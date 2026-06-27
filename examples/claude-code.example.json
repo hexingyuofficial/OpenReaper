@@ -1,0 +1,35 @@
+{
+  "_comment": "Streetlight MCP server configuration for Claude Code. Pick the snippet that matches your OS, replace the absolute path, and remove this _comment key. Paths containing spaces work as-is in JSON strings; do NOT add extra quoting.",
+
+  "mcpServers": {
+    "streetlight": {
+      "command": "node",
+      "args": [
+        "/Users/your-name/code/streetlight soundly/packages/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "STREETLIGHT_QUEUE_DIR": "/Users/your-name/Library/Application Support/Streetlight/queue"
+      }
+    }
+  },
+
+  "_windows_example": {
+    "mcpServers": {
+      "streetlight": {
+        "command": "node",
+        "args": [
+          "C:\\Users\\your-name\\code\\streetlight soundly\\packages\\mcp-server\\dist\\index.js"
+        ],
+        "env": {
+          "STREETLIGHT_QUEUE_DIR": "C:\\Users\\your-name\\AppData\\Roaming\\Streetlight\\queue"
+        }
+      }
+    }
+  },
+
+  "_notes": [
+    "STREETLIGHT_QUEUE_DIR is optional. If omitted, the MCP server uses the platform default (macOS: ~/Library/Application Support/Streetlight/queue, Windows: %APPDATA%/Streetlight/queue, Linux: ~/.local/share/streetlight/queue).",
+    "Both the MCP server AND the Lua bridge must agree on the queue directory. If you set STREETLIGHT_QUEUE_DIR here, you must pass the same path to the bridge — see reaper/streetlight_bridge.lua.",
+    "Paths with spaces (the project folder itself is 'streetlight soundly') work in JSON as plain strings. Do NOT wrap them in extra quotes."
+  ]
+}

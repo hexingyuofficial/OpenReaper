@@ -1,0 +1,27 @@
+.DS_Store
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+*.log
+*.tsbuildinfo
+
+# Streetlight local runtime
+.streetlight/
+queue/
+tmp/
+
+# REAPER test projects (the bridge lives in reaper/, but user RPP projects do not)
+# Anything under reaper/ except the bridge script + packs/ is local-only.
+reaper/*
+!reaper/streetlight_bridge.lua
+!reaper/packs/
+!reaper/packs/**
+!reaper/.gitkeep
+
+# REAPER artifacts wherever they appear
+*.RPP
+*.rpp-bak
+*.reapeaks

@@ -1,0 +1,20 @@
+{
+  "_comment": "Streetlight MCP server configuration for Cursor. Cursor uses the same MCP servers config shape as Claude Code; this file mirrors examples/claude-code.example.json with a Cursor-flavored filename for discoverability.",
+
+  "mcpServers": {
+    "streetlight": {
+      "command": "node",
+      "args": [
+        "/Users/your-name/code/streetlight soundly/packages/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "STREETLIGHT_QUEUE_DIR": "/Users/your-name/Library/Application Support/Streetlight/queue"
+      }
+    }
+  },
+
+  "_notes": [
+    "If you registered Streetlight in Claude Code already, you can reuse the same config.",
+    "See examples/claude-code.example.json for the Windows path equivalent."
+  ]
+}

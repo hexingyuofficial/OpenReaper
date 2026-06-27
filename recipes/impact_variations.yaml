@@ -1,0 +1,149 @@
+id: impact_variations
+description: Create and render game-audio impact variations from a selected item or source file.
+version: 1
+
+# Recipes are agent-readable, NOT server-executed in v0.1.
+# The agent reads this file via the `list_recipes` MCP tool and calls
+# `call_template` for each step in order. Streetlight validates each call
+# but does not orchestrate them — that is the agent's job.
+
+inputs:
+  source:
+    type: item_or_file
+    required: true
+    description: A selected REAPER item (preferred) or a path to a source WAV.
+  count:
+    type: integer
+    default: 8
+    minimum: 1
+    maximum: 16
+  output_dir:
+    type: path
+    required: true
+    description: Absolute directory path. Must exist and be writable.
+  style:
+    type: string
+    default: punchy game impact
+    description: Free-text hint the agent can use when picking variation tone.
+
+# Each variation in `variations` is a concrete parameter set the agent
+# applies to a duplicate of the source item, in order. Keys map directly to
+# template parameters in the steps below.
+variations:
+  - name: var_01
+    pitch: -5
+    rate: 0.92
+    fade_out: 0.10
+  - name: var_02
+    pitch: -3
+    rate: 0.96
+    fade_out: 0.08
+  - name: var_03
+    pitch: -1
+    rate: 1.00
+    fade_out: 0.06
+  - name: var_04
+    pitch: 2
+    rate: 1.04
+    fade_out: 0.06
+  - name: var_05
+    pitch: 4
+    rate: 1.08
+    fade_out: 0.05
+  - name: var_06
+    pitch: -8
+    rate: 0.85
+    fade_in: 0.04
+    fade_out: 0.14
+  - name: var_07
+    pitch: 7
+    rate: 1.12
+    fade_out: 0.04
+  - name: var_08
+    pitch: -2
+    rate: 1.15
+    length: 0.5
+    fade_out: 0.04
+
+# `steps` is a structured sequence of MCP tool calls. Each step the agent
+# executes is a real `call_template` (or `get_state`); the `for_each` block
+# expands at agent-execution time, once per variation.
+steps:
+
+  - tool: get_state
+    params:
+      scope: selection
+    bind: selection
+
+  - tool: call_template
+    name: track_create
+    params:
+      name: "Streetlight - Impact Variations"
+      reuse: true
+    bind: variations_track
+
+  - for_each: variations
+    as: v
+    index: i
+    steps:
+
+      - tool: call_template
+        name: item_duplicate
+        params:
+          item_id: "selected:0"
+          track_id: "{{ variations_track.track.id }}"
+          position: "{{ i * 1.0 }}"
+        bind: dup
+
+      - tool: call_template
+        name: item_pitch
+        params:
+          item_id: "{{ dup.items[0].id }}"
+          semitones: "{{ v.pitch }}"
+
+      - tool: call_template
+        name: item_rate
+        params:
+          item_id: "{{ dup.items[0].id }}"
+          rate: "{{ v.rate }}"
+
+      - tool: call_template
+        name: item_fade
+        params:
+          item_id: "{{ dup.items[0].id }}"
+          fade_in: "{{ v.fade_in | default(0.0) }}"
+          fade_out: "{{ v.fade_out | default(0.05) }}"
+
+      - tool: call_template
+        name: item_trim
+        when: "v.length is defined"
+        params:
+          item_id: "{{ dup.items[0].id }}"
+          length: "{{ v.length }}"
+
+      - tool: call_template
+        name: region_create
+        params:
+          name: "{{ v.name }}"
+          item_id: "{{ dup.items[0].id }}"
+        bind: region
+
+      - tool: call_template
+        name: render_region
+        params:
+          region_id: "region:{{ v.name }}"
+          output_dir: "{{ inputs.output_dir }}"
+          format: wav
+
+# Notes for the agent reading this recipe:
+#
+# - `{{ ... }}` is a Jinja-style placeholder. The agent substitutes values
+#   at runtime from previously bound results (track_id, item ids), from the
+#   current variation (v.pitch, etc.), or from the recipe inputs.
+# - `bind:` stores the result of a call under that name for later steps.
+# - `for_each:` repeats its inner steps once per entry in the referenced list.
+# - `when:` skips the step when the expression is falsy.
+# - The agent does not need to support a full Jinja engine. A small subset
+#   (variable lookup, index, basic filters like `default`) is enough.
+# - If the agent cannot resolve a placeholder, it should fail clearly rather
+#   than guess.

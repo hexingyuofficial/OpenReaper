@@ -1,0 +1,32 @@
+{
+  "name": "@streetlight/mcp-server",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Streetlight MCP server. Step 1: ping round trip via file queue.",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "streetlight-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --noEmit || tsc -b",
+    "clean": "tsc -b --clean",
+    "test": "vitest run",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@streetlight/core": "*",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}

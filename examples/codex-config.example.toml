@@ -1,0 +1,25 @@
+# Example only. Exact Codex config location and syntax may vary by Codex version.
+# Pick the snippet that matches your OS and replace the absolute path.
+
+# --- macOS ---
+
+[mcp_servers.streetlight]
+command = "node"
+args = ["/Users/your-name/code/streetlight soundly/packages/mcp-server/dist/index.js"]
+
+[mcp_servers.streetlight.env]
+STREETLIGHT_QUEUE_DIR = "/Users/your-name/Library/Application Support/Streetlight/queue"
+
+# --- Windows (commented; uncomment and edit) ---
+
+# [mcp_servers.streetlight]
+# command = "node"
+# args = ['C:\Users\your-name\code\streetlight soundly\packages\mcp-server\dist\index.js']
+#
+# [mcp_servers.streetlight.env]
+# STREETLIGHT_QUEUE_DIR = 'C:\Users\your-name\AppData\Roaming\Streetlight\queue'
+
+# Notes:
+# - STREETLIGHT_QUEUE_DIR is optional. Default: ~/Library/Application Support/Streetlight/queue (macOS), %APPDATA%/Streetlight/queue (Windows).
+# - The Lua bridge must use the SAME queue directory.
+# - Paths with spaces (the project folder is "streetlight soundly") work as TOML strings. Use single-quoted strings on Windows to avoid backslash escapes.
