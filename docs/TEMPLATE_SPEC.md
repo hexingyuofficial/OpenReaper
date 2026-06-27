@@ -46,14 +46,26 @@ Do not rename templates casually. Agents and recipes may depend on names.
 
 ## Result Shape
 
-Success:
+Success — the locked `call_template` envelope. **Every template returns
+this shape, regardless of what it does.** Agents read post-state via
+`get_state` when they need details (name, position, pitch, …); the
+envelope itself carries IDs only.
 
 ```json
 {
   "ok": true,
-  "result": {}
+  "result": {
+    "template": "item_pitch",
+    "changed_count": 1,
+    "changed_ids": ["guid:{1F8063CD-452B-A246-8680-82FD82095319}"],
+    "truncated": false
+  }
 }
 ```
+
+`changed_ids` is capped at 50 entries at the bridge dispatcher;
+`changed_count` is the true count and `truncated` is `true` when the cap
+fired. See `docs/RESPONSE_BUDGET.md § call_template` for the rationale.
 
 Failure:
 
@@ -67,6 +79,12 @@ Failure:
   }
 }
 ```
+
+`recoverable: true` means the agent can adjust and try again with
+different params — NOT that blind auto-retry of a mutating call is
+safe. See `errors.ts` `StreetlightError.recoverable` jsdoc and the
+`call_template` MCP tool description for the mutating-timeout
+counter-example.
 
 ## Safety Requirements
 
@@ -102,56 +120,100 @@ Templates must not:
 
 ## Example: `item_pitch`
 
-Schema (Zod, source of truth):
+Schema (Zod, source of truth — lives in
+`packages/mcp-server/src/templates/item-pitch.ts`):
 
 ```ts
 const ItemPitchParams = z.object({
-  item_id: z.string().describe("Logical item reference, e.g. selected:0 or guid:{...}"),
+  item_id: z.string().min(1).describe(
+    "Logical item reference. v0.1 supports selected:N, guid:{...}, "
+    + "last_result:item:N, track:Name/item:N."
+  ),
   semitones: z.number().min(-24).max(24),
-});
+}).strict();
 
-const ItemPitchResult = z.object({
-  items: z.array(z.object({
-    id: z.string(),
-    take_name: z.string(),
-    pitch_before: z.number(),
-    pitch_after: z.number(),
-  })),
-});
-
-registry.register({
-  name: "item_pitch",
-  description: "Set active take pitch in semitones.",
-  risk: "write_safe",
-  mutates: true,
-  undoable: true,
-  params: ItemPitchParams,
-  result: ItemPitchResult,
-  pack: "core",
-});
+// Result is the locked call_template envelope. Same for every template;
+// see "Result Shape" above.
 ```
 
 Input example:
 
 ```json
 {
-  "item_id": "selected:0",
-  "semitones": -3
+  "name": "item_pitch",
+  "params": {
+    "item_id": "selected:0",
+    "semitones": -3
+  }
 }
 ```
 
 Expected behavior:
 
-- resolve selected item
-- find active take
-- snapshot pitch_before
+- resolve the item reference via `refs.lua`
+- find the active take (no take → `TAKE_NOT_FOUND`)
 - set take pitch in semitones via `SetMediaItemTakeInfo_Value(take, "D_PITCH", semitones)`
 - update arrange view via `UpdateArrange()`
-- wrap the change in `Undo_BeginBlock` / `Undo_EndBlock2(0, "Streetlight: item_pitch", UNDO_STATE_ITEMS)`
-- return changed item info including pitch_before and pitch_after
+- the bridge dispatcher wraps the call in `Undo_BeginBlock` /
+  `Undo_EndBlock2(0, "Streetlight: item_pitch", UNDO_STATE_ITEMS)` via
+  `undo.with_undo` (declared in the manifest as `undoable = true`)
+- return `{ changed_ids = { "guid:{...}" } }` from the Lua handler; the
+  dispatcher promotes it to the locked envelope
 
 Notes:
 
 - pitch belongs to the active take, not the media item itself
 - missing take should return `TAKE_NOT_FOUND`
-- semitone range above clamps at 24 to prevent absurd values; this is policy, not a REAPER limit
+- semitone range above clamps at ±24 to prevent absurd values; this is
+  policy, not a REAPER limit. Out-of-range values are rejected MCP-side
+  with `PARAMS_INVALID` before they reach the bridge.
+
+## Nullable Params
+
+Some templates take parameters where "leave alone" and "explicitly clear"
+are different. `item_fade`'s `fade_in` / `fade_out` are the first
+examples in v0.1:
+
+- absent (key not in the JSON object) → leave the existing value alone
+- explicit `null` → clear the fade (set length to 0)
+- a number → set the fade length to that many seconds
+
+JSON has both states. Lua does not — both `{"fade_in": null}` and `{}`
+parse to a Lua table with no `fade_in` key. To preserve the distinction
+across the wire, the bridge's `packs/core/lib/json.lua` mints a unique
+sentinel value `json.null`:
+
+- the **decoder** returns `json.null` (a unique table) when it sees a
+  JSON `null` — not Lua `nil`, which would silently disappear from
+  arrays and object keys
+- the **encoder** emits `"null"` when it sees `json.null`
+- in handler code, check with reference equality: `if v == json.null`
+
+Templates that accept nullable params should:
+
+1. Declare the field with Zod as `z.union([z.number(), z.null()]).optional()`
+   (or your shape of choice — TS-side validation passes `null` through)
+2. In the Lua handler, check `if params.fade_in == nil then …` for
+   absent and `if params.fade_in == ctx.json.null then …` (or whatever
+   reference to the sentinel is exposed via `ctx`) for explicit null
+3. Document both cases in the template's TS jsdoc so agents reading
+   `list_templates` know what each state means
+
+The encoder is symmetric — Lua handlers that need to emit explicit
+`null` (rare in v0.1) set the value to `json.null`. Plain Lua `nil`
+inside a table still means "absent" and disappears as before.
+
+## Reference Resolution (refs.lua)
+
+The agent-facing reference kinds and what they mean in v0.1:
+
+| Ref | Meaning | Step landed |
+|---|---|---|
+| `selected:N` | The N-th selected media item in arrange (0-indexed). | 3 |
+| `guid:{...}` | An item by REAPER-assigned GUID. Stable across the project. | 3 |
+| `last_result:item:N` | The N-th item from the most recent successful mutating `call_template`. Resets on bridge reload; not affected by reads (`ping`, `get_state`). | 4 |
+| `track:Name/item:N` | The N-th media item on the first track whose `P_NAME` matches exactly. Duplicate track names → first match wins. | 4 |
+
+Future v0.1 ref kinds (`last_result:region:N`, `last_result:track:N`)
+parse on the TS side but the Lua resolver returns `REF_INVALID` until
+the corresponding mutating templates ship (Step 5 / 6).

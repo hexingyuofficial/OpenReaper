@@ -4,11 +4,34 @@
 --   - encode: strings, numbers, booleans, nil, sequential arrays, string-keyed objects
 --   - decode: standard JSON (RFC 8259 subset, no Unicode surrogate pairs)
 --
--- Known limitation: empty Lua tables encode as `{}` (object) by default. To
--- force an array, use `json.array(t)` to tag a table as an array even if it
--- has no entries.
+-- Known limitation: empty Lua tables encode as `[]` (empty array). To force
+-- an object shape, populate the table with at least one key, or wrap in a
+-- dedicated table tagged some other way. v0.1 has not needed forced-{} yet.
+--
+-- ─── json.null sentinel ────────────────────────────────────────────────────
+--
+-- JSON `null` and absent-key are distinct in JSON but BOTH map to Lua `nil`.
+-- That's lossy: { "fade_in": null } and {} round-trip to the same Lua table.
+-- For templates with nullable params (Step 4's `item_fade` is the first),
+-- the distinction matters: `null` means "explicitly clear", absent means
+-- "leave alone".
+--
+-- We mint a unique sentinel TABLE `json.null` and:
+--   - the decoder returns `json.null` (not Lua nil) when it sees `null`
+--   - the encoder emits `"null"` when it sees a value equal to `json.null`
+--
+-- Compare with `v == json.null` (reference equality). DO NOT use
+-- `v == nil` to detect explicit null after decoding — explicit null is
+-- `json.null`, absence is Lua nil. Templates that accept nullable params
+-- treat both as "no value supplied" unless they specifically need to
+-- distinguish them.
 
 local json = {}
+
+json.null = setmetatable({}, {
+  __tostring = function() return "json.null" end,
+  __newindex = function() error("json.null is read-only") end,
+})
 
 -- ─── Encoder ────────────────────────────────────────────────────────────────
 
@@ -45,6 +68,8 @@ end
 local encode_value
 
 encode_value = function(v)
+  -- json.null sentinel takes precedence over the table branch below.
+  if v == json.null then return "null" end
   local t = type(v)
   if t == "nil"     then return "null" end
   if t == "boolean" then return v and "true" or "false" end
@@ -215,9 +240,9 @@ decode_value = function(s, i)
     end
   end
 
-  if c == 't' and s:sub(i, i + 3) == 'true'  then return true,  i + 4 end
-  if c == 'f' and s:sub(i, i + 4) == 'false' then return false, i + 5 end
-  if c == 'n' and s:sub(i, i + 3) == 'null'  then return nil,   i + 4 end
+  if c == 't' and s:sub(i, i + 3) == 'true'  then return true,     i + 4 end
+  if c == 'f' and s:sub(i, i + 4) == 'false' then return false,    i + 5 end
+  if c == 'n' and s:sub(i, i + 3) == 'null'  then return json.null, i + 4 end
   if c == '-' or (c >= '0' and c <= '9') then return decode_number(s, i) end
 
   error("Unexpected character '" .. c .. "' at position " .. i)

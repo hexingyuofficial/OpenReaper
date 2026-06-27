@@ -391,6 +391,10 @@ function DISPATCH.template(cmd)
   local ctx = {
     refs        = refs,
     last_result = LAST_RESULT,
+    -- Exposed so handlers with nullable params can compare with
+    -- `params.x == ctx.json.null`. See docs/TEMPLATE_SPEC.md
+    -- § Nullable Params.
+    json        = json,
   }
   local params = cmd.params or {}
 

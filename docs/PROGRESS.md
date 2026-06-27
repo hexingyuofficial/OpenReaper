@@ -12,6 +12,11 @@ Last verified on REAPER 7.71/macOS-arm64: 2026-06-27 (Steps 2 + 3). Step 3
 TS side 76/76 green; bridge-side dispatcher and MCP-side Zod / registry
 rejections both proven against a live REAPER session.
 
+**Step 4a 🟡 code landed; REAPER smoke pending bridge reload.** json.null
+sentinel in `packs/core/lib/json.lua`, `last_result:item:N` +
+`track:Name/item:N` resolvers in `refs.lua`, `ctx.json` wired into the
+template ctx. 76/76 tests still pass.
+
 ### v0.1 progress at a glance
 
 | | Done | Code-done, REAPER-pending | Remaining |
@@ -24,14 +29,23 @@ JSON null fix) and 6 (render) are the biggest. Steps 5, 7, 8 are smaller.
 
 ### Next action
 
-1. Start Step 4. See `docs/IMPLEMENTATION_PLAN.md` § Step 4 for the three
-   workstreams (7 templates, 2 new ref kinds in `refs.lua`, Lua JSON
-   `null` fix). The dispatcher contract is now law — new templates
-   inherit the locked envelope shape for free; they only need to return
-   `{ changed_ids = {...} }`.
-2. `item_fade` is the first template that takes nullable params, so
-   tackle the JSON `null` sentinel in `packs/core/lib/json.lua`
-   before that one (or build `item_fade` last in the Step 4 batch).
+1. **Reload `streetlight_bridge.lua` in REAPER** (Step 4a touched
+   `json.lua`, `refs.lua`, and the bridge ctx wiring — the bridge dofile's
+   pack files exactly once at startup, so a reload is mandatory). Console
+   should still print `templates: item_pitch` — no new templates land
+   until 4b.
+
+2. **Walk the 4a smoke prompts** in § "Step 4a smoke recipe" below.
+   Each prompt verifies one ref kind. Three prompts total; all
+   reversible via Cmd+Z.
+
+3. **If green:** flip Step 4a to ✅ and start 4b (5 easy templates:
+   `track_create`, `track_rename`, `item_move`, `item_rate`, `item_trim`).
+
+4. **If red:** paste the bridge console output + the failing
+   `call_template` response JSON into the next conversation. Likely
+   suspects: refs.lua syntax slip, `ctx.json` not threaded, last_result
+   table shape drift.
 
 ## What's Done
 
@@ -252,6 +266,53 @@ the one issuing the calls below — these are the prompts you give it.
 If anything fails: copy the bridge console output and the MCP response
 JSON into the next conversation. Both are needed to diagnose.
 
+### Step 4a smoke recipe
+
+After reloading `streetlight_bridge.lua`, walk these three prompts in
+order. Each verifies one ref kind. All reversible via Cmd+Z, so feel free
+to leave items in arbitrary pitch states during the run — the final
+Cmd+Z chain resets everything.
+
+Prerequisite: at least one media item on a track named `111` (or rename
+your existing track), with that item selected.
+
+1. **Acc 4a-1 — `selected:0` baseline.** Establishes the first
+   `last_result.items` entry.
+   > Prompt: *"Use Streetlight `call_template` to pitch the selected item up 1 semitone."*
+
+   Pass: locked envelope, `changed_ids` has one GUID (your first
+   selected item). Pitch dialog reads `+1.000`.
+
+2. **Acc 4a-2 — `last_result:item:0` echoes the same item.** Same item
+   should be pitched again, this time to −1.
+   > Prompt: *"Use Streetlight `call_template` to pitch `last_result:item:0` down by 2 semitones (so semitones = -1)."*
+
+   Pass: same GUID in `changed_ids[0]`. Pitch dialog now reads `-1.000`.
+   Verifies the bridge's `LAST_RESULT.items` write/read pairing.
+
+3. **Acc 4a-3 — `track:111/item:0` resolves by track name.** Wakes up
+   the second new ref kind. Resets pitch on track 111's first item.
+   > Prompt: *"Use Streetlight `call_template` to pitch `track:111/item:0` to 0 semitones."*
+
+   Pass: locked envelope, `changed_count: 1`. The first item on track
+   `111` is now at pitch 0. (If your selected item lives on track
+   `111`, the same item gets pitched and the GUID matches Acc 4a-1.)
+
+Then drive the negative paths to confirm error messages:
+
+4. **`last_result:item:99` →** `ITEM_NOT_FOUND, "last_result:item:99 out
+   of range (last_result has 1 item)"`.
+5. **`track:DoesNotExist/item:0` →** `TRACK_NOT_FOUND, "No track named
+   'DoesNotExist'"`.
+6. **`track:111/item:99` →** `ITEM_NOT_FOUND, "track:111/item:99 out of
+   range (track has N items)"`.
+7. **Bridge-reload sanity:** reload `streetlight_bridge.lua` once more
+   in REAPER (`LAST_RESULT` is in-memory, dies on reload). Then call
+   `item_pitch last_result:item:0 …` — expect `REF_INVALID, "no mutating
+   call has produced changed_ids yet this session"`.
+
+If anything fails: copy the bridge console + the MCP response JSON.
+
 ### Code — Step 2 additions
 
 Files:
@@ -283,7 +344,7 @@ Files:
 | 1 — First round trip (ping) | ✅ done | 50/50 tests pass; verified on REAPER 7.71/macOS-arm64 |
 | 2 — Read selection (get_state) | ✅ done | 61/61 tests pass; all 5 acceptance points verified on REAPER 7.71/macOS-arm64 (2026-06-27); response-budget backstop landed |
 | 3 — First mutation (item_pitch) | ✅ done | 76/76 tests pass; all 8 acceptance points verified on REAPER 7.71/macOS-arm64 (2026-06-27); `DISPATCH.template` enforces locked shape at the bridge boundary; cmd-ID hardened; mutating-timeout no-auto-retry documented |
-| 4 — Variation building blocks | ⬜ | 7 templates (item_reverse cut); add `last_result:item:N` + `track:Name/item:N` resolvers in `refs.lua` |
+| 4 — Variation building blocks | 🟡 4a code-done, REAPER smoke pending; 4b/4c (7 templates) not started | json.null sentinel + last_result:item:N + track:Name/item:N landed; bridge ctx now exposes `json` so 4c's `item_fade` can detect explicit null |
 | 5 — Regions (region_create) | ⬜ | |
 | 6 — Render (render_region) | ⬜ | see `RENDER_NOTES.md` |
 | 7 — Recipe discovery + end-to-end demo | ⬜ | `list_recipes` tool + finalized recipe |
