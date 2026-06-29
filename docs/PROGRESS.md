@@ -20,13 +20,18 @@ stability window, bridge startup stale-`RUNNING/` cleanup). The
 (`~/Desktop/streetlight-step7-resmoke-1782704645367`): 8 WAVs (24-bit
 PCM stereo 48 kHz), zero `.RPP` / `.RPP-bak` sidecars, `changed_ids`
 WAV-only, plus the focused preflight check (touch a `.wav.RPP` →
-typed `OUTPUT_FILE_EXISTS`, user file untouched). 164/164 TS tests
-green (146 baseline + 16 Step 7 + 2 sidecar preflight),
-`npm run build` clean. NO COMMITS — git out-of-band per workflow.
+    typed `OUTPUT_FILE_EXISTS`, user file untouched). 164/164 TS tests
+    green (146 baseline + 16 Step 7 + 2 sidecar preflight),
+    `npm run build` clean. Step 3 → Step 8 Round A/C is captured in
+    local checkpoint `166d109`; the release-prep setup/launcher round
+    is still user-owned until explicitly committed.
 Step 8 release polish closed across Round A (release-blocker code,
 +7 tests → 171/171) + Round C (docs + audit evaluation) the same
 window; Round B (Linux queue-dir) deferred to v0.2 by explicit user
-decision. All six open notes resolved.
+decision. All six open notes resolved. Release-prep setup/launcher
+(scripts/setup.mjs + REAPER start_bridge.lua + setup-out/ MCP config
+generator) landed same window with manual REAPER Load... + Run gate
+passed live (console: bridge ready generation 1); test bar 171 → 198.
 
 **Step 6 ✅ done — 10/10 smoke prompts (6-0..6-9) verified on REAPER 7.71/macOS-arm64 (2026-06-29), 146/146 TS tests green.**
 
@@ -203,8 +208,8 @@ below.
 
 | | Done | Remaining |
 |---|---|---|
-| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅ | none (v0.1 release-polish complete) |
-| Tests | 171/171 green | grows per step |
+| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅ | none (v0.1 release-polish complete; release-prep setup/launcher landed; second-Mac smoke is the open gate) |
+| Tests | 198/198 green | grows per step |
 
 **9 / 9 steps shipped.** Step 6 (render) closed
 2026-06-29 after a Codex re-smoke against the post-restart single-chunk
@@ -233,19 +238,28 @@ upgrade evaluation) docs-only. Round B (Linux queue-dir, #2)
 **deferred to v0.2** per explicit user decision (no Linux REAPER rig).
 All six open notes resolved (closed Round A: 3; closed Round C: 1;
 evaluated and deferred post-v0.1: 1; deferred v0.2: 1). v0.1 is at
-release-candidate from a Streetlight-side perspective.
+release-candidate from a Streetlight-side perspective. Release-prep
+setup/launcher (`scripts/setup.mjs`, REAPER `start_bridge.lua`
+launcher, `setup-out/` MCP config artifacts) landed 2026-06-29 same
+window with the manual REAPER `Actions → ReaScript: Load... → Run`
+gate passed live on this Mac (console: `bridge ready (generation
+1) — templates: …`). Test bar 171 → 198 (+27 pure-function setup
+tests). The second-Mac smoke per `docs/CROSS_MAC_SMOKE.md` is the
+remaining gate before any release tag.
 
 ### Next action
 
-1. **Step 8 closeout / v0.1 release candidate.** All open notes
-   resolved (see Step 7 §"Open items for Step 8" for the disposition
-   table). Optional work the user may still pull in: **Vitest 2 → 4
-   major upgrade** (zero real-world exposure on current usage; best
-   in a dedicated session, see Step 8 Round C entry for full
-   evaluation), and any **v0.2 scope items** (Linux queue-dir
-   resolver, idempotency tokens, socket transport, configurable risk
-   policy + done-sweep env overrides, foreground-render chunked-tick
-   loop).
+1. **Second-Mac smoke / v0.1 release tag.** Setup/launcher reproducer
+   is ready; `docs/CROSS_MAC_SMOKE.md` is the live runbook. All
+   Streetlight-side open notes are resolved (see Step 7 §"Open items
+   for Step 8" for the disposition table) and the release-prep entry
+   below for the setup/launcher work. Optional work the user may
+   still pull in: **Vitest 2 → 4 major upgrade** (zero real-world
+   exposure on current usage; best in a dedicated session, see Step
+   8 Round C entry for full evaluation), and any **v0.2 scope items**
+   (Linux queue-dir resolver, idempotency tokens, socket transport,
+   configurable risk policy + done-sweep env overrides, foreground-
+   render chunked-tick loop).
 2. **No outstanding Step 7 work.** Probe scaffolding
    (`reaper/streetlight_probe_renderconfig.lua`) removed at Step 7
    close; the post-mortem lives in this file + the workflow memory.
@@ -2560,6 +2574,153 @@ final disposition. v0.1 is at release-candidate from a Streetlight-
 side perspective. Optional work the user may still pull in is the
 Vitest 2 → 4 major upgrade above; v0.2 scope items are tracked in
 docs/ROADMAP.md.
+
+### Release prep — setup launcher + MCP config generator (2026-06-29)
+
+Goal of this slice: another Mac (or this one after a fresh clone)
+reaches `bridge ready` without the user hand-writing a single
+absolute path. NOT a tag / publish — that's a separate user decision
+gated on the second-Mac smoke. The CROSS_MAC_SMOKE.md runbook lives
+alongside this work.
+
+**Decisions locked (carry forward):**
+
+13. **Setup language:** plain Node ESM (`scripts/setup.mjs`), no TS
+    build dep. Setup doesn't need the kernel types and skipping a
+    build step avoids the chicken-and-egg of "setup needs to run
+    before dist exists." TypeScript test files would still need
+    vitest config changes; .mjs slots in via a one-line `include`
+    extension.
+14. **Setup writes to two places, both safe:** the REAPER launcher
+    at `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`
+    and `setup-out/` inside the repo. **Never** edits user-global MCP
+    configs (Claude Desktop / Codex / Cursor) — those may contain
+    other servers and a merge bug could break unrelated tooling. The
+    cost is one copy-paste per client; the saved risk is real.
+15. **REAPER launcher requires one-time `Actions → Show action list →
+    ReaScript: Load...`** to register in the Action List. REAPER does
+    NOT auto-discover scripts dropped into its Scripts folder (per
+    ReaScript docs). The launcher's header comment + setup's
+    next-steps print + INSTALL.md + CROSS_MAC_SMOKE.md all spell this
+    out. v0.1 does NOT auto-edit `reaper-kb.ini` or import a
+    ReaperKeyMap to skip the Load... step — too easy to clobber user
+    config, deferred to v0.2 installer polish.
+16. **Render-in-background detection:** read-only probe of
+    `[reaper] → workrender` in `reaper.ini`. **Any non-zero → ON**
+    (bitfield-tolerant; this Mac's value is `8209`, would have
+    falsely read OFF on strict `==1`). `unknown` when section/key
+    absent. Step 7 B2 docs-only stays — setup only surfaces the
+    verdict in next-steps, never writes to `reaper.ini`.
+17. **`setup-out/` is git-ignored.** Each clone generates its own
+    absolute-path configs; committing them would just churn paths
+    across machines. Added to `.gitignore` line 17.
+
+**Files (5 modified, 2 created):**
+
+- `scripts/setup.mjs` (new, ~330 lines). Pure exports:
+  `buildLauncherLua`, `buildClaudeCodeConfig`, `buildCodexConfig`,
+  `buildCursorConfig`, `parseRenderInBackground`,
+  `defaultReaperResourcePath`, `launcherInstallPath`, `reaperIniPath`,
+  `mcpServerEntryPath`. CLI wraps them with darwin-only fail-fast,
+  `dist/index.js` existence check, `--no-overwrite` (refuses to
+  overwrite existing launcher), `--reaper-resource-path <p>`
+  (portable installs / `--reapath` users), `-h`/`--help`, best-effort
+  `reaper.ini` read, full next-steps print.
+- `scripts/__tests__/setup.test.mjs` (new). 27 tests, all
+  pure-function — NO writes to `~/Library/Application Support/REAPER`
+  in tests (the user-asked-for testability constraint). Coverage:
+  launcher lua content + path validation + space-in-path handling +
+  rejection of quote/backslash; client config builders (JSON / TOML
+  shape + space-in-path + Cursor mirrors Claude); reaper.ini parser
+  (ON/OFF/unknown/bitfield-non-zero/whitespace-tolerance + does NOT
+  cross-pollute between sections like `[project]`); platform fail-
+  fast; install-path joiners.
+- `package.json` — adds `"setup": "node scripts/setup.mjs"`.
+- `vitest.config.ts` — `include` adds `scripts/**/*.test.mjs`.
+- `.gitignore` — adds `setup-out/`.
+- `docs/INSTALL.md` — new "Install Step 2: Quick Setup" leads with
+  `npm run setup`; old Layout A/B demoted to "2 (advanced). Manual
+  REAPER Bridge install" with a note about removing any prior
+  `__startup.lua` `dofile` to avoid double-load console noise
+  (generation guard catches it functionally, but logs get noisy).
+  §3 client config gained the `setup-out/` pointer.
+- `docs/CROSS_MAC_SMOKE.md` — §3-5 collapsed into one `npm run setup`
+  step + a Load... + Run step + a copy-from-setup-out step;
+  renumbered 1-8; test baseline 171 → 198.
+- `README.md` — first-time install one-liner above the prereqs
+  checklist in "How To Run The Impact-Variations Demo".
+
+**REAPER launcher shape (auto-generated by setup):**
+
+```lua
+-- streetlight start_bridge.lua
+--
+-- AUTO-GENERATED by `npm run setup` in the Streetlight repo at:
+--   <abs-repo-path>
+-- DO NOT EDIT BY HAND. Re-run `npm run setup` from the repo if its
+-- absolute path changes. ...
+-- To register this script in REAPER's Action List (one-time, per Mac):
+--   Actions → Show action list → ReaScript: Load... → pick this file.
+-- ...
+
+local repo = "<abs-repo-path>"
+local bridge = repo .. "/reaper/streetlight_bridge.lua"
+local f = io.open(bridge, "r")
+if not f then
+  reaper.ShowConsoleMsg(
+    "[streetlight] launcher: bridge not found at " .. bridge ..
+    "\n[streetlight] re-run `npm run setup` from the repo, or check " ..
+    "the repo wasn't moved/deleted.\n"
+  )
+  return
+end
+f:close()
+dofile(bridge)
+```
+
+The guarded `io.open` is so a moved/deleted repo prints a friendly
+console message instead of stack-tracing out of `dofile`.
+
+**Manual gate (this Mac, 2026-06-29).** Live verified end-to-end:
+
+1. `npm run setup` ran clean. Launcher landed at
+   `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`
+   with the repo's actual absolute path baked in (`/Users/Zhuanz/Documents/steetlight soundly`).
+2. Three `setup-out/*` files written with the absolute dist path
+   (`/Users/Zhuanz/Documents/steetlight soundly/packages/mcp-server/dist/index.js`).
+3. Render-in-background detection printed `✓ ON` — matches actual
+   `workrender=8209` in the user's reaper.ini (bitfield, any non-zero
+   → ON path saved us from a false OFF on strict `==1`).
+4. `--no-overwrite` correctly refused a second run; printed
+   `(exists and --no-overwrite set); pass without --no-overwrite to refresh`.
+5. REAPER → Actions → Show action list → ReaScript: Load... →
+   selected `start_bridge.lua` → Run. Console printed
+   `[streetlight] bridge starting (generation 1)`, queue dir line,
+   `loaded pack 'core' v0.1.0`, then
+   `[streetlight] bridge ready (generation 1) — templates: …` with
+   the full template list. Bridge alive.
+
+**Test bar:** 171 → 198 (+27). `npm run build` clean. `npm run
+typecheck` unchanged (TS6310 then exit 0).
+
+**What's intentionally NOT in this slice:**
+
+- No auto-edit of `reaper-kb.ini` / ReaperKeyMap import to skip the
+  Load... step (deferred to v0.2 installer polish per user
+  constraint — too easy to clobber user config).
+- No auto-flip of REAPER prefs (Render-in-background stays a docs
+  contract per B2; setup probe is read-only).
+- No merge into user-global MCP configs.
+- No Windows / Linux support (v0.2 alongside the cross-platform
+  queue-dir resolver).
+- No changes to `streetlight_bridge.lua` or any bridge behavior —
+  the launcher just `dofile`s the existing entry point.
+- No `--reaper-resource-path` test against a portable install — the
+  flag exists and is unit-tested, but no live verification on a
+  portable REAPER setup.
+
+**Open: the second-Mac smoke.** Per `docs/CROSS_MAC_SMOKE.md`. Once
+that passes, the v0.1 release tag is a separate user decision.
 
 ### Step 4b verification (2026-06-28)
 

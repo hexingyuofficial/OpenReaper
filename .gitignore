@@ -12,6 +12,11 @@ coverage/
 .streetlight/
 queue/
 tmp/
+# Personalized MCP client config snippets written by `npm run setup`.
+# Each clone generates its own absolute-path configs in here; never commit.
+setup-out/
+# Separate nested project; keep it out of Streetlight commits.
+style-memory-mcp/
 
 # REAPER test projects (the bridge lives in reaper/, but user RPP projects do not)
 # Anything under reaper/ except the bridge script + packs/ is local-only.

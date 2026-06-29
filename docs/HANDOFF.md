@@ -1,23 +1,23 @@
-# Handoff — 2026-06-29 (Step 7 ✅; Step 8 Round A + C ✅; v0.1 release-polish complete)
+# Handoff — 2026-06-29 (Step 7 ✅; Step 8 Round A + C ✅; release-prep setup/launcher ✅; v0.1 release-candidate ready)
 
 Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
 ## Where the project is
 
 - Path: `/Users/Zhuanz/Documents/steetlight soundly`, git repo on
-  branch `main`. The user manages versioning out-of-band — do NOT
-  commit, branch, or run any push/reset commands without an explicit
-  ask. Read `git log` / `git status` if you need history context;
-  treat the working tree as theirs to commit. Heads-up: `git status`
-  shows the cumulative Step 3 → Step 8-Round-A working pile (new
-  mcp-server tools, recipe + Lua tweaks, README + INSTALL + PROGRESS
-  updates, `package-lock.json` from `npm install js-yaml`, the Step 7
-  guarded-cleanup path in `render.lua`, and the Round-A changes in
-  `call-template.ts` + `file-queue.ts` + their tests). That's the
-  user's intentional state, not unfinished work.
-- `npm test` → **171/171 green** (164 Step-7-close baseline + 7 Round
+  branch `main`. Local checkpoint `166d109` contains the Step 3 →
+  Step 8 Round A/C release-candidate pile. The current working tree
+  is the release-prep setup/launcher round (`scripts/setup.mjs`,
+  setup tests, INSTALL/CROSS_MAC_SMOKE/README/HANDOFF/PROGRESS
+  updates, `.gitignore` protection for `setup-out/` and
+  `style-memory-mcp/`). The user manages versioning out-of-band —
+  do NOT commit, branch, push, or reset without an explicit ask.
+  Read `git log` / `git status` if you need history context; treat
+  the working tree as theirs to commit.
+- `npm test` → **198/198 green** (164 Step-7-close baseline + 7 Round
   A: 2 risk-policy enforce, 1 file-queue non-ENOENT wrap, 4 done/
-  orphan sweep). `npm run build` → clean.
+  orphan sweep; + 27 release-prep setup tests for
+  `scripts/setup.mjs`). `npm run build` → clean.
 - **Steps 4, 5, 6, 7 fully ✅** — see prior PROGRESS for details.
   Bridge is single-owner after `dofile` reload (generation guard
   from Step 6 mid-smoke fix #2 + Step 7 B4 startup
@@ -89,6 +89,62 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
     dedicated window for migration, not bolted onto release polish.
     Re-run when we adopt vitest UI or anything else expands the
     real-world surface.
+- **Release-prep setup/launcher ✅ (2026-06-29 same window, manual gate
+  passed live on this Mac).** Goal: another Mac (or this one after a
+  fresh clone) should reach `bridge ready` without hand-writing a single
+  absolute path.
+  - **`scripts/setup.mjs`** (new, plain Node ESM — no TS build step).
+    Pure exports: `buildLauncherLua`, `buildClaudeCodeConfig`,
+    `buildCodexConfig`, `buildCursorConfig`, `parseRenderInBackground`,
+    `defaultReaperResourcePath`, `launcherInstallPath`, `reaperIniPath`,
+    `mcpServerEntryPath`. CLI wraps them with file I/O + `darwin`-only
+    fail-fast, `dist/index.js` existence check, `--no-overwrite` and
+    `--reaper-resource-path <p>` flags, read-only `reaper.ini` probe.
+    Writes only to (a) the REAPER launcher path and (b) `setup-out/`
+    in the repo — NEVER user-global MCP configs.
+  - **REAPER launcher** at
+    `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`.
+    Tiny wrapper: AUTO-GENERATED header documenting the one-time
+    `Actions → Show action list → ReaScript: Load...` registration
+    (REAPER does NOT auto-discover scripts dropped into Scripts/);
+    repo-absolute path baked in; guarded `io.open` so a missing/moved
+    repo prints a friendly error instead of stack-tracing.
+  - **MCP client config artifacts** at `setup-out/`:
+    `claude-code.json` / `codex-config.toml` / `cursor.json`. Each has
+    the absolute dist path baked in. User copies into their own MCP
+    client config — setup never merges into user-global files (merge
+    risk on Codex/Claude Desktop/Cursor configs with other servers is
+    not worth the saved copy-paste).
+  - **`reaper.ini` probe.** Read-only; parses the `[reaper]` section's
+    `workrender` key; any non-zero → ON (bitfield-tolerant — this
+    Mac's value is `8209`, a bitfield, would have falsely read OFF on
+    strict `==1`). Returns `unknown` if section/key absent or input
+    not a string. NEVER writes to `reaper.ini`. Step 7 B2 docs-only
+    decision stays — setup just surfaces the verdict in the next-steps
+    block.
+  - **Tests:** 27 new in `scripts/__tests__/setup.test.mjs`, all
+    pure-function (no writes to `~/Library`). Test bar: 171 → 198.
+  - **Wiring:** `vitest.config.ts` `include` adds
+    `scripts/**/*.test.mjs`; `package.json` adds `"setup": "node
+    scripts/setup.mjs"`. `.gitignore` adds `setup-out/` so each
+    clone's personalized configs never get committed.
+  - **Docs flipped to setup flow:** `docs/INSTALL.md` — new "Install
+    Step 2: Quick Setup" leads, old Layout A/B demoted to
+    "2 (advanced). Manual REAPER Bridge install" with note about
+    removing any prior `__startup.lua` dofile to avoid double-load
+    noise; §3 client config gained `setup-out/` pointer.
+    `docs/CROSS_MAC_SMOKE.md` — §3-5 collapsed into setup + Load... +
+    Run; renumbered 1-8; baseline 171 → 198. `README.md` — first-time
+    install one-liner in How To Run prereqs.
+  - **Manual gate (this Mac, 2026-06-29):** `npm run setup` →
+    launcher landed, three setup-out artifacts written, Render-in-
+    background detected `✓ ON` (matches actual `workrender=8209`).
+    REAPER `Actions → Show action list → ReaScript: Load...` →
+    `start_bridge.lua` → Run → console printed
+    `bridge ready (generation 1) — templates: …` — templates list
+    populated, bridge alive. Cross-Mac flow is exercised end-to-end
+    on this Mac; second-Mac smoke per `docs/CROSS_MAC_SMOKE.md` is
+    the next gate.
 - **Step 7 code shape (final):**
   - `list_templates` + `list_recipes` MCP tools.
     `js-yaml@^4.1.0` in `@streetlight/mcp-server` deps only.
@@ -145,33 +201,34 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 1. **Read the user's MOST RECENT message in this new window.**
    Three plausible paths:
 
-   (a) **"Step 8 closeout" / "tag v0.1" / "let's release."** Round A
-       (release-blocker code) and Round C (docs + audit eval) both ✅;
-       all six open notes are resolved (closed, evaluated, or
-       explicitly deferred). v0.1 is at release-candidate from a
-       Streetlight-side perspective. Optional remaining work the user
-       may still pull in: **Vitest 2 → 4 major upgrade** (zero
-       real-world exposure on current usage — `npm audit --omit=dev`
-       is clean — best in a dedicated session, not glued to release;
-       see HANDOFF "Round C" bullet + PROGRESS Step 8 Round C entry
-       for the full evaluation), and any **v0.2 items** the user wants
-       to scope (Linux queue-dir resolver, idempotency tokens,
-       socket transport, configurable risk policy + done-sweep env
+   (a) **"Run the second-Mac smoke" / "tag v0.1" / "ship."** Step 8
+       Round A + C ✅ and the release-prep setup/launcher landed +
+       manual gate passed on this Mac. v0.1 is at release-candidate.
+       The unfinished gate is `docs/CROSS_MAC_SMOKE.md` actually run
+       on a second Mac (or this one after a fresh clone). Optional
+       work the user may still pull in: **Vitest 2 → 4 major
+       upgrade** (zero real-world exposure on current usage — `npm
+       audit --omit=dev` clean — best in a dedicated session, not
+       glued to release; see HANDOFF "Round C" bullet for the full
+       evaluation), and any **v0.2 items** the user wants to scope
+       (Linux queue-dir resolver, idempotency tokens, socket
+       transport, configurable risk policy + done-sweep env
        overrides, foreground-render chunked-tick loop).
 
-   (b) **"Codex found a bug in Round A/C or earlier."** Locked
-       iteration loop: confirm the bug from code → name the fix + any
-       decision the user owns BEFORE editing → propose 1-2 tight
-       regression notes → wait for sign-off → fix → hand back for
-       re-test. Never preemptively flip ✅. Round A bugs round-trip
-       TS-only (no live REAPER needed unless behavior reaches the
-       bridge); Round C bugs are docs-only; earlier-step bugs take
-       the full live REAPER loop.
+   (b) **"Codex found a bug in Round A/C, release-prep, or earlier."**
+       Locked iteration loop: confirm the bug from code → name the
+       fix + any decision the user owns BEFORE editing → propose 1-2
+       tight regression notes → wait for sign-off → fix → hand back
+       for re-test. Never preemptively flip ✅. Round A and
+       release-prep bugs round-trip TS-only (no live REAPER needed
+       unless behavior reaches the bridge or the launcher); Round C
+       bugs are docs-only; earlier-step bugs take the full live
+       REAPER loop.
 
    (c) **Pivot to something else.** Abandon these first moves and
        follow the new direction.
 
-2. **Tests + build baseline this window:** `npm test` 171/171,
+2. **Tests + build baseline this window:** `npm test` 198/198,
    `npm run build` clean. The `npm run typecheck` script prints a
    `TS6310` "may not disable emit" line then exits 0 — pre-existing
    project setup, do not chase. The `[streetlight-mcp] done-sweep:
@@ -181,7 +238,10 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
 3. **Git out-of-band.** Do not commit, branch, push, reset. The
    working tree is the user's; multi-window working pile is
-   intentional (Step 3 → Step 8 Round A + Round C + `package-lock.json`).
+   intentional (Step 3 → Step 8 Round A + Round C + release-prep
+   setup/launcher + `package-lock.json`). `style-memory-mcp/` is the
+   user's separate repo (`https://github.com/hexingyuofficial/style-memory-mcp.git`)
+   nested under this tree; it's in `.gitignore` and stays untouched.
 
 4. **MCP-server reachability quick check.** `call_template
    render_region {}` returns `PARAMS_INVALID` (missing both required

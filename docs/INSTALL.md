@@ -54,18 +54,83 @@ npm install
 npm run build
 ```
 
-### 2. Install The REAPER Bridge
+### 2. Install The REAPER Bridge (Quick Setup)
 
-The bridge entry point is `reaper/streetlight_bridge.lua`. It `dofile`s
-sibling files under `reaper/packs/core/` (the JSON lib, refs/undo
-modules, the pack manifest, and per-template handlers) **relative to its
-own script path**. So the whole `reaper/` directory has to stay
-together — copying only `streetlight_bridge.lua` into REAPER's Scripts
-folder will fail at startup with a missing-dofile error.
+The recommended path for v0.1 (macOS only). One command, no hand-
+written paths:
+
+```bash
+npm run setup
+```
+
+This generates two things:
+
+1. **The REAPER launcher** at
+   `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`.
+   It's a tiny script that `dofile`s the bridge in this repo with the
+   absolute path baked in. `git pull` in this repo is picked up
+   automatically the next time the launcher runs — re-run `npm run
+   setup` only if you MOVE the repo.
+2. **Filled-in MCP client config snippets** at `setup-out/`
+   (`claude-code.json`, `codex-config.toml`, `cursor.json`). Each has
+   the absolute path for your clone baked in. Copy the snippet for
+   your client into its config. Setup never edits your client config
+   directly — those files may contain other MCP servers, and a merge
+   bug could break unrelated tooling.
+
+Setup also does a read-only probe of `reaper.ini` and warns if
+`Render in background` is OFF.
+
+**Register the launcher in REAPER's Action List (one-time, per Mac):**
+
+REAPER does NOT auto-discover scripts dropped into its Scripts
+folder; you have to add them once via Load...:
+
+1. Open REAPER.
+2. `Actions → Show action list → ReaScript: Load...` →
+   pick `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`.
+3. With it selected, click **Run**. The console (`View → Show console`)
+   should print:
+
+   ```text
+   [streetlight] bridge starting (generation N)
+   [streetlight] queue dir = ...
+   [streetlight] bridge ready (generation N) — templates: item_pitch, ...
+   ```
+
+After Load..., the launcher stays in the Action List — search
+"Streetlight" in future sessions and click Run.
+
+**If you previously hand-wrote a `dofile("...streetlight_bridge.lua")`
+line into `__startup.lua` (the manual install below), REMOVE that
+line now.** The launcher replaces it. Leaving both in place isn't
+harmful — Step 6's generation guard ensures only the newest chunk
+serves requests — but your console will print two "bridge starting"
+lines per REAPER launch, which is noise.
+
+`npm run setup` flags:
+
+- `--no-overwrite` — refuse to overwrite an existing launcher.
+- `--reaper-resource-path /custom/path` — point at a non-default
+  REAPER Resource Path (portable installs, `--reapath` users).
+- `-h` / `--help`.
+
+v0.1 of setup is macOS only. Linux + Windows track with the v0.2
+cross-platform queue-dir work in `docs/ROADMAP.md`.
+
+### 2 (advanced). Manual REAPER Bridge install
+
+If you can't or don't want to use `npm run setup`, the bridge entry
+point is `reaper/streetlight_bridge.lua`. It `dofile`s sibling files
+under `reaper/packs/core/` **relative to its own script path**, so
+the whole `reaper/` directory has to stay together — copying only
+`streetlight_bridge.lua` into REAPER's Scripts folder will fail at
+startup with a missing-dofile error.
 
 Pick one of the two install layouts below.
 
-**Layout A — `dofile` from the repo (recommended; survives `git pull`).**
+**Layout A — `dofile` from the repo (mirrors what `npm run setup`
+generates, but you write the absolute path by hand).**
 
 Leave the repo wherever you cloned it. Add this line to your REAPER
 resource folder's `__startup.lua` (create the file if it does not exist):
@@ -87,8 +152,8 @@ loads.
 ```
 
 Then either point `__startup.lua` at that copy, or `Actions →
-Show action list → Load → pick streetlight_bridge.lua → Run` each
-session. Note: you have to recopy after every repo update.
+Show action list → ReaScript: Load... → pick streetlight_bridge.lua
+→ Run` each session. Note: you have to recopy after every repo update.
 
 REAPER resource folder paths for `__startup.lua`:
 
@@ -120,7 +185,20 @@ Conceptual command:
 node /path/to/streetlight/packages/mcp-server/dist/index.js
 ```
 
-See:
+If you ran `npm run setup` (recommended), the absolute path is
+already baked into ready-to-paste config snippets at:
+
+- `setup-out/claude-code.json`
+- `setup-out/codex-config.toml`
+- `setup-out/cursor.json`
+
+Open the file matching your client and copy the snippet into your
+client's MCP config. (Setup never edits the client config directly —
+those files often contain other MCP servers, and a merge bug could
+break unrelated tooling.)
+
+For the underlying shape (placeholder paths only, used by the manual
+install path above), see:
 
 - `examples/codex-config.example.toml`
 - `examples/claude-code.example.json`

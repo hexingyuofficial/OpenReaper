@@ -1,25 +1,31 @@
 # Cross-Mac Smoke Checklist — v0.1 release-candidate
 
 Reproduce the current v0.1 release-candidate on a second Mac. Goal:
-prove that the working tree as it stands (uncommitted Step 3 → Step 8
-Round A + Round C pile included) installs, builds, tests, and runs
-end-to-end on hardware other than the original dev Mac. NOT a release
-tag, NOT a publish — just an "it works elsewhere" gate.
+prove that a fresh clone of the release-candidate installs, builds,
+tests, and runs end-to-end on hardware other than the original dev Mac.
+NOT a publish — just an "it works elsewhere" gate before tagging.
 
 Original dev environment (the one this is verified against):
 
 - macOS-arm64
 - REAPER 7.71
 - Node ≥ 20 (the engine the workspace was built with)
-- HEAD `ac6bd02` + ~59 uncommitted files in the working tree
+- Release checkpoint `166d109` plus the release-prep setup/launcher
+  commit that contains this checklist.
 
-## 1. Transfer the working tree
+## 1. Clone the release-candidate
 
-Git is **out-of-band** on this project — the working tree carries the
-cumulative Step 3 → Step 8 Round A + Round C changes that have NOT
-been committed. Transferring HEAD alone is wrong. Use one of:
+Use the Git remote once the release-prep setup/launcher commit has
+been pushed:
 
-**Option A (recommended) — `rsync` the live tree, skip `node_modules`:**
+```bash
+git clone <streetlight-repo-url> "steetlight soundly"
+cd "steetlight soundly"
+git status --short            # should be empty
+```
+
+If you are deliberately testing an uncommitted local working tree
+before pushing, use `rsync` instead and skip `node_modules`:
 
 ```bash
 # On the source Mac:
@@ -28,30 +34,8 @@ rsync -av --exclude='node_modules' --exclude='.DS_Store' \
   destmac:"~/Documents/steetlight soundly/"
 ```
 
-`package-lock.json` IS tracked / transferred — that locks deps on the
-destination. `node_modules` is excluded; we re-install fresh.
-
-**Option B — tar + scp:**
-
-```bash
-# On the source Mac:
-tar --exclude='node_modules' --exclude='.DS_Store' \
-  -czf /tmp/streetlight.tgz -C "/Users/Zhuanz/Documents" "steetlight soundly"
-scp /tmp/streetlight.tgz destmac:~/Documents/
-# On the destination Mac:
-cd ~/Documents && tar -xzf streetlight.tgz
-```
-
-Sanity check on the destination after transfer:
-
-```bash
-cd "~/Documents/steetlight soundly"
-git rev-parse HEAD            # should print ac6bd02...
-git status --short | wc -l    # should print roughly 59 (matches source)
-```
-
-If `git status` shows a different count, the transfer dropped or added
-files — re-do the rsync/tar.
+That fallback is for pre-push portability debugging only. The normal
+release-candidate smoke should use a clean clone.
 
 ## 2. Install + build + test baseline
 
@@ -68,7 +52,7 @@ npm test                      # vitest run
 - `npm install` clean (matches lockfile; if a new platform-specific
   binary triggers a warning, that's OK as long as install exits 0).
 - `npm run build` exits 0 with no output (clean tsc -b).
-- `npm test` → `Test Files 20 passed (20)` / `Tests 171 passed (171)`.
+- `npm test` → `Test Files 21 passed (21)` / `Tests 198 passed (198)`.
 
 The single `[streetlight-mcp] done-sweep: readdir failed (EACCES…)`
 line is the **expected best-effort warning** from the "init() resolves
@@ -78,82 +62,94 @@ If tests fail, STOP here. A red bar before REAPER is involved is a
 pure-TS environment delta (Node version, platform binaries) and
 nothing further in this checklist will help.
 
-## 3. REAPER environment
+## 3. Run `npm run setup` (REAPER launcher + MCP config artifacts)
 
-REAPER must be installed and licensed on the destination Mac.
+`npm run setup` does two things from the repo root:
 
-**Version:** 7.71 matches the verified environment. Any REAPER 7.x
-should work, but the `set_config_var_string`-is-nil verdict was
-specifically observed on stock 7.71/macOS-arm64 — `render.lua`'s
-guarded cleanup is the v0.1 path regardless.
+1. Writes a tiny launcher at
+   `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`
+   that `dofile`s the bridge in this repo (absolute path baked in).
+2. Generates filled-in MCP client config snippets under `setup-out/`
+   — `claude-code.json`, `codex-config.toml`, `cursor.json` — each
+   with the absolute path for this clone already inserted. (Setup
+   never edits user-global client configs; copy the snippet you want
+   into your client manually.)
 
-**Arch:** arm64 is verified. Intel macOS is **not verified** for the
-sidecar-saga findings (the `set_config_var_string` API surface may
-differ). The guarded-cleanup path doesn't care, so the demo should
-still work; just note that the path-A theory-elimination is an
-arm64-specific data point.
+Setup also probes `reaper.ini` read-only and tells you whether
+`Render in background` is ON (the #1 cause of demo failure).
 
-**Prefs to set BEFORE running the demo:**
-
-1. `REAPER → Preferences (⌘,) → Audio → Rendering → "Render in
-   background (does not apply to queued renders)"` — **must be ON.**
-   See `docs/INSTALL.md` § Render in background for the full
-   rationale. OFF → demo will hit `BRIDGE_NOT_RUNNING` instead of
-   typed render errors.
-2. (Optional, reproduces the original sidecar-regression environment)
-   leave `autosaveonrender2 = 1` as-is in `reaper.ini` — that's the
-   pref that produces `.wav.RPP` sidecars and confirms the
-   guarded-cleanup contract actually has work to do.
-
-## 4. Install the REAPER bridge
-
-Follow `docs/INSTALL.md` § Install Step 2 (Layout A or B). The bridge
-entry point is `reaper/streetlight_bridge.lua`, but it `dofile`s
-sibling files under `reaper/packs/core/`, so the whole `reaper/`
-directory has to stay together.
-
-Easiest: `dofile` from the repo path you just rsynced — survives
-re-runs of this checklist.
-
-In REAPER's `__startup.lua` (or run it manually once via Actions →
-ReaScript: Run ReaScript):
-
-```lua
-dofile("/Users/<you>/Documents/steetlight soundly/reaper/streetlight_bridge.lua")
+```bash
+npm run setup
 ```
 
-**Expected REAPER console output:**
+**Expected output:** the path of the launcher it wrote, the paths
+of the three setup-out files, the Render-in-background detection
+result, and a numbered "Next steps" block.
 
-```
-[streetlight] bridge starting (generation N)
-[streetlight] queue dir = /Users/<you>/Library/Application Support/Streetlight/queue
-[streetlight] loaded pack 'core' v0.1.0
-[streetlight] bridge ready (generation N) — templates: item_pitch, ...
-```
+`--no-overwrite` refuses to overwrite an existing launcher.
+`--reaper-resource-path /custom/path` overrides the default
+`~/Library/Application Support/REAPER` (portable installs).
 
-If you see `[streetlight] startup-cleanup: reaped K stale running/
-envelopes ...`, that's fine — it's Step 7 B4 doing its job on
-leftover state.
+## 4. Register the launcher in REAPER
 
-A `dofile` error at startup almost always means `reaper/packs/` is
-not sitting next to `streetlight_bridge.lua` — re-check transfer.
+REAPER does NOT auto-discover scripts dropped into its Scripts
+folder. The launcher needs a one-time Load... before it shows up in
+the Action List.
 
-## 5. Configure the agent client
+1. Open REAPER on the destination Mac.
+2. `Actions → Show action list → ReaScript: Load...` → pick
+   `~/Library/Application Support/REAPER/Scripts/Streetlight/start_bridge.lua`.
+3. With it selected in the Action List, click **Run**.
+4. Open the REAPER console (`View → Show console`). Expected:
 
-Pick the client you actually use on this Mac (Codex / Claude Code /
-Cursor / etc.). Templates live in `examples/`:
+   ```text
+   [streetlight] bridge starting (generation N)
+   [streetlight] queue dir = /Users/<you>/Library/Application Support/Streetlight/queue
+   [streetlight] loaded pack 'core' v0.1.0
+   [streetlight] bridge ready (generation N) — templates: item_pitch, ...
+   ```
 
-- `examples/codex-config.example.toml`
-- `examples/claude-code.example.json`
-- `examples/cursor.example.json`
+   `[streetlight] startup-cleanup: reaped K stale running/ envelopes`
+   is fine — Step 7 B4 doing its job on leftover state.
 
-The command in every example is conceptually the same:
+After Load... the launcher persists in the Action List — future
+sessions just search "Streetlight" and Run.
 
-```
-node /Users/<you>/Documents/steetlight soundly/packages/mcp-server/dist/index.js
-```
+**REAPER environment notes:**
 
-After registering, restart the client so it picks up the config.
+- **Version:** 7.71 matches the verified environment. Any REAPER 7.x
+  should work, but the `set_config_var_string`-is-nil verdict was
+  specifically observed on stock 7.71/macOS-arm64 — `render.lua`'s
+  guarded cleanup is the v0.1 path regardless.
+- **Arch:** arm64 is verified. Intel macOS is **not verified** for
+  the sidecar-saga findings (the `set_config_var_string` API surface
+  may differ). The guarded-cleanup path doesn't care, so the demo
+  should still work; just note that the path-A theory-elimination is
+  an arm64-specific data point.
+- **`Render in background` MUST be ON.** Setup's probe should have
+  printed ✓ — if it printed ⚠ OFF, fix it before continuing:
+  `REAPER → Preferences (⌘,) → Audio → Rendering → "Render in
+  background (does not apply to queued renders)"` → check the box.
+- **Optional:** to reproduce the original sidecar-regression environment,
+  leave `autosaveonrender2 = 1` as-is in `reaper.ini` — that's the
+  pref that produces `.wav.RPP` sidecars and confirms the
+  guarded-cleanup contract actually has work to do.
+
+If you previously hand-wrote a `dofile(...streetlight_bridge.lua)`
+line into `__startup.lua`, remove it — the launcher replaces it. The
+generation guard from Step 6 stops them stepping on each other, but
+your console will print two "bridge starting" lines per launch.
+
+## 5. Wire the MCP client
+
+Open `setup-out/<your-client>.<ext>` from the repo and paste the
+snippet into your client's MCP config:
+
+- Claude Code → `setup-out/claude-code.json`
+- Codex → `setup-out/codex-config.toml`
+- Cursor → `setup-out/cursor.json`
+
+Restart the client so it picks up the config.
 
 ## 6. Minimal reachability check
 
