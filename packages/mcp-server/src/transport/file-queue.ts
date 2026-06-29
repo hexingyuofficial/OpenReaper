@@ -59,7 +59,18 @@ export interface FileQueueClientOptions {
   /** First poll interval; backs off geometrically to maxPollIntervalMs. */
   initialPollIntervalMs?: number;
   maxPollIntervalMs?: number;
+  /**
+   * Age (ms) above which a `done/<id>.json` entry is treated as an orphan
+   * and unlinked during `init()`. Orphans accumulate when a callTemplate
+   * times out (the client gave up) but the bridge later writes the result
+   * anyway. Defaults to 24h. Sweep is best-effort and only touches `done/`;
+   * `pending/` and `running/` are off-limits because the bridge owns their
+   * lifecycle. Test-only override.
+   */
+  doneOrphanThresholdMs?: number;
 }
+
+const DEFAULT_DONE_ORPHAN_THRESHOLD_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Client side of the Streetlight file-queue protocol.
@@ -74,6 +85,7 @@ export class FileQueueClient {
   private readonly doneDir: string;
   private readonly initialPollMs: number;
   private readonly maxPollMs: number;
+  private readonly doneOrphanThresholdMs: number;
 
   constructor(opts: FileQueueClientOptions) {
     this.pendingDir = path.join(opts.queueDir, "pending");
@@ -81,12 +93,56 @@ export class FileQueueClient {
     this.doneDir = path.join(opts.queueDir, "done");
     this.initialPollMs = opts.initialPollIntervalMs ?? 50;
     this.maxPollMs = opts.maxPollIntervalMs ?? 200;
+    this.doneOrphanThresholdMs =
+      opts.doneOrphanThresholdMs ?? DEFAULT_DONE_ORPHAN_THRESHOLD_MS;
   }
 
   async init(): Promise<void> {
     await fs.mkdir(this.pendingDir, { recursive: true });
     await fs.mkdir(this.runningDir, { recursive: true });
     await fs.mkdir(this.doneDir, { recursive: true });
+    // Sweep is best-effort: an unreadable done/ or an entry we cannot stat
+    // / unlink must NOT prevent the MCP server from coming up. Any failure
+    // is swallowed inside sweepDoneOrphans.
+    await this.sweepDoneOrphans();
+  }
+
+  /**
+   * Unlink `done/<id>.json` entries whose mtime is older than
+   * `doneOrphanThresholdMs`. Orphans accumulate when callTemplate times out
+   * before the bridge writes its result. Only entries in `done/` are
+   * touched — pending/ and running/ are owned by the bridge.
+   *
+   * Best-effort: any failure (readdir, stat, unlink) is logged to stderr
+   * and swallowed. Never throws.
+   */
+  private async sweepDoneOrphans(): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.doneDir);
+    } catch (e) {
+      process.stderr.write(
+        `[streetlight-mcp] done-sweep: readdir failed (${stringifyError(e)})\n`,
+      );
+      return;
+    }
+
+    const cutoff = Date.now() - this.doneOrphanThresholdMs;
+    for (const name of entries) {
+      const full = path.join(this.doneDir, name);
+      try {
+        const st = await fs.stat(full);
+        // Directories aren't part of the protocol — leave them alone so we
+        // don't surprise anyone who poked something into done/ by hand.
+        if (!st.isFile()) continue;
+        if (st.mtimeMs > cutoff) continue;
+        await fs.unlink(full);
+      } catch (e) {
+        process.stderr.write(
+          `[streetlight-mcp] done-sweep: ${name} skipped (${stringifyError(e)})\n`,
+        );
+      }
+    }
   }
 
   async send<R>(
@@ -134,7 +190,25 @@ export class FileQueueClient {
     let interval = this.initialPollMs;
 
     while (Date.now() < deadline) {
-      const data = await readIfExists(donePath);
+      // `readIfExists` swallows ENOENT (the keep-polling case) but lets any
+      // other error — EACCES if the queue dir lost permissions mid-session,
+      // EIO from disk faults, ENOTDIR if `done/` is no longer a directory —
+      // re-throw. Honor the class contract ("errors never reject") by
+      // wrapping that here into INTERNAL_ERROR. Non-recoverable: the wire
+      // command may or may not have applied, so the agent must call
+      // get_state to inspect actual state (same recovery shape as the
+      // BRIDGE_NOT_RUNNING mutating-timeout case).
+      let data: string | null;
+      try {
+        data = await readIfExists(donePath);
+      } catch (e) {
+        await fs.unlink(pendingPath).catch(() => {});
+        return err(
+          ErrorCodes.INTERNAL_ERROR,
+          `Failed to read bridge response file: ${stringifyError(e)}`,
+          { recoverable: false },
+        );
+      }
       if (data !== null) {
         await fs.unlink(donePath).catch(() => {});
         return parseEnvelope<R>(data);

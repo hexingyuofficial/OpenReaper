@@ -12,6 +12,13 @@ export const ErrorCodes = {
   REGION_NOT_FOUND: "REGION_NOT_FOUND",
   REF_INVALID: "REF_INVALID",
 
+  // Media
+  // Raised by media_import when the supplied path cannot be opened by the
+  // REAPER process — typo'd path, permissions, unmounted drive. Distinct
+  // from INTERNAL_ERROR so agents can tell "wrong input" from "bridge
+  // crashed mid-call".
+  MEDIA_NOT_FOUND: "MEDIA_NOT_FOUND",
+
   // Region
   REGION_NAME_TAKEN: "REGION_NAME_TAKEN",
   REGION_NAME_INVALID: "REGION_NAME_INVALID",

@@ -435,7 +435,7 @@ Do steps in order. Do not start step N+1 while step N's acceptance test still fa
 
 **Build (Lua JSON null fix — carried over from Step 3 Open Questions):**
 
-- `reaper/packs/core/lib/json.lua` currently decodes JSON `null` as Lua `nil`, which silently disappears from objects and array elements. Step 3 templates have no nullable params so this was OK; `item_fade` is the first to need it (fade-in/out `null` = "leave unchanged"). Fix: introduce a sentinel value (`json.null` table) so callers can distinguish "key absent" from "key present with null", and document the convention in `TEMPLATE_SPEC.md`. Update existing get_state encoder to keep emitting empty strings (not nulls) per the locked `name`/`track_name` contract.
+- `reaper/packs/core/lib/json.lua` currently decodes JSON `null` as Lua `nil`, which silently disappears from objects and array elements. Step 3 templates have no nullable params so this was OK; `item_fade` is the first to need it. Tri-state semantics shipped in Step 4c (locked): **absent → leave unchanged, explicit `null` → clear to 0, number ≥ 0 → set that length**. Fix: introduce a sentinel value (`json.null` table) so callers can distinguish "key absent" from "key present with null", and document the convention in `TEMPLATE_SPEC.md`. Update existing get_state encoder to keep emitting empty strings (not nulls) per the locked `name`/`track_name` contract.
 
 **Acceptance:**
 

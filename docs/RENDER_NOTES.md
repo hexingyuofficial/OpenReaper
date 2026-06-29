@@ -4,6 +4,31 @@
 
 If render does not work reliably, the MVP demo does not work. Treat this as the longest single task in Step 6.
 
+> **2026-06-29 amendment.** Step 6 lands `render_region` in code; the live
+> REAPER smoke is the next gate. Three deviations from the original text
+> below were locked during design and apply across the implementation:
+>
+> 1. **Snapshot/restore covers TEN keys, not eight.** `RENDER_STARTPOS`
+>    and `RENDER_ENDPOS` are added because we use `RENDER_BOUNDSFLAG = 0`
+>    (custom time bounds). Without snapshotting them we'd leak our
+>    per-render bounds into the user's render dialog.
+> 2. **`RENDER_PATTERN` is the literal region name, not `"$region"`.**
+>    With `BOUNDSFLAG = 0` (custom time, not project regions),
+>    `$region`'s expansion is not guaranteed. We already have the
+>    resolved name in hand at render time; using it literally makes the
+>    output filename deterministic (`<output_dir>/<region_name>.wav`).
+>    The smoke recipe asserts the exact filename.
+> 3. **Two deadlines, not one.** The MCP-side wire timeout is 60_000 ms
+>    (`RENDER_REGION_TIMEOUT_MS` in `render-region.ts`). The bridge's
+>    internal `RENDER_INTERNAL_DEADLINE_S = 55` s sits 5 s underneath so
+>    `RENDER_TIMEOUT` surfaces with its typed code before the MCP-side
+>    budget trips `BRIDGE_NOT_RUNNING`. Don't sync them — the gap is
+>    load-bearing.
+>
+> The deferred-completion machinery used by `render_region` lives in
+> `streetlight_bridge.lua` § "Deferred-completion slot" — single slot,
+> bridge-internal, agent sees only the normal `Result` envelope.
+
 ## Why Render Is Hard
 
 REAPER's render system is configured through **global, sticky project settings**, not per-call arguments. A render template must:

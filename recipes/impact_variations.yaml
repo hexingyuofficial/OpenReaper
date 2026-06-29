@@ -79,7 +79,7 @@ steps:
     name: track_create
     params:
       name: "Streetlight - Impact Variations"
-      reuse: true
+      reuse_existing: true
     bind: variations_track
 
   - for_each: variations
@@ -90,7 +90,7 @@ steps:
       - tool: call_template
         name: item_duplicate
         params:
-          item_id: "selected:0"
+          item_id: "{{ selection.selection.items[0].id }}"
           track_id: "{{ variations_track.changed_ids[0] }}"
           position: "{{ i * 1.0 }}"
         bind: dup
@@ -130,10 +130,13 @@ steps:
 
       - tool: call_template
         name: render_region
+        # render_region uses a strict Zod schema { region_id, output_dir }.
+        # Do NOT add format / sample_rate / channels here — they will fail
+        # PARAMS_INVALID before reaching the bridge. WAV24 is hardcoded for
+        # v0.1 (see docs/RENDER_NOTES.md + Step 6 decisions).
         params:
           region_id: "{{ region.changed_ids[0] }}"
           output_dir: "{{ inputs.output_dir }}"
-          format: wav
 
 # Notes for the agent reading this recipe:
 #
@@ -152,3 +155,9 @@ steps:
 #   (variable lookup, index, basic filters like `default`) is enough.
 # - If the agent cannot resolve a placeholder, it should fail clearly rather
 #   than guess.
+# - This recipe assumes exactly one selected item. After the initial
+#   `get_state` step the agent MUST abort before any mutating call if
+#   `selection.selection.items.length !== 1`. The bound GUID at
+#   `selection.selection.items[0].id` is then reused as the duplicate source
+#   for every variation, so loop iterations cannot drift if REAPER's live
+#   selection changes mid-recipe.

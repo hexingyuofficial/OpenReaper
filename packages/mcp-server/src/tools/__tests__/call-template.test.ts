@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { CapabilityRegistry } from "@streetlight/core";
+import { z } from "zod";
+import {
+  CapabilityRegistry,
+  RiskLevels,
+  withAllowed,
+} from "@streetlight/core";
 import { FileQueueClient } from "../../transport/file-queue.js";
 import { startFakeBridge } from "../../transport/__tests__/fake-bridge.js";
 import { callTemplate } from "../call-template.js";
@@ -304,5 +309,85 @@ describe("callTemplate", () => {
     // never more.
     const left = await fs.readdir(pendingDir).catch(() => [] as string[]);
     expect(left.length).toBeLessThanOrEqual(1);
+  });
+
+  describe("risk policy enforcement", () => {
+    // Fresh registry per test — we deliberately add a `destructive`
+    // template that the v0.1 core registry does not contain, so we can
+    // exercise the RISK_BLOCKED gate without coupling to which templates
+    // happen to be `write_safe` / `filesystem` today.
+    function registerDestructiveTemplate(reg: CapabilityRegistry): void {
+      reg.register({
+        name: "fake_destructive",
+        description: "Test-only destructive template (never reaches bridge).",
+        pack: "test",
+        risk: RiskLevels.destructive,
+        mutates: true,
+        undoable: false,
+        idempotent: false,
+        params: z.object({}).strict(),
+        result: z.object({}),
+      });
+    }
+
+    it("RISK_BLOCKED under default policy, no queue write, no params parse", async () => {
+      const isolatedRegistry = new CapabilityRegistry();
+      registerDestructiveTemplate(isolatedRegistry);
+
+      // No fake bridge: if the gate let the call through we'd hit a timeout,
+      // not a clean RISK_BLOCKED.
+      const result = await callTemplate(client, isolatedRegistry, {
+        name: "fake_destructive",
+        // Deliberately pass an unknown param. RISK_BLOCKED must fire BEFORE
+        // params parse so this junk should not produce PARAMS_INVALID.
+        params: { bogus: 1 },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("RISK_BLOCKED");
+        expect(result.error.message).toMatch(/destructive/);
+        expect(result.error.message).toMatch(/fake_destructive/);
+      }
+
+      // Queue must be untouched — pending/ empty proves we short-circuited
+      // before any wire write.
+      const pendingDir = path.join(queueDir, "pending");
+      const pending = await fs.readdir(pendingDir);
+      expect(pending).toEqual([]);
+    });
+
+    it("explicit policy granting destructive lets the call through to the bridge", async () => {
+      const isolatedRegistry = new CapabilityRegistry();
+      registerDestructiveTemplate(isolatedRegistry);
+
+      const bridge = startFakeBridge(queueDir, () => ({
+        ok: true,
+        result: {
+          template: "fake_destructive",
+          changed_count: 0,
+          changed_ids: [],
+          truncated: false,
+        },
+      }));
+      try {
+        const result = await callTemplate(
+          client,
+          isolatedRegistry,
+          { name: "fake_destructive", params: {} },
+          undefined,
+          withAllowed([
+            RiskLevels.read,
+            RiskLevels.write_safe,
+            RiskLevels.filesystem,
+            RiskLevels.destructive,
+          ]),
+        );
+        expect(result.ok).toBe(true);
+        expect(bridge.seen).toHaveLength(1);
+      } finally {
+        await bridge.stop();
+      }
+    });
   });
 });

@@ -186,6 +186,44 @@ track") could otherwise return 500 descriptors × 200 bytes = 100 KB in one
 result. The id-only contract makes the worst case ~1.5 KB regardless of how
 many items the template touched.
 
+#### `changed_ids` shape — and the one carve-out (Step 6)
+
+Every template except `render_region` uses **project-entity refs** in
+`changed_ids`:
+
+- `"guid:{...}"` — item or track GUID
+- `"region:NAME"` — region (no native GUID API in REAPER 7)
+- `"track:Name"` — bare track name (rare; only when the agent fed one in)
+
+`render_region` is the **single carve-out**. Its `changed_ids` holds
+**absolute artifact paths** the agent can hand to a media-player or a
+follow-up `media_import`:
+
+```json
+{
+  "ok": true,
+  "result": {
+    "template":      "render_region",
+    "changed_count": 1,
+    "changed_ids":   ["/Users/.../var_01.wav"],
+    "truncated":     false
+  }
+}
+```
+
+The deviation is deliberate: render produces nothing inside the project
+that an entity-ref could point at, and we don't want to add a "render"
+ref kind in v0.1. The `entity_kind = "render"` manifest entry routes the
+path into `LAST_RESULT.renders` so the bridge's cross-bucket clear stays
+exhaustive, but there's no `last_result:render:N` resolver in v0.1.
+
+**Do NOT generalize this carve-out to other templates.** A future
+template that "creates an MP3 from the project" would inherit it; one
+that "renames a track" would not. If you're unsure, ask: is the thing my
+handler produced addressable as a REAPER project entity? Yes → use the
+entity ref. No → it's a render-shaped output and you need to revisit
+this section before adding it.
+
 ### Empty Strings vs Missing Fields
 
 `name` and `track_name` are required `string` on every descriptor. When the

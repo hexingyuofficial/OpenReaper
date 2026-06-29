@@ -13,6 +13,8 @@ import {
   MIN_GET_STATE_LIMIT,
 } from "./tools/get-state.js";
 import { callTemplate } from "./tools/call-template.js";
+import { listTemplates } from "./tools/list-templates.js";
+import { listRecipes } from "./tools/list-recipes.js";
 import { registerCoreTemplates } from "./templates/index.js";
 import { z } from "zod";
 
@@ -25,7 +27,7 @@ async function main(): Promise<void> {
   registerCoreTemplates(registry);
 
   process.stderr.write(
-    `[streetlight-mcp] queue=${queueDir}\n[streetlight-mcp] step 3 — ping + get_state + call_template (${registry.size()} templates)\n`,
+    `[streetlight-mcp] queue=${queueDir}\n[streetlight-mcp] step 7 — ping + get_state + list_templates + list_recipes + call_template (${registry.size()} templates)\n`,
   );
 
   const server = new McpServer({
@@ -68,6 +70,42 @@ async function main(): Promise<void> {
         scope: scope ?? "selection",
         limit: limit ?? DEFAULT_GET_STATE_LIMIT,
       });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+        isError: !result.ok,
+      };
+    },
+  );
+
+  server.tool(
+    "list_templates",
+    "List every registered Streetlight template with its metadata and JSON Schemas (risk, mutates, undoable, idempotent, params_schema, result_schema). Does NOT touch the REAPER bridge — the registry is in-process. Use this to discover what call_template accepts before invoking it.",
+    {},
+    async () => {
+      const result = listTemplates(registry);
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+        isError: !result.ok,
+      };
+    },
+  );
+
+  server.tool(
+    "list_recipes",
+    "List Streetlight recipes (YAML workflow guides agents follow). Re-reads recipes/*.yaml on every call (no caching). Recipes are agent-readable docs, NOT server-executed — the agent orchestrates each step itself via call_template. Bad YAML files are skipped and surface in result.warnings[]; the tool only fails on infrastructure errors. Override the directory with STREETLIGHT_RECIPES_DIR env var.",
+    {},
+    async () => {
+      const result = await listRecipes();
       return {
         content: [
           {

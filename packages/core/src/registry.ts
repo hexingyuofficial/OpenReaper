@@ -16,6 +16,16 @@ export interface CapabilityDefinition<
   idempotent: boolean;
   params: P;
   result: R;
+  /**
+   * Optional per-template wall-clock budget for the file-queue round trip.
+   * When unset, callTemplate uses DEFAULT_CALL_TEMPLATE_TIMEOUT_MS (5 s).
+   * Step 6's `render_region` sets this to 60_000 because render can take
+   * tens of seconds. Note this is the OUTER timeout the MCP client waits
+   * for the bridge's done file; the bridge has its own (slightly shorter)
+   * internal deadline for the deferred-completion poll. See
+   * docs/RENDER_NOTES.md.
+   */
+  timeoutMs?: number;
 }
 
 export interface CapabilityMetadata {

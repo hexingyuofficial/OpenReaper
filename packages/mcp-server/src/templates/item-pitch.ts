@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { CapabilityDefinition } from "@streetlight/core";
+import { callTemplateResultSchema } from "./_shared.js";
 
 /**
  * `item_pitch` — set the pitch of an item's active take, in semitones.
@@ -24,6 +25,7 @@ const ItemPitchParams = z
       ),
     semitones: z
       .number()
+      .finite()
       .min(-24)
       .max(24)
       .describe(
@@ -32,23 +34,11 @@ const ItemPitchParams = z
   })
   .strict();
 
-/**
- * Locked `call_template` result shape. This is the SAME schema for every
- * template; it lives next to `item_pitch` only because it is the first
- * template to ship. Step 4 will lift this into a shared module.
- */
-const CallTemplateResultSchema = z
-  .object({
-    template: z.literal("item_pitch"),
-    changed_count: z.number().int().min(0),
-    changed_ids: z.array(z.string()).max(50),
-    truncated: z.boolean(),
-  })
-  .strict();
+const ItemPitchResult = callTemplateResultSchema("item_pitch");
 
 export const itemPitchDefinition: CapabilityDefinition<
   typeof ItemPitchParams,
-  typeof CallTemplateResultSchema
+  typeof ItemPitchResult
 > = {
   name: "item_pitch",
   description: "Set the active take's pitch (in semitones) on the referenced item.",
@@ -58,5 +48,5 @@ export const itemPitchDefinition: CapabilityDefinition<
   undoable: true,
   idempotent: true, // Setting pitch to N twice yields the same state.
   params: ItemPitchParams,
-  result: CallTemplateResultSchema,
+  result: ItemPitchResult,
 };

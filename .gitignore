@@ -20,6 +20,8 @@ reaper/*
 !reaper/packs/
 !reaper/packs/**
 !reaper/.gitkeep
+# Re-ignore Finder metadata that `!reaper/packs/**` would otherwise re-include.
+reaper/**/.DS_Store
 
 # REAPER artifacts wherever they appear
 *.RPP

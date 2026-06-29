@@ -72,7 +72,7 @@ export type ReaperVersion = string;
  * Rules (enforced at the Lua dispatcher, not in individual templates):
  *
  * - `changed_count` is the **true** count of items the template mutated.
- * - `changed_ids` is capped at 50 GUIDs in mutation order. If
+ * - `changed_ids` is capped at 50 entries in mutation order. If
  *   `changed_count > 50` then `truncated: true` and the array contains the
  *   first 50.
  * - The result NEVER embeds `ItemDescriptor` or other rich payloads, even
@@ -83,10 +83,30 @@ export type ReaperVersion = string;
  * This shape is the same for read-only, write-safe, filesystem-touching,
  * and (eventually) destructive templates. Bridge dispatcher normalizes —
  * individual handlers only return `{ changed_ids = [...] }`.
+ *
+ * `changed_ids` entry shape — and the one carve-out:
+ *
+ * Every template except `render_region` uses project-entity refs:
+ *   "guid:{...}"  — item or track GUID
+ *   "region:NAME" — region (no native GUID API in REAPER 7)
+ *   "track:Name"  — bare track name (rare)
+ *
+ * `render_region` is the SINGLE carve-out: its `changed_ids` carries
+ * absolute artifact paths (e.g. `["/Users/.../var_01.wav"]`). The deviation
+ * is documented in docs/RESPONSE_BUDGET.md § call_template — don't
+ * generalize. If you're writing a new template and unsure: does the thing
+ * the handler produced exist inside the project as a REAPER entity? Yes →
+ * entity ref. No → revisit the carve-out section before shipping.
  */
 export interface CallTemplateResult {
   template: string;
   changed_count: number;
+  /**
+   * Per-template entry shape; see the interface doc for the rule. Most
+   * templates fill this with project-entity refs (`guid:{...}`,
+   * `region:NAME`, `track:Name`). `render_region` fills it with absolute
+   * artifact paths instead — the documented v0.1 carve-out.
+   */
   changed_ids: string[];
   truncated: boolean;
 }
