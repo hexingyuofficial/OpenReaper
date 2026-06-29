@@ -28,6 +28,8 @@ export interface QueueCommand<P = unknown> {
   /** Template name when `kind === "template"`. Empty otherwise. */
   name?: string;
   params: P;
+  /** Template structural verification spec when `kind === "template"`. */
+  expected_delta?: unknown;
   /** ISO 8601 UTC timestamp. */
   created_at: string;
 }

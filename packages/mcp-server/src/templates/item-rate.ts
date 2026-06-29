@@ -48,6 +48,7 @@ export const itemRateDefinition: CapabilityDefinition<
   entity_kind: "item",
   undo_flags: ["ITEMS"],
   idempotent: true,
+  expectedDelta: { count: 1 },
   params: ItemRateParams,
   result: ItemRateResult,
   examples: [

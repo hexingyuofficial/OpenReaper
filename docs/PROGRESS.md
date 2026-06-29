@@ -11,8 +11,35 @@ first.
 
 ## Current Status
 
-**Kernel hardening Slice 03 ✅ live-smoked / commit-ready
+**Kernel hardening Slice 04 ✅ live-smoked / commit-ready
 (2026-06-29).** Architect packet lives at
+`docs/plans/SLICE_04_ARCHITECT_PLAN.md`; source master plans remain
+`docs/plans/KERNEL_HARDENING_PLAN.md` and
+`docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 04 is the H2
+minimum structural verification slice: `ExpectedDelta` v1 is now
+active on the descriptor surface, `callTemplate` sends it over the
+queue as `expected_delta`, the Lua bridge snapshots item/track/region
+counts around successful synchronous template handlers, and mismatches
+return typed `VERIFY_FAILED` with `recoverable:false`, structured
+details, and the required recovery phrase telling agents to call
+`get_state`. Normal green-path behavior is intended to remain
+unchanged. `track_create` uses `maybeCreates` to preserve the
+`reuse_existing:true` no-create success path; `render_region` omits
+`expectedDelta` and remains the deferred artifact-path carve-out.
+Static descriptor redlines now fail missing or incoherent
+`expectedDelta` declarations. Code baseline is green: `npm test`
+244/244, `npm run build` clean, `npm run check:manifest` green,
+`npm run check:error-codes-fresh` green (22 codes), and
+`git diff --check` clean. Live smoke passed on REAPER
+7.71/macOS-arm64 after a full REAPER restart and current
+`start_bridge.lua` load: `track_create` create/reuse both hit the same
+track GUID, read scopes did not pollute `LAST_RESULT`, `media_import`
+and in-place `item_pitch` passed structural verification,
+`region_create` and `render_region` passed, and a raw-queue forced
+mismatch returned typed `VERIFY_FAILED` without updating `LAST_RESULT`.
+
+**Kernel hardening Slice 03 ✅ live-smoked, committed, and pushed
+(2026-06-29, `4e80839`).** Architect packet lives at
 `docs/plans/SLICE_03_ARCHITECT_PLAN.md`; the source master plans are
 `docs/plans/KERNEL_HARDENING_PLAN.md` and
 `docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 03 is the H5
@@ -416,14 +443,110 @@ Live/minimal activity smoke:
   truncated:false }`. The smoke track is left in the open REAPER
   project for undo/delete.
 
+### Kernel hardening Slice 04 (2026-06-29) — structural expectedDelta verification ✅
+
+Scope: implement the H2 minimum safe slice from
+`docs/plans/SLICE_04_ARCHITECT_PLAN.md`. This is structural
+verification only: before/after entity-count checks, no field-level
+checks, no rollback, no handler rewrites, no `manifest.lua` changes,
+and no verification for deferred `render_region`.
+
+What changed:
+
+- `packages/core/src/registry.ts` — `ExpectedDelta` v1 is now
+  `{ count: number | "any"; creates?; maybeCreates?; deletes? }`.
+  Descriptor validation rejects mutually incompatible
+  `creates` / `maybeCreates` / `deletes` modes and rejects
+  `maybeCreates:true` with `count:"any"`.
+- `packages/core/src/errors.ts` — new `VERIFY_FAILED` error code,
+  non-recoverable by default.
+- Ten undoable mutating descriptors now declare `expectedDelta`:
+  in-place item/track templates use `{count:1}`;
+  `item_duplicate` and `region_create` use `{count:1, creates:true}`;
+  `media_import` uses `{count:"any", creates:true}`; and
+  `track_create` uses `{count:1, maybeCreates:true}` to preserve the
+  legal reuse path. `render_region` intentionally omits it.
+- `packages/core/src/queue.ts`,
+  `packages/mcp-server/src/transport/file-queue.ts`, and
+  `packages/mcp-server/src/tools/call-template.ts` carry descriptor
+  metadata over the queue as `expected_delta`.
+- `reaper/packs/core/verify.lua` (new) owns structural snapshots,
+  diffs, and checks for item/track/region counts. `streetlight_bridge.lua`
+  snapshots before synchronous handler execution, checks after handler
+  success, and only then calls `finalize_template`. A mismatch returns
+  typed `VERIFY_FAILED` with `recoverable:false`, `error.details =
+  {expected, actual, changed_count}`, and the required phrase:
+  "The mutation has been applied — call get_state to inspect actual
+  state."
+- `scripts/manifest-alignment.mjs` now also validates descriptor
+  completeness/coherence: every mutating undoable template must have
+  `expectedDelta`, non-undoable templates must not, delta modes must
+  be mutually exclusive, and `maybeCreates` requires a numeric count.
+- Tests updated across registry metadata, `list_templates`,
+  `call_template` on-wire payloads, manifest static checks,
+  error-code generation, fake bridge error `details`, and Lua
+  structure. `VERIFY_FAILED` details are surfaced without retry.
+
+Verification:
+
+- `npm test` → 244/244 green.
+- `npm run build` → clean.
+- `npm run check:manifest` → `Streetlight manifest alignment ok (11 templates).`
+- `npm run check:error-codes-fresh` → `Streetlight error codes fresh (22 codes).`
+- `git diff --check` → clean.
+- Focused reviewer pass → no blocking findings.
+
+Live smoke (REAPER 7.71/macOS-arm64):
+
+- User fully quit/reopened REAPER and loaded the current
+  `start_bridge.lua`.
+- S0 `ping` → connected, `reaper_version="7.71/macOS-arm64"`.
+- S8 `list_templates` → 11 templates. Ten undoable mutating templates
+  expose `expectedDelta`; `track_create.expectedDelta` is
+  `{count:1, maybeCreates:true}`; `render_region` omits it.
+- S1/S1b `track_create name:"smoke04-mc-1782743061140"
+  reuse_existing:true` → create then reuse both returned
+  `guid:{732FDB51-4926-3641-9BCD-B414EDC7CBBC}`; `get_state(tracks)`
+  confirmed only one track with that name, proving `maybeCreates`
+  accepts both +1 and 0 delta paths.
+- S7 read-scope regression → `get_state(tracks)` after S1b did not
+  touch `LAST_RESULT`; `track_rename track_id:"last_result:track:0"`
+  succeeded against the same GUID.
+- S4 `media_import` into the smoke track imported
+  `/System/Library/Sounds/Ping.aiff`, returned
+  `guid:{E2B0A51D-B0DB-A84A-9658-0C396A8C45AD}`, and satisfied
+  `{count:"any", creates:true}`.
+- S2 `item_pitch` on that imported item succeeded as in-place
+  `{count:1}` verification.
+- S3 `region_create name:"smoke04-r1-1782743061140" item_id:<item>`
+  returned `region:smoke04-r1-1782743061140`.
+- S5 `render_region` on that region wrote
+  `/var/folders/n5/dxh3rm291xq9js6hqjdhn1br0000gn/T/streetlight-slice04-render-1782743061140/smoke04-r1-1782743061140.wav`,
+  returned only that WAV path in `changed_ids`, and the output dir
+  contained exactly that WAV (no `.RPP` / `.RPP-bak` sidecar). The
+  temporary output directory was removed after smoke.
+- S6 raw-queue forced mismatch: sent `item_pitch` with deliberately
+  wrong `expected_delta={count:1, creates:true}`. Bridge returned
+  `VERIFY_FAILED`, `recoverable:false`, message contained "The
+  mutation has been applied — call get_state to inspect actual state",
+  and details were
+  `{actual:{items:0,regions:0,tracks:0}, changed_count:1,
+  expected:{count:1,creates:true}}`.
+- S6 follow-up `track_rename track_id:"last_result:track:0"` still hit
+  `guid:{732FDB51-4926-3641-9BCD-B414EDC7CBBC}`, proving
+  `VERIFY_FAILED` did not finalize or update `LAST_RESULT`.
+- Temporary smoke scripts and render files were removed. Smoke tracks /
+  regions/items remain in the open REAPER project for manual Cmd+Z or
+  deletion; they are not repository state.
+
 
 
 ### v0.1 progress at a glance
 
 | | Done | Remaining |
 |---|---|---|
-| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-03 ✅ | Slice 03 commit/push |
-| Tests | 237/237 green | none |
+| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-04 ✅ | Slice 04 commit/push |
+| Tests | 244/244 green | none |
 
 **9 / 9 v0.1 steps shipped; kernel hardening Slice 03 is now the live
 edge.** Step 6 (render) closed
@@ -462,18 +585,18 @@ gate passed live on this Mac (console: `bridge ready (generation
 tests). The second-Mac smoke per `docs/CROSS_MAC_SMOKE.md` is the
 remaining gate before any release tag. Kernel Slice 01 was committed
 and pushed at `baa13bd`; Slice 02 was committed and pushed at
-`e93d39e`; Slice 03 is the current uncommitted, live-smoked code-drop
-adding H5 descriptor authority, manifest alignment, and error-code
-generation.
+`e93d39e`; Slice 03 was committed and pushed at `4e80839`. Slice 04
+is the current uncommitted, live-smoked code-drop adding H2 structural
+verification.
 
 ### Next action
 
-1. **Commit Kernel Slice 03 when the user asks.** M0 and M1-M3 are
-   green. Current baseline: `npm test` 237/237, build clean,
-   `check:manifest` green, `check:error-codes-fresh` green,
-   `git diff --check` clean.
+1. **Commit Kernel Slice 04 when the user asks.** Current code
+   baseline: `npm test` 244/244, build clean, `check:manifest` green,
+   `check:error-codes-fresh` green, `git diff --check` clean, focused
+   reviewer pass, and REAPER live smoke green.
 2. **Second-Mac smoke / v0.1 release tag remains available after
-   Slice 03 closes.** Setup/launcher reproducer is ready;
+   Slice 04 closes.** Setup/launcher reproducer is ready;
    `docs/CROSS_MAC_SMOKE.md` is still the runbook.
 
 
@@ -3134,12 +3257,13 @@ streetlight/
 
 1. **Read `docs/RESPONSE_BUDGET.md` first.** Everything Step 4+ is bound by the shapes locked there.
 
-2. **Kernel hardening Slice 03 is commit-ready.** Read
-   `docs/plans/SLICE_03_ARCHITECT_PLAN.md` before touching code. M0
-   is green (`npm test` 237/237, build clean, `check:manifest` green,
-   `check:error-codes-fresh` green, `git diff --check` clean), and
-   M1-M3 live/minimal activity smoke passed on REAPER
-   7.71/macOS-arm64. Do not commit unless the user explicitly asks.
+2. **Kernel hardening Slice 04 is live-smoked and commit-ready.** Read
+   `docs/plans/SLICE_04_ARCHITECT_PLAN.md` before touching code.
+   Checks are green (`npm test` 244/244, build clean,
+   `check:manifest` green, `check:error-codes-fresh` green,
+   `git diff --check` clean), focused reviewer pass is clean, and
+   REAPER live smoke passed. Do not commit unless the user explicitly
+   asks.
 
 4. **Step 3 + Step 4a contracts are still law.** `call_template`
    envelope shape is `{ template, changed_count, changed_ids, truncated }`.

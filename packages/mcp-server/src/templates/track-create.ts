@@ -57,6 +57,7 @@ export const trackCreateDefinition: CapabilityDefinition<
   undo_flags: ["TRACKCFG"],
   // Not idempotent: calling twice with reuse_existing=false produces two tracks.
   idempotent: false,
+  expectedDelta: { count: 1, maybeCreates: true },
   params: TrackCreateParams,
   result: TrackCreateResult,
   examples: [

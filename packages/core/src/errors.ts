@@ -47,6 +47,13 @@ export const ErrorCodes = {
   // See docs/RESPONSE_BUDGET.md.
   RESPONSE_TOO_LARGE: "RESPONSE_TOO_LARGE",
 
+  // Runtime verification
+  // Raised after a mutating template has completed when the bridge's
+  // structural before/after count check disagrees with descriptor
+  // expectedDelta. The mutation may already be in the undo history; agents
+  // must inspect state rather than blindly retry.
+  VERIFY_FAILED: "VERIFY_FAILED",
+
   // Last resort
   INTERNAL_ERROR: "INTERNAL_ERROR",
 } as const;
@@ -79,6 +86,7 @@ export interface StreetlightError {
  */
 const NON_RECOVERABLE: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
   ErrorCodes.INTERNAL_ERROR,
+  ErrorCodes.VERIFY_FAILED,
 ]);
 
 export function defaultRecoverable(code: ErrorCode): boolean {

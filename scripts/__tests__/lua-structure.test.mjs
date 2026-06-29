@@ -155,4 +155,27 @@ describe("Lua bridge structure", () => {
     expect(bridge).not.toMatch(/rawget\(t, "__streetlight_array"\)\s*==\s*true\s*then return true/);
     expect(bridge).not.toMatch(/TrackFX_GetFXIdent/);
   });
+
+  it("wires Slice 04 expected_delta structural verification before finalizing templates", async () => {
+    const [bridge, verify] = await Promise.all([
+      readRepoFile("reaper/streetlight_bridge.lua"),
+      readRepoFile("reaper/packs/core/verify.lua"),
+    ]);
+
+    expect(bridge).toMatch(/packs\/core\/verify\.lua/);
+    expect(bridge).toMatch(/local expected_delta = cmd\.expected_delta/);
+    expect(bridge).toMatch(/snap_before = verify\.snapshot\(\)/);
+    expect(bridge).toMatch(/local changed_for_verify, changed_total = normalize_changed_ids\(raw_changed\)/);
+    expect(bridge).toMatch(/verify\.check\(expected_delta, changed_for_verify, delta, entry\.entity_kind, changed_total\)/);
+    expect(bridge).toMatch(/changed_count = changed_total/);
+    expect(bridge).toMatch(/code = "VERIFY_FAILED"/);
+    expect(bridge).toMatch(/The mutation has been applied.+call get_state to inspect actual state/);
+
+    expect(verify).toMatch(/function M\.snapshot\(\)/);
+    expect(verify).toMatch(/function M\.diff\(before, after\)/);
+    expect(verify).toMatch(/function M\.check\(expected, changed_ids, delta, entity_kind, changed_count_override\)/);
+    expect(verify).toMatch(/changed_count = changed_count_override/);
+    expect(verify).toMatch(/expected\.maybeCreates/);
+    expect(verify).toMatch(/expected 0 or \+%d \(maybeCreates\)/);
+  });
 });

@@ -43,6 +43,7 @@ describe("listTemplates", () => {
     expect(callTemplateEnvelope).toBeDefined();
     expect(callTemplateEnvelope?.entity_kind).toBe("item");
     expect(callTemplateEnvelope?.undo_flags).toEqual(["ITEMS"]);
+    expect(callTemplateEnvelope?.expectedDelta).toEqual({ count: 1 });
     expect(callTemplateEnvelope?.examples[0]?.params).toEqual({
       item_id: "selected:0",
       semitones: -12,
@@ -60,16 +61,22 @@ describe("listTemplates", () => {
       expect(template.entity_kind).toMatch(/^(item|track|region|render)$/);
       expect(Array.isArray(template.undo_flags)).toBe(true);
       expect(template.examples.length).toBeGreaterThanOrEqual(1);
-      expect(template).not.toHaveProperty("expectedDelta");
       expect(template).not.toHaveProperty("reads");
       expect(template).not.toHaveProperty("writes");
 
-      if (template.undoable) {
+      if (template.mutates && template.undoable) {
         expect(template.undo_flags.length).toBeGreaterThan(0);
+        expect(template.expectedDelta).toBeDefined();
       } else {
         expect(template.undo_flags).toEqual([]);
+        expect(template).not.toHaveProperty("expectedDelta");
       }
     }
+
+    const trackCreate = result.result.templates.find((t) => t.name === "track_create");
+    expect(trackCreate?.expectedDelta).toEqual({ count: 1, maybeCreates: true });
+    const renderRegion = result.result.templates.find((t) => t.name === "render_region");
+    expect(renderRegion).not.toHaveProperty("expectedDelta");
   });
 
   it("serializes cleanly through JSON.stringify (no functions or cycles)", () => {

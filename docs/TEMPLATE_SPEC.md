@@ -86,6 +86,30 @@ safe. See `errors.ts` `StreetlightError.recoverable` jsdoc and the
 `call_template` MCP tool description for the mutating-timeout
 counter-example.
 
+Slice 04 adds one non-recoverable runtime-verification failure:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "VERIFY_FAILED",
+    "message": "Template 'item_pitch' produced delta inconsistent with expectedDelta. ... The mutation has been applied — call get_state to inspect actual state.",
+    "recoverable": false,
+    "details": {
+      "expected": { "count": 1 },
+      "actual": { "items": 1, "tracks": 0, "regions": 0 },
+      "changed_count": 1
+    }
+  }
+}
+```
+
+`VERIFY_FAILED` means a handler returned successfully, but the bridge's
+before/after structural snapshot disagreed with that template's
+`expectedDelta`. The mutation may already be in the project and undo
+history. Agents must inspect state with `get_state`; they must not
+blindly retry.
+
 ## Safety Requirements
 
 Mutating templates must:
@@ -95,6 +119,8 @@ Mutating templates must:
 - create undo points
 - update REAPER arrange view when needed
 - return what changed
+- declare `expectedDelta` unless they are an intentional deferred
+  carve-out like `render_region`
 
 Templates must not:
 
@@ -202,6 +228,44 @@ Templates that accept nullable params should:
 The encoder is symmetric — Lua handlers that need to emit explicit
 `null` (rare in v0.1) set the value to `json.null`. Plain Lua `nil`
 inside a table still means "absent" and disappears as before.
+
+## Runtime Structural Verification (Slice 04)
+
+Every synchronous undoable mutating template declares an `expectedDelta`
+descriptor in TypeScript:
+
+```ts
+type ExpectedDelta = {
+  count: number | "any";
+  creates?: boolean;
+  maybeCreates?: boolean;
+  deletes?: boolean;
+};
+```
+
+The MCP server sends this descriptor to the bridge as
+`expected_delta`. The bridge snapshots item, track, and region counts
+before handler execution, snapshots again after handler success, and
+checks the observed structural delta before it updates `LAST_RESULT`.
+
+Modes:
+
+- no mode flag → in-place mutation, `changed_count` equals `count` and
+  the relevant entity count does not move
+- `creates:true` → positive entity-count movement
+- `deletes:true` → negative entity-count movement
+- `maybeCreates:true` → either zero movement or the numeric positive
+  count; used narrowly for `track_create` with `reuse_existing:true`
+- `count:"any"` → at least one changed id; used by `media_import`
+
+`creates`, `maybeCreates`, and `deletes` are mutually exclusive.
+`maybeCreates` cannot be paired with `count:"any"`.
+
+This is intentionally not field-level verification. The bridge does not
+check that `D_PITCH` equals `params.semitones` or that a rendered WAV
+has the requested format. Those are later H2 slices. `render_region`
+omits `expectedDelta` in v0.1 because it is deferred and returns an
+artifact path, not a project-entity ref.
 
 ## Reference Resolution (refs.lua)
 

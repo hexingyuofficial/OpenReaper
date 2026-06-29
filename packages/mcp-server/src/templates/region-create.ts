@@ -116,6 +116,7 @@ export const regionCreateDefinition: CapabilityDefinition<
   // Not idempotent: a second call with the same name returns REGION_NAME_TAKEN
   // (and creates no marker), but the first call DID create one.
   idempotent: false,
+  expectedDelta: { count: 1, creates: true },
   params: RegionCreateParams,
   result: RegionCreateResult,
   examples: [

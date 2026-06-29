@@ -58,7 +58,7 @@ Possible additions:
 - **foreground-render support via chunked-tick render loop.** v0.1 requires `REAPER → Preferences → Audio → Rendering → "Render in background" = ON` (Step 7 decision B2; see `docs/INSTALL.md` § Render in background). When OFF, REAPER's main thread blocks for the entire render and the bridge tick stalls, so any 60 s wire timeout fires before the typed `RENDER_TIMEOUT` ever can. v0.2 can revisit by yielding back to `reaper.defer` between progress polls so foreground renders survive without the wire-timeout cliff.
 - **configurable risk policy via env-var override.** v0.1 hardcodes `defaultPolicy()` in `callTemplate` (Step 8 Round A decision #10 — zero `destructive` / `unsafe_eval` templates ship in v0.1, so the toggle was overhead). v0.2 adds an env-var override (e.g. `STREETLIGHT_RISK_ALLOW=destructive`) alongside the first `destructive` template.
 - **configurable done/ orphan sweep threshold via env-var override.** v0.1 hardcodes the 24h mtime threshold and runs the sweep only at `init()` (Step 8 Round A decision #11). `doneOrphanThresholdMs` exists as a test-only ctor option. v0.2 adds env-var configuration (e.g. `STREETLIGHT_DONE_ORPHAN_HOURS=`) and may grow to a periodic sweep if real-world `done/` growth shows up.
-- **H5 descriptor single-source follow-through.** Kernel Slice 03 ships the minimum descriptor enrichment (`entity_kind`, `undo_flags`, `examples`) plus TS/Lua manifest alignment and generated Lua error-code constants. v0.2+ continues with H2 runtime verification, handler-side error-code constant migration, H4 idempotency tokens, and H6 template scaffolding.
+- **H2/H5 descriptor single-source follow-through.** Kernel Slice 03 ships the minimum descriptor enrichment (`entity_kind`, `undo_flags`, `examples`) plus TS/Lua manifest alignment and generated Lua error-code constants. Kernel Slice 04 ships the minimum H2 structural `expectedDelta` verification for synchronous mutating templates. `maybeCreates` is the v1 escape hatch for `track_create` reuse; if v0.2+ grows three or more templates with genuinely branchy delta semantics, upgrade `ExpectedDelta` to an `alternatives`/`oneOf` shape and auto-expand the old `maybeCreates` form. v0.2+ continues with field-level verification, handler-side error-code constant migration, H4 idempotency tokens, and H6 template scaffolding.
 - better variation parameter presets
 - UI click variations recipe
 - footstep set recipe
@@ -81,7 +81,7 @@ Possible additions:
 - project diagnostics tool
 - sample test project
 - template test harness
-- post-execution verification (template declares `expected_delta`, bridge reports `actual_delta`)
+- field-level post-execution verification (Slice 04 already covers structural count deltas)
 - plan/apply MCP tools (`plan` produces a structured preview; `apply` executes)
 
 ## v0.4: Asset Awareness

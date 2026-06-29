@@ -332,6 +332,25 @@ handler produced addressable as a REAPER project entity? Yes → use the
 entity ref. No → it's a render-shaped output and you need to revisit
 this section before adding it.
 
+#### `VERIFY_FAILED` details (Slice 04)
+
+Slice 04 adds structural verification metadata to mutating templates.
+When the bridge detects a mismatch between a template's `expectedDelta`
+and the observed item/track/region count movement, it returns
+`VERIFY_FAILED` with small structured details:
+
+```json
+{
+  "expected": { "count": 1 },
+  "actual": { "items": 1, "tracks": 0, "regions": 0 },
+  "changed_count": 1
+}
+```
+
+This is intentionally compact and does not include descriptors or field
+diffs. The error message tells agents to call `get_state` because the
+mutation may already be applied.
+
 ### Empty Strings vs Missing Fields
 
 `name` and `track_name` are required `string` on every descriptor. When the
@@ -379,9 +398,12 @@ bridge. Slice 03 enriches every template entry with H5 descriptor fields:
 `render_region` is the v0.1 non-undoable carve-out and reports
 `undo_flags: []`.
 
-`expectedDelta`, `reads`, and `writes` are Slice-03 placeholders for H2/H6.
-When absent, they are omitted from metadata; do not emit `null` or empty
-arrays to imply semantics that are not active yet.
+Slice 04 activates `expectedDelta` for the ten undoable mutating core
+templates. It remains omitted on `render_region`, which is the deferred
+artifact-path carve-out and is not structurally verified in v0.1.
+`reads` and `writes` remain H6 placeholders. When any optional metadata
+field is absent, omit it; do not emit `null` or empty arrays to imply
+semantics that are not active yet.
 
 ## Deferred To v0.2 / v0.3
 

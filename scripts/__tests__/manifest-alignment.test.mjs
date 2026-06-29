@@ -82,8 +82,26 @@ return { templates = {
 
   it("reports field mismatches and missing templates", () => {
     const ts = new Map([
-      ["item_pitch", { undoable: true, undo_flags: ["ITEMS"], entity_kind: "track" }],
-      ["ts_only", { undoable: true, undo_flags: ["ITEMS"], entity_kind: "item" }],
+      [
+        "item_pitch",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "track",
+          expectedDelta: { count: 1 },
+        },
+      ],
+      [
+        "ts_only",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "item",
+          expectedDelta: { count: 1 },
+        },
+      ],
     ]);
     const lua = parseManifestLua(SAMPLE_MANIFEST);
     const errors = diffManifestAlignment(ts, lua);
@@ -94,6 +112,69 @@ return { templates = {
     expect(errors).toContain("MISSING_IN_LUA:ts_only");
     expect(errors).toContain("MISSING_IN_TS:media_import");
     expect(errors).toContain("MISSING_IN_TS:render_region");
+  });
+
+  it("reports missing and misplaced expectedDelta descriptors", () => {
+    const ts = new Map([
+      [
+        "item_pitch",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "item",
+        },
+      ],
+      [
+        "render_region",
+        {
+          mutates: true,
+          undoable: false,
+          undo_flags: [],
+          entity_kind: "render",
+          expectedDelta: { count: 1 },
+        },
+      ],
+    ]);
+    const lua = parseManifestLua(SAMPLE_MANIFEST);
+    const errors = diffManifestAlignment(ts, lua);
+
+    expect(errors).toContain("EXPECTED_DELTA_MISSING:item_pitch");
+    expect(errors).toContain("EXPECTED_DELTA_FOR_NON_UNDOABLE:render_region");
+  });
+
+  it("reports invalid expectedDelta mode combinations", () => {
+    const ts = new Map([
+      [
+        "item_pitch",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "item",
+          expectedDelta: { count: 1, creates: true, maybeCreates: true },
+        },
+      ],
+      [
+        "media_import",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS", "TRACKCFG"],
+          entity_kind: "item",
+          expectedDelta: { count: "any", maybeCreates: true },
+        },
+      ],
+    ]);
+    const lua = parseManifestLua(SAMPLE_MANIFEST);
+    const errors = diffManifestAlignment(ts, lua);
+
+    expect(errors).toContain(
+      "EXPECTED_DELTA_INVALID:item_pitch: creates/maybeCreates/deletes are mutually exclusive",
+    );
+    expect(errors).toContain(
+      "EXPECTED_DELTA_INVALID:media_import: maybeCreates requires a numeric count",
+    );
   });
 
   it("real core registry aligns with the real Lua manifest", async () => {

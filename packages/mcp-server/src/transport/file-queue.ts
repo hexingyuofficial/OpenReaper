@@ -52,6 +52,8 @@ export function resolveQueueDir(
 export interface SendOptions {
   /** Total wall-clock budget before we return BRIDGE_NOT_RUNNING. */
   timeoutMs: number;
+  /** Optional descriptor-driven verification payload for template commands. */
+  expectedDelta?: unknown;
 }
 
 export interface FileQueueClientOptions {
@@ -158,6 +160,9 @@ export class FileQueueClient {
       params,
       created_at: new Date().toISOString(),
       ...(name !== undefined ? { name } : {}),
+      ...(opts.expectedDelta !== undefined
+        ? { expected_delta: opts.expectedDelta }
+        : {}),
     };
 
     try {

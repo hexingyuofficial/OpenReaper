@@ -25,6 +25,7 @@ local json     = dofile(SCRIPT_DIR .. "packs/core/lib/json.lua")
 local buckets  = dofile(SCRIPT_DIR .. "packs/core/lib/entity_buckets.lua")
 local refs     = dofile(SCRIPT_DIR .. "packs/core/refs.lua")
 local undo     = dofile(SCRIPT_DIR .. "packs/core/undo.lua")
+local verify   = dofile(SCRIPT_DIR .. "packs/core/verify.lua")
 local MANIFEST = dofile(SCRIPT_DIR .. "packs/core/manifest.lua")
 
 -- ─── Paths ──────────────────────────────────────────────────────────────────
@@ -679,7 +680,7 @@ local function template_error_envelope(err_obj)
   -- Handlers raise via `error({ code, message })`. Anything else (string
   -- error, unexpected throw) collapses to INTERNAL_ERROR with the raw text.
   if type(err_obj) == "table" and err_obj.code then
-    return {
+    local error_env = {
       ok = false,
       error = {
         code        = tostring(err_obj.code),
@@ -687,6 +688,10 @@ local function template_error_envelope(err_obj)
         recoverable = err_obj.recoverable ~= false,
       },
     }
+    if err_obj.details ~= nil then
+      error_env.error.details = err_obj.details
+    end
+    return error_env
   end
   return {
     ok = false,
@@ -860,6 +865,11 @@ function DISPATCH.template(cmd)
     json        = json,
   }
   local params = cmd.params or {}
+  local expected_delta = cmd.expected_delta
+  local snap_before = nil
+  if expected_delta ~= nil then
+    snap_before = verify.snapshot()
+  end
 
   local ok_run, result_or_err
   if entry.undoable then
@@ -901,6 +911,27 @@ function DISPATCH.template(cmd)
   if type(result_or_err) == "table" then
     raw_changed = result_or_err.changed_ids
   end
+
+  if expected_delta ~= nil then
+    local changed_for_verify, changed_total = normalize_changed_ids(raw_changed)
+    local snap_after = verify.snapshot()
+    local delta = verify.diff(snap_before, snap_after)
+    local reason = verify.check(expected_delta, changed_for_verify, delta, entry.entity_kind, changed_total)
+    if reason then
+      return template_error_envelope({
+        code = "VERIFY_FAILED",
+        message = "Template '" .. name .. "' produced delta inconsistent with expectedDelta. "
+          .. reason .. ". The mutation has been applied — call get_state to inspect actual state.",
+        recoverable = false,
+        details = {
+          expected = expected_delta,
+          actual = delta,
+          changed_count = changed_total,
+        },
+      })
+    end
+  end
+
   return finalize_template(name, entry.entity_kind, raw_changed)
 end
 

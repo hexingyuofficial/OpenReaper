@@ -45,6 +45,7 @@ export const trackRenameDefinition: CapabilityDefinition<
   entity_kind: "track",
   undo_flags: ["TRACKCFG"],
   idempotent: true,
+  expectedDelta: { count: 1 },
   params: TrackRenameParams,
   result: TrackRenameResult,
   examples: [

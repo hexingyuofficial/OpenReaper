@@ -13,6 +13,7 @@ function makeItemPitch(reg: CapabilityRegistry): void {
     entity_kind: "item",
     undo_flags: ["ITEMS"],
     idempotent: false,
+    expectedDelta: { count: 1 },
     params: z.object({
       item_id: z.string(),
       semitones: z.number().min(-24).max(24),
@@ -45,6 +46,7 @@ function makeTrackCreate(reg: CapabilityRegistry): void {
     entity_kind: "track",
     undo_flags: ["TRACKCFG"],
     idempotent: false,
+    expectedDelta: { count: 1, maybeCreates: true },
     params: z.object({
       name: z.string(),
       reuse: z.boolean().optional(),
@@ -81,6 +83,7 @@ describe("CapabilityRegistry", () => {
     expect(itemPitch?.mutates).toBe(true);
     expect(itemPitch?.entity_kind).toBe("item");
     expect(itemPitch?.undo_flags).toEqual(["ITEMS"]);
+    expect(itemPitch?.expectedDelta).toEqual({ count: 1 });
     expect(itemPitch?.examples).toEqual([
       { params: { item_id: "selected:0", semitones: -3 } },
     ]);
@@ -123,6 +126,17 @@ describe("CapabilityRegistry", () => {
     const list = reg.list();
     // Round-trip through JSON to prove there are no functions or symbols.
     expect(() => JSON.parse(JSON.stringify(list))).not.toThrow();
+  });
+
+  it("metadata passes through maybeCreates expectedDelta", () => {
+    const reg = new CapabilityRegistry();
+    makeTrackCreate(reg);
+
+    const trackCreate = reg.list().find((c) => c.name === "track_create");
+    expect(trackCreate?.expectedDelta).toEqual({
+      count: 1,
+      maybeCreates: true,
+    });
   });
 
   it("rejects capabilities missing required descriptor metadata", () => {
@@ -172,5 +186,36 @@ describe("CapabilityRegistry", () => {
     expect(() =>
       reg.register({ ...base, undoable: true, undo_flags: ["NOPE"] as never }),
     ).toThrow(/unknown undo flag/);
+  });
+
+  it("rejects inconsistent expectedDelta modes", () => {
+    const reg = new CapabilityRegistry();
+    const base = {
+      name: "bad_delta",
+      description: "bad",
+      pack: "test",
+      risk: "write_safe" as const,
+      mutates: true,
+      undoable: true,
+      idempotent: false,
+      entity_kind: "track",
+      undo_flags: ["TRACKCFG"] as const,
+      params: z.object({}),
+      result: z.object({}),
+      examples: [{ params: {} }],
+    };
+
+    expect(() =>
+      reg.register({
+        ...base,
+        expectedDelta: { count: 1, creates: true, maybeCreates: true },
+      }),
+    ).toThrow(/incompatible delta modes/);
+    expect(() =>
+      reg.register({
+        ...base,
+        expectedDelta: { count: "any", maybeCreates: true },
+      }),
+    ).toThrow(/maybeCreates requires a numeric count/);
   });
 });

@@ -62,6 +62,7 @@ export const mediaImportDefinition: CapabilityDefinition<
   entity_kind: "item",
   undo_flags: ["ITEMS", "TRACKCFG"],
   idempotent: false,
+  expectedDelta: { count: "any", creates: true },
   params: MediaImportParams,
   result: MediaImportResult,
   examples: [

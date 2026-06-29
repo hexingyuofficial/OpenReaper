@@ -90,6 +90,56 @@ describe("callTemplate", () => {
       expect(cmd.kind).toBe("template");
       expect(cmd.name).toBe("item_pitch");
       expect(cmd.params).toEqual({ item_id: "selected:0", semitones: 2 });
+      expect(cmd.expected_delta).toEqual({ count: 1 });
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("on-wire: every undoable mutating core template sends expected_delta; render_region omits it", async () => {
+    const expectedByTemplate = new Map<string, unknown>([
+      ["item_pitch", { count: 1 }],
+      ["item_move", { count: 1 }],
+      ["item_rate", { count: 1 }],
+      ["item_trim", { count: 1 }],
+      ["item_fade", { count: 1 }],
+      ["item_duplicate", { count: 1, creates: true }],
+      ["media_import", { count: "any", creates: true }],
+      ["track_create", { count: 1, maybeCreates: true }],
+      ["track_rename", { count: 1 }],
+      ["region_create", { count: 1, creates: true }],
+    ]);
+    const validParamsByTemplate: Record<string, unknown> = {
+      item_pitch: { item_id: "selected:0", semitones: 2 },
+      item_move: { item_id: "selected:0", position: 1 },
+      item_rate: { item_id: "selected:0", rate: 0.5 },
+      item_trim: { item_id: "selected:0", length: 1 },
+      item_fade: { item_id: "selected:0", fade_in: 0.1 },
+      item_duplicate: { item_id: "selected:0", track_id: "track:Variations", position: 1 },
+      media_import: { path: "/System/Library/Sounds/Ping.aiff", track_id: "track:Imports", position: 0 },
+      track_create: { name: "Smoke", reuse_existing: true },
+      track_rename: { track_id: "last_result:track:0", name: "Smoke Renamed" },
+      region_create: { name: "var_01", start: 0, end: 1 },
+      render_region: { region_id: "region:var_01", output_dir: "/tmp" },
+    };
+
+    const bridge = startFakeBridge(queueDir, (cmd) =>
+      fakeTemplateOk(cmd.name ?? "unknown", ["guid:{X}"]),
+    );
+    try {
+      for (const [template, expectedDelta] of expectedByTemplate.entries()) {
+        await callTemplate(client, registry, {
+          name: template,
+          params: validParamsByTemplate[template],
+        });
+        expect(bridge.seen.at(-1)?.expected_delta).toEqual(expectedDelta);
+      }
+
+      await callTemplate(client, registry, {
+        name: "render_region",
+        params: validParamsByTemplate.render_region,
+      });
+      expect(bridge.seen.at(-1)).not.toHaveProperty("expected_delta");
     } finally {
       await bridge.stop();
     }
@@ -235,6 +285,43 @@ describe("callTemplate", () => {
       });
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.error.code).toBe("TAKE_NOT_FOUND");
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("surfaces VERIFY_FAILED details from the bridge without retrying", async () => {
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: false,
+      error: {
+        code: "VERIFY_FAILED",
+        message:
+          "Template 'item_pitch' produced delta inconsistent with expectedDelta. delta_items=1 but expected 0 (in-place). The mutation has been applied — call get_state to inspect actual state.",
+        recoverable: false,
+        details: {
+          expected: { count: 1 },
+          actual: { items: 1, tracks: 0, regions: 0 },
+          changed_count: 1,
+        },
+      },
+    }));
+    try {
+      const result = await callTemplate(client, registry, {
+        name: "item_pitch",
+        params: { item_id: "selected:0", semitones: 1 },
+      });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("VERIFY_FAILED");
+        expect(result.error.recoverable).toBe(false);
+        expect(result.error.message).toMatch(/call get_state to inspect actual state/);
+        expect(result.error.details).toEqual({
+          expected: { count: 1 },
+          actual: { items: 1, tracks: 0, regions: 0 },
+          changed_count: 1,
+        });
+      }
+      expect(bridge.seen).toHaveLength(1);
     } finally {
       await bridge.stop();
     }

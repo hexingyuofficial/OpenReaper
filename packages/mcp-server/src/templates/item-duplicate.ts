@@ -60,6 +60,7 @@ export const itemDuplicateDefinition: CapabilityDefinition<
   undo_flags: ["ITEMS"],
   // Each call adds a new item; running twice produces two duplicates.
   idempotent: false,
+  expectedDelta: { count: 1, creates: true },
   params: ItemDuplicateParams,
   result: ItemDuplicateResult,
   examples: [

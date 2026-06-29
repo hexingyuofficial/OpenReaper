@@ -1,25 +1,81 @@
-# Handoff — 2026-06-29 (Kernel Slice 03 ✅ live-smoked; H5 descriptor checks commit-ready)
+# Handoff — 2026-06-29 (Kernel Slice 04 ✅ live-smoked; H2 structural verification commit-ready)
 
 Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
 ## Where the project is
 
 - Path: `/Users/Zhuanz/Documents/streetlight-reaper-mcp`, git repo on
-  branch `main`. Recent checkpoints: `73864f7` beginner installers,
-  `7a1e4df` agent workflow + kernel hardening plans, `baa13bd`
-  **Kernel Slice 01** committed and pushed, `e93d39e`
-  **Kernel Slice 02** committed and pushed. The current working tree is
-  **Kernel hardening Slice 03** (uncommitted): H5 minimum descriptor
-  hardening (`CapabilityDefinition` metadata, TS↔Lua manifest
-  alignment, generated/audited error codes). The user manages
-  versioning out-of-band — do NOT commit, branch, push, or reset
-  without an explicit ask. Read `git log` / `git status` if you need
-  history context; treat the working tree as theirs to commit.
-- `npm test` → **237/237 green**. `npm run build` → clean.
+  branch `main`. Recent checkpoints: `baa13bd` Kernel Slice 01,
+  `e93d39e` Kernel Slice 02, `4e80839` Kernel Slice 03, all committed
+  and pushed. The current working tree is **Kernel hardening Slice 04**
+  (uncommitted, live-smoked): H2 minimum structural verification
+  (`expectedDelta` descriptors, wire `expected_delta`, Lua
+  before/after count checks, typed `VERIFY_FAILED`). The user manages
+  versioning out-of-band — do
+  NOT commit, branch, push, or reset without an explicit ask. Read
+  `git log` / `git status` if you need history context; treat the
+  working tree as theirs to commit.
+- `npm test` → **244/244 green**. `npm run build` → clean.
   `npm run check:manifest` → 11 templates aligned. `npm run
-  check:error-codes-fresh` → 21 codes fresh. `git diff --check`
+  check:error-codes-fresh` → 22 codes fresh. `git diff --check`
   clean.
-- **Kernel hardening Slice 03 ✅ live-smoked / commit-ready
+- **Kernel hardening Slice 04 ✅ live-smoked / commit-ready
+  (2026-06-29).** Scope from
+  `docs/plans/SLICE_04_ARCHITECT_PLAN.md`:
+  - `packages/core/src/registry.ts` now owns `ExpectedDelta` v1:
+    `{ count: number | "any"; creates?; maybeCreates?; deletes? }`.
+    Registry validation rejects incompatible mode combinations and
+    `maybeCreates:true` with `count:"any"`.
+  - Ten undoable mutating core templates now declare `expectedDelta`;
+    `render_region` deliberately omits it. `track_create` uses
+    `{ count: 1, maybeCreates: true }` so `reuse_existing:true`
+    remains a valid no-create success path.
+  - `callTemplate` passes descriptor metadata over the queue as
+    `expected_delta`; `FileQueueClient` and `QueueCommand` know the
+    field; tests assert the on-wire payload for every core template.
+  - New `reaper/packs/core/verify.lua` snapshots
+    item/track/region counts, diffs them, and checks count movement.
+    `streetlight_bridge.lua` snapshots before synchronous template
+    execution and checks after handler success, before
+    `finalize_template` writes `LAST_RESULT`.
+  - On mismatch the bridge returns typed `VERIFY_FAILED` with
+    `recoverable:false`, structured `error.details`
+    `{expected, actual, changed_count}`, and the required recovery
+    phrase: "The mutation has been applied — call get_state to inspect
+    actual state." No rollback is attempted.
+  - `scripts/manifest-alignment.mjs` now also enforces the descriptor
+    contract: every mutating undoable template must have
+    `expectedDelta`, non-undoable templates must not, and delta modes
+    must be coherent.
+  - Runtime behavior is intended to be unchanged on all normal green
+    paths. This slice adds guardrails for impossible deltas; it does
+    not add field-level verification and does not verify deferred
+    `render_region`.
+  - Live smoke passed on REAPER 7.71/macOS-arm64 after the user fully
+    restarted REAPER and loaded the current `start_bridge.lua`.
+    Evidence: `ping` connected; `list_templates` returned 11
+    templates with `track_create.expectedDelta={count:1,maybeCreates:true}`
+    and no `expectedDelta` on `render_region`; `track_create`
+    create+reuse both returned the same GUID
+    `guid:{732FDB51-4926-3641-9BCD-B414EDC7CBBC}` with no duplicate
+    track; `get_state(tracks)` between create/reuse and
+    `track_rename last_result:track:0` did not pollute `LAST_RESULT`;
+    `media_import` inserted
+    `guid:{E2B0A51D-B0DB-A84A-9658-0C396A8C45AD}`; `item_pitch`
+    in-place passed; `region_create` produced
+    `region:smoke04-r1-1782743061140`; `render_region` wrote only
+    `/var/folders/.../streetlight-slice04-render-1782743061140/smoke04-r1-1782743061140.wav`
+    and no sidecars; a raw-queue forced mismatch
+    `expected_delta={count:1,creates:true}` on `item_pitch` returned
+    `VERIFY_FAILED`, `recoverable:false`, details
+    `{actual:{items:0,regions:0,tracks:0}, changed_count:1,
+    expected:{count:1,creates:true}}`, and the required `get_state`
+    recovery phrase. A subsequent `track_rename last_result:track:0`
+    still hit the same track GUID, proving `VERIFY_FAILED` did not
+    update `LAST_RESULT`. Temporary render files/scripts were removed;
+    the smoke objects remain in the open REAPER project for manual
+    undo/delete.
+- **Kernel hardening Slice 03 ✅ live-smoked / committed + pushed
   (2026-06-29).** Scope from
   `docs/plans/SLICE_03_ARCHITECT_PLAN.md`:
   - `packages/core/src/registry.ts` now requires every
@@ -351,13 +407,13 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 1. **Read the user's MOST RECENT message in this new window.**
    Three plausible paths:
 
-   (a) **"Commit Slice 03."** M0 and M1-M3 are green. Current
-       baseline is `npm test` 237/237 + `npm run build` clean +
+   (a) **"Commit Slice 04."** Live smoke is green. Current code
+       baseline is `npm test` 244/244 + `npm run build` clean +
        `npm run check:manifest` green + `npm run
        check:error-codes-fresh` green + `git diff --check` clean.
-       Commit only if the user explicitly asks.
+       Commit/push only if the user explicitly asks.
 
-   (b) **"Codex found a bug in Slice 03 or earlier."** Locked
+   (b) **"Codex found a bug in Slice 04 or earlier."** Locked
        iteration loop: confirm the bug from code → name the fix + any
        decision the user owns BEFORE editing → propose 1-2 tight
        regression notes → wait for sign-off → fix → hand back for
@@ -366,7 +422,7 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
    (c) **Pivot to something else.** Abandon these first moves and
        follow the new direction.
 
-2. **Tests + build baseline this window:** `npm test` 237/237,
+2. **Tests + build baseline this window:** `npm test` 244/244,
    `npm run build` clean, `npm run check:manifest` green, `npm run
    check:error-codes-fresh` green. The `npm run typecheck` script prints a
    `TS6310` "may not disable emit" line then exits 0 — pre-existing

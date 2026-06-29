@@ -57,6 +57,7 @@ export const itemTrimDefinition: CapabilityDefinition<
   entity_kind: "item",
   undo_flags: ["ITEMS"],
   idempotent: true,
+  expectedDelta: { count: 1 },
   params: ItemTrimParams,
   result: ItemTrimResult,
   examples: [

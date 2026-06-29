@@ -49,6 +49,7 @@ export const itemPitchDefinition: CapabilityDefinition<
   entity_kind: "item",
   undo_flags: ["ITEMS"],
   idempotent: true, // Setting pitch to N twice yields the same state.
+  expectedDelta: { count: 1 },
   params: ItemPitchParams,
   result: ItemPitchResult,
   examples: [

@@ -105,11 +105,16 @@ export function parseManifestLua(text) {
 export function buildRegistrySnapshot(registry) {
   const snapshot = new Map();
   for (const def of registry.rawDefinitions()) {
-    snapshot.set(def.name, {
+    const entry = {
+      mutates: def.mutates,
       undoable: def.undoable,
       undo_flags: sorted(def.undo_flags),
       entity_kind: def.entity_kind,
-    });
+    };
+    if (def.expectedDelta !== undefined) {
+      entry.expectedDelta = { ...def.expectedDelta };
+    }
+    snapshot.set(def.name, entry);
   }
   return snapshot;
 }
@@ -118,9 +123,41 @@ function sameArray(a, b) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
+function validateExpectedDeltaDescriptor(name, tsDef) {
+  const errors = [];
+  const expected = tsDef.expectedDelta;
+
+  if (tsDef.mutates && tsDef.undoable && expected === undefined) {
+    errors.push(`EXPECTED_DELTA_MISSING:${name}`);
+  }
+  if (!tsDef.undoable && expected !== undefined) {
+    errors.push(`EXPECTED_DELTA_FOR_NON_UNDOABLE:${name}`);
+  }
+  if (expected !== undefined) {
+    const activeModes = [
+      expected.creates,
+      expected.maybeCreates,
+      expected.deletes,
+    ].filter(Boolean).length;
+    if (activeModes > 1) {
+      errors.push(
+        `EXPECTED_DELTA_INVALID:${name}: creates/maybeCreates/deletes are mutually exclusive`,
+      );
+    }
+    if (expected.maybeCreates && expected.count === "any") {
+      errors.push(
+        `EXPECTED_DELTA_INVALID:${name}: maybeCreates requires a numeric count`,
+      );
+    }
+  }
+
+  return errors;
+}
+
 export function diffManifestAlignment(tsSnapshot, luaSnapshot) {
   const errors = [];
   for (const [name, tsDef] of tsSnapshot.entries()) {
+    errors.push(...validateExpectedDeltaDescriptor(name, tsDef));
     const luaDef = luaSnapshot.get(name);
     if (!luaDef) {
       errors.push(`MISSING_IN_LUA:${name}`);

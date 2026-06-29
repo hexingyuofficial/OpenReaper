@@ -113,7 +113,7 @@ export async function callTemplate(
   return client.send<CallTemplateResult>(
     "template",
     params.data,
-    { timeoutMs: effectiveTimeout },
+    { timeoutMs: effectiveTimeout, expectedDelta: def.expectedDelta },
     def.name,
   );
 }

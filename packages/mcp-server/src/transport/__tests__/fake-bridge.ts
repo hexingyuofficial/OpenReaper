@@ -5,7 +5,12 @@ export type FakeBridgeResponse =
   | { ok: true; result: unknown }
   | {
       ok: false;
-      error: { code: string; message: string; recoverable: boolean };
+      error: {
+        code: string;
+        message: string;
+        recoverable: boolean;
+        details?: Record<string, unknown>;
+      };
     };
 
 export type FakeBridgeResponder = (cmd: ParsedCommand) => FakeBridgeResponse;
@@ -15,6 +20,7 @@ export interface ParsedCommand {
   kind: string;
   name?: string;
   params: unknown;
+  expected_delta?: unknown;
   created_at: string;
 }
 

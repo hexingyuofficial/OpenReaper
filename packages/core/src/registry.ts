@@ -13,10 +13,9 @@ export const UNDO_STATE = {
 export type UndoFlag = keyof typeof UNDO_STATE;
 
 export interface ExpectedDelta {
-  entity: string;
   count: number | "any";
-  fields?: string[];
   creates?: boolean;
+  maybeCreates?: boolean;
   deletes?: boolean;
 }
 
@@ -135,9 +134,6 @@ export class CapabilityRegistry {
     };
     if (c.expectedDelta !== undefined) {
       metadata.expectedDelta = { ...c.expectedDelta };
-      if (c.expectedDelta.fields) {
-        metadata.expectedDelta.fields = [...c.expectedDelta.fields];
-      }
     }
     if (c.reads !== undefined) metadata.reads = [...c.reads];
     if (c.writes !== undefined) metadata.writes = [...c.writes];
@@ -173,6 +169,27 @@ function validateDefinition(def: CapabilityDefinition): void {
   for (const [i, example] of def.examples.entries()) {
     if (!example || typeof example.params !== "object" || example.params === null) {
       throw new Error(`Capability ${def.name} example ${i} must include params`);
+    }
+  }
+
+  if (def.expectedDelta !== undefined) {
+    const activeDeltaModes = [
+      def.expectedDelta.creates,
+      def.expectedDelta.maybeCreates,
+      def.expectedDelta.deletes,
+    ].filter(Boolean).length;
+    if (activeDeltaModes > 1) {
+      throw new Error(
+        `Capability ${def.name} expectedDelta declares incompatible delta modes`,
+      );
+    }
+    if (
+      def.expectedDelta.maybeCreates &&
+      def.expectedDelta.count === "any"
+    ) {
+      throw new Error(
+        `Capability ${def.name} expectedDelta maybeCreates requires a numeric count`,
+      );
     }
   }
 }
