@@ -84,12 +84,18 @@ describe("listTemplates", () => {
     }
 
     const trackCreate = result.result.templates.find((t) => t.name === "track_create");
-    expect(trackCreate?.expectedDelta).toEqual({ count: 1, maybeCreates: true });
+    expect(trackCreate?.expectedDelta).toEqual({
+      count: 1,
+      maybeCreates: true,
+      fields: [
+        { scope: "track", field: "P_NAME", paramPath: "name" },
+      ],
+    });
     const renderRegion = result.result.templates.find((t) => t.name === "render_region");
     expect(renderRegion).not.toHaveProperty("expectedDelta");
   });
 
-  it("exposes field-check metadata on the seven covered templates", () => {
+  it("exposes field-check metadata on the eight covered templates", () => {
     const registry = new CapabilityRegistry();
     registerCoreTemplates(registry);
     const result = listTemplates(registry);
@@ -151,6 +157,10 @@ describe("listTemplates", () => {
         "track_rename",
         [{ scope: "track", field: "P_NAME", paramPath: "name" }],
       ],
+      [
+        "track_create",
+        [{ scope: "track", field: "P_NAME", paramPath: "name" }],
+      ],
     ]);
 
     for (const template of result.result.templates) {
@@ -179,6 +189,27 @@ describe("listTemplates", () => {
       ],
     });
     const field = itemDuplicate?.expectedDelta?.fields?.[0];
+    expect(field).not.toHaveProperty("optional");
+    expect(field).not.toHaveProperty("nullable");
+  });
+
+  it("keeps track_create field metadata free of tolerance, optional, and nullable", () => {
+    const registry = new CapabilityRegistry();
+    registerCoreTemplates(registry);
+    const result = listTemplates(registry);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const trackCreate = result.result.templates.find((t) => t.name === "track_create");
+    expect(trackCreate?.expectedDelta).toEqual({
+      count: 1,
+      maybeCreates: true,
+      fields: [
+        { scope: "track", field: "P_NAME", paramPath: "name" },
+      ],
+    });
+    const field = trackCreate?.expectedDelta?.fields?.[0];
+    expect(field).not.toHaveProperty("tolerance");
     expect(field).not.toHaveProperty("optional");
     expect(field).not.toHaveProperty("nullable");
   });

@@ -363,8 +363,9 @@ verification fails:
 
 v0.1 field verification is bounded to at most two fields per call
 (`item_trim` in Slice 07, `item_fade` in Slice 08, and
-`item_duplicate` in Slice 09 with one field), so the added payload is
-tiny. Nullable field descriptors do not add data to
+`item_duplicate` in Slice 09 with one field, and `track_create` in
+Slice 10 with one field), so the added payload is tiny. Nullable field
+descriptors do not add data to
 `error.details.fields[]`; a `json.null` parameter is coerced to expected
 value `0` before the normal `{scope, field, expected, actual, tolerance,
 ok}` detail is built. The error message still tells agents to call

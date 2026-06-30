@@ -144,6 +144,14 @@ because creates/maybeCreates templates still need the D5 relaxation.
 stays Slice 10, `media_import` / `count:"any"` stays Slice 11+, and
 `region_create` / region-scope field readers stay Slice 12+.
 
+2026-06-30 note: Slice 10 extends field-level verification to
+`track_create` and makes the second narrow D5 relaxation:
+`expectedDelta.fields[]` may coexist with `maybeCreates:true` only when
+`count` is a finite positive integer. Create and reuse paths both run
+field verification on track `P_NAME`. `media_import` / `count:"any"`
+stays Slice 11+, and `region_create` / region-scope field readers stay
+Slice 12+.
+
 **触及文件**：
 - `packages/core/src/registry.ts`（`expectedDelta` 字段）
 - `packages/core/src/errors.ts`（`VERIFY_FAILED`）

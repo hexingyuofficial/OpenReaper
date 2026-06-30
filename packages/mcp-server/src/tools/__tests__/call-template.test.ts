@@ -186,7 +186,16 @@ describe("callTemplate", () => {
         },
       ],
       ["media_import", { count: "any", creates: true }],
-      ["track_create", { count: 1, maybeCreates: true }],
+      [
+        "track_create",
+        {
+          count: 1,
+          maybeCreates: true,
+          fields: [
+            { scope: "track", field: "P_NAME", param_path: "name" },
+          ],
+        },
+      ],
       [
         "track_rename",
         {
@@ -278,6 +287,56 @@ describe("callTemplate", () => {
           tolerance: 1e-6,
         },
       ]);
+      expect(fields?.[0]).not.toHaveProperty("optional");
+      expect(fields?.[0]).not.toHaveProperty("nullable");
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("on-wire: track_create sends maybeCreates plus a P_NAME field descriptor", async () => {
+    const bridge = startFakeBridge(queueDir, (cmd) =>
+      fakeTemplateOk(cmd.name ?? "unknown", ["guid:{TRACK}"]),
+    );
+    try {
+      await callTemplate(client, registry, {
+        name: "track_create",
+        params: { name: "Slice10", reuse_existing: true },
+      });
+      expect(bridge.seen.at(-1)?.expected_delta).toEqual({
+        count: 1,
+        maybeCreates: true,
+        fields: [
+          {
+            scope: "track",
+            field: "P_NAME",
+            param_path: "name",
+          },
+        ],
+      });
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("on-wire: track_create P_NAME descriptor omits tolerance, optional, and nullable", async () => {
+    const bridge = startFakeBridge(queueDir, (cmd) =>
+      fakeTemplateOk(cmd.name ?? "unknown", ["guid:{TRACK}"]),
+    );
+    try {
+      await callTemplate(client, registry, {
+        name: "track_create",
+        params: { name: "Slice10", reuse_existing: false },
+      });
+      const fields = bridge.seen.at(-1)?.expected_delta?.fields;
+      expect(fields).toEqual([
+        {
+          scope: "track",
+          field: "P_NAME",
+          param_path: "name",
+        },
+      ]);
+      expect(fields?.[0]).not.toHaveProperty("tolerance");
       expect(fields?.[0]).not.toHaveProperty("optional");
       expect(fields?.[0]).not.toHaveProperty("nullable");
     } finally {

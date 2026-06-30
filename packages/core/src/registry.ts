@@ -234,20 +234,16 @@ function validateExpectedDeltaFields(
       `Capability ${name} expectedDelta.fields cannot coexist with deletes`,
     );
   }
-  if (expectedDelta.maybeCreates) {
-    throw new Error(
-      `Capability ${name} expectedDelta.fields cannot coexist with maybeCreates yet`,
-    );
-  }
   if (
-    expectedDelta.creates &&
+    (expectedDelta.creates || expectedDelta.maybeCreates) &&
     (typeof expectedDelta.count !== "number" ||
       !Number.isFinite(expectedDelta.count) ||
       Math.floor(expectedDelta.count) !== expectedDelta.count ||
       expectedDelta.count < 1)
   ) {
+    const mode = expectedDelta.creates ? "creates:true" : "maybeCreates:true";
     throw new Error(
-      `Capability ${name} expectedDelta.fields with creates:true requires numeric count >= 1`,
+      `Capability ${name} expectedDelta.fields with ${mode} requires numeric count >= 1`,
     );
   }
 

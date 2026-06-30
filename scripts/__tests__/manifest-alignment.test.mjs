@@ -284,7 +284,7 @@ return { templates = {
     );
   });
 
-  it("still rejects fields with maybeCreates", () => {
+  it("allows fields with maybeCreates:true when count is a positive integer", () => {
     const ts = new Map([
       [
         "item_pitch",
@@ -292,12 +292,39 @@ return { templates = {
           mutates: true,
           undoable: true,
           undo_flags: ["ITEMS"],
-          entity_kind: "item",
+          entity_kind: "track",
           expectedDelta: {
             count: 1,
             maybeCreates: true,
             fields: [
-              { scope: "item", field: "D_POSITION", paramPath: "position" },
+              { scope: "track", field: "P_NAME", paramPath: "name" },
+            ],
+          },
+        },
+      ],
+    ]);
+    const lua = parseManifestLua(SAMPLE_MANIFEST);
+    const errors = diffManifestAlignment(ts, lua);
+
+    expect(errors).not.toContain(
+      "EXPECTED_DELTA_INVALID:item_pitch: fields with maybeCreates:true requires numeric count >= 1",
+    );
+  });
+
+  it("rejects fields with maybeCreates:true and count:any", () => {
+    const ts = new Map([
+      [
+        "item_pitch",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "track",
+          expectedDelta: {
+            count: "any",
+            maybeCreates: true,
+            fields: [
+              { scope: "track", field: "P_NAME", paramPath: "name" },
             ],
           },
         },
@@ -307,7 +334,34 @@ return { templates = {
     const errors = diffManifestAlignment(ts, lua);
 
     expect(errors).toContain(
-      "EXPECTED_DELTA_INVALID:item_pitch: fields cannot coexist with maybeCreates yet",
+      "EXPECTED_DELTA_INVALID:item_pitch: maybeCreates requires a numeric count",
+    );
+  });
+
+  it("rejects fields with maybeCreates:true and non-positive count", () => {
+    const ts = new Map([
+      [
+        "item_pitch",
+        {
+          mutates: true,
+          undoable: true,
+          undo_flags: ["ITEMS"],
+          entity_kind: "track",
+          expectedDelta: {
+            count: 0,
+            maybeCreates: true,
+            fields: [
+              { scope: "track", field: "P_NAME", paramPath: "name" },
+            ],
+          },
+        },
+      ],
+    ]);
+    const lua = parseManifestLua(SAMPLE_MANIFEST);
+    const errors = diffManifestAlignment(ts, lua);
+
+    expect(errors).toContain(
+      "EXPECTED_DELTA_INVALID:item_pitch: fields with maybeCreates:true requires numeric count >= 1",
     );
   });
 

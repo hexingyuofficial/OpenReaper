@@ -409,6 +409,39 @@ describe("CapabilityRegistry", () => {
     });
   });
 
+  it("accepts maybeCreates expectedDelta field checks with a positive numeric count", () => {
+    const reg = new CapabilityRegistry();
+    reg.register({
+      name: "track_create_checked",
+      description: "track create checked",
+      pack: "test",
+      risk: "write_safe",
+      mutates: true,
+      undoable: true,
+      idempotent: false,
+      entity_kind: "track",
+      undo_flags: ["TRACKCFG"],
+      expectedDelta: {
+        count: 1,
+        maybeCreates: true,
+        fields: [
+          { scope: "track", field: "P_NAME", paramPath: "name" },
+        ],
+      },
+      params: z.object({}),
+      result: z.object({}),
+      examples: [{ params: {} }],
+    });
+
+    expect(reg.list()[0]?.expectedDelta).toEqual({
+      count: 1,
+      maybeCreates: true,
+      fields: [
+        { scope: "track", field: "P_NAME", paramPath: "name" },
+      ],
+    });
+  });
+
   it("deep-copies expectedDelta fields in metadata", () => {
     const reg = new CapabilityRegistry();
     reg.register({
@@ -560,13 +593,6 @@ describe("CapabilityRegistry", () => {
     expect(() =>
       registerWithExpectedDelta({
         count: 1,
-        maybeCreates: true,
-        fields: [{ scope: "track", field: "P_NAME", paramPath: "name" }],
-      }),
-    ).toThrow(/cannot coexist with maybeCreates/);
-    expect(() =>
-      registerWithExpectedDelta({
-        count: 1,
         deletes: true,
         fields: [{ scope: "item", field: "D_POSITION", paramPath: "position" }],
       }),
@@ -577,13 +603,27 @@ describe("CapabilityRegistry", () => {
         creates: true,
         fields: [{ scope: "item", field: "D_POSITION", paramPath: "position" }],
       }),
-    ).toThrow(/requires numeric count >= 1/);
+    ).toThrow(/with creates:true requires numeric count >= 1/);
     expect(() =>
       registerWithExpectedDelta({
         count: 0,
         creates: true,
         fields: [{ scope: "item", field: "D_POSITION", paramPath: "position" }],
       }),
-    ).toThrow(/requires numeric count >= 1/);
+    ).toThrow(/with creates:true requires numeric count >= 1/);
+    expect(() =>
+      registerWithExpectedDelta({
+        count: "any",
+        maybeCreates: true,
+        fields: [{ scope: "track", field: "P_NAME", paramPath: "name" }],
+      }),
+    ).toThrow(/maybeCreates requires a numeric count/);
+    expect(() =>
+      registerWithExpectedDelta({
+        count: 0,
+        maybeCreates: true,
+        fields: [{ scope: "track", field: "P_NAME", paramPath: "name" }],
+      }),
+    ).toThrow(/with maybeCreates:true requires numeric count >= 1/);
   });
 });

@@ -214,7 +214,7 @@ describe("Lua bridge structure", () => {
     expect(bridge).toMatch(/fields = json\.array\(field_details or {}\)/);
   });
 
-  it("does not add region field verification scope in Slice 09", async () => {
+  it("does not add region field verification scope in Slice 09 or Slice 10", async () => {
     const verify = await readRepoFile("reaper/packs/core/verify.lua");
 
     expect(verify).not.toMatch(/parse_region_ref/);

@@ -11,8 +11,35 @@ first.
 
 ## Current Status
 
-**Kernel hardening Slice 09 ✅ live-smoked
+**Kernel hardening Slice 10 ✅ live-smoked / commit-pending
 (2026-06-30).** Architect packet lives at
+`docs/plans/SLICE_10_ARCHITECT_PLAN.md`; source master plans remain
+`docs/plans/KERNEL_HARDENING_PLAN.md` and
+`docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 10 continues H2
+field-level verification by adding `track_create`, the first
+`maybeCreates:true` template with `expectedDelta.fields[]`.
+`track_create` declares track `P_NAME ← params.name` with no
+tolerance, `optional`, or `nullable`. D5 is now relaxed for
+`maybeCreates:true` descriptors whose `count` is a finite positive
+integer; static validation still rejects `fields[]` with
+`deletes:true`, `creates:true` plus `count:"any"`, and any region
+field scope. No Lua runtime path changed: the existing Slice 06
+`verify.lua` changed-id GUID resolver and track field reader are
+reused. Decisions locked by user: D1=a only `track_create`; D2=a
+maybeCreates-only, keep `count:"any"` closed; D3=a only `P_NAME`;
+D4=a reuse path still runs field verification; D5=a no tolerance for
+string `P_NAME`; D6=a failed create may leave an orphan track but must
+not update `LAST_RESULT`. Static gates are green: `npm test` 278/278,
+`npm run build` clean, `npm run check:manifest` green, and
+`npm run check:error-codes-fresh` green, and `git diff --check` clean.
+Reviewer pass completed with no P1/P2 issues; the only P3 doc nits were
+fixed in the pre-smoke docs sync. REAPER live smoke S0-S17 passed on
+REAPER 7.71/macOS-arm64 after full restart and current `start_bridge.lua`
+load. Console showed generation 1 and `loaded error_codes (22 codes)`.
+Timestamp: `20260630032823069`.
+
+**Kernel hardening Slice 09 ✅ live-smoked, committed, and pushed
+(2026-06-30, `bf15daa`).** Architect packet lives at
 `docs/plans/SLICE_09_ARCHITECT_PLAN.md`; source master plans remain
 `docs/plans/KERNEL_HARDENING_PLAN.md` and
 `docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 09 continues H2
@@ -639,7 +666,111 @@ Live smoke (REAPER 7.71/macOS-arm64):
   regions/items remain in the open REAPER project for manual Cmd+Z or
   deletion; they are not repository state.
 
-### Kernel hardening Slice 09 (2026-06-30) — item_duplicate creates field verification ✅ live-smoked
+### Kernel hardening Slice 10 (2026-06-30) — track_create maybeCreates field verification ✅ live-smoked
+
+Scope: extend H2 field verification to `track_create` and split the
+D5 boundary for the first maybeCreates-style template. This is the
+smallest maybeCreates slice: track entity kind, GUID-shaped
+`changed_ids[1]`, numeric `count:1`, track-scope `P_NAME`, string
+equality, and no Lua verifier changes.
+
+What changed:
+
+- `docs/plans/SLICE_10_ARCHITECT_PLAN.md` — Architect packet copied
+  into the repo for future windows.
+- `packages/core/src/registry.ts` — `expectedDelta.fields[]` may now
+  coexist with `maybeCreates:true` only when `count` is a finite
+  positive integer. Slice 09's `creates:true` numeric-count rule is
+  preserved. The guard still rejects fields with `deletes:true` and
+  `creates:true` plus `count:"any"`. Existing field descriptor rules
+  remain unchanged.
+- `packages/mcp-server/src/templates/track-create.ts` —
+  `track_create.expectedDelta` expands from
+  `{count:1, maybeCreates:true}` to
+  `{count:1, maybeCreates:true, fields:[...]}` with one descriptor:
+  track `P_NAME` from `params.name`, no tolerance.
+- `scripts/manifest-alignment.mjs` — mirrors the registry D5 boundary
+  so CLI alignment and runtime registration cannot drift.
+- Tests updated:
+  - registry tests accept `maybeCreates:true` with numeric count +
+    fields and reject `maybeCreates` with `count:"any"` / `count:0`.
+  - call-template tests assert the on-wire `track_create`
+    `expected_delta` includes `maybeCreates:true` plus track `P_NAME`
+    and omits `tolerance` / `optional` / `nullable`.
+  - list-templates tests assert `track_create` is now the eighth
+    covered field-verify template and keeps its descriptor free of
+    `tolerance` / `optional` / `nullable`.
+  - manifest-alignment tests mirror the legal / illegal D5 matrix.
+  - Lua structure tests assert Slice 10 did not add region field
+    verification scope or region ref parsing to `verify.lua`.
+
+Decisions locked by user:
+
+- D1=a: only `track_create` in Slice 10.
+- D2=a: relax D5 for `maybeCreates:true`, not `count:"any"`.
+- D3=a: verify only track `P_NAME`.
+- D4=a: reuse path still runs field verification.
+- D5=a: no tolerance for string `P_NAME`.
+- D6=a: a failed create-path field verify may leave an orphan track,
+  but must not update `LAST_RESULT`; reuse-path failure should leave no
+  orphan.
+
+Not changed:
+
+- No Lua runtime files changed. `reaper/packs/core/verify.lua` already
+  resolves `changed_ids[1]` as a GUID track ref and reads track
+  `P_NAME`, so `track_create` uses the Slice 06 path.
+- `media_import` remains `{count:"any", creates:true}` with no fields
+  and is deferred to Slice 11+.
+- `region_create` remains `{count:1, creates:true}` with no fields;
+  region scope / `region:NAME` changed-id verification is deferred to
+  Slice 12+.
+- `render_region` still omits `expectedDelta` and keeps the artifact
+  path carve-out.
+
+Verification so far:
+
+- Focused registry / call-template / list-templates tests passed.
+- Focused manifest-alignment / Lua-structure tests passed.
+- Full static gates passed: `npm test` **278/278**, `npm run build`
+  clean, `npm run check:manifest` green, and
+  `npm run check:error-codes-fresh` green.
+- `git diff --check` clean.
+- Reviewer pass completed with no P1/P2 issues. The reviewer only found
+  P3 doc-state nits (static baseline / remaining-action wording), fixed
+  in the pre-smoke docs sync.
+- REAPER live smoke S0-S17 passed on REAPER 7.71/macOS-arm64. Console
+  precondition showed `bridge starting (generation 1)`,
+  `loaded error_codes (22 codes)`, and `bridge ready (generation 1)`.
+  Run timestamp: `20260630032823069`.
+- `list_templates` reported 11 templates. `track_create.expectedDelta`
+  was `count:1 + maybeCreates:true + fields:[track P_NAME <- name]`,
+  with no `tolerance`, `optional`, or `nullable`.
+- `track_create` create path passed with `delta_tracks=+1` and `P_NAME`
+  verified. Reuse path passed with the same GUID, `delta_tracks=0`, and
+  `P_NAME` verified.
+- Raw `P_NAMEX` mismatch returned `VERIFY_FAILED` with
+  `details.fields[]`, `recoverable:false` on both create and reuse
+  paths. Both failure paths left `LAST_RESULT` unchanged.
+- Slice 06-09 regressions, `get_state`, and `render_region` passed.
+  `render_region` temp output was WAV-only and deleted; queue teardown
+  was clean.
+- Main test track GUID:
+  `guid:{5AACF036-56CF-7141-8F1D-925A1457FDB2}`.
+- Expected REAPER project leftovers from verify-failure side effects:
+  `force-c-20260630032823069`,
+  `Slice10 PP 20260630032823069`, and
+  `Slice10 SM 20260630032823069`. S8 reuse mismatch created no orphan.
+
+Regression notes to carry:
+
+- D5 is still not global. Do not add fields to `media_import` or
+  `region_create` without a new Architect packet.
+- Create-path `VERIFY_FAILED` may leave a real orphan track while
+  intentionally not updating `LAST_RESULT`; reuse-path `VERIFY_FAILED`
+  should not create anything. Slice 10 live smoke verified both.
+
+### Kernel hardening Slice 09 (2026-06-30) — item_duplicate creates field verification ✅ live-smoked / pushed `bf15daa`
 
 Scope: extend H2 field verification to `item_duplicate` and split the
 D5 boundary for the first creates-style template. This is deliberately
@@ -1150,11 +1281,11 @@ Verification so far:
 
 | | Done | Remaining |
 |---|---|---|
-| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-09 ✅ | Slice 09 commit/push only if user authorizes |
-| Tests | Slice 09: 272/272 green; build / manifest / error-code / diff-check clean; reviewer P3s fixed; REAPER smoke `slice09-1782785591409` green; Slice 08 pushed at `c923df9` | none before commit unless desired |
+| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-10 ✅; Slice 10 commit-pending | commit/push only if explicitly requested |
+| Tests | Slice 10: 278/278 green; build / manifest / error-code / diff-check clean; reviewer pass no P1/P2; REAPER S0-S17 green; Slice 09 pushed at `bf15daa` | none |
 
-**9 / 9 v0.1 steps shipped; kernel hardening Slice 09 is now
-live-smoked and commit-ready.** Step 6 (render) closed
+**9 / 9 v0.1 steps shipped; kernel hardening Slice 10 is now
+live-smoked and commit-pending.** Step 6 (render) closed
 2026-06-29 after a Codex re-smoke against the post-restart single-chunk
 bridge (generation 1, full 6-0..6-9 roll-up green). Step 7 (recipe
 discovery + end-to-end demo) shipped 2026-06-29 in the same window:
@@ -1194,17 +1325,17 @@ and pushed at `baa13bd`; Slice 02 was committed and pushed at
 was committed and pushed at `d3f8fe7`; Slice 05 was committed and
 pushed at `5ba6318`; Slice 06 was committed and pushed at `9f56ce0`;
 Slice 07 was committed and pushed at `9244be3`; Slice 08 was committed
-and pushed at `c923df9`. Slice 09 is the current uncommitted H2
-`item_duplicate` creates-field verification slice, with static
-baseline, reviewer pass, and REAPER live smoke complete.
+and pushed at `c923df9`; Slice 09 was committed and pushed at
+`bf15daa`. Slice 10 is the current uncommitted H2 `track_create`
+maybeCreates-field verification slice, with full static gates,
+reviewer pass, and REAPER S0-S17 smoke green.
 
 ### Next action
 
-1. **Commit/push Slice 09 only if the user explicitly asks.**
-   Static baseline, reviewer pass, and REAPER live smoke are green.
-2. **Start the next Architect slice only after Slice 09 is either
-   committed or the user explicitly chooses to continue with it
-   uncommitted.**
+1. **Commit/push Slice 10 only if the user explicitly asks.**
+   It is live-smoked and commit-ready.
+2. **Architect Slice 11 can start after Slice 10 is committed/pushed,
+   or earlier only if the user explicitly chooses that risk.**
 3. **Second-Mac smoke / v0.1 release tag remains available.**
    Setup/launcher reproducer is ready;
    `docs/CROSS_MAC_SMOKE.md` is still the runbook.
@@ -3867,12 +3998,12 @@ streetlight/
 
 1. **Read `docs/RESPONSE_BUDGET.md` first.** Everything Step 4+ is bound by the shapes locked there.
 
-2. **Kernel hardening Slice 09 is live-smoked and commit-ready.** Read
-   `docs/plans/SLICE_09_ARCHITECT_PLAN.md` before touching code.
-   Static baseline is green (`npm test` 272/272, build,
+2. **Kernel hardening Slice 10 is live-smoked and commit-pending.** Read
+   `docs/plans/SLICE_10_ARCHITECT_PLAN.md` before touching code.
+   Static baseline is green (`npm test` 278/278, build,
    `check:manifest`, `check:error-codes-fresh`, `git diff --check`).
-   Reviewer pass and REAPER 7.71/macOS-arm64 smoke are complete. Do not
-   commit unless the user explicitly asks.
+   Reviewer pass and REAPER 7.71/macOS-arm64 S0-S17 smoke are green.
+   Do not commit unless the user explicitly asks.
 
 4. **Step 3 + Step 4a contracts are still law.** `call_template`
    envelope shape is `{ template, changed_count, changed_ids, truncated }`.

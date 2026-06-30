@@ -289,6 +289,7 @@ back the changed entity after the structural check passes but before
 | `item_trim` | `item` | `D_LENGTH` | `params.length` |
 | `item_trim` | `take` | `D_STARTOFFS` | `params.start_offset` when supplied |
 | `item_duplicate` | `item` | `D_POSITION` | `params.position` on the newly-created item |
+| `track_create` | `track` | `P_NAME` | `params.name` on either created or reused track |
 | `track_rename` | `track` | `P_NAME` | `params.name` |
 
 Numeric checks use absolute `tolerance` when declared. String checks use
@@ -332,11 +333,27 @@ with `count:"any"`. Region field verification is also still closed:
 cannot opt into fields until a future slice adds region ref parsing and
 a region field reader.
 
-Field verification is intentionally not global yet. `track_create`,
-`media_import`, `region_create`, and `render_region` remain Slice 10+
-work.
+Field verification is intentionally not global yet. `media_import`,
+`region_create`, and `render_region` remain Slice 11+ work.
 `render_region` still omits `expectedDelta` in v0.1 because it is
 deferred and returns an artifact path, not a project-entity ref.
+
+Slice 10 starts field verification on maybeCreates-style templates.
+`expectedDelta.fields[]` may coexist with `maybeCreates:true` only when
+`count` is a finite positive integer. `track_create` verifies the track
+named by `changed_ids[1]` using the same GUID-shaped track reader that
+`track_rename` uses. The create path has structural delta `+1`; the
+reuse path has structural delta `0`; both paths still run field
+verification. On reuse, `P_NAME == params.name` is structurally
+guaranteed because the handler found the existing track by that name,
+so the field check is a pipeline proof-of-life rather than a new
+semantic assertion.
+
+`count:"any"` remains closed for field verification, so `media_import`
+cannot opt in until a future slice decides whether multi-item imports
+verify the first changed item, every changed item, or a different
+shape. Region scope also remains closed until a future slice adds
+region ref parsing and a region field reader.
 
 ## Reference Resolution (refs.lua)
 
