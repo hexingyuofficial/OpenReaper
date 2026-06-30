@@ -1250,14 +1250,14 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 1. **Read the user's MOST RECENT message in this new window.**
    Three plausible paths:
 
-   (a) **"Close Slice 16 reviewer follow-up."** Slice 16 is already
-       locally committed at `0996b5b`; reviewer Locke found docs-only
-       accuracy issues, and the current working tree fixes them. Static
-       gates are green. Make a local follow-up commit only if the user
-       explicitly asks. Avoid push during work hours unless the user
-       explicitly makes an exception.
+   (a) **"Close Slice 17 review follow-up."** Slice 17 is already a
+       local save-point commit at HEAD. Reviewer Pasteur found no code
+       issue; its only P3 was this stale first-moves/baseline wording.
+       Static gates are green. Make a local docs follow-up commit only
+       if the user explicitly asks. Avoid push during work hours unless
+       the user explicitly makes an exception.
 
-   (b) **"Codex/reviewer found a bug in Slice 16 or earlier."** Locked
+   (b) **"Codex/reviewer found a bug in Slice 17 or earlier."** Locked
        iteration loop: confirm the bug from code → name the fix + any
        decision the user owns BEFORE editing → propose 1-2 tight
        regression notes → wait for sign-off → fix → hand back for
@@ -1266,13 +1266,16 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
    (c) **Pivot to something else.** Abandon these first moves and
        follow the new direction.
 
-2. **Tests + build baseline this window:** Slice 16 baseline is full
-   `npm test` 326/326, `npm run build` clean,
+2. **Tests + build baseline this window:** Slice 17 baseline is full
+   `npm test` 329/329, `npm run build` clean,
    `npm run check:manifest` green,
    `npm run check:error-codes-fresh` green,
    `npm run check:template-authoring` green, and `git diff --check`
-   clean. Slice 16 has no REAPER smoke by decision S16-D5=a because no
-   runtime changed. Slice 15 baseline was focused suite 74/74, full
+   clean. Slice 17 has no REAPER smoke by decision S17-D7=a because no
+   runtime changed. Slice 16 baseline was full `npm test` 326/326,
+   build / manifest / error-code / template-authoring / diff-check
+   clean, with no REAPER smoke by S16-D5=a. Slice 15 baseline was
+   focused suite 74/74, full
    `npm test` 313/313, build / manifest / error-code / diff-check
    clean. REAPER smoke
    `slice15-1782819968415` is green on `7.71/macOS-arm64`; extra
