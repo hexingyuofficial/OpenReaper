@@ -291,6 +291,8 @@ back the changed entity after the structural check passes but before
 | `item_duplicate` | `item` | `D_POSITION` | `params.position` on the newly-created item |
 | `media_import` | `item` | `D_POSITION` | `params.position` on `changed_ids[1]` (first-item verify) |
 | `region_create` | `region` | `name` | `params.name` on the newly-created region |
+| `region_create` | `region` | `pos` | `params.start` when supplied; tolerance `1e-6` |
+| `region_create` | `region` | `rgnend` | `params.end` when supplied; tolerance `1e-6` |
 | `track_create` | `track` | `P_NAME` | `params.name` on either created or reused track |
 | `track_rename` | `track` | `P_NAME` | `params.name` |
 
@@ -332,8 +334,9 @@ The D5 relaxation is intentionally incremental. Slice 09 covers only
 numeric-count `creates:true` descriptors. Slice 10 covers numeric-count
 `maybeCreates:true` descriptors. Slice 11 covers `creates:true` with
 `count:"any"` as first-item verification. Slice 12 adds the `region`
-field scope for `region_create`. `fields[]` still cannot coexist with
-`deletes:true`.
+field scope for `region_create`; Slice 13 combines that region scope
+with mixed optional numeric bounds fields. `fields[]` still cannot
+coexist with `deletes:true`.
 
 Field verification is intentionally not global yet. `render_region`
 still omits `expectedDelta` in v0.1 because it is deferred and returns
@@ -379,13 +382,24 @@ without coupling verify.lua to refs.lua.
 the handler creates the region with `params.name`, then verify reads the
 region by the `region:NAME` changed id and compares the name string
 strictly. It proves the region changed-id shape, parser, scanner, and
-field reader are live; it does not yet verify bounds. `pos` and
-`rgnend` readers exist in Lua for the next slice, but
-`region_create` does not declare bounds fields in Slice 12 because
-explicit `{start,end}` mode and item-derived `{item_id}` mode need a
-separate paramPath decision. If region field verification fails, the
-region may already exist in the project and `LAST_RESULT` is not
-updated, matching the existing `VERIFY_FAILED` recovery contract.
+field reader are live.
+
+Slice 13 adds bounds verification for explicit-mode `region_create`.
+When the caller uses `{name,start,end}`, the descriptor verifies all
+three fields: `name`, `pos ← params.start`, and
+`rgnend ← params.end`. The numeric checks use tolerance `1e-6`.
+
+When the caller uses item-derived mode `{name,item_id}`, the descriptor
+still includes `pos` and `rgnend`, but both fields are marked
+`optional:true`. Because `params.start` and `params.end` are absent in
+that mode, Slice 07's optional-absent rule skips those two field checks;
+item-derived mode therefore remains name-only proof-of-life in v0.1.
+Strong item-mode bounds verification would require a new
+"computed expected" descriptor axis that resolves `item_id` and derives
+`D_POSITION + D_LENGTH`, so it is deferred to Slice 14+ / v0.2. If
+region field verification fails, the region may already exist in the
+project and `LAST_RESULT` is not updated, matching the existing
+`VERIFY_FAILED` recovery contract.
 
 ## Reference Resolution (refs.lua)
 

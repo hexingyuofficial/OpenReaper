@@ -34,6 +34,28 @@ function fakeTemplateOk(
   };
 }
 
+const regionCreateWireFields = [
+  {
+    scope: "region",
+    field: "name",
+    param_path: "name",
+  },
+  {
+    scope: "region",
+    field: "pos",
+    param_path: "start",
+    tolerance: 1e-6,
+    optional: true,
+  },
+  {
+    scope: "region",
+    field: "rgnend",
+    param_path: "end",
+    tolerance: 1e-6,
+    optional: true,
+  },
+];
+
 describe("callTemplate", () => {
   let queueDir: string;
   let client: FileQueueClient;
@@ -219,9 +241,7 @@ describe("callTemplate", () => {
         {
           count: 1,
           creates: true,
-          fields: [
-            { scope: "region", field: "name", param_path: "name" },
-          ],
+          fields: regionCreateWireFields,
         },
       ],
     ]);
@@ -388,32 +408,26 @@ describe("callTemplate", () => {
     }
   });
 
-  it("on-wire: region_create explicit mode sends a region name field descriptor", async () => {
+  it("on-wire: region_create explicit mode sends region name and bounds descriptors", async () => {
     const bridge = startFakeBridge(queueDir, (cmd) =>
       fakeTemplateOk(cmd.name ?? "unknown", ["region:Slice12"]),
     );
     try {
       await callTemplate(client, registry, {
         name: "region_create",
-        params: { name: "Slice12", start: 0, end: 1 },
+        params: { name: "Slice13", start: 0, end: 1.25 },
       });
       expect(bridge.seen.at(-1)?.expected_delta).toEqual({
         count: 1,
         creates: true,
-        fields: [
-          {
-            scope: "region",
-            field: "name",
-            param_path: "name",
-          },
-        ],
+        fields: regionCreateWireFields,
       });
     } finally {
       await bridge.stop();
     }
   });
 
-  it("on-wire: region_create item mode uses the same region name descriptor", async () => {
+  it("on-wire: region_create item mode sends the same optional bounds descriptors", async () => {
     const bridge = startFakeBridge(queueDir, (cmd) =>
       fakeTemplateOk(cmd.name ?? "unknown", ["region:Slice12Item"]),
     );
@@ -423,16 +437,16 @@ describe("callTemplate", () => {
         params: { name: "Slice12Item", item_id: "selected:0" },
       });
       const fields = bridge.seen.at(-1)?.expected_delta?.fields;
-      expect(fields).toEqual([
-        {
-          scope: "region",
-          field: "name",
-          param_path: "name",
-        },
-      ]);
+      expect(fields).toEqual(regionCreateWireFields);
       expect(fields?.[0]).not.toHaveProperty("tolerance");
       expect(fields?.[0]).not.toHaveProperty("optional");
       expect(fields?.[0]).not.toHaveProperty("nullable");
+      expect(fields?.[1]).toHaveProperty("tolerance", 1e-6);
+      expect(fields?.[1]).toHaveProperty("optional", true);
+      expect(fields?.[1]).not.toHaveProperty("nullable");
+      expect(fields?.[2]).toHaveProperty("tolerance", 1e-6);
+      expect(fields?.[2]).toHaveProperty("optional", true);
+      expect(fields?.[2]).not.toHaveProperty("nullable");
     } finally {
       await bridge.stop();
     }

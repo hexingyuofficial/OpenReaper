@@ -11,8 +11,53 @@ first.
 
 ## Current Status
 
-**Kernel hardening Slice 12 ✅ live-smoked / not committed
+**Kernel hardening Slice 13 ✅ live-smoked / not committed
 (2026-06-30).** Architect packet lives at
+`docs/plans/SLICE_13_ARCHITECT_PLAN.md`; source master plans remain
+`docs/plans/KERNEL_HARDENING_PLAN.md` and
+`docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 13 continues H2
+field-level verification by expanding `region_create` from one region
+field to three. The descriptor order is `[name, pos, rgnend]`: name is
+strict string equality; `pos ← params.start` and
+`rgnend ← params.end` use tolerance `1e-6` and `optional:true`.
+Explicit mode `{name,start,end}` verifies all three fields. Item-derived
+mode `{name,item_id}` still verifies only `name` because `start` and
+`end` are absent, so the bounds fields skip via Slice 07's
+optional-absent rule. This deliberately avoids a new computed-expected
+axis for deriving bounds from `item_id`. Decisions locked by user:
+D1=a region bounds; D2=a `pos` / `rgnend`; D3=a tolerance `1e-6`;
+D4=a order `[name,pos,rgnend]`; D5=a document the item-mode trade-off;
+D6=a reuse Slice 12 orphan-region contract; D7=b reference Slice 12
+baseline `6e4a02f`. No Lua runtime files changed. Static gates are
+green before the mid-smoke owner fix: focused suite 90/90,
+`npm test` 292/292, `npm run build` clean, `npm run check:manifest`
+green, `npm run check:error-codes-fresh` green, and `git diff --check`
+clean. After the owner fix, full `npm test` is **293/293** with build /
+manifest / error-code / diff-check still clean. REAPER re-smoke is green
+on REAPER `7.71/macOS-arm64` with run id `slice13-1782809548082`.
+
+Mid-smoke blocker found after this code drop: first smoke attempt
+`slice13-1782808140769` passed `ping` and `list_templates`, then
+stopped at S2b because `track_create` returned a track GUID but the
+following `media_import track_id:"last_result:track:0"` reported that
+no mutating call had produced tracks. The console showed two identical
+`generation 1` ready blocks, confirming a double-owner bridge split
+across separate ReaScript Lua states. Fix approved by user: add a
+file-backed `bridge_owner` token in the queue dir; the last launcher run
+writes the token, and older states self-exit before `process_one` if
+their token no longer matches. Re-smoke S2b proved that fix by running
+`track_create` → `media_import track_id:"last_result:track:0"` in
+sequence: track `guid:{1AFDB38A-6C5E-7E49-B618-33FF483AFBA2}` fed the
+import that returned item `guid:{CF9CC998-3614-E243-A15A-7A7F0C078627}`.
+The run also verified explicit region bounds `[0,1]` and
+`[7.13,13.71]`, item-mode optional bounds skip, raw field mismatch
+paths, no `LAST_RESULT` pollution after failed verifies, representative
+Slice 07-12 regressions, error-code probes, `get_state` include/region
+visibility regressions, and the `render_region` artifact carve-out.
+Queue cleanup after the run was `pending=0`, `running=0`, `done=0`.
+
+**Kernel hardening Slice 12 ✅ live-smoked, committed, and pushed
+(2026-06-30, `6e4a02f`).** Architect packet lives at
 `docs/plans/SLICE_12_ARCHITECT_PLAN.md`; source master plans remain
 `docs/plans/KERNEL_HARDENING_PLAN.md` and
 `docs/plans/KERNEL_HARDENING_EXECUTION.md`. Slice 12 continues H2
@@ -719,7 +764,166 @@ Live smoke (REAPER 7.71/macOS-arm64):
   regions/items remain in the open REAPER project for manual Cmd+Z or
   deletion; they are not repository state.
 
-### Kernel hardening Slice 12 (2026-06-30) — region_create region-scope name field verification ✅ live-smoked
+### Kernel hardening Slice 13 (2026-06-30) — region_create explicit bounds field verification ✅ live-smoked
+
+Scope: extend Slice 12's region-scope field verification from
+`name` only to `name + pos + rgnend`, without changing Lua runtime
+code. This slice activates two pieces that already existed: Slice 12's
+`read_region_field(handle,"pos"/"rgnend")` reader and Slice 07's
+optional-absent skip rule.
+
+What changed:
+
+- `docs/plans/SLICE_13_ARCHITECT_PLAN.md` — Architect packet copied
+  into the repo for future windows.
+- `reaper/streetlight_bridge.lua` — mid-smoke blocker fix. Adds a
+  queue-dir `bridge_owner` token written at startup and checked at the
+  top of every tick before the existing `_G` generation guard and before
+  `process_one`. This prevents two separately-started ReaScript Lua
+  states from splitting `LAST_RESULT` and claiming alternating queue
+  commands.
+- `packages/mcp-server/src/templates/region-create.ts` —
+  `region_create.expectedDelta.fields[]` expands from one field to
+  three, in fixed order:
+  `{scope:"region", field:"name", paramPath:"name"}`,
+  `{scope:"region", field:"pos", paramPath:"start", tolerance:1e-6,
+  optional:true}`, and `{scope:"region", field:"rgnend",
+  paramPath:"end", tolerance:1e-6, optional:true}`.
+- `packages/core/src/__tests__/registry.test.ts` — adds static coverage
+  for mixed-optional region-scope bounds metadata with
+  `creates:true`, plus regression checks that all-optional
+  non-nullable region fields and duplicate `region:pos` descriptors are
+  still rejected.
+- `packages/mcp-server/src/tools/__tests__/call-template.test.ts` —
+  asserts explicit-mode and item-mode `region_create` send the same
+  three-field wire descriptor; runtime mode selection happens in
+  `verify.lua` via optional skip.
+- `packages/mcp-server/src/tools/__tests__/list-templates.test.ts` —
+  asserts `list_templates` exposes the three fields in `[name,pos,rgnend]`
+  order, no `nullable`, and no accidental changes to `render_region`.
+- `scripts/__tests__/manifest-alignment.test.mjs` — mirrors the
+  mixed-optional region bounds acceptance at CLI alignment level.
+- `scripts/__tests__/lua-structure.test.mjs` — guards that
+  `verify.lua` still has the Slice 12 region reader branches for
+  `name`, `pos`, and `rgnend`, still does not loop over every
+  `changed_id`, and still does not pull in `refs.lua` / computed
+  expected logic. Also guards that `streetlight_bridge.lua` checks the
+  file-backed owner token before the generation guard / `process_one`.
+- `docs/TEMPLATE_SPEC.md`, `docs/RESPONSE_BUDGET.md`,
+  `docs/plans/KERNEL_HARDENING_PLAN.md`, and
+  `docs/plans/KERNEL_HARDENING_EXECUTION.md` document the new
+  explicit-mode strong-bounds / item-mode name-only trade-off.
+
+Decisions locked by user:
+
+- D1=a: do Slice 13 region bounds verification.
+- D2=a: use region reader fields `pos` / `rgnend`.
+- D3=a: numeric tolerance `1e-6`.
+- D4=a: descriptor order `[name, pos, rgnend]`.
+- D5=a: explicitly document that item-mode remains name-only
+  proof-of-life until a computed-expected descriptor axis exists.
+- D6=a: reuse Slice 12's create + `VERIFY_FAILED` orphan-region
+  contract.
+- D7=b: Slice 13 packet references Slice 12 baseline `6e4a02f`; HANDOFF
+  / PROGRESS are synced in this code drop.
+
+Not changed:
+
+- `reaper/packs/core/verify.lua` and
+  `reaper/packs/core/templates/region.lua` are intentionally untouched.
+  `streetlight_bridge.lua` changed only for the mid-smoke
+  file-backed-owner guard; no verification, handler, or manifest logic
+  changed.
+- `region_create` happy envelope is unchanged:
+  `{template, changed_count, changed_ids, truncated}` with
+  `changed_ids:["region:<name>"]`.
+- Item-derived bounds are not strongly verified. `{name,item_id}` skips
+  `pos` / `rgnend` because `params.start` / `params.end` are absent and
+  both fields are optional.
+- `render_region` remains the permanent artifact-path carve-out with no
+  `expectedDelta`.
+
+Verification so far:
+
+- Focused registry / call-template / list-templates /
+  manifest-alignment / Lua-structure tests passed: **90/90**.
+- Full static gates passed after the owner fix: `npm test`
+  **293/293**, `npm run build` clean, `npm run check:manifest` green,
+  `npm run check:error-codes-fresh` green, and `git diff --check`
+  clean. Focused Slice 13 suite was 90/90 before the owner fix; the
+  extra bridge-structure guard raises the full test count by one.
+- Reviewer pass completed with no P1/P2/P3 findings.
+- First live smoke attempt `slice13-1782808140769` passed S0/S1 and
+  confirmed the three-field `region_create` metadata plus
+  `render_region` carve-out, then stopped at S2b with the double-owner
+  `LAST_RESULT` split described above. No docs were flipped to ✅.
+- REAPER re-smoke passed after the user's full REAPER restart and
+  current bridge load. Run id: `slice13-1782809548082`; queue:
+  `/Users/Zhuanz/Library/Application Support/Streetlight/queue`;
+  REAPER `7.71/macOS-arm64`. User-provided console preflight showed a
+  single current `bridge ready (generation 1)` and `loaded error_codes
+  (22 codes)`.
+- S0/S1: `ping` connected; `list_templates` returned 11 templates.
+  `region_create.expectedDelta.fields[]` was exactly
+  `[name,pos,rgnend]`; `pos` and `rgnend` carried `optional:true` and
+  `tolerance:1e-6`; `render_region` still had no `expectedDelta`.
+- S2 owner-guard regression: `track_create` returned
+  `guid:{1AFDB38A-6C5E-7E49-B618-33FF483AFBA2}`, and the immediately
+  following `media_import track_id:"last_result:track:0"` returned
+  item `guid:{CF9CC998-3614-E243-A15A-7A7F0C078627}`. The prior
+  double-owner `LAST_RESULT` split did not recur.
+- S3/S4/S5: explicit simple region
+  `slice13-1782809548082-explicit-simple` round-tripped `[0,1]`;
+  explicit nontrivial region
+  `slice13-1782809548082-explicit-nontrivial` round-tripped
+  `[7.13,13.71]`; item-mode region
+  `slice13-1782809548082-item-mode` passed with name-only verify via
+  optional bounds skip.
+- S6/S8/S9/S10: raw mismatch probes returned `VERIFY_FAILED` with
+  `recoverable:false` for unsupported field `posX`, missing
+  `startX` without optional, numeric `pos <- end` mismatch
+  (`expected:1`, `actual:0`, `tolerance:1e-6`), and structural
+  count `2` vs actual `1`. Structural mismatch took priority and did
+  not include top-level `details.fields[]`.
+- S11: failed verifies did not pollute `LAST_RESULT`.
+  `track_rename` and `item_move` still hit the original track/item, and
+  a fresh successful region
+  `slice13-1782809548082-lr-region-after-fails` became the only
+  `last_result:region:0` target for a render probe.
+- S12/S13/S14/S15: representative `item_trim` optional,
+  `item_fade` nullable, `item_duplicate`, `track_create` reuse, and
+  `media_import` first-item regressions passed. Error probes covered
+  `REGION_NAME_INVALID`, `REGION_NAME_TAKEN`, `ITEM_NOT_FOUND`,
+  `MEDIA_NOT_FOUND`, `PARAMS_INVALID`, and `SCOPE_NOT_IMPLEMENTED`.
+  `get_state(tracks, include:["fx"])` passed; render include returned
+  `PARAMS_INVALID`; bare render returned `SCOPE_NOT_IMPLEMENTED`;
+  `get_state(regions)` showed happy and orphan region names. Final
+  `render_region` produced exactly one WAV path for
+  `slice13-1782809548082-explicit-simple`; the file was RIFF/WAVE,
+  stereo, 24-bit, and the temp dir was deleted.
+- Queue cleanup after the run: `pending=0`, `running=0`, `done=0`.
+
+Regression notes verified by live smoke:
+
+- Full quit/reopen REAPER before loading the current `start_bridge.lua`.
+  Slice 13 now changes `streetlight_bridge.lua` for the owner guard, and
+  the current MCP server sends a three-field `region_create` manifest.
+  If the console shows two ready blocks, the owner token should make the
+  older owner self-exit before it can claim queue files.
+- `list_templates` should show `region_create.expectedDelta.fields[]`
+  as `[name, pos, rgnend]`, with `pos` and `rgnend` carrying
+  `optional:true` and `tolerance:1e-6`.
+- Explicit-mode `region_create {name,start,end}` should verify all
+  three fields. Use both simple bounds and non-trivial bounds such as
+  `start:7.13,end:13.71`.
+- Item-mode `region_create {name,item_id}` should still pass by
+  verifying only `name`; `pos` and `rgnend` skip via optional-absent.
+- Raw mismatch paths should cover unsupported region field, paramPath
+  missing without optional, numeric mismatch by field/param mismatch,
+  and structural mismatch priority. Create + `VERIFY_FAILED` may leave
+  orphan regions and must not update `LAST_RESULT`.
+
+### Kernel hardening Slice 12 (2026-06-30) — region_create region-scope name field verification ✅ live-smoked / pushed `6e4a02f`
 
 Scope: extend H2 field verification to `region_create` and add the
 first `region` field scope. This is intentionally name-only: it proves
@@ -1572,8 +1776,8 @@ Verification so far:
 
 | | Done | Remaining |
 |---|---|---|
-| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-12 ✅ live-smoked | Commit / push Slice 12 only on explicit ask |
-| Tests | Slice 12: 291/291 green; build / manifest / error-code clean; focused suite 89/89; reviewer no P1/P2; live smoke `slice12-1782804345538`; Slice 11 pushed at `f66b2db` | git versioning |
+| Steps | 0, 1, 2, 3, 4a, 4b, 4c, 5, 6, 7, 8 ✅; Kernel Slices 01-12 ✅ pushed; Slice 13 code-done/static-green/reviewer-pass/live-smoked | Commit / push Slice 13 only on explicit ask |
+| Tests | Slice 13: 293/293 green after owner fix; build / manifest / error-code clean; focused suite 90/90 pre-owner-fix; REAPER smoke `slice13-1782809548082`; Slice 12 pushed at `6e4a02f` | git versioning |
 
 **9 / 9 v0.1 steps shipped; kernel hardening Slice 10 is now
 live-smoked, committed, and pushed.** Step 6 (render) closed
@@ -1618,16 +1822,16 @@ pushed at `5ba6318`; Slice 06 was committed and pushed at `9f56ce0`;
 Slice 07 was committed and pushed at `9244be3`; Slice 08 was committed
 and pushed at `c923df9`; Slice 09 was committed and pushed at
 `bf15daa`; Slice 10 was committed and pushed at `2babc5c`; Slice 11
-was committed and pushed at `f66b2db`. Slice 12 is code-done,
-static-green, reviewer-pass, and live-smoked locally, not committed or
-pushed.
+was committed and pushed at `f66b2db`; Slice 12 was committed and
+pushed at `6e4a02f`. Slice 13 is code-done, static-green,
+reviewer-pass, and live-smoked locally, not committed or pushed.
 `docs/PUBLIC_STORY.md` now tracks the public positioning, launch-copy
 blocks, technical moats, demo story, and "do not overclaim yet" language
 for future Bilibili / YouTube / README use.
 
 ### Next action
 
-1. **Commit / push Slice 12 only on explicit ask.** Local verification
+1. **Commit / push Slice 13 only on explicit ask.** Local verification
    is complete; the working tree is intentionally uncommitted.
 3. **Second-Mac smoke / v0.1 release tag remains available.**
    Setup/launcher reproducer is ready;

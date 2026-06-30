@@ -4,6 +4,24 @@ import { z } from "zod";
 import { listTemplates } from "../list-templates.js";
 import { registerCoreTemplates } from "../../templates/index.js";
 
+const regionCreateExpectedFields = [
+  { scope: "region", field: "name", paramPath: "name" },
+  {
+    scope: "region",
+    field: "pos",
+    paramPath: "start",
+    tolerance: 1e-6,
+    optional: true,
+  },
+  {
+    scope: "region",
+    field: "rgnend",
+    paramPath: "end",
+    tolerance: 1e-6,
+    optional: true,
+  },
+];
+
 describe("listTemplates", () => {
   it("empty registry → ok with empty templates array", () => {
     const registry = new CapabilityRegistry();
@@ -103,9 +121,7 @@ describe("listTemplates", () => {
     expect(regionCreate?.expectedDelta).toEqual({
       count: 1,
       creates: true,
-      fields: [
-        { scope: "region", field: "name", paramPath: "name" },
-      ],
+      fields: regionCreateExpectedFields,
     });
     const renderRegion = result.result.templates.find((t) => t.name === "render_region");
     expect(renderRegion).not.toHaveProperty("expectedDelta");
@@ -183,7 +199,7 @@ describe("listTemplates", () => {
       ],
       [
         "region_create",
-        [{ scope: "region", field: "name", paramPath: "name" }],
+        regionCreateExpectedFields,
       ],
     ]);
 
@@ -258,7 +274,7 @@ describe("listTemplates", () => {
     expect(field).not.toHaveProperty("nullable");
   });
 
-  it("keeps region_create field metadata free of tolerance, optional, and nullable", () => {
+  it("keeps region_create metadata ordered as name then optional bounds", () => {
     const registry = new CapabilityRegistry();
     registerCoreTemplates(registry);
     const result = listTemplates(registry);
@@ -269,14 +285,34 @@ describe("listTemplates", () => {
     expect(regionCreate?.expectedDelta).toEqual({
       count: 1,
       creates: true,
-      fields: [
-        { scope: "region", field: "name", paramPath: "name" },
-      ],
+      fields: regionCreateExpectedFields,
     });
-    const field = regionCreate?.expectedDelta?.fields?.[0];
-    expect(field).not.toHaveProperty("tolerance");
-    expect(field).not.toHaveProperty("optional");
-    expect(field).not.toHaveProperty("nullable");
+    const fields = regionCreate?.expectedDelta?.fields;
+    expect(fields).toHaveLength(3);
+    expect(fields?.[0]).toEqual({
+      scope: "region",
+      field: "name",
+      paramPath: "name",
+    });
+    expect(fields?.[0]).not.toHaveProperty("tolerance");
+    expect(fields?.[0]).not.toHaveProperty("optional");
+    expect(fields?.[0]).not.toHaveProperty("nullable");
+    expect(fields?.[1]).toEqual({
+      scope: "region",
+      field: "pos",
+      paramPath: "start",
+      tolerance: 1e-6,
+      optional: true,
+    });
+    expect(fields?.[1]).not.toHaveProperty("nullable");
+    expect(fields?.[2]).toEqual({
+      scope: "region",
+      field: "rgnend",
+      paramPath: "end",
+      tolerance: 1e-6,
+      optional: true,
+    });
+    expect(fields?.[2]).not.toHaveProperty("nullable");
   });
 
   it("does not leak nullable metadata onto templates that did not declare it", () => {

@@ -171,6 +171,18 @@ need their own paramPath decision. H2 v0.1 coverage is now 10/11; the
 remaining `render_region` template is the permanent artifact-path
 carve-out.
 
+2026-06-30 note: Slice 13 expands `region_create.expectedDelta.fields[]`
+from one region field to three: `name <- params.name`,
+`pos <- params.start`, and `rgnend <- params.end`. The two bounds fields
+are `optional:true` with tolerance `1e-6`, so explicit mode
+`{name,start,end}` verifies all three fields while item-derived mode
+`{name,item_id}` skips the bounds fields and remains name-only
+proof-of-life. This intentionally avoids a new "computed expected" axis
+that would have to resolve `item_id` and derive `position + length`.
+`verify.lua`, `region.lua`, and `streetlight_bridge.lua` do not change
+in Slice 13; the slice activates the region `pos` / `rgnend` readers
+written in Slice 12 and the optional-absent rule from Slice 07.
+
 **触及文件**：
 - `packages/core/src/registry.ts`（`expectedDelta` 字段）
 - `packages/core/src/errors.ts`（`VERIFY_FAILED`）

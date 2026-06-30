@@ -459,6 +459,20 @@ describe("CapabilityRegistry", () => {
         creates: true,
         fields: [
           { scope: "region", field: "name", paramPath: "name" },
+          {
+            scope: "region",
+            field: "pos",
+            paramPath: "start",
+            tolerance: 1e-6,
+            optional: true,
+          },
+          {
+            scope: "region",
+            field: "rgnend",
+            paramPath: "end",
+            tolerance: 1e-6,
+            optional: true,
+          },
         ],
       },
       params: z.object({}),
@@ -471,11 +485,25 @@ describe("CapabilityRegistry", () => {
       creates: true,
       fields: [
         { scope: "region", field: "name", paramPath: "name" },
+        {
+          scope: "region",
+          field: "pos",
+          paramPath: "start",
+          tolerance: 1e-6,
+          optional: true,
+        },
+        {
+          scope: "region",
+          field: "rgnend",
+          paramPath: "end",
+          tolerance: 1e-6,
+          optional: true,
+        },
       ],
     });
   });
 
-  it("accepts region-scope tolerance metadata for future numeric region fields", () => {
+  it("accepts mixed-optional region-scope bounds metadata with creates:true", () => {
     const reg = new CapabilityRegistry();
     reg.register({
       name: "region_bounds_checked",
@@ -491,7 +519,15 @@ describe("CapabilityRegistry", () => {
         count: 1,
         creates: true,
         fields: [
+          { scope: "region", field: "name", paramPath: "name" },
           { scope: "region", field: "pos", paramPath: "start", tolerance: 1e-6 },
+          {
+            scope: "region",
+            field: "rgnend",
+            paramPath: "end",
+            tolerance: 1e-6,
+            optional: true,
+          },
         ],
       },
       params: z.object({}),
@@ -499,11 +535,20 @@ describe("CapabilityRegistry", () => {
       examples: [{ params: {} }],
     });
 
-    expect(reg.list()[0]?.expectedDelta?.fields?.[0]).toEqual({
-      scope: "region",
-      field: "pos",
-      paramPath: "start",
-      tolerance: 1e-6,
+    expect(reg.list()[0]?.expectedDelta).toEqual({
+      count: 1,
+      creates: true,
+      fields: [
+        { scope: "region", field: "name", paramPath: "name" },
+        { scope: "region", field: "pos", paramPath: "start", tolerance: 1e-6 },
+        {
+          scope: "region",
+          field: "rgnend",
+          paramPath: "end",
+          tolerance: 1e-6,
+          optional: true,
+        },
+      ],
     });
   });
 
@@ -668,6 +713,28 @@ describe("CapabilityRegistry", () => {
     expect(() =>
       registerWithExpectedDelta({
         count: 1,
+        creates: true,
+        fields: [
+          {
+            scope: "region",
+            field: "pos",
+            paramPath: "start",
+            tolerance: 1e-6,
+            optional: true,
+          },
+          {
+            scope: "region",
+            field: "rgnend",
+            paramPath: "end",
+            tolerance: 1e-6,
+            optional: true,
+          },
+        ],
+      }),
+    ).toThrow(/all-optional only when every field is nullable/);
+    expect(() =>
+      registerWithExpectedDelta({
+        count: 1,
         fields: [
           {
             scope: "item",
@@ -703,6 +770,16 @@ describe("CapabilityRegistry", () => {
         ],
       }),
     ).toThrow(/duplicate region:name/);
+    expect(() =>
+      registerWithExpectedDelta({
+        count: 1,
+        creates: true,
+        fields: [
+          { scope: "region", field: "pos", paramPath: "start" },
+          { scope: "region", field: "pos", paramPath: "end" },
+        ],
+      }),
+    ).toThrow(/duplicate region:pos/);
     expect(() =>
       registerWithExpectedDelta({
         count: 1,

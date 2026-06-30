@@ -72,6 +72,7 @@ local QUEUE_DIR = get_queue_dir()
 local PENDING   = QUEUE_DIR .. "/pending"
 local RUNNING   = QUEUE_DIR .. "/running"
 local DONE      = QUEUE_DIR .. "/done"
+local OWNER     = QUEUE_DIR .. "/bridge_owner"
 
 reaper.RecursiveCreateDirectory(QUEUE_DIR, 0)
 reaper.RecursiveCreateDirectory(PENDING, 0)
@@ -162,6 +163,28 @@ local function write_file_atomic(path, content)
     return false, "rename failed: " .. tostring(e)
   end
   return true
+end
+
+local OWNER_TOKEN = nil
+
+local function make_owner_token()
+  local version = tostring(MANIFEST.name) .. "@" .. tostring(MANIFEST.version)
+  local now = tostring(reaper.time_precise())
+  local random_part = tostring(math.random(1000000000))
+  return table.concat({ version, now, random_part }, "|")
+end
+
+local function write_owner_token()
+  OWNER_TOKEN = make_owner_token()
+  local ok, err = write_file_atomic(OWNER, OWNER_TOKEN)
+  if not ok then
+    error("Could not write bridge owner token: " .. tostring(err))
+  end
+end
+
+local function owner_token_matches()
+  if not OWNER_TOKEN then return false end
+  return read_file(OWNER) == OWNER_TOKEN
 end
 
 -- ─── Dispatcher ─────────────────────────────────────────────────────────────
@@ -1131,6 +1154,19 @@ local POLL_INTERVAL_S = 0.1   -- 10 Hz
 local last_tick = 0
 
 local function tick()
+  -- File-backed owner guard: REAPER can run separate ReaScript actions in
+  -- separate Lua states, so the `_G` generation counter below is not enough
+  -- to stop a double-clicked launcher. The last started bridge writes OWNER;
+  -- older states self-exit before claiming queue files.
+  if not owner_token_matches() then
+    if DEFERRED and DEFERRED.on_terminal then
+      pcall(DEFERRED.on_terminal)
+    end
+    DEFERRED = nil
+    log("bridge owner token changed; self-exiting")
+    return
+  end
+
   -- Generation guard: a newer chunk has loaded and taken ownership.
   -- Stop ticking — do not call process_one, do not re-enroll in defer.
   -- The newer chunk owns LAST_RESULT, DEFERRED, the queue dirs, etc.
@@ -1231,6 +1267,7 @@ local function reap_stale_running()
 end
 
 reap_stale_running()
+write_owner_token()
 
 log("bridge ready (generation " .. MY_GENERATION
   .. ") — loaded error_codes (" .. EXPECTED_ERROR_CODE_COUNT

@@ -361,15 +361,18 @@ verification fails:
 }
 ```
 
-v0.1 field verification is bounded to at most two fields per call
-(`item_trim` in Slice 07, `item_fade` in Slice 08, and
-`item_duplicate` in Slice 09 with one field, and `track_create` in
-Slice 10 with one field). Slice 11 adds `media_import` with one
-first-item field check even though its structural count is `"any"`, so
-the failure payload still contains at most one media-import
-`fields[]` entry. Slice 12 adds `region_create` with one region-name
-string field check, so region-scope failure payloads stay similarly
-small even though the field value is a string rather than a number.
+v0.1 field verification is bounded to at most three fields per call.
+Most templates still carry one or two field descriptors (`item_trim` in
+Slice 07, `item_fade` in Slice 08, and the single-field create/reuse
+templates in Slices 09-12). Slice 13 makes `region_create` the first
+three-field verifier: `name`, `pos`, and `rgnend`. A region-name
+mismatch adds one small string field entry; a bounds mismatch adds one
+or two numeric entries. Even the theoretical all-three-field failure is
+well under 1 KiB, far below `MAX_RESPONSE_BYTES = 65536`.
+
+Slice 11 adds `media_import` with one first-item field check even though
+its structural count is `"any"`, so the failure payload still contains
+at most one media-import `fields[]` entry.
 Nullable field descriptors do not add data to `error.details.fields[]`;
 a `json.null` parameter is coerced to expected value `0` before the
 normal `{scope, field, expected, actual, tolerance, ok}` detail is

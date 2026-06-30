@@ -183,6 +183,27 @@ describe("Lua bridge structure", () => {
     expect(verify).toMatch(/expected 0 or \+%d \(maybeCreates\)/);
   });
 
+  it("uses a file-backed owner token so double-run launchers cannot split LAST_RESULT", async () => {
+    const bridge = await readRepoFile("reaper/streetlight_bridge.lua");
+
+    expect(bridge).toMatch(/local OWNER\s*=\s*QUEUE_DIR \.\. "\/bridge_owner"/);
+    expect(bridge).toMatch(/local OWNER_TOKEN = nil/);
+    expect(bridge).toMatch(/function write_owner_token\(\)/);
+    expect(bridge).toMatch(/write_file_atomic\(OWNER, OWNER_TOKEN\)/);
+    expect(bridge).toMatch(/function owner_token_matches\(\)/);
+    expect(bridge).toMatch(/read_file\(OWNER\) == OWNER_TOKEN/);
+    expect(bridge).toMatch(/write_owner_token\(\)/);
+    expect(bridge).toMatch(/bridge owner token changed; self-exiting/);
+
+    const tickIndex = bridge.indexOf("local function tick()");
+    const ownerIndex = bridge.indexOf("if not owner_token_matches()", tickIndex);
+    const generationIndex = bridge.indexOf("if MY_GENERATION ~= _G.STREETLIGHT_BRIDGE_GENERATION", tickIndex);
+    const processIndex = bridge.indexOf("pcall(process_one)", tickIndex);
+    expect(ownerIndex).toBeGreaterThan(tickIndex);
+    expect(ownerIndex).toBeLessThan(generationIndex);
+    expect(ownerIndex).toBeLessThan(processIndex);
+  });
+
   it("wires Slice 06 field verification after count checks and before LAST_RESULT finalize", async () => {
     const [bridge, verify] = await Promise.all([
       readRepoFile("reaper/streetlight_bridge.lua"),
@@ -214,7 +235,7 @@ describe("Lua bridge structure", () => {
     expect(bridge).toMatch(/fields = json\.array\(field_details or {}\)/);
   });
 
-  it("adds Slice 12 region field verification scope without touching refs.lua", async () => {
+  it("keeps Slice 12/13 region field verification scope without touching refs.lua", async () => {
     const verify = await readRepoFile("reaper/packs/core/verify.lua");
 
     expect(verify).toMatch(/local function parse_region_ref\(ref\)/);
@@ -222,9 +243,14 @@ describe("Lua bridge structure", () => {
     expect(verify).toMatch(/local function find_region_by_name\(name\)/);
     expect(verify).toMatch(/EnumProjectMarkers3/);
     expect(verify).toMatch(/local function read_region_field\(handle, field\)/);
+    expect(verify).toMatch(/if field == "name" then return true, handle\.name end/);
+    expect(verify).toMatch(/if field == "pos" then return true, handle\.pos end/);
+    expect(verify).toMatch(/if field == "rgnend" then return true, handle\.rgnend end/);
     expect(verify).toMatch(/region\s*=\s*{ entity_kind = "region"/);
     expect(verify).toMatch(/parse = parse_region_ref/);
     expect(verify).not.toMatch(/dofile\([^)]*refs\.lua/);
+    expect(verify).not.toMatch(/resolve_item/);
+    expect(verify).not.toMatch(/computed/i);
   });
 
   it("keeps Slice 11 and Slice 12 field verification on the first changed id only", async () => {

@@ -170,6 +170,14 @@ quit/reopen REAPER, load the current `start_bridge.lua`, and verify the
 console shows `bridge ready (generation 1)` plus `loaded error_codes
 (22 codes)`.
 
+2026-06-30 note: Slice 13 does not change Lua runtime files, but it
+changes the `region_create` manifest metadata sent over the wire from
+one region field to three (`name`, optional `pos`, optional `rgnend`).
+For live smoke, still fully quit/reopen REAPER and load the current
+`start_bridge.lua`; the old Slice 12 chunk would otherwise advertise
+and verify only the name field. Console preflight remains
+`bridge ready (generation 1)` plus `loaded error_codes (22 codes)`.
+
 ### 细化点（这步设计难点都在这里）
 - **不要做任意字段的全量 before/after diff**——太贵且 before 不可知（handler 内部才解析
   出受影响实体）。校验只覆盖两类**可知后置条件**：
