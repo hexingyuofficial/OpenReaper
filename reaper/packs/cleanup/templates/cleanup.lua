@@ -11,7 +11,10 @@ local MAX_TITLE_CHARS = 96
 local MAX_DETAIL_CHARS = 192
 local MAX_TARGET_NAME_CHARS = 80
 local MAX_PREVIEW_ITEMS = 8
+local MAX_SAFE_STEPS_PER_ACTION = 8
+local MAX_RENAME_SUFFIX_ATTEMPTS = 50
 local HASH_MOD = 4294967296
+local SAFE_ACTION_ALLOWLIST = "cleanup_safe_v1"
 
 local KINDS = {
   "duplicate_track_names",
@@ -207,6 +210,131 @@ local function preview_list(values)
   return table.concat(shown, ", ")
 end
 
+local function existing_track_names(tracks)
+  local used = {}
+  for _, track in ipairs(tracks) do
+    local name = trim(track.name)
+    if name ~= "" then used[name] = true end
+  end
+  return used
+end
+
+local function review_rename_action(reason)
+  return {
+    type = "review_rename",
+    version = 1,
+    status = "review_only",
+    mode = "agent_step",
+    allowlist = SAFE_ACTION_ALLOWLIST,
+    auto_apply = false,
+    requires_approval = true,
+    reason = reason,
+  }
+end
+
+local function build_duplicate_track_rename_action(name, group, tracks)
+  local step_count = math.max(#group - 1, 0)
+  if step_count == 0 then return nil end
+  if step_count > MAX_SAFE_STEPS_PER_ACTION then
+    return review_rename_action("too_many_steps")
+  end
+  if #name > MAX_TARGET_NAME_CHARS then
+    return review_rename_action("name_too_long")
+  end
+
+  local used = existing_track_names(tracks)
+  local steps = {}
+  local suffix = 2
+
+  -- The first track by index keeps the original duplicate name. Every later
+  -- track receives the first deterministic suffix that is not already used by
+  -- the project or by an earlier generated step.
+  for i = 2, #group do
+    local track = group[i]
+    local chosen = nil
+    local attempts = 0
+
+    while attempts < MAX_RENAME_SUFFIX_ATTEMPTS do
+      local candidate = name .. " " .. tostring(suffix)
+      suffix = suffix + 1
+      attempts = attempts + 1
+
+      if #candidate <= MAX_TARGET_NAME_CHARS and not used[candidate] then
+        chosen = candidate
+        used[candidate] = true
+        break
+      end
+    end
+
+    if not chosen then
+      return review_rename_action("name_collision_limit")
+    end
+
+    steps[#steps + 1] = {
+      template = "track_rename",
+      params = {
+        track_id = track.id,
+        name = chosen,
+      },
+      expected_before = {
+        type = "track",
+        id = track.id,
+        index = track.index,
+        name = track.name,
+      },
+    }
+  end
+
+  return {
+    type = "track_rename",
+    version = 1,
+    status = "executable",
+    mode = "agent_step",
+    allowlist = SAFE_ACTION_ALLOWLIST,
+    apply_template = "track_rename",
+    auto_apply = false,
+    requires_approval = true,
+    step_count = #steps,
+    steps_truncated = false,
+    steps = steps,
+  }
+end
+
+local function finalize_safe_action(action, suggestion_index)
+  if not action then return nil end
+
+  local out = {
+    type = action.type,
+    version = action.version,
+    status = action.status,
+    mode = action.mode,
+    allowlist = action.allowlist,
+    auto_apply = action.auto_apply,
+    requires_approval = action.requires_approval,
+  }
+
+  if action.apply_template then out.apply_template = action.apply_template end
+  if action.reason then out.reason = action.reason end
+
+  if action.status == "executable" then
+    out.action_id = string.format("act_%03d", suggestion_index)
+    out.step_count = action.step_count or #(action.steps or {})
+    out.steps_truncated = action.steps_truncated or false
+    out.steps = {}
+
+    for step_index, step in ipairs(action.steps or {}) do
+      out.steps[#out.steps + 1] = {
+        step_id = string.format("step_%03d", step_index),
+        template = step.template,
+        params = step.params,
+        expected_before = step.expected_before,
+      }
+    end
+  end
+
+  return out
+end
+
 local function add_candidate(candidates, kind, severity, title, detail, targets, safe_action)
   local bounded, target_count, targets_truncated = bounded_targets(targets)
   local title_out, title_truncated = truncate_string(title, MAX_TITLE_CHARS)
@@ -259,11 +387,7 @@ local function add_duplicate_track_name_candidates(candidates, tracks)
       "Duplicate track name: " .. display_name,
       tostring(#group) .. " tracks share the exact name " .. display_name .. ".",
       targets,
-      {
-        type = "review_rename",
-        apply_template = "track_rename",
-        auto_apply = false,
-      }
+      build_duplicate_track_rename_action(name, group, tracks)
     )
   end
 end
@@ -284,11 +408,7 @@ local function add_empty_or_unnamed_candidates(candidates, tracks)
         "Review " .. label .. " track at index " .. tostring(track.index),
         "Track " .. tostring(track.index) .. " is " .. label .. ".",
         { track_target(track) },
-        unnamed and {
-          type = "review_rename",
-          apply_template = "track_rename",
-          auto_apply = false,
-        } or nil
+        unnamed and review_rename_action("unnamed_track_requires_review") or nil
       )
     end
   end
@@ -506,7 +626,7 @@ local function finalize_suggestions(candidates, max_suggestions)
       targets = candidate.targets,
       target_count = candidate.target_count,
       targets_truncated = candidate.targets_truncated or nil,
-      safe_action = candidate.safe_action,
+      safe_action = finalize_safe_action(candidate.safe_action, i),
     }
   end
 

@@ -11,6 +11,48 @@ first.
 
 ## Current Status
 
+**Slice 23A ✅ static-green / REAPER live smoke pending
+(2026-07-01).** Source:
+`docs/plans/SLICE_23A_CLEANUP_SAFE_AGENT_STEP_ARCHITECT_PLAN.md`.
+This is Phase 2B Cleanup Safe Agent-Step MVP. User locked D1-D6:
+agent-step execution, no `cleanup_apply_safe`, `cleanup_safe_v1`
+allowlist limited to `track_rename`, no report artifact, no
+`PLAN_STALE`, and deterministic/collision-safe duplicate-track rename
+generation. Current implementation keeps `cleanup_plan` read-only and
+extends only the JSON plan payload. Duplicate-track-name suggestions may
+now carry `safe_action.status:"executable"`, `mode:"agent_step"`,
+`allowlist:"cleanup_safe_v1"`, `apply_template:"track_rename"`, and
+bounded `steps`; each step contains exact `track_rename` params plus
+`expected_before` `{ type:"track", id, index, name }`. Tracks are sorted
+by index, the first duplicate keeps the original name, later duplicates
+get increasing suffix names, collisions with existing/generated names are
+skipped, and collision-limit or size-limit cases downgrade to
+`review_only`. Empty/unnamed tracks, region-name issues, folder-depth
+observations, and state warnings remain review-only or non-executable.
+Agent freshness is explicit: rerun `cleanup_plan` and compare
+`source.fingerprint`; before every step, inspect current tracks and
+verify target GUID + current name still match `expected_before`; stop
+before `track_rename` on any mismatch. No apply template, destructive
+cleanup, deletion, routing/FX repair, delivery, audio analysis, MIDI, new
+MCP tool, report artifact, or core parking. Static gates are green:
+focused `npm test -- scripts/__tests__/lua-structure.test.mjs` 18/18,
+full `npm test` 412/412, `npm run build` clean,
+`npm run check:error-codes-fresh` 24 codes fresh, default
+`check:manifest` 12 templates across 1 pack, cleanup-enabled
+`check:manifest` 13 templates across 2 packs, cleanup+fixture
+`check:manifest` 15 templates across 3 packs, default
+`check:template-authoring` 12 templates, cleanup-enabled
+`check:template-authoring` 13 templates, cleanup+fixture
+`check:template-authoring` 15 templates, and `git diff --check` clean.
+REAPER live smoke is not complete: direct bridge ping reached REAPER
+`7.71/macOS-arm64`; a pre-reload `cleanup_plan` response proved stale
+Slice 22 cleanup code was still loaded; Codex then accidentally reloaded
+the bridge core-only. The user immediately reloaded with
+`_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`; console showed core 12
+templates, cleanup 1 template, and `cleanup_plan` in the ready template
+list. Next run can execute `docs/smokes/cleanup_plan.md` against that
+cleanup-enabled bridge.
+
 **Slice 22 ✅ live-smoked / static-green
 (2026-07-01).** Source:
 `docs/plans/SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`. This is Phase 2A

@@ -1,9 +1,10 @@
 # Cleanup Plan Smoke
 
-Slice 22 live smoke verifies the opt-in `cleanup` pack and its read-only
-`cleanup_plan` artifact producer. It does not claim cleanup apply,
-destructive cleanup, delivery, analysis, routing repair, FX repair, or
-MIDI.
+Slice 23A live smoke verifies the opt-in `cleanup` pack, its read-only
+`cleanup_plan` artifact producer, and the narrow agent-step safe action
+contract for duplicate track renames. It does not add
+`cleanup_apply_safe`, destructive cleanup, delivery, analysis, routing
+repair, FX repair, or MIDI.
 
 ## Setup
 
@@ -33,15 +34,19 @@ MIDI.
 Use MCP calls to seed deterministic state instead of relying on a
 pre-baked `.RPP`:
 
-1. `track_create` twice with the exact same non-empty name, such as
-   `S22 Duplicate <stamp>`. This creates the duplicate-name case.
-2. `track_create` once with `S22 Empty <stamp>`. Newly-created tracks are
+1. `track_create` three times with the exact same non-empty name, such as
+   `S23 Duplicate <stamp>`. This creates a duplicate-name case with two
+   executable `track_rename` steps.
+2. Optional collision fixture: `track_create` once with
+   `S23 Duplicate <stamp> 2`. A correct plan must then skip that suffix
+   and use the next available suffix for the first renamed duplicate.
+3. `track_create` once with `S23 Empty <stamp>`. Newly-created tracks are
    empty, so this creates the empty-track case.
-3. `region_create` three times with one letter-only family and mixed
+4. `region_create` three times with one letter-only family and mixed
    separators/case, such as `szz_01`, `szz 2`, and `SZZ-03`, using
    non-overlapping short bounds. This creates the inconsistent-region
    family case.
-4. `track_create` once with `name:"S22 Cleanup Anchor <stamp>"` and
+5. `track_create` once with `name:"S23 Cleanup Anchor <stamp>"` and
    `reuse_existing:true`. Record this GUID; it is the `LAST_RESULT`
    anchor used after artifact creation.
 
@@ -100,6 +105,18 @@ acceptance does not depend on these optional categories.
    - bounded `payload.suggestions`;
    - `target_count` on each suggestion and `targets_truncated:true` when
      a preview omits targets;
+   - for duplicate track names, `safe_action.status:"executable"`,
+     `mode:"agent_step"`, `allowlist:"cleanup_safe_v1"`,
+     `apply_template:"track_rename"`, and bounded `steps`;
+   - each executable step has `template:"track_rename"`,
+     `params.track_id` as a track GUID, a deterministic collision-safe
+     `params.name`, and `expected_before` with the same target GUID and
+     current name;
+   - the first duplicate track by index keeps the original name; only
+     later duplicate tracks receive generated suffix names;
+   - empty-track, region-name, folder-depth, and state-warning
+     suggestions are absent `safe_action` or `safe_action.status` is
+     `review_only`;
    - `payload.deferred` naming the intentionally-deferred apply,
      destructive, routing, FX, analysis, and delivery capabilities;
    - `response_bytes <= 65536`.
@@ -113,6 +130,29 @@ acceptance does not depend on these optional categories.
     track, proving plan artifacts did not pollute project `LAST_RESULT`.
 11. `cleanup_plan` with `max_suggestions:51` should return
     `PARAMS_INVALID` before bridge execution.
-12. Queue cleanup should end with no `pending/`, `running/`, or `done/`
+12. Agent-step safe apply:
+    - run `cleanup_plan` again and read its payload;
+    - compare the new `payload.source.fingerprint` to the original
+      fingerprint;
+    - for each executable duplicate-name step, read `get_state(tracks)`
+      and confirm the target track GUID still exists and its current name
+      equals `expected_before.name`;
+    - call `track_rename` with exactly the step params, using a stable
+      idempotency key such as
+      `s23-<stamp>-<action_id>-<step_id>`;
+    - stop on the first fingerprint mismatch, `expected_before` mismatch,
+      or typed error. Do not call `track_rename` after a mismatch.
+13. Re-run `cleanup_plan` and read the payload. The original duplicate
+    suggestion should be gone or reduced according to remaining duplicate
+    state; no deletion, routing, FX, delivery, audio-analysis, render,
+    import, item edit, or track-create action should appear as executable.
+14. Stale guard:
+    - create a fresh plan;
+    - manually or through `track_rename` change one planned target's name;
+    - before applying the old plan, compare either the fresh fingerprint
+      or the step `expected_before`;
+    - expect the agent to stop without calling `track_rename`. Slice 23A
+      has no `PLAN_STALE` error code because there is no apply template.
+15. Queue cleanup should end with no `pending/`, `running/`, or `done/`
     JSON files. Artifact JSON files under `artifacts/v1` may remain for
     TTL cleanup.
