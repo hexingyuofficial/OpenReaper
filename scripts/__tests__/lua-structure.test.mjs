@@ -416,6 +416,59 @@ describe("Lua bridge structure", () => {
     expect(fixtureManifest).toMatch(/updates_last_result = false/);
   });
 
+  it("wires Slice 22 cleanup_plan as a read-only artifact-producing pack", async () => {
+    const [cleanupManifest, cleanupLua, templateIndex, authoringLint] = await Promise.all([
+      readRepoFile("reaper/packs/cleanup/manifest.lua"),
+      readRepoFile("reaper/packs/cleanup/templates/cleanup.lua"),
+      readRepoFile("packages/mcp-server/src/templates/index.ts"),
+      readRepoFile("scripts/template-authoring-lint.mjs"),
+    ]);
+
+    expect(templateIndex).toMatch(/CLEANUP_PACK_ID/);
+    expect(templateIndex).toMatch(/registerCleanupTemplates/);
+    expect(authoringLint).toMatch(/cleanup: "packages\/mcp-server\/src\/packs\/cleanup"/);
+
+    expect(cleanupManifest).toMatch(/name = "cleanup"/);
+    expect(cleanupManifest).toMatch(/cleanup_plan\s*=\s*{/);
+    expect(cleanupManifest).toMatch(/undoable\s*=\s*false/);
+    expect(cleanupManifest).toMatch(/entity_kind = "artifact"/);
+    expect(cleanupManifest).toMatch(/ref_prefix = "artifact:cleanup:plan:"/);
+    expect(cleanupManifest).toMatch(/schema = "openreaper\.cleanup_plan\.v1"/);
+    expect(cleanupManifest).toMatch(/updates_last_result = false/);
+    expect(cleanupManifest).not.toMatch(/entity_buckets\s*=/);
+
+    expect(cleanupLua).toMatch(/function M\.cleanup_plan\(params, ctx\)/);
+    expect(cleanupLua).toMatch(/ctx\.artifacts:write_json/);
+    expect(cleanupLua).toMatch(/owner_pack = "cleanup"/);
+    expect(cleanupLua).toMatch(/scope = "plan"/);
+    expect(cleanupLua).toMatch(/producer_template = "cleanup_plan"/);
+    expect(cleanupLua).toMatch(/schema = SCHEMA/);
+    expect(cleanupLua).toMatch(/max_suggestions/);
+    expect(cleanupLua).toMatch(/build_fingerprint/);
+    expect(cleanupLua).toMatch(/MAX_TARGETS_PER_SUGGESTION = 2/);
+    expect(cleanupLua).toMatch(/MAX_TITLE_CHARS = 96/);
+    expect(cleanupLua).toMatch(/MAX_DETAIL_CHARS = 192/);
+    expect(cleanupLua).toMatch(/MAX_TARGET_NAME_CHARS = 80/);
+    expect(cleanupLua).toMatch(/target_count = candidate\.target_count/);
+    expect(cleanupLua).toMatch(/targets_truncated = candidate\.targets_truncated/);
+    expect(cleanupLua).toMatch(/local h = 2166136261/);
+    expect(cleanupLua).toMatch(/hash=%08x/);
+    expect(cleanupLua).not.toMatch(/track_names=.+table\.concat/);
+    expect(cleanupLua).not.toMatch(/region_names=.+table\.concat/);
+    expect(cleanupLua).toMatch(/duplicate_track_names/);
+    expect(cleanupLua).toMatch(/empty_or_unnamed_tracks/);
+    expect(cleanupLua).toMatch(/inconsistent_region_names/);
+    expect(cleanupLua).toMatch(/folder_depth_observation/);
+    expect(cleanupLua).toMatch(/state_warning/);
+    expect(cleanupLua).not.toMatch(/InsertTrackAtIndex/);
+    expect(cleanupLua).not.toMatch(/SetMediaTrackInfo_Value/);
+    expect(cleanupLua).not.toMatch(/GetSetMediaTrackInfo_String\([^\n]+true/);
+    expect(cleanupLua).not.toMatch(/DeleteTrack/);
+    expect(cleanupLua).not.toMatch(/DeleteProjectMarker/);
+    expect(cleanupLua).not.toMatch(/Main_OnCommand/);
+    expect(cleanupLua).not.toMatch(/UpdateArrange/);
+  });
+
   it("keeps Lua runtime code paths free of string-literal error codes", async () => {
     const files = [
       "reaper/streetlight_bridge.lua",
@@ -426,6 +479,7 @@ describe("Lua bridge structure", () => {
       "reaper/packs/core/templates/media.lua",
       "reaper/packs/core/templates/render.lua",
       "reaper/packs/core/lib/artifacts.lua",
+      "reaper/packs/cleanup/templates/cleanup.lua",
     ];
     const [errorsTs, ...texts] = await Promise.all([
       readRepoFile("packages/core/src/errors.ts"),

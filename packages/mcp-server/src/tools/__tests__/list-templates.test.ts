@@ -146,6 +146,51 @@ describe("listTemplates", () => {
     });
   });
 
+  it("exposes cleanup pack ownership and artifact metadata when enabled", () => {
+    const registry = new CapabilityRegistry();
+    registerEnabledTemplates(registry, ["core", "cleanup"]);
+    const result = listTemplates(registry);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.result.templates).toHaveLength(13);
+    expect(
+      result.result.templates.find((t) => t.name === "fixture_artifact_probe"),
+    ).toBeUndefined();
+
+    const cleanupPlan = result.result.templates.find(
+      (t) => t.name === "cleanup_plan",
+    );
+    expect(cleanupPlan).toBeDefined();
+    expect(cleanupPlan?.pack).toBe("cleanup");
+    expect(cleanupPlan?.risk).toBe("filesystem");
+    expect(cleanupPlan?.mutates).toBe(false);
+    expect(cleanupPlan?.undoable).toBe(false);
+    expect(cleanupPlan?.entity_kind).toBe("artifact");
+    expect(cleanupPlan?.undo_flags).toEqual([]);
+    expect(cleanupPlan).not.toHaveProperty("expectedDelta");
+    expect(cleanupPlan?.artifact).toEqual({
+      kind: "json",
+      scope: "plan",
+      ref_prefix: "artifact:cleanup:plan:",
+      read_scope: "artifact",
+      updates_last_result: false,
+      schema: "openreaper.cleanup_plan.v1",
+    });
+  });
+
+  it("can enable cleanup and fixture packs together", () => {
+    const registry = new CapabilityRegistry();
+    registerEnabledTemplates(registry, ["core", "cleanup", "pack_contract_fixture"]);
+    const result = listTemplates(registry);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.result.templates).toHaveLength(15);
+    expect(result.result.templates.some((t) => t.name === "cleanup_plan")).toBe(true);
+    expect(result.result.templates.some((t) => t.name === "fixture_artifact_probe")).toBe(true);
+  });
+
   it("returns descriptor metadata for every core template", () => {
     const registry = new CapabilityRegistry();
     registerCoreTemplates(registry);

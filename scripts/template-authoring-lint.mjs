@@ -28,6 +28,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const TEMPLATE_DIRS_BY_PACK = {
   core: "packages/mcp-server/src/templates",
+  cleanup: "packages/mcp-server/src/packs/cleanup",
   pack_contract_fixture: "packages/mcp-server/src/packs/pack-contract-fixture",
 };
 const TEMPLATES_SUBDIR = TEMPLATE_DIRS_BY_PACK.core;

@@ -1,4 +1,4 @@
-# Handoff — 2026-07-01 (Slice 21 ✅ live-smoked; artifact contract foundation)
+# Handoff — 2026-07-01 (Slice 22 ✅ cleanup_plan artifact MVP live-smoked)
 
 Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
@@ -19,6 +19,67 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
   explicit ask. User preference (2026-06-29): local commits are okay as
   explicit save points, but avoid pushing during work hours unless the
   user explicitly makes an exception.
+- **Slice 22 ✅ live-smoked / static-green (2026-07-01).**
+  Source: `docs/plans/SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`.
+  This is Phase 2A Cleanup Plan Artifact MVP. Scope landed: new
+  non-core `cleanup` pack, disabled by default and enabled explicitly via
+  `STREETLIGHT_ENABLED_PACKS=core,cleanup`; one template
+  `cleanup_plan`; params `{ max_suggestions?: 1..50 }` defaulting to 25;
+  JSON artifact output `artifact:cleanup:plan:<id>` with schema
+  `openreaper.cleanup_plan.v1`; read-only Lua project/track/region
+  inspection; deterministic suggestions for duplicate track names,
+  empty/unnamed tracks, inconsistent region names, folder/depth
+  observations, and mute/solo/recarm warnings. No apply, no deletion, no
+  routing/FX repair, no delivery, no analysis, no MIDI, no new MCP tool,
+  and no core parking.
+  - New TS: `packages/mcp-server/src/packs/cleanup/index.ts` and
+    `cleanup-plan.ts`; `registerEnabledTemplates` can enable `cleanup`;
+    template-authoring lint knows the cleanup pack.
+  - New Lua: `reaper/packs/cleanup/manifest.lua` and
+    `templates/cleanup.lua`. The handler uses
+    `ctx.artifacts:write_json(...)`, `entity_kind="artifact"`, and
+    `artifact.updates_last_result=false`. Static structure tests assert
+    it avoids known project-mutating APIs.
+  - Docs: `docs/packs/cleanup/README.md` and
+    `docs/smokes/cleanup_plan.md`.
+  - Static gates are green: `npm test` **412/412**, `npm run build`
+    clean, `npm run check:error-codes-fresh` → 24 codes fresh,
+    default `npm run check:manifest` → 12 templates across 1 pack,
+    cleanup-enabled `check:manifest` → 13 templates across 2 packs,
+    cleanup+fixture `check:manifest` → 15 templates across 3 packs,
+    default `npm run check:template-authoring` → 12 templates,
+    cleanup-enabled `check:template-authoring` → 13 templates,
+    cleanup+fixture `check:template-authoring` → 15 templates, and
+    `git diff --check` clean.
+  - Reviewer follow-up is closed: payloads are now truly bounded. Each
+    suggestion has a small `targets` preview plus `target_count`; long
+    text and target names are truncated on UTF-8 boundaries; and
+    `source.fingerprint` is a compact deterministic hash instead of a
+    concatenated full track/region-name list. The smoke runbook is now
+    machine-rerunnable: it seeds duplicate tracks, empty tracks, mixed
+    region families, and the `LAST_RESULT` anchor through MCP calls.
+  - REAPER live smoke passed on `7.71/macOS-arm64` after the user loaded
+    the bridge with `_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`.
+    Ready line showed 24 error codes, core `(12 templates)`, cleanup
+    `(1 templates)`, and ready templates including `cleanup_plan`.
+    Smoke stamp `s22-1782897185752`. Duplicate tracks:
+    `guid:{A24D27E4-AA95-4E4E-891B-1E750738FE4F}` and
+    `guid:{FB5332E1-7758-F84D-9AB1-0C6D9639E554}`. Empty track:
+    `guid:{A66890E1-43E7-0F4F-B5CF-6348309CBDA1}`. Anchor track:
+    `guid:{917E8B72-F0DD-9942-B32C-A35FB51F3836}`. Regions:
+    `szzmrauyayg_01`, `szzmrauyayg 2`, `SZZMRAUYAYG-03`.
+    Artifact refs:
+    `artifact:cleanup:plan:art_20260701091311863_012_5e8624` and
+    `artifact:cleanup:plan:art_20260701091313507_015_e370d8`.
+    Summary view omitted payload; payload response was 3187 bytes and
+    included duplicate-track, empty-track, and inconsistent-region
+    suggestions. Two plan payloads normalized equal while refs differed.
+    Re-snapshotting project/tracks/regions after both plan runs matched
+    the post-fixture snapshot; `track_rename last_result:track:0` still
+    hit the anchor GUID; `max_suggestions:51` returned `PARAMS_INVALID`;
+    queue ended `pending=0`, `running=0`, `done=0`. The smoke-created
+    tracks/regions intentionally remain in the current REAPER project for
+    manual undo/delete.
 - **Slice 21 ✅ live-smoked / commit-ready (2026-07-01).**
   Source: `docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`.
   This is Phase 1 Artifact Contract Foundation from the first-real-

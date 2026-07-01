@@ -132,6 +132,67 @@ describe("callTemplate", () => {
     }
   });
 
+  it("cleanup_plan JSON artifact producer returns only refs in the locked envelope", async () => {
+    const artifactRef =
+      "artifact:cleanup:plan:art_20260701010101999_000_ab12cd";
+    const cleanupRegistry = new CapabilityRegistry();
+    registerEnabledTemplates(cleanupRegistry, ["core", "cleanup"]);
+    const bridge = startFakeBridge(queueDir, () =>
+      fakeTemplateOk("cleanup_plan", [artifactRef]),
+    );
+    try {
+      const result = await callTemplate(client, cleanupRegistry, {
+        name: "cleanup_plan",
+        params: {},
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.result).toEqual({
+        template: "cleanup_plan",
+        changed_count: 1,
+        changed_ids: [artifactRef],
+        truncated: false,
+      });
+      expect(result.result).not.toHaveProperty("artifact");
+      expect(result.result).not.toHaveProperty("plan");
+      expect(result.result).not.toHaveProperty("suggestions");
+      expect(result.result).not.toHaveProperty("summary");
+      expect(result.result).not.toHaveProperty("payload");
+      expect(result.result).not.toHaveProperty("path");
+      expect(bridge.seen[0]?.params).toEqual({ max_suggestions: 25 });
+      expect(bridge.seen[0]?.expected_delta).toBeUndefined();
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("keeps cleanup_plan disabled unless the cleanup pack is enabled", async () => {
+    const result = await callTemplate(client, registry, {
+      name: "cleanup_plan",
+      params: {},
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("TEMPLATE_NOT_FOUND");
+    }
+    expect(await fs.readdir(path.join(queueDir, "pending"))).toEqual([]);
+  });
+
+  it("validates cleanup_plan max_suggestions before queue write", async () => {
+    const cleanupRegistry = new CapabilityRegistry();
+    registerEnabledTemplates(cleanupRegistry, ["core", "cleanup"]);
+    const result = await callTemplate(client, cleanupRegistry, {
+      name: "cleanup_plan",
+      params: { max_suggestions: 51 },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("PARAMS_INVALID");
+      expect(result.error.message).toMatch(/max_suggestions/);
+    }
+    expect(await fs.readdir(path.join(queueDir, "pending"))).toEqual([]);
+  });
+
   it("on-wire: kind='template', name=<template>, params=<validated>", async () => {
     const bridge = startFakeBridge(queueDir, () =>
       fakeTemplateOk("item_pitch", ["guid:{X}"]),

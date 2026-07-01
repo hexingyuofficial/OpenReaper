@@ -683,8 +683,7 @@ return { templates = {
     expect(diffManifestAlignment(ts, lua)).toEqual([]);
   });
 
-  it("real enabled core + fixture registries align with their Lua manifests", async () => {
-    const enabledPacks = ["core", "pack_contract_fixture"];
+  async function expectEnabledPacksAlign(enabledPacks) {
     const registry = new CapabilityRegistry();
     registerEnabledTemplates(registry, enabledPacks);
     const ts = buildRegistrySnapshot(registry);
@@ -704,5 +703,17 @@ return { templates = {
         diffPackManifestAlignment(enabledPacks[index], ts, manifest),
       ),
     ).toEqual([]);
+  }
+
+  it("real enabled core + fixture registries align with their Lua manifests", async () => {
+    await expectEnabledPacksAlign(["core", "pack_contract_fixture"]);
+  });
+
+  it("real enabled core + cleanup registries align with their Lua manifests", async () => {
+    await expectEnabledPacksAlign(["core", "cleanup"]);
+  });
+
+  it("real enabled core + cleanup + fixture registries align with their Lua manifests", async () => {
+    await expectEnabledPacksAlign(["core", "cleanup", "pack_contract_fixture"]);
   });
 });

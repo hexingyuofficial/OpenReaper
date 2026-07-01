@@ -215,4 +215,19 @@ describe("template authoring lint — real registry", () => {
     expect(findExampleSchemaMismatches(defs)).toEqual([]);
     expect(findSlugMismatches(defs, templateFiles)).toEqual([]);
   });
+
+  it("checks cleanup pack examples and slugs when the pack is enabled", async () => {
+    const registry = new CapabilityRegistry();
+    registerEnabledTemplates(registry, ["core", "cleanup"]);
+    const defs = registry.rawDefinitions();
+    const templateFiles = await readTemplateFilenames(repoRoot, [
+      "core",
+      "cleanup",
+    ]);
+
+    expect(defs.some((def) => def.name === "cleanup_plan")).toBe(true);
+    expect(templateFiles).toContain("cleanup-plan.ts");
+    expect(findExampleSchemaMismatches(defs)).toEqual([]);
+    expect(findSlugMismatches(defs, templateFiles)).toEqual([]);
+  });
 });

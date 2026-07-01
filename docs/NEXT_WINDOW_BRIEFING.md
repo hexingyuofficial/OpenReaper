@@ -1,7 +1,7 @@
 # Next Window Briefing — 2026-07-01
 
 Use this as the first read after a context reset. It is the current truth
-after Slice 21 live smoke; Slice 21 is commit-ready.
+after Slice 22 live smoke.
 
 ## Snapshot
 
@@ -11,6 +11,34 @@ after Slice 21 live smoke; Slice 21 is commit-ready.
   `e54fd9c kernel-hardening: slice 19 track color template`
 - Slice 19 is committed and pushed. It is static-green and live-smoked
   on REAPER `7.71/macOS-arm64`; H6's basic loop is closed.
+- Slice 22 (Phase 2A Cleanup Plan Artifact MVP) is static-green and
+  live-smoked. It adds the non-core
+  `cleanup` pack and one read-only template, `cleanup_plan`, enabled only
+  with `STREETLIGHT_ENABLED_PACKS=core,cleanup`. `cleanup_plan` writes one
+  JSON artifact `artifact:cleanup:plan:<id>` with schema
+  `openreaper.cleanup_plan.v1`; it reads project/track/region state,
+  produces deterministic bounded suggestions, and does not mutate REAPER
+  or update item/track/region `LAST_RESULT`. Static gates are green:
+  `npm test` 412/412, `npm run build` clean,
+  `npm run check:error-codes-fresh` 24 codes fresh, default
+  `check:manifest` 12 templates across 1 pack, cleanup-enabled
+  `check:manifest` 13 templates across 2 packs, cleanup+fixture
+  `check:manifest` 15 templates across 3 packs, default
+  `check:template-authoring` 12 templates, cleanup-enabled
+  `check:template-authoring` 13 templates, cleanup+fixture
+  `check:template-authoring` 15 templates, and `git diff --check`
+  clean. Reviewer follow-up is closed: suggestions have bounded target
+  previews plus `target_count`, long text is UTF-8-safe truncated, the
+  fingerprint is a compact deterministic hash, and the smoke runbook now
+  seeds dirty state through MCP calls. Live smoke passed on REAPER
+  `7.71/macOS-arm64` with bridge `core,cleanup`; stamp
+  `s22-1782897185752`; anchor track GUID
+  `guid:{917E8B72-F0DD-9942-B32C-A35FB51F3836}`; artifact refs
+  `artifact:cleanup:plan:art_20260701091311863_012_5e8624` and
+  `artifact:cleanup:plan:art_20260701091313507_015_e370d8`; normalized
+  payloads matched; response bytes were 3187; project/tracks/regions did
+  not change after planning; `track_rename last_result:track:0` still hit
+  the anchor; queue ended clean.
 - Slice 21 (Phase 1 Artifact Contract Foundation) is static-green,
   live-smoked, and commit-ready. Static gates: `npm test` 403/403,
   `npm run build` clean, `npm run check:error-codes-fresh` 24 codes
@@ -66,73 +94,46 @@ after Slice 21 live smoke; Slice 21 is commit-ready.
 
 ## Current Slice
 
-Slice 21 implements **Phase 1 Artifact Contract Foundation**. It prevents
-cleanup / loop QA / analysis / reports from inventing one-off result
-shapes or dumping domain state into the locked `call_template` envelope.
+Slice 22 implements **Phase 2A Cleanup Plan Artifact MVP**. It is the
+first real non-core domain pack on top of the pack contract and artifact
+contract foundations.
 
 What changed in the current working tree:
 
-- New TS artifact helpers in `packages/core/src/artifacts.ts`.
-- New errors in `packages/core/src/errors.ts`:
-  `ARTIFACT_NOT_FOUND`, `ARTIFACT_INVALID`.
-- `CapabilityDefinition.artifact` metadata and list_templates exposure.
-- `get_state(scope:"artifact", artifact_ref, view)` in
-  `packages/mcp-server/src/tools/get-state.ts`.
-- New Lua helper:
-  `reaper/packs/core/lib/artifacts.lua`.
-- Bridge wiring in `reaper/streetlight_bridge.lua`: artifact helper,
-  artifact read scope, startup sweep, handler ctx, and JSON-artifact
-  `LAST_RESULT` skip.
-- Core manifest reserves `entity_kind="artifact"` and tags
-  `render_region` as `artifact.kind="external_file"` legacy carve-out.
-- Fixture pack adds `fixture_artifact_probe` on both TS and Lua sides.
-- `scripts/manifest-alignment.mjs` compares artifact metadata.
-- New plan file:
-  `docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`.
+- New TS cleanup pack:
+  `packages/mcp-server/src/packs/cleanup/cleanup-plan.ts`
+  and `packages/mcp-server/src/packs/cleanup/index.ts`.
+- `packages/mcp-server/src/templates/index.ts` can register
+  `cleanup` through `registerEnabledTemplates`.
+- `scripts/template-authoring-lint.mjs` scans cleanup templates when the
+  pack is enabled.
+- New Lua cleanup pack:
+  `reaper/packs/cleanup/manifest.lua` and
+  `reaper/packs/cleanup/templates/cleanup.lua`.
+- New docs:
+  `docs/packs/cleanup/README.md`,
+  `docs/smokes/cleanup_plan.md`, and
+  `docs/plans/SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`.
+- Tests cover cleanup pack visibility, disabled-by-default behavior,
+  locked envelope, manifest alignment, authoring lint, read-only Lua
+  structure, bounded target previews, and compact hashed fingerprints.
 
-Do not ship fixture pack by default. Enable only for verification:
+Enable cleanup explicitly:
 
 ```sh
-STREETLIGHT_ENABLED_PACKS=core,pack_contract_fixture npm run check:manifest
-STREETLIGHT_ENABLED_PACKS=core,pack_contract_fixture npm run check:template-authoring
+STREETLIGHT_ENABLED_PACKS=core,cleanup npm run check:manifest
+STREETLIGHT_ENABLED_PACKS=core,cleanup npm run check:template-authoring
 ```
 
-For REAPER live smoke, set this before loading `start_bridge.lua`:
+For REAPER live smoke, set this before loading the bridge:
 
 ```lua
-_G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"
+_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"
 ```
 
-Then `list_templates` should show 14 templates including
-`fixture_artifact_probe`; `call_template fixture_artifact_probe` should
-return exactly one artifact ref in the locked envelope; and
-`get_state(scope:"artifact", artifact_ref:<that ref>)` should read the
-summary/payload without touching existing `LAST_RESULT`.
-
-Live-smoke recipe to run next:
-
-1. Fully quit/reopen REAPER.
-2. Before loading bridge:
-   `_G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"`.
-3. Load current `start_bridge.lua`; ready line should show 14 templates
-   and 24 error codes.
-4. `ping`.
-5. `list_templates` asserts `fixture_artifact_probe.artifact.kind=json`
-   and `render_region.artifact.kind=external_file`.
-6. Anchor `LAST_RESULT.tracks` with `track_create`, then call
-   `fixture_artifact_probe {label:"S21 artifact smoke"}`.
-7. Verify the call_template result is locked:
-   `{template, changed_count:1, changed_ids:["artifact:..."], truncated:false}`.
-8. `track_rename last_result:track:0` should still hit the anchored track,
-   proving JSON artifact producers did not clear/update `LAST_RESULT`.
-9. `get_state artifact` summary and payload views return the same ref,
-   schema `openreaper.fixture.probe.v1`, label, and payload note.
-10. Missing old ref
-    `artifact:pack_contract_fixture:probe:art_20000101000000000_000_deadbe`
-    returns `ARTIFACT_NOT_FOUND`; malformed ref `"../bad"` returns
-    `PARAMS_INVALID`.
-11. Existing regressions: `render_region` still returns absolute WAV path,
-    and fixture/default core visibility still behaves like Slice 20B.
+Current state is implementation-complete and smoke-green. Next action is
+whatever the user asks next: commit Slice 22, request the next architect
+packet from the external planner, or pivot.
 
 ## Previous Slice
 

@@ -15,6 +15,10 @@ import {
   PACK_CONTRACT_FIXTURE_PACK_ID,
   registerPackContractFixtureTemplates,
 } from "../packs/pack-contract-fixture/index.js";
+import {
+  CLEANUP_PACK_ID,
+  registerCleanupTemplates,
+} from "../packs/cleanup/index.js";
 
 /**
  * Register every v0.1 core-pack template with the MCP server's registry.
@@ -52,6 +56,8 @@ export function registerEnabledTemplates(
   for (const pack of enabledPacks) {
     if (pack === "core") {
       registerCoreTemplates(registry);
+    } else if (pack === CLEANUP_PACK_ID) {
+      registerCleanupTemplates(registry);
     } else if (pack === PACK_CONTRACT_FIXTURE_PACK_ID) {
       registerPackContractFixtureTemplates(registry);
     } else {

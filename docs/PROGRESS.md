@@ -11,7 +11,55 @@ first.
 
 ## Current Status
 
-**Slice 21 ✅ live-smoked / static-green / commit-ready
+**Slice 22 ✅ live-smoked / static-green
+(2026-07-01).** Source:
+`docs/plans/SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`. This is Phase 2A
+Cleanup Plan Artifact MVP. It adds the first real non-core domain pack,
+`cleanup`, and one read-only template, `cleanup_plan`. The template is
+disabled by default and enabled with `STREETLIGHT_ENABLED_PACKS=core,cleanup`;
+it accepts optional `max_suggestions` (default 25, range 1..50), reads
+project/track/region state in Lua, writes one JSON artifact
+`artifact:cleanup:plan:<id>` with schema `openreaper.cleanup_plan.v1`,
+and returns only the locked `call_template` envelope. The plan payload is
+deterministic and bounded: project source/fingerprint, limits,
+suggestions, target-preview counts, and deferred capability names. Slice
+22 explicitly does not ship apply, destructive cleanup, deletion,
+routing/FX repair, delivery, analysis, MIDI, new MCP tools, or core
+parking. Static gates are green: `npm test` **412/412**,
+`npm run build` clean, `npm run check:error-codes-fresh` 24 codes fresh,
+default `npm run check:manifest` → 12 templates across 1 pack,
+cleanup-enabled `check:manifest` → 13 templates across 2 packs,
+cleanup+fixture `check:manifest` → 15 templates across 3 packs, default
+`npm run check:template-authoring` → 12 templates, cleanup-enabled
+`check:template-authoring` → 13 templates, cleanup+fixture
+`check:template-authoring` → 15 templates, and `git diff --check`
+clean. Reviewer follow-up is closed: payloads no longer embed unbounded
+target arrays or full track/region-name fingerprints; each suggestion
+uses a bounded `targets` preview plus `target_count`, long text is
+truncated on UTF-8 boundaries, and the fingerprint is a compact
+deterministic hash. `docs/smokes/cleanup_plan.md` now seeds a dirty
+fixture with MCP calls instead of relying on a hand-prepared project.
+REAPER live smoke passed on `7.71/macOS-arm64` with bridge
+`core,cleanup`; ready line showed 24 error codes, core 12 templates,
+cleanup 1 template, and `cleanup_plan`. Smoke stamp:
+`s22-1782897185752`. Created fixture state: duplicate tracks
+`guid:{A24D27E4-AA95-4E4E-891B-1E750738FE4F}` and
+`guid:{FB5332E1-7758-F84D-9AB1-0C6D9639E554}`; empty track
+`guid:{A66890E1-43E7-0F4F-B5CF-6348309CBDA1}`; anchor track
+`guid:{917E8B72-F0DD-9942-B32C-A35FB51F3836}`; regions
+`szzmrauyayg_01`, `szzmrauyayg 2`, `SZZMRAUYAYG-03`. Artifact refs:
+`artifact:cleanup:plan:art_20260701091311863_012_5e8624` and
+`artifact:cleanup:plan:art_20260701091313507_015_e370d8`. The locked
+envelope carried only the artifact ref; summary view omitted payload;
+payload view included duplicate-track, empty-track, and
+inconsistent-region suggestions with `response_bytes=3187`; the two
+payloads normalized equal while refs differed; project/tracks/regions
+were unchanged after planning; `track_rename last_result:track:0` still
+hit the anchor GUID; `max_suggestions:51` returned `PARAMS_INVALID`;
+queue ended `pending=0`, `running=0`, `done=0`. Smoke-created tracks and
+regions remain in the current REAPER project for manual undo/delete.
+
+**Slice 21 ✅ live-smoked / static-green / committed at `c0222c9`
 (2026-07-01).** Source:
 `docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`. This is
 Phase 1 Artifact Contract Foundation from the first-real-version plan:
