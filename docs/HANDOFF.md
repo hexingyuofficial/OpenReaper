@@ -1,4 +1,4 @@
-# Handoff — 2026-07-01 (Slice 23A cleanup safe agent-step MVP static-green)
+# Handoff — 2026-07-01 (Slice 23A cleanup safe agent-step MVP live-smoked)
 
 Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
@@ -19,8 +19,7 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
   explicit ask. User preference (2026-06-29): local commits are okay as
   explicit save points, but avoid pushing during work hours unless the
   user explicitly makes an exception.
-- **Slice 23A ✅ static-green / REAPER live smoke pending
-  (2026-07-01).**
+- **Slice 23A ✅ live-smoked / static-green (2026-07-01).**
   Source: `docs/plans/SLICE_23A_CLEANUP_SAFE_AGENT_STEP_ARCHITECT_PLAN.md`.
   User locked D1-D6: agent-step execution, no `cleanup_apply_safe`,
   `cleanup_safe_v1` allowlist limited to `track_rename`, no report
@@ -52,15 +51,32 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
     cleanup-enabled `check:template-authoring` → 13 templates,
     cleanup+fixture `check:template-authoring` → 15 templates, and
     `git diff --check` clean.
-  - REAPER Slice 23A live smoke is **not complete**. Direct bridge ping
-    reached REAPER `7.71/macOS-arm64`. A pre-reload `cleanup_plan`
-    response proved the running bridge was still stale Slice 22 code.
-    Codex then accidentally reloaded the bridge core-only, but the user
-    immediately reloaded it with `_G.STREETLIGHT_ENABLED_PACKS =
-    "core,cleanup"`; console showed core `(12 templates)`, cleanup
-    `(1 templates)`, and `cleanup_plan` in the ready template list.
-    Next window can run `docs/smokes/cleanup_plan.md` directly against
-    that cleanup-enabled bridge.
+  - REAPER live smoke passed on `7.71/macOS-arm64` with bridge
+    `core,cleanup`. Smoke stamp `s23-1782901902009`. Fixture duplicate:
+    `S23 Duplicate s23-1782901902009`; collision track:
+    `S23 Duplicate s23-1782901902009 2`; anchor track:
+    `guid:{5F5AB7EA-03AD-1645-8137-C82E6CE0ACD3}` renamed through
+    `last_result:track:0` after artifact creation, proving JSON
+    artifacts did not pollute project LAST_RESULT. Artifact refs:
+    `artifact:cleanup:plan:art_20260701103149486_014_a52fde`,
+    `artifact:cleanup:plan:art_20260701103151338_017_d9a0c1`,
+    `artifact:cleanup:plan:art_20260701103154639_023_8aee00`,
+    `artifact:cleanup:plan:art_20260701103155879_025_3497cb`,
+    `artifact:cleanup:plan:art_20260701103159395_031_db1864`, and
+    `artifact:cleanup:plan:art_20260701103201659_035_c2eb62`.
+    Initial fingerprint:
+    `tracks=7;regions=3;project=33.500000;hash=1e63536f`.
+    Collision-safe generated names were
+    `S23 Duplicate s23-1782901902009 3` and
+    `S23 Duplicate s23-1782901902009 4`; both agent-step
+    `track_rename` calls succeeded with per-step `expected_before`.
+    Post-apply plan no longer contained the original duplicate
+    suggestion. Stale guard stopped before applying an old step when the
+    target had been renamed to
+    `S23 Stale s23-1782901902009 Manual Change`; no `PLAN_STALE` error
+    was needed. Queue ended `pending=0`, `running=0`, `done=0`. Smoke
+    tracks/regions remain in the current REAPER project for manual
+    undo/delete.
 - **Slice 22 ✅ live-smoked / static-green (2026-07-01).**
   Source: `docs/plans/SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`.
   This is Phase 2A Cleanup Plan Artifact MVP. Scope landed: new

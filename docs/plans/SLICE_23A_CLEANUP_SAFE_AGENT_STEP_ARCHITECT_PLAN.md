@@ -5,10 +5,8 @@ Date: 2026-07-01
 Phase: 2B, the first safe-apply slice after
 [`SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md`](SLICE_22_CLEANUP_PLAN_ARCHITECT_PLAN.md).
 
-Status: implemented and static-green; REAPER live smoke pending. The
-bridge is currently cleanup-enabled after the user reloaded it with
-`_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`. Do not push without an
-explicit user ask.
+Status: implemented, static-green, and REAPER live-smoked. Do not push
+without an explicit user ask.
 
 ## Goal
 
@@ -168,10 +166,29 @@ freshness comparison, per-step `expected_before`, successful
 agent-step `track_rename`, stale guard stop-before-mutation, locked
 artifact envelope, and clean queue teardown.
 
-2026-07-01 attempt: direct ping reached REAPER `7.71/macOS-arm64`.
-Before reload, `cleanup_plan` still returned stale Slice 22-style
-`safe_action`. Codex then accidentally reloaded the bridge with enabled
-packs `core`; the user immediately reloaded with
-`_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`, and the console showed
-core 12 templates, cleanup 1 template, and `cleanup_plan` in the ready
-template list. The live smoke itself still needs to be rerun.
+2026-07-01 live smoke passed on REAPER `7.71/macOS-arm64` with bridge
+`core,cleanup`.
+
+- Stamp: `s23-1782901902009`
+- Fixture duplicate: `S23 Duplicate s23-1782901902009`
+- Collision fixture: `S23 Duplicate s23-1782901902009 2`
+- Anchor track: `guid:{5F5AB7EA-03AD-1645-8137-C82E6CE0ACD3}`
+- Artifact refs:
+  `artifact:cleanup:plan:art_20260701103149486_014_a52fde`,
+  `artifact:cleanup:plan:art_20260701103151338_017_d9a0c1`,
+  `artifact:cleanup:plan:art_20260701103154639_023_8aee00`,
+  `artifact:cleanup:plan:art_20260701103155879_025_3497cb`,
+  `artifact:cleanup:plan:art_20260701103159395_031_db1864`, and
+  `artifact:cleanup:plan:art_20260701103201659_035_c2eb62`
+- Initial fingerprint:
+  `tracks=7;regions=3;project=33.500000;hash=1e63536f`
+- Generated collision-safe names:
+  `S23 Duplicate s23-1782901902009 3` and
+  `S23 Duplicate s23-1782901902009 4`
+
+The smoke proved: locked artifact envelope, summary/payload readback,
+deterministic repeated payloads, read-only planning, LAST_RESULT
+isolation, `PARAMS_INVALID` for `max_suggestions:51`, agent-side
+freshness comparison, per-step `expected_before`, two successful
+agent-step `track_rename` calls, post-apply duplicate resolution, stale
+guard stop-before-mutation, no `PLAN_STALE`, and clean queue teardown.

@@ -1,7 +1,7 @@
 # Next Window Briefing — 2026-07-01
 
 Use this as the first read after a context reset. It is the current truth
-after Slice 23A static verification.
+after Slice 23A live smoke.
 
 ## Snapshot
 
@@ -11,7 +11,7 @@ after Slice 23A static verification.
   `e54fd9c kernel-hardening: slice 19 track color template`
 - Slice 19 is committed and pushed. It is static-green and live-smoked
   on REAPER `7.71/macOS-arm64`; H6's basic loop is closed.
-- Slice 23A is static-green; REAPER live smoke remains pending. Source:
+- Slice 23A is static-green and REAPER live-smoked. Source:
   `docs/plans/SLICE_23A_CLEANUP_SAFE_AGENT_STEP_ARCHITECT_PLAN.md`.
   User locked agent-step execution, no `cleanup_apply_safe`,
   `cleanup_safe_v1` allowlist limited to `track_rename`, no report
@@ -35,13 +35,19 @@ after Slice 23A static verification.
   `check:template-authoring` 12 templates, cleanup-enabled
   `check:template-authoring` 13 templates, cleanup+fixture
   `check:template-authoring` 15 templates, and `git diff --check`
-  clean. REAPER live smoke is not complete: direct bridge ping reached
-  REAPER `7.71/macOS-arm64`; a pre-reload `cleanup_plan` response showed
-  stale Slice 22 cleanup code; Codex then accidentally reloaded the
-  bridge core-only. The user immediately reloaded with
-  `_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`; console showed core 12
-  templates, cleanup 1 template, and `cleanup_plan` ready. Next window
-  can run `docs/smokes/cleanup_plan.md` against that bridge.
+  clean. REAPER live smoke passed on `7.71/macOS-arm64` with bridge
+  `core,cleanup`; smoke stamp `s23-1782901902009`. Artifact refs included
+  `artifact:cleanup:plan:art_20260701103149486_014_a52fde` and
+  `artifact:cleanup:plan:art_20260701103201659_035_c2eb62`. Initial
+  fingerprint:
+  `tracks=7;regions=3;project=33.500000;hash=1e63536f`. Collision-safe
+  generated names were `S23 Duplicate s23-1782901902009 3` and
+  `S23 Duplicate s23-1782901902009 4`; both agent-step `track_rename`
+  calls succeeded after fingerprint and `expected_before` checks.
+  Post-apply plan no longer contained the original duplicate suggestion.
+  Stale guard stopped before applying an old step after the target name
+  changed; queue ended clean. Smoke tracks/regions remain in the REAPER
+  project for manual undo/delete.
 - Slice 22 (Phase 2A Cleanup Plan Artifact MVP) is static-green and
   live-smoked. It adds the non-core
   `cleanup` pack and one read-only template, `cleanup_plan`, enabled only
@@ -157,9 +163,9 @@ For REAPER live smoke, set this before loading the bridge:
 _G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"
 ```
 
-Current state is implementation-complete and static-green, but **not**
-REAPER-smoke-green. The bridge is now cleanup-enabled again after the
-user reloaded it; next action is run `docs/smokes/cleanup_plan.md`.
+Current state is implementation-complete, static-green, and
+REAPER-smoke-green. Next action is whatever the user asks next: commit
+the smoke-evidence docs, request Slice 23B/24 planning, or pivot.
 
 ## Previous Slice
 

@@ -11,8 +11,7 @@ first.
 
 ## Current Status
 
-**Slice 23A ✅ static-green / REAPER live smoke pending
-(2026-07-01).** Source:
+**Slice 23A ✅ live-smoked / static-green (2026-07-01).** Source:
 `docs/plans/SLICE_23A_CLEANUP_SAFE_AGENT_STEP_ARCHITECT_PLAN.md`.
 This is Phase 2B Cleanup Safe Agent-Step MVP. User locked D1-D6:
 agent-step execution, no `cleanup_apply_safe`, `cleanup_safe_v1`
@@ -44,14 +43,35 @@ full `npm test` 412/412, `npm run build` clean,
 `check:template-authoring` 12 templates, cleanup-enabled
 `check:template-authoring` 13 templates, cleanup+fixture
 `check:template-authoring` 15 templates, and `git diff --check` clean.
-REAPER live smoke is not complete: direct bridge ping reached REAPER
-`7.71/macOS-arm64`; a pre-reload `cleanup_plan` response proved stale
-Slice 22 cleanup code was still loaded; Codex then accidentally reloaded
-the bridge core-only. The user immediately reloaded with
-`_G.STREETLIGHT_ENABLED_PACKS = "core,cleanup"`; console showed core 12
-templates, cleanup 1 template, and `cleanup_plan` in the ready template
-list. Next run can execute `docs/smokes/cleanup_plan.md` against that
-cleanup-enabled bridge.
+REAPER live smoke passed on `7.71/macOS-arm64` with bridge
+`core,cleanup`. Smoke stamp `s23-1782901902009`. Fixture created
+duplicate tracks named `S23 Duplicate s23-1782901902009`, a collision
+track `S23 Duplicate s23-1782901902009 2`, an empty track
+`S23 Empty s23-1782901902009`, mixed-region family `szz902440_01` /
+`szz902440 2` / `SZZ902440-03`, and anchor track
+`guid:{5F5AB7EA-03AD-1645-8137-C82E6CE0ACD3}`. Artifact refs:
+`artifact:cleanup:plan:art_20260701103149486_014_a52fde`,
+`artifact:cleanup:plan:art_20260701103151338_017_d9a0c1`,
+`artifact:cleanup:plan:art_20260701103154639_023_8aee00`,
+`artifact:cleanup:plan:art_20260701103155879_025_3497cb`,
+`artifact:cleanup:plan:art_20260701103159395_031_db1864`, and
+`artifact:cleanup:plan:art_20260701103201659_035_c2eb62`. Initial
+fingerprint was `tracks=7;regions=3;project=33.500000;hash=1e63536f`.
+The locked envelope carried only the artifact ref; summary omitted
+payload; repeated plan payloads normalized equal while refs differed;
+project/tracks/regions were unchanged after planning; invalid
+`max_suggestions:51` returned `PARAMS_INVALID`; `track_rename
+last_result:track:0` still hit the anchor after artifact creation.
+Duplicate safe action generated collision-safe names
+`S23 Duplicate s23-1782901902009 3` and
+`S23 Duplicate s23-1782901902009 4`; both agent-step `track_rename`
+calls succeeded after fingerprint and per-step `expected_before` checks.
+Post-apply plan no longer contained the original duplicate suggestion.
+Stale guard stopped before an old step after its target had been renamed
+to `S23 Stale s23-1782901902009 Manual Change`; no `PLAN_STALE` error
+was emitted. Queue ended `pending=0`, `running=0`, `done=0`. Smoke
+tracks and regions remain in the current REAPER project for manual
+undo/delete.
 
 **Slice 22 ✅ live-smoked / static-green
 (2026-07-01).** Source:
