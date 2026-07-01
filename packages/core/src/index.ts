@@ -5,4 +5,5 @@ export * from "./refs.js";
 export * from "./queue.js";
 export * from "./registry.js";
 export * from "./packs.js";
+export * from "./artifacts.js";
 export * from "./types.js";

@@ -139,6 +139,89 @@ describe("CapabilityRegistry", () => {
     });
   });
 
+  it("passes through compact artifact metadata", () => {
+    const reg = new CapabilityRegistry();
+    reg.register({
+      name: "fixture_artifact_probe",
+      description: "fixture artifact",
+      pack: "pack_contract_fixture",
+      risk: "filesystem",
+      mutates: false,
+      undoable: false,
+      entity_kind: "artifact",
+      undo_flags: [],
+      idempotent: false,
+      artifact: {
+        kind: "json",
+        scope: "probe",
+        ref_prefix: "artifact:pack_contract_fixture:probe:",
+        read_scope: "artifact",
+        updates_last_result: false,
+        schema: "openreaper.fixture.probe.v1",
+      },
+      params: z.object({}),
+      result: z.object({}),
+      examples: [{ params: {} }],
+    });
+
+    expect(reg.list()[0]?.artifact).toEqual({
+      kind: "json",
+      scope: "probe",
+      ref_prefix: "artifact:pack_contract_fixture:probe:",
+      read_scope: "artifact",
+      updates_last_result: false,
+      schema: "openreaper.fixture.probe.v1",
+    });
+  });
+
+  it("rejects JSON artifact producers that violate the artifact contract", () => {
+    const base = {
+      name: "bad_artifact",
+      description: "bad artifact",
+      pack: "pack_contract_fixture",
+      risk: "filesystem" as const,
+      mutates: false,
+      undoable: false,
+      entity_kind: "artifact",
+      undo_flags: [],
+      idempotent: false,
+      artifact: {
+        kind: "json" as const,
+        scope: "probe",
+        ref_prefix: "artifact:pack_contract_fixture:probe:",
+        read_scope: "artifact" as const,
+        updates_last_result: false,
+        schema: "openreaper.fixture.probe.v1",
+      },
+      params: z.object({}),
+      result: z.object({}),
+      examples: [{ params: {} }],
+    };
+
+    expect(() =>
+      new CapabilityRegistry().register({ ...base, risk: "write_safe" }),
+    ).toThrow(/filesystem risk/);
+    expect(() =>
+      new CapabilityRegistry().register({
+        ...base,
+        undoable: true,
+        undo_flags: ["ITEMS"],
+      }),
+    ).toThrow(/undoable:false/);
+    expect(() =>
+      new CapabilityRegistry().register({
+        ...base,
+        expectedDelta: { count: 1 },
+      }),
+    ).toThrow(/omit expectedDelta/);
+    expect(() =>
+      new CapabilityRegistry().register({
+        ...base,
+        artifact: { ...base.artifact, ref_prefix: "artifact:other:probe:" },
+      }),
+    ).toThrow(/ref_prefix/);
+  });
+
   it("rejects capabilities missing required descriptor metadata", () => {
     const reg = new CapabilityRegistry();
     const base = {

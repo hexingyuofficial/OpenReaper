@@ -11,56 +11,65 @@ first.
 
 ## Current Status
 
-**Slice 20B ✅ live-smoked / static-green / commit-ready
+**Slice 21 ✅ live-smoked / static-green / commit-ready
 (2026-07-01).** Source:
-`docs/plans/SLICE_20B_PACK_CONTRACT_ARCHITECT_PLAN.md`. This is Phase
-0.5 Pack Contract Foundation from the first-real-version plan: keep
-future cleanup / loop / MIDI / routing / FX / unsafe domains out of
-`core` by landing the minimal repo-local pack contract before those
-domains begin. Current implementation adds `packages/core/src/packs.ts`
-(`parseEnabledPacks`, pack-id validation, default core, duplicate
-rejection, require core), `registerEnabledTemplates(...)`,
-fixture-pack TS registration, pack-aware MCP startup logging,
-pack-aware `list_recipes` (`recipe_roots[]`, `pack`, `qualified_id`),
-pack-aware `check:manifest` and `check:template-authoring`, Lua
-`reaper/packs/core/lib/pack_loader.lua`, bridge multi-pack loading, and
-a test-only `pack_contract_fixture` on both TS and Lua sides. Default
-behavior remains core-only: 12 templates and no fixture exposure.
-Fixture verification uses
-`STREETLIGHT_ENABLED_PACKS=core,pack_contract_fixture` on the MCP/static
-side and `_G.STREETLIGHT_ENABLED_PACKS =
-"core,pack_contract_fixture"` before loading the REAPER bridge. Static
-gates already run by Codex are green after reviewer follow-up:
-`npm test` **376/376**,
-`npm run build` clean, `npm run check:error-codes-fresh` 22 codes fresh,
-default `npm run check:manifest` → 12 templates across 1 pack,
-fixture-enabled `check:manifest` → 13 templates across 2 packs, default
+`docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`. This is
+Phase 1 Artifact Contract Foundation from the first-real-version plan:
+future cleanup / loop QA / analysis / reports can produce durable,
+bounded non-project data without expanding the locked `call_template`
+envelope or parking domain code in `core`. User locked D1-D11 to the
+recommended values. Current implementation adds artifact ref helpers in
+`packages/core/src/artifacts.ts`; new error codes
+`ARTIFACT_NOT_FOUND` and `ARTIFACT_INVALID`; registry/list_templates
+artifact metadata; `get_state(scope:"artifact", artifact_ref, view)` with
+summary/payload views; Lua `reaper/packs/core/lib/artifacts.lua` for
+safe path derivation, atomic JSON writes, response-budgeted readback, and
+startup TTL sweep; bridge artifact context wiring and JSON-artifact
+`LAST_RESULT` skip; manifest alignment for artifact metadata; and a
+fixture-pack template `fixture_artifact_probe`. JSON artifact producers
+return refs shaped `artifact:<owner_pack>:<scope>:<id>` in
+`changed_ids`; they do not update item/track/region `LAST_RESULT`.
+Artifact ids are derived from queue command ids and files live under
+`<dirname(QUEUE_DIR)>/artifacts/v1`. `render_region` remains the legacy
+external-file carve-out: absolute WAV path in `changed_ids`, still routed
+to `LAST_RESULT.renders`, not migrated to JSON artifacts in this slice.
+Static gates are green: `npm test` **403/403**, `npm run build` clean,
+`npm run check:error-codes-fresh` 24 codes fresh, default
+`npm run check:manifest` → 12 templates across 1 pack,
+fixture-enabled `check:manifest` → 14 templates across 2 packs, default
 `npm run check:template-authoring` → 12 templates,
-fixture-enabled `check:template-authoring` → 13 templates, and
-`git diff --check` clean. Reviewer Feynman found two contract gaps and
-both are fixed: non-core packs cannot introduce new entity kinds in this
-slice, and recipe ids cannot contain `:` or collide into duplicate
-`qualified_id`s. Smoke agent Banach found no static blockers and supplied
-the REAPER fixture smoke recipe. Live smoke then passed on REAPER
-`7.71/macOS-arm64` after the user loaded the bridge with
-`_G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"`. Console
-showed `loaded pack 'core' v0.1.0 (12 templates)`, `loaded pack
-'pack_contract_fixture' v0.1.0 (1 templates)`, and ready line with
-`fixture_track_rename`. Smoke stamp `1782881931841`; track GUID
-`guid:{76CC9D4E-3F98-CE4E-B02A-A34C0F03D870}`. `ping` connected;
-fixture-enabled `list_templates` returned 13 templates with
-`track_color.pack === "core"` and `fixture_track_rename.pack ===
-"pack_contract_fixture"`; fixture-enabled `list_recipes` returned
-`core:impact_variations` and
-`pack_contract_fixture:fixture_pack_smoke` with zero warnings.
-`track_create`, core `track_color`, fixture `fixture_track_rename`, and
-core `track_rename` all returned the same track GUID through
-`last_result:track:0`, proving cross-pack `LAST_RESULT.tracks` routing.
-Missing fixture track returned typed `TRACK_NOT_FOUND`; default core-only
-registry returned 12 templates, fixture absent, and
-`TEMPLATE_NOT_FOUND` before queue write; queue cleanup ended
-`pending=0`, `running=0`, `done=0`. Remaining action: local commit only
-when the user explicitly asks; no push unless explicitly requested.
+fixture-enabled `check:template-authoring` → 14 templates, and
+`git diff --check` clean. Reviewer follow-up is closed: artifact reads
+require `payload` and return `ARTIFACT_INVALID` if it is missing;
+startup TTL sweep uses file mtime, not artifact-id time; direct queue
+calls that send `artifact_ref` / `view` on non-artifact scopes now
+return `PARAMS_INVALID` before reserved-scope dispatch. Live smoke
+passed on REAPER `7.71/macOS-arm64` with fixture pack enabled after a
+full quit/reopen. Ready line showed 24 error codes, core 12 templates,
+fixture 2 templates, and `fixture_artifact_probe`. Smoke stamp:
+`slice21-1782891483364`; anchor track GUID:
+`guid:{C5E18394-48F2-DB4F-89D2-AD9CDFAF8A9D}`; artifact ref:
+`artifact:pack_contract_fixture:probe:art_20260701073804406_003_ff08e3`.
+Summary view returned metadata + summary and no payload; payload view
+returned the fixture payload; artifact creation did not pollute
+`LAST_RESULT` (`track_rename last_result:track:0` still hit the anchor
+track); `ARTIFACT_NOT_FOUND`, malformed-ref `PARAMS_INVALID`, and direct
+queue artifact-param `PARAMS_INVALID` regressions passed. `render_region`
+remained the legacy absolute WAV path carve-out and produced
+`/var/folders/.../streetlight-s21-render-ml5vxC/s21_render_slice21_1782891483364.wav`
+with zero `.RPP` sidecars; temp render dir was removed; queue ended
+`pending=0`, `running=0`, `done=0`. Do not commit or push until the user
+explicitly asks.
+
+**Slice 20B ✅ live-smoked / locally committed at `c11b114`
+(2026-07-01).** Phase 0.5 Pack Contract Foundation landed before Slice
+21. It added pack-id parsing, `registerEnabledTemplates`, pack-aware MCP
+startup/list_recipes/static gates, Lua `pack_loader.lua`, bridge
+multi-pack loading, and the disabled-by-default `pack_contract_fixture`.
+Static gates were green at 376/376 tests; live smoke passed on REAPER
+`7.71/macOS-arm64` with fixture-enabled 13 templates, fixture recipe
+ownership, cross-pack `LAST_RESULT.tracks` routing, typed
+`TRACK_NOT_FOUND`, core-only fixture absence, and clean queue teardown.
 
 **Kernel hardening Slice 19 ✅ live-smoked / static-green /
 committed and pushed at `e54fd9c` (2026-07-01), with docs sync at

@@ -75,6 +75,35 @@ envelope itself carries IDs only.
 `changed_count` is the true count and `truncated` is `true` when the cap
 fired. See `docs/RESPONSE_BUDGET.md § call_template` for the rationale.
 
+Allowed `changed_ids` families:
+
+- project refs: `guid:{...}`, `region:NAME`, and legacy/name-shaped
+  `track:Name`;
+- JSON artifact refs:
+  `artifact:<owner_pack>:<scope>:<id>`;
+- the legacy `render_region` external-file carve-out: absolute WAV
+  paths only.
+
+JSON artifact refs were added in Slice 21. They point to bounded JSON
+records stored under `<dirname(QUEUE_DIR)>/artifacts/v1` and read back
+through:
+
+```json
+{
+  "scope": "artifact",
+  "artifact_ref": "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd",
+  "view": "summary"
+}
+```
+
+`view:"summary"` returns metadata plus the artifact's small summary.
+`view:"payload"` returns metadata, summary, and payload if the encoded
+response fits the response budget; otherwise the bridge returns
+`RESPONSE_TOO_LARGE`. Missing refs return `ARTIFACT_NOT_FOUND`; corrupt
+or schema-invalid artifact files return `ARTIFACT_INVALID`. JSON
+artifact-producing templates do not update item/track/region
+`LAST_RESULT` in Slice 21.
+
 Failure:
 
 ```json

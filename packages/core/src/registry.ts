@@ -1,5 +1,6 @@
 import type { ZodTypeAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { isValidArtifactScope } from "./artifacts.js";
 import type { RiskLevel } from "./risk.js";
 
 export const UNDO_STATE = {
@@ -34,6 +35,17 @@ export interface CapabilityExample {
   params: Record<string, unknown>;
 }
 
+export interface ArtifactDescriptor {
+  kind: "json" | "external_file";
+  scope?: string;
+  ref_prefix?: string;
+  read_scope?: "artifact" | null;
+  updates_last_result: boolean;
+  schema?: string;
+  path_shape?: string;
+  legacy_carve_out?: boolean;
+}
+
 export interface CapabilityDefinition<
   P extends ZodTypeAny = ZodTypeAny,
   R extends ZodTypeAny = ZodTypeAny,
@@ -52,6 +64,7 @@ export interface CapabilityDefinition<
   result: R;
   examples: CapabilityExample[];
   expectedDelta?: ExpectedDelta;
+  artifact?: ArtifactDescriptor;
   reads?: string[];
   writes?: string[];
   /**
@@ -78,6 +91,7 @@ export interface CapabilityMetadata {
   idempotent: boolean;
   examples: CapabilityExample[];
   expectedDelta?: ExpectedDelta;
+  artifact?: ArtifactDescriptor;
   reads?: string[];
   writes?: string[];
   params_schema: unknown;
@@ -152,6 +166,7 @@ export class CapabilityRegistry {
           : {}),
       };
     }
+    if (c.artifact !== undefined) metadata.artifact = { ...c.artifact };
     if (c.reads !== undefined) metadata.reads = [...c.reads];
     if (c.writes !== undefined) metadata.writes = [...c.writes];
     return metadata;
@@ -215,6 +230,51 @@ function validateDefinition(def: CapabilityDefinition): void {
       );
     }
     validateExpectedDeltaFields(def.name, def.expectedDelta);
+  }
+  if (def.artifact !== undefined) {
+    validateArtifactDescriptor(def);
+  }
+}
+
+function validateArtifactDescriptor(def: CapabilityDefinition): void {
+  const artifact = def.artifact;
+  if (!artifact || typeof artifact !== "object") {
+    throw new Error(`Capability ${def.name} artifact metadata must be an object`);
+  }
+  if (artifact.kind === "json") {
+    if (!artifact.scope || !isValidArtifactScope(artifact.scope)) {
+      throw new Error(`Capability ${def.name} artifact.scope is invalid`);
+    }
+    if (artifact.ref_prefix !== `artifact:${def.pack}:${artifact.scope}:`) {
+      throw new Error(`Capability ${def.name} artifact.ref_prefix must match pack and scope`);
+    }
+    if (artifact.read_scope !== "artifact") {
+      throw new Error(`Capability ${def.name} JSON artifact read_scope must be artifact`);
+    }
+    if (artifact.updates_last_result !== false) {
+      throw new Error(`Capability ${def.name} JSON artifact must not update LAST_RESULT`);
+    }
+    if (!artifact.schema || typeof artifact.schema !== "string") {
+      throw new Error(`Capability ${def.name} JSON artifact requires schema`);
+    }
+    if (def.risk !== "filesystem") {
+      throw new Error(`Capability ${def.name} JSON artifact requires filesystem risk`);
+    }
+    if (def.undoable) {
+      throw new Error(`Capability ${def.name} JSON artifact must be undoable:false`);
+    }
+    if (def.expectedDelta !== undefined) {
+      throw new Error(`Capability ${def.name} JSON artifact must omit expectedDelta`);
+    }
+  } else if (artifact.kind === "external_file") {
+    if (artifact.legacy_carve_out !== true) {
+      throw new Error(`Capability ${def.name} external_file artifact must be an explicit legacy carve-out`);
+    }
+    if (artifact.updates_last_result !== true) {
+      throw new Error(`Capability ${def.name} external_file artifact must declare LAST_RESULT behavior`);
+    }
+  } else {
+    throw new Error(`Capability ${def.name} artifact.kind is unsupported`);
   }
 }
 

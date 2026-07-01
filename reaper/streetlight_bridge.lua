@@ -23,6 +23,7 @@ end)()
 
 local json     = dofile(SCRIPT_DIR .. "packs/core/lib/json.lua")
 local ERRS     = dofile(SCRIPT_DIR .. "packs/core/error_codes.lua")
+local artifact_lib = dofile(SCRIPT_DIR .. "packs/core/lib/artifacts.lua")
 local buckets  = dofile(SCRIPT_DIR .. "packs/core/lib/entity_buckets.lua")
 local packs    = dofile(SCRIPT_DIR .. "packs/core/lib/pack_loader.lua")
 local refs     = dofile(SCRIPT_DIR .. "packs/core/refs.lua")
@@ -30,7 +31,7 @@ local undo     = dofile(SCRIPT_DIR .. "packs/core/undo.lua")
 local verify   = dofile(SCRIPT_DIR .. "packs/core/verify.lua")
 local MANIFEST = nil
 
-local EXPECTED_ERROR_CODE_COUNT = 22
+local EXPECTED_ERROR_CODE_COUNT = 24
 
 local function validate_error_codes(errs)
   local count = 0
@@ -138,6 +139,12 @@ local ENTITY_BUCKET = buckets.build_entity_bucket_map(MANIFEST, {
   log = log,
 })
 local LAST_RESULT = buckets.make_last_result(ENTITY_BUCKET)
+local ARTIFACTS = artifact_lib.new({
+  queue_dir = QUEUE_DIR,
+  json = json,
+  errs = ERRS,
+  log = log,
+})
 
 -- Slice 14/15 / H4: retry deduplication for mutating template commands.
 -- The table is intentionally in-memory and bridge-lifetime scoped, like
@@ -254,6 +261,7 @@ local KNOWN_SCOPES = {
   selection  = true,
   regions    = true,
   render     = true,
+  artifact   = true,
 }
 
 -- Response-budget backstop. See docs/RESPONSE_BUDGET.md for the full design.
@@ -607,6 +615,10 @@ local function validate_get_state_include(params, scope)
     return params_invalid("get_state include must be an array"), false
   end
 
+  if scope ~= "tracks" then
+    return params_invalid("include is only valid with scope='tracks'"), false
+  end
+
   local include_fx = false
   for i = 1, #include do
     local value = include[i]
@@ -614,10 +626,6 @@ local function validate_get_state_include(params, scope)
       return params_invalid("Unknown get_state include value: " .. tostring(value)), false
     end
     include_fx = true
-  end
-
-  if include_fx and scope ~= "tracks" then
-    return params_invalid("include is only valid with scope='tracks'"), false
   end
 
   return nil, include_fx
@@ -635,6 +643,15 @@ function DISPATCH.get_state(cmd)
     return params_invalid("Unknown get_state scope: " .. tostring(scope))
   end
 
+  if scope ~= "artifact" then
+    if params.artifact_ref ~= nil then
+      return params_invalid("artifact_ref is only valid with scope='artifact'")
+    end
+    if params.view ~= nil then
+      return params_invalid("view is only valid with scope='artifact'")
+    end
+  end
+
   if scope == "render" then
     return {
       ok = false,
@@ -644,6 +661,13 @@ function DISPATCH.get_state(cmd)
         recoverable = true,
       },
     }
+  end
+
+  if scope == "artifact" then
+    if type(params.artifact_ref) ~= "string" or params.artifact_ref == "" then
+      return params_invalid("scope='artifact' requires artifact_ref")
+    end
+    return ARTIFACTS:read(params.artifact_ref, params.view or "summary")
   end
 
   if scope == "project" then
@@ -802,8 +826,22 @@ end
 -- deferred sentinel path itself — call it from the terminal resolution
 -- (success only). Error terminations skip LAST_RESULT updates by going
 -- through template_error_envelope instead.
-local function finalize_template(template_name, entity_kind, raw_changed)
+local function should_update_last_result(entry)
+  local artifact = entry and entry.artifact
+  if type(artifact) == "table"
+    and artifact.kind == "json"
+    and artifact.updates_last_result == false then
+    return false
+  end
+  return true
+end
+
+local function finalize_template(template_name, entity_kind, raw_changed, entry)
   local envelope = build_template_envelope(template_name, raw_changed)
+
+  if not should_update_last_result(entry) then
+    return envelope
+  end
 
   -- last_result tracks the most recent successful mutating command's
   -- outputs in the bucket matching this template's entity kind. Read-only
@@ -906,7 +944,7 @@ local function tick_deferred()
     local ok_to, err_or_result = pcall(d.on_timeout)
     if ok_to then
       local changed = type(err_or_result) == "table" and err_or_result.changed_ids or nil
-      close_with(finalize_template(d.template_name, d.entity_kind, changed))
+      close_with(finalize_template(d.template_name, d.entity_kind, changed, d.entry))
     else
       close_with(template_error_envelope(err_or_result))
     end
@@ -924,7 +962,7 @@ local function tick_deferred()
     close_with({ ok = false, error = rc_result.error })
   else
     local changed = type(rc_result) == "table" and rc_result.changed_ids or nil
-    close_with(finalize_template(d.template_name, d.entity_kind, changed))
+    close_with(finalize_template(d.template_name, d.entity_kind, changed, d.entry))
   end
 end
 
@@ -957,6 +995,10 @@ function DISPATCH.template(cmd)
   local ctx = {
     refs        = refs,
     last_result = LAST_RESULT,
+    artifacts   = ARTIFACTS,
+    command_id  = cmd.id,
+    template_name = name,
+    template_entry = entry,
     -- Exposed so handlers with nullable params can compare with
     -- `params.x == ctx.json.null`. See docs/TEMPLATE_SPEC.md
     -- § Nullable Params.
@@ -1002,6 +1044,7 @@ function DISPATCH.template(cmd)
   if type(result_or_err) == "table" and result_or_err.deferred then
     result_or_err.template_name = name
     result_or_err.entity_kind   = entry.entity_kind
+    result_or_err.entry         = entry
     return result_or_err
   end
 
@@ -1052,7 +1095,7 @@ function DISPATCH.template(cmd)
     end
   end
 
-  return finalize_template(name, entry.entity_kind, raw_changed)
+  return finalize_template(name, entry.entity_kind, raw_changed, entry)
 end
 
 local function dispatch(cmd)
@@ -1179,6 +1222,7 @@ local function process_one()
           id            = cmd_id,
           template_name = result.template_name,
           entity_kind   = result.entity_kind,
+          entry         = result.entry,
           idempotency_key = cmd.idempotency_key,
           running_path  = running_path,
           done_path     = DONE .. "/" .. cmd_id .. ".json",
@@ -1342,6 +1386,7 @@ local function reap_stale_running()
 end
 
 reap_stale_running()
+ARTIFACTS:sweep_old()
 write_owner_token()
 
 log("bridge ready (generation " .. MY_GENERATION

@@ -214,10 +214,29 @@ deciding whether it fits. It never truncates inside an FX chain.
 Include errors are part of the public contract:
 
 - unknown include values such as `"midi"` return `PARAMS_INVALID`;
-- non-`tracks` scopes with a non-empty include return `PARAMS_INVALID`;
+- non-`tracks` scopes with any include return `PARAMS_INVALID`;
 - `get_state(render, include:["fx"])` returns `PARAMS_INVALID`, not
   `SCOPE_NOT_IMPLEMENTED`, because include validation runs before scope
   dispatch.
+
+Slice 21 adds `get_state(scope:"artifact")` for JSON artifact refs.
+It is a single-record read, not a list:
+
+```json
+{
+  "scope": "artifact",
+  "artifact_ref": "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd",
+  "view": "summary"
+}
+```
+
+`view:"summary"` returns artifact metadata plus `summary`;
+`view:"payload"` returns metadata, `summary`, and `payload`. Artifact
+reads still encode the full response before returning. If the selected
+view exceeds `MAX_RESPONSE_BYTES`, the bridge returns
+`RESPONSE_TOO_LARGE`; it does not truncate arbitrary JSON payloads or
+page inside them in Slice 21. `truncated` is therefore always `false`
+for successful artifact reads.
 
 `regions.items[]` v1 descriptor:
 
@@ -294,18 +313,30 @@ track") could otherwise return 500 descriptors × 200 bytes = 100 KB in one
 result. The id-only contract makes the worst case ~1.5 KB regardless of how
 many items the template touched.
 
-#### `changed_ids` shape — and the one carve-out (Step 6)
+#### `changed_ids` allowlist — project refs, JSON artifacts, and one legacy path
 
-Every template except `render_region` uses **project-entity refs** in
-`changed_ids`:
+`changed_ids` is still id-only, but Slice 21 makes the allowed id
+families explicit:
 
-- `"guid:{...}"` — item or track GUID
-- `"region:NAME"` — region (no native GUID API in REAPER 7)
-- `"track:Name"` — bare track name (rare; only when the agent fed one in)
+1. **Project-entity refs**:
+   - `"guid:{...}"` — item or track GUID
+   - `"region:NAME"` — region (no native GUID API in REAPER 7)
+   - `"track:Name"` — legacy/name-shaped track reference
+2. **JSON artifact refs**:
+   - `"artifact:<owner_pack>:<scope>:<id>"`
+   - Example:
+     `"artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd"`
+   - Artifact details are read through
+     `get_state({scope:"artifact", artifact_ref, view:"summary"|"payload"})`.
+   - JSON artifact producers do not update item/track/region
+     `LAST_RESULT` in Slice 21.
+3. **Legacy external-file path**:
+   - `render_region` only.
+   - Absolute WAV path in `changed_ids`.
 
-`render_region` is the **single carve-out**. Its `changed_ids` holds
-**absolute artifact paths** the agent can hand to a media-player or a
-follow-up `media_import`:
+`render_region` remains the legacy external-file carve-out. Its
+`changed_ids` holds **absolute WAV paths** the agent can hand to a
+media-player or a follow-up `media_import`:
 
 ```json
 {
@@ -325,12 +356,11 @@ ref kind in v0.1. The `entity_kind = "render"` manifest entry routes the
 path into `LAST_RESULT.renders` so the bridge's cross-bucket clear stays
 exhaustive, but there's no `last_result:render:N` resolver in v0.1.
 
-**Do NOT generalize this carve-out to other templates.** A future
-template that "creates an MP3 from the project" would inherit it; one
-that "renames a track" would not. If you're unsure, ask: is the thing my
-handler produced addressable as a REAPER project entity? Yes → use the
-entity ref. No → it's a render-shaped output and you need to revisit
-this section before adding it.
+**Do NOT generalize absolute paths to other templates.** New
+non-project data should use JSON artifact refs unless a future slice
+explicitly amends this allowlist. Raw artifact root paths, `file://`
+URLs, relative paths, `~/...`, and full JSON descriptors in
+`changed_ids` are forbidden.
 
 #### `VERIFY_FAILED` details (Slice 04 + Slice 06)
 

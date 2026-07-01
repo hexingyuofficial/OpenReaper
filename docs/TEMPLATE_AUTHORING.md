@@ -465,18 +465,23 @@ name-shaped (`region:NAME`), region GUID refs are unsupported in v0.1,
 and the synthetic region handle exposes only `{index, pos, rgnend,
 name}`.
 
-### `render_region` is the deferred artifact-path template
+### External outputs: JSON artifacts first, render path only for WAV render
 
-It is the only `mutates=true / undoable=false` template in v0.1 and the
-only template whose `changed_ids` are artifact paths rather than project
-refs. It does not declare `expectedDelta`. Its terminal envelope is
-computed in a deferred slot (Slice 06+, Slice 15 made it
-DEDUP-eligible). If you are
-authoring a new template that also has tens-of-seconds latency or
-produces an external artifact rather than project state, read the
-`render_region` handler and Slice 15 plan first; copy that pattern
-carefully — the deferred slot is single-slot, so two long-running
-templates active at once will serialize.
+Slice 21 adds JSON artifact refs for non-project data:
+`artifact:<owner_pack>:<scope>:<id>`. New analysis/report/plan-style
+templates should use that contract and read back details through
+`get_state(scope:"artifact")`; do not return raw JSON objects or raw
+paths in `changed_ids`.
+
+`render_region` remains the legacy external-file carve-out. It is the
+only template whose `changed_ids` are absolute WAV paths rather than refs,
+and it still routes to `LAST_RESULT.renders`. It does not declare
+`expectedDelta`. Its terminal envelope is computed in a deferred slot
+(Slice 06+, Slice 15 made it DEDUP-eligible). If you are authoring a new
+template that has tens-of-seconds latency, read the `render_region`
+handler and Slice 15 plan first; copy that deferred pattern carefully —
+the deferred slot is single-slot, so two long-running templates active at
+once will serialize.
 
 ### Idempotency keys are caller-owned
 

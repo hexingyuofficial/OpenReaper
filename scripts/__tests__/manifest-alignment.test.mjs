@@ -47,6 +47,13 @@ return {
       handler = render_templates.render_region,
       undoable = false,
       entity_kind = "render",
+      artifact = {
+        kind = "external_file",
+        path_shape = "absolute_wav_path",
+        read_scope = false,
+        updates_last_result = true,
+        legacy_carve_out = true,
+      },
     },
   },
 }
@@ -75,6 +82,13 @@ describe("manifest alignment helpers", () => {
       undoable: false,
       undo_flags: [],
       entity_kind: "render",
+      artifact: {
+        kind: "external_file",
+        path_shape: "absolute_wav_path",
+        read_scope: null,
+        updates_last_result: true,
+        legacy_carve_out: true,
+      },
     });
   });
 
@@ -195,6 +209,35 @@ return { templates = {
 
     expect(errors).toContain("EXPECTED_DELTA_MISSING:item_pitch");
     expect(errors).toContain("EXPECTED_DELTA_FOR_NON_UNDOABLE:render_region");
+  });
+
+  it("reports artifact metadata mismatches", () => {
+    const ts = new Map([
+      [
+        "render_region",
+        {
+          mutates: true,
+          undoable: false,
+          undo_flags: [],
+          entity_kind: "render",
+          artifact: {
+            kind: "external_file",
+            path_shape: "absolute_wav_path",
+            read_scope: null,
+            updates_last_result: true,
+            legacy_carve_out: true,
+          },
+        },
+      ],
+    ]);
+    const lua = parseManifestLua(SAMPLE_MANIFEST.replace(
+      'path_shape = "absolute_wav_path"',
+      'path_shape = "relative_path"',
+    ));
+
+    expect(diffManifestAlignment(ts, lua)).toContain(
+      'FIELD_MISMATCH:render_region.artifact: ts={"kind":"external_file","legacy_carve_out":true,"path_shape":"absolute_wav_path","read_scope":null,"updates_last_result":true} lua={"kind":"external_file","legacy_carve_out":true,"path_shape":"relative_path","read_scope":null,"updates_last_result":true}',
+    );
   });
 
   it("reports invalid expectedDelta mode combinations", () => {

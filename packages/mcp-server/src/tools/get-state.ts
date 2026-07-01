@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ProjectState, Result } from "@streetlight/core";
+import { parseArtifactRef, type ProjectState, type Result } from "@streetlight/core";
 import type { FileQueueClient } from "../transport/file-queue.js";
 
 /**
@@ -12,6 +12,7 @@ export const GetStateScope = z.enum([
   "tracks",
   "selection",
   "regions",
+  "artifact",
   "render",
 ]);
 export type GetStateScope = z.infer<typeof GetStateScope>;
@@ -29,6 +30,8 @@ export const MIN_GET_STATE_LIMIT = 1;
 
 export const GetStateInclude = z.enum(["fx"]);
 export type GetStateInclude = z.infer<typeof GetStateInclude>;
+export const GetStateArtifactView = z.enum(["summary", "payload"]);
+export type GetStateArtifactView = z.infer<typeof GetStateArtifactView>;
 
 export const GetStateInput = z
   .object({
@@ -40,13 +43,42 @@ export const GetStateInput = z
       .max(MAX_GET_STATE_LIMIT)
       .default(DEFAULT_GET_STATE_LIMIT),
     include: z.array(GetStateInclude).optional(),
+    artifact_ref: z.string().min(1).optional(),
+    view: GetStateArtifactView.optional(),
   })
   .superRefine((input, ctx) => {
-    if (input.include && input.include.length > 0 && input.scope !== "tracks") {
+    if (input.include !== undefined && input.scope !== "tracks") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["include"],
         message: "include is only valid with scope='tracks'",
+      });
+    }
+    if (input.scope === "artifact") {
+      if (!input.artifact_ref) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["artifact_ref"],
+          message: "artifact_ref is required when scope='artifact'",
+        });
+      } else if (!parseArtifactRef(input.artifact_ref)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["artifact_ref"],
+          message: "artifact_ref must match artifact:<owner_pack>:<scope>:<id>",
+        });
+      }
+    } else if (input.artifact_ref !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["artifact_ref"],
+        message: "artifact_ref is only valid with scope='artifact'",
+      });
+    } else if (input.view !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["view"],
+        message: "view is only valid with scope='artifact'",
       });
     }
   });
@@ -71,5 +103,15 @@ export async function getState(
       },
     };
   }
-  return client.send<ProjectState>("get_state", parsed.data, { timeoutMs });
+  const wire =
+    parsed.data.scope === "artifact"
+      ? { ...parsed.data, view: parsed.data.view ?? "summary" }
+      : {
+          scope: parsed.data.scope,
+          limit: parsed.data.limit,
+          ...(parsed.data.include !== undefined
+            ? { include: parsed.data.include }
+            : {}),
+        };
+  return client.send<ProjectState>("get_state", wire, { timeoutMs });
 }

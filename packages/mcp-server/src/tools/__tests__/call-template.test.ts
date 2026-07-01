@@ -11,7 +11,10 @@ import {
 import { FileQueueClient } from "../../transport/file-queue.js";
 import { startFakeBridge } from "../../transport/__tests__/fake-bridge.js";
 import { callTemplate } from "../call-template.js";
-import { registerCoreTemplates } from "../../templates/index.js";
+import {
+  registerCoreTemplates,
+  registerEnabledTemplates,
+} from "../../templates/index.js";
 
 /**
  * Build a fake bridge envelope matching the locked call_template shape.
@@ -93,6 +96,37 @@ describe("callTemplate", () => {
         expect(result.result.changed_ids).toEqual(["guid:{ABC-123}"]);
         expect(result.result.truncated).toBe(false);
       }
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("fixture JSON artifact producer returns only refs in the locked envelope", async () => {
+    const artifactRef =
+      "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd";
+    const fixtureRegistry = new CapabilityRegistry();
+    registerEnabledTemplates(fixtureRegistry, ["core", "pack_contract_fixture"]);
+    const bridge = startFakeBridge(queueDir, () =>
+      fakeTemplateOk("fixture_artifact_probe", [artifactRef]),
+    );
+    try {
+      const result = await callTemplate(client, fixtureRegistry, {
+        name: "fixture_artifact_probe",
+        params: { label: "S21 artifact smoke" },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.result).toEqual({
+        template: "fixture_artifact_probe",
+        changed_count: 1,
+        changed_ids: [artifactRef],
+        truncated: false,
+      });
+      expect(result.result).not.toHaveProperty("artifact");
+      expect(result.result).not.toHaveProperty("summary");
+      expect(result.result).not.toHaveProperty("payload");
+      expect(result.result).not.toHaveProperty("path");
+      expect(bridge.seen[0]?.expected_delta).toBeUndefined();
     } finally {
       await bridge.stop();
     }

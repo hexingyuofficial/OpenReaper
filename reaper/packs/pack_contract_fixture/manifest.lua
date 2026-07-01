@@ -13,6 +13,7 @@ end)()
 
 local undo = dofile(PACK_DIR .. "../core/undo.lua")
 local track_templates = dofile(PACK_DIR .. "templates/track.lua")
+local artifact_templates = dofile(PACK_DIR .. "templates/artifact.lua")
 
 return {
   name = "pack_contract_fixture",
@@ -24,6 +25,19 @@ return {
       undo_label  = "Streetlight Fixture: fixture_track_rename",
       undo_flags  = undo.UNDO_STATE_TRACKCFG,
       entity_kind = "track",
+    },
+    fixture_artifact_probe = {
+      handler     = artifact_templates.fixture_artifact_probe,
+      undoable    = false,
+      entity_kind = "artifact",
+      artifact = {
+        kind = "json",
+        scope = "probe",
+        ref_prefix = "artifact:pack_contract_fixture:probe:",
+        read_scope = "artifact",
+        updates_last_result = false,
+        schema = "openreaper.fixture.probe.v1",
+      },
     },
   },
 }

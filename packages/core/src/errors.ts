@@ -47,6 +47,10 @@ export const ErrorCodes = {
   // See docs/RESPONSE_BUDGET.md.
   RESPONSE_TOO_LARGE: "RESPONSE_TOO_LARGE",
 
+  // Artifacts
+  ARTIFACT_NOT_FOUND: "ARTIFACT_NOT_FOUND",
+  ARTIFACT_INVALID: "ARTIFACT_INVALID",
+
   // Runtime verification
   // Raised after a mutating template has completed when the bridge's
   // structural before/after count check disagrees with descriptor

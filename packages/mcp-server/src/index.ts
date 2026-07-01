@@ -8,6 +8,7 @@ import { ping } from "./tools/ping.js";
 import {
   getState,
   GetStateInclude,
+  GetStateArtifactView,
   GetStateScope,
   DEFAULT_GET_STATE_LIMIT,
   MAX_GET_STATE_LIMIT,
@@ -57,7 +58,7 @@ async function main(): Promise<void> {
 
   server.tool(
     "get_state",
-    'Read a scoped subset of the REAPER project. Implemented scopes: "selection", "project", "tracks", "regions"; "render" is reserved and returns SCOPE_NOT_IMPLEMENTED. `include:["fx"]` is valid only with scope="tracks" and adds track FX metadata. `limit` (default 50, max 200) bounds list responses; the bridge also enforces an item-boundary byte cap and returns RESPONSE_TOO_LARGE if a single descriptor exceeds it. See docs/RESPONSE_BUDGET.md.',
+    'Read a scoped subset of the REAPER project or OpenReaper state. Implemented scopes: "selection", "project", "tracks", "regions", "artifact"; "render" is reserved and returns SCOPE_NOT_IMPLEMENTED. `include:["fx"]` is valid only with scope="tracks" and adds track FX metadata. `scope:"artifact"` requires `artifact_ref` and supports `view:"summary"|"payload"`. `limit` (default 50, max 200) bounds list responses; the bridge also enforces an item-boundary byte cap and returns RESPONSE_TOO_LARGE if a single descriptor exceeds it. See docs/RESPONSE_BUDGET.md.',
     {
       scope: GetStateScope.optional(),
       limit: z
@@ -67,12 +68,16 @@ async function main(): Promise<void> {
         .max(MAX_GET_STATE_LIMIT)
         .optional(),
       include: z.array(GetStateInclude).optional(),
+      artifact_ref: z.string().min(1).optional(),
+      view: GetStateArtifactView.optional(),
     },
-    async ({ scope, limit, include }) => {
+    async ({ scope, limit, include, artifact_ref, view }) => {
       const result = await getState(client, {
         scope: scope ?? "selection",
         limit: limit ?? DEFAULT_GET_STATE_LIMIT,
         include,
+        artifact_ref,
+        view,
       });
       return {
         content: [

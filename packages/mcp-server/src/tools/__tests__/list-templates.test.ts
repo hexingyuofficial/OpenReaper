@@ -59,6 +59,13 @@ describe("listTemplates", () => {
     expect(renderRegion.mutates).toBe(true);
     expect(renderRegion.params_schema).toBeDefined();
     expect(renderRegion.result_schema).toBeDefined();
+    expect(renderRegion.artifact).toEqual({
+      kind: "external_file",
+      path_shape: "absolute_wav_path",
+      read_scope: null,
+      updates_last_result: true,
+      legacy_carve_out: true,
+    });
 
     const callTemplateEnvelope = templates.find((t) => t.name === "item_pitch");
     expect(callTemplateEnvelope).toBeDefined();
@@ -102,7 +109,7 @@ describe("listTemplates", () => {
     const result = listTemplates(registry);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.result.templates).toHaveLength(13);
+    expect(result.result.templates).toHaveLength(14);
 
     const trackColor = result.result.templates.find((t) => t.name === "track_color");
     expect(trackColor?.pack).toBe("core");
@@ -118,6 +125,24 @@ describe("listTemplates", () => {
     expect(fixture?.expectedDelta).toEqual({
       count: 1,
       fields: [{ scope: "track", field: "P_NAME", paramPath: "name" }],
+    });
+
+    const artifactFixture = result.result.templates.find(
+      (t) => t.name === "fixture_artifact_probe",
+    );
+    expect(artifactFixture).toBeDefined();
+    expect(artifactFixture?.pack).toBe("pack_contract_fixture");
+    expect(artifactFixture?.risk).toBe("filesystem");
+    expect(artifactFixture?.entity_kind).toBe("artifact");
+    expect(artifactFixture?.undoable).toBe(false);
+    expect(artifactFixture).not.toHaveProperty("expectedDelta");
+    expect(artifactFixture?.artifact).toEqual({
+      kind: "json",
+      scope: "probe",
+      ref_prefix: "artifact:pack_contract_fixture:probe:",
+      read_scope: "artifact",
+      updates_last_result: false,
+      schema: "openreaper.fixture.probe.v1",
     });
   });
 

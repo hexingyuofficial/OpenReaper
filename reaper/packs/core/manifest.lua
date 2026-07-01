@@ -45,6 +45,7 @@ return {
     track  = "tracks",
     region = "regions",
     render = "renders",
+    artifact = "artifacts",
   },
   templates = {
     item_pitch = {
@@ -147,6 +148,13 @@ return {
       -- future media_import-from-render chain can land in v0.2 without
       -- a bridge structural change.
       entity_kind = "render",
+      artifact = {
+        kind = "external_file",
+        path_shape = "absolute_wav_path",
+        read_scope = false,
+        updates_last_result = true,
+        legacy_carve_out = true,
+      },
     },
   },
 }

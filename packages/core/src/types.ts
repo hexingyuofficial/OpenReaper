@@ -69,6 +69,21 @@ export interface ProjectDescriptor {
   length_seconds: number;
 }
 
+export interface ArtifactState {
+  ref: string;
+  id: string;
+  scope: string;
+  owner_pack: string;
+  producer_template: string;
+  schema: string;
+  created_at: string;
+  summary: Record<string, unknown>;
+  payload?: Record<string, unknown>;
+  view: "summary" | "payload";
+  truncated: false;
+  response_bytes: number;
+}
+
 /**
  * Response-budget metadata attached to every list-shaped response.
  * See docs/RESPONSE_BUDGET.md for the contract.
@@ -103,6 +118,7 @@ export interface ProjectState {
   project?: ProjectDescriptor;
   tracks?: TracksState;
   regions?: RegionsState;
+  artifact?: ArtifactState;
 }
 
 /** REAPER major.minor.patch version string, e.g. "7.21". */
@@ -128,19 +144,21 @@ export type ReaperVersion = string;
  * and (eventually) destructive templates. Bridge dispatcher normalizes —
  * individual handlers only return `{ changed_ids = [...] }`.
  *
- * `changed_ids` entry shape — and the one carve-out:
+ * `changed_ids` entry shapes:
  *
- * Every template except `render_region` uses project-entity refs:
+ * Most templates use project-entity refs:
  *   "guid:{...}"  — item or track GUID
  *   "region:NAME" — region (no native GUID API in REAPER 7)
  *   "track:Name"  — bare track name (rare)
  *
- * `render_region` is the SINGLE carve-out: its `changed_ids` carries
- * absolute artifact paths (e.g. `["/Users/.../var_01.wav"]`). The deviation
- * is documented in docs/RESPONSE_BUDGET.md § call_template — don't
- * generalize. If you're writing a new template and unsure: does the thing
- * the handler produced exist inside the project as a REAPER entity? Yes →
- * entity ref. No → revisit the carve-out section before shipping.
+ * JSON artifact producers use pack-qualified artifact refs:
+ *   "artifact:<owner_pack>:<scope>:<id>"
+ *
+ * `render_region` is the legacy external-file carve-out: its
+ * `changed_ids` carries absolute WAV paths (e.g.
+ * `["/Users/.../var_01.wav"]`). Do not copy that shape for JSON
+ * artifacts; use artifact refs and read details through
+ * `get_state(scope:"artifact")`.
  */
 export interface CallTemplateResult {
   template: string;
@@ -148,8 +166,9 @@ export interface CallTemplateResult {
   /**
    * Per-template entry shape; see the interface doc for the rule. Most
    * templates fill this with project-entity refs (`guid:{...}`,
-   * `region:NAME`, `track:Name`). `render_region` fills it with absolute
-   * artifact paths instead — the documented v0.1 carve-out.
+   * `region:NAME`, `track:Name`). JSON artifact producers fill it with
+   * `artifact:<owner_pack>:<scope>:<id>` refs. `render_region` fills it
+   * with absolute WAV paths instead — the documented legacy carve-out.
    */
   changed_ids: string[];
   truncated: boolean;

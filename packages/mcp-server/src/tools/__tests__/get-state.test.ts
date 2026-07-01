@@ -328,6 +328,119 @@ describe("getState", () => {
     }
   });
 
+  it("returns artifact summary state from the bridge", async () => {
+    const ref =
+      "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd";
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: true,
+      result: {
+        artifact: {
+          ref,
+          id: "art_20260701010101999_000_ab12cd",
+          scope: "probe",
+          owner_pack: "pack_contract_fixture",
+          producer_template: "fixture_artifact_probe",
+          schema: "openreaper.fixture.probe.v1",
+          created_at: "2026-07-01T01:01:01.999Z",
+          summary: { label: "S21 artifact smoke" },
+          view: "summary",
+          truncated: false,
+          response_bytes: 512,
+        },
+      },
+    }));
+    try {
+      const result = await getState(client, { scope: "artifact", artifact_ref: ref });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result.artifact?.ref).toBe(ref);
+        expect(result.result.artifact?.summary).toEqual({
+          label: "S21 artifact smoke",
+        });
+        expect(result.result.artifact).not.toHaveProperty("payload");
+      }
+      expect(bridge.seen[0]!.params).toEqual({
+        scope: "artifact",
+        limit: 50,
+        artifact_ref: ref,
+        view: "summary",
+      });
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("returns artifact payload state from the bridge", async () => {
+    const ref =
+      "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd";
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: true,
+      result: {
+        artifact: {
+          ref,
+          id: "art_20260701010101999_000_ab12cd",
+          scope: "probe",
+          owner_pack: "pack_contract_fixture",
+          producer_template: "fixture_artifact_probe",
+          schema: "openreaper.fixture.probe.v1",
+          created_at: "2026-07-01T01:01:01.999Z",
+          summary: { label: "S21 artifact smoke" },
+          payload: { label: "S21 artifact smoke", note: "fixture-only payload" },
+          view: "payload",
+          truncated: false,
+          response_bytes: 768,
+        },
+      },
+    }));
+    try {
+      const result = await getState(client, {
+        scope: "artifact",
+        artifact_ref: ref,
+        view: "payload",
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.result.artifact?.payload).toEqual({
+          label: "S21 artifact smoke",
+          note: "fixture-only payload",
+        });
+      }
+      expect(bridge.seen[0]!.params).toEqual({
+        scope: "artifact",
+        limit: 50,
+        artifact_ref: ref,
+        view: "payload",
+      });
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it.each(["ARTIFACT_NOT_FOUND", "ARTIFACT_INVALID", "RESPONSE_TOO_LARGE"] as const)(
+    "surfaces %s from artifact reads",
+    async (code) => {
+      const bridge = startFakeBridge(queueDir, () => ({
+        ok: false,
+        error: {
+          code,
+          message: `${code} from bridge`,
+          recoverable: true,
+        },
+      }));
+      try {
+        const result = await getState(client, {
+          scope: "artifact",
+          artifact_ref:
+            "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd",
+        });
+        expect(result.ok).toBe(false);
+        if (!result.ok) expect(result.error.code).toBe(code);
+      } finally {
+        await bridge.stop();
+      }
+    },
+  );
+
   it("returns BRIDGE_NOT_RUNNING when no bridge responds in time", async () => {
     const result = await getState(client, { scope: "selection" }, 100);
     expect(result.ok).toBe(false);
@@ -518,6 +631,72 @@ describe("getState", () => {
       }
     },
   );
+
+  it("requires artifact_ref for artifact scope before hitting the bridge", async () => {
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: true,
+      result: fakeSelection([]),
+    }));
+    const result = await getState(client, { scope: "artifact" }, 100);
+    try {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("PARAMS_INVALID");
+        expect(result.error.message).toMatch(/artifact_ref/);
+      }
+      expect(bridge.seen).toHaveLength(0);
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("rejects malformed artifact refs before hitting the bridge", async () => {
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: true,
+      result: fakeSelection([]),
+    }));
+    const result = await getState(
+      client,
+      { scope: "artifact", artifact_ref: "../bad" },
+      100,
+    );
+    try {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("PARAMS_INVALID");
+        expect(result.error.message).toMatch(/artifact:<owner_pack>/);
+      }
+      expect(bridge.seen).toHaveLength(0);
+    } finally {
+      await bridge.stop();
+    }
+  });
+
+  it("rejects artifact-only options on non-artifact scopes before hitting the bridge", async () => {
+    const bridge = startFakeBridge(queueDir, () => ({
+      ok: true,
+      result: fakeSelection([]),
+    }));
+    const result = await getState(
+      client,
+      {
+        scope: "selection",
+        artifact_ref:
+          "artifact:pack_contract_fixture:probe:art_20260701010101999_000_ab12cd",
+      },
+      100,
+    );
+    try {
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("PARAMS_INVALID");
+        expect(result.error.message).toMatch(/artifact_ref/);
+      }
+      expect(bridge.seen).toHaveLength(0);
+    } finally {
+      await bridge.stop();
+    }
+  });
 
   it("parses a truncated tracks-with-FX envelope from the bridge", async () => {
     const bridge = startFakeBridge(queueDir, () => ({

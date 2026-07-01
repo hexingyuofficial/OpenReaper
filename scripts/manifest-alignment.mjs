@@ -25,7 +25,7 @@ export function stripLuaLineComments(text) {
     .join("\n");
 }
 
-function parseTemplateBlock(body, name, startIndex) {
+function parseTemplateBlockRange(body, name, startIndex) {
   const open = body.indexOf("{", startIndex);
   if (open === -1) {
     throw new Error(`${MANIFEST_FORMAT_UNEXPECTED}: missing opening block for ${name}`);
@@ -37,10 +37,59 @@ function parseTemplateBlock(body, name, startIndex) {
     if (c === "{") depth += 1;
     if (c === "}") {
       depth -= 1;
-      if (depth === 0) return body.slice(open + 1, i);
+      if (depth === 0) {
+        return {
+          block: body.slice(open + 1, i),
+          endIndex: i + 1,
+        };
+      }
     }
   }
   throw new Error(`${MANIFEST_FORMAT_UNEXPECTED}: unclosed block for ${name}`);
+}
+
+function parseTemplateBlock(body, name, startIndex) {
+  return parseTemplateBlockRange(body, name, startIndex).block;
+}
+
+function parseLuaStringOrFalseField(text, field) {
+  const stripped = stripLuaLineComments(text);
+  const prefix = `(?:^|[^A-Za-z0-9_])${field}`;
+  const stringMatch = stripped.match(new RegExp(`${prefix}\\s*=\\s*"([^"]+)"\\s*,`));
+  if (stringMatch) return stringMatch[1];
+  const falseMatch = stripped.match(new RegExp(`${prefix}\\s*=\\s*false\\s*,`));
+  if (falseMatch) return null;
+  return undefined;
+}
+
+function parseLuaBooleanField(text, field) {
+  const prefix = `(?:^|[^A-Za-z0-9_])${field}`;
+  const match = stripLuaLineComments(text).match(new RegExp(`${prefix}\\s*=\\s*(true|false)\\s*,`));
+  return match ? match[1] === "true" : undefined;
+}
+
+function parseArtifactMetadata(block) {
+  const match = /artifact\s*=\s*\{/g.exec(block);
+  if (!match) return undefined;
+  const artifactBlock = parseTemplateBlock(block, "artifact", match.index);
+  const artifact = {};
+  for (const field of [
+    "kind",
+    "scope",
+    "ref_prefix",
+    "schema",
+    "path_shape",
+  ]) {
+    const value = parseLuaStringOrFalseField(artifactBlock, field);
+    if (value !== undefined) artifact[field] = value;
+  }
+  const readScope = parseLuaStringOrFalseField(artifactBlock, "read_scope");
+  if (readScope !== undefined) artifact.read_scope = readScope;
+  for (const field of ["updates_last_result", "legacy_carve_out"]) {
+    const value = parseLuaBooleanField(artifactBlock, field);
+    if (value !== undefined) artifact[field] = value;
+  }
+  return artifact;
 }
 
 export function parseManifestLua(text) {
@@ -60,7 +109,9 @@ export function parseManifestLua(text) {
 
     const name = match[1];
     if (name === "entity_buckets" || name === "templates") continue;
-    const block = parseTemplateBlock(text, name, match.index);
+    const range = parseTemplateBlockRange(text, name, match.index);
+    const block = range.block;
+    entryRe.lastIndex = range.endIndex;
 
     const undoableMatch = block.match(/undoable\s*=\s*(true|false)\s*,/);
     const entityKindMatch = block.match(/entity_kind\s*=\s*"([^"]+)"\s*,/);
@@ -92,10 +143,12 @@ export function parseManifestLua(text) {
       }
     }
 
+    const artifact = parseArtifactMetadata(block);
     found.set(name, {
       undoable,
       undo_flags: sorted(undoFlags),
       entity_kind: entityKindMatch[1],
+      ...(artifact !== undefined ? { artifact } : {}),
     });
   }
 
@@ -143,6 +196,9 @@ export function buildRegistrySnapshot(registry) {
     if (def.expectedDelta !== undefined) {
       entry.expectedDelta = { ...def.expectedDelta };
     }
+    if (def.artifact !== undefined) {
+      entry.artifact = { ...def.artifact };
+    }
     snapshot.set(def.name, entry);
   }
   return snapshot;
@@ -150,6 +206,19 @@ export function buildRegistrySnapshot(registry) {
 
 function sameArray(a, b) {
   return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function normalizeArtifact(artifact) {
+  if (artifact === undefined) return undefined;
+  const out = {};
+  for (const key of Object.keys(artifact).sort()) {
+    if (artifact[key] !== undefined) out[key] = artifact[key];
+  }
+  return out;
+}
+
+function sameArtifact(a, b) {
+  return JSON.stringify(normalizeArtifact(a)) === JSON.stringify(normalizeArtifact(b));
 }
 
 function validateExpectedDeltaDescriptor(name, tsDef) {
@@ -288,6 +357,11 @@ export function diffManifestAlignment(tsSnapshot, luaSnapshot) {
     if (!sameArray(tsDef.undo_flags, luaDef.undo_flags)) {
       errors.push(
         `FIELD_MISMATCH:${name}.undo_flags: ts=${JSON.stringify(tsDef.undo_flags)} lua=${JSON.stringify(luaDef.undo_flags)}`,
+      );
+    }
+    if (!sameArtifact(tsDef.artifact, luaDef.artifact)) {
+      errors.push(
+        `FIELD_MISMATCH:${name}.artifact: ts=${JSON.stringify(normalizeArtifact(tsDef.artifact))} lua=${JSON.stringify(normalizeArtifact(luaDef.artifact))}`,
       );
     }
   }

@@ -1,4 +1,4 @@
-# Handoff — 2026-07-01 (Slice 20B ✅ live-smoked; pack contract foundation)
+# Handoff — 2026-07-01 (Slice 21 ✅ live-smoked; artifact contract foundation)
 
 Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
 
@@ -10,14 +10,74 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
   Slice 19 at `e54fd9c kernel-hardening: slice 19 track color
   template`, and the follow-up docs sync at `7bbd426 docs: sync slice
   19 pushed state`. Slice 19 is committed, pushed, static-green, and
-  live-smoked; H6's basic loop is closed. Slice 20B is currently in the
-  working tree, not yet committed or pushed: Phase 0.5 Pack Contract
-  Foundation is reviewer-passed, static-green, and live-smoked. The user
+  live-smoked; H6's basic loop is closed. Slice 20B is locally committed
+  at `c11b114 first-real-version: slice 20b pack contract foundation`
+  and not pushed: Phase 0.5 Pack Contract Foundation is reviewer-passed,
+  static-green, and live-smoked. The user
   manages versioning out-of-band — do NOT commit,
   branch, push, or reset without an
   explicit ask. User preference (2026-06-29): local commits are okay as
   explicit save points, but avoid pushing during work hours unless the
   user explicitly makes an exception.
+- **Slice 21 ✅ live-smoked / commit-ready (2026-07-01).**
+  Source: `docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`.
+  This is Phase 1 Artifact Contract Foundation from the first-real-
+  version plan. User locked D1-D11 to recommended values. Scope landed:
+  JSON artifact refs in `changed_ids` using
+  `artifact:<owner_pack>:<scope>:<id>`; no item/track/region
+  `LAST_RESULT` update for JSON artifact producers; artifact ids derived
+  from queue command ids; artifact root
+  `<dirname(QUEUE_DIR)>/artifacts/v1`; startup TTL sweep; new
+  `get_state(scope:"artifact", artifact_ref, view)` summary/payload
+  readback; `render_region` remains the legacy absolute-WAV-path carve-
+  out; compact artifact metadata appears in `list_templates`; fixture
+  pack adds `fixture_artifact_probe`; new error codes
+  `ARTIFACT_NOT_FOUND` and `ARTIFACT_INVALID`.
+  - New TS: `packages/core/src/artifacts.ts` plus tests; registry
+    artifact metadata validation; `ProjectState.artifact`; get_state
+    artifact scope validation; fixture template
+    `fixture-artifact-probe.ts`.
+  - New Lua: `reaper/packs/core/lib/artifacts.lua` for safe path
+    derivation, atomic JSON writes, summary/payload reads, response cap,
+    and startup sweep. Bridge now loads the helper, exposes it to
+    handlers, validates artifact reads, and skips `LAST_RESULT` finalize
+    for JSON artifacts with `updates_last_result=false`.
+  - Manifest alignment now compares artifact metadata across TS and Lua;
+    core reserves `entity_kind="artifact"` with bucket `artifacts`;
+    `render_region` declares `artifact.kind="external_file"` as the
+    explicit legacy carve-out; fixture manifest declares JSON artifact
+    metadata.
+  - Static gates green: `npm test` **403/403**, `npm run build` clean,
+    `npm run check:error-codes-fresh` → 24 codes fresh,
+    default `npm run check:manifest` → 12 templates across 1 pack,
+    fixture-enabled `check:manifest` → 14 templates across 2 packs,
+    default `npm run check:template-authoring` → 12 templates,
+    fixture-enabled `check:template-authoring` → 14 templates, and
+    `git diff --check` clean.
+  - Reviewer follow-up is closed: artifact reads now require
+    `payload` and return `ARTIFACT_INVALID` if it is missing; startup
+    TTL sweep ages files by file mtime instead of artifact-id time; and
+    bridge-side direct queue validation rejects `artifact_ref` / `view`
+    on non-artifact scopes before reserved-scope dispatch.
+  - Live smoke passed on REAPER `7.71/macOS-arm64` after the user full
+    quit/reopened REAPER and loaded the bridge with
+    `_G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"`.
+    Console showed `loaded error_codes (24 codes)`, core `(12
+    templates)`, fixture `(2 templates)`, and ready line including
+    `fixture_artifact_probe`.
+    Smoke stamp `slice21-1782891483364`. Anchor track GUID:
+    `guid:{C5E18394-48F2-DB4F-89D2-AD9CDFAF8A9D}`. Artifact ref:
+    `artifact:pack_contract_fixture:probe:art_20260701073804406_003_ff08e3`.
+    Summary view omitted payload; payload view returned
+    `{ label, note:"fixture-only payload" }`; `track_rename
+    last_result:track:0` still hit the same anchor track after artifact
+    creation; missing artifact returned `ARTIFACT_NOT_FOUND`; malformed
+    ref returned `PARAMS_INVALID`; direct queue `artifact_ref` /
+    `view` on non-artifact scopes returned `PARAMS_INVALID`;
+    `render_region` still returned an absolute WAV path
+    `/var/folders/.../streetlight-s21-render-ml5vxC/s21_render_slice21_1782891483364.wav`,
+    not an `artifact:` ref, with zero `.RPP` sidecars. Temp render dir
+    was removed; queue ended `pending=0`, `running=0`, `done=0`.
 - **Slice 20B ✅ live-smoked / commit-ready
   (2026-07-01).** Source:
   `docs/plans/SLICE_20B_PACK_CONTRACT_ARCHITECT_PLAN.md`. This slice
@@ -86,8 +146,7 @@ Short, dense. Read this first. Long-form log is in `docs/PROGRESS.md`.
     returned typed `TRACK_NOT_FOUND`; default core-only registry returned
     12 templates, fixture absent, and `TEMPLATE_NOT_FOUND` before queue
     write; queue cleanup ended `pending=0`, `running=0`, `done=0`.
-  - Pending before local commit: user says `commit Slice 20B` (or
-    equivalent). Do not push unless explicitly requested.
+  - Local commit is `c11b114`; do not push unless explicitly requested.
 - Slice 19 baseline: full `npm test` → **357/357 green**
   (Slice 18 baseline 348/348 plus 8 new `track_color` fake-bridge tests
   and 1 new Lua-structure test), `npm run build` → clean,

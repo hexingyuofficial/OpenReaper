@@ -84,6 +84,13 @@ export const renderRegionDefinition: CapabilityDefinition<
   // returns OUTPUT_FILE_EXISTS (we refuse to overwrite). Pure-function
   // shape, but observably non-idempotent through the file system.
   idempotent: false,
+  artifact: {
+    kind: "external_file",
+    path_shape: "absolute_wav_path",
+    read_scope: null,
+    updates_last_result: true,
+    legacy_carve_out: true,
+  },
   params: RenderRegionParams,
   result: RenderRegionResult,
   timeoutMs: RENDER_REGION_TIMEOUT_MS,

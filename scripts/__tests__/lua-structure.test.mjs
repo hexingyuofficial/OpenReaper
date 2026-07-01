@@ -290,7 +290,7 @@ describe("Lua bridge structure", () => {
 
     const checkIndex = bridge.indexOf("verify.check(expected_delta");
     const fieldsIndex = bridge.indexOf("verify.check_fields(");
-    const finalizeIndex = bridge.indexOf("return finalize_template(name, entry.entity_kind, raw_changed)");
+    const finalizeIndex = bridge.indexOf("return finalize_template(name, entry.entity_kind, raw_changed, entry)");
     expect(checkIndex).toBeGreaterThan(0);
     expect(fieldsIndex).toBeGreaterThan(checkIndex);
     expect(finalizeIndex).toBeGreaterThan(fieldsIndex);
@@ -354,7 +354,7 @@ describe("Lua bridge structure", () => {
     ]);
 
     expect(bridge).toMatch(/packs\/core\/error_codes\.lua/);
-    expect(bridge).toMatch(/EXPECTED_ERROR_CODE_COUNT\s*=\s*22/);
+    expect(bridge).toMatch(/EXPECTED_ERROR_CODE_COUNT\s*=\s*24/);
     expect(bridge).toMatch(/validate_error_codes\(ERRS\)/);
     expect(bridge).toMatch(/refs\.attach_errs\(ERRS\)/);
     expect(bridge).toMatch(/log\("loaded error_codes \("/);
@@ -363,6 +363,57 @@ describe("Lua bridge structure", () => {
     expect(refs).toMatch(/local ERRS = nil/);
     expect(refs).toMatch(/function M\.attach_errs\(errs\)/);
     expect(refs).toMatch(/ERRS\.REF_INVALID/);
+  });
+
+  it("wires Slice 21 artifact storage without using raw changed_ids paths", async () => {
+    const [bridge, artifacts, fixtureArtifact, fixtureManifest, coreManifest] = await Promise.all([
+      readRepoFile("reaper/streetlight_bridge.lua"),
+      readRepoFile("reaper/packs/core/lib/artifacts.lua"),
+      readRepoFile("reaper/packs/pack_contract_fixture/templates/artifact.lua"),
+      readRepoFile("reaper/packs/pack_contract_fixture/manifest.lua"),
+      readRepoFile("reaper/packs/core/manifest.lua"),
+    ]);
+
+    expect(bridge).toMatch(/artifact_lib = dofile/);
+    expect(bridge).toMatch(/artifact\s*=\s*true/);
+    expect(bridge).toMatch(/scope == "artifact"/);
+    expect(bridge).toMatch(/params\.artifact_ref ~= nil/);
+    expect(bridge).toMatch(/artifact_ref is only valid with scope='artifact'/);
+    expect(bridge).toMatch(/view is only valid with scope='artifact'/);
+    expect(bridge).toMatch(/ARTIFACTS:read\(params\.artifact_ref, params\.view or "summary"\)/);
+    expect(bridge).toMatch(/ARTIFACTS:sweep_old\(\)/);
+    expect(bridge).toMatch(/artifacts\s*=\s*ARTIFACTS/);
+    expect(bridge).toMatch(/command_id\s*=\s*cmd\.id/);
+    expect(bridge).toMatch(/should_update_last_result\(entry\)/);
+    expect(bridge).toMatch(/artifact\.kind == "json"/);
+    expect(bridge).toMatch(/artifact\.updates_last_result == false/);
+
+    expect(artifacts).toMatch(/state_root \.\. "\/artifacts\/v1"/);
+    expect(artifacts).toMatch(/function M\.parse_ref\(ref\)/);
+    expect(artifacts).toMatch(/function ArtifactStore:write_json\(opts\)/);
+    expect(artifacts).toMatch(/write_file_atomic\(path, encoded_or_err\)/);
+    expect(artifacts).toMatch(/function ArtifactStore:read\(ref, view\)/);
+    expect(artifacts).toMatch(/function ArtifactStore:sweep_old\(\)/);
+    expect(artifacts).toMatch(/type\(value\.payload\) == "table"/);
+    expect(artifacts).toMatch(/out\.payload = artifact\.payload/);
+    expect(artifacts).toMatch(/function file_mtime_seconds\(path\)/);
+    expect(artifacts).toMatch(/mtime < cutoff/);
+    expect(artifacts).toMatch(/errs\.ARTIFACT_NOT_FOUND/);
+    expect(artifacts).toMatch(/errs\.ARTIFACT_INVALID/);
+    expect(artifacts).toMatch(/errs\.RESPONSE_TOO_LARGE/);
+
+    expect(fixtureArtifact).toMatch(/function M\.fixture_artifact_probe\(params, ctx\)/);
+    expect(fixtureArtifact).toMatch(/ctx\.artifacts:write_json/);
+    expect(fixtureArtifact).toMatch(/owner_pack = "pack_contract_fixture"/);
+    expect(fixtureArtifact).toMatch(/scope = "probe"/);
+    expect(fixtureArtifact).toMatch(/schema = "openreaper\.fixture\.probe\.v1"/);
+    expect(fixtureArtifact).not.toMatch(/InsertTrack|SetMedia|Main_OnCommand/);
+
+    expect(coreManifest).toMatch(/artifact\s*=\s*"artifacts"/);
+    expect(coreManifest).toMatch(/render_region[\s\S]*kind = "external_file"/);
+    expect(fixtureManifest).toMatch(/fixture_artifact_probe\s*=\s*{/);
+    expect(fixtureManifest).toMatch(/entity_kind = "artifact"/);
+    expect(fixtureManifest).toMatch(/updates_last_result = false/);
   });
 
   it("keeps Lua runtime code paths free of string-literal error codes", async () => {
@@ -374,6 +425,7 @@ describe("Lua bridge structure", () => {
       "reaper/packs/core/templates/region.lua",
       "reaper/packs/core/templates/media.lua",
       "reaper/packs/core/templates/render.lua",
+      "reaper/packs/core/lib/artifacts.lua",
     ];
     const [errorsTs, ...texts] = await Promise.all([
       readRepoFile("packages/core/src/errors.ts"),

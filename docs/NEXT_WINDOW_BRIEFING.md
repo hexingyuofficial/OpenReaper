@@ -1,7 +1,7 @@
 # Next Window Briefing — 2026-07-01
 
 Use this as the first read after a context reset. It is the current truth
-after Slice 20B live smoke.
+after Slice 21 live smoke; Slice 21 is commit-ready.
 
 ## Snapshot
 
@@ -11,9 +11,35 @@ after Slice 20B live smoke.
   `e54fd9c kernel-hardening: slice 19 track color template`
 - Slice 19 is committed and pushed. It is static-green and live-smoked
   on REAPER `7.71/macOS-arm64`; H6's basic loop is closed.
-- Slice 20B (Phase 0.5 Pack Contract Foundation) is in the current
-  working tree, not yet committed or pushed. It is reviewer-passed,
-  static-green, and live-smoked. Static gates: `npm test` 376/376,
+- Slice 21 (Phase 1 Artifact Contract Foundation) is static-green,
+  live-smoked, and commit-ready. Static gates: `npm test` 403/403,
+  `npm run build` clean, `npm run check:error-codes-fresh` 24 codes
+  fresh, default `check:manifest` 12 templates across 1 pack,
+  fixture-enabled `check:manifest` 14 templates across 2 packs, default
+  `check:template-authoring` 12 templates, fixture-enabled
+  `check:template-authoring` 14 templates, and `git diff --check`
+  clean. It adds JSON artifact refs
+  `artifact:<owner_pack>:<scope>:<id>`, artifact root
+  `<dirname(QUEUE_DIR)>/artifacts/v1`, `get_state(scope:"artifact")`
+  summary/payload readback, startup TTL sweep, compact artifact metadata
+  in `list_templates`, fixture template `fixture_artifact_probe`, and
+  error codes `ARTIFACT_NOT_FOUND` / `ARTIFACT_INVALID`. It does not
+  migrate `render_region`, which remains the legacy absolute-WAV-path
+  carve-out routed to `LAST_RESULT.renders`. Reviewer follow-up is
+  already closed: artifact reads require `payload`, TTL sweep uses file
+  mtime, and direct queue validation rejects artifact-only params outside
+  `scope:"artifact"`. Live smoke passed on REAPER
+  `7.71/macOS-arm64` after fixture-enabled bridge restart. Smoke stamp
+  `slice21-1782891483364`; anchor track GUID
+  `guid:{C5E18394-48F2-DB4F-89D2-AD9CDFAF8A9D}`; artifact ref
+  `artifact:pack_contract_fixture:probe:art_20260701073804406_003_ff08e3`.
+  Artifact summary/payload reads, LAST_RESULT preservation, new artifact
+  errors, direct-queue param guards, render_region legacy WAV carve-out,
+  zero sidecars, and clean queue teardown all passed.
+- Slice 20B (Phase 0.5 Pack Contract Foundation) is locally committed
+  at `c11b114 first-real-version: slice 20b pack contract foundation`
+  and not pushed. It is reviewer-passed, static-green, and live-smoked.
+  Static gates: `npm test` 376/376,
   `npm run build` clean,
   `npm run check:error-codes-fresh` 22 codes fresh, default
   `npm run check:manifest` 12 templates across 1 pack,
@@ -40,33 +66,29 @@ after Slice 20B live smoke.
 
 ## Current Slice
 
-Slice 20B implements **Phase 0.5 Pack Contract Foundation**. It prevents
-cleanup / loop / MIDI / routing / FX / unsafe capabilities from becoming
-a parking lot inside `core`.
+Slice 21 implements **Phase 1 Artifact Contract Foundation**. It prevents
+cleanup / loop QA / analysis / reports from inventing one-off result
+shapes or dumping domain state into the locked `call_template` envelope.
 
 What changed in the current working tree:
 
-- New pack parsing helpers in `packages/core/src/packs.ts`.
-- `packages/mcp-server/src/templates/index.ts` keeps
-  `registerCoreTemplates(...)` and adds `registerEnabledTemplates(...)`.
-- MCP startup reads `STREETLIGHT_ENABLED_PACKS` and logs enabled packs.
-- `list_templates` stays bridge-free and exposes pack ownership through
-  existing metadata; fixture pack is hidden by default and appears only
-  when explicitly enabled.
-- `list_recipes` now returns `recipe_roots[]`, pack ownership, and
-  `qualified_id = "<pack>:<id>"`; default remains core recipes.
-- `scripts/manifest-alignment.mjs` and
-  `scripts/template-authoring-lint.mjs` are pack-aware.
-- New Lua loader:
-  `reaper/packs/core/lib/pack_loader.lua`.
-- `reaper/streetlight_bridge.lua` loads static enabled packs instead of
-  hard-coding `core` only.
-- New test-only fixture pack:
-  `reaper/packs/pack_contract_fixture/`,
-  `packages/mcp-server/src/packs/pack-contract-fixture/`, and
-  `docs/packs/pack_contract_fixture/README.md`.
+- New TS artifact helpers in `packages/core/src/artifacts.ts`.
+- New errors in `packages/core/src/errors.ts`:
+  `ARTIFACT_NOT_FOUND`, `ARTIFACT_INVALID`.
+- `CapabilityDefinition.artifact` metadata and list_templates exposure.
+- `get_state(scope:"artifact", artifact_ref, view)` in
+  `packages/mcp-server/src/tools/get-state.ts`.
+- New Lua helper:
+  `reaper/packs/core/lib/artifacts.lua`.
+- Bridge wiring in `reaper/streetlight_bridge.lua`: artifact helper,
+  artifact read scope, startup sweep, handler ctx, and JSON-artifact
+  `LAST_RESULT` skip.
+- Core manifest reserves `entity_kind="artifact"` and tags
+  `render_region` as `artifact.kind="external_file"` legacy carve-out.
+- Fixture pack adds `fixture_artifact_probe` on both TS and Lua sides.
+- `scripts/manifest-alignment.mjs` compares artifact metadata.
 - New plan file:
-  `docs/plans/SLICE_20B_PACK_CONTRACT_ARCHITECT_PLAN.md`.
+  `docs/plans/SLICE_21_ARTIFACT_CONTRACT_ARCHITECT_PLAN.md`.
 
 Do not ship fixture pack by default. Enable only for verification:
 
@@ -81,36 +103,36 @@ For REAPER live smoke, set this before loading `start_bridge.lua`:
 _G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"
 ```
 
-Then `list_templates` should show 13 templates including
-`fixture_track_rename`, `list_recipes` should include
-`pack_contract_fixture:fixture_pack_smoke`, and
-`call_template fixture_track_rename` should rename a track while routing
-`LAST_RESULT.tracks` exactly like core track templates.
+Then `list_templates` should show 14 templates including
+`fixture_artifact_probe`; `call_template fixture_artifact_probe` should
+return exactly one artifact ref in the locked envelope; and
+`get_state(scope:"artifact", artifact_ref:<that ref>)` should read the
+summary/payload without touching existing `LAST_RESULT`.
 
-Live-smoke evidence:
+Live-smoke recipe to run next:
 
-- REAPER `7.71/macOS-arm64`.
-- Bridge loaded `core` (12 templates) and `pack_contract_fixture`
-  (1 template); ready line included `fixture_track_rename`.
-- `ping` connected.
-- Fixture-enabled `list_templates` returned 13 templates; `track_color`
-  stayed `pack:"core"` and `fixture_track_rename` reported
-  `pack:"pack_contract_fixture"`.
-- Fixture-enabled `list_recipes` returned
-  `core:impact_variations` and
-  `pack_contract_fixture:fixture_pack_smoke` with zero warnings.
-- `track_create` created
-  `guid:{76CC9D4E-3F98-CE4E-B02A-A34C0F03D870}`.
-- `track_color last_result:track:0`, `fixture_track_rename
-  last_result:track:0`, and core `track_rename last_result:track:0`
-  all returned the same GUID, proving cross-pack `LAST_RESULT.tracks`
-  routing.
-- `fixture_track_rename` with a missing GUID returned typed
-  `TRACK_NOT_FOUND`.
-- Default core-only registry returned 12 templates, fixture absent, and
-  `call_template fixture_track_rename` returned `TEMPLATE_NOT_FOUND`
-  before queue write.
-- Queue cleanup ended `pending=0`, `running=0`, `done=0`.
+1. Fully quit/reopen REAPER.
+2. Before loading bridge:
+   `_G.STREETLIGHT_ENABLED_PACKS = "core,pack_contract_fixture"`.
+3. Load current `start_bridge.lua`; ready line should show 14 templates
+   and 24 error codes.
+4. `ping`.
+5. `list_templates` asserts `fixture_artifact_probe.artifact.kind=json`
+   and `render_region.artifact.kind=external_file`.
+6. Anchor `LAST_RESULT.tracks` with `track_create`, then call
+   `fixture_artifact_probe {label:"S21 artifact smoke"}`.
+7. Verify the call_template result is locked:
+   `{template, changed_count:1, changed_ids:["artifact:..."], truncated:false}`.
+8. `track_rename last_result:track:0` should still hit the anchored track,
+   proving JSON artifact producers did not clear/update `LAST_RESULT`.
+9. `get_state artifact` summary and payload views return the same ref,
+   schema `openreaper.fixture.probe.v1`, label, and payload note.
+10. Missing old ref
+    `artifact:pack_contract_fixture:probe:art_20000101000000000_000_deadbe`
+    returns `ARTIFACT_NOT_FOUND`; malformed ref `"../bad"` returns
+    `PARAMS_INVALID`.
+11. Existing regressions: `render_region` still returns absolute WAV path,
+    and fixture/default core visibility still behaves like Slice 20B.
 
 ## Previous Slice
 
