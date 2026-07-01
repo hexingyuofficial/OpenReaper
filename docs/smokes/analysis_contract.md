@@ -2,7 +2,8 @@
 
 This smoke verifies the analysis pack with a real REAPER bridge. Slice 25
 covers loudness / peaks / silence; Slice 26 adds explicit opt-in
-transient candidates.
+transient candidates; Slice 27 adds explicit opt-in loop candidate
+intervals.
 
 ## Preconditions
 
@@ -76,12 +77,25 @@ error codes.
     `score_db`. Threshold metadata must expose the actual
     `threshold_dbfs` and the floor `transient_threshold_floor_dbfs=-60`
     separately.
-11. All-feature regression: call with
-    `["loudness","peaks","silence","transients"]`; old Slice 25 fields
-    remain sane and transients remain bounded.
-12. Negative: source unavailable. If a stable offline-media setup is not
+11. Loop-candidate regression: call with
+    `features:["loop_candidates"]`. Expected: locked envelope with one
+    artifact ref; summary `computed_features:["loop_candidates"]`;
+    payload includes bounded `loop_candidates.candidates` with score
+    `0..1`, item-local `start/end/duration`, 0-based transient indices,
+    stable `reason` strings, and `warnings`; payload does **not** expose
+    `transients` unless `transients` was also requested. Zero candidates
+    is not an error, but should include a warning.
+12. Combined transient+loop regression: call with
+    `features:["transients","loop_candidates"]`; payload includes both
+    `transients.events` and `loop_candidates.candidates`, and candidate
+    transient indices refer into the events array.
+13. All-feature regression: call with
+    `["loudness","peaks","silence","transients","loop_candidates"]`;
+    old Slice 25 fields remain sane, transients remain bounded, and
+    loop candidates remain bounded.
+14. Negative: source unavailable. If a stable offline-media setup is not
     practical, use an item with no active take. Expected typed error:
     `AUDIO_SOURCE_OFFLINE`.
-13. Regression: `get_state(scope:"analysis")` remains invalid or
+15. Regression: `get_state(scope:"analysis")` remains invalid or
     unimplemented; use `scope:"artifact"` only.
-14. Queue ends clean: `pending=0`, `running=0`, `done=0`.
+16. Queue ends clean: `pending=0`, `running=0`, `done=0`.

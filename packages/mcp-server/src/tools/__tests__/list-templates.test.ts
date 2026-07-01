@@ -263,6 +263,9 @@ describe("listTemplates", () => {
     expect(itemAudioAnalyze?.examples.some((example) =>
       JSON.stringify(example.params).includes("transients"),
     )).toBe(true);
+    expect(itemAudioAnalyze?.examples.some((example) =>
+      JSON.stringify(example.params).includes("loop_candidates"),
+    )).toBe(true);
   });
 
   it("can enable all opt-in packs together", () => {

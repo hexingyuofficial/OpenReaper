@@ -1,14 +1,43 @@
 # Next Window Briefing — 2026-07-01
 
 Use this as the first read after a context reset. It is the current truth
-after Slice 26 static implementation and REAPER live smoke.
+after Slice 27 static implementation and REAPER live smoke.
 
 ## Snapshot
 
 - Repo: `/Users/Zhuanz/Documents/streetlight-reaper-mcp`
 - Remote: `https://github.com/hexingyuofficial/OpenReaper.git`
-- Branch: `main`; latest pushed checkpoint is Slice 25:
-  `9631983 first-real-version: slice 25 audio analysis artifact`
+- Branch: `main`; latest pushed checkpoint is Slice 26:
+  `b6077a6 first-real-version: slice 26 analysis transients`
+- Slice 27 is implemented, static-green, and REAPER live-smoked.
+  Source:
+  `docs/plans/SLICE_27_ANALYSIS_LOOP_CANDIDATES_ARCHITECT_PLAN.md`.
+  It adds explicit opt-in `features:["loop_candidates"]` to
+  `item_audio_analyze`. Defaults remain `loudness + peaks + silence`;
+  schema/ref stay `openreaper.analysis.item_audio.v1` and
+  `artifact:analysis:analysis:<id>`; no `get_state(scope:"analysis")`.
+  Loop-only calls may compute transients internally but must not output
+  `payload.transients`; combined `features:["transients","loop_candidates"]`
+  outputs both. Candidate count cap is `5`; duration bounds
+  `0.25s..8.0s`; pair cap `4096`; score is heuristic, not click-risk or
+  seamless guarantee. Static gates are green: build clean,
+  `npm test` 431/431, error codes fresh at 26, default
+  manifest/template-authoring 12 templates, `core,analysis` 13,
+  all-pack 18, and `git diff --check` clean. Reviewer found no blocker.
+  Live smoke passed on REAPER `7.71/macOS-arm64` with bridge
+  `core,analysis`; stamp `s27-live-1782920437671`; evidence:
+  `/var/folders/n5/dxh3rm291xq9js6hqjdhn1br0000gn/T/s27-live-1782920437671/evidence.json`.
+  Loop-only ref
+  `artifact:analysis:analysis:art_20260701154039166_004_45c857`
+  had `candidate_count:5`, no `payload.transients`, best candidate
+  `0.19737→0.847528` with score `0.839377`. Combined
+  transient+loop ref
+  `artifact:analysis:analysis:art_20260701154041003_007_c166ce`
+  emitted both and indices pointed into transient events. All-feature
+  ref `artifact:analysis:analysis:art_20260701154042231_009_2b1461`
+  passed; default analysis still omits transients and loop candidates;
+  LAST_RESULT preservation, source-offline `AUDIO_SOURCE_OFFLINE`, and
+  clean queue all passed.
 - Slice 26 is implemented, static-green, and REAPER live-smoked.
   Source: `docs/plans/SLICE_26_ANALYSIS_TRANSIENTS_ARCHITECT_PLAN.md`.
   It adds explicit opt-in `features:["transients"]` to

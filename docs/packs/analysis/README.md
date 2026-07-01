@@ -30,7 +30,7 @@ Read details through:
 - default features:
   `["loudness", "peaks", "silence"]`
 - opt-in features:
-  `["transients"]`
+  `["transients", "loop_candidates"]`
 - schema:
   `openreaper.analysis.item_audio.v1`
 - maximum analysis range:
@@ -39,6 +39,8 @@ Read details through:
   `200`
 - maximum transient events:
   `200`
+- maximum loop candidates:
+  `5`
 
 ## Important Definitions
 
@@ -49,10 +51,13 @@ Read details through:
 - `transients` are heuristic onset candidates. They are useful as
   machine-readable attack-point hints, but they are not loop candidates,
   click-risk metrics, beat grids, or musical phrase boundaries.
+- `loop_candidates` are heuristic intervals based on transient pairs,
+  duration bounds, peak continuity, and light silence hints. They do not
+  guarantee a seamless loop and are not click-risk metrics.
 - Analysis uses REAPER PCM accessors and reads pre-FX item/take audio.
 
 ## Explicitly Deferred
 
-No loop candidates, click-risk metrics, external sample search,
-embeddings, AI generation, OpenAudio integration, MIDI, FX, routing, or
-scene/recipe execution lives in this pack yet.
+No click-risk metrics, external sample search, embeddings, AI
+generation, OpenAudio integration, MIDI, FX, routing, or scene/recipe
+execution lives in this pack yet.

@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { callTemplateResultSchema, defineTemplate } from "../../templates/_shared.js";
 
-const ANALYSIS_FEATURES = ["loudness", "peaks", "silence", "transients"] as const;
+const ANALYSIS_FEATURES = [
+  "loudness",
+  "peaks",
+  "silence",
+  "transients",
+  "loop_candidates",
+] as const;
 const DEFAULT_ANALYSIS_FEATURES = ["loudness", "peaks", "silence"] as const;
 
 const TimeRange = z
@@ -36,7 +42,7 @@ const ItemAudioAnalyzeParams = z
       .optional()
       .default([...DEFAULT_ANALYSIS_FEATURES])
       .describe(
-        "Feature set for analysis. Defaults to loudness, peaks, and silence; transients must be requested explicitly.",
+        "Feature set for analysis. Defaults to loudness, peaks, and silence; transients and loop_candidates must be requested explicitly.",
       ),
     time_range: TimeRange.optional().describe(
       "Optional item-local analysis window in seconds. Omitted means the whole item.",
@@ -62,7 +68,7 @@ const ItemAudioAnalyzeResult = callTemplateResultSchema("item_audio_analyze");
 export const itemAudioAnalyzeDefinition = defineTemplate({
   name: "item_audio_analyze",
   description:
-    "Analyze one in-project audio item and write a bounded JSON analysis artifact. Reports RMS dBFS, sample peaks, silence segments, and opt-in transient candidates.",
+    "Analyze one in-project audio item and write a bounded JSON analysis artifact. Reports RMS dBFS, sample peaks, silence segments, opt-in transient candidates, and opt-in loop candidate intervals.",
   pack: "analysis",
   risk: "filesystem",
   mutates: false,
@@ -100,6 +106,13 @@ export const itemAudioAnalyzeDefinition = defineTemplate({
       params: {
         item_id: "selected:0",
         features: ["transients"],
+      },
+    },
+    {
+      description: "Analyze loop candidate intervals only.",
+      params: {
+        item_id: "selected:0",
+        features: ["loop_candidates"],
       },
     },
   ],

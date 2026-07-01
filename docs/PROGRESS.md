@@ -11,6 +11,57 @@ first.
 
 ## Current Status
 
+**Slice 27 ✅ live-smoked / static-green
+(2026-07-01).** Source:
+`docs/plans/SLICE_27_ANALYSIS_LOOP_CANDIDATES_ARCHITECT_PLAN.md`. This
+is Phase 3C Analysis Loop Candidates MVP. User locked S27-D1..D6:
+`loop_candidates` is explicit opt-in for `item_audio_analyze`; default
+features stay `loudness + peaks + silence`; schema remains
+`openreaper.analysis.item_audio.v1`; loop-only calls may compute
+transients internally but do not output `payload.transients`; only
+combined `transients + loop_candidates` outputs both; no user params in
+this slice. Fixed caps: `MAX_LOOP_CANDIDATES=5`, duration bounds
+`0.25s..8.0s`, transient index gap `1`, pair cap `4096`, silence margin
+`0.04s`, peak continuity max `18dB`. Candidate indices are 0-based;
+`score` is a `0..1` heuristic, not click-risk or seamless guarantee;
+`reason` is the stable short string
+`transient_pair_duration_peak_continuity`; zero candidates is not an
+error and returns an empty array plus warning. Scope deliberately
+excludes trim/fade/take-loop/render/recipe/scene/click-risk/MIDI/
+OpenAudio/AI/new MCP tool/core parking/`get_state(scope:"analysis")`.
+Static gates are green: `npm run build` clean, `npm test` 431/431,
+`npm run check:error-codes-fresh` → 26 codes fresh, default
+manifest/template-authoring → 12 templates, `core,analysis`
+manifest/template-authoring → 13 templates, all-pack
+manifest/template-authoring → 18 templates, and `git diff --check`
+clean. Reviewer found no blockers or P1/P2 contract violations. REAPER
+live smoke passed on `7.71/macOS-arm64` with bridge `core,analysis`;
+ready output showed 26 error codes, core `(12 templates)`, analysis
+`(1 templates)`, and `item_audio_analyze`. Smoke stamp
+`s27-live-1782920437671`; evidence:
+`/var/folders/n5/dxh3rm291xq9js6hqjdhn1br0000gn/T/s27-live-1782920437671/evidence.json`.
+Main loop-only artifact:
+`artifact:analysis:analysis:art_20260701154039166_004_45c857`;
+combined transient+loop artifact:
+`artifact:analysis:analysis:art_20260701154041003_007_c166ce`;
+all-feature artifact:
+`artifact:analysis:analysis:art_20260701154042231_009_2b1461`.
+Loop-only payload showed `computed_features:["loop_candidates"]`,
+`candidate_count:5`, `total_considered:15`, `truncated:false`,
+response bytes `791` summary / `3205` payload, and
+`hasTransients:false`. Best candidate was `0.19737 → 0.847528`
+(`duration=0.650158`, `score=0.839377`, indices `0→2`, reason
+`transient_pair_duration_peak_continuity`). Combined mode emitted both
+transients (`transient_count:6`) and loop candidates (`loop_count:5`),
+with candidate indices pointing into emitted events. All-feature
+regression returned all five features with RMS `-21.361`, peak `-2.3`,
+silence count `7`, transient count `6`, loop count `5`. Default
+analysis still omitted both `transients` and `loop_candidates`.
+LAST_RESULT anchor `guid:{1AFCDBC3-2096-2D46-850A-C3989868B7D1}`
+survived analysis; analyzed item
+`guid:{1F38D6DF-08E0-604E-92B4-9343B77B9233}`. Deleting the copied
+media source returned `AUDIO_SOURCE_OFFLINE`. Queue ended clean.
+
 **Slice 26 ✅ live-smoked / static-green
 (2026-07-01).** Source:
 `docs/plans/SLICE_26_ANALYSIS_TRANSIENTS_ARCHITECT_PLAN.md`. This is

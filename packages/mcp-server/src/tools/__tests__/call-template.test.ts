@@ -303,6 +303,38 @@ describe("callTemplate", () => {
     }
   });
 
+  it("item_audio_analyze accepts explicit loop_candidates without putting them in the default feature set", async () => {
+    const artifactRef =
+      "artifact:analysis:analysis:art_20260701010101999_002_ef56ab";
+    const analysisRegistry = new CapabilityRegistry();
+    registerEnabledTemplates(analysisRegistry, ["core", "analysis"]);
+    const bridge = startFakeBridge(queueDir, () =>
+      fakeTemplateOk("item_audio_analyze", [artifactRef]),
+    );
+    try {
+      const result = await callTemplate(client, analysisRegistry, {
+        name: "item_audio_analyze",
+        params: { item_id: "selected:0", features: ["loop_candidates"] },
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.result).toEqual({
+        template: "item_audio_analyze",
+        changed_count: 1,
+        changed_ids: [artifactRef],
+        truncated: false,
+      });
+      expect(result.result).not.toHaveProperty("payload");
+      expect(result.result).not.toHaveProperty("loop_candidates");
+      expect(bridge.seen[0]?.params).toEqual({
+        item_id: "selected:0",
+        features: ["loop_candidates"],
+      });
+    } finally {
+      await bridge.stop();
+    }
+  });
+
   it("keeps cleanup_plan disabled unless the cleanup pack is enabled", async () => {
     const result = await callTemplate(client, registry, {
       name: "cleanup_plan",
@@ -404,7 +436,7 @@ describe("callTemplate", () => {
     registerEnabledTemplates(analysisRegistry, ["core", "analysis"]);
     const result = await callTemplate(client, analysisRegistry, {
       name: "item_audio_analyze",
-      params: { item_id: "selected:0", features: ["loop_candidates"] },
+      params: { item_id: "selected:0", features: ["click_risk"] },
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {

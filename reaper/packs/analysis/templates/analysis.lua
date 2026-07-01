@@ -6,6 +6,8 @@
 -- tools.
 -- Slice 26 adds explicit opt-in transient candidates. They are heuristic
 -- onset markers, not loop candidates or click-risk metrics.
+-- Slice 27 adds explicit opt-in loop candidates. They are lightweight
+-- heuristic intervals, not seamless-loop guarantees.
 
 local M = {}
 
@@ -21,6 +23,13 @@ local TRANSIENT_FRAME_SAMPLES = 512
 local TRANSIENT_MIN_GAP_SECONDS = 0.05
 local TRANSIENT_RISE_THRESHOLD_DB = 10
 local TRANSIENT_THRESHOLD_FLOOR_DBFS = -60
+local MAX_LOOP_CANDIDATES = 5
+local LOOP_MIN_DURATION_SECONDS = 0.25
+local LOOP_MAX_DURATION_SECONDS = 8.0
+local LOOP_MIN_TRANSIENT_INDEX_GAP = 1
+local LOOP_MAX_PAIRS_CONSIDERED = 4096
+local LOOP_SILENCE_MARGIN_SECONDS = 0.04
+local LOOP_PEAK_CONTINUITY_MAX_DB = 18
 local EPSILON = 0.000000000001
 
 local function raise(code, message, recoverable)
@@ -291,6 +300,114 @@ local function detect_transients(scan, window)
   }
 end
 
+local function clamp01(value)
+  if type(value) ~= "number" then return 0 end
+  if value < 0 then return 0 end
+  if value > 1 then return 1 end
+  return value
+end
+
+local function silence_near(silence_segments, time, margin)
+  for i = 1, #silence_segments do
+    local segment = silence_segments[i]
+    if time >= segment.start - margin and time <= segment["end"] + margin then
+      return true
+    end
+  end
+  return false
+end
+
+local function insert_loop_candidate(best, candidate)
+  local inserted = false
+  for i = 1, #best do
+    local current = best[i]
+    if candidate.score > current.score
+        or (candidate.score == current.score and candidate.start < current.start)
+        or (candidate.score == current.score and candidate.start == current.start and candidate["end"] < current["end"]) then
+      table.insert(best, i, candidate)
+      inserted = true
+      break
+    end
+  end
+  if not inserted then best[#best + 1] = candidate end
+  if #best > MAX_LOOP_CANDIDATES then best[#best] = nil end
+end
+
+local function detect_loop_candidates(transients, scan, ctx)
+  local warnings = {}
+  local total_considered = 0
+  local truncated = false
+  local candidates = {}
+  local events = transients.events or {}
+
+  if #events < 2 then
+    warnings[#warnings + 1] = "not_enough_transients"
+  end
+
+  for i = 1, #events - LOOP_MIN_TRANSIENT_INDEX_GAP do
+    for j = i + LOOP_MIN_TRANSIENT_INDEX_GAP, #events do
+      if total_considered >= LOOP_MAX_PAIRS_CONSIDERED then
+        truncated = true
+        break
+      end
+      total_considered = total_considered + 1
+
+      local start_time = events[i].time
+      local end_time = events[j].time
+      local duration = end_time - start_time
+      if duration >= LOOP_MIN_DURATION_SECONDS and duration <= LOOP_MAX_DURATION_SECONDS then
+        local peak_diff = math.abs((events[i].peak_dbfs or -120) - (events[j].peak_dbfs or -120))
+        local continuity_score = clamp01(1 - (peak_diff / LOOP_PEAK_CONTINUITY_MAX_DB))
+        local span_transients = j - i + 1
+        local density_score = clamp01(span_transients / 8)
+        local silence_score = 0
+        if silence_near(scan.silence_segments, start_time, LOOP_SILENCE_MARGIN_SECONDS) then
+          silence_score = silence_score + 0.5
+        end
+        if silence_near(scan.silence_segments, end_time, LOOP_SILENCE_MARGIN_SECONDS) then
+          silence_score = silence_score + 0.5
+        end
+        local duration_score = clamp01(1 - (math.abs(duration - 1.0) / LOOP_MAX_DURATION_SECONDS))
+        local score = clamp01((continuity_score * 0.45) + (density_score * 0.25) + (silence_score * 0.20) + (duration_score * 0.10))
+        local candidate_warnings = {}
+        if peak_diff > LOOP_PEAK_CONTINUITY_MAX_DB then
+          candidate_warnings[#candidate_warnings + 1] = "peak_continuity_weak"
+        end
+        if silence_score == 0 then
+          candidate_warnings[#candidate_warnings + 1] = "no_silence_boundary_hint"
+        end
+        insert_loop_candidate(candidates, {
+          start = round6(start_time),
+          ["end"] = round6(end_time),
+          duration = round6(duration),
+          score = round6(score),
+          start_transient_index = i - 1,
+          end_transient_index = j - 1,
+          reason = "transient_pair_duration_peak_continuity",
+          warnings = ctx.json.array(candidate_warnings),
+        })
+      end
+    end
+    if truncated then break end
+  end
+
+  if #candidates == 0 then
+    warnings[#warnings + 1] = "zero_candidates"
+  end
+
+  return {
+    type = "transient_pair_loop_candidates",
+    algorithm_version = "loop_candidates_v1",
+    candidates = candidates,
+    candidate_count = #candidates,
+    total_considered = total_considered,
+    truncated = truncated,
+    cap = MAX_LOOP_CANDIDATES,
+    transient_source = "internal_or_requested",
+    warnings = ctx.json.array(warnings),
+  }
+end
+
 local function scan_audio(take, window, features, errs)
   ensure_accessor_api(errs)
 
@@ -356,12 +473,12 @@ local function scan_audio(take, window, features, errs)
           if abs_value > block_peak then block_peak = abs_value end
         end
         state.sample_frames = state.sample_frames + frames
-        if has_feature(features, "transients") then
+        if has_feature(features, "transients") or has_feature(features, "loop_candidates") then
           local block_local_start_for_frames = cursor - window.project_start + window.local_start
           scan_frame_peaks(buffer, frames, channels, block_local_start_for_frames, state)
         end
 
-        if has_feature(features, "silence") then
+        if has_feature(features, "silence") or has_feature(features, "loop_candidates") then
           local block_start_local = cursor - window.project_start + window.local_start
           local block_end_local = math.min(window.local_end, block_start_local + request_duration)
           if block_peak <= SILENCE_THRESHOLD then
@@ -464,6 +581,36 @@ local function build_feature_payload(scan, window, features, ctx)
     end
   end
 
+  if has_feature(features, "loop_candidates") then
+    local transients_for_loops = payload.transients
+    if not transients_for_loops then
+      transients_for_loops = detect_transients(scan, window)
+    end
+    local loop_candidates = detect_loop_candidates(transients_for_loops, scan, ctx)
+    computed[#computed + 1] = "loop_candidates"
+    payload.loop_candidates = {
+      type = loop_candidates.type,
+      algorithm_version = loop_candidates.algorithm_version,
+      candidates = ctx.json.array(loop_candidates.candidates),
+      candidate_count = loop_candidates.candidate_count,
+      total_considered = loop_candidates.total_considered,
+      truncated = loop_candidates.truncated,
+      cap = loop_candidates.cap,
+      transient_source = loop_candidates.transient_source,
+      warnings = loop_candidates.warnings,
+    }
+    summary.loop_candidate_count = loop_candidates.candidate_count
+    summary.loop_candidate_total_considered = loop_candidates.total_considered
+    summary.loop_candidates_truncated = loop_candidates.truncated
+    if loop_candidates.candidate_count > 0 then
+      local best = loop_candidates.candidates[1]
+      summary.best_loop_candidate_start = best.start
+      summary.best_loop_candidate_end = best["end"]
+      summary.best_loop_candidate_duration = best.duration
+      summary.best_loop_candidate_score = best.score
+    end
+  end
+
   summary.computed_features = ctx.json.array(computed)
   summary.duration_seconds = round6(window.duration)
   summary.sample_frames = scan.sample_frames
@@ -550,16 +697,24 @@ function M.item_audio_analyze(params, ctx)
       transient_frame_samples = TRANSIENT_FRAME_SAMPLES,
       transient_rise_threshold_db = TRANSIENT_RISE_THRESHOLD_DB,
       transient_threshold_floor_dbfs = TRANSIENT_THRESHOLD_FLOOR_DBFS,
+      max_loop_candidates = MAX_LOOP_CANDIDATES,
+      loop_min_duration_seconds = LOOP_MIN_DURATION_SECONDS,
+      loop_max_duration_seconds = LOOP_MAX_DURATION_SECONDS,
+      loop_min_transient_index_gap = LOOP_MIN_TRANSIENT_INDEX_GAP,
+      loop_max_pairs_considered = LOOP_MAX_PAIRS_CONSIDERED,
+      loop_silence_margin_seconds = LOOP_SILENCE_MARGIN_SECONDS,
+      loop_peak_continuity_max_db = LOOP_PEAK_CONTINUITY_MAX_DB,
     },
     loudness = feature_payload.loudness,
     peaks = feature_payload.peaks,
     silence = feature_payload.silence,
     transients = feature_payload.transients,
+    loop_candidates = feature_payload.loop_candidates,
     warnings = ctx.json.array({
       "loudness is RMS dBFS, not LUFS",
       "peaks are sample peaks, not true peaks",
       "transients are heuristic onset candidates, not loop candidates or click-risk metrics",
-      "loop_candidates are deferred",
+      "loop_candidates are heuristic intervals, not click-risk metrics or seamless-loop guarantees",
     }),
   }
 
@@ -577,6 +732,13 @@ function M.item_audio_analyze(params, ctx)
     transients_truncated = feature_summary.transients_truncated,
     first_transient_time = feature_summary.first_transient_time,
     last_transient_time = feature_summary.last_transient_time,
+    loop_candidate_count = feature_summary.loop_candidate_count,
+    loop_candidate_total_considered = feature_summary.loop_candidate_total_considered,
+    loop_candidates_truncated = feature_summary.loop_candidates_truncated,
+    best_loop_candidate_start = feature_summary.best_loop_candidate_start,
+    best_loop_candidate_end = feature_summary.best_loop_candidate_end,
+    best_loop_candidate_duration = feature_summary.best_loop_candidate_duration,
+    best_loop_candidate_score = feature_summary.best_loop_candidate_score,
     sample_frames = feature_summary.sample_frames,
   }
 
