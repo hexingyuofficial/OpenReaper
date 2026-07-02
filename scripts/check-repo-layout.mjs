@@ -26,6 +26,7 @@ const requiredPaths = [
   "README.md",
   "AGENTS.md",
   "docs/FOUNDATION_FREEZE_PLAN.md",
+  "docs/LAYER_PROGRESS.md",
   "docs/REPOSITORY_LAYOUT.md",
   "docs/abi/TOOL_ABI_V1.md",
   "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
