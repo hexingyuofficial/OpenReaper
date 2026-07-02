@@ -103,9 +103,10 @@ Layer 1: Tool ABI v1 is frozen.
 Layer 1.5: Discovery / Menu Contract v1 is frozen.
 Layer 2: Foundation / Bridge ABI v1 is frozen.
 Layer 3: Pack Taxonomy v1 is frozen.
+Layer 4A: Template Descriptor Contract is frozen.
 
-The next window should freeze Layer 4: Template Authoring ABI v1.
+The next window should build Layer 4B: Template Execution Harness.
 
 It should not change the frozen MCP tool, discovery/menu, foundation/bridge,
-or pack taxonomy surfaces. If template authoring work exposes a real
-lower-layer blocker, stop and report it to the control tower.
+pack taxonomy, or 4A descriptor surfaces. If execution harness work exposes a
+real lower-layer blocker, stop and report it to the control tower.

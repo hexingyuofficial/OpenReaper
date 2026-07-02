@@ -106,9 +106,9 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: 4A builder complete; control-tower review pending. 4B/4C pending.
+Status: 4A frozen; 4B/4C pending.
 
-Accepted commit: none yet.
+Accepted commit: `f1ce637 freeze: layer 4a template descriptor contract`
 
 Scope target: freeze how templates are described, validated, implemented,
 tested, smoked, and connected to the frozen foundation/bridge ABI inside the
@@ -125,5 +125,9 @@ descriptor budgets, and pressure-fixture categories.
 `npm run check:layer -- layer4a`, `npm run build`, `git diff --check`.
 
 Legacy migrated: no.
+
+Known risks: 4A freezes static descriptor validation only. Runtime bridge
+request construction, result/error mapping, fake/live execution, catalog
+exposure, and template smoke gates remain for 4B/4C.
 
 Next gate: Layer 4B Template Execution Harness.
