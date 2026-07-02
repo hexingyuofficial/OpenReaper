@@ -72,6 +72,17 @@ const allowlists = {
     "packages/core/src/template-execution-harness-v1.mjs",
     "tests/layer4b/**",
   ],
+  layer4c: [
+    "docs/abi/TEMPLATE_AUTHORING_ABI_V1.md",
+    "docs/guides/TEMPLATE_AUTHORING_GUIDE.md",
+    "docs/LAYER_PROGRESS.md",
+    "package.json",
+    "scripts/check-template-authoring.mjs",
+    "scripts/check-layer-scope.mjs",
+    "packages/core/src/template-catalog-v1.mjs",
+    "packages/core/src/template-catalog-fixtures-v1.mjs",
+    "tests/layer4c/**",
+  ],
 };
 
 const denylists = {
@@ -159,6 +170,29 @@ const denylists = {
     "tests/layer2/**",
     "tests/layer3/**",
     "tests/layer4a/**",
+  ],
+  layer4c: [
+    "AGENTS.md",
+    "README.md",
+    "docs/FOUNDATION_FREEZE_PLAN.md",
+    "docs/REPOSITORY_LAYOUT.md",
+    "docs/abi/TOOL_ABI_V1.md",
+    "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
+    "docs/abi/FOUNDATION_BRIDGE_ABI_V1.md",
+    "docs/taxonomy/**",
+    "docs/migration/**",
+    "packages/core/src/foundation-bridge-v1.mjs",
+    "packages/core/src/template-descriptor-v1.mjs",
+    "packages/core/src/template-execution-harness-v1.mjs",
+    "packages/mcp-server/**",
+    "reaper/**",
+    "recipes/**",
+    "tests/layer1/**",
+    "tests/layer1_5/**",
+    "tests/layer2/**",
+    "tests/layer3/**",
+    "tests/layer4a/**",
+    "tests/layer4b/**",
   ],
 };
 

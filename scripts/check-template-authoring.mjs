@@ -25,6 +25,11 @@ import {
   TEMPLATE_EXECUTION_HARNESS_ERROR_CODES,
 } from "../packages/core/src/template-execution-harness-v1.mjs";
 import {
+  TEMPLATE_CATALOG_CONTRACT,
+  TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS,
+  TEMPLATE_CATALOG_SMOKE_CATEGORIES,
+} from "../packages/core/src/template-catalog-v1.mjs";
+import {
   TEMPLATE_DETAIL_FIELDS,
   TEMPLATE_SUMMARY_FIELDS,
 } from "../packages/mcp-server/src/discovery-menu-v1.mjs";
@@ -67,16 +72,27 @@ const requiredAbiNeedles = [
   "Typed Error Mapping",
   "Fake Executor Requirement",
   "does not implement the real `call_template` MCP runtime",
+  "## 4C Catalog / Smoke Gate Contract",
+  `"contract": "${TEMPLATE_CATALOG_CONTRACT}"`,
+  "Catalog Registry",
+  "Discovery/Menu Integration",
+  "Default template catalog discovery",
+  "Duplicate template ids",
+  "Fake Execution Smoke Gate",
+  "4C does not implement the real `call_template` MCP runtime",
 ];
 
 const requiredGuideNeedles = [
   "## Reading A Descriptor",
   "## Writing A Descriptor",
   "## Executing Through The 4B Harness",
+  "## Catalog And Smoke Gate",
   "Choose exactly one primary pack owner",
   "Do not use workflow-shaped pack names",
   "Keep compact discovery separate from full descriptors",
   "bounded `template.execution.v1` envelope",
+  "Register descriptors through the template catalog",
+  "Run `node --test tests/layer4c/*.test.mjs`",
   "Run `npm run check:template-authoring`",
 ];
 
@@ -94,6 +110,8 @@ assertDocList("ABI pressure fixture categories", abi, TEMPLATE_DESCRIPTOR_PRESSU
 assertDocList("ABI workflow-shaped pack guard", abi, TEMPLATE_DESCRIPTOR_WORKFLOW_SHAPED_PACK_IDS);
 assertDocList("ABI discovery summary fields", abi, TEMPLATE_DESCRIPTOR_DISCOVERY_SUMMARY_FIELDS);
 assertDocList("ABI detail fields", abi, TEMPLATE_DESCRIPTOR_DETAIL_FIELDS);
+assertDocList("ABI catalog default forbidden discovery fields", abi, TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS);
+assertDocList("ABI catalog smoke categories", abi, TEMPLATE_CATALOG_SMOKE_CATEGORIES);
 assertDocList("ABI template execution harness typed errors", abi, [
   "TEMPLATE_INPUT_INVALID",
   "TEMPLATE_IDEMPOTENCY_INVALID",
@@ -135,7 +153,12 @@ execFileSync(process.execPath, ["--test", "tests/layer4b/template-execution-harn
   stdio: "inherit",
 });
 
-console.log("Template Authoring ABI 4A descriptor and 4B execution harness contracts ok.");
+execFileSync(process.execPath, ["--test", "tests/layer4c/template-catalog.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+console.log("Template Authoring ABI 4A descriptor, 4B execution harness, and 4C catalog contracts ok.");
 
 function assertNeedles(label, text, needles) {
   const missing = needles.filter((needle) => !text.includes(needle));

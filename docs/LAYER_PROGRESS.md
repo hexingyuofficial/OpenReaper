@@ -106,7 +106,8 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: 4A frozen; 4B frozen; 4C pending.
+Status: 4A frozen; 4B frozen; 4C candidate complete pending control-tower
+acceptance.
 
 Accepted commits:
 
@@ -147,4 +148,20 @@ bridge error, input invalid, and response-too-large pressure scenarios.
 does not implement real `call_template`, catalog loading, live REAPER execution,
 or template smoke gates.
 
-Next gate: Layer 4C Template Catalog / Smoke Gate.
+4C scope: added the `template.catalog.v1` registry, minimal seed template
+fixtures, Layer 1.5 discovery/menu adapter, duplicate-id and pack boundary
+guards, and a fake execution smoke gate for catalog templates.
+
+4C tests: `tests/layer4c/template-catalog.test.mjs` covers catalog load, all
+descriptor validation, duplicate ids, workflow-shaped/non-fixed/mismatched pack
+metadata rejection, recipe rejection, bounded default discovery, exact ids
+field expansion, fake read/write/job/artifact/idempotent/error execution, no
+live REAPER startup, no legacy migration, and no recipes.
+
+4C known risks: seed templates are descriptor plus fake harness smoke fixtures
+only. 4C does not implement real `call_template`, a live REAPER startup path,
+real Lua template behavior, official recipes, user recipe authoring, or legacy
+template migration.
+
+Next gate: control-tower acceptance of the 4C freeze, then Layer 5 Recipe
+Contract v1.

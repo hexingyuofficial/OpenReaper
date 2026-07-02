@@ -139,3 +139,32 @@ When reviewing a harness-backed template, check:
 4B tests use the fake bridge executor only. Do not start real REAPER, create a
 real template catalog, implement `call_template`, add recipes, or migrate
 legacy templates in a harness-only window.
+
+## Catalog And Smoke Gate
+
+Register descriptors through the template catalog after they pass descriptor
+and harness review. The catalog validates each descriptor through 4A, rejects
+duplicate ids, rejects workflow-shaped pack metadata, checks the id pack
+segment against `pack`, and accepts only fixed Layer 3 pack owners.
+
+Default catalog discovery is still the Layer 1.5 compact menu. Do not expose
+`bridge`, `inputSchema`, `outputSchema`, `refs`, `artifacts`, `expectedDelta`,
+`verification`, or `examples` in the default listing. Use exact `ids` plus
+Layer 1.5 `fields` when an agent needs selected detail fields.
+
+When adding or changing a catalog template, check:
+
+1. The descriptor validates before it enters the catalog.
+2. The catalog rejects any duplicate id or invalid pack owner.
+3. Discovery uses `createDiscoveryCatalog({ templates })` or the catalog
+   adapter for that helper.
+4. Default discovery remains bounded and compact.
+5. Fake harness smoke covers the relevant read, write, job, artifact,
+   idempotent, or typed error behavior.
+6. The smoke does not start live REAPER, migrate legacy files, or create
+   recipes.
+
+Run `node --test tests/layer4c/*.test.mjs` for the focused 4C smoke.
+
+Run `npm run check:template-authoring` before returning a 4C or later template
+authoring report.

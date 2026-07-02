@@ -718,6 +718,147 @@ requests and returns typed bridge envelopes. The fake executor proves request
 construction, idempotency, undo, verification, bounded result mapping, and
 typed error mapping without starting real REAPER.
 
+## 4C Catalog / Smoke Gate Contract
+
+Status: frozen by the Layer 4C gate.
+
+The template catalog contract id is:
+
+```json
+{
+  "contract": "template.catalog.v1"
+}
+```
+
+Layer 4C freezes how validated 4A descriptors enter a catalog, how that catalog
+connects to the Layer 1.5 discovery/menu contract, and which static and fake
+execution smokes future template additions must pass.
+
+4C does not implement the real `call_template` MCP runtime, live REAPER
+startup, real Lua behavior, recipes, user recipe authoring, or legacy template
+migration.
+
+### Catalog Registry
+
+The catalog registry consumes `template.descriptor.v1` descriptors and
+normalizes each descriptor through the frozen 4A descriptor validator before
+accepting it.
+
+Catalog input is template-only:
+
+```json
+{
+  "templates": []
+}
+```
+
+Rules:
+
+- every catalog descriptor must pass 4A validation,
+- Duplicate template ids fail catalog validation,
+- template `pack` metadata must be one of the fixed 16 Layer 3 packs,
+- workflow-shaped pack metadata is rejected,
+- the template id pack segment must match the descriptor `pack`,
+- catalog input must not include recipes.
+
+Workflow-shaped pack metadata remains forbidden:
+
+```text
+loop
+cleanup
+delivery
+layer
+music_sketch
+```
+
+### Discovery/Menu Integration
+
+The catalog exposes validated descriptors as the template input to the frozen
+Layer 1.5 menu helper:
+
+```js
+createDiscoveryCatalog({ templates })
+```
+
+Default template catalog discovery must use the compact Layer 1.5 summary
+fields:
+
+```text
+id
+title
+summary
+pack
+lifecycle
+risk
+entity_kind
+tags
+```
+
+Default template catalog discovery must not expose full descriptor fields:
+
+```text
+bridge
+inputSchema
+outputSchema
+refs
+artifacts
+expectedDelta
+verification
+examples
+```
+
+Exact id expansion and field selection remain the Layer 1.5 contract. Detail
+fields are on demand only, require `ids`, and are limited to:
+
+```text
+inputSchema
+outputSchema
+examples
+expectedDelta
+```
+
+Fields such as `bridge`, `refs`, `artifacts`, and `verification` are not menu
+detail fields. They remain internal descriptor data for catalog validation,
+template review, and future runtime construction.
+
+### Seed Templates
+
+Layer 4C may include a small official seed fixture set only to pressure the
+catalog and smoke gate. Seed templates are descriptor plus fake harness smoke
+fixtures; they do not create a real template library, real REAPER Lua behavior,
+or official recipes.
+
+### Fake Execution Smoke Gate
+
+Every future catalog template addition must keep the 4C smoke categories green:
+
+```text
+catalog_load
+descriptor_validation
+default_discovery_bounded
+exact_ids_expansion
+fake_execution_read
+fake_execution_write
+fake_execution_job
+fake_execution_artifact
+fake_execution_idempotent
+fake_execution_error
+no_live_reaper_startup
+no_legacy_migration
+no_recipes
+```
+
+The fake execution smoke uses the 4B harness with an injected fake bridge
+executor. It must prove representative read, write, job, artifact, idempotent,
+and typed error cases without launching REAPER or calling a real MCP server.
+
+Required checks:
+
+```text
+npm run check:template-authoring
+node --test tests/layer4c/*.test.mjs
+```
+
 ## Non-Goals
 
 Layer 4 must not change the frozen Tool ABI, Discovery/Menu contract,
