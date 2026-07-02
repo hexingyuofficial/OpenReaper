@@ -1,53 +1,164 @@
 # Discovery / Menu Contract v1
 
-Status: target for the Layer 1.5 Discovery / Menu Contract gate.
+Status: frozen by the Layer 1.5 Discovery / Menu Contract gate.
 
 ## Purpose
 
 Layer 1 froze the five MCP tool names. Layer 1.5 freezes how agents discover
 templates and recipes through `list_templates` and `list_recipes`.
 
-These tools are long-term discovery/menu tools. They must not become full
-catalog dumps as OpenReaper grows.
+These tools are long-term discovery/menu tools. They are menus, not full catalog
+dumps. Their default responses must stay compact as packs, templates, and
+recipes grow.
 
-## Contract To Freeze
+## Request Shape
 
-Layer 1.5 must define the exact request and response shape for:
+`list_templates` and `list_recipes` accept the same request envelope:
 
-- compact default menus,
-- exact expansion by `ids`,
-- detail selection by `fields`,
-- filters including `query`, `tags`, `pack`, `lifecycle`, `risk`, and
-  `entity_kind`,
-- stable pagination using `limit` and `cursor`, or a reserved compatible
-  pagination envelope.
+```json
+{
+  "ids": ["optional.exact.id"],
+  "fields": ["optional_field_name"],
+  "query": "optional text",
+  "tags": ["optional_tag"],
+  "pack": "optional_pack_or_array",
+  "lifecycle": "optional_lifecycle_or_array",
+  "risk": "optional_risk_or_array",
+  "entity_kind": "optional_entity_kind_or_array",
+  "limit": 25,
+  "cursor": "optional opaque cursor"
+}
+```
 
-## Required Behavior
+All properties are optional. An omitted request is equivalent to `{}`.
 
-`list_templates()` defaults to compact template summaries. It does not return
-full schemas, examples, implementation details, or expected deltas unless the
-agent asks for them.
+`ids` switches the call into exact expansion mode. Exact expansion returns
+known items in the requested id order and reports unknown ids in `missing_ids`.
+Exact expansion is not paginated.
 
-`list_recipes()` defaults to compact recipe summaries. It does not return full
-steps, assertions, recovery branches, or long examples unless the agent asks for
-them.
+`fields` selects response fields. `id` is always returned, even when omitted
+from `fields`.
 
-Full template descriptors and full recipe steps are on-demand reads, not the
-default discovery path.
+Broad filters are `query`, `tags`, `pack`, `lifecycle`, `risk`, and
+`entity_kind`. `query` is a case-insensitive text match over compact metadata.
+`tags` uses all-of matching. The other filters accept either one value or an
+array and use any-of matching.
 
-Simple atomic tasks may call a template directly after discovery. Complex tasks
-should be recipe-first, or explicitly say that they are doing ad-hoc primitive
-composition.
+`limit` and `cursor` are the stable pagination interface for menu mode.
+`limit` defaults to `25` and is capped by the implementation. `cursor` is
+opaque to agents.
+
+## Response Shape
+
+Both tools return this envelope:
+
+```json
+{
+  "contract": "discovery.menu.v1",
+  "kind": "template_menu",
+  "mode": "menu",
+  "items": [],
+  "page": {
+    "limit": 25,
+    "cursor": null,
+    "next_cursor": null,
+    "has_more": false
+  },
+  "applied": {
+    "ids": [],
+    "fields": [],
+    "filters": {}
+  },
+  "missing_ids": []
+}
+```
+
+For `list_templates`, `kind` is `"template_menu"` (`"kind": "template_menu"`).
+
+For `list_recipes`, `kind` is `"recipe_menu"` (`"kind": "recipe_menu"`).
+
+The envelope deliberately does not include full catalog totals. Agents should
+follow `page.next_cursor` while `page.has_more` is true.
+
+## Default Template Menu
+
+`list_templates()` defaults to compact template summaries with these fields:
+
+```text
+id
+title
+summary
+pack
+lifecycle
+risk
+entity_kind
+tags
+```
+
+The default template menu must not include full `inputSchema`, `outputSchema`,
+`examples`, or `expectedDelta`.
+
+Template detail fields are:
+
+```text
+inputSchema
+outputSchema
+examples
+expectedDelta
+```
+
+Template detail fields require exact expansion by `ids`.
+
+## Default Recipe Menu
+
+`list_recipes()` defaults to compact recipe summaries with these fields:
+
+```text
+id
+title
+summary
+pack
+lifecycle
+risk
+entity_kind
+tags
+```
+
+The default recipe menu must not include full `steps`, `assertions`, or
+`recovery`.
+
+Recipe detail fields are:
+
+```text
+steps
+assertions
+recovery
+```
+
+Recipe detail fields require exact expansion by `ids`.
+
+## Agent Use Rules
+
+Simple atomic tasks may directly call a template after discovery.
+
+Complex tasks must be recipe-first. If no recipe fits, the agent must explicitly
+say it is using ad-hoc primitive composition before calling multiple templates
+as a workflow.
+
+Recipes are not server-side hidden executors. Agents execute recipe steps
+through normal `call_template` and `get_state` calls.
 
 ## Tests Required
 
 Layer 1.5 must include synthetic large-catalog tests proving that default
-discovery remains bounded as the number of templates and recipes grows.
+discovery remains bounded by menu pagination and compact fields, not by hidden
+full descriptors or recipe bodies.
 
-It must also test that requested details are returned only for selected ids and
-fields.
+It must also test exact id expansion, field selection, filters, pagination
+shape, and that detail fields are returned only for selected ids and fields.
 
 ## Non-Goals
 
 Layer 1.5 must not implement the bridge, migrate REAPER packs, create template
-runtime behavior, or create official recipe workflows.
+runtime behavior, create official recipe workflows, add a sixth MCP tool, or
+change pack taxonomy.

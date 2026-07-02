@@ -8,10 +8,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "npm run check:layout && npm run check:tool-abi",
+    "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu",
     "check:layout": "node scripts/check-repo-layout.mjs",
     "check:tool-abi": "node scripts/check-tool-abi.mjs",
+    "check:discovery-menu": "node scripts/check-discovery-menu.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
-    "build": "npm run check:layout && npm run check:tool-abi"
+    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu"
   }
 }
