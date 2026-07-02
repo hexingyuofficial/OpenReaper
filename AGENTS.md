@@ -28,6 +28,7 @@ Layer order:
 
 ```text
 1. Tool ABI v1
+1.5. Discovery / Menu Contract v1
 2. Foundation / Bridge ABI v1
 3. Pack Taxonomy v1
 4. Template Authoring ABI v1
@@ -35,9 +36,13 @@ Layer order:
 6. User Recipe Authoring v1
 ```
 
-## Current First Task
+## Current Next Task
 
-The next window should freeze Layer 1: Tool ABI v1.
+Layer 1: Tool ABI v1 is frozen.
+
+The next window should freeze Layer 1.5: Discovery / Menu Contract v1.
 
 It should not implement bridge behavior, migrate packs, migrate templates, or
-create workflow recipes.
+create workflow recipes. It should define the stable discovery/menu contract for
+`list_templates` and `list_recipes`, add tests for compact default responses,
+and stop if it needs deeper runtime behavior.

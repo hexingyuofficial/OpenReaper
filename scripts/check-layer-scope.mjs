@@ -15,10 +15,30 @@ const allowlists = {
     "packages/mcp-server/**",
     "tests/layer1/**",
   ],
+  "layer1.5": [
+    "README.md",
+    "docs/FOUNDATION_FREEZE_PLAN.md",
+    "docs/REPOSITORY_LAYOUT.md",
+    "docs/abi/TOOL_ABI_V1.md",
+    "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
+    "package.json",
+    "scripts/check-layer-scope.mjs",
+    "scripts/check-repo-layout.mjs",
+    "scripts/check-discovery-menu.mjs",
+    "packages/mcp-server/**",
+    "tests/layer1_5/**",
+  ],
 };
 
 const denylists = {
   layer1: [
+    "reaper/**",
+    "recipes/**",
+    "docs/taxonomy/**",
+    "docs/migration/**",
+    "packages/core/**",
+  ],
+  "layer1.5": [
     "reaper/**",
     "recipes/**",
     "docs/taxonomy/**",

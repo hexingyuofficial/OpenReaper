@@ -2,6 +2,10 @@
 
 Status: frozen by the Layer 1 Tool ABI v1 gate.
 
+Scope: Layer 1 freezes only the MCP tool surface and direct-call rules.
+Discovery/menu behavior for `list_templates` and `list_recipes` is frozen by
+Layer 1.5 in `DISCOVERY_MENU_CONTRACT_V1.md`.
+
 ## Frozen MCP Tool Surface
 
 OpenReaper exposes exactly five agent-facing MCP tools:
@@ -38,11 +42,13 @@ Reads bounded state, projections, and artifacts.
 
 ### `list_templates`
 
-Lists callable templates from enabled fixed packs.
+Discovers callable templates from enabled fixed packs. Its menu and expansion
+contract belongs to Layer 1.5.
 
 ### `list_recipes`
 
-Lists workflow contracts that agents can execute step by step.
+Discovers workflow contracts that agents can execute step by step. Its menu and
+expansion contract belongs to Layer 1.5.
 
 ### `call_template`
 

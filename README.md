@@ -28,6 +28,7 @@ Freeze the architecture one layer at a time:
 
 ```text
 1. Tool ABI v1
+1.5. Discovery / Menu Contract v1
 2. Foundation / Bridge ABI v1
 3. Pack Taxonomy v1
 4. Template Authoring ABI v1
@@ -35,7 +36,8 @@ Freeze the architecture one layer at a time:
 6. User Recipe Authoring v1
 ```
 
-The first implementation window should work only on Layer 1: Tool ABI v1.
+Layer 1 freezes only the MCP tool surface. The next implementation window
+should work only on Layer 1.5: Discovery / Menu Contract v1.
 
 ## Repository Map
 
@@ -45,6 +47,7 @@ Important starting docs:
 
 - [docs/FOUNDATION_FREEZE_PLAN.md](docs/FOUNDATION_FREEZE_PLAN.md)
 - [docs/abi/TOOL_ABI_V1.md](docs/abi/TOOL_ABI_V1.md)
+- [docs/abi/DISCOVERY_MENU_CONTRACT_V1.md](docs/abi/DISCOVERY_MENU_CONTRACT_V1.md)
 - [docs/taxonomy/PACK_TAXONOMY_V1.md](docs/taxonomy/PACK_TAXONOMY_V1.md)
 - [docs/migration/LEGACY_BOUNDARY.md](docs/migration/LEGACY_BOUNDARY.md)
 

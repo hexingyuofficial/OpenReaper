@@ -9,6 +9,7 @@ capabilities through fixed packs and composing them through recipes.
 
 ```text
 frozen five-tool agent interface
+  + frozen discovery / menu contract
   + frozen foundation / bridge ABI
   + fixed REAPER capability pack taxonomy
   + verified template library
@@ -42,6 +43,33 @@ call_template
 
 Agents call only these tools directly.
 
+Layer 1 only freezes the tool surface. It does not freeze how much
+`list_templates` or `list_recipes` return.
+
+### Layer 1.5: Discovery / Menu Contract v1
+
+Freeze how agents discover templates and recipes through `list_templates` and
+`list_recipes`.
+
+This layer exists so discovery stays stable and low-cost as packs, templates,
+and recipes grow. The default response must be a compact menu summary, not a
+full dump of template schemas, examples, expected deltas, recipe steps,
+assertions, or recovery branches.
+
+Layer 1.5 must define and test:
+
+- exact on-demand expansion by `ids`,
+- field selection by `fields`,
+- filters such as `query`, `tags`, `pack`, `lifecycle`, `risk`, and
+  `entity_kind`,
+- stable pagination shape with `limit` and `cursor`, or an explicit reserved
+  shape for it,
+- synthetic large-catalog checks proving default discovery does not grow with
+  the full catalog size,
+- the rule that full descriptors and full recipe steps are read only on demand.
+
+After Layer 1.5 is frozen, the agent-facing discovery interface is frozen.
+
 ### Layer 2: Foundation / Bridge ABI v1
 
 Freeze runtime behavior:
@@ -59,6 +87,10 @@ Freeze runtime behavior:
 - `LAST_RESULT`,
 - idempotency,
 - bridge owner / generation behavior.
+
+Layer 2 must wait for Layer 1.5 because the discovery contract affects response
+budgets, descriptor shapes, recipe metadata, pack metadata, lifecycle fields,
+and future user recipe authoring.
 
 ### Layer 3: Pack Taxonomy v1
 
