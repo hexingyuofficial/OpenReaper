@@ -1,4 +1,52 @@
 import { TEMPLATE_DESCRIPTOR_CONTRACT } from "./template-descriptor-v1.mjs";
+import {
+  WAVE1A_ANALYSIS_TEMPLATE_IDS,
+  WAVE1A_ANALYSIS_TEMPLATES,
+  createWave1AAnalysisTemplates,
+} from "./template-packs/wave1a-analysis-templates-v1.mjs";
+import {
+  WAVE1A_ITEMS_TEMPLATE_IDS,
+  WAVE1A_ITEMS_TEMPLATES,
+  createWave1AItemsTemplates,
+} from "./template-packs/wave1a-items-templates-v1.mjs";
+import {
+  WAVE1A_PROJECT_TEMPLATE_IDS,
+  WAVE1A_PROJECT_TEMPLATES,
+  createWave1aProjectTemplates,
+} from "./template-packs/wave1a-project-templates-v1.mjs";
+import {
+  WAVE1A_RENDER_TEMPLATE_IDS,
+  WAVE1A_RENDER_TEMPLATES,
+  createWave1aRenderTemplates,
+} from "./template-packs/wave1a-render-templates-v1.mjs";
+import {
+  WAVE1A_TRACKS_TEMPLATE_IDS,
+  WAVE1A_TRACKS_TEMPLATES,
+  createWave1ATracksTemplates,
+} from "./template-packs/wave1a-tracks-templates-v1.mjs";
+import {
+  WAVE1A_TRANSPORT_TEMPLATE_IDS,
+  WAVE1A_TRANSPORT_TEMPLATES,
+  createWave1ATransportTemplates,
+} from "./template-packs/wave1a-transport-templates-v1.mjs";
+
+export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
+  ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
+  ...Object.values(WAVE1A_TRACKS_TEMPLATE_IDS),
+  ...WAVE1A_ITEMS_TEMPLATE_IDS,
+  ...WAVE1A_TRANSPORT_TEMPLATE_IDS,
+  ...WAVE1A_ANALYSIS_TEMPLATE_IDS,
+  ...Object.values(WAVE1A_RENDER_TEMPLATE_IDS),
+]);
+
+export const TEMPLATE_CATALOG_WAVE1A_TEMPLATES = deepFreeze([
+  ...WAVE1A_PROJECT_TEMPLATES,
+  ...WAVE1A_TRACKS_TEMPLATES,
+  ...WAVE1A_ITEMS_TEMPLATES,
+  ...WAVE1A_TRANSPORT_TEMPLATES,
+  ...WAVE1A_ANALYSIS_TEMPLATES,
+  ...WAVE1A_RENDER_TEMPLATES,
+]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
   readHealth: "template.core.read_health",
@@ -229,6 +277,17 @@ export const TEMPLATE_CATALOG_SEED_TEMPLATES = deepFreeze([
 
 export function createTemplateCatalogSeedTemplates() {
   return cloneJson(TEMPLATE_CATALOG_SEED_TEMPLATES);
+}
+
+export function createTemplateCatalogWave1aTemplates() {
+  return [
+    ...createWave1aProjectTemplates(),
+    ...createWave1ATracksTemplates(),
+    ...createWave1AItemsTemplates(),
+    ...createWave1ATransportTemplates(),
+    ...createWave1AAnalysisTemplates(),
+    ...createWave1aRenderTemplates(),
+  ];
 }
 
 function bridge(overrides = {}) {

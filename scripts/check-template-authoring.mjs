@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import {
   FOUNDATION_BRIDGE_OPERATION_FAMILIES,
@@ -157,6 +157,21 @@ execFileSync(process.execPath, ["--test", "tests/layer4c/template-catalog.test.m
   cwd: root,
   stdio: "inherit",
 });
+
+const templatePackTestDir = path.join(root, "tests/template-packs");
+if (existsSync(templatePackTestDir)) {
+  const templatePackTests = readdirSync(templatePackTestDir)
+    .filter((file) => file.endsWith(".test.mjs"))
+    .sort()
+    .map((file) => path.join("tests/template-packs", file));
+
+  if (templatePackTests.length > 0) {
+    execFileSync(process.execPath, ["--test", ...templatePackTests], {
+      cwd: root,
+      stdio: "inherit",
+    });
+  }
+}
 
 console.log("Template Authoring ABI 4A descriptor, 4B execution harness, and 4C catalog contracts ok.");
 

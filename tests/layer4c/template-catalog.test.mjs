@@ -21,7 +21,9 @@ import {
   validateTemplateCatalog,
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
+  TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
+  createTemplateCatalogWave1aTemplates,
   createTemplateCatalogSeedTemplates,
 } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../packages/core/src/template-execution-harness-v1.mjs";
@@ -45,6 +47,101 @@ describe("Layer 4C template catalog and smoke gate", () => {
       assert.equal(result.ok, true, descriptor.id);
       assert.equal(FOUNDATION_BRIDGE_PACK_IDS.includes(descriptor.pack), true, descriptor.id);
       assert.equal(descriptor.id.match(TEMPLATE_DESCRIPTOR_ID_PATTERN)?.[1], descriptor.pack);
+    }
+  });
+
+  it("loads the official Wave 1A catalog without blocked candidates", () => {
+    const templates = createTemplateCatalogWave1aTemplates();
+    const validation = validateTemplateCatalog({ templates });
+    const catalog = createTemplateCatalog({ templates });
+    const blocked = [
+      "template.render.preflight_output_path",
+      "template.render.render_region_wav",
+      "template.render.render_region_job",
+      "template.items.copy_item_to_track",
+      "template.items.delete_item",
+      "template.tracks.delete_empty_track",
+      "template.tracks.delete_track",
+      "template.tracks.ensure_named_track",
+      "template.transport.read_record_posture",
+      "template.transport.start_recording",
+      "template.analysis.summarize_selected_audio_items",
+      "template.analysis.measure_item_audio_basics",
+      "template.analysis.measure_item_lufs",
+      "template.analysis.measure_item_loudness_rms",
+      "template.render.read_recent_stats",
+      "template.render.render_source_section",
+    ];
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.equal(catalog.size, 43);
+    assert.deepEqual(catalog.ids, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
+    assert.equal(new Set(catalog.ids).size, catalog.ids.length);
+
+    for (const id of blocked) {
+      assert.equal(catalog.get(id), null, id);
+    }
+
+    const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
+    const menu = discovery.list_templates();
+    assert.equal(menu.items.length, 25);
+    assert.equal(menu.page.has_more, true);
+    assert.equal("total" in menu.page, false);
+
+    const exact = discovery.list_templates({
+      ids: ["template.project.create_region", "template.analysis.measure_item_rms"],
+      fields: ["summary", "inputSchema", "expectedDelta"],
+    });
+    assert.equal(exact.mode, "ids");
+    assert.deepEqual(
+      exact.items.map((item) => item.id),
+      ["template.project.create_region", "template.analysis.measure_item_rms"],
+    );
+    assert.equal("bridge" in exact.items[0], false);
+    assert.equal("refs" in exact.items[0], false);
+  });
+
+  it("runs combined fake execution smoke for the official Wave 1A catalog", async () => {
+    const catalog = createTemplateCatalog({ templates: createTemplateCatalogWave1aTemplates() });
+
+    for (const [index, descriptor] of catalog.list().entries()) {
+      const bridge = new FakeFoundationBridge();
+      const outputRefs = descriptor.refs.output
+        .filter((refDeclaration) => refDeclaration.kind !== "artifact" && refDeclaration.kind !== "job")
+        .map((refDeclaration, refIndex) => sampleObjectRef(refDeclaration.kind, index, refIndex));
+      const artifacts = descriptor.refs.output
+        .filter((refDeclaration) => refDeclaration.kind === "artifact")
+        .map((_, refIndex) => sampleArtifactRef(descriptor, index, refIndex));
+      const jobs = descriptor.refs.output
+        .filter((refDeclaration) => refDeclaration.kind === "job")
+        .map((_, refIndex) => sampleObjectRef("job", index, refIndex));
+      const result = await executeTemplate({
+        descriptor,
+        input: cloneJson(descriptor.examples[0]?.input ?? {}),
+        refs: sampleInputRefs(descriptor, index),
+        context: context({ request_sequence: (index % 999) + 1 }),
+        executor: (request) =>
+          bridge.okEnvelope(request, "2026-07-02T00:00:00.000Z", {
+            summary: {
+              template_id: descriptor.id,
+              pack: descriptor.pack,
+            },
+            refs: outputRefs,
+            artifacts,
+            jobs,
+            last_result: {
+              updated: descriptor.risk !== "read",
+              refs: [...outputRefs, ...jobs, ...artifacts],
+              truncated: false,
+            },
+          }),
+      });
+
+      assert.equal(result.ok, true, descriptor.id);
+      assert.equal(result.template.id, descriptor.id);
+      assert.equal(result.template.pack, descriptor.pack);
+      assert.doesNotMatch(JSON.stringify(result), /payload|segments|events|samples/);
     }
   });
 
@@ -241,7 +338,15 @@ describe("Layer 4C template catalog and smoke gate", () => {
       new URL("../../packages/core/src/template-catalog-fixtures-v1.mjs", import.meta.url),
       "utf8",
     );
-    const source = `${catalogSource}\n${fixtureSource}`;
+    const packSources = [
+      "../../packages/core/src/template-packs/wave1a-analysis-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave1a-items-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave1a-project-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave1a-render-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave1a-tracks-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave1a-transport-templates-v1.mjs",
+    ].map((sourcePath) => readFileSync(new URL(sourcePath, import.meta.url), "utf8"));
+    const source = `${catalogSource}\n${fixtureSource}\n${packSources.join("\n")}`;
 
     assert.doesNotMatch(source, /streetlight-reaper-mcp/);
     assert.doesNotMatch(source, /\blegacy\b/i);
@@ -288,6 +393,50 @@ function syntheticTemplates(count) {
       },
     ],
   }));
+}
+
+function sampleInputRefs(descriptor, index) {
+  return Object.fromEntries(
+    descriptor.refs.input.map((refDeclaration, refIndex) => [
+      refDeclaration.name,
+      sampleObjectRef(refDeclaration.kind, index, refIndex),
+    ]),
+  );
+}
+
+function sampleObjectRef(kind, index, refIndex) {
+  if (kind === "artifact") {
+    return createArtifactRef({
+      owner_pack: "render",
+      scope: "output_file",
+      id: sampleArtifactId(index, refIndex),
+      schema: "render.output_file_metadata.v1",
+      summary: { template_index: index },
+    });
+  }
+
+  const scheme = kind === "job" ? "job_id" : kind === "file" ? "path" : "guid";
+  const value = kind === "file" ? `/tmp/openreaper-${index}-${refIndex}.wav` : `{${kind.toUpperCase()}-${index}-${refIndex}}`;
+  return createObjectRef(kind, { scheme, value });
+}
+
+function sampleArtifactRef(descriptor, index, refIndex) {
+  const artifactDeclaration = descriptor.artifacts.output[refIndex] ?? descriptor.artifacts.output[0];
+  return createArtifactRef({
+    owner_pack: artifactDeclaration?.owner_pack ?? descriptor.pack,
+    scope: artifactDeclaration?.schema?.split(".")[1] ?? "metadata",
+    id: sampleArtifactId(index, refIndex),
+    schema: artifactDeclaration?.schema ?? `${descriptor.pack}.artifact.v1`,
+    summary: { template_id: descriptor.id },
+  });
+}
+
+function sampleArtifactId(index, refIndex) {
+  return `art_20260702000000000_${String((index % 999) + 1).padStart(3, "0")}_${String(refIndex).padStart(6, "0")}`;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function context(overrides = {}) {
