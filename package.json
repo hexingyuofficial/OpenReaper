@@ -1,0 +1,15 @@
+{
+  "name": "openreaper",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Clean foundation repo for the OpenReaper verified REAPER agent runtime.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node scripts/check-repo-layout.mjs",
+    "check:layout": "node scripts/check-repo-layout.mjs",
+    "build": "node scripts/check-repo-layout.mjs"
+  }
+}
