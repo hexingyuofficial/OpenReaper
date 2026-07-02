@@ -15,6 +15,10 @@ only its own entry when its prompt explicitly authorizes it.
 - Forward work pauses while the lower-layer fix is active.
 - After the fix is accepted, the original later layer resumes from the new
   frozen commit.
+- Builder windows normally do not commit. The control tower commits accepted
+  layer freezes and approved architecture/process updates.
+- A layer is frozen only after the control tower records the accepted commit in
+  this ledger.
 
 ## Layer 1: Tool ABI v1
 

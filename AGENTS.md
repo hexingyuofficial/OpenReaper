@@ -55,6 +55,16 @@ tower. Do not make the edit yourself.
 `docs/LAYER_PROGRESS.md` is the single progress ledger. Update it only when
 your layer prompt explicitly asks you to update the entry for your layer.
 
+## Commit Ownership
+
+Layer builder windows do not commit unless their prompt explicitly says so.
+They finish by returning a report, changed-file list, tests, reviewer findings,
+smoke output when required, and known risks.
+
+The control tower owns commits for accepted layer freezes and approved
+architecture/process updates. A layer is frozen only after the control tower
+accepts the work and records the accepted commit.
+
 Layer order:
 
 ```text
