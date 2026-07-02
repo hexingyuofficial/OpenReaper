@@ -105,10 +105,11 @@ Layer 2: Foundation / Bridge ABI v1 is frozen.
 Layer 3: Pack Taxonomy v1 is frozen.
 Layer 4A: Template Descriptor Contract is frozen.
 Layer 4B: Template Execution Harness is frozen.
+Layer 4C: Template Catalog / Smoke Gate is frozen.
 
-The next window should build Layer 4C: Template Catalog / Smoke Gate.
+The next window should build Layer 5: Recipe Contract v1.
 
 It should not change the frozen MCP tool, discovery/menu, foundation/bridge,
-pack taxonomy, 4A descriptor, or 4B execution harness surfaces. If catalog or
-smoke-gate work exposes a real lower-layer blocker, stop and report it to the
-control tower.
+pack taxonomy, 4A descriptor, 4B execution harness, or 4C catalog/smoke
+surfaces. If recipe contract work exposes a real lower-layer blocker, stop and
+report it to the control tower.

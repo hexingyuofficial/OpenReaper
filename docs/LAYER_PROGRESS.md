@@ -106,13 +106,13 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: 4A frozen; 4B frozen; 4C candidate complete pending control-tower
-acceptance.
+Status: frozen.
 
 Accepted commits:
 
 - `f1ce637 freeze: layer 4a template descriptor contract`
 - `3d74b6b freeze: layer 4b template execution harness`
+- `ff1baa6 freeze: layer 4c template catalog smoke gate`
 
 Scope target: freeze how templates are described, validated, implemented,
 tested, smoked, and connected to the frozen foundation/bridge ABI inside the
@@ -163,5 +163,4 @@ only. 4C does not implement real `call_template`, a live REAPER startup path,
 real Lua template behavior, official recipes, user recipe authoring, or legacy
 template migration.
 
-Next gate: control-tower acceptance of the 4C freeze, then Layer 5 Recipe
-Contract v1.
+Next gate: Layer 5 Recipe Contract v1.
