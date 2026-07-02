@@ -24,6 +24,27 @@ Only work on the requested layer.
 If a lower layer needs changes, stop and report the dependency. Do not fix it
 as a drive-by change.
 
+## Architecture File Ownership
+
+Architecture and process files are control-tower owned. Do not edit them unless
+the prompt for your layer explicitly names the exact file and says the user has
+approved that architecture-file change.
+
+Architecture and process files include:
+
+- `AGENTS.md`
+- `README.md`
+- `docs/FOUNDATION_FREEZE_PLAN.md`
+- `docs/REPOSITORY_LAYOUT.md`
+- `docs/abi/**`
+- `docs/taxonomy/**`
+- `docs/migration/**`
+- `scripts/check-layer-scope.mjs`
+
+If your layer needs one of these files changed and it was not explicitly
+approved in your prompt, stop and report the proposed change to the control
+tower. Do not make the edit yourself.
+
 Layer order:
 
 ```text
