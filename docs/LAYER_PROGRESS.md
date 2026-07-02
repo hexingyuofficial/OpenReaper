@@ -174,29 +174,68 @@ Wave 1A known risks: descriptors and fake harness smoke only. No real
 `call_template` runtime binding, live REAPER behavior, runtime Lua, recipes, or
 user docs are implemented.
 
-Next gate: Layer 4D Template Runtime Binding / Live Smoke Gate.
+Wave 2A descriptor-only scope target: add 70 approved descriptor-only templates
+for `media`, `midi`, `fx`, `routing`, `automation`, and `actions`, using only
+the existing 4A descriptor contract, 4B fake execution harness, 4C catalog
+patterns, and Layer 3 pack taxonomy.
+
+Wave 2A out of scope: runtime Lua, live REAPER behavior, recipes, destructive
+templates, hardware endpoint behavior, generic/action execution, user docs, new
+ref kinds, and frozen ABI changes.
+
+Next gate: Wave 2A Descriptor-Only 70-Template Pass.
+
+## Wave 2A: Descriptor-Only 70-Template Pass
+
+Status: planned
+
+Scope target: implement the 70 template ids approved in the old control-tower
+Wave 2 review as descriptor-only catalog entries with pack-local tests and
+combined fake catalog/harness smoke.
+
+Required coverage:
+
+- create pack-scoped descriptor files for `media`, `midi`, `fx`, `routing`,
+  `automation`, and `actions`;
+- implement exactly the 70 approved Wave 2A template ids recorded in
+  `/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/template-candidates/wave-2-review.md`;
+- wire accepted descriptors into the shared catalog fixture without changing
+  frozen 4A/4B/4C surfaces;
+- keep discovery compact and bounded;
+- add pack-local descriptor/catalog/fake harness tests;
+- extend combined catalog smoke so Wave 1A plus Wave 2A descriptors validate
+  together.
+
+Out of scope: runtime Lua, live REAPER startup, live smoke, `call_template`
+runtime binding, recipes, user recipe authoring, destructive templates,
+hardware endpoints, generic/action execution, new ref kinds, user docs, and
+frozen ABI changes unless a concrete blocker is reported.
+
+Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
+Smoke Gate.
 
 ## Layer 4D: Template Runtime Binding / Live Smoke Gate
 
 Status: planned
 
-Scope target: bind the official Wave 1A template catalog to the agent-facing
+Scope target: bind the accepted official template catalog to the agent-facing
 `call_template` execution path without adding MCP tools or changing frozen ABI
-surfaces, and add an opt-in live smoke gate.
+surfaces, and add a unified opt-in live smoke gate after Wave 2A descriptor-only
+work is accepted.
 
 Required coverage:
 
-- resolve official Wave 1A template ids from the catalog;
+- resolve accepted official template ids from the catalog;
 - reject unknown, blocked, and non-catalog template ids with typed errors;
 - route input/ref/context validation through the Layer 4B execution harness;
 - keep `call_template` as the only direct template execution entry point;
 - keep discovery/menu compact and unchanged;
-- run fake runtime smoke over the official Wave 1A catalog;
+- run fake runtime smoke over the accepted official catalog;
 - provide live smoke commands or scripts that are opt-in and do not start
   REAPER by default.
 
-Out of scope: recipes, user recipe authoring, Wave 1B blocked templates,
-runtime Lua expansion, broad live REAPER coverage, user docs, and frozen ABI
-changes unless a concrete blocker is reported.
+Out of scope: recipes, user recipe authoring, blocked templates, runtime Lua
+expansion, broad live REAPER coverage, user docs, and frozen ABI changes unless
+a concrete blocker is reported.
 
 Next gate after acceptance: Layer 5 Recipe Contract v1.
