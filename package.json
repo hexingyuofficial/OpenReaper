@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node scripts/check-repo-layout.mjs",
     "check:layout": "node scripts/check-repo-layout.mjs",
+    "check:layer": "node scripts/check-layer-scope.mjs",
     "build": "node scripts/check-repo-layout.mjs"
   }
 }
