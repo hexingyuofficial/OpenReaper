@@ -39,6 +39,16 @@ const allowlists = {
     "reaper/bridge/**",
     "tests/layer2/**",
   ],
+  layer3: [
+    "docs/taxonomy/PACK_TAXONOMY_V1.md",
+    "docs/taxonomy/PACK_TAXONOMY_REVIEW_NOTES.md",
+    "docs/LAYER_PROGRESS.md",
+    "package.json",
+    "scripts/check-pack-taxonomy.mjs",
+    "scripts/check-layer-scope.mjs",
+    "scripts/check-repo-layout.mjs",
+    "tests/layer3/**",
+  ],
 };
 
 const denylists = {
@@ -69,6 +79,22 @@ const denylists = {
     "reaper/packs/**",
     "tests/layer1/**",
     "tests/layer1_5/**",
+  ],
+  layer3: [
+    "AGENTS.md",
+    "README.md",
+    "docs/FOUNDATION_FREEZE_PLAN.md",
+    "docs/REPOSITORY_LAYOUT.md",
+    "docs/abi/**",
+    "docs/migration/**",
+    "packages/core/**",
+    "packages/mcp-server/**",
+    "reaper/bridge/**",
+    "reaper/packs/**",
+    "recipes/**",
+    "tests/layer1/**",
+    "tests/layer1_5/**",
+    "tests/layer2/**",
   ],
 };
 
