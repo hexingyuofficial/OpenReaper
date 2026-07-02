@@ -82,9 +82,10 @@ Layer order:
 Layer 1: Tool ABI v1 is frozen.
 Layer 1.5: Discovery / Menu Contract v1 is frozen.
 Layer 2: Foundation / Bridge ABI v1 is frozen.
+Layer 3: Pack Taxonomy v1 is frozen.
 
-The next window should freeze Layer 3: Pack Taxonomy v1.
+The next window should freeze Layer 4: Template Authoring ABI v1.
 
-It should not change the frozen MCP tool, discovery/menu, or foundation/bridge
-ABI surfaces. If pack taxonomy work exposes a real lower-layer blocker, stop
-and report it to the control tower.
+It should not change the frozen MCP tool, discovery/menu, foundation/bridge,
+or pack taxonomy surfaces. If template authoring work exposes a real
+lower-layer blocker, stop and report it to the control tower.

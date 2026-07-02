@@ -84,14 +84,36 @@ Next gate: Layer 3 Pack Taxonomy v1.
 
 ## Layer 3: Pack Taxonomy v1
 
+Status: frozen
+
+Accepted commit: `7897ed1 freeze: layer 3 pack taxonomy v1`
+
+Scope: froze the fixed 16 top-level pack taxonomy as dependency domains, not
+workflow products; added taxonomy review notes, pack taxonomy checks, Layer 3
+scope guard support, and Layer 3 taxonomy tests.
+
+Tests: `npm test`, `npm run check:tool-abi`, `npm run check:discovery-menu`,
+`npm run check:foundation-bridge`, `npm run check:pack-taxonomy`,
+`npm run check:layer -- layer3`, `npm run build`, `git diff --check`.
+
+Legacy migrated: no.
+
+Known risks: taxonomy placement is frozen as ownership metadata only. No real
+pack content, templates, recipes, loader behavior, or live REAPER runtime
+behavior was migrated or implemented in this layer.
+
+Next gate: Layer 4 Template Authoring ABI v1.
+
+## Layer 4: Template Authoring ABI v1
+
 Status: planned
 
 Accepted commit: none yet.
 
-Scope target: verify and freeze the fixed top-level pack taxonomy as dependency
-domains, not workflow products. No bridge ABI or template authoring changes
-unless a concrete blocker is reported back to the control tower.
+Scope target: freeze how templates are described, validated, implemented,
+tested, smoked, and connected to the frozen foundation/bridge ABI inside the
+fixed pack taxonomy.
 
 Legacy migrated: no.
 
-Next gate: Layer 4 Template Authoring ABI v1.
+Next gate: Layer 5 Recipe Contract v1.
