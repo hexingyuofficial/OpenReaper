@@ -106,9 +106,12 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: 4A frozen; 4B implemented for control-tower review; 4C pending.
+Status: 4A frozen; 4B frozen; 4C pending.
 
-Accepted commit: `f1ce637 freeze: layer 4a template descriptor contract`
+Accepted commits:
+
+- `f1ce637 freeze: layer 4a template descriptor contract`
+- `3d74b6b freeze: layer 4b template execution harness`
 
 Scope target: freeze how templates are described, validated, implemented,
 tested, smoked, and connected to the frozen foundation/bridge ABI inside the
@@ -144,5 +147,4 @@ bridge error, input invalid, and response-too-large pressure scenarios.
 does not implement real `call_template`, catalog loading, live REAPER execution,
 or template smoke gates.
 
-Next gate: Control-tower review for Layer 4B freeze, then Layer 4C Template
-Catalog / Smoke Gate.
+Next gate: Layer 4C Template Catalog / Smoke Gate.
