@@ -28,6 +28,17 @@ const allowlists = {
     "packages/mcp-server/**",
     "tests/layer1_5/**",
   ],
+  layer2: [
+    "docs/abi/FOUNDATION_BRIDGE_ABI_V1.md",
+    "package.json",
+    "scripts/check-layer-scope.mjs",
+    "scripts/check-repo-layout.mjs",
+    "scripts/check-foundation-bridge.mjs",
+    "packages/core/**",
+    "packages/mcp-server/**",
+    "reaper/bridge/**",
+    "tests/layer2/**",
+  ],
 };
 
 const denylists = {
@@ -44,6 +55,20 @@ const denylists = {
     "docs/taxonomy/**",
     "docs/migration/**",
     "packages/core/**",
+  ],
+  layer2: [
+    "AGENTS.md",
+    "README.md",
+    "docs/FOUNDATION_FREEZE_PLAN.md",
+    "docs/REPOSITORY_LAYOUT.md",
+    "docs/abi/TOOL_ABI_V1.md",
+    "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
+    "recipes/**",
+    "docs/taxonomy/**",
+    "docs/migration/**",
+    "reaper/packs/**",
+    "tests/layer1/**",
+    "tests/layer1_5/**",
   ],
 };
 

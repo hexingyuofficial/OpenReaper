@@ -30,6 +30,7 @@ const requiredPaths = [
   "docs/REPOSITORY_LAYOUT.md",
   "docs/abi/TOOL_ABI_V1.md",
   "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
+  "docs/abi/FOUNDATION_BRIDGE_ABI_V1.md",
   "docs/taxonomy/PACK_TAXONOMY_V1.md",
   "docs/migration/LEGACY_BOUNDARY.md",
   "packages/core",
