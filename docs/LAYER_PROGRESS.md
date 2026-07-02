@@ -60,15 +60,38 @@ Next gate: Layer 2 Foundation / Bridge ABI v1.
 
 ## Layer 2: Foundation / Bridge ABI v1
 
+Status: frozen
+
+Accepted commit: `9a8677f freeze: layer 2 foundation bridge abi v1`
+
+Scope: froze the foundation/bridge ABI for template execution, including
+envelopes, refs, errors, undo, verification, artifacts, budget, idempotency,
+timeout, queue, bridge owner/generation, fixed operation families, bounded
+last_result, health, and fake bridge contract smoke.
+
+Tests: `npm test`, `npm run check:tool-abi`, `npm run check:discovery-menu`,
+`npm run check:foundation-bridge`, `npm run check:layer -- layer2`,
+`npm run build`, `git diff --check`, fake bridge smoke.
+
+Legacy migrated: no.
+
+Known risks: fake bridge proves ABI shape and safety rules, not live REAPER
+behavior. Future layers must bind the contract to real template authoring,
+bridge transport, Lua execution, artifact persistence, and permission/risk
+policy.
+
+Next gate: Layer 3 Pack Taxonomy v1.
+
+## Layer 3: Pack Taxonomy v1
+
 Status: planned
 
 Accepted commit: none yet.
 
-Scope target: freeze the foundation/bridge ABI for template execution,
-including envelopes, refs, errors, undo, verification, artifacts, budget,
-idempotency, timeout, queue, bridge owner/generation, and fake bridge contract
-smoke.
+Scope target: verify and freeze the fixed top-level pack taxonomy as dependency
+domains, not workflow products. No bridge ABI or template authoring changes
+unless a concrete blocker is reported back to the control tower.
 
 Legacy migrated: no.
 
-Next gate: Layer 3 Pack Taxonomy v1.
+Next gate: Layer 4 Template Authoring ABI v1.

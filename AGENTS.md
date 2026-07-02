@@ -81,8 +81,10 @@ Layer order:
 
 Layer 1: Tool ABI v1 is frozen.
 Layer 1.5: Discovery / Menu Contract v1 is frozen.
+Layer 2: Foundation / Bridge ABI v1 is frozen.
 
-The next window should freeze Layer 2: Foundation / Bridge ABI v1.
+The next window should freeze Layer 3: Pack Taxonomy v1.
 
-It should not migrate packs, create real templates, create official recipes, or
-change the frozen MCP tool or discovery/menu surfaces.
+It should not change the frozen MCP tool, discovery/menu, or foundation/bridge
+ABI surfaces. If pack taxonomy work exposes a real lower-layer blocker, stop
+and report it to the control tower.
