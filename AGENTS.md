@@ -55,6 +55,20 @@ tower. Do not make the edit yourself.
 `docs/LAYER_PROGRESS.md` is the single progress ledger. Update it only when
 your layer prompt explicitly asks you to update the entry for your layer.
 
+## Document Registry
+
+Any new long-lived document in this repo must be registered in the old control
+tower record:
+
+```text
+/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/CONTROL_TOWER_RECORD.md
+```
+
+Registration means adding the path to the resume/index area and briefly stating
+what the document records. A layer builder may create a new document only when
+its prompt explicitly allows it, and its completion report must say whether the
+new document was registered or still needs control-tower registration.
+
 ## Commit Ownership
 
 Layer builder windows do not commit unless their prompt explicitly says so.
