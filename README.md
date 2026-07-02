@@ -56,5 +56,5 @@ Run:
 npm test
 ```
 
-At repo birth this only checks the fixed directory layout and pack taxonomy.
-Future layers should add real ABI and runtime tests.
+This runs the fixed directory layout check and the Layer 1 Tool ABI check.
+Future layers should add their own ABI and runtime tests.
