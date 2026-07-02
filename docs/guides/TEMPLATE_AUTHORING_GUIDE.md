@@ -110,3 +110,32 @@ express a shape; they do not create official templates.
 
 Run `npm run check:template-authoring` before returning a 4A or later template
 authoring report.
+
+## Executing Through The 4B Harness
+
+The 4B harness is the contract boundary between descriptor authoring and the
+Foundation / Bridge ABI. It validates the descriptor, validates template input
+against `inputSchema`, builds one `foundation.bridge.v1` request, dispatches
+through an injected bridge executor, and maps the typed bridge result into a
+bounded `template.execution.v1` envelope.
+
+When reviewing a harness-backed template, check:
+
+1. The request uses descriptor bridge metadata for operation family/name,
+   capability, pack id, risk, timeout, artifacts, refs, and verification.
+2. The execution context carries `session_id`, expected bridge owner, expected
+   generation, created timestamp, and request sequence.
+3. Input validation fails before bridge dispatch when required fields are
+   missing, unknown fields are present, or compact schema constraints fail.
+4. Idempotency follows the descriptor policy exactly: `none`, `supported`, or
+   `required`.
+5. Read-risk operations use no undo, while non-read command/action/job
+   requests carry required undo policy.
+6. Results contain compact summaries plus refs, artifact refs, job refs, and
+   bounded last-result metadata only.
+7. Bridge typed errors remain typed with `source: "bridge"`; harness validation
+   errors use `source: "harness"`.
+
+4B tests use the fake bridge executor only. Do not start real REAPER, create a
+real template catalog, implement `call_template`, add recipes, or migrate
+legacy templates in a harness-only window.

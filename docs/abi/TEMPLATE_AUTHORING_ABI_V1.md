@@ -505,6 +505,219 @@ compact_discovery_full_descriptor_split
 These pressure fixtures prove descriptor expressiveness only. They do not
 create official template library entries.
 
+## 4B Execution Harness Contract
+
+Status: frozen by the Layer 4B gate.
+
+The template execution harness contract id is:
+
+```json
+{
+  "contract": "template.execution.v1"
+}
+```
+
+Layer 4B freezes the harness that consumes a 4A
+`template.descriptor.v1`, validated template input, execution context, and
+typed refs, then constructs one legal Layer 2 `foundation.bridge.v1` request.
+4B does not implement the real `call_template` MCP runtime, a template
+catalog, live REAPER startup, recipes, or legacy migration.
+
+### Bridge Request Construction
+
+The harness maps descriptor metadata into the bridge request as follows:
+
+```text
+descriptor.bridge.operation_family -> operation.family
+descriptor.bridge.operation_name   -> operation.name
+descriptor.pack                    -> pack.id
+descriptor.bridge.capability       -> pack.capability
+descriptor.risk                    -> pack.risk
+descriptor.bridge.timeout_ms       -> timeout_ms
+descriptor.verification            -> verification
+descriptor.artifacts.mode          -> artifacts.allow
+execution refs                     -> refs
+validated template input           -> params
+execution budget                   -> budget
+execution context                  -> client and expected bridge owner/generation
+```
+
+The harness must normalize the constructed request through the frozen
+Foundation / Bridge ABI before dispatch. It must not add bridge operation
+families, pack ids, typed errors, or new MCP tools.
+
+### Execution Context
+
+The context supplies:
+
+```json
+{
+  "client_id": "openreaper-mcp",
+  "session_id": "session-id",
+  "expected_owner": "owner-token",
+  "expected_generation": 1,
+  "created_at": "2026-07-02T00:00:00.000Z",
+  "request_sequence": 1
+}
+```
+
+`client_id` defaults to `openreaper-mcp`. `session_id`,
+`expected_owner`, and `expected_generation` are required. Request ids use the
+stable shape:
+
+```text
+cmd_<17 UTC timestamp digits>_<3 digit sequence>_<6 hex fingerprint>
+```
+
+The fingerprint is deterministic for the descriptor id, validated input, refs,
+and idempotency key. The bridge owner and generation remain explicit expected
+values on every request.
+
+### Input Validation
+
+The harness validates template input against the descriptor `inputSchema`
+before dispatch. Validation is limited to the compact object schema frozen by
+4A:
+
+- input must be a JSON object,
+- required properties must be present,
+- unknown properties fail because `additionalProperties` is `false`,
+- property `type`, `enum`, `const`, and `oneOf` declarations are enforced.
+
+Invalid input returns a typed template execution error and must not reach the
+bridge executor.
+
+### Idempotency Policy
+
+Descriptor `bridge.idempotency` fixes harness behavior:
+
+```text
+none      -> no idempotency_key is sent; a supplied key is an error
+supported -> a supplied key is sent when Layer 2 allows it; omission sends no key
+required  -> a supplied key is sent, otherwise the harness generates a stable key
+```
+
+The harness must not send idempotency keys for Layer 2 read/read-risk requests
+where the Foundation / Bridge ABI forbids them. Required idempotency on a
+bridge operation that cannot carry a key is a harness error.
+
+### Undo Policy
+
+Read-risk templates and read operation families (`query_state` and
+`artifact_metadata`) use:
+
+```json
+{
+  "mode": "none"
+}
+```
+
+Non-read `run_command`, `run_action`, and `run_job` requests use required undo
+with a label derived from the descriptor capability:
+
+```json
+{
+  "mode": "required",
+  "label": "OpenReaper: track.create",
+  "flags": ["track"]
+}
+```
+
+The flags are compact expected-delta entity kinds. Undo blocks are still bridge
+responsibility; the harness only constructs the request policy.
+
+### Bounded Template Result
+
+Template execution results are bounded envelopes:
+
+```json
+{
+  "contract": "template.execution.v1",
+  "template": {
+    "id": "template.tracks.create_track",
+    "pack": "tracks",
+    "risk": "write",
+    "operation": {
+      "family": "run_command",
+      "name": "template.execute"
+    },
+    "capability": "track.create"
+  },
+  "request": {
+    "id": "cmd_20260702000000000_001_abcdef",
+    "created_at": "2026-07-02T00:00:00.000Z",
+    "client": {
+      "id": "openreaper-mcp",
+      "session_id": "session-id"
+    },
+    "bridge": {
+      "expected_owner": "owner-token",
+      "expected_generation": 1
+    },
+    "idempotency_key": null,
+    "timeout_ms": 5000
+  },
+  "ok": true,
+  "result": {
+    "summary": {},
+    "refs": [],
+    "artifacts": [],
+    "jobs": [],
+    "last_result": {
+      "updated": false,
+      "refs": [],
+      "truncated": false
+    }
+  },
+  "undo": {},
+  "verification": {},
+  "budget": {
+    "max_response_bytes": 65536,
+    "response_bytes": 1024,
+    "truncated": false,
+    "bridge_response_bytes": 512
+  }
+}
+```
+
+The template result must not echo full descriptors, schemas, examples, raw
+params, large analysis payloads, render data, file contents, or logs. Large
+outputs remain artifact, job, or object refs. If the mapped template envelope
+would exceed the response budget, the harness returns a typed
+`RESPONSE_TOO_LARGE` template error.
+
+### Typed Error Mapping
+
+Bridge errors remain typed inside the template execution envelope:
+
+```json
+{
+  "contract": "template.execution.v1",
+  "ok": false,
+  "error": {
+    "source": "bridge",
+    "code": "VERIFY_FAILED",
+    "message": "Verification failed.",
+    "recoverable": false,
+    "details": {}
+  }
+}
+```
+
+Harness-side validation and executor failures use `source: "harness"` and a
+bounded typed code such as `TEMPLATE_INPUT_INVALID`,
+`TEMPLATE_IDEMPOTENCY_INVALID`, `TEMPLATE_REFS_INVALID`,
+`TEMPLATE_CONTEXT_INVALID`, `BRIDGE_RESULT_INVALID`, or
+`RESPONSE_TOO_LARGE`. Errors must not be downgraded into free-text-only
+responses.
+
+### Fake Executor Requirement
+
+4B tests use a fake bridge executor that accepts `foundation.bridge.v1`
+requests and returns typed bridge envelopes. The fake executor proves request
+construction, idempotency, undo, verification, bounded result mapping, and
+typed error mapping without starting real REAPER.
+
 ## Non-Goals
 
 Layer 4 must not change the frozen Tool ABI, Discovery/Menu contract,

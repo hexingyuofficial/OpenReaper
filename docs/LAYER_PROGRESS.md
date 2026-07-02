@@ -106,7 +106,7 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: 4A frozen; 4B/4C pending.
+Status: 4A frozen; 4B implemented for control-tower review; 4C pending.
 
 Accepted commit: `f1ce637 freeze: layer 4a template descriptor contract`
 
@@ -126,8 +126,23 @@ descriptor budgets, and pressure-fixture categories.
 
 Legacy migrated: no.
 
-Known risks: 4A freezes static descriptor validation only. Runtime bridge
+4A known risks: 4A freezes static descriptor validation only. Runtime bridge
 request construction, result/error mapping, fake/live execution, catalog
-exposure, and template smoke gates remain for 4B/4C.
+exposure, and template smoke gates remained for 4B/4C.
 
-Next gate: Layer 4B Template Execution Harness.
+4B scope: added the Template Execution Harness contract that consumes frozen
+4A descriptors, validates template input, constructs normalized
+`foundation.bridge.v1` requests, applies idempotency and undo policy, dispatches
+through an injected fake bridge executor, and maps bridge results/errors into a
+bounded `template.execution.v1` envelope.
+
+4B tests: `tests/layer4b/template-execution-harness.test.mjs` covers read,
+write, destructive, job, artifact, idempotent mutation, verification failure,
+bridge error, input invalid, and response-too-large pressure scenarios.
+
+4B known risks: fake bridge coverage proves harness contract behavior only. It
+does not implement real `call_template`, catalog loading, live REAPER execution,
+or template smoke gates.
+
+Next gate: Control-tower review for Layer 4B freeze, then Layer 4C Template
+Catalog / Smoke Gate.

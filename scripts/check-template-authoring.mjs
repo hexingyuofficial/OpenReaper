@@ -20,6 +20,11 @@ import {
   TEMPLATE_DESCRIPTOR_WORKFLOW_SHAPED_PACK_IDS,
 } from "../packages/core/src/template-descriptor-v1.mjs";
 import {
+  TEMPLATE_EXECUTION_HARNESS_CONTRACT,
+  TEMPLATE_EXECUTION_HARNESS_DEFAULT_CLIENT_ID,
+  TEMPLATE_EXECUTION_HARNESS_ERROR_CODES,
+} from "../packages/core/src/template-execution-harness-v1.mjs";
+import {
   TEMPLATE_DETAIL_FIELDS,
   TEMPLATE_SUMMARY_FIELDS,
 } from "../packages/mcp-server/src/discovery-menu-v1.mjs";
@@ -50,14 +55,28 @@ const requiredAbiNeedles = [
   "Examples Declaration",
   "Pressure Fixture Metadata",
   "4A does not implement `call_template` runtime",
+  "## 4B Execution Harness Contract",
+  `"contract": "${TEMPLATE_EXECUTION_HARNESS_CONTRACT}"`,
+  "Bridge Request Construction",
+  "Execution Context",
+  `"client_id": "${TEMPLATE_EXECUTION_HARNESS_DEFAULT_CLIENT_ID}"`,
+  "Input Validation",
+  "Idempotency Policy",
+  "Undo Policy",
+  "Bounded Template Result",
+  "Typed Error Mapping",
+  "Fake Executor Requirement",
+  "does not implement the real `call_template` MCP runtime",
 ];
 
 const requiredGuideNeedles = [
   "## Reading A Descriptor",
   "## Writing A Descriptor",
+  "## Executing Through The 4B Harness",
   "Choose exactly one primary pack owner",
   "Do not use workflow-shaped pack names",
   "Keep compact discovery separate from full descriptors",
+  "bounded `template.execution.v1` envelope",
   "Run `npm run check:template-authoring`",
 ];
 
@@ -75,6 +94,19 @@ assertDocList("ABI pressure fixture categories", abi, TEMPLATE_DESCRIPTOR_PRESSU
 assertDocList("ABI workflow-shaped pack guard", abi, TEMPLATE_DESCRIPTOR_WORKFLOW_SHAPED_PACK_IDS);
 assertDocList("ABI discovery summary fields", abi, TEMPLATE_DESCRIPTOR_DISCOVERY_SUMMARY_FIELDS);
 assertDocList("ABI detail fields", abi, TEMPLATE_DESCRIPTOR_DETAIL_FIELDS);
+assertDocList("ABI template execution harness typed errors", abi, [
+  "TEMPLATE_INPUT_INVALID",
+  "TEMPLATE_IDEMPOTENCY_INVALID",
+  "TEMPLATE_REFS_INVALID",
+  "TEMPLATE_CONTEXT_INVALID",
+  "BRIDGE_RESULT_INVALID",
+  "RESPONSE_TOO_LARGE",
+]);
+
+if (!TEMPLATE_EXECUTION_HARNESS_ERROR_CODES.includes("VERIFY_FAILED")) {
+  console.error("Template execution harness error code set must include bridge typed errors.");
+  process.exit(1);
+}
 
 if (JSON.stringify(TEMPLATE_DESCRIPTOR_DISCOVERY_SUMMARY_FIELDS) !== JSON.stringify(TEMPLATE_SUMMARY_FIELDS)) {
   console.error("Template descriptor summary fields must match the frozen discovery menu summary fields.");
@@ -98,7 +130,12 @@ execFileSync(process.execPath, ["--test", "tests/layer4a/template-descriptor.tes
   stdio: "inherit",
 });
 
-console.log("Template Authoring ABI 4A descriptor contract ok.");
+execFileSync(process.execPath, ["--test", "tests/layer4b/template-execution-harness.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+console.log("Template Authoring ABI 4A descriptor and 4B execution harness contracts ok.");
 
 function assertNeedles(label, text, needles) {
   const missing = needles.filter((needle) => !text.includes(needle));
