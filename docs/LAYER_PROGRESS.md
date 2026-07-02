@@ -113,6 +113,7 @@ Accepted commits:
 - `f1ce637 freeze: layer 4a template descriptor contract`
 - `3d74b6b freeze: layer 4b template execution harness`
 - `ff1baa6 freeze: layer 4c template catalog smoke gate`
+- `1af8eaa templates: add wave 1a catalog descriptors`
 
 Scope target: freeze how templates are described, validated, implemented,
 tested, smoked, and connected to the frozen foundation/bridge ABI inside the
@@ -163,4 +164,39 @@ only. 4C does not implement real `call_template`, a live REAPER startup path,
 real Lua template behavior, official recipes, user recipe authoring, or legacy
 template migration.
 
-Next gate: Layer 5 Recipe Contract v1.
+Wave 1A template catalog scope: accepted 43 official descriptor-only templates
+for `project`, `tracks`, `items`, `transport`, `analysis`, and `render`. These
+are wired into the shared catalog fixture through pack-scoped descriptor files,
+and `check:template-authoring` runs pack-local tests plus combined fake catalog
+smoke.
+
+Wave 1A known risks: descriptors and fake harness smoke only. No real
+`call_template` runtime binding, live REAPER behavior, runtime Lua, recipes, or
+user docs are implemented.
+
+Next gate: Layer 4D Template Runtime Binding / Live Smoke Gate.
+
+## Layer 4D: Template Runtime Binding / Live Smoke Gate
+
+Status: planned
+
+Scope target: bind the official Wave 1A template catalog to the agent-facing
+`call_template` execution path without adding MCP tools or changing frozen ABI
+surfaces, and add an opt-in live smoke gate.
+
+Required coverage:
+
+- resolve official Wave 1A template ids from the catalog;
+- reject unknown, blocked, and non-catalog template ids with typed errors;
+- route input/ref/context validation through the Layer 4B execution harness;
+- keep `call_template` as the only direct template execution entry point;
+- keep discovery/menu compact and unchanged;
+- run fake runtime smoke over the official Wave 1A catalog;
+- provide live smoke commands or scripts that are opt-in and do not start
+  REAPER by default.
+
+Out of scope: recipes, user recipe authoring, Wave 1B blocked templates,
+runtime Lua expansion, broad live REAPER coverage, user docs, and frozen ABI
+changes unless a concrete blocker is reported.
+
+Next gate after acceptance: Layer 5 Recipe Contract v1.

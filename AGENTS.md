@@ -93,6 +93,7 @@ Layer order:
 2. Foundation / Bridge ABI v1
 3. Pack Taxonomy v1
 4. Template Authoring ABI v1
+4D. Template Runtime Binding / Live Smoke Gate
 5. Recipe Contract v1
 6. User Recipe Authoring v1
 ```
@@ -106,10 +107,15 @@ Layer 3: Pack Taxonomy v1 is frozen.
 Layer 4A: Template Descriptor Contract is frozen.
 Layer 4B: Template Execution Harness is frozen.
 Layer 4C: Template Catalog / Smoke Gate is frozen.
+Wave 1A official descriptor catalog is accepted.
 
-The next window should build Layer 5: Recipe Contract v1.
+The next window should build Layer 4D: Template Runtime Binding / Live Smoke
+Gate.
 
-It should not change the frozen MCP tool, discovery/menu, foundation/bridge,
-pack taxonomy, 4A descriptor, 4B execution harness, or 4C catalog/smoke
-surfaces. If recipe contract work exposes a real lower-layer blocker, stop and
-report it to the control tower.
+It should not change the frozen MCP tool names, discovery/menu,
+foundation/bridge, pack taxonomy, 4A descriptor, 4B execution harness, or 4C
+catalog/smoke surfaces. It should keep `call_template` as the only template
+execution entry point, bind the official Wave 1A catalog to the runtime path,
+and add opt-in live smoke gates that do not start REAPER by default. If this
+work exposes a real lower-layer blocker, stop and report it to the control
+tower.
