@@ -49,6 +49,19 @@ const allowlists = {
     "scripts/check-repo-layout.mjs",
     "tests/layer3/**",
   ],
+  layer4a: [
+    "docs/abi/TEMPLATE_AUTHORING_ABI_V1.md",
+    "docs/guides/TEMPLATE_AUTHORING_GUIDE.md",
+    "docs/LAYER_PROGRESS.md",
+    "package.json",
+    "scripts/check-template-authoring.mjs",
+    "scripts/check-layer-scope.mjs",
+    "scripts/check-repo-layout.mjs",
+    "packages/core/**",
+    "packages/mcp-server/**",
+    "tests/layer4/**",
+    "tests/layer4a/**",
+  ],
 };
 
 const denylists = {
@@ -95,6 +108,26 @@ const denylists = {
     "tests/layer1/**",
     "tests/layer1_5/**",
     "tests/layer2/**",
+  ],
+  layer4a: [
+    "AGENTS.md",
+    "README.md",
+    "docs/FOUNDATION_FREEZE_PLAN.md",
+    "docs/REPOSITORY_LAYOUT.md",
+    "docs/abi/TOOL_ABI_V1.md",
+    "docs/abi/DISCOVERY_MENU_CONTRACT_V1.md",
+    "docs/abi/FOUNDATION_BRIDGE_ABI_V1.md",
+    "docs/taxonomy/**",
+    "docs/migration/**",
+    "packages/core/src/foundation-bridge-v1.mjs",
+    "packages/mcp-server/src/discovery-menu-v1.mjs",
+    "packages/mcp-server/src/tool-abi-v1.mjs",
+    "reaper/**",
+    "recipes/**",
+    "tests/layer1/**",
+    "tests/layer1_5/**",
+    "tests/layer2/**",
+    "tests/layer3/**",
   ],
 };
 

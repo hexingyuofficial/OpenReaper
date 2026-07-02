@@ -106,7 +106,7 @@ Next gate: Layer 4 Template Authoring ABI v1.
 
 ## Layer 4: Template Authoring ABI v1
 
-Status: planned
+Status: 4A builder complete; control-tower review pending. 4B/4C pending.
 
 Accepted commit: none yet.
 
@@ -114,6 +114,16 @@ Scope target: freeze how templates are described, validated, implemented,
 tested, smoked, and connected to the frozen foundation/bridge ABI inside the
 fixed pack taxonomy.
 
+4A scope: froze the template descriptor contract shape and static validation
+rules for metadata, pack ownership, schemas, refs, artifacts, verification,
+expected delta, examples, discovery summary split, full descriptor fields,
+descriptor budgets, and pressure-fixture categories.
+
+4A tests: `npm test`, `npm run check:tool-abi`,
+`npm run check:discovery-menu`, `npm run check:foundation-bridge`,
+`npm run check:pack-taxonomy`, `npm run check:template-authoring`,
+`npm run check:layer -- layer4a`, `npm run build`, `git diff --check`.
+
 Legacy migrated: no.
 
-Next gate: Layer 5 Recipe Contract v1.
+Next gate: Layer 4B Template Execution Harness.

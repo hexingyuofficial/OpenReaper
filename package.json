@@ -8,13 +8,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy",
+    "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring",
     "check:layout": "node scripts/check-repo-layout.mjs",
     "check:tool-abi": "node scripts/check-tool-abi.mjs",
     "check:discovery-menu": "node scripts/check-discovery-menu.mjs",
     "check:foundation-bridge": "node scripts/check-foundation-bridge.mjs",
     "check:pack-taxonomy": "node scripts/check-pack-taxonomy.mjs",
+    "check:template-authoring": "node scripts/check-template-authoring.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
-    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy"
+    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring"
   }
 }
