@@ -69,6 +69,12 @@ what the document records. A layer builder may create a new document only when
 its prompt explicitly allows it, and its completion report must say whether the
 new document was registered or still needs control-tower registration.
 
+This responsibility also applies to subagents. Reviewer, smoke, explorer, and
+worker subagents must not create long-lived documents unless explicitly
+authorized. If a subagent recommends creating one, the parent builder must
+include that recommendation in the completion report so the control tower can
+approve and register it.
+
 ## Commit Ownership
 
 Layer builder windows do not commit unless their prompt explicitly says so.
