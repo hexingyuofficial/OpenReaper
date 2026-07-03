@@ -155,18 +155,18 @@ Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
 Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 Layer 6 Narrow User Recipe Authoring v1 is accepted.
-Critical Fill Render / Analysis P0 descriptors are accepted and merged into
-the official catalog as `critical_fill`; accepted runtime/recipe template ids
-now total 123.
+Critical Fill Render / Analysis and R3 report P0 descriptors are accepted and
+merged into the official catalog as `critical_fill`; accepted runtime/recipe
+template ids now total 126.
 
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Current next choices: open remaining critical report-template fills from the
-four-vision gap table, plan fixture-batched live-smoke routes for the accepted
-critical fill, or prepare the Layer 7 official recipe acceptance gate. Do not
-make any path claim four-vision readiness without separate live/evidence gates
-and official recipe acceptance.
+Current next choices: plan fixture-batched live-smoke routes for the accepted
+critical fill, decide whether Layer 4.5C is needed before first-real evidence,
+or prepare the Layer 7 official recipe acceptance gate. Do not make any path
+claim four-vision readiness without separate live/evidence gates and official
+recipe acceptance.
 
 Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
 control-tower approval. Do not open it as a drive-by follow-up to 4.5B.

@@ -351,9 +351,9 @@ the accepted Wave 1A + Wave 2A + Wave 3B official catalog, rejected seed-only,
 held, unknown, workflow-shaped, non-catalog, raw descriptor, raw Lua/action,
 shell/process, arbitrary bridge, and arbitrary request payloads with typed
 errors, routed accepted executions through the Layer 4B harness, retained
-bounded `template.runtime.evidence.v1`, added fake runtime smoke over 119
-accepted ids, and added an opt-in live smoke gate that skips safely by default
-without starting REAPER.
+bounded `template.runtime.evidence.v1`, added fake runtime smoke over the then
+accepted 119 ids, and added an opt-in live smoke gate that skips safely by
+default without starting REAPER.
 
 Tests: `npm run check:tool-abi`, `npm run check:template-runtime`, `npm test`,
 `npm run build`, `npm run check:layer -- layer4d`, `git diff --check`.
@@ -438,7 +438,7 @@ Accepted coverage:
 
 Out of scope: REAPER process startup, raw Lua, raw actions, shell/process
 execution, write operations, full template runtime Lua, broad live smoke,
-119-template live execution, recipes, Layer 5, Layer 6, old-project live smoke
+all-template live execution, recipes, Layer 5, Layer 6, old-project live smoke
 matrix updates, and frozen ABI/taxonomy/template changes.
 
 Tests: `node --test tests/layer4d2/openreaper-live-bridge.test.mjs`,
@@ -465,7 +465,7 @@ Accepted commit: `1344b2d runtime: add wave1a live read handlers`
 
 Scope target: extend the non-spawning live-smoke path from the Wave 0 canary
 handlers to exactly the nine approved Wave 1A read/query templates, without
-broadening to all 119 templates, writes, actions, recipes, or live matrix
+broadening to all accepted templates, writes, actions, recipes, or live matrix
 promotion.
 
 Accepted coverage:
@@ -680,8 +680,8 @@ cases can be broadened later without reopening the contract. Layer 6 does not
 prove any official recipe or four-vision workflow is ready.
 
 Next gate after acceptance: critical template/report fills from the
-four-vision gap table, Wave 1A track/item fixture retry evidence, and later
-Layer 7 official recipe acceptance / first real version gate.
+four-vision gap table, fixture-batched live evidence, and later Layer 7
+official recipe acceptance / first real version gate.
 
 ## Critical Fill: Render / Analysis P0 Descriptors
 
@@ -715,6 +715,36 @@ promotion.
 Known risks: descriptor/fake-smoke only. The new render and analysis templates
 still need fixture-batched live smoke before any official first-real-version
 recipe can claim live evidence.
+
+## Critical Fill: R3 Report P0 Descriptors
+
+Status: accepted
+
+Accepted commit: pending control-tower commit.
+
+Scope target: close the remaining P0 report-template gaps from the
+four-vision pressure pass without moving recipe-authored plans into templates.
+
+Accepted coverage:
+
+- added `template.items.create_layer_report` as an items-owned read-risk
+  `run_job` report producer for bounded item/layer evidence;
+- added `template.project.create_cleanup_report` as a project-owned read-risk
+  `run_job` report producer for bounded cleanup evidence;
+- added `template.render.create_delivery_report` as a render-owned read-risk
+  `run_job` report producer for bounded delivery evidence;
+- merged the three descriptors into the accepted official template catalog as
+  `critical_fill`, expanding runtime and recipe accepted template ids from 123
+  to 126;
+- kept all plan/checklist/decision ownership with recipes and agents.
+
+Out of scope: official recipes, recipe execution, live REAPER smoke, Lua
+artifact helpers, upload/publish actions, cleanup execution, layer assignment
+decisions, and live matrix promotion.
+
+Known risks: descriptor/fake-smoke only. The report templates still need
+artifact helper/runtime evidence and fixture-batched live smoke before Layer 7
+recipes can claim portable first-real-version evidence.
 
 ## Template Closure / User Recipe Authoring Target
 

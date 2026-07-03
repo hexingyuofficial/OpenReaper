@@ -27,7 +27,7 @@ describe("Layer 4D call_template runtime binding", () => {
   it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, and critical-fill official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
-    assert.equal(catalog.size, 123);
+    assert.equal(catalog.size, 126);
     assert.deepEqual(catalog.ids, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE.waves, [
       "wave1a",
@@ -39,6 +39,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(catalog.get("template.tracks.create_track") !== null, true);
     assert.equal(catalog.get("template.render.render_region_wav") !== null, true);
     assert.equal(catalog.get("template.analysis.detect_loop_candidates") !== null, true);
+    assert.equal(catalog.get("template.items.create_layer_report") !== null, true);
+    assert.equal(catalog.get("template.project.create_cleanup_report") !== null, true);
+    assert.equal(catalog.get("template.render.create_delivery_report") !== null, true);
     assert.deepEqual([...CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS].sort(), [
       "template.core.read_health",
       "template.render.render_region_job",

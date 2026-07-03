@@ -75,10 +75,25 @@ import {
   createCriticalAnalysisTemplates,
 } from "./template-packs/critical-analysis-templates-v1.mjs";
 import {
+  CRITICAL_ITEMS_REPORT_TEMPLATE_IDS,
+  CRITICAL_ITEMS_REPORT_TEMPLATES,
+  createCriticalItemsReportTemplates,
+} from "./template-packs/critical-items-report-templates-v1.mjs";
+import {
+  CRITICAL_PROJECT_REPORT_TEMPLATE_IDS,
+  CRITICAL_PROJECT_REPORT_TEMPLATES,
+  createCriticalProjectReportTemplates,
+} from "./template-packs/critical-project-report-templates-v1.mjs";
+import {
   CRITICAL_RENDER_TEMPLATE_IDS,
   CRITICAL_RENDER_TEMPLATES,
   createCriticalRenderTemplates,
 } from "./template-packs/critical-render-templates-v1.mjs";
+import {
+  CRITICAL_RENDER_REPORT_TEMPLATE_IDS,
+  CRITICAL_RENDER_REPORT_TEMPLATES,
+  createCriticalRenderReportTemplates,
+} from "./template-packs/critical-render-report-templates-v1.mjs";
 
 export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
   ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
@@ -137,11 +152,17 @@ export const TEMPLATE_CATALOG_WAVE3B_TEMPLATES = deepFreeze([
 export const TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS = deepFreeze([
   ...CRITICAL_RENDER_TEMPLATE_IDS,
   ...CRITICAL_ANALYSIS_TEMPLATE_IDS,
+  ...CRITICAL_ITEMS_REPORT_TEMPLATE_IDS,
+  ...CRITICAL_PROJECT_REPORT_TEMPLATE_IDS,
+  ...CRITICAL_RENDER_REPORT_TEMPLATE_IDS,
 ]);
 
 export const TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATES = deepFreeze([
   ...CRITICAL_RENDER_TEMPLATES,
   ...CRITICAL_ANALYSIS_TEMPLATES,
+  ...CRITICAL_ITEMS_REPORT_TEMPLATES,
+  ...CRITICAL_PROJECT_REPORT_TEMPLATES,
+  ...CRITICAL_RENDER_REPORT_TEMPLATES,
 ]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
@@ -414,6 +435,9 @@ export function createTemplateCatalogCriticalFillTemplates() {
   return [
     ...createCriticalRenderTemplates(),
     ...createCriticalAnalysisTemplates(),
+    ...createCriticalItemsReportTemplates(),
+    ...createCriticalProjectReportTemplates(),
+    ...createCriticalRenderReportTemplates(),
   ];
 }
 

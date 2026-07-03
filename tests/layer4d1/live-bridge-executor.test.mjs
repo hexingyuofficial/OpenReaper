@@ -167,7 +167,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(configuredMissing.reason, "live_bridge_transport_absent");
     assert.equal(configuredMissing.attempted_template_ids.length, 9);
     assert.deepEqual(configuredMissing.attempted_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
-    assert.equal(configuredMissing.accepted_catalog.size, 123);
+    assert.equal(configuredMissing.accepted_catalog.size, 126);
     assert.equal(configuredMissing.executions.length, 9);
     assert.equal(configuredMissing.spawned_reaper, false);
   });
