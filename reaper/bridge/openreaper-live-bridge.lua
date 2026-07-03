@@ -1,9 +1,11 @@
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
--- foundation.bridge.v1 results for approved read-only live-smoke handlers.
+-- foundation.bridge.v1 results for approved live-smoke handlers.
 
 local CONTRACT = "foundation.bridge.v1"
+local ARTIFACT_CONTRACT = "artifact.state_store.v1"
 local TRANSPORT_ENV = "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+local ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT"
 local OWNER_ENV = "OPENREAPER_LIVE_BRIDGE_OWNER"
 local GENERATION_ENV = "OPENREAPER_LIVE_BRIDGE_GENERATION"
 local DEFAULT_OWNER = "openreaper-live-smoke"
@@ -317,6 +319,7 @@ end
 
 local ACTIVE_OWNER = non_empty(os.getenv(OWNER_ENV)) or DEFAULT_OWNER
 local ACTIVE_GENERATION = parse_generation(os.getenv(GENERATION_ENV))
+local ARTIFACT_ROOT = non_empty(os.getenv(ARTIFACT_ROOT_ENV))
 
 local function path_separator(path)
   return type(path) == "string" and path:find("\\", 1, true) and "\\" or "/"
@@ -389,6 +392,24 @@ local function call_reaper(name, ...)
     return false
   end
   return pcall(reaper[name], ...)
+end
+
+local function ensure_directory(path)
+  local ok = call_reaper("RecursiveCreateDirectory", path, 0)
+  if ok then
+    return true
+  end
+  return false, "recursive_create_directory_unavailable"
+end
+
+local function is_absolute_path(value)
+  if type(value) ~= "string" then
+    return false
+  end
+  if value:match("^[A-Za-z]:[\\/]") then
+    return false
+  end
+  return value:sub(1, 1) == "/"
 end
 
 local function first_string(...)
@@ -542,7 +563,7 @@ local function bridge_error_envelope(request, code, message, options)
   return finalize_json_with_budget(envelope)
 end
 
-local function bridge_ok_envelope(request, started_at, summary)
+local function bridge_ok_envelope(request, started_at, summary, artifacts)
   local completed_at = now_iso()
   local budget = safe_budget(request)
   local envelope = {
@@ -562,7 +583,7 @@ local function bridge_ok_envelope(request, started_at, summary)
     result = {
       summary = summary or {},
       refs = json_array({}),
-      artifacts = json_array({}),
+      artifacts = artifacts or json_array({}),
       jobs = json_array({}),
       last_result = {
         updated = false,
@@ -620,6 +641,345 @@ local FIXED_PACKS = {
   hardware_control = true,
 }
 
+local WORKFLOW_SHAPED_IDS = {
+  loop = true,
+  cleanup = true,
+  delivery = true,
+  layer = true,
+  music_sketch = true,
+}
+
+local A1_ARTIFACT_OPERATIONS = {
+  ["run_job:analysis.detect_loop_candidates"] = true,
+  ["run_job:analysis.measure_loop_click_risk"] = true,
+  ["run_job:analysis.create_loop_qa_report"] = true,
+  ["run_job:project.create_cleanup_report"] = true,
+}
+
+local A1_ARTIFACT_SPECS = {
+  ["run_job:analysis.detect_loop_candidates"] = {
+    template_id = "template.analysis.detect_loop_candidates",
+    owner_pack = "analysis",
+    scope = "loop_candidates",
+    schema = "analysis.loop_candidates.v1",
+  },
+  ["run_job:analysis.measure_loop_click_risk"] = {
+    template_id = "template.analysis.measure_loop_click_risk",
+    owner_pack = "analysis",
+    scope = "loop_click_risk",
+    schema = "analysis.loop_click_risk.v1",
+  },
+  ["run_job:analysis.create_loop_qa_report"] = {
+    template_id = "template.analysis.create_loop_qa_report",
+    owner_pack = "analysis",
+    scope = "loop_qa_report",
+    schema = "analysis.loop_qa_report.v1",
+  },
+  ["run_job:project.create_cleanup_report"] = {
+    template_id = "template.project.create_cleanup_report",
+    owner_pack = "project",
+    scope = "cleanup_report",
+    schema = "project.cleanup_report.v1",
+  },
+}
+
+local A1_LOOP_CANDIDATES_INPUT = {
+  owner_pack = "analysis",
+  scope = "loop_candidates",
+  schema = "analysis.loop_candidates.v1",
+}
+
+local A1_LOOP_CLICK_RISK_INPUT = {
+  owner_pack = "analysis",
+  scope = "loop_click_risk",
+  schema = "analysis.loop_click_risk.v1",
+}
+
+local function valid_lower_snake(value)
+  return type(value) == "string" and value:match("^[a-z][a-z0-9_]*$") ~= nil
+end
+
+local function parse_artifact_ref(ref)
+  if not is_string(ref) then
+    return nil, "Artifact ref must be a non-empty string."
+  end
+  if ref:find("/", 1, true) or ref:find("\\", 1, true) or ref:sub(1, 7) == "file://" or ref:sub(1, 1) == "~" then
+    return nil, "Artifact ref must not be a raw path."
+  end
+  local owner_pack, scope, id = ref:match("^artifact:([a-z][a-z0-9_]*):([a-z][a-z0-9_]*):(art_%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d_%d%d%d_[a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9])$")
+  if not owner_pack then
+    return nil, "Malformed artifact ref; expected artifact:<owner_pack>:<scope>:<id>."
+  end
+  if not FIXED_PACKS[owner_pack] then
+    return nil, "Invalid artifact owner_pack."
+  end
+  if WORKFLOW_SHAPED_IDS[owner_pack] or WORKFLOW_SHAPED_IDS[scope] then
+    return nil, "Workflow-shaped artifact owner or scope is forbidden."
+  end
+  return {
+    owner_pack = owner_pack,
+    scope = scope,
+    id = id,
+    ref = ref,
+  }
+end
+
+local function validate_schema(schema)
+  if type(schema) ~= "string" or #schema > 160 then
+    return false
+  end
+  if schema:find("..", 1, true) or schema:sub(1, 1) == "." or schema:sub(-1) == "." then
+    return false
+  end
+  local segments = {}
+  for segment in schema:gmatch("[^.]+") do
+    segments[#segments + 1] = segment
+  end
+  if #segments < 3 or not segments[#segments]:match("^v%d+$") then
+    return false
+  end
+  for index = 1, #segments - 1 do
+    if not valid_lower_snake(segments[index]) then
+      return false
+    end
+  end
+  return true
+end
+
+local function artifact_id_from_request(request)
+  local timestamp, sequence, suffix = tostring(request and request.id or ""):match("^cmd_(%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d%d)_(%d%d%d)_([a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9])$")
+  if not timestamp then
+    return nil
+  end
+  return "art_" .. timestamp .. "_" .. sequence .. "_" .. suffix
+end
+
+local function artifact_path(parts)
+  local artifact_dir = path_join(path_join(ARTIFACT_ROOT, parts.owner_pack), parts.scope)
+  return artifact_dir, path_join(artifact_dir, parts.id .. ".json")
+end
+
+local function artifact_object_ref(parts, schema)
+  return {
+    kind = "artifact",
+    ref = parts.ref,
+    identity = {
+      scheme = "artifact_ref",
+      value = parts.ref,
+    },
+    summary = {
+      schema = schema,
+      owner_pack = parts.owner_pack,
+      scope = parts.scope,
+    },
+  }
+end
+
+local function artifact_ref_for_request(request, spec)
+  local artifact_id = artifact_id_from_request(request)
+  if not artifact_id then
+    return nil, "Command id cannot derive a canonical artifact id."
+  end
+  return "artifact:" .. spec.owner_pack .. ":" .. spec.scope .. ":" .. artifact_id
+end
+
+local function artifact_root_ready()
+  if not ARTIFACT_ROOT then
+    return false, "artifact_root_not_configured", "First-Real-Fixture-A A1 artifact root is not configured."
+  end
+  if ARTIFACT_ROOT:sub(1, 7) == "file://" or not is_absolute_path(ARTIFACT_ROOT) then
+    return false, "artifact_root_invalid", "First-Real-Fixture-A A1 artifact root must be an absolute filesystem path."
+  end
+  return true
+end
+
+local function write_a1_artifact(request, spec, summary, payload)
+  local root_ok, blocker, root_message = artifact_root_ready()
+  if not root_ok then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = root_message,
+      details = {
+        blocker = blocker,
+        artifact_root_env = ARTIFACT_ROOT_ENV,
+      },
+    }
+  end
+
+  local ref, ref_error = artifact_ref_for_request(request, spec)
+  if not ref then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = ref_error,
+      details = { field = "id" },
+    }
+  end
+
+  local parts, parse_error_message = parse_artifact_ref(ref)
+  if not parts then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = parse_error_message,
+      details = { field = "artifact_ref" },
+    }
+  end
+  if parts.owner_pack ~= spec.owner_pack or parts.scope ~= spec.scope then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "A1 artifact ref does not match the operation owner/scope.",
+      details = {
+        expected_owner_pack = spec.owner_pack,
+        expected_scope = spec.scope,
+      },
+    }
+  end
+  if not validate_schema(spec.schema) then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "Artifact schema must use dotted lower-snake grammar with a vN suffix.",
+      details = { schema = spec.schema },
+    }
+  end
+
+  summary.artifact_ref = ref
+  summary.schema = spec.schema
+  local producer = {
+    kind = "template",
+    id = spec.template_id,
+    pack = spec.owner_pack,
+  }
+  local envelope = {
+    contract = ARTIFACT_CONTRACT,
+    ref = ref,
+    id = parts.id,
+    owner_pack = parts.owner_pack,
+    scope = parts.scope,
+    schema = spec.schema,
+    producer = producer,
+    created_at = request.created_at,
+    summary = summary,
+    payload = payload,
+  }
+
+  local encoded = json.encode(envelope)
+  if #json.encode(summary) > 2048 then
+    return nil, {
+      code = "RESPONSE_TOO_LARGE",
+      message = "A1 artifact summary exceeded the artifact.state_store.v1 summary budget.",
+      details = { summary_bytes = #json.encode(summary) },
+    }
+  end
+  if #json.encode(payload) > 65536 then
+    return nil, {
+      code = "RESPONSE_TOO_LARGE",
+      message = "A1 artifact payload exceeded the artifact.state_store.v1 payload budget.",
+      details = { payload_bytes = #json.encode(payload) },
+    }
+  end
+
+  local artifact_dir, path_value = artifact_path(parts)
+  local dir_ok, dir_error = ensure_directory(artifact_dir)
+  if not dir_ok then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = "A1 artifact directory could not be created.",
+      details = {
+        blocker = "artifact_directory_unavailable",
+        message = dir_error,
+      },
+    }
+  end
+  local write_ok, write_error = write_file_atomic(path_value, encoded .. "\n")
+  if not write_ok then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = "A1 artifact envelope could not be written.",
+      details = {
+        blocker = "artifact_write_failed",
+        message = bounded_string(write_error, 160),
+      },
+    }
+  end
+
+  return {
+    ref = ref,
+    object_ref = artifact_object_ref(parts, spec.schema),
+    bytes = #encoded + 1,
+  }
+end
+
+local function read_artifact_envelope(ref, expected)
+  expected = expected or {}
+  local root_ok, blocker, root_message = artifact_root_ready()
+  if not root_ok then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = root_message,
+      details = {
+        blocker = blocker,
+        artifact_root_env = ARTIFACT_ROOT_ENV,
+      },
+    }
+  end
+  local parts, parse_error_message = parse_artifact_ref(ref)
+  if not parts then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = parse_error_message,
+      details = { field = "artifact_ref" },
+    }
+  end
+  if (expected.owner_pack and parts.owner_pack ~= expected.owner_pack)
+    or (expected.scope and parts.scope ~= expected.scope) then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "A1 input artifact ref does not match the expected owner/scope.",
+      details = {
+        field = "artifact_ref",
+        expected_owner_pack = expected.owner_pack,
+        expected_scope = expected.scope,
+      },
+    }
+  end
+  local _, path_value = artifact_path(parts)
+  local raw = read_file(path_value)
+  if not raw then
+    return nil, {
+      code = "ARTIFACT_NOT_FOUND",
+      message = "A1 input artifact was not found in the configured artifact root.",
+      details = { ref = ref },
+    }
+  end
+  local decoded_ok, envelope_or_error = pcall(json.decode, raw)
+  if not decoded_ok or not is_object(envelope_or_error) then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = "A1 input artifact JSON could not be parsed.",
+      details = { ref = ref },
+    }
+  end
+  if envelope_or_error.contract ~= ARTIFACT_CONTRACT
+    or envelope_or_error.ref ~= ref
+    or envelope_or_error.id ~= parts.id
+    or envelope_or_error.owner_pack ~= parts.owner_pack
+    or envelope_or_error.scope ~= parts.scope
+    or envelope_or_error.schema ~= expected.schema
+    or (expected.owner_pack and envelope_or_error.owner_pack ~= expected.owner_pack)
+    or (expected.scope and envelope_or_error.scope ~= expected.scope) then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = "A1 input artifact envelope does not match the expected schema/ref/owner/scope.",
+      details = {
+        ref = ref,
+        expected_schema = expected.schema,
+        expected_owner_pack = expected.owner_pack,
+        expected_scope = expected.scope,
+      },
+    }
+  end
+  return envelope_or_error
+end
+
 local function validate_request(request)
   if not is_object(request) then
     return false, "Bridge request must be an object."
@@ -648,6 +1008,8 @@ local function validate_request(request)
   if not FIXED_FAMILIES[request.operation.family] then
     return false, "operation.family is outside foundation.bridge.v1."
   end
+  local operation_key = request.operation.family .. ":" .. request.operation.name
+  local artifacts_allowed_for_operation = A1_ARTIFACT_OPERATIONS[operation_key] == true
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -672,8 +1034,12 @@ local function validate_request(request)
   if not is_object(request.artifacts) or type(request.artifacts.allow) ~= "boolean" then
     return false, "artifacts.allow must be a boolean."
   end
-  if request.artifacts.allow ~= false then
-    return false, "Read-only live-smoke handlers do not write artifacts."
+  if artifacts_allowed_for_operation then
+    if request.artifacts.allow ~= true then
+      return false, "First-Real-Fixture-A A1 artifact handlers require artifacts.allow true."
+    end
+  elseif request.artifacts.allow ~= false then
+    return false, "Only First-Real-Fixture-A A1 artifact handlers may write artifacts."
   end
   local budget = request.budget
   if not is_object(budget)
@@ -1533,6 +1899,267 @@ local function read_item_summary(request)
   return item_summary(item, request.params.include_take_summary == true)
 end
 
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function artifact_ref_from_request_refs(request, expected)
+  expected = expected or {}
+  if not is_json_array(request.refs) then
+    return nil
+  end
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "artifact" and is_string(ref.ref) then
+      local summary = is_object(ref.summary) and ref.summary or {}
+      if summary.schema == expected.schema
+        and summary.owner_pack == expected.owner_pack
+        and summary.scope == expected.scope then
+        local parts = parse_artifact_ref(ref.ref)
+        if parts
+          and parts.owner_pack == expected.owner_pack
+          and parts.scope == expected.scope then
+          return ref.ref
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function detect_loop_candidates(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return handler_error("ITEM_NOT_FOUND", "Loop-candidate detection requires a resolvable item ref.", {})
+  end
+
+  local spec = A1_ARTIFACT_SPECS["run_job:analysis.detect_loop_candidates"]
+  local item_facts = item_summary(item, true)
+  local item_length = bounded_number(item_facts.length_seconds, 0)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, item_length)
+  if end_seconds <= start_seconds then
+    end_seconds = item_length > 0 and item_length or (start_seconds + 1)
+  end
+  local analyzed_seconds = math.max(0, end_seconds - start_seconds)
+  local max_candidates = bounded_limit(request, request.params.max_candidates, 4, 12)
+  local candidate_count = analyzed_seconds > 0 and math.min(max_candidates, 1) or 0
+  local candidates = json_array({})
+  if candidate_count > 0 then
+    candidates[#candidates + 1] = {
+      candidate_id = "candidate:0",
+      item_ref = item_facts.item_ref,
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+      duration_seconds = analyzed_seconds,
+      score = 0.5,
+      smoke_only = true,
+    }
+  end
+
+  local summary = {
+    candidate_count = candidate_count,
+    analyzed_seconds = analyzed_seconds,
+    truncated = false,
+  }
+  local payload = {
+    smoke_only = true,
+    analysis_quality_claim = false,
+    item = item_facts,
+    limits = {
+      min_loop_seconds = bounded_number(request.params.min_loop_seconds, 1),
+      max_loop_seconds = bounded_number(request.params.max_loop_seconds, 12),
+      max_candidates = max_candidates,
+    },
+    candidates = candidates,
+  }
+  local write, failure = write_a1_artifact(request, spec, summary, payload)
+  if not write then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end
+
+local function measure_loop_click_risk(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return handler_error("ITEM_NOT_FOUND", "Loop click-risk measurement requires a resolvable item ref.", {})
+  end
+
+  local candidate_ref = artifact_ref_from_request_refs(request, A1_LOOP_CANDIDATES_INPUT)
+  if not candidate_ref then
+    return handler_error("ARTIFACT_NOT_FOUND", "Loop click-risk measurement requires a loop-candidates artifact ref.", {})
+  end
+  local candidate_envelope, candidate_failure = read_artifact_envelope(candidate_ref, A1_LOOP_CANDIDATES_INPUT)
+  if not candidate_envelope then
+    return handler_error(candidate_failure.code, candidate_failure.message, candidate_failure.details)
+  end
+
+  local spec = A1_ARTIFACT_SPECS["run_job:analysis.measure_loop_click_risk"]
+  local candidate_count = 0
+  if is_object(candidate_envelope.summary) and type(candidate_envelope.summary.candidate_count) == "number" then
+    candidate_count = candidate_envelope.summary.candidate_count
+  end
+  local risk_fact_count = candidate_count > 0 and 1 or 0
+  local summary = {
+    measured_candidate_count = candidate_count,
+    risk_fact_count = risk_fact_count,
+    truncated = false,
+  }
+  local payload = {
+    smoke_only = true,
+    analysis_quality_claim = false,
+    item = item_summary(item, true),
+    candidate_artifact_ref = candidate_ref,
+    boundary_window_ms = bounded_number(request.params.boundary_window_ms, 20),
+    risk_facts = risk_fact_count > 0 and json_array({
+      {
+        candidate_id = "candidate:0",
+        click_risk = "unknown_smoke_heuristic",
+        boundary_delta = 0,
+      },
+    }) or json_array({}),
+  }
+  local write, failure = write_a1_artifact(request, spec, summary, payload)
+  if not write then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end
+
+local function create_loop_qa_report(request)
+  local candidate_ref = artifact_ref_from_request_refs(request, A1_LOOP_CANDIDATES_INPUT)
+  local risk_ref = artifact_ref_from_request_refs(request, A1_LOOP_CLICK_RISK_INPUT)
+  if not candidate_ref or not risk_ref then
+    return handler_error("ARTIFACT_NOT_FOUND", "Loop QA report requires loop-candidates and click-risk artifact refs.", {})
+  end
+  local candidate_envelope, candidate_failure = read_artifact_envelope(candidate_ref, A1_LOOP_CANDIDATES_INPUT)
+  if not candidate_envelope then
+    return handler_error(candidate_failure.code, candidate_failure.message, candidate_failure.details)
+  end
+  local risk_envelope, risk_failure = read_artifact_envelope(risk_ref, A1_LOOP_CLICK_RISK_INPUT)
+  if not risk_envelope then
+    return handler_error(risk_failure.code, risk_failure.message, risk_failure.details)
+  end
+
+  local spec = A1_ARTIFACT_SPECS["run_job:analysis.create_loop_qa_report"]
+  local candidate_count = is_object(candidate_envelope.summary) and bounded_number(candidate_envelope.summary.candidate_count, 0) or 0
+  local risk_fact_count = is_object(risk_envelope.summary) and bounded_number(risk_envelope.summary.risk_fact_count, 0) or 0
+  local report_row_count = math.min(bounded_limit(request, request.params.max_report_rows, 8, 32), math.max(candidate_count, risk_fact_count, 1))
+  local summary = {
+    candidate_count = candidate_count,
+    risk_fact_count = risk_fact_count,
+    report_row_count = report_row_count,
+    truncated = false,
+  }
+  local payload = {
+    smoke_only = true,
+    analysis_quality_claim = false,
+    candidate_artifact_ref = candidate_ref,
+    click_risk_artifact_ref = risk_ref,
+    rows = json_array({
+      {
+        row = 1,
+        finding = "fixture_smoke_readback",
+        candidate_count = candidate_count,
+        risk_fact_count = risk_fact_count,
+      },
+    }),
+  }
+  local write, failure = write_a1_artifact(request, spec, summary, payload)
+  if not write then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end
+
+local function create_cleanup_report(request)
+  local spec = A1_ARTIFACT_SPECS["run_job:project.create_cleanup_report"]
+  local project_summary = read_project_summary({
+    params = { include_counts = true },
+    budget = request.budget,
+  })
+  local markers = list_markers_regions({
+    params = {
+      include_markers = request.params.include_markers ~= false,
+      include_regions = request.params.include_regions ~= false,
+      limit = request.params.marker_region_limit,
+    },
+    budget = request.budget,
+  })
+  local tempo = read_tempo_map({
+    params = {
+      limit = request.params.tempo_marker_limit,
+      effective_at_seconds = json_array({ 0 }),
+    },
+    budget = request.budget,
+  })
+  local metadata = read_project_metadata({
+    params = { fields = json_array({ "title", "author", "notes" }) },
+    budget = request.budget,
+  })
+  local metadata_field_count = 0
+  for _, field in ipairs({ "title", "author", "notes" }) do
+    if metadata[field] ~= nil then
+      metadata_field_count = metadata_field_count + 1
+    end
+  end
+  local evidence_family_count = 4
+  local report_row_count = math.min(bounded_limit(request, request.params.max_report_rows, 8, 64), evidence_family_count)
+  local project_fingerprint = "tracks:" .. tostring(project_summary.track_count or 0)
+    .. "|items:" .. tostring(project_summary.item_count or 0)
+    .. "|markers:" .. tostring(project_summary.marker_count or 0)
+    .. "|regions:" .. tostring(project_summary.region_count or 0)
+  local summary = {
+    evidence_family_count = evidence_family_count,
+    report_row_count = report_row_count,
+    marker_count = markers.marker_count or 0,
+    region_count = markers.region_count or 0,
+    metadata_field_count = metadata_field_count,
+    tempo_marker_count = tempo and #tempo.tempo_markers or 0,
+    project_fingerprint = project_fingerprint,
+    truncated = markers.truncated == true or tempo.truncated == true,
+  }
+  local payload = {
+    smoke_only = true,
+    cleanup_policy_claim = false,
+    project_summary = project_summary,
+    markers_regions = markers,
+    tempo = tempo,
+    metadata = metadata,
+    rows = json_array({
+      { row = 1, family = "project_summary" },
+      { row = 2, family = "markers_regions" },
+      { row = 3, family = "tempo" },
+      { row = 4, family = "metadata" },
+    }),
+  }
+  local write, failure = write_a1_artifact(request, spec, summary, payload)
+  if not write then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end
+
 local ALLOWED_OPERATIONS = {
   ["query_state:project.read_summary"] = {
     pack = "project",
@@ -1590,6 +2217,22 @@ local ALLOWED_OPERATIONS = {
     pack = "system",
     handler = read_api_symbols,
   },
+  ["run_job:analysis.detect_loop_candidates"] = {
+    pack = "analysis",
+    handler = detect_loop_candidates,
+  },
+  ["run_job:analysis.measure_loop_click_risk"] = {
+    pack = "analysis",
+    handler = measure_loop_click_risk,
+  },
+  ["run_job:analysis.create_loop_qa_report"] = {
+    pack = "analysis",
+    handler = create_loop_qa_report,
+  },
+  ["run_job:project.create_cleanup_report"] = {
+    pack = "project",
+    handler = create_cleanup_report,
+  },
 }
 
 local function dispatch_request(request, fallback_id)
@@ -1627,7 +2270,7 @@ local function dispatch_request(request, fallback_id)
   local key = request.operation.family .. ":" .. request.operation.name
   local operation = ALLOWED_OPERATIONS[key]
   if not operation then
-    return bridge_error_envelope(request, "OPERATION_NOT_FOUND", "OpenReaper live bridge supports only the approved read-only live-smoke operations.", {
+    return bridge_error_envelope(request, "OPERATION_NOT_FOUND", "OpenReaper live bridge supports only the approved scoped live-smoke operations.", {
       recoverable = true,
       started_at = started_at,
       details = {
@@ -1647,9 +2290,9 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  local ok, summary, handler_failure = pcall(operation.handler, request)
+  local ok, summary, handler_failure, artifacts = pcall(operation.handler, request)
   if not ok then
-    return bridge_error_envelope(request, "INTERNAL_ERROR", "Read-only live bridge handler failed.", {
+    return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,
       started_at = started_at,
       details = {
@@ -1659,13 +2302,13 @@ local function dispatch_request(request, fallback_id)
     })
   end
   if handler_failure then
-    return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Read-only live bridge handler failed.", {
+    return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
       recoverable = handler_failure.recoverable ~= false,
       started_at = started_at,
       details = handler_failure.details or {},
     })
   end
-  return bridge_ok_envelope(request, started_at, summary)
+  return bridge_ok_envelope(request, started_at, summary, artifacts)
 end
 
 local function process_request_file(filename)

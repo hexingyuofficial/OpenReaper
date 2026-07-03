@@ -189,7 +189,16 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /Bridge request JSON is malformed/);
     assert.match(BRIDGE_SOURCE, /#encoded > budget\.max_response_bytes/);
     assert.match(BRIDGE_SOURCE, /bounded_limit/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|run_job|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_job:([^"]+)"\]\s*=/g)].map((match) => match[1]))].sort(),
+      [
+        "analysis.create_loop_qa_report",
+        "analysis.detect_loop_candidates",
+        "analysis.measure_loop_click_risk",
+        "project.create_cleanup_report",
+      ].sort(),
+    );
     assert.doesNotMatch(
       BRIDGE_SOURCE,
       /\b(Main_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,

@@ -60,6 +60,13 @@ export const CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS = deepFreeze([
   "template.items.read_item_summary",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.detect_loop_candidates",
+  "template.analysis.measure_loop_click_risk",
+  "template.analysis.create_loop_qa_report",
+  "template.project.create_cleanup_report",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -593,7 +600,10 @@ function normalizeLiveRuntimeOptions(input) {
 
 function normalizeLiveAllowedTemplateIds(value) {
   if (!Array.isArray(value)) return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
-  const allowed = new Set(CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS);
+  const allowed = new Set([
+    ...CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS,
+    ...CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  ]);
   const ids = [...new Set(value.filter((id) => allowed.has(id)))];
   if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length
     && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS[index])) {
@@ -602,6 +612,10 @@ function normalizeLiveAllowedTemplateIds(value) {
   if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS.length
     && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS[index])) {
     return CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS;
+  }
+  if (ids.length === CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS.length
+    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS[index])) {
+    return CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS;
   }
   return deepFreeze(ids);
 }

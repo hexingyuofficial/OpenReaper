@@ -38,7 +38,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("supports exactly the approved Wave 0 plus Wave 1A read-only bridge operations", () => {
+  it("keeps the approved Wave 0 plus Wave 1A query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
@@ -93,7 +93,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
 
     assert.match(BRIDGE_SOURCE, /request\.bridge\.expected_owner ~= ACTIVE_OWNER/);
     assert.match(BRIDGE_SOURCE, /request\.bridge\.expected_generation ~= ACTIVE_GENERATION/);
-    assert.match(BRIDGE_SOURCE, /approved read-only live-smoke operations/);
+    assert.match(BRIDGE_SOURCE, /approved scoped live-smoke operations/);
     assert.match(BRIDGE_SOURCE, /Bridge request JSON is malformed/);
   });
 
