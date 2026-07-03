@@ -131,6 +131,7 @@ Layer order:
 4.5C. Lua Artifact Helper + Live Artifact Smoke
 5. Recipe Contract v1
 6. User Recipe Authoring v1
+7. Official Recipe Acceptance / First Real Version Gate
 ```
 
 ## Current Next Task
@@ -153,13 +154,16 @@ Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
 Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
 Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
 Layer 5 Recipe Contract v1 is frozen.
+Layer 6 Narrow User Recipe Authoring v1 is accepted.
 
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Current next choices: collect old-control Wave 1A manual live evidence, or
-open narrow Layer 6 user recipe authoring. Do not make either path claim
-four-vision readiness without separate live/evidence gates.
+Current next choices: collect the Wave 1A track/item fixture retry evidence,
+open a critical template/report fill route from the four-vision gap table, or
+prepare the Layer 7 official recipe acceptance gate. Do not make any path claim
+four-vision readiness without separate live/evidence gates and official recipe
+acceptance.
 
 Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
 control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
@@ -170,12 +174,16 @@ using `OPENREAPER_LIVE_SMOKE_TRACK_REF` and
 `OPENREAPER_LIVE_SMOKE_ITEM_REF`. Do not mix live-smoke work into Layer 4.5C or
 Layer 6.
 
-Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
-recipe rules over the accepted official template catalog. It must not let users
+Layer 6 exposes the frozen Layer 5 recipe contract as narrow user-writable
+recipe rules over the accepted official template catalog. It does not let users
 define templates, raw Lua, raw actions, shell commands, arbitrary bridge
-requests, or bypass paths. Layer 6 may open only as narrow user recipe
-authoring and must not claim the four north-star workflows as official,
-artifact-backed, or live-smoked.
+requests, or bypass paths. It must not claim the four north-star workflows as
+official, artifact-backed, or live-smoked.
 
 Layer 6 must not reopen Layer 5, Layer 4.5A, Layer 4D, Layer 4D.1, or Layer
 4D.2 unless a concrete blocker is reported to the control tower.
+
+Layer 7 is the future official recipe acceptance / first real version gate.
+It should turn the four north-star workflows into accepted official recipes
+only after the required critical templates, artifact/report reads, live smoke
+evidence, and portability checks are in place.

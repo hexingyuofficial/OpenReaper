@@ -635,26 +635,57 @@ readiness claim.
 
 ## Layer 6: User Recipe Authoring v1
 
-Status: planned
+Status: accepted
+
+Accepted commit: `e0cc616 recipe: add layer 6 user authoring`
 
 Scope target: expose the Layer 5 recipe contract as user-writable recipe rules.
 
-Current boundary: Layer 6 is allowed only in the narrow authoring sense unless
-the control tower explicitly accepts the remaining artifact/report and live
-evidence blockers. It must not implement official four-vision recipes, add
-templates, run live smoke, or claim artifact-heavy workflows are ready.
+Accepted boundary: Layer 6 is narrow static recipe authoring only. It allows
+strict `*.recipe.json` sources to enter the existing recipe catalog/discovery
+path after Layer 5 normalization and additional source/ref/artifact checks.
 
-Required coverage:
+Accepted coverage:
 
-- users can create and edit recipes against the official template catalog;
-- user recipes must reference known templates and declared refs/artifacts;
-- user recipe rules can express the approved run/checkpoint/evidence/resume
-  model;
-- user authoring cannot define templates or bypass the template catalog.
+- added strict official/user/community recipe source loading with lifecycle
+  policy;
+- rejected duplicate recipe ids and user/community shadowing of official ids;
+- reused Layer 5 normalization so steps can reference only accepted official
+  template ids;
+- validated minimal literal refs and `$from_step` bindings against template
+  descriptor `refs.input` / `refs.output`;
+- allowed artifact `get_state` reads only through declared artifact output
+  labels;
+- exposed merged recipe catalogs through the existing Layer 1.5
+  `list_recipes` discovery shape;
+- added `check:user-recipe-authoring`, Layer 6 scope guard support, and focused
+  authoring tests.
+
+Out of scope: official four-vision recipes, recipe executor, `call_recipe`,
+new MCP tools, template authoring, raw Lua, raw actions, shell commands,
+arbitrary bridge requests, live REAPER smoke, live matrix updates, and lower
+layer contract changes.
+
+Tests: `npm run check:user-recipe-authoring`, `npm run check:recipe-contract`,
+`npm run check:tool-abi`, `npm run check:discovery-menu`, `npm test`,
+`npm run build`, `npm run check:layer -- layer6`, and `git diff --check`.
+
+Reviewer: no P0/P1/P2 findings after the acceptance fixes. Prior P1/P2 issues
+around symbolic refs, literal refs, and artifact `get_state` ambiguity were
+fixed before acceptance.
+
+Known risks: discovery integration is still module-level; full MCP server
+registration coverage remains future work. Community roots and symlink edge
+cases can be broadened later without reopening the contract. Layer 6 does not
+prove any official recipe or four-vision workflow is ready.
+
+Next gate after acceptance: critical template/report fills from the
+four-vision gap table, Wave 1A track/item fixture retry evidence, and later
+Layer 7 official recipe acceptance / first real version gate.
 
 ## Template Closure / User Recipe Authoring Target
 
-Status: planned product boundary for v1.
+Status: accepted product boundary for v1.
 
 Target: by the time Layer 6 is accepted, ordinary users should be able to
 create and edit recipes against the official template catalog without authoring
