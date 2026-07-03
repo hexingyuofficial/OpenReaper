@@ -101,7 +101,7 @@ Layer order:
 4. Template Authoring ABI v1
 4W2A. Wave 2A Descriptor-Only 70-Template Pass
 4W3A. Wave 3A Critical Research-Only Scout
-4W3B. Wave 3A Critical Descriptor-Only Pass
+4W3B. Wave 3B Critical Descriptor-Only Pass
 4D. Template Runtime Binding / Live Smoke Gate
 5. Recipe Contract v1
 6. User Recipe Authoring v1
@@ -118,21 +118,24 @@ Layer 4B: Template Execution Harness is frozen.
 Layer 4C: Template Catalog / Smoke Gate is frozen.
 Wave 1A official descriptor catalog is accepted.
 Wave 2A descriptor-only 70-template catalog is accepted.
+Wave 3A critical research-only scout is accepted.
 
-The next window should run Wave 3A: Critical Research-Only Scout.
+The next window should run Wave 3B: Critical Descriptor-Only Pass.
 
-It should not change the new repo implementation. It should let `core` and
-`system` workers research and propose the smallest critical candidate set using
-the route board in the old control repo.
+It should implement only the six approved `core`/`system` descriptor ids from
+the old control repo route board:
 
-Wave 3A scout workers must not implement descriptors, tests, catalog wiring,
-runtime Lua, live REAPER behavior, recipes, destructive templates, `ui`
-templates, `hardware_control` templates, arbitrary UI automation/clicking,
-hardware writes, hardware endpoint mutation, video-specific product work,
-generic/action execution, or new ref kinds.
+```text
+/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/WAVE_3B.md
+```
 
-After the control tower approves a Wave 3A allowlist, a bounded descriptor-only
-implementation pass may open. After that pass is accepted, the next gate is
-Layer 4D. Layer 4D may retain compact template execution evidence for future
-recipe-run recovery, but it must not implement recipe ratchet; Layer 5 owns
-recipe run state, checkpoints, evidence, idempotency, resume, and risk gates.
+Wave 3B workers must not edit shared catalog entry points, runtime Lua, live
+REAPER behavior, recipes, destructive templates, `ui` templates,
+`hardware_control` templates, arbitrary UI automation/clicking, hardware writes,
+hardware endpoint mutation, video-specific product work, generic/action
+execution, or new ref kinds.
+
+After Wave 3B is accepted, the next gate is Layer 4D. Layer 4D may retain
+compact template execution evidence for future recipe-run recovery, but it must
+not implement recipe ratchet; Layer 5 owns recipe run state, checkpoints,
+evidence, idempotency, resume, and risk gates.

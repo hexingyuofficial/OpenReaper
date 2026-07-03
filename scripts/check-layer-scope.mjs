@@ -83,6 +83,12 @@ const allowlists = {
     "packages/core/src/template-catalog-fixtures-v1.mjs",
     "tests/layer4c/**",
   ],
+  wave3b: [
+    "packages/core/src/template-packs/wave3b-core-templates-v1.mjs",
+    "packages/core/src/template-packs/wave3b-system-templates-v1.mjs",
+    "tests/template-packs/wave3b-core-templates.test.mjs",
+    "tests/template-packs/wave3b-system-templates.test.mjs",
+  ],
 };
 
 const denylists = {
@@ -193,6 +199,28 @@ const denylists = {
     "tests/layer3/**",
     "tests/layer4a/**",
     "tests/layer4b/**",
+  ],
+  wave3b: [
+    "AGENTS.md",
+    "README.md",
+    "docs/**",
+    "package.json",
+    "scripts/**",
+    "packages/core/src/foundation-bridge-v1.mjs",
+    "packages/core/src/template-descriptor-v1.mjs",
+    "packages/core/src/template-execution-harness-v1.mjs",
+    "packages/core/src/template-catalog-v1.mjs",
+    "packages/core/src/template-catalog-fixtures-v1.mjs",
+    "packages/mcp-server/**",
+    "reaper/**",
+    "recipes/**",
+    "tests/layer1/**",
+    "tests/layer1_5/**",
+    "tests/layer2/**",
+    "tests/layer3/**",
+    "tests/layer4a/**",
+    "tests/layer4b/**",
+    "tests/layer4c/**",
   ],
 };
 

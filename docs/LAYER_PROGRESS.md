@@ -225,7 +225,7 @@ Smoke Gate.
 
 ## Wave 3A: Critical Research-Only Scout
 
-Status: planned
+Status: accepted
 
 Scope target: let `core` and `system` workers research and propose only the
 smallest critical candidate set before any descriptor implementation opens.
@@ -251,8 +251,55 @@ arbitrary UI automation, generic action execution, video-specific product work,
 new ref kinds, user docs, and frozen ABI changes unless a concrete blocker is
 reported.
 
-Next gate after control-tower allowlist approval: Wave 3B Critical
-Descriptor-Only Pass.
+Accepted research reports:
+
+- `/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/reports/wave3a-core.md`
+- `/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/reports/wave3a-system.md`
+
+Approved Wave 3B ids:
+
+- `template.core.read_openreaper_status`
+- `template.core.read_template_catalog_summary`
+- `template.core.read_last_result`
+- `template.system.read_runtime_environment`
+- `template.system.read_resource_paths`
+- `template.system.check_api_symbols`
+
+Held for later owner decision:
+
+- `template.core.read_template_coverage_summary`
+- `template.system.read_ext_state_value`
+
+Known risks: descriptor-only Wave 3B can stage these ids, but real usefulness
+depends on Layer 4D runtime binding. `ui` and `hardware_control` remain
+deferred.
+
+Next gate: Wave 3B Critical Descriptor-Only Pass.
+
+## Wave 3B: Critical Descriptor-Only Pass
+
+Status: planned
+
+Scope target: implement only the six approved Wave 3A `core`/`system`
+descriptor candidates as descriptor-only pack files with pack-local fake smoke.
+
+Required coverage:
+
+- create pack-scoped descriptor files for `core` and `system`;
+- implement exactly the six approved Wave 3B template ids;
+- keep all six templates read-only and non-destructive;
+- use existing 4A descriptor, 4B fake execution harness, and 4C catalog
+  patterns;
+- keep compact discovery behavior and descriptor budgets intact;
+- keep shared catalog entry points untouched until the control tower merge.
+
+Out of scope: runtime Lua, live REAPER startup, live smoke, `call_template`
+runtime binding, recipes, user recipe authoring, destructive templates, `ui`,
+`hardware_control`, hardware endpoints, generic/action execution, new ref
+kinds, and frozen ABI/taxonomy changes unless a concrete blocker is reported.
+
+Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
+Smoke Gate.
 
 ## Layer 4D: Template Runtime Binding / Live Smoke Gate
 
