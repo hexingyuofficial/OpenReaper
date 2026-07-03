@@ -9,6 +9,7 @@ import {
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
@@ -37,16 +38,25 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("supports exactly the five Wave 0 read-only bridge operations", () => {
+  it("supports exactly the approved Wave 0 plus Wave 1A read-only bridge operations", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
 
     assert.deepEqual(operationKeys, [
+      "items.read_item_summary",
+      "items.resolve_item_ref",
+      "last_result.read",
       "openreaper.read_status",
+      "project.list_markers_regions",
+      "project.read_metadata",
       "project.read_summary",
+      "project.read_tempo_map",
+      "system.api_symbols.check",
       "system.resource_paths.read",
       "system.runtime_environment.read",
+      "template_catalog.read_summary",
+      "track.resolve_ref",
       "transport.read_state",
     ].sort());
 
@@ -57,9 +67,17 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "template.system.read_runtime_environment",
       "template.system.read_resource_paths",
     ]);
-    assert.doesNotMatch(BRIDGE_SOURCE, /template_catalog\.read_summary/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /last_result\.read/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /system\.api_symbols\.check/);
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS, [
+      "template.core.read_template_catalog_summary",
+      "template.core.read_last_result",
+      "template.system.check_api_symbols",
+      "template.project.read_metadata",
+      "template.project.list_markers_regions",
+      "template.project.read_tempo_map",
+      "template.tracks.resolve_track_ref",
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+    ]);
   });
 
   it("keeps malformed, owner mismatch, generation mismatch, and unsupported-operation paths typed", () => {
@@ -75,7 +93,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
 
     assert.match(BRIDGE_SOURCE, /request\.bridge\.expected_owner ~= ACTIVE_OWNER/);
     assert.match(BRIDGE_SOURCE, /request\.bridge\.expected_generation ~= ACTIVE_GENERATION/);
-    assert.match(BRIDGE_SOURCE, /Layer 4D\.2 supports only the Wave 0 read-only canary operations/);
+    assert.match(BRIDGE_SOURCE, /approved read-only live-smoke operations/);
     assert.match(BRIDGE_SOURCE, /Bridge request JSON is malformed/);
   });
 

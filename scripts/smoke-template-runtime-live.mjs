@@ -1,8 +1,11 @@
 import {
   CALL_TEMPLATE_RUNTIME_CONTRACT,
-  CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  createObjectRef,
+} from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
   LIVE_BRIDGE_EXECUTOR_ENV,
   createLiveBridgeExecutorFromEnv,
@@ -15,6 +18,7 @@ const GENERATION_ENV = "OPENREAPER_LIVE_BRIDGE_GENERATION";
 const SESSION_ENV = "OPENREAPER_LIVE_BRIDGE_SESSION_ID";
 
 const optedIn = process.env[OPT_IN_ENV] === "1" || process.argv.includes(OPT_IN_FLAG);
+const LIVE_SMOKE_TEMPLATE_IDS = CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS;
 const runtime = createCallTemplateRuntime();
 const baseReport = {
   gate: "template-runtime-live",
@@ -24,8 +28,8 @@ const baseReport = {
   opt_in_flag: OPT_IN_FLAG,
   opted_in: optedIn,
   spawned_reaper: false,
-  wave: "wave0-runtime-canary",
-  allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  wave: "wave1a-read-handlers",
+  allowed_template_ids: LIVE_SMOKE_TEMPLATE_IDS,
 };
 
 if (!optedIn) {
@@ -56,21 +60,22 @@ const liveRuntime = createCallTemplateRuntime({
     opted_in: true,
     executor: executorConfig.executor,
     executor_config: executorConfig.config,
-    allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+    allowed_template_ids: LIVE_SMOKE_TEMPLATE_IDS,
     opt_in_env: OPT_IN_ENV,
     opt_in_flag: OPT_IN_FLAG,
   },
-  evidenceLimit: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length,
+  evidenceLimit: LIVE_SMOKE_TEMPLATE_IDS.length,
 });
 const exampleInputsById = exampleInputs(liveRuntime);
+const exampleRefsById = exampleRefs();
 const contextBase = liveContextBase();
 const executions = [];
 
-for (const [index, id] of CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.entries()) {
+for (const [index, id] of LIVE_SMOKE_TEMPLATE_IDS.entries()) {
   const response = await liveRuntime.call_template({
     id,
     input: exampleInputsById[id] ?? {},
-    refs: [],
+    refs: exampleRefsById[id] ?? [],
     context: {
       ...contextBase,
       created_at: new Date().toISOString(),
@@ -81,7 +86,7 @@ for (const [index, id] of CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.entries(
 }
 
 const ok = executions.every((execution) => execution.ok);
-const reason = ok ? "wave0_live_canary_passed" : firstBlocker(executions) ?? "wave0_live_canary_failed";
+const reason = ok ? "wave1a_live_read_handlers_passed" : firstBlocker(executions) ?? "wave1a_live_read_handlers_failed";
 
 console.log(JSON.stringify({
   ...baseReport,
@@ -94,7 +99,7 @@ console.log(JSON.stringify({
     expected_owner: contextBase.expected_owner,
     expected_generation: contextBase.expected_generation,
   },
-  attempted_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  attempted_template_ids: LIVE_SMOKE_TEMPLATE_IDS,
   executions,
   evidence: liveRuntime.evidence(),
 }));
@@ -102,12 +107,20 @@ process.exit(ok ? 0 : 2);
 
 function exampleInputs(liveRuntime) {
   const menu = liveRuntime.list_templates({
-    ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+    ids: LIVE_SMOKE_TEMPLATE_IDS,
     fields: ["examples"],
   });
   return Object.fromEntries(
     menu.items.map((item) => [item.id, cloneJson(item.examples?.[0]?.input ?? {})]),
   );
+}
+
+function exampleRefs() {
+  return {
+    "template.items.read_item_summary": {
+      item_ref: createObjectRef("item", { scheme: "selected", value: "0" }, { ref: "item:selected:0" }),
+    },
+  };
 }
 
 function liveContextBase() {

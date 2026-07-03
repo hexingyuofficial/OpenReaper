@@ -45,6 +45,23 @@ export const CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS = deepFreeze([
   "template.system.read_resource_paths",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS = deepFreeze([
+  "template.core.read_template_catalog_summary",
+  "template.core.read_last_result",
+  "template.system.check_api_symbols",
+  "template.project.read_metadata",
+  "template.project.list_markers_regions",
+  "template.project.read_tempo_map",
+  "template.tracks.resolve_track_ref",
+  "template.items.resolve_item_ref",
+  "template.items.read_item_summary",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
+  ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
+]);
+
 export const CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS = deepFreeze(
   Object.values(TEMPLATE_CATALOG_SEED_TEMPLATE_IDS).filter((id) => !ACCEPTED_TEMPLATE_ID_SET.has(id)),
 );
@@ -372,7 +389,7 @@ function assertLiveRuntimeDispatchAllowed(live, id) {
   if (!live.allowedTemplateIdSet.has(id)) {
     throw new CallTemplateRuntimeError(
       "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
-      "Live bridge executor is restricted to Wave 0 runtime canary template ids.",
+      "Live bridge executor is restricted to the configured small live-smoke template allowlist.",
       {
         recoverable: true,
         details: {
@@ -572,10 +589,17 @@ function normalizeLiveRuntimeOptions(input) {
 
 function normalizeLiveAllowedTemplateIds(value) {
   if (!Array.isArray(value)) return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
-  const ids = value.filter((id) => CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.includes(id));
-  return ids.length === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length
-    ? CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS
-    : deepFreeze([...new Set(ids)]);
+  const allowed = new Set(CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS);
+  const ids = [...new Set(value.filter((id) => allowed.has(id)))];
+  if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length
+    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS[index])) {
+    return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
+  }
+  if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS.length
+    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS[index])) {
+    return CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS;
+  }
+  return deepFreeze(ids);
 }
 
 function boundedLiveExecutorConfig(config) {

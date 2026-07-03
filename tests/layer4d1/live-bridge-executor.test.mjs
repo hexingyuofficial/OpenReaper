@@ -8,6 +8,7 @@ import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-
 import {
   CALL_TEMPLATE_RUNTIME_CONTRACT,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
@@ -133,7 +134,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(timeout.error.details.blocker, "live_bridge_handshake_failed");
   });
 
-  it("live smoke script skips by default and never broadens past Wave 0", async () => {
+  it("live smoke script skips by default and stays on the Wave 1A read-handler allowlist", async () => {
     const skipped = JSON.parse(
       execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
         cwd: new URL("../..", import.meta.url),
@@ -148,6 +149,8 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(skipped.ok, true);
     assert.equal(skipped.skipped, true);
     assert.equal(skipped.spawned_reaper, false);
+    assert.equal(skipped.wave, "wave1a-read-handlers");
+    assert.deepEqual(skipped.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
 
     const noExecutor = runLiveSmokeExpectingFailure({
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
@@ -155,16 +158,17 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     });
     assert.equal(noExecutor.reason, "live_bridge_executor_not_configured");
     assert.equal(noExecutor.spawned_reaper, false);
+    assert.deepEqual(noExecutor.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
 
     const configuredMissing = runLiveSmokeExpectingFailure({
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: join(await mkdtemp(join(tmpdir(), "openreaper-live-script-")), "missing"),
       OPENREAPER_LIVE_BRIDGE_TIMEOUT_MS: "20",
     });
     assert.equal(configuredMissing.reason, "live_bridge_transport_absent");
-    assert.equal(configuredMissing.attempted_template_ids.length, 5);
-    assert.deepEqual(configuredMissing.attempted_template_ids, CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS);
+    assert.equal(configuredMissing.attempted_template_ids.length, 9);
+    assert.deepEqual(configuredMissing.attempted_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
     assert.equal(configuredMissing.accepted_catalog.size, 119);
-    assert.equal(configuredMissing.executions.length, 5);
+    assert.equal(configuredMissing.executions.length, 9);
     assert.equal(configuredMissing.spawned_reaper, false);
   });
 });

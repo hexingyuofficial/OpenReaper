@@ -17,6 +17,11 @@ execFileSync(process.execPath, ["--test", "tests/layer4d2/openreaper-live-bridge
   stdio: "inherit",
 });
 
+execFileSync(process.execPath, ["--test", "tests/layer4dx/read-handler-expansion.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
   cwd: root,
   stdio: "inherit",
