@@ -7,7 +7,8 @@ Before changing files, read:
 1. `docs/FOUNDATION_FREEZE_PLAN.md`
 2. `docs/REPOSITORY_LAYOUT.md`
 3. `docs/LAYER_PROGRESS.md`
-4. The ABI or taxonomy document for the layer you are working on.
+4. `docs/RATCHET_MODEL.md`
+5. The ABI or taxonomy document for the layer you are working on.
 
 ## Hard Boundary
 
@@ -21,6 +22,10 @@ Legacy workflow names such as `loop`, `cleanup`, `delivery`, `layer`, and
 ## Layer Discipline
 
 Only work on the requested layer.
+
+Respect the ratchet model in `docs/RATCHET_MODEL.md`: do not downgrade,
+bypass, or silently mutate accepted/frozen status. If a lower layer needs
+changes, report the concrete blocker and wait for a bounded fix window.
 
 If a lower layer needs changes, stop and report the dependency. Do not fix it
 as a drive-by change.
@@ -41,6 +46,7 @@ Architecture and process files include:
 - `README.md`
 - `docs/FOUNDATION_FREEZE_PLAN.md`
 - `docs/LAYER_PROGRESS.md`
+- `docs/RATCHET_MODEL.md`
 - `docs/REPOSITORY_LAYOUT.md`
 - `docs/abi/**`
 - `docs/taxonomy/**`

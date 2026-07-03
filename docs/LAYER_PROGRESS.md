@@ -19,6 +19,9 @@ only its own entry when its prompt explicitly authorizes it.
   layer freezes and approved architecture/process updates.
 - A layer is frozen only after the control tower records the accepted commit in
   this ledger.
+- The ratchet model in `docs/RATCHET_MODEL.md` governs status promotion,
+  lower-layer reopen, template lifecycle, recipe lifecycle, capability
+  coverage, and worker-scope rules.
 
 ## Layer 1: Tool ABI v1
 
@@ -264,3 +267,17 @@ Acceptance direction:
   actions, shell commands, or bypass paths;
 - any future third-party template extension is treated as reviewed developer
   mode, not the default user workflow.
+
+## Ratchet Governance
+
+Status: planned governance model.
+
+Record marker: `RATCHET-GOVERNANCE-V0-2026-07-03`.
+
+Scope: `docs/RATCHET_MODEL.md` defines the internal engineering ratchet for
+layers, templates, recipes, capability coverage, and worker scope. It is a
+control-tower governance model, not a user-facing REAPER feature.
+
+Near-term use: Wave/template/catalog work may continue in parallel only within
+assigned routes. Status promotion to runtime/live/stable must wait for the
+proper gate evidence and control-tower acceptance.

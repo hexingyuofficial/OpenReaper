@@ -58,6 +58,15 @@ V1 target:
 - no recipe may smuggle new powers through raw Lua, raw actions, shell commands,
   or unreviewed template definitions.
 
+## Ratchet Governance
+
+Engineering progress is governed by `docs/RATCHET_MODEL.md`.
+
+The ratchet model is internal project governance, not a user-facing feature. It
+defines how layers, templates, recipes, and capability coverage move from
+research to accepted evidence states without silently downgrading or bypassing
+frozen decisions.
+
 ## Layer Order
 
 ### Layer 1: Tool ABI v1
