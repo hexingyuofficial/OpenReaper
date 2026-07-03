@@ -367,9 +367,14 @@ Next gate after acceptance: Layer 5 Recipe Contract v1.
 
 ## Layer 5: Recipe Contract v1
 
-Status: planned
+Status: candidate_complete
 
 Scope target: define the lightweight user-agent recipe run ratchet.
+
+Candidate scope: added `recipe.contract.v1` as a workflow contract over the
+Layer 4D accepted official template catalog and compact
+`template.runtime.evidence.v1`; added a validator/normalizer, recipe catalog
+discovery adapter, Layer 5 ABI check, layer-scope support, and contract tests.
 
 Required coverage:
 
@@ -383,6 +388,15 @@ Required coverage:
 Out of scope: user-writable recipe authoring UI/syntax beyond the contract,
 new template definitions, raw Lua, raw actions, shell commands, and bypass
 paths.
+
+Tests: `npm run check:recipe-contract`, `npm test`, `npm run build`,
+`npm run check:layer -- layer5`, `git diff --check`.
+
+Known risks: Layer 5 is contract-only. It does not ship an official real recipe
+catalog, user recipe authoring UI/syntax, server-side recipe executor, live
+REAPER recipe smoke, or recipe-level runtime implementation. Official recipe
+promotion still depends on future control-tower acceptance and relevant
+template live evidence.
 
 Next gate after acceptance: Layer 6 User Recipe Authoring v1.
 

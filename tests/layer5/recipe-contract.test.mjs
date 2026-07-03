@@ -1,0 +1,447 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, it } from "node:test";
+import {
+  RECIPE_CONTRACT,
+  RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS,
+  RECIPE_CONTRACT_HELD_TEMPLATE_IDS,
+  RECIPE_CONTRACT_SEED_ONLY_TEMPLATE_IDS,
+  RECIPE_DETAIL_FIELDS,
+  RECIPE_DISCOVERY_SUMMARY_FIELDS,
+  RECIPE_RUN_STATES,
+  RECIPE_TEMPLATE_EVIDENCE_CONTRACT,
+  RECIPE_TERMINAL_RUN_STATES,
+  RecipeContractValidationError,
+  createRecipeCatalog,
+  createRecipeCatalogDiscovery,
+  normalizeRecipeContract,
+  recipeContractDiscoverySummary,
+  recipeContractOnDemandFields,
+  recipeExpectedOutputs,
+  recipeTemplateDependencies,
+  validateRecipeContract,
+} from "../../packages/core/src/recipe-contract-v1.mjs";
+import {
+  CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
+} from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  DiscoveryMenuRequestError,
+  RECIPE_DETAIL_FIELDS as DISCOVERY_RECIPE_DETAIL_FIELDS,
+  RECIPE_SUMMARY_FIELDS,
+  createDiscoveryCatalog,
+} from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
+import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
+
+describe("Layer 5 Recipe Contract v1", () => {
+  it("normalizes a workflow contract without creating an executor", () => {
+    const recipe = makeRecipe();
+    const validation = validateRecipeContract(recipe);
+    const normalized = normalizeRecipeContract(recipe);
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.equal(normalized.contract, RECIPE_CONTRACT);
+    assert.equal(Object.isFrozen(normalized), true);
+    assert.deepEqual(recipeTemplateDependencies(recipe), ["template.tracks.create_track"]);
+    assert.deepEqual(recipeExpectedOutputs(recipe), [
+      {
+        refs: ["track_ref"],
+        artifacts: [],
+        jobs: [],
+        state: ["track"],
+      },
+    ]);
+
+    const catalog = createRecipeCatalog({ recipes: [recipe] });
+    assert.equal(catalog.contract, "recipe.catalog.v1");
+    assert.equal(catalog.size, 1);
+    assert.equal(typeof catalog.execute, "undefined");
+    assert.equal(typeof catalog.run, "undefined");
+  });
+
+  it("fits the frozen Layer 1.5 recipe menu fields without expanding discovery", () => {
+    assert.deepEqual(RECIPE_DISCOVERY_SUMMARY_FIELDS, RECIPE_SUMMARY_FIELDS);
+    assert.deepEqual(RECIPE_DETAIL_FIELDS, DISCOVERY_RECIPE_DETAIL_FIELDS);
+
+    const summary = recipeContractDiscoverySummary(makeRecipe());
+    assert.deepEqual(Object.keys(summary), RECIPE_DISCOVERY_SUMMARY_FIELDS);
+    assert.equal("steps" in summary, false);
+    assert.equal("assertions" in summary, false);
+    assert.equal("recovery" in summary, false);
+
+    const detail = recipeContractOnDemandFields(makeRecipe(), ["steps", "recovery"]);
+    assert.deepEqual(Object.keys(detail).sort(), ["id", "recovery", "steps"]);
+
+    const discovery = createRecipeCatalogDiscovery(
+      createRecipeCatalog({ recipes: syntheticRecipes(100) }),
+      createDiscoveryCatalog,
+    );
+    const largerDiscovery = createRecipeCatalogDiscovery(
+      createRecipeCatalog({ recipes: syntheticRecipes(1_000) }),
+      createDiscoveryCatalog,
+    );
+    const menu = discovery.list_recipes();
+    const largerMenu = largerDiscovery.list_recipes();
+
+    assert.equal(JSON.stringify(menu), JSON.stringify(largerMenu));
+    assert.equal(menu.contract, "discovery.menu.v1");
+    assert.equal(menu.kind, "recipe_menu");
+    assert.equal(menu.mode, "menu");
+    assert.equal(menu.items.length, 25);
+    assert.equal(menu.page.has_more, true);
+    assert.equal("total" in menu.page, false);
+    assert.doesNotMatch(JSON.stringify(menu), /steps|assertions|recovery|create_dialog_track|evidence_create_dialog_track/);
+
+    const exact = discovery.list_recipes({
+      ids: ["recipe.tracks.prepare_dialog_track_0003"],
+      fields: ["steps", "assertions", "recovery"],
+    });
+    assert.equal(exact.mode, "ids");
+    assert.deepEqual(Object.keys(exact.items[0]).sort(), ["assertions", "id", "recovery", "steps"]);
+
+    assert.throws(
+      () => discovery.list_recipes({ fields: ["steps"] }),
+      DiscoveryMenuRequestError,
+    );
+  });
+
+  it("limits recipe steps to Layer 4D accepted official template ids", () => {
+    assert.deepEqual(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
+    assert.deepEqual(RECIPE_CONTRACT_SEED_ONLY_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS);
+    assert.deepEqual(RECIPE_CONTRACT_HELD_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS);
+    assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length, 119);
+
+    assertRejectsTemplateId("template.tracks.not_in_catalog", /unknown or non-accepted template id/);
+    assertRejectsTemplateId("template.core.read_health", /seed-only template id/);
+    assertRejectsTemplateId("template.core.read_template_coverage_summary", /held template id/);
+    assertRejectsTemplateId("template.loop.cleanup_project", /workflow-shaped template pack metadata/);
+    assertRejectsTemplateId("lua:reaper.Main_OnCommand(40044, 0)", /raw execution-looking template id/);
+    assertRejectsTemplateId("run_command", /raw execution-looking template id/);
+  });
+
+  it("rejects workflow-shaped recipe pack metadata while allowing workflow tags", () => {
+    const tagged = makeRecipe({ tags: ["track", "cleanup"] });
+    assert.deepEqual(validateRecipeContract(tagged).errors, []);
+
+    const workflowPack = makeRecipe({
+      id: "recipe.loop.prepare_dialog_track",
+      pack: "loop",
+    });
+    const errors = validateRecipeContract(workflowPack).errors.join("\n");
+
+    assert.match(errors, /Workflow-shaped pack ids are forbidden as recipe pack metadata: loop/);
+    assert.match(errors, /Workflow-shaped recipe id pack segment is forbidden: loop/);
+  });
+
+  it("validates run state, checkpoints, evidence, idempotency, resume, and risk gates", () => {
+    const recipe = makeRecipe();
+    const recovery = recipe.recovery;
+
+    assert.equal(recovery.run_state.contract, "recipe.run_state.v1");
+    assert.deepEqual(recovery.run_state.states, RECIPE_RUN_STATES);
+    assert.deepEqual(recovery.run_state.terminal, RECIPE_TERMINAL_RUN_STATES);
+    assert.equal(recovery.evidence_requirements[0].source, RECIPE_TEMPLATE_EVIDENCE_CONTRACT);
+    assert.equal(RECIPE_TEMPLATE_EVIDENCE_CONTRACT, CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT);
+    assert.equal(recovery.evidence_requirements[0].require_request_id, true);
+    assert.equal(recovery.resume.from_checkpoint, "latest_verified");
+    assert.equal(recovery.idempotency.on_replay, "reuse_verified_evidence");
+
+    const missingCheckpointEvidence = makeRecipe();
+    missingCheckpointEvidence.recovery.checkpoints[1].required_evidence = [];
+    assert.match(
+      validateRecipeContract(missingCheckpointEvidence).errors.join("\n"),
+      /must be required by a checkpoint/,
+    );
+
+    const wrongEvidenceSource = makeRecipe();
+    wrongEvidenceSource.recovery.evidence_requirements[0].source = "template.execution.v1";
+    assert.match(
+      validateRecipeContract(wrongEvidenceSource).errors.join("\n"),
+      /source must be template\.runtime\.evidence\.v1/,
+    );
+
+    const readOnlyTemplateStep = makeRecipe();
+    readOnlyTemplateStep.steps[1].idempotency = {
+      mode: "read_only",
+      key_scope: "none",
+      on_resume: "rerun",
+    };
+    assert.match(
+      validateRecipeContract(readOnlyTemplateStep).errors.join("\n"),
+      /read_only is reserved for get_state steps/,
+    );
+
+    const missingRiskGate = makeRecipe();
+    missingRiskGate.recovery.risk_gates = [];
+    assert.match(
+      validateRecipeContract(missingRiskGate).errors.join("\n"),
+      /write recipes must declare at least one matching recipe-level risk gate/,
+    );
+
+    const destructiveWithoutConfirmation = makeRecipe({
+      id: "recipe.render.destructive_delivery",
+      pack: "render",
+      risk: "destructive",
+      steps: [
+        {
+          ...makeRecipe().steps[1],
+          id: "create_dialog_track",
+          checkpoint: "checkpoint_create_dialog_track",
+          evidence: "evidence_create_dialog_track",
+        },
+      ],
+    });
+    destructiveWithoutConfirmation.recovery.checkpoints = [destructiveWithoutConfirmation.recovery.checkpoints[1]];
+    destructiveWithoutConfirmation.recovery.risk_gates = [
+      {
+        id: "gate_destructive",
+        applies_to: ["destructive"],
+        required_before_step: "create_dialog_track",
+        policy: "fresh_state",
+        blocks_auto_resume: true,
+        summary: "Require a fresh state read before destructive work.",
+      },
+    ];
+    assert.match(
+      validateRecipeContract(destructiveWithoutConfirmation).errors.join("\n"),
+      /destructive recipes require a blocking user_confirmation risk gate/,
+    );
+  });
+
+  it("rejects raw Lua, raw action, shell, descriptor, and bridge bypass-shaped recipe fields", () => {
+    const rawLua = makeRecipe();
+    rawLua.steps[1].call_template.input.lua = "reaper.Main_OnCommand(40044, 0)";
+    assert.match(validateRecipeContract(rawLua).errors.join("\n"), /forbidden raw execution or bypass field/);
+
+    const bridgeRequest = makeRecipe();
+    bridgeRequest.steps[1].call_template.bridge_request = { operation: "run_command" };
+    assert.match(validateRecipeContract(bridgeRequest).errors.join("\n"), /forbidden raw execution or bypass field/);
+
+    const rawDescriptor = makeRecipe({ descriptor: { id: "template.tracks.create_track" } });
+    assert.match(validateRecipeContract(rawDescriptor).errors.join("\n"), /forbidden raw execution or bypass field/);
+  });
+
+  it("does not add MCP tools, live REAPER smoke, runtime Lua, or a hidden recipe executor", () => {
+    assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_template",
+      "get_state",
+      "list_recipes",
+      "list_templates",
+      "ping",
+    ].sort());
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+
+    const source = readFileSync(
+      new URL("../../packages/core/src/recipe-contract-v1.mjs", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(source, /executeRecipe|runRecipe|server-side recipe executor/i);
+    assert.doesNotMatch(source, /child_process|spawn\(|execFile|REAPER\.app|reaper\/bridge|runtime Lua/i);
+    assert.doesNotMatch(source, /streetlight-reaper-mcp/);
+  });
+});
+
+function assertRejectsTemplateId(id, pattern) {
+  const recipe = makeRecipe();
+  recipe.steps[1].call_template.id = id;
+  recipe.recovery.evidence_requirements[0].template_id = id;
+  assert.match(validateRecipeContract(recipe).errors.join("\n"), pattern, id);
+}
+
+function syntheticRecipes(count) {
+  return Array.from({ length: count }, (_, index) => makeRecipe({
+    id: `recipe.tracks.prepare_dialog_track_${String(index).padStart(4, "0")}`,
+    title: `Prepare dialog track ${index}`,
+    summary: `Workflow contract fixture ${index}.`,
+  }));
+}
+
+function makeRecipe(overrides = {}) {
+  const recipe = {
+    contract: RECIPE_CONTRACT,
+    id: "recipe.tracks.prepare_dialog_track",
+    title: "Prepare dialog track",
+    summary: "Read compact project state, create a dialog track, and retain compact evidence.",
+    pack: "tracks",
+    lifecycle: "validated",
+    risk: "write",
+    entity_kind: "track",
+    tags: ["track", "setup", "cleanup"],
+    steps: [
+      {
+        id: "read_project",
+        title: "Read project",
+        summary: "Read bounded state needed before mutating tracks.",
+        uses: "get_state",
+        call_template: null,
+        get_state: {
+          projection: "project.summary",
+          refs: [],
+        },
+        checkpoint: "checkpoint_read_project",
+        evidence: null,
+        idempotency: {
+          mode: "read_only",
+          key_scope: "none",
+          on_resume: "rerun",
+        },
+        on_failure: "branch_request_user",
+      },
+      {
+        id: "create_dialog_track",
+        title: "Create dialog track",
+        summary: "Call the accepted track creation template.",
+        uses: "call_template",
+        call_template: {
+          id: "template.tracks.create_track",
+          input: {
+            name: "Dialog",
+          },
+          refs: {},
+        },
+        get_state: null,
+        checkpoint: "checkpoint_create_dialog_track",
+        evidence: "evidence_create_dialog_track",
+        idempotency: {
+          mode: "supported",
+          key_scope: "recipe_run",
+          on_resume: "reuse_evidence",
+        },
+        on_failure: "branch_retry_create",
+      },
+    ],
+    assertions: [
+      {
+        id: "assert_dialog_track_output",
+        kind: "expected_output",
+        summary: "The recipe returns or records a compact track ref expectation.",
+        required: true,
+        evidence: ["evidence_create_dialog_track"],
+        outputs: {
+          refs: ["track_ref"],
+          artifacts: [],
+          jobs: [],
+          state: ["track"],
+        },
+      },
+      {
+        id: "assert_template_evidence",
+        kind: "template_evidence",
+        summary: "The call_template step must retain compact Layer 4D runtime evidence.",
+        required: true,
+        evidence: ["evidence_create_dialog_track"],
+        outputs: {
+          refs: [],
+          artifacts: [],
+          jobs: [],
+          state: [],
+        },
+      },
+    ],
+    recovery: {
+      run_state: {
+        contract: "recipe.run_state.v1",
+        initial: "not_started",
+        states: [
+          "not_started",
+          "running",
+          "paused",
+          "succeeded",
+          "failed",
+          "blocked",
+        ],
+        terminal: [
+          "succeeded",
+          "failed",
+          "blocked",
+        ],
+      },
+      checkpoints: [
+        {
+          id: "checkpoint_read_project",
+          after_step: "read_project",
+          required_evidence: [],
+          on_resume: "continue_next_step",
+          summary: "Bounded state read completed; resume can continue to the template step.",
+        },
+        {
+          id: "checkpoint_create_dialog_track",
+          after_step: "create_dialog_track",
+          required_evidence: ["evidence_create_dialog_track"],
+          on_resume: "continue_next_step",
+          summary: "The template step completed with compact runtime evidence.",
+        },
+      ],
+      evidence_requirements: [
+        {
+          id: "evidence_create_dialog_track",
+          step: "create_dialog_track",
+          source: "template.runtime.evidence.v1",
+          template_id: "template.tracks.create_track",
+          require_ok: true,
+          require_request_id: true,
+          counts: {
+            refs_min: 0,
+            artifacts_min: 0,
+            jobs_min: 0,
+            last_result_refs_min: 0,
+          },
+          timestamps: "current_run",
+        },
+      ],
+      idempotency: {
+        scope: "recipe_run",
+        default_step_policy: "follow_step_idempotency",
+        on_resume: "skip_completed_checkpoints",
+        on_replay: "reuse_verified_evidence",
+      },
+      resume: {
+        from_checkpoint: "latest_verified",
+        on_missing_evidence: "rerun_step",
+        on_failed_evidence: "use_recovery_branch",
+        on_risk_gate: "pause_for_user",
+      },
+      branches: [
+        {
+          id: "branch_retry_create",
+          trigger: "template_error",
+          step: "create_dialog_track",
+          strategy: "retry_step",
+          summary: "Retry only the failed accepted template step when evidence says it is recoverable.",
+        },
+        {
+          id: "branch_request_user",
+          trigger: "resume_conflict",
+          step: null,
+          strategy: "request_user",
+          summary: "Pause for the agent or user when state recovery is ambiguous.",
+        },
+      ],
+      risk_gates: [
+        {
+          id: "gate_write_fresh_state",
+          applies_to: ["write"],
+          required_before_step: "create_dialog_track",
+          policy: "fresh_state",
+          blocks_auto_resume: true,
+          summary: "Require a fresh bounded state read before write-risk recipe work.",
+        },
+      ],
+    },
+  };
+
+  return mergeRecipe(recipe, overrides);
+}
+
+function mergeRecipe(base, overrides) {
+  const recipe = cloneJson(base);
+  for (const [key, value] of Object.entries(overrides)) recipe[key] = cloneJson(value);
+  return recipe;
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
