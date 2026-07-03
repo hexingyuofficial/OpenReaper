@@ -494,9 +494,10 @@ Known risks: this is contract/helper-only. Runtime missing/corrupt artifact
 behavior, fake store reads, `get_state` projection, REAPER-side artifact helper,
 and live artifact smoke remain for later 4.5 windows.
 
-Next gate after acceptance: decide whether to open Layer 4.5B for bounded
-`get_state` artifact projection / runtime binding, or continue Vision Pressure
-with Layer 4.5A evidence noted as sufficient for contract review.
+Next gate after acceptance: Vision Pressure accepted `proceed_with_warnings`.
+Layer 4.5B is the preferred bounded fix before artifact/report-backed
+first-real-version workflow claims. Layer 4.5C remains a separate later
+live/helper route.
 
 ## Layer 5: Recipe Contract v1
 
@@ -533,13 +534,22 @@ REAPER recipe smoke, or recipe-level runtime implementation. Official recipe
 promotion still depends on future control-tower acceptance and relevant
 template live evidence.
 
-Next gate after acceptance: Layer 6 User Recipe Authoring v1.
+Next gate after acceptance: the Vision Pressure readout found no Layer 5
+contract blocker. Preferred next implementation is Layer 4.5B if the goal is
+artifact/report-backed first-real-version workflows. Layer 6 may open before
+4.5B only as narrow user recipe authoring over accepted template ids, with no
+official promotion or north-star workflow readiness claim.
 
 ## Layer 6: User Recipe Authoring v1
 
 Status: planned
 
 Scope target: expose the Layer 5 recipe contract as user-writable recipe rules.
+
+Current boundary: Layer 6 is allowed only in the narrow authoring sense unless
+the control tower explicitly accepts the remaining artifact/report and live
+evidence blockers. It must not implement official four-vision recipes, add
+templates, run live smoke, or claim artifact-heavy workflows are ready.
 
 Required coverage:
 

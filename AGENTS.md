@@ -131,17 +131,27 @@ Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
 Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 
-The next implementation window should not start Layer 6 until the old-control
-Vision Pressure Pass readout says Layer 6 may proceed.
+Current control-tower decision: the old-control Vision Pressure Pass accepted
+`proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Layer 4.5B get_state Artifact Projection / Runtime Binding and Layer 4.5C Lua
-Artifact Helper + Live Artifact Smoke require separate control-tower approval.
-Do not open either as a drive-by follow-up to 4.5A.
+Preferred next implementation gate: Layer 4.5B get_state Artifact Projection /
+Runtime Binding, if the goal is first-real-version artifact/report-backed
+workflows.
+
+Layer 4.5B and Layer 4.5C require separate control-tower approval. Do not open
+either as a drive-by follow-up to 4.5A. Layer 4.5C should remain closed unless
+the control tower explicitly opens a live/helper route.
+
+Separate live-smoke track: Wave 1 read-only live smoke is blocked until a
+bounded 4D.x read-handler expansion is approved. Do not mix that work into
+Layer 4.5B or Layer 6.
 
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users
 define templates, raw Lua, raw actions, shell commands, arbitrary bridge
-requests, or bypass paths.
+requests, or bypass paths. Layer 6 may open before 4.5B only as narrow user
+recipe authoring and must not claim the four north-star workflows as official,
+artifact-backed, or live-smoked.
 
 Layer 6 must not reopen Layer 5, Layer 4.5A, Layer 4D, Layer 4D.1, or Layer
 4D.2 unless a concrete blocker is reported to the control tower.
