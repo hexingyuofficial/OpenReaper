@@ -100,7 +100,8 @@ Layer order:
 3. Pack Taxonomy v1
 4. Template Authoring ABI v1
 4W2A. Wave 2A Descriptor-Only 70-Template Pass
-4W3A. Wave 3A Critical Descriptor-Only Pass
+4W3A. Wave 3A Critical Research-Only Scout
+4W3B. Wave 3A Critical Descriptor-Only Pass
 4D. Template Runtime Binding / Live Smoke Gate
 5. Recipe Contract v1
 6. User Recipe Authoring v1
@@ -118,21 +119,20 @@ Layer 4C: Template Catalog / Smoke Gate is frozen.
 Wave 1A official descriptor catalog is accepted.
 Wave 2A descriptor-only 70-template catalog is accepted.
 
-The next window should build Wave 3A: Critical Descriptor-Only Pass.
+The next window should run Wave 3A: Critical Research-Only Scout.
 
-It should not change the frozen MCP tool names, discovery/menu,
-foundation/bridge, pack taxonomy, 4A descriptor, 4B execution harness, or 4C
-catalog/smoke surfaces. It should add only the most critical descriptor-only
-templates for `core` and `system`, using the route board in the old control
-repo.
+It should not change the new repo implementation. It should let `core` and
+`system` workers research and propose the smallest critical candidate set using
+the route board in the old control repo.
 
-Wave 3A must not implement runtime Lua, live REAPER behavior, recipes,
-destructive templates, `ui` templates, `hardware_control` templates, arbitrary
-UI automation/clicking, hardware writes, hardware endpoint mutation,
-video-specific product work, generic/action execution, or new ref kinds. If
-this work exposes a real lower-layer blocker, stop and report it to the control
-tower.
+Wave 3A scout workers must not implement descriptors, tests, catalog wiring,
+runtime Lua, live REAPER behavior, recipes, destructive templates, `ui`
+templates, `hardware_control` templates, arbitrary UI automation/clicking,
+hardware writes, hardware endpoint mutation, video-specific product work,
+generic/action execution, or new ref kinds.
 
-After Wave 3A is accepted, the next gate is Layer 4D. Layer 4D should bind the
-accepted official template catalog to the `call_template` runtime path and add
-unified opt-in live smoke gates that do not start REAPER by default.
+After the control tower approves a Wave 3A allowlist, a bounded descriptor-only
+implementation pass may open. After that pass is accepted, the next gate is
+Layer 4D. Layer 4D may retain compact template execution evidence for future
+recipe-run recovery, but it must not implement recipe ratchet; Layer 5 owns
+recipe run state, checkpoints, evidence, idempotency, resume, and risk gates.

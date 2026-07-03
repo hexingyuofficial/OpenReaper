@@ -223,16 +223,17 @@ templates are closed/reviewed capabilities; users primarily author recipes.
 Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
 Smoke Gate.
 
-## Wave 3A: Critical Descriptor-Only Pass
+## Wave 3A: Critical Research-Only Scout
 
 Status: planned
 
-Scope target: add only the most critical descriptor-only trial set for `core`
-and `system` before Layer 4D.
+Scope target: let `core` and `system` workers research and propose only the
+smallest critical candidate set before any descriptor implementation opens.
 
 Required coverage:
 
-- implement only the small approved Wave 3A route-board ids;
+- write old-repo route reports only;
+- propose a small candidate table for each pack;
 - keep `core` focused on OpenReaper/catalog/last-result visibility;
 - keep `system` focused on runtime environment, resource paths, and API symbol
   visibility;
@@ -240,19 +241,18 @@ Required coverage:
 - defer `hardware_control` entirely for now;
 - keep video as non-pack work; video-related atoms stay under `media`, `fx`,
   `items`, or `render` by primary owner if needed later;
-- add pack-local descriptor/catalog/fake harness tests;
-- extend combined catalog smoke so Wave 1A, Wave 2A, and Wave 3A critical
-  descriptors validate together.
+- record open questions, blocked ideas, and any Layer 4D support needs.
 
 Out of scope: runtime Lua, live REAPER startup, live smoke, `call_template`
-runtime binding, recipes, user recipe authoring, destructive templates,
-all `ui` templates, all `hardware_control` templates, hardware writes, hardware
-endpoint mutation, arbitrary UI automation, generic action execution,
-video-specific product work, new ref kinds, user docs, and frozen ABI changes
-unless a concrete blocker is reported.
+runtime binding, descriptor implementation, catalog wiring, tests, recipes,
+user recipe authoring, destructive templates, all `ui` templates, all
+`hardware_control` templates, hardware writes, hardware endpoint mutation,
+arbitrary UI automation, generic action execution, video-specific product work,
+new ref kinds, user docs, and frozen ABI changes unless a concrete blocker is
+reported.
 
-Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
-Smoke Gate.
+Next gate after control-tower allowlist approval: Wave 3B Critical
+Descriptor-Only Pass.
 
 ## Layer 4D: Template Runtime Binding / Live Smoke Gate
 
@@ -260,7 +260,7 @@ Status: planned
 
 Scope target: bind the accepted official template catalog to the agent-facing
 `call_template` execution path without adding MCP tools or changing frozen ABI
-surfaces, and add a unified opt-in live smoke gate after Wave 3A descriptor-only
+surfaces, and add a unified opt-in live smoke gate after Wave 3B descriptor-only
 work is accepted.
 
 Required coverage:
@@ -271,14 +271,52 @@ Required coverage:
 - keep `call_template` as the only direct template execution entry point;
 - keep discovery/menu compact and unchanged;
 - run fake runtime smoke over the accepted official catalog;
+- retain compact template execution evidence that can later support recipe-run
+  recovery;
 - provide live smoke commands or scripts that are opt-in and do not start
   REAPER by default.
 
 Out of scope: recipes, user recipe authoring, blocked templates, runtime Lua
-expansion, broad live REAPER coverage, user docs, and frozen ABI changes unless
-a concrete blocker is reported.
+expansion, recipe ratchet/run state, recipe checkpoints, recipe resume,
+recipe-level risk gates, broad live REAPER coverage, user docs, and frozen ABI
+changes unless a concrete blocker is reported.
 
 Next gate after acceptance: Layer 5 Recipe Contract v1.
+
+## Layer 5: Recipe Contract v1
+
+Status: planned
+
+Scope target: define the lightweight user-agent recipe run ratchet.
+
+Required coverage:
+
+- recipe run state;
+- checkpoints;
+- evidence requirements over template execution evidence;
+- idempotency expectations;
+- resume/recovery rules;
+- recipe-level risk gates.
+
+Out of scope: user-writable recipe authoring UI/syntax beyond the contract,
+new template definitions, raw Lua, raw actions, shell commands, and bypass
+paths.
+
+Next gate after acceptance: Layer 6 User Recipe Authoring v1.
+
+## Layer 6: User Recipe Authoring v1
+
+Status: planned
+
+Scope target: expose the Layer 5 recipe contract as user-writable recipe rules.
+
+Required coverage:
+
+- users can create and edit recipes against the official template catalog;
+- user recipes must reference known templates and declared refs/artifacts;
+- user recipe rules can express the approved run/checkpoint/evidence/resume
+  model;
+- user authoring cannot define templates or bypass the template catalog.
 
 ## Template Closure / User Recipe Authoring Target
 

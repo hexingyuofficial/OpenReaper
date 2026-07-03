@@ -86,6 +86,13 @@ Rules:
   new template descriptors, or bypass paths.
 - Official real recipes should depend only on templates that meet the minimum
   lifecycle required by the recipe risk level.
+- Layer 4D may retain compact template execution evidence for future recipe-run
+  recovery, but it does not implement recipe ratchet.
+- Layer 5 Recipe Contract v1 owns the lightweight user-agent run ratchet: run
+  state, checkpoints, evidence requirements, idempotency expectations,
+  resume/recovery, and risk gates.
+- Layer 6 User Recipe Authoring v1 exposes that contract as user-writable
+  recipe rules without allowing new template powers.
 
 ## Capability Coverage States
 
