@@ -159,8 +159,8 @@ Layer 6 Narrow User Recipe Authoring v1 is accepted.
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Current next choices: collect the Wave 1A track/item fixture retry evidence,
-open a critical template/report fill route from the four-vision gap table, or
+Current next choices: open critical template/report fill routes from the
+four-vision gap table, plan the next separately scoped live-smoke batch, or
 prepare the Layer 7 official recipe acceptance gate. Do not make any path claim
 four-vision readiness without separate live/evidence gates and official recipe
 acceptance.
@@ -168,11 +168,10 @@ acceptance.
 Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
 control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
 
-Separate live-smoke track: Wave 0 plus six Wave 1A read rows are live-passed in
-the old-control matrix. Three Wave 1A track/item rows still need a fixture retry
-using `OPENREAPER_LIVE_SMOKE_TRACK_REF` and
-`OPENREAPER_LIVE_SMOKE_ITEM_REF`. Do not mix live-smoke work into Layer 4.5C or
-Layer 6.
+Separate live-smoke track: Wave 0 plus all nine scoped Wave 1A read rows are
+live-passed in the old-control matrix. Broader Wave 1 read-only, Wave 2
+safe-write, and Wave 3 fixture-heavy live smoke still require separately
+approved routes. Do not mix live-smoke work into Layer 4.5C or Layer 6.
 
 Layer 6 exposes the frozen Layer 5 recipe contract as narrow user-writable
 recipe rules over the accepted official template catalog. It does not let users
