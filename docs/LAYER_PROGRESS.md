@@ -501,14 +501,16 @@ live/helper route.
 
 ## Layer 4.5B: get_state Artifact Projection / Runtime Binding
 
-Status: candidate_complete
+Status: accepted
+
+Accepted commit: `a4e5822 runtime: add layer 4.5b artifact get_state projection`
 
 Scope target: bind bounded artifact/report summary and payload reads through
 the existing `get_state` semantics without adding MCP tools, touching
 `reaper/bridge/**`, connecting live REAPER, writing Lua helpers, changing
 `call_template` behavior, or opening Layer 6.
 
-Candidate coverage:
+Accepted coverage:
 
 - added `get_state.runtime.v1` artifact projection runtime/helper over
   canonical `artifact:<owner_pack>:<scope>:<id>` refs;
@@ -531,10 +533,10 @@ Known risks: fake-store/runtime-helper coverage only. Layer 4.5B does not
 prove filesystem artifact roots under live REAPER, Lua artifact helpers, live
 artifact smoke, report schema contracts, or official artifact-backed recipes.
 
-Next gate after control-tower review: Layer 4.5C remains closed unless a
-separate live/helper route is explicitly opened. Layer 6 may still open only as
-narrow user recipe authoring unless artifact-backed workflow claims are
-accepted separately.
+Next gate after acceptance: Layer 4.5C remains closed unless a separate
+live/helper route is explicitly opened. The separate 4D.x Wave 1A read-handler
+track can continue. Layer 6 may open only as narrow user recipe authoring
+unless artifact-backed workflow claims are accepted separately.
 
 ## Layer 5: Recipe Contract v1
 
@@ -572,10 +574,10 @@ promotion still depends on future control-tower acceptance and relevant
 template live evidence.
 
 Next gate after acceptance: the Vision Pressure readout found no Layer 5
-contract blocker. Preferred next implementation is Layer 4.5B if the goal is
-artifact/report-backed first-real-version workflows. Layer 6 may open before
-4.5B only as narrow user recipe authoring over accepted template ids, with no
-official promotion or north-star workflow readiness claim.
+contract blocker, and Layer 4.5B now provides bounded artifact/report
+`get_state` projection. Layer 6 may open only as narrow user recipe authoring
+over accepted template ids, with no official promotion or north-star workflow
+readiness claim.
 
 ## Layer 6: User Recipe Authoring v1
 

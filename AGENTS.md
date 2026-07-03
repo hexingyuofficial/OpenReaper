@@ -129,18 +129,19 @@ Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
 Layer 4D.1 Live Bridge Executor Binding / Wave 0 Canary Enablement is accepted.
 Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
 Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
+Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Preferred next implementation gate: Layer 4.5B get_state Artifact Projection /
-Runtime Binding, if the goal is first-real-version artifact/report-backed
-workflows.
+Current next implementation choices: accept the separate 4D.x Wave 1A
+read-handler expansion when its worker returns, or open narrow Layer 6 user
+recipe authoring. Do not make either path claim four-vision readiness without
+separate live/evidence gates.
 
-Layer 4.5B and Layer 4.5C require separate control-tower approval. Do not open
-either as a drive-by follow-up to 4.5A. Layer 4.5C should remain closed unless
-the control tower explicitly opens a live/helper route.
+Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
+control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
 
 Separate live-smoke track: Wave 1 read-only live smoke is blocked until a
 bounded 4D.x read-handler expansion is approved. Do not mix that work into
@@ -149,8 +150,8 @@ Layer 4.5B or Layer 6.
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users
 define templates, raw Lua, raw actions, shell commands, arbitrary bridge
-requests, or bypass paths. Layer 6 may open before 4.5B only as narrow user
-recipe authoring and must not claim the four north-star workflows as official,
+requests, or bypass paths. Layer 6 may open only as narrow user recipe
+authoring and must not claim the four north-star workflows as official,
 artifact-backed, or live-smoked.
 
 Layer 6 must not reopen Layer 5, Layer 4.5A, Layer 4D, Layer 4D.1, or Layer
