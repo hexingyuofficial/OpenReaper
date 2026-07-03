@@ -21,12 +21,14 @@ import {
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const SMOKE_SOURCE = readFileSync(new URL("../../scripts/smoke-template-runtime-live.mjs", import.meta.url), "utf8");
 const READ_B_FLAG = "--read-b";
 const LIVE_OPT_IN_ENV = "OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE";
 const A1_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A1_LIVE_SMOKE";
 const MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
 const AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
 const MEDIA_PATH_ENV = "OPENREAPER_LIVE_SMOKE_MEDIA_PATH";
+const ACTION_SEARCH_LIMIT_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SEARCH_LIMIT";
 
 const READ_B_OPERATION_NAMES = Object.freeze([
   "actions.resolve_named_command",
@@ -104,6 +106,11 @@ describe("Read-B live handler expansion", () => {
       assert.equal("process" in request, false);
     }
 
+    const actionSearchRequest = bridge.seen.find(
+      (request) => request.operation.name === "actions.search_action_commands",
+    );
+    assert.equal(actionSearchRequest.params.limit, 6);
+
     const evidence = runtime.evidence();
     assert.equal(evidence.length, 15);
     assert.equal(evidence.every((entry) => entry.live.spawned_reaper === false), true);
@@ -159,6 +166,7 @@ describe("Read-B live handler expansion", () => {
     assert.deepEqual(skipped.allowed_bridge_operations, READ_B_OPERATION_KEYS);
     assert.equal(skipped.fixture_inputs.midi_take_ref, "selected:0");
     assert.equal(skipped.fixture_inputs.audio_take_ref, "take:index:0");
+    assert.equal(skipped.fixture_inputs.action_search_limit, 6);
 
     const noExecutor = runSmokeExpectingFailure([READ_B_FLAG, "--live"], {
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
@@ -192,6 +200,7 @@ describe("Read-B live handler expansion", () => {
     const report = runSmokeExpectingFailure([READ_B_FLAG, "--live"], {
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
       [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "1",
+      [ACTION_SEARCH_LIMIT_ENV]: "999",
       [MIDI_TAKE_REF_ENV]: "take:index:0",
       [AUDIO_TAKE_REF_ENV]: "take:index:1",
       [MEDIA_PATH_ENV]: "/tmp/openreaper-read-b-fixture.wav",
@@ -215,6 +224,7 @@ describe("Read-B live handler expansion", () => {
     assert.equal(byOperation.get("query_state:actions.read_action_metadata").params.command_id, 40044);
     assert.equal(byOperation.get("query_state:actions.read_action_toggle_state").params.command_id, 40364);
     assert.equal(byOperation.get("query_state:actions.parse_marker_action_text").params.text, "!40044 !40364");
+    assert.equal(byOperation.get("query_state:actions.search_action_commands").params.limit, 6);
     assert.equal(byOperation.get("query_state:midi.resolve_midi_take_ref").params.ref, "take:index:0");
     assert.equal(byOperation.get("query_state:media.file.probe").params.path, "/tmp/openreaper-read-b-fixture.wav");
 
@@ -269,6 +279,46 @@ describe("Read-B live handler expansion", () => {
       /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
   });
+
+  it("bounds action command search summary shape below the runtime inline budget", () => {
+    assert.match(BRIDGE_SOURCE, /ACTION_SEARCH_DEFAULT_LIMIT\s*=\s*6/);
+    assert.match(BRIDGE_SOURCE, /ACTION_SEARCH_MAX_LIMIT\s*=\s*6/);
+    assert.match(BRIDGE_SOURCE, /ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS\s*=\s*96/);
+    assert.match(BRIDGE_SOURCE, /ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS\s*=\s*80/);
+    assert.match(
+      BRIDGE_SOURCE,
+      /bounded_limit\(request,\s*request\.params\.limit,\s*ACTION_SEARCH_DEFAULT_LIMIT,\s*ACTION_SEARCH_MAX_LIMIT\)/,
+    );
+    assert.match(
+      BRIDGE_SOURCE,
+      /display_name\s*=\s*bounded_string\(display_name,\s*ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS\)/,
+    );
+    assert.match(
+      BRIDGE_SOURCE,
+      /named_command\s*=\s*bounded_string\(named_command,\s*ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS\)/,
+    );
+
+    assert.match(SMOKE_SOURCE, /READ_B_ACTION_SEARCH_DEFAULT_LIMIT\s*=\s*6/);
+    assert.match(SMOKE_SOURCE, /READ_B_ACTION_SEARCH_MAX_LIMIT\s*=\s*6/);
+    assert.match(
+      SMOKE_SOURCE,
+      /Math\.min\(\s*positiveInteger\(env\[READ_B_ACTION_SEARCH_LIMIT_ENV\],\s*READ_B_ACTION_SEARCH_DEFAULT_LIMIT\),\s*READ_B_ACTION_SEARCH_MAX_LIMIT,\s*\)/,
+    );
+
+    const worstCaseSummary = {
+      section: "crossfade_editor",
+      items: Array.from({ length: 6 }, () => ({
+        section: "crossfade_editor",
+        command_id: 2_147_483_647,
+        display_name: "D".repeat(96),
+        named_command: `_${"N".repeat(79)}`,
+        source: "extension",
+      })),
+      next_cursor: "1000000000",
+      truncated: true,
+    };
+    assert.ok(Buffer.byteLength(JSON.stringify(worstCaseSummary), "utf8") < 2048);
+  });
 });
 
 function readBInput(id) {
@@ -298,7 +348,7 @@ function readBInput(id) {
     "template.actions.search_action_commands": {
       section: "main",
       query: "marker",
-      limit: 25,
+      limit: 6,
     },
     "template.midi.resolve_midi_take_ref": {
       ref: "take:index:0",

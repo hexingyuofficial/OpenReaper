@@ -50,6 +50,8 @@ const READ_B_ACTION_TOGGLE_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_TOGGLE
 const READ_B_NAMED_COMMAND_ENV = "OPENREAPER_LIVE_SMOKE_NAMED_COMMAND";
 const READ_B_ACTION_SEARCH_QUERY_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SEARCH_QUERY";
 const READ_B_ACTION_SEARCH_LIMIT_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SEARCH_LIMIT";
+const READ_B_ACTION_SEARCH_DEFAULT_LIMIT = 6;
+const READ_B_ACTION_SEARCH_MAX_LIMIT = 6;
 const READ_B_MARKER_ACTION_TEXT_ENV = "OPENREAPER_LIVE_SMOKE_MARKER_ACTION_TEXT";
 const READ_B_MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
 const READ_B_AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
@@ -765,7 +767,10 @@ function readBFixtureInputs(env) {
   const actionToggleCommandId = positiveInteger(env[READ_B_ACTION_TOGGLE_COMMAND_ID_ENV], 40364);
   const namedCommand = nonEmpty(env[READ_B_NAMED_COMMAND_ENV]) ?? "_OPENREAPER_READ_B_NO_SUCH_COMMAND";
   const actionSearchQuery = nonEmpty(env[READ_B_ACTION_SEARCH_QUERY_ENV]) ?? "marker";
-  const actionSearchLimit = positiveInteger(env[READ_B_ACTION_SEARCH_LIMIT_ENV], 25);
+  const actionSearchLimit = Math.min(
+    positiveInteger(env[READ_B_ACTION_SEARCH_LIMIT_ENV], READ_B_ACTION_SEARCH_DEFAULT_LIMIT),
+    READ_B_ACTION_SEARCH_MAX_LIMIT,
+  );
   const markerActionText = nonEmpty(env[READ_B_MARKER_ACTION_TEXT_ENV]) ?? "!40044 !40364";
   const midiTakeRef = normalizeTakeFixtureRef(nonEmpty(env[READ_B_MIDI_TAKE_REF_ENV])) ?? "selected:0";
   const audioTakeRef = normalizeTakeFixtureRef(nonEmpty(env[READ_B_AUDIO_TAKE_REF_ENV])) ?? "take:index:0";

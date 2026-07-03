@@ -2088,11 +2088,16 @@ local function lower_string(value)
   return tostring(value or ""):lower()
 end
 
+local ACTION_SEARCH_DEFAULT_LIMIT = 6
+local ACTION_SEARCH_MAX_LIMIT = 6
+local ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS = 96
+local ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS = 80
+
 local function search_action_commands(request)
   local section = action_section_name(request.params.section)
   local section_id = action_section_id(section)
   local query = lower_string(request.params.query)
-  local limit = bounded_limit(request, request.params.limit, 25, 50)
+  local limit = bounded_limit(request, request.params.limit, ACTION_SEARCH_DEFAULT_LIMIT, ACTION_SEARCH_MAX_LIMIT)
   local cursor = integer_value(tonumber(request.params.cursor)) or 0
   local items = json_array({})
   local scanned = 0
@@ -2116,8 +2121,8 @@ local function search_action_commands(request)
       items[#items + 1] = {
         section = section,
         command_id = math.floor(command_id),
-        named_command = named_command,
-        display_name = display_name,
+        display_name = bounded_string(display_name, ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS),
+        named_command = bounded_string(named_command, ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS),
         source = action_source(named_command, command_id),
       }
     end
