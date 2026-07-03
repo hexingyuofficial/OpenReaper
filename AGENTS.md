@@ -119,23 +119,17 @@ Layer 4C: Template Catalog / Smoke Gate is frozen.
 Wave 1A official descriptor catalog is accepted.
 Wave 2A descriptor-only 70-template catalog is accepted.
 Wave 3A critical research-only scout is accepted.
+Wave 3B critical descriptor-only catalog is accepted.
 
-The next window should run Wave 3B: Critical Descriptor-Only Pass.
+The next window should run Layer 4D: Template Runtime Binding / Live Smoke Gate.
 
-It should implement only the six approved `core`/`system` descriptor ids from
-the old control repo route board:
+It should bind the accepted official template catalog to the agent-facing
+`call_template` path without adding MCP tools or changing frozen ABI surfaces.
 
-```text
-/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/WAVE_3B.md
-```
-
-Wave 3B workers must not edit shared catalog entry points, runtime Lua, live
-REAPER behavior, recipes, destructive templates, `ui` templates,
-`hardware_control` templates, arbitrary UI automation/clicking, hardware writes,
-hardware endpoint mutation, video-specific product work, generic/action
-execution, or new ref kinds.
-
-After Wave 3B is accepted, the next gate is Layer 4D. Layer 4D may retain
-compact template execution evidence for future recipe-run recovery, but it must
-not implement recipe ratchet; Layer 5 owns recipe run state, checkpoints,
-evidence, idempotency, resume, and risk gates.
+Layer 4D should resolve accepted catalog ids, reject unknown or non-catalog ids
+with typed errors, route input/ref/context validation through the Layer 4B
+harness, keep discovery compact, add fake runtime smoke over the accepted
+catalog, and provide opt-in live smoke commands that do not start REAPER by
+default. It may retain compact template execution evidence for future
+recipe-run recovery, but it must not implement recipe ratchet; Layer 5 owns
+recipe run state, checkpoints, evidence, idempotency, resume, and risk gates.

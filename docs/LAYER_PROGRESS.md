@@ -278,7 +278,9 @@ Next gate: Wave 3B Critical Descriptor-Only Pass.
 
 ## Wave 3B: Critical Descriptor-Only Pass
 
-Status: planned
+Status: accepted
+
+Accepted commit: `204640a templates: add wave 3b descriptor catalog`
 
 Scope target: implement only the six approved Wave 3A `core`/`system`
 descriptor candidates as descriptor-only pack files with pack-local fake smoke.
@@ -298,6 +300,21 @@ runtime binding, recipes, user recipe authoring, destructive templates, `ui`,
 `hardware_control`, hardware endpoints, generic/action execution, new ref
 kinds, and frozen ABI/taxonomy changes unless a concrete blocker is reported.
 
+Accepted coverage: added three `core` descriptors and three `system`
+descriptors, wired both pack files into the shared catalog fixture, and extended
+Layer 4C catalog smoke so Wave 1A, Wave 2A, and Wave 3B validate together
+without duplicate ids.
+
+Tests: `node --test tests/layer4c/template-catalog.test.mjs
+tests/template-packs/wave3b-core-templates.test.mjs
+tests/template-packs/wave3b-system-templates.test.mjs`, `npm test`,
+`npm run build`, `git diff --check`.
+
+Known risks: descriptor-only and fake-smoke only. Layer 4D still needs to bind
+the accepted catalog to the real `call_template` path, define runtime sources
+for core/system facts, enforce concrete symbol/query caps, and add opt-in live
+smoke.
+
 Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
 Smoke Gate.
 
@@ -307,8 +324,7 @@ Status: planned
 
 Scope target: bind the accepted official template catalog to the agent-facing
 `call_template` execution path without adding MCP tools or changing frozen ABI
-surfaces, and add a unified opt-in live smoke gate after Wave 3B descriptor-only
-work is accepted.
+surfaces, and add a unified opt-in live smoke gate.
 
 Required coverage:
 
