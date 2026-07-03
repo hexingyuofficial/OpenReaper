@@ -16,10 +16,13 @@ const OPT_IN_FLAG = "--live";
 const OWNER_ENV = "OPENREAPER_LIVE_BRIDGE_OWNER";
 const GENERATION_ENV = "OPENREAPER_LIVE_BRIDGE_GENERATION";
 const SESSION_ENV = "OPENREAPER_LIVE_BRIDGE_SESSION_ID";
+const TRACK_REF_ENV = "OPENREAPER_LIVE_SMOKE_TRACK_REF";
+const ITEM_REF_ENV = "OPENREAPER_LIVE_SMOKE_ITEM_REF";
 
 const optedIn = process.env[OPT_IN_ENV] === "1" || process.argv.includes(OPT_IN_FLAG);
 const LIVE_SMOKE_TEMPLATE_IDS = CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS;
 const runtime = createCallTemplateRuntime();
+const fixtureInputs = liveSmokeFixtureInputs(process.env);
 const baseReport = {
   gate: "template-runtime-live",
   contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
@@ -30,6 +33,7 @@ const baseReport = {
   spawned_reaper: false,
   wave: "wave1a-read-handlers",
   allowed_template_ids: LIVE_SMOKE_TEMPLATE_IDS,
+  fixture_inputs: fixtureInputs.report,
 };
 
 if (!optedIn) {
@@ -66,8 +70,8 @@ const liveRuntime = createCallTemplateRuntime({
   },
   evidenceLimit: LIVE_SMOKE_TEMPLATE_IDS.length,
 });
-const exampleInputsById = exampleInputs(liveRuntime);
-const exampleRefsById = exampleRefs();
+const exampleInputsById = exampleInputs(liveRuntime, fixtureInputs);
+const exampleRefsById = exampleRefs(fixtureInputs);
 const contextBase = liveContextBase();
 const executions = [];
 
@@ -105,22 +109,75 @@ console.log(JSON.stringify({
 }));
 process.exit(ok ? 0 : 2);
 
-function exampleInputs(liveRuntime) {
+function exampleInputs(liveRuntime, fixtureInputsForRun) {
   const menu = liveRuntime.list_templates({
     ids: LIVE_SMOKE_TEMPLATE_IDS,
     fields: ["examples"],
   });
-  return Object.fromEntries(
+  const inputs = Object.fromEntries(
     menu.items.map((item) => [item.id, cloneJson(item.examples?.[0]?.input ?? {})]),
   );
+  if (fixtureInputsForRun.track_ref) {
+    inputs["template.tracks.resolve_track_ref"] = { track_ref: fixtureInputsForRun.track_ref };
+  }
+  if (fixtureInputsForRun.item_ref) {
+    inputs["template.items.resolve_item_ref"] = { ref: fixtureInputsForRun.item_ref };
+  }
+  return inputs;
 }
 
-function exampleRefs() {
+function exampleRefs(fixtureInputsForRun) {
   return {
     "template.items.read_item_summary": {
-      item_ref: createObjectRef("item", { scheme: "selected", value: "0" }, { ref: "item:selected:0" }),
+      item_ref: itemObjectRefFromFixture(fixtureInputsForRun.item_ref),
     },
   };
+}
+
+function liveSmokeFixtureInputs(env) {
+  const trackRef = nonEmpty(env[TRACK_REF_ENV]);
+  const itemRef = normalizeItemFixtureRef(nonEmpty(env[ITEM_REF_ENV])) ?? "selected:0";
+  return {
+    track_ref: trackRef,
+    item_ref: itemRef,
+    report: {
+      track_ref_env: TRACK_REF_ENV,
+      item_ref_env: ITEM_REF_ENV,
+      track_ref: trackRef,
+      item_ref: itemRef,
+      applies_to_template_ids: [
+        "template.tracks.resolve_track_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+      ],
+    },
+  };
+}
+
+function itemObjectRefFromFixture(itemRef) {
+  const parsed = parseItemFixtureRef(itemRef) ?? parseItemFixtureRef("selected:0");
+  return createObjectRef("item", parsed.identity, { ref: parsed.ref });
+}
+
+function normalizeItemFixtureRef(itemRef) {
+  return parseItemFixtureRef(itemRef)?.input_ref ?? null;
+}
+
+function parseItemFixtureRef(itemRef) {
+  const token = String(itemRef ?? "").trim();
+  for (const scheme of ["selected", "index", "guid"]) {
+    const prefix = `${scheme}:`;
+    const typedPrefix = `item:${scheme}:`;
+    if (token.startsWith(typedPrefix)) {
+      const value = token.slice(typedPrefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: token };
+    }
+    if (token.startsWith(prefix)) {
+      const value = token.slice(prefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: `item:${scheme}:${value}` };
+    }
+  }
+  return null;
 }
 
 function liveContextBase() {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -22,6 +22,8 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const TRACK_REF_ENV = "OPENREAPER_LIVE_SMOKE_TRACK_REF";
+const ITEM_REF_ENV = "OPENREAPER_LIVE_SMOKE_ITEM_REF";
 
 const WAVE1A_OPERATION_NAMES = Object.freeze([
   "template_catalog.read_summary",
@@ -204,6 +206,8 @@ describe("4D.x Wave 1A read-handler expansion", () => {
           ...process.env,
           OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
           [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+          [TRACK_REF_ENV]: "",
+          [ITEM_REF_ENV]: "",
         },
       }).trim(),
     );
@@ -212,10 +216,23 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.equal(skipped.wave, "wave1a-read-handlers");
     assert.deepEqual(skipped.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
     assert.equal(skipped.spawned_reaper, false);
+    assert.deepEqual(skipped.fixture_inputs, {
+      track_ref_env: TRACK_REF_ENV,
+      item_ref_env: ITEM_REF_ENV,
+      track_ref: null,
+      item_ref: "selected:0",
+      applies_to_template_ids: [
+        "template.tracks.resolve_track_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+      ],
+    });
 
     const noExecutor = runLiveSmokeExpectingFailure({
       OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [TRACK_REF_ENV]: "",
+      [ITEM_REF_ENV]: "",
     });
     assert.equal(noExecutor.reason, "live_bridge_executor_not_configured");
     assert.equal(noExecutor.spawned_reaper, false);
@@ -225,11 +242,102 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     const missingTransport = runLiveSmokeExpectingFailure({
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: join(await mkdtemp(join(tmpdir(), "openreaper-live-wave1a-")), "missing"),
       OPENREAPER_LIVE_BRIDGE_TIMEOUT_MS: "20",
+      [TRACK_REF_ENV]: "",
+      [ITEM_REF_ENV]: "",
     });
     assert.equal(missingTransport.reason, "live_bridge_transport_absent");
     assert.deepEqual(missingTransport.attempted_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
     assert.equal(missingTransport.executions.length, 9);
     assert.equal(missingTransport.spawned_reaper, false);
+  });
+
+  it("accepts scoped fixture env overrides only for the Wave 1A track/item retry inputs", () => {
+    const overridden = JSON.parse(
+      execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+          [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+          [TRACK_REF_ENV]: "track:Dialog",
+          [ITEM_REF_ENV]: "item:index:0",
+        },
+      }).trim(),
+    );
+    assert.equal(overridden.ok, true);
+    assert.equal(overridden.skipped, true);
+    assert.deepEqual(overridden.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
+    assert.deepEqual(overridden.fixture_inputs, {
+      track_ref_env: TRACK_REF_ENV,
+      item_ref_env: ITEM_REF_ENV,
+      track_ref: "track:Dialog",
+      item_ref: "item:index:0",
+      applies_to_template_ids: [
+        "template.tracks.resolve_track_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+      ],
+    });
+
+    const invalidItemRef = JSON.parse(
+      execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
+        cwd: ROOT,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+          [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+          [TRACK_REF_ENV]: "track:index:0",
+          [ITEM_REF_ENV]: "track:Dialog",
+        },
+      }).trim(),
+    );
+    assert.equal(invalidItemRef.fixture_inputs.track_ref, "track:index:0");
+    assert.equal(invalidItemRef.fixture_inputs.item_ref, "selected:0");
+  });
+
+  it("wires fixture env overrides into the live bridge request files without starting REAPER", async () => {
+    const transportDir = await mkdtemp(join(tmpdir(), "openreaper-live-fixture-env-"));
+    await mkdir(join(transportDir, "requests"));
+    await mkdir(join(transportDir, "results"));
+
+    const report = runLiveSmokeExpectingFailure({
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      OPENREAPER_LIVE_BRIDGE_TIMEOUT_MS: "1",
+      [TRACK_REF_ENV]: "track:Dialog",
+      [ITEM_REF_ENV]: "item:index:0",
+    });
+    assert.equal(report.reason, "live_bridge_handshake_failed");
+    assert.equal(report.spawned_reaper, false);
+    assert.deepEqual(report.fixture_inputs.applies_to_template_ids, [
+      "template.tracks.resolve_track_ref",
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+    ]);
+
+    const requests = await readTransportRequests(transportDir);
+    assert.equal(requests.length, 9);
+    const byOperation = new Map(requests.map((request) => [request.operation.name, request]));
+
+    assert.equal(byOperation.get("track.resolve_ref").params.track_ref, "track:Dialog");
+    assert.equal(byOperation.get("items.resolve_item_ref").params.ref, "item:index:0");
+    assert.deepEqual(byOperation.get("items.read_item_summary").refs, [
+      {
+        kind: "item",
+        ref: "item:index:0",
+        identity: {
+          scheme: "index",
+          value: "0",
+        },
+      },
+    ]);
+
+    for (const request of requests) {
+      assert.equal(request.operation.family, "query_state");
+      assert.equal(request.undo.mode, "none");
+      assert.equal(request.artifacts.allow, false);
+    }
   });
 });
 
@@ -265,6 +373,15 @@ function runLiveSmokeExpectingFailure(env) {
     return JSON.parse(error.stdout.trim());
   }
   assert.fail("Expected live smoke script to exit with status 2.");
+}
+
+async function readTransportRequests(transportDir) {
+  const requestDir = join(transportDir, "requests");
+  const names = await readdir(requestDir);
+  return names
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => JSON.parse(readFileSync(join(requestDir, name), "utf8")));
 }
 
 function context(overrides = {}) {
