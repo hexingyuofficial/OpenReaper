@@ -631,15 +631,19 @@ Tests: `node --test tests/layer4_5c/*.test.mjs`,
 `npm test`, `npm run build`, `npm run check:layer -- layer4.5c`, and
 `git diff --check`.
 
-Known risks: accepted coverage proves the artifact helper/write/readback
-path, not any render, analysis, report, critical-fill, first-real-fixture, or
-official recipe live pass. A real REAPER helper run and later fixture-batched
-First-Real route still need separate control-tower evidence before matrix or
-recipe promotion.
+Known risks: accepted coverage plus the real REAPER artifact helper canary
+prove the artifact helper/write/readback path, not any render, analysis,
+report, critical-fill, first-real-fixture, or official recipe live pass.
+Fixture-batched First-Real evidence still needs separate control-tower evidence
+before matrix or recipe promotion.
 
-Next gate after acceptance: decide whether to use this helper in a separate
-First-Real-Fixture-A route. Do not promote critical-fill rows or official
-recipes from this helper-only evidence.
+Post-acceptance live canary: real REAPER artifact helper canary passed on
+2026-07-04; evidence lives in the old control repo at
+`docs/agent-routing/reports/live-smoke-artifact-helper-canary.md`.
+
+Next gate after acceptance: prepare First-Real-Fixture-A v2 as a fixture batch,
+then open a scoped handler expansion route for the approved first batch. Do not
+promote critical-fill rows or official recipes from helper-only evidence.
 
 ## Layer 5: Recipe Contract v1
 

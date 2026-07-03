@@ -153,6 +153,7 @@ Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
 4D.x Wave 1A Read-Handler Expansion is accepted.
 Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
 Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
+Layer 4.5C Lua Artifact Helper + Live Artifact Smoke is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 Layer 6 Narrow User Recipe Authoring v1 is accepted.
 Critical Fill Render / Analysis and R3 report P0 descriptors are accepted and
@@ -162,19 +163,20 @@ template ids now total 126.
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Current next choices: plan fixture-batched live-smoke routes for the accepted
-critical fill, decide whether Layer 4.5C is needed before first-real evidence,
-or prepare the Layer 7 official recipe acceptance gate. Do not make any path
-claim four-vision readiness without separate live/evidence gates and official
-recipe acceptance.
+Layer 4.5C real REAPER artifact helper canary passed. It proves only the
+artifact helper/write/readback canary path, not render, analysis, report,
+First-Real-Fixture-A, or official recipe live-pass evidence.
 
-Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
-control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
+Current next choice: prepare First-Real-Fixture-A v2 planning as a fixture
+batch, then open a scoped handler expansion route for the approved first batch.
+Do not make any path claim four-vision readiness without separate live/evidence
+gates and official recipe acceptance.
 
 Separate live-smoke track: Wave 0 plus all nine scoped Wave 1A read rows are
-live-passed in the old-control matrix. Broader Wave 1 read-only, Wave 2
-safe-write, and Wave 3 fixture-heavy live smoke still require separately
-approved routes. Do not mix live-smoke work into Layer 4.5C or Layer 6.
+live-passed in the old-control matrix. Layer 4.5C artifact helper canary also
+passed, but it is not a template row and does not update the matrix. Broader
+Wave 1 read-only, Wave 2 safe-write, and Wave 3 fixture-heavy live smoke still
+require separately approved routes. Do not mix live-smoke work into Layer 6.
 
 Layer 6 exposes the frozen Layer 5 recipe contract as narrow user-writable
 recipe rules over the accepted official template catalog. It does not let users
