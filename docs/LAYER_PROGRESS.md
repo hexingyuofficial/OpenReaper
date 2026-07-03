@@ -412,13 +412,15 @@ produce `live_pass` evidence.
 
 ## Layer 4D.2: REAPER-side Bridge Script / Wave 0 Handshake
 
-Status: candidate_complete
+Status: accepted
+
+Accepted commit: `675c1f0 runtime: add layer 4d2 reaper bridge handshake`
 
 Scope target: add the minimal manual REAPER-side file transport bridge loop
 needed for the Layer 4D.1 executor to handshake with a real REAPER process for
 the five Wave 0 read-only canaries.
 
-Candidate coverage:
+Accepted coverage:
 
 - added `reaper/bridge/openreaper-live-bridge.lua` as a manual
   `reaper.defer()` polling loop over `<transport>/requests/*.json`;
@@ -450,9 +452,10 @@ Known risks: static/fixture tests prove the handshake boundary and result
 shape only. No automatic Lua interpreter or REAPER process was used in this
 window, so Wave 0 has not yet been promoted to live pass evidence.
 
-Next gate after candidate review: run the manual REAPER bridge loop against a
+Next gate after acceptance: run the manual REAPER bridge loop against a
 prepared transport directory and collect old-control live-smoke evidence before
-any matrix promotion.
+any matrix promotion. Layer 4.5A artifact/state-store contract work may proceed
+in parallel if it avoids the 4D.2 bridge workspace.
 
 ## Layer 5: Recipe Contract v1
 

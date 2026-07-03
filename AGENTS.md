@@ -104,6 +104,10 @@ Layer order:
 4W3B. Wave 3B Critical Descriptor-Only Pass
 4D. Template Runtime Binding / Live Smoke Gate
 4D.1. Live Bridge Executor Binding / Wave 0 Canary Enablement
+4D.2. REAPER-side Bridge Script / Wave 0 Handshake
+4.5A. Artifact / State Store Contract + Core Helpers
+4.5B. get_state Artifact Projection / Runtime Binding
+4.5C. Lua Artifact Helper + Live Artifact Smoke
 5. Recipe Contract v1
 6. User Recipe Authoring v1
 ```
@@ -123,15 +127,21 @@ Wave 3A critical research-only scout is accepted.
 Wave 3B critical descriptor-only catalog is accepted.
 Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
 Layer 4D.1 Live Bridge Executor Binding / Wave 0 Canary Enablement is accepted.
+Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 
 The next implementation window should not start Layer 6 until the old-control
 Vision Pressure Pass readout says Layer 6 may proceed.
+
+Layer 4.5A Artifact / State Store Contract + Core Helpers may run in parallel
+with live-smoke evidence work if it stays contract/helper-only and avoids the
+Layer 4D.2 bridge workspace. Layer 4.5B and 4.5C should wait for control-tower
+approval after the 4D.2 bridge handshake and 4.5A blocker status are reviewed.
 
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users
 define templates, raw Lua, raw actions, shell commands, arbitrary bridge
 requests, or bypass paths.
 
-Layer 6 must not reopen Layer 5, Layer 4D, or Layer 4D.1 unless a concrete
-blocker is reported to the control tower.
+Layer 6 must not reopen Layer 5, Layer 4D, Layer 4D.1, or Layer 4D.2 unless a
+concrete blocker is reported to the control tower.
