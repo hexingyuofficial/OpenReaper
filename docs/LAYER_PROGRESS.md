@@ -410,6 +410,50 @@ Next gate after acceptance: old-control Vision Pressure Pass before Layer 6,
 plus a future REAPER-side bridge transport/script route before Wave 0 can
 produce `live_pass` evidence.
 
+## Layer 4D.2: REAPER-side Bridge Script / Wave 0 Handshake
+
+Status: candidate_complete
+
+Scope target: add the minimal manual REAPER-side file transport bridge loop
+needed for the Layer 4D.1 executor to handshake with a real REAPER process for
+the five Wave 0 read-only canaries.
+
+Candidate coverage:
+
+- added `reaper/bridge/openreaper-live-bridge.lua` as a manual
+  `reaper.defer()` polling loop over `<transport>/requests/*.json`;
+- writes complete `foundation.bridge.v1` result envelopes to
+  `<transport>/results/<request-id>.json` through temp-file plus rename;
+- supports only `project.read_summary`, `transport.read_state`,
+  `openreaper.read_status`, `system.runtime_environment.read`, and
+  `system.resource_paths.read`;
+- returns `REQUEST_INVALID`, `OPERATION_NOT_FOUND`,
+  `BRIDGE_OWNER_MISMATCH`, and `BRIDGE_GENERATION_MISMATCH` for the relevant
+  handshake failures;
+- keeps refs, artifacts, jobs, and last-result refs empty for the Wave 0
+  success path;
+- added static/fixture tests and Layer 4D.2 scope guard coverage.
+
+Out of scope: REAPER process startup, raw Lua, raw actions, shell/process
+execution, write operations, full template runtime Lua, broad live smoke,
+119-template live execution, recipes, Layer 5, Layer 6, old-project live smoke
+matrix updates, and frozen ABI/taxonomy/template changes.
+
+Tests: `node --test tests/layer4d2/openreaper-live-bridge.test.mjs`,
+`npm run check:template-runtime`, `npm test`, `npm run build`,
+`node scripts/smoke-template-runtime-live.mjs`,
+`node scripts/smoke-template-runtime-live.mjs --live`,
+configured empty transport probe, `npm run check:layer -- layer4d2`, and
+`git diff --check`.
+
+Known risks: static/fixture tests prove the handshake boundary and result
+shape only. No automatic Lua interpreter or REAPER process was used in this
+window, so Wave 0 has not yet been promoted to live pass evidence.
+
+Next gate after candidate review: run the manual REAPER bridge loop against a
+prepared transport directory and collect old-control live-smoke evidence before
+any matrix promotion.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen
