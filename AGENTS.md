@@ -103,6 +103,7 @@ Layer order:
 4W3A. Wave 3A Critical Research-Only Scout
 4W3B. Wave 3B Critical Descriptor-Only Pass
 4D. Template Runtime Binding / Live Smoke Gate
+4D.1. Live Bridge Executor Binding / Wave 0 Canary Enablement
 5. Recipe Contract v1
 6. User Recipe Authoring v1
 ```
@@ -121,14 +122,16 @@ Wave 2A descriptor-only 70-template catalog is accepted.
 Wave 3A critical research-only scout is accepted.
 Wave 3B critical descriptor-only catalog is accepted.
 Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
+Layer 4D.1 Live Bridge Executor Binding / Wave 0 Canary Enablement is accepted.
 Layer 5 Recipe Contract v1 is frozen.
 
-The next window should run Layer 6: User Recipe Authoring v1.
+The next implementation window should not start Layer 6 until the old-control
+Vision Pressure Pass readout says Layer 6 may proceed.
 
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users
 define templates, raw Lua, raw actions, shell commands, arbitrary bridge
 requests, or bypass paths.
 
-Layer 6 must not reopen Layer 5 or Layer 4D unless a concrete blocker is
-reported to the control tower.
+Layer 6 must not reopen Layer 5, Layer 4D, or Layer 4D.1 unless a concrete
+blocker is reported to the control tower.

@@ -367,13 +367,15 @@ Next gate after acceptance: Layer 5 Recipe Contract v1.
 
 ## Layer 4D.1: Live Bridge Executor Binding / Wave 0 Canary Enablement
 
-Status: candidate_complete
+Status: accepted
+
+Accepted commit: `63a9428 runtime: add layer 4d1 live bridge binding`
 
 Scope target: add the minimal explicit live bridge executor binding needed for
 the Layer 4D opt-in live gate to progress beyond
 `live_bridge_executor_not_configured` toward Wave 0 runtime canary execution.
 
-Candidate coverage:
+Accepted coverage:
 
 - added an explicitly configured, non-spawning file-transport live bridge
   executor;
@@ -396,6 +398,17 @@ Known risks: the binding prepares a file transport contract and blocker
 classification only. Without an installed REAPER-side bridge script and active
 transport loop, Wave 0 live canary remains blocked at the more specific bridge
 transport/script/handshake state.
+
+Tests: `node --test tests/layer4d1/live-bridge-executor.test.mjs`,
+`npm run check:template-runtime`, `npm test`, `npm run build`,
+`npm run check:layer -- layer4d1`, `git diff --check`,
+`node scripts/smoke-template-runtime-live.mjs`,
+`node scripts/smoke-template-runtime-live.mjs --live`, and configured missing
+transport probe.
+
+Next gate after acceptance: old-control Vision Pressure Pass before Layer 6,
+plus a future REAPER-side bridge transport/script route before Wave 0 can
+produce `live_pass` evidence.
 
 ## Layer 5: Recipe Contract v1
 
