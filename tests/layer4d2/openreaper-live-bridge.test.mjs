@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,8 +21,45 @@ import {
 
 const BRIDGE_SCRIPT_URL = new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url);
 const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_URL, "utf8");
+const BRIDGE_SOURCE_MODULES = Object.freeze([
+  "00-bridge-kernel.lua",
+  "10-file-transport.lua",
+  "20-bridge-envelope-kernel.lua",
+  "30-artifact-helper.lua",
+  "40-route-pack-handlers.lua",
+  "90-file-transport-loop.lua",
+]);
+const ROOT = new URL("../..", import.meta.url);
 
 describe("Layer 4D.2 REAPER-side live bridge script", () => {
+  it("bundles the manual bridge from stable source modules without changing the output", () => {
+    execFileSync(process.execPath, ["scripts/build-live-bridge.mjs", "--check"], {
+      cwd: ROOT,
+      stdio: "pipe",
+    });
+
+    const sourceModules = Object.fromEntries(
+      BRIDGE_SOURCE_MODULES.map((file) => [
+        file,
+        readFileSync(new URL(`../../reaper/bridge/src/${file}`, import.meta.url), "utf8"),
+      ]),
+    );
+    assert.equal(Object.values(sourceModules).join(""), BRIDGE_SOURCE);
+
+    assert.match(sourceModules["00-bridge-kernel.lua"], /local CONTRACT = "foundation\.bridge\.v1"/);
+    assert.match(sourceModules["00-bridge-kernel.lua"], /function json\.decode/);
+    assert.match(sourceModules["20-bridge-envelope-kernel.lua"], /bridge_error_envelope/);
+    assert.match(sourceModules["20-bridge-envelope-kernel.lua"], /FIXED_FAMILIES/);
+    assert.match(sourceModules["10-file-transport.lua"], /write_file_atomic/);
+    assert.match(sourceModules["10-file-transport.lua"], /os\.rename\(temp_path, path\)/);
+    assert.match(sourceModules["30-artifact-helper.lua"], /artifact\.state_store\.v1/);
+    assert.match(sourceModules["30-artifact-helper.lua"], /A1_ARTIFACT_OPERATIONS/);
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /local ALLOWED_OPERATIONS = \{/);
+    assert.match(sourceModules["40-route-pack-handlers.lua"], /handler = read_project_summary/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.defer\(bridge_loop\)/);
+  });
+
   it("adds a manual file-transport bridge loop without REAPER startup behavior", () => {
     assert.match(BRIDGE_SOURCE, /OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/);
     assert.match(BRIDGE_SOURCE, /path_join\(TRANSPORT_DIR, "requests"\)/);

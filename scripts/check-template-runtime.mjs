@@ -2,6 +2,11 @@ import { execFileSync } from "node:child_process";
 
 const root = process.cwd();
 
+execFileSync(process.execPath, ["scripts/build-live-bridge.mjs", "--check"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 execFileSync(process.execPath, ["--test", "tests/layer4d/call-template-runtime.test.mjs"], {
   cwd: root,
   stdio: "inherit",

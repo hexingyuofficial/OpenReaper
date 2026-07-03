@@ -645,6 +645,18 @@ Next gate after acceptance: prepare First-Real-Fixture-A v2 as a fixture batch,
 then open a scoped handler expansion route for the approved first batch. Do not
 promote critical-fill rows or official recipes from helper-only evidence.
 
+## Bridge Source Split / Bundler
+
+Status: worker window
+
+Scope: split the accepted manual REAPER live bridge source into
+`reaper/bridge/src/**` modules and add `npm run build:live-bridge` to generate
+the single manually loaded `reaper/bridge/openreaper-live-bridge.lua` bundle.
+
+Out of scope: new template ids, new bridge handlers, raw Lua/action/shell/process
+execution, recipes, live smoke, live matrix updates, MCP tools, and REAPER
+startup.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen
