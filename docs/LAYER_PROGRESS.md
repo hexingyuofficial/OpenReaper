@@ -592,6 +592,53 @@ live/helper route is explicitly opened. The separate 4D.x Wave 1A read-handler
 track can continue. Layer 6 may open only as narrow user recipe authoring
 unless artifact-backed workflow claims are accepted separately.
 
+## Layer 4.5C: Lua Artifact Helper + Live Artifact Smoke
+
+Status: candidate_complete
+
+Scope target: add the smallest non-spawning artifact helper and opt-in smoke
+gate needed to prove canonical `artifact.state_store.v1` write/readback
+evidence before First-Real-Fixture-A artifact-backed claims.
+
+Candidate coverage:
+
+- added a narrow REAPER-side Lua artifact helper script for exactly one
+  `artifact_metadata:artifact_state_store.write_canary` file-transport
+  operation;
+- kept the existing Wave 0/Wave 1A live bridge script and template live smoke
+  allowlist unchanged;
+- added a default-safe-skipped artifact live smoke runner with fake/static
+  readback proof, typed configured-missing artifact-root blocker, and
+  no-REAPER timeout behavior that does not claim `live_pass`;
+- wrote canonical `artifact.state_store.v1` envelopes under
+  `<artifact_root>/<owner_pack>/<scope>/<id>.json` using canonical
+  `artifact:<owner_pack>:<scope>:<id>` refs and the existing
+  `artifactPathFromRef` mapping on the Node side;
+- proved `get_state(scope:"artifact")` summary and payload readback from the
+  helper-written fixture in the fake/static layer;
+- added Layer 4.5C scope guard support and included 4.5C tests in
+  `check:artifact-state-store`.
+
+Out of scope: First-Real-Fixture-A template handlers, render/write template
+live smoke, broad accepted-catalog live smoke, `call_template` raw execution,
+new MCP tools, shell/raw Lua/action bypasses, Layer 5, Layer 6, recipes, old
+live matrix updates, and control-tower commits.
+
+Tests: `node --test tests/layer4_5c/*.test.mjs`,
+`npm run check:artifact-state-store`, `npm run check:template-runtime`,
+`npm test`, `npm run build`, `npm run check:layer -- layer4.5c`, and
+`git diff --check`.
+
+Known risks: candidate coverage proves the artifact helper/write/readback
+path, not any render, analysis, report, critical-fill, first-real-fixture, or
+official recipe live pass. A real REAPER helper run and later fixture-batched
+First-Real route still need separate control-tower evidence before matrix or
+recipe promotion.
+
+Next gate after acceptance: decide whether to use this helper in a separate
+First-Real-Fixture-A route. Do not promote critical-fill rows or official
+recipes from this helper-only evidence.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen

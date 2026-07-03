@@ -103,6 +103,11 @@ execFileSync(process.execPath, ["--test", "tests/layer4_5b/get-state-artifact-pr
   stdio: "inherit",
 });
 
+execFileSync(process.execPath, ["--test", "tests/layer4_5c/artifact-live-helper.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 console.log("Artifact / State Store v1 checks ok.");
 
 function assertNeedles(label, text, needles) {
