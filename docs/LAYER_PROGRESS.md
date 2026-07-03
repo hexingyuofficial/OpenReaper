@@ -367,11 +367,13 @@ Next gate after acceptance: Layer 5 Recipe Contract v1.
 
 ## Layer 5: Recipe Contract v1
 
-Status: candidate_complete
+Status: frozen
+
+Accepted commit: `3769792 recipe: add layer 5 contract`
 
 Scope target: define the lightweight user-agent recipe run ratchet.
 
-Candidate scope: added `recipe.contract.v1` as a workflow contract over the
+Accepted scope: added `recipe.contract.v1` as a workflow contract over the
 Layer 4D accepted official template catalog and compact
 `template.runtime.evidence.v1`; added a validator/normalizer, recipe catalog
 discovery adapter, Layer 5 ABI check, layer-scope support, and contract tests.

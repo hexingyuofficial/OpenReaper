@@ -121,14 +121,14 @@ Wave 2A descriptor-only 70-template catalog is accepted.
 Wave 3A critical research-only scout is accepted.
 Wave 3B critical descriptor-only catalog is accepted.
 Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
+Layer 5 Recipe Contract v1 is frozen.
 
-The next window should run Layer 5: Recipe Contract v1.
+The next window should run Layer 6: User Recipe Authoring v1.
 
-Layer 5 should define the lightweight user-agent recipe run ratchet using the
-accepted official template catalog and Layer 4D template execution evidence.
+Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
+recipe rules over the accepted official template catalog. It must not let users
+define templates, raw Lua, raw actions, shell commands, arbitrary bridge
+requests, or bypass paths.
 
-Layer 5 owns recipe run state, checkpoints, evidence requirements,
-idempotency expectations, resume/recovery rules, and recipe-level risk gates.
-It must not define new templates, raw Lua, raw actions, shell commands, or
-bypass paths, and it must not reopen Layer 4D unless a concrete blocker is
+Layer 6 must not reopen Layer 5 or Layer 4D unless a concrete blocker is
 reported to the control tower.
