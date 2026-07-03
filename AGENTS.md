@@ -144,9 +144,11 @@ four-vision readiness without separate live/evidence gates.
 Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
 control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
 
-Separate live-smoke track: Wave 1A read handlers are available, but the live
-matrix must not change until a control-tower-reviewed opt-in live evidence
-report passes. Do not mix live-smoke work into Layer 4.5C or Layer 6.
+Separate live-smoke track: Wave 0 plus six Wave 1A read rows are live-passed in
+the old-control matrix. Three Wave 1A track/item rows still need a fixture retry
+using `OPENREAPER_LIVE_SMOKE_TRACK_REF` and
+`OPENREAPER_LIVE_SMOKE_ITEM_REF`. Do not mix live-smoke work into Layer 4.5C or
+Layer 6.
 
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users

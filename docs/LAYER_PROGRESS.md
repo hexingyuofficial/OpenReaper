@@ -499,6 +499,18 @@ Next gate after acceptance: run a control-tower-scoped manual Wave 1A live
 evidence route before any `LIVE_SMOKE_MATRIX.md` promotion, or open narrow
 Layer 6 user recipe authoring.
 
+Fixture retry update: accepted commit `4f91ca9`
+(`runtime: allow wave1a live fixture refs`) adds narrow live-smoke fixture env
+overrides for only the three Wave 1A track/item retry rows:
+
+- `OPENREAPER_LIVE_SMOKE_TRACK_REF`
+- `OPENREAPER_LIVE_SMOKE_ITEM_REF`
+
+The smoke script remains Wave 1A-only, non-spawning, read-only, and limited to
+the nine approved read templates. These env values apply only to
+`template.tracks.resolve_track_ref`, `template.items.resolve_item_ref`, and
+`template.items.read_item_summary`.
+
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 
 Status: accepted
