@@ -1,9 +1,11 @@
 import { FOUNDATION_BRIDGE_PACK_IDS } from "./foundation-bridge-v1.mjs";
 import {
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
+  createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
@@ -167,6 +169,7 @@ export const RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS = deepFreeze([
   ...TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
+  ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
 ]);
 
 const ACCEPTED_TEMPLATE_ID_SET = new Set(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS);
@@ -207,6 +210,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave1aTemplates(),
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
+    ...createTemplateCatalogCriticalFillTemplates(),
   ],
 });
 const ACCEPTED_TEMPLATE_BY_ID = new Map(

@@ -66,7 +66,7 @@ const requiredNeedles = [
   "Recipe-Level Risk Gates",
   "Forbidden Bypass Surfaces",
   "Non-Goals",
-  "119 templates total",
+  `${RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length} templates total`,
 ];
 
 assertNeedles("RECIPE_CONTRACT_V1.md", abi, requiredNeedles);

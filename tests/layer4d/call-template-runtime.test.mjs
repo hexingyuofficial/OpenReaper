@@ -24,18 +24,21 @@ import {
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
 describe("Layer 4D call_template runtime binding", () => {
-  it("binds only the accepted Wave 1A, Wave 2A, and Wave 3B official catalog", () => {
+  it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, and critical-fill official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
-    assert.equal(catalog.size, 119);
+    assert.equal(catalog.size, 123);
     assert.deepEqual(catalog.ids, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE.waves, [
       "wave1a",
       "wave2a",
       "wave3b",
+      "critical_fill",
     ]);
 
     assert.equal(catalog.get("template.tracks.create_track") !== null, true);
+    assert.equal(catalog.get("template.render.render_region_wav") !== null, true);
+    assert.equal(catalog.get("template.analysis.detect_loop_candidates") !== null, true);
     assert.deepEqual([...CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS].sort(), [
       "template.core.read_health",
       "template.render.render_region_job",

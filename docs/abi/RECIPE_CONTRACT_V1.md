@@ -232,7 +232,7 @@ Recipes must include at least one `call_template` step.
 Template dependencies are derived from `steps[*].call_template.id`.
 
 Layer 5's accepted template dependency set is the Layer 4D accepted official
-catalog, currently the Wave 1A, Wave 2A, and Wave 3B ids, 119 templates total.
+catalog, currently the Wave 1A, Wave 2A, Wave 3B, and critical-fill ids, 123 templates total.
 Recipe validation rejects:
 
 ```text

@@ -74,7 +74,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
       "template.items.resolve_item_ref",
       "template.items.read_item_summary",
     ]);
-    assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length, 119);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length, 123);
     assert.equal(CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS.length, 14);
   });
 
@@ -118,7 +118,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.deepEqual(evidence[0].live.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
   });
 
-  it("does not broaden Wave 1A live execution to Wave 0, writes, actions, or all 119 ids", async () => {
+  it("does not broaden Wave 1A live execution to Wave 0, writes, actions, or all accepted ids", async () => {
     const bridge = new FakeFoundationBridge();
     const runtime = createCallTemplateRuntime({
       live: {

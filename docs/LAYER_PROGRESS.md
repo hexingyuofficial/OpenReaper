@@ -683,6 +683,37 @@ Next gate after acceptance: critical template/report fills from the
 four-vision gap table, Wave 1A track/item fixture retry evidence, and later
 Layer 7 official recipe acceptance / first real version gate.
 
+## Critical Fill: Render / Analysis P0 Descriptors
+
+Status: accepted
+
+Scope target: close the highest-priority four-vision template gaps before
+Layer 7 official recipe acceptance, without adding recipes, live smoke, runtime
+Lua, raw execution, workflow packs, or user docs.
+
+Accepted coverage:
+
+- added `template.render.render_region_wav` as one bounded managed
+  region-to-WAV render job with required idempotency, undo, verification, and
+  render-owned artifact/job evidence refs;
+- added `template.analysis.detect_loop_candidates`,
+  `template.analysis.measure_loop_click_risk`, and
+  `template.analysis.create_loop_qa_report` as read-risk analysis `run_job`
+  artifact producers;
+- merged the four descriptors into the accepted official template catalog as
+  `critical_fill`, expanding runtime and recipe accepted template ids from 119
+  to 123;
+- kept live smoke scoped separately: the Wave 1A live gate remains limited to
+  its nine read-handler ids and does not run all accepted templates.
+
+Out of scope: real REAPER render execution, live analysis jobs, Lua artifact
+helpers, official recipes, broad live smoke, matrix updates, and Layer 7
+promotion.
+
+Known risks: descriptor/fake-smoke only. The new render and analysis templates
+still need fixture-batched live smoke before any official first-real-version
+recipe can claim live evidence.
+
 ## Template Closure / User Recipe Authoring Target
 
 Status: accepted product boundary for v1.

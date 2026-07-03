@@ -69,6 +69,16 @@ import {
   WAVE3B_SYSTEM_TEMPLATES,
   createWave3BSystemTemplates,
 } from "./template-packs/wave3b-system-templates-v1.mjs";
+import {
+  CRITICAL_ANALYSIS_TEMPLATE_IDS,
+  CRITICAL_ANALYSIS_TEMPLATES,
+  createCriticalAnalysisTemplates,
+} from "./template-packs/critical-analysis-templates-v1.mjs";
+import {
+  CRITICAL_RENDER_TEMPLATE_IDS,
+  CRITICAL_RENDER_TEMPLATES,
+  createCriticalRenderTemplates,
+} from "./template-packs/critical-render-templates-v1.mjs";
 
 export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
   ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
@@ -122,6 +132,16 @@ export const TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS = deepFreeze([
 export const TEMPLATE_CATALOG_WAVE3B_TEMPLATES = deepFreeze([
   ...WAVE3B_CORE_TEMPLATES,
   ...WAVE3B_SYSTEM_TEMPLATES,
+]);
+
+export const TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS = deepFreeze([
+  ...CRITICAL_RENDER_TEMPLATE_IDS,
+  ...CRITICAL_ANALYSIS_TEMPLATE_IDS,
+]);
+
+export const TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATES = deepFreeze([
+  ...CRITICAL_RENDER_TEMPLATES,
+  ...CRITICAL_ANALYSIS_TEMPLATES,
 ]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
@@ -387,6 +407,13 @@ export function createTemplateCatalogWave3bTemplates() {
   return [
     ...createWave3BCoreTemplates(),
     ...createWave3BSystemTemplates(),
+  ];
+}
+
+export function createTemplateCatalogCriticalFillTemplates() {
+  return [
+    ...createCriticalRenderTemplates(),
+    ...createCriticalAnalysisTemplates(),
   ];
 }
 
