@@ -594,13 +594,15 @@ unless artifact-backed workflow claims are accepted separately.
 
 ## Layer 4.5C: Lua Artifact Helper + Live Artifact Smoke
 
-Status: candidate_complete
+Status: accepted
+
+Accepted commit: `55f8d9b runtime: add layer 4.5c artifact smoke helper`
 
 Scope target: add the smallest non-spawning artifact helper and opt-in smoke
 gate needed to prove canonical `artifact.state_store.v1` write/readback
 evidence before First-Real-Fixture-A artifact-backed claims.
 
-Candidate coverage:
+Accepted coverage:
 
 - added a narrow REAPER-side Lua artifact helper script for exactly one
   `artifact_metadata:artifact_state_store.write_canary` file-transport
@@ -622,14 +624,14 @@ Candidate coverage:
 Out of scope: First-Real-Fixture-A template handlers, render/write template
 live smoke, broad accepted-catalog live smoke, `call_template` raw execution,
 new MCP tools, shell/raw Lua/action bypasses, Layer 5, Layer 6, recipes, old
-live matrix updates, and control-tower commits.
+live matrix updates, and official recipe promotion.
 
 Tests: `node --test tests/layer4_5c/*.test.mjs`,
 `npm run check:artifact-state-store`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- layer4.5c`, and
 `git diff --check`.
 
-Known risks: candidate coverage proves the artifact helper/write/readback
+Known risks: accepted coverage proves the artifact helper/write/readback
 path, not any render, analysis, report, critical-fill, first-real-fixture, or
 official recipe live pass. A real REAPER helper run and later fixture-batched
 First-Real route still need separate control-tower evidence before matrix or
