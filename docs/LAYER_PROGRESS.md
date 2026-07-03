@@ -720,7 +720,7 @@ recipe can claim live evidence.
 
 Status: accepted
 
-Accepted commit: pending control-tower commit.
+Accepted commit: `7485834 templates: add r3 report catalog descriptors`
 
 Scope target: close the remaining P0 report-template gaps from the
 four-vision pressure pass without moving recipe-authored plans into templates.
