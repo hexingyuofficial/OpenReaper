@@ -24,10 +24,12 @@ import {
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aFxTemplates,
   createTemplateCatalogWave2aTemplates,
+  createTemplateCatalogWave3bTemplates,
   createTemplateCatalogSeedTemplates,
 } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../packages/core/src/template-execution-harness-v1.mjs";
@@ -195,19 +197,67 @@ describe("Layer 4C template catalog and smoke gate", () => {
     }
   });
 
-  it("loads the official Wave 1A plus Wave 2A catalog without duplicate ids", () => {
+  it("loads the Wave 3B core and system descriptors through the shared fixture", () => {
+    const templates = createTemplateCatalogWave3bTemplates();
+    const validation = validateTemplateCatalog({ templates });
+    const catalog = createTemplateCatalog({ templates });
+    const blocked = [
+      "template.core.read_template_coverage_summary",
+      "template.core.read_health",
+      "template.system.read_ext_state_value",
+      "template.system.write_ext_state_value",
+      "template.system.run_shell_command",
+      "template.system.execute_api_symbol",
+    ];
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.equal(catalog.size, 6);
+    assert.deepEqual(catalog.ids, TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS);
+    assert.equal(new Set(catalog.ids).size, catalog.ids.length);
+
+    for (const id of blocked) {
+      assert.equal(catalog.get(id), null, id);
+    }
+
+    const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
+    const menu = discovery.list_templates();
+    assert.equal(menu.items.length, 6);
+    assert.equal(menu.page.has_more, false);
+    assert.equal("total" in menu.page, false);
+    assert.deepEqual(new Set(menu.items.map((item) => item.pack)), new Set(["core", "system"]));
+    const payload = JSON.stringify(menu);
+    for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      assert.doesNotMatch(payload, new RegExp(field));
+    }
+  });
+
+  it("loads the official Wave 1A, Wave 2A, and Wave 3B catalog without duplicate ids", () => {
     const templates = [
       ...createTemplateCatalogWave1aTemplates(),
       ...createTemplateCatalogWave2aTemplates(),
+      ...createTemplateCatalogWave3bTemplates(),
     ];
     const validation = validateTemplateCatalog({ templates });
     const catalog = createTemplateCatalog({ templates });
 
     assert.deepEqual(validation.errors, []);
     assert.equal(validation.ok, true);
-    assert.equal(catalog.size, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length + TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS.length);
+    assert.equal(
+      catalog.size,
+      TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length +
+        TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS.length +
+        TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS.length,
+    );
     assert.deepEqual(catalog.ids.slice(0, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
-    assert.deepEqual(catalog.ids.slice(TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS);
+    assert.deepEqual(
+      catalog.ids.slice(
+        TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length,
+        TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length + TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS.length,
+      ),
+      TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
+    );
+    assert.deepEqual(catalog.ids.slice(-TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS);
     assert.equal(new Set(catalog.ids).size, catalog.ids.length);
 
     const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
@@ -466,6 +516,8 @@ describe("Layer 4C template catalog and smoke gate", () => {
       "../../packages/core/src/template-packs/wave2a-media-templates-v1.mjs",
       "../../packages/core/src/template-packs/wave2a-midi-templates-v1.mjs",
       "../../packages/core/src/template-packs/wave2a-routing-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave3b-core-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave3b-system-templates-v1.mjs",
     ].map((sourcePath) => readFileSync(new URL(sourcePath, import.meta.url), "utf8"));
     const source = `${catalogSource}\n${fixtureSource}\n${packSources.join("\n")}`;
 

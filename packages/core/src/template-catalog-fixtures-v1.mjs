@@ -59,6 +59,16 @@ import {
   WAVE2A_ACTIONS_TEMPLATES,
   createWave2AActionsTemplates,
 } from "./template-packs/wave2a-actions-templates-v1.mjs";
+import {
+  WAVE3B_CORE_TEMPLATE_IDS,
+  WAVE3B_CORE_TEMPLATES,
+  createWave3BCoreTemplates,
+} from "./template-packs/wave3b-core-templates-v1.mjs";
+import {
+  WAVE3B_SYSTEM_TEMPLATE_IDS,
+  WAVE3B_SYSTEM_TEMPLATES,
+  createWave3BSystemTemplates,
+} from "./template-packs/wave3b-system-templates-v1.mjs";
 
 export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
   ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
@@ -102,6 +112,16 @@ export const TEMPLATE_CATALOG_WAVE2A_TEMPLATES = deepFreeze([
   ...WAVE2A_AUTOMATION_TEMPLATES,
   ...WAVE2A_MIDI_TEMPLATES,
   ...WAVE2A_ACTIONS_TEMPLATES,
+]);
+
+export const TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS = deepFreeze([
+  ...WAVE3B_CORE_TEMPLATE_IDS,
+  ...WAVE3B_SYSTEM_TEMPLATE_IDS,
+]);
+
+export const TEMPLATE_CATALOG_WAVE3B_TEMPLATES = deepFreeze([
+  ...WAVE3B_CORE_TEMPLATES,
+  ...WAVE3B_SYSTEM_TEMPLATES,
 ]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
@@ -360,6 +380,13 @@ export function createTemplateCatalogWave2aTemplates() {
     ...createWave2AAutomationTemplates(),
     ...createWave2AMidiTemplates(),
     ...createWave2AActionsTemplates(),
+  ];
+}
+
+export function createTemplateCatalogWave3bTemplates() {
+  return [
+    ...createWave3BCoreTemplates(),
+    ...createWave3BSystemTemplates(),
   ];
 }
 
