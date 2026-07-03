@@ -1,7 +1,8 @@
 # Artifact / State Store v1
 
-Status: target for the Layer 4.5A Artifact / State Store Contract + Core
-Helpers gate.
+Status: Layer 4.5A Artifact / State Store Contract + Core Helpers accepted.
+Layer 4.5B adds the bounded `get_state(scope:"artifact")` runtime/helper
+binding over this same contract.
 
 ## Purpose
 
@@ -10,6 +11,12 @@ carry large, resumable, or recipe-checkpoint state outside ordinary template
 results. It does not connect artifacts to live REAPER, `get_state`,
 `call_template`, bridge transport, Lua runtime helpers, live smoke, MCP tools,
 or Layer 6 user recipe authoring.
+
+Layer 4.5B binds summary and payload reads to the existing `get_state` tool
+semantics. It is runtime/helper work over canonical artifact refs. It is not a
+live artifact helper, does not add an MCP tool, does not touch
+`reaper/bridge/**`, and does not create a `call_template` artifact payload
+path.
 
 Artifacts are referenced by opaque refs. Agent-facing responses must carry
 compact refs, metadata, and summaries; full payload reads are explicit bounded
@@ -186,6 +193,59 @@ Layer 4.5A does not implement `get_state(scope:"artifact")`; later runtime
 windows may bind this contract to the existing `get_state` tool without adding
 a new MCP tool.
 
+## Layer 4.5B get_state Runtime Binding
+
+Layer 4.5B binds artifact reads through the existing `get_state` tool. The
+runtime/helper response contract is:
+
+```json
+{
+  "contract": "get_state.runtime.v1"
+}
+```
+
+The only Layer 4.5B-bound state projection is:
+
+```text
+get_state(scope:"artifact")
+```
+
+Request shape:
+
+```json
+{
+  "scope": "artifact",
+  "artifact_ref": "artifact:analysis:loudness:art_20260703000000000_001_abcdef",
+  "view": "summary",
+  "budget": {
+    "max_response_bytes": 65536
+  }
+}
+```
+
+Rules:
+
+- `artifact_ref` is required and must be a canonical artifact ref.
+- Report refs are canonical artifact refs whose scope/schema identify the
+  report family; `report:` refs, raw paths, relative paths, absolute paths,
+  traversal strings, shell-expanded paths, and `file://` URLs are invalid.
+- `owner_pack` is validated against the fixed 16 Layer 3 pack ids.
+- `view` defaults to `summary`; the only valid views are `summary` and
+  `payload`.
+- `summary` returns artifact metadata plus `summary`.
+- `payload` returns artifact metadata plus `summary` and `payload`.
+- Missing artifacts return `ARTIFACT_NOT_FOUND`.
+- Corrupt or invalid JSON artifact envelopes return `ARTIFACT_INVALID`.
+- Oversized payloads or responses return `RESPONSE_TOO_LARGE`.
+- Budget enforcement returns a complete typed error; it never emits partial or
+  half-truncated JSON.
+- Artifact reads do not mutate public or runtime `last_result` state.
+
+Layer 4.5B is runtime/helper binding only. Layer 4.5B does not connect artifact
+reads or writes to `call_template`, does not implement a live artifact helper,
+does not edit `reaper/bridge/**`, does not run live smoke, and does not start
+Layer 6.
+
 ## TTL Sweep Policy Shape
 
 The helper defines only the policy shape:
@@ -243,6 +303,19 @@ Layer 4.5A does not:
 - edit `reaper/bridge/**`;
 - implement REAPER Lua artifact runtime;
 - implement `get_state(scope:"artifact")`;
+- connect artifact reads or writes to `call_template`;
+- run live smoke or update live-smoke matrices;
+- add database, server, or external storage dependencies;
+- import legacy `loop`, `cleanup`, `delivery`, `layer`, or `music_sketch` as
+  packs;
+- start or modify Layer 6.
+
+Layer 4.5B keeps these non-goals:
+
+- add MCP tools;
+- change frozen lower-layer ABI or taxonomy documents;
+- edit `reaper/bridge/**`;
+- implement REAPER Lua artifact runtime;
 - connect artifact reads or writes to `call_template`;
 - run live smoke or update live-smoke matrices;
 - add database, server, or external storage dependencies;

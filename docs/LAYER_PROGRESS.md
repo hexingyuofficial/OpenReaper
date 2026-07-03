@@ -499,6 +499,43 @@ Layer 4.5B is the preferred bounded fix before artifact/report-backed
 first-real-version workflow claims. Layer 4.5C remains a separate later
 live/helper route.
 
+## Layer 4.5B: get_state Artifact Projection / Runtime Binding
+
+Status: candidate_complete
+
+Scope target: bind bounded artifact/report summary and payload reads through
+the existing `get_state` semantics without adding MCP tools, touching
+`reaper/bridge/**`, connecting live REAPER, writing Lua helpers, changing
+`call_template` behavior, or opening Layer 6.
+
+Candidate coverage:
+
+- added `get_state.runtime.v1` artifact projection runtime/helper over
+  canonical `artifact:<owner_pack>:<scope>:<id>` refs;
+- validated report/artifact refs against the fixed 16 pack owners and rejected
+  raw paths, traversal, `file://`, workflow-shaped owners/scopes, and malformed
+  aliases before store access;
+- projected `summary` and explicit `payload` views from fake artifact stores;
+- mapped missing, corrupt, oversized, and budget-failing artifact reads to the
+  existing typed error vocabulary;
+- enforced response budgets as complete typed errors, not partial JSON;
+- kept artifact reads from updating `last_result`;
+- confirmed artifact-producing `call_template` results still carry refs only.
+
+Tests: `node --test tests/layer4_5b/get-state-artifact-projection.test.mjs`,
+`npm run check:artifact-state-store`, `npm run check:tool-abi`,
+`npm run check:template-runtime`, `npm test`, `npm run build`, and
+`git diff --check`.
+
+Known risks: fake-store/runtime-helper coverage only. Layer 4.5B does not
+prove filesystem artifact roots under live REAPER, Lua artifact helpers, live
+artifact smoke, report schema contracts, or official artifact-backed recipes.
+
+Next gate after control-tower review: Layer 4.5C remains closed unless a
+separate live/helper route is explicitly opened. Layer 6 may still open only as
+narrow user recipe authoring unless artifact-backed workflow claims are
+accepted separately.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen
