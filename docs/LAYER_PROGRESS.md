@@ -223,13 +223,44 @@ templates are closed/reviewed capabilities; users primarily author recipes.
 Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
 Smoke Gate.
 
+## Wave 3A: Critical Descriptor-Only Pass
+
+Status: planned
+
+Scope target: add only the most critical descriptor-only trial set for `core`
+and `system` before Layer 4D.
+
+Required coverage:
+
+- implement only the small approved Wave 3A route-board ids;
+- keep `core` focused on OpenReaper/catalog/last-result visibility;
+- keep `system` focused on runtime environment, resource paths, and API symbol
+  visibility;
+- defer `ui` entirely for now;
+- defer `hardware_control` entirely for now;
+- keep video as non-pack work; video-related atoms stay under `media`, `fx`,
+  `items`, or `render` by primary owner if needed later;
+- add pack-local descriptor/catalog/fake harness tests;
+- extend combined catalog smoke so Wave 1A, Wave 2A, and Wave 3A critical
+  descriptors validate together.
+
+Out of scope: runtime Lua, live REAPER startup, live smoke, `call_template`
+runtime binding, recipes, user recipe authoring, destructive templates,
+all `ui` templates, all `hardware_control` templates, hardware writes, hardware
+endpoint mutation, arbitrary UI automation, generic action execution,
+video-specific product work, new ref kinds, user docs, and frozen ABI changes
+unless a concrete blocker is reported.
+
+Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
+Smoke Gate.
+
 ## Layer 4D: Template Runtime Binding / Live Smoke Gate
 
 Status: planned
 
 Scope target: bind the accepted official template catalog to the agent-facing
 `call_template` execution path without adding MCP tools or changing frozen ABI
-surfaces, and add a unified opt-in live smoke gate after Wave 2A descriptor-only
+surfaces, and add a unified opt-in live smoke gate after Wave 3A descriptor-only
 work is accepted.
 
 Required coverage:
