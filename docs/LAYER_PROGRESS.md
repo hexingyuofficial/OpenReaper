@@ -457,6 +457,47 @@ prepared transport directory and collect old-control live-smoke evidence before
 any matrix promotion. Layer 4.5A artifact/state-store contract work may proceed
 in parallel if it avoids the 4D.2 bridge workspace.
 
+## Layer 4.5A: Artifact / State Store Contract + Core Helpers
+
+Status: accepted
+
+Accepted commit: `00f837e core: add layer 4.5a artifact state store`
+
+Scope target: define the artifact/state-store contract and pure core helpers
+needed for large, resumable, or recipe-checkpoint data without binding runtime,
+`get_state`, `call_template`, REAPER Lua, live smoke, or Layer 6.
+
+Accepted coverage:
+
+- added `artifact.state_store.v1` ABI documentation;
+- added canonical `artifact:<owner_pack>:<scope>:<id>` parser/formatter and
+  command-id-derived artifact id helper;
+- validated owner packs against the frozen 16-pack taxonomy and rejected
+  legacy workflow-shaped owner/scope leakage;
+- added path-safe artifact-root mapping and TTL sweep policy classification
+  without deleting files;
+- added JSON artifact envelope validation, exact field checks, producer
+  checks, summary/payload budgets, and bounded read projection semantics;
+- added no-public-`last_result:artifact:N` policy helpers;
+- wired `check:artifact-state-store` into `npm test` and `npm run build`;
+- added Layer 4.5A scope guard coverage.
+
+Out of scope: `reaper/bridge/**`, REAPER Lua artifact runtime,
+`get_state(scope:"artifact")`, `call_template` artifact binding, live smoke,
+matrix updates, MCP tool changes, Layer 6, and filesystem sweep/delete.
+
+Tests: `npm run check:artifact-state-store`, `node --test
+tests/layer4_5a/*.test.mjs`, `npm test`, `npm run build`,
+`npm run check:layer -- layer4.5a`, and `git diff --check`.
+
+Known risks: this is contract/helper-only. Runtime missing/corrupt artifact
+behavior, fake store reads, `get_state` projection, REAPER-side artifact helper,
+and live artifact smoke remain for later 4.5 windows.
+
+Next gate after acceptance: decide whether to open Layer 4.5B for bounded
+`get_state` artifact projection / runtime binding, or continue Vision Pressure
+with Layer 4.5A evidence noted as sufficient for contract review.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen
