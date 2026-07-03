@@ -120,16 +120,15 @@ Wave 1A official descriptor catalog is accepted.
 Wave 2A descriptor-only 70-template catalog is accepted.
 Wave 3A critical research-only scout is accepted.
 Wave 3B critical descriptor-only catalog is accepted.
+Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
 
-The next window should run Layer 4D: Template Runtime Binding / Live Smoke Gate.
+The next window should run Layer 5: Recipe Contract v1.
 
-It should bind the accepted official template catalog to the agent-facing
-`call_template` path without adding MCP tools or changing frozen ABI surfaces.
+Layer 5 should define the lightweight user-agent recipe run ratchet using the
+accepted official template catalog and Layer 4D template execution evidence.
 
-Layer 4D should resolve accepted catalog ids, reject unknown or non-catalog ids
-with typed errors, route input/ref/context validation through the Layer 4B
-harness, keep discovery compact, add fake runtime smoke over the accepted
-catalog, and provide opt-in live smoke commands that do not start REAPER by
-default. It may retain compact template execution evidence for future
-recipe-run recovery, but it must not implement recipe ratchet; Layer 5 owns
-recipe run state, checkpoints, evidence, idempotency, resume, and risk gates.
+Layer 5 owns recipe run state, checkpoints, evidence requirements,
+idempotency expectations, resume/recovery rules, and recipe-level risk gates.
+It must not define new templates, raw Lua, raw actions, shell commands, or
+bypass paths, and it must not reopen Layer 4D unless a concrete blocker is
+reported to the control tower.

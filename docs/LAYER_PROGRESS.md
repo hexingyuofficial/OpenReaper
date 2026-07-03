@@ -320,7 +320,9 @@ Smoke Gate.
 
 ## Layer 4D: Template Runtime Binding / Live Smoke Gate
 
-Status: planned
+Status: accepted
+
+Accepted commit: `971758b runtime: add layer 4d call_template binding`
 
 Scope target: bind the accepted official template catalog to the agent-facing
 `call_template` execution path without adding MCP tools or changing frozen ABI
@@ -343,6 +345,23 @@ Out of scope: recipes, user recipe authoring, blocked templates, runtime Lua
 expansion, recipe ratchet/run state, recipe checkpoints, recipe resume,
 recipe-level risk gates, broad live REAPER coverage, user docs, and frozen ABI
 changes unless a concrete blocker is reported.
+
+Accepted coverage: added `call_template.runtime.v1` module-level binding over
+the accepted Wave 1A + Wave 2A + Wave 3B official catalog, rejected seed-only,
+held, unknown, workflow-shaped, non-catalog, raw descriptor, raw Lua/action,
+shell/process, arbitrary bridge, and arbitrary request payloads with typed
+errors, routed accepted executions through the Layer 4B harness, retained
+bounded `template.runtime.evidence.v1`, added fake runtime smoke over 119
+accepted ids, and added an opt-in live smoke gate that skips safely by default
+without starting REAPER.
+
+Tests: `npm run check:tool-abi`, `npm run check:template-runtime`, `npm test`,
+`npm run build`, `npm run check:layer -- layer4d`, `git diff --check`.
+
+Known risks: this binds the accepted catalog to a module-level runtime path and
+live-smoke gate. It does not provide full MCP server invocation coverage, real
+live bridge execution, runtime Lua implementation for each descriptor, or pack
+live-smoke promotion.
 
 Next gate after acceptance: Layer 5 Recipe Contract v1.
 
