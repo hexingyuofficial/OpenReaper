@@ -457,6 +457,48 @@ prepared transport directory and collect old-control live-smoke evidence before
 any matrix promotion. Layer 4.5A artifact/state-store contract work may proceed
 in parallel if it avoids the 4D.2 bridge workspace.
 
+## 4D.x: Wave 1A Read-Handler Expansion
+
+Status: accepted
+
+Accepted commit: `1344b2d runtime: add wave1a live read handlers`
+
+Scope target: extend the non-spawning live-smoke path from the Wave 0 canary
+handlers to exactly the nine approved Wave 1A read/query templates, without
+broadening to all 119 templates, writes, actions, recipes, or live matrix
+promotion.
+
+Accepted coverage:
+
+- preserved the five Wave 0 canary ids as a separate runtime allowlist;
+- added the nine Wave 1A live ids and kept the live smoke script scoped to
+  those ids;
+- added read-only Lua bridge handlers for template catalog summary, last
+  result metadata, API symbol checks, project metadata, marker/region listing,
+  tempo map, track ref resolution, item ref resolution, and item summary;
+- kept REAPER startup manual and non-spawning;
+- retained typed owner/generation, malformed request, unsupported operation,
+  and response-budget errors;
+- added `layer4dx` scope guard support and focused tests.
+
+Out of scope: writes, action execution, raw Lua eval, shell/process behavior,
+all-template live smoke, live matrix updates, recipes, Layer 4.5C artifact
+helpers, and Layer 6.
+
+Tests: `node --test tests/layer4dx/read-handler-expansion.test.mjs`,
+`npm run check:template-runtime`, `node scripts/smoke-template-runtime-live.mjs`,
+`node scripts/smoke-template-runtime-live.mjs --live`, `npm test`,
+`npm run build`, `npm run check:layer -- layer4dx`, and `git diff --check`.
+
+Known risks: handler coverage is static/fake until a manual REAPER opt-in
+Wave 1A live evidence report is collected. `template.core.read_last_result`
+currently exposes bounded live bridge metadata and does not prove rich
+last-result replay semantics.
+
+Next gate after acceptance: run a control-tower-scoped manual Wave 1A live
+evidence route before any `LIVE_SMOKE_MATRIX.md` promotion, or open narrow
+Layer 6 user recipe authoring.
+
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 
 Status: accepted

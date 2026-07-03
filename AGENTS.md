@@ -105,6 +105,7 @@ Layer order:
 4D. Template Runtime Binding / Live Smoke Gate
 4D.1. Live Bridge Executor Binding / Wave 0 Canary Enablement
 4D.2. REAPER-side Bridge Script / Wave 0 Handshake
+4D.x. Wave 1A Read-Handler Expansion
 4.5A. Artifact / State Store Contract + Core Helpers
 4.5B. get_state Artifact Projection / Runtime Binding
 4.5C. Lua Artifact Helper + Live Artifact Smoke
@@ -128,6 +129,7 @@ Wave 3B critical descriptor-only catalog is accepted.
 Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
 Layer 4D.1 Live Bridge Executor Binding / Wave 0 Canary Enablement is accepted.
 Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
+4D.x Wave 1A Read-Handler Expansion is accepted.
 Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
 Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
 Layer 5 Recipe Contract v1 is frozen.
@@ -135,17 +137,16 @@ Layer 5 Recipe Contract v1 is frozen.
 Current control-tower decision: the old-control Vision Pressure Pass accepted
 `proceed_with_warnings`. Layer 5 does not need a contract reopen.
 
-Current next implementation choices: accept the separate 4D.x Wave 1A
-read-handler expansion when its worker returns, or open narrow Layer 6 user
-recipe authoring. Do not make either path claim four-vision readiness without
-separate live/evidence gates.
+Current next choices: collect old-control Wave 1A manual live evidence, or
+open narrow Layer 6 user recipe authoring. Do not make either path claim
+four-vision readiness without separate live/evidence gates.
 
 Layer 4.5C Lua Artifact Helper + Live Artifact Smoke requires separate
 control-tower approval. Do not open it as a drive-by follow-up to 4.5B.
 
-Separate live-smoke track: Wave 1 read-only live smoke is blocked until a
-bounded 4D.x read-handler expansion is approved. Do not mix that work into
-Layer 4.5B or Layer 6.
+Separate live-smoke track: Wave 1A read handlers are available, but the live
+matrix must not change until a control-tower-reviewed opt-in live evidence
+report passes. Do not mix live-smoke work into Layer 4.5C or Layer 6.
 
 Layer 6 should expose the frozen Layer 5 recipe contract as user-writable
 recipe rules over the accepted official template catalog. It must not let users
