@@ -29,6 +29,36 @@ import {
   WAVE1A_TRANSPORT_TEMPLATES,
   createWave1ATransportTemplates,
 } from "./template-packs/wave1a-transport-templates-v1.mjs";
+import {
+  WAVE2A_FX_TEMPLATE_IDS,
+  WAVE2A_FX_TEMPLATES,
+  createWave2AFxTemplates,
+} from "./template-packs/wave2a-fx-templates-v1.mjs";
+import {
+  WAVE2A_MEDIA_TEMPLATE_IDS,
+  WAVE2A_MEDIA_TEMPLATES,
+  createWave2AMediaTemplates,
+} from "./template-packs/wave2a-media-templates-v1.mjs";
+import {
+  WAVE2A_ROUTING_TEMPLATE_IDS,
+  WAVE2A_ROUTING_TEMPLATES,
+  createWave2ARoutingTemplates,
+} from "./template-packs/wave2a-routing-templates-v1.mjs";
+import {
+  WAVE2A_AUTOMATION_TEMPLATE_IDS,
+  WAVE2A_AUTOMATION_TEMPLATES,
+  createWave2AAutomationTemplates,
+} from "./template-packs/wave2a-automation-templates-v1.mjs";
+import {
+  WAVE2A_MIDI_TEMPLATE_IDS,
+  WAVE2A_MIDI_TEMPLATES,
+  createWave2AMidiTemplates,
+} from "./template-packs/wave2a-midi-templates-v1.mjs";
+import {
+  WAVE2A_ACTIONS_TEMPLATE_IDS,
+  WAVE2A_ACTIONS_TEMPLATES,
+  createWave2AActionsTemplates,
+} from "./template-packs/wave2a-actions-templates-v1.mjs";
 
 export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
   ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
@@ -46,6 +76,32 @@ export const TEMPLATE_CATALOG_WAVE1A_TEMPLATES = deepFreeze([
   ...WAVE1A_TRANSPORT_TEMPLATES,
   ...WAVE1A_ANALYSIS_TEMPLATES,
   ...WAVE1A_RENDER_TEMPLATES,
+]);
+
+export const TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS = deepFreeze([
+  ...WAVE2A_FX_TEMPLATE_IDS,
+]);
+
+export const TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATES = deepFreeze([
+  ...WAVE2A_FX_TEMPLATES,
+]);
+
+export const TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS = deepFreeze([
+  ...WAVE2A_MEDIA_TEMPLATE_IDS,
+  ...WAVE2A_FX_TEMPLATE_IDS,
+  ...WAVE2A_ROUTING_TEMPLATE_IDS,
+  ...WAVE2A_AUTOMATION_TEMPLATE_IDS,
+  ...WAVE2A_MIDI_TEMPLATE_IDS,
+  ...WAVE2A_ACTIONS_TEMPLATE_IDS,
+]);
+
+export const TEMPLATE_CATALOG_WAVE2A_TEMPLATES = deepFreeze([
+  ...WAVE2A_MEDIA_TEMPLATES,
+  ...WAVE2A_FX_TEMPLATES,
+  ...WAVE2A_ROUTING_TEMPLATES,
+  ...WAVE2A_AUTOMATION_TEMPLATES,
+  ...WAVE2A_MIDI_TEMPLATES,
+  ...WAVE2A_ACTIONS_TEMPLATES,
 ]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
@@ -287,6 +343,23 @@ export function createTemplateCatalogWave1aTemplates() {
     ...createWave1ATransportTemplates(),
     ...createWave1AAnalysisTemplates(),
     ...createWave1aRenderTemplates(),
+  ];
+}
+
+export function createTemplateCatalogWave2aFxTemplates() {
+  return [
+    ...createWave2AFxTemplates(),
+  ];
+}
+
+export function createTemplateCatalogWave2aTemplates() {
+  return [
+    ...createWave2AMediaTemplates(),
+    ...createWave2AFxTemplates(),
+    ...createWave2ARoutingTemplates(),
+    ...createWave2AAutomationTemplates(),
+    ...createWave2AMidiTemplates(),
+    ...createWave2AActionsTemplates(),
   ];
 }
 

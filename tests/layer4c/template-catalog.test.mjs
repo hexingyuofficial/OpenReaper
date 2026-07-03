@@ -22,8 +22,12 @@ import {
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
   createTemplateCatalogWave1aTemplates,
+  createTemplateCatalogWave2aFxTemplates,
+  createTemplateCatalogWave2aTemplates,
   createTemplateCatalogSeedTemplates,
 } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../packages/core/src/template-execution-harness-v1.mjs";
@@ -100,6 +104,117 @@ describe("Layer 4C template catalog and smoke gate", () => {
     );
     assert.equal("bridge" in exact.items[0], false);
     assert.equal("refs" in exact.items[0], false);
+  });
+
+  it("loads the Wave 2A fx descriptors with the official Wave 1A catalog", () => {
+    const templates = [
+      ...createTemplateCatalogWave1aTemplates(),
+      ...createTemplateCatalogWave2aFxTemplates(),
+    ];
+    const validation = validateTemplateCatalog({ templates });
+    const catalog = createTemplateCatalog({ templates });
+    const blocked = [
+      "template.fx.delete_fx",
+      "template.fx.copy_fx_to_track",
+      "template.fx.set_fx_offline",
+      "template.fx.set_video_processor_code",
+      "template.fx.set_fx_pin_mapping",
+      "template.fx.write_fx_parameter_envelope",
+      "template.fx.set_fx_parameter_learn",
+    ];
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.equal(catalog.size, 43 + TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS.length);
+    assert.deepEqual(catalog.ids.slice(0, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
+    assert.deepEqual(catalog.ids.slice(TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS);
+    assert.equal(new Set(catalog.ids).size, catalog.ids.length);
+
+    for (const id of blocked) {
+      assert.equal(catalog.get(id), null, id);
+    }
+
+    const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
+    const menu = discovery.list_templates({ pack: "fx" });
+    assert.equal(menu.items.length, TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS.length);
+    assert.equal(menu.page.has_more, false);
+    assert.equal("bridge" in menu.items[0], false);
+
+    const exact = discovery.list_templates({
+      ids: ["template.fx.set_fx_bypass", "template.fx.read_video_processor_code"],
+      fields: ["summary", "inputSchema", "expectedDelta"],
+    });
+    assert.equal(exact.mode, "ids");
+    assert.deepEqual(
+      exact.items.map((item) => item.id),
+      ["template.fx.set_fx_bypass", "template.fx.read_video_processor_code"],
+    );
+    assert.equal("bridge" in exact.items[0], false);
+    assert.equal("refs" in exact.items[0], false);
+    assert.equal("artifacts" in exact.items[0], false);
+  });
+
+  it("loads the Wave 2A media descriptors through the shared Wave 2A fixture", () => {
+    const templates = createTemplateCatalogWave2aTemplates();
+    const validation = validateTemplateCatalog({ templates });
+    const catalog = createTemplateCatalog({ templates });
+    const mediaIds = [
+      "template.media.probe_file",
+      "template.media.read_take_source",
+      "template.media.import_file_to_track",
+      "template.media.import_file_section_to_track",
+      "template.media.read_project_media_files",
+      "template.media.relink_take_source",
+    ];
+    const blocked = [
+      "template.media.relink_project_source_path",
+      "template.media.render_source_section",
+      "template.media.delete_source_file",
+      "template.media.read_project_bay_sources",
+      "template.media.read_sws_resource_media_slots",
+    ];
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.deepEqual(catalog.ids, TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS);
+    assert.deepEqual(catalog.ids.slice(0, mediaIds.length), mediaIds);
+    assert.equal(new Set(catalog.ids).size, catalog.ids.length);
+
+    for (const id of blocked) {
+      assert.equal(catalog.get(id), null, id);
+    }
+
+    const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
+    const menu = discovery.list_templates({ pack: "media" });
+    assert.equal(menu.items.length, mediaIds.length);
+    assert.equal(menu.page.has_more, false);
+    assert.equal("total" in menu.page, false);
+    const payload = JSON.stringify(menu);
+    for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      assert.doesNotMatch(payload, new RegExp(field));
+    }
+  });
+
+  it("loads the official Wave 1A plus Wave 2A catalog without duplicate ids", () => {
+    const templates = [
+      ...createTemplateCatalogWave1aTemplates(),
+      ...createTemplateCatalogWave2aTemplates(),
+    ];
+    const validation = validateTemplateCatalog({ templates });
+    const catalog = createTemplateCatalog({ templates });
+
+    assert.deepEqual(validation.errors, []);
+    assert.equal(validation.ok, true);
+    assert.equal(catalog.size, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length + TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS.length);
+    assert.deepEqual(catalog.ids.slice(0, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
+    assert.deepEqual(catalog.ids.slice(TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS);
+    assert.equal(new Set(catalog.ids).size, catalog.ids.length);
+
+    const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
+    const menu = discovery.list_templates();
+    assert.equal(menu.items.length, 25);
+    assert.equal(menu.page.has_more, true);
+    assert.equal("total" in menu.page, false);
   });
 
   it("runs combined fake execution smoke for the official Wave 1A catalog", async () => {
@@ -345,6 +460,12 @@ describe("Layer 4C template catalog and smoke gate", () => {
       "../../packages/core/src/template-packs/wave1a-render-templates-v1.mjs",
       "../../packages/core/src/template-packs/wave1a-tracks-templates-v1.mjs",
       "../../packages/core/src/template-packs/wave1a-transport-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-actions-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-automation-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-fx-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-media-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-midi-templates-v1.mjs",
+      "../../packages/core/src/template-packs/wave2a-routing-templates-v1.mjs",
     ].map((sourcePath) => readFileSync(new URL(sourcePath, import.meta.url), "utf8"));
     const source = `${catalogSource}\n${fixtureSource}\n${packSources.join("\n")}`;
 
