@@ -187,11 +187,13 @@ Next gate: Wave 2A Descriptor-Only 70-Template Pass.
 
 ## Wave 2A: Descriptor-Only 70-Template Pass
 
-Status: planned
+Status: accepted
 
-Scope target: implement the 70 template ids approved in the old control-tower
-Wave 2 review as descriptor-only catalog entries with pack-local tests and
-combined fake catalog/harness smoke.
+Accepted commit: `ee14a64 templates: add wave 2a descriptor catalog`
+
+Scope: implemented the 70 template ids approved in the old control-tower Wave 2
+review as descriptor-only catalog entries with pack-local tests and combined
+fake catalog/harness smoke.
 
 Required coverage:
 
@@ -210,6 +212,10 @@ Out of scope: runtime Lua, live REAPER startup, live smoke, `call_template`
 runtime binding, recipes, user recipe authoring, destructive templates,
 hardware endpoints, generic/action execution, new ref kinds, user docs, and
 frozen ABI changes unless a concrete blocker is reported.
+
+Product direction: Wave 2A expands the official reviewed template catalog. It
+does not make templates user-authorable. The intended v1 boundary remains:
+templates are closed/reviewed capabilities; users primarily author recipes.
 
 Next gate after acceptance: Layer 4D Template Runtime Binding / Unified Live
 Smoke Gate.
@@ -239,3 +245,22 @@ expansion, broad live REAPER coverage, user docs, and frozen ABI changes unless
 a concrete blocker is reported.
 
 Next gate after acceptance: Layer 5 Recipe Contract v1.
+
+## Template Closure / User Recipe Authoring Target
+
+Status: planned product boundary for v1.
+
+Target: by the time Layer 6 is accepted, ordinary users should be able to
+create and edit recipes against the official template catalog without authoring
+new templates.
+
+Acceptance direction:
+
+- `list_templates` exposes a reviewed, versioned official catalog;
+- `list_recipes` exposes official and user/community recipes;
+- recipe validation proves every step references known templates and declared
+  refs/artifacts;
+- user recipe authoring cannot define new template descriptors, raw Lua, raw
+  actions, shell commands, or bypass paths;
+- any future third-party template extension is treated as reviewed developer
+  mode, not the default user workflow.

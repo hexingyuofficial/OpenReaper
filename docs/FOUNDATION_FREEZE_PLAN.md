@@ -27,6 +27,37 @@ Agent = reads recipes and calls templates through MCP tools
 User = primarily creates or edits recipes
 ```
 
+## Template Closure Target
+
+OpenReaper v1 should treat templates as a closed, reviewed capability catalog.
+Ordinary users should not author or install arbitrary templates in the normal
+product path.
+
+The long-term authoring boundary is:
+
+```text
+Official / reviewed maintainers expand templates.
+Users and community authors primarily create recipes.
+Agents discover recipes first and call templates only through recipes or
+explicit atomic calls.
+```
+
+Reason: templates are the dangerous boundary. They touch REAPER state, files,
+routing, FX, automation, render, actions, and future bridge/runtime behavior.
+Recipe authoring is the intended creative/workflow boundary because it composes
+already verified template powers without creating new write powers.
+
+V1 target:
+
+- template ids, descriptors, risks, refs, expected deltas, and fake/live smoke
+  evidence are maintained by the project;
+- user-facing extension starts at recipes, not templates;
+- any future third-party template extension must be a reviewed developer mode,
+  gated by descriptor validation, fake smoke, live smoke where relevant, risk
+  policy, ownership review, and catalog acceptance;
+- no recipe may smuggle new powers through raw Lua, raw actions, shell commands,
+  or unreviewed template definitions.
+
 ## Layer Order
 
 ### Layer 1: Tool ABI v1

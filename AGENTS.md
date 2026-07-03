@@ -109,20 +109,17 @@ Layer 4A: Template Descriptor Contract is frozen.
 Layer 4B: Template Execution Harness is frozen.
 Layer 4C: Template Catalog / Smoke Gate is frozen.
 Wave 1A official descriptor catalog is accepted.
+Wave 2A descriptor-only 70-template catalog is accepted.
 
-The next window should build Wave 2A: Descriptor-Only 70-Template Pass.
+The next window should build Layer 4D: Template Runtime Binding / Unified Live
+Smoke Gate.
 
 It should not change the frozen MCP tool names, discovery/menu,
 foundation/bridge, pack taxonomy, 4A descriptor, 4B execution harness, or 4C
-catalog/smoke surfaces. It should add only descriptor-only template pack files,
-pack-local tests, shared catalog wiring, and fake catalog/harness smoke for the
-70 approved Wave 2A template ids recorded in the old control-tower review.
+catalog/smoke surfaces. It should bind the accepted official template catalog
+to the `call_template` runtime path and add unified opt-in live smoke gates that
+do not start REAPER by default.
 
-Wave 2A must not implement runtime Lua, live REAPER behavior, recipes,
-destructive templates, hardware endpoint behavior, generic/action execution, or
-new ref kinds. If this work exposes a real lower-layer blocker, stop and report
-it to the control tower.
-
-After Wave 2A is accepted, the next gate is Layer 4D. Layer 4D should bind the
-accepted official template catalog to the `call_template` runtime path and add
-unified opt-in live smoke gates that do not start REAPER by default.
+Layer 4D must not implement recipes, user recipe authoring, blocked templates,
+runtime Lua expansion, broad live REAPER coverage, user docs, or frozen ABI
+changes unless a concrete blocker is reported to the control tower.
