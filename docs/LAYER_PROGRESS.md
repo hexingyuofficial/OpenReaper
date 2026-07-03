@@ -687,6 +687,8 @@ Layer 7 official recipe acceptance / first real version gate.
 
 Status: accepted
 
+Accepted commit: `dcc6913 templates: add critical render analysis catalog`
+
 Scope target: close the highest-priority four-vision template gaps before
 Layer 7 official recipe acceptance, without adding recipes, live smoke, runtime
 Lua, raw execution, workflow packs, or user docs.
