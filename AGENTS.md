@@ -91,6 +91,26 @@ The control tower owns commits for accepted layer freezes and approved
 architecture/process updates. A layer is frozen only after the control tower
 accepts the work and records the accepted commit.
 
+## User Handoff Prompts
+
+When the control tower needs the user to send work to another window, it should
+give a complete copy-paste prompt and name the intended recipient clearly, such
+as `Layer 6 worker`, `R3 research`, `R4 research`, `C fixture retry`, or
+`reviewer`.
+
+The handoff should say:
+
+- who should receive it;
+- what repo/path scope they may touch;
+- what they must not change;
+- what tests or checks to run;
+- what report path or completion format to return;
+- whether commits are forbidden.
+
+Do not ask the user to infer which window or agent should receive a prompt.
+If multiple windows are active, state which one should receive each prompt and
+which returned reports the control tower is waiting for.
+
 Layer order:
 
 ```text
