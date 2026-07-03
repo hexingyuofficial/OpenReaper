@@ -2,6 +2,7 @@ import { stat } from "node:fs/promises";
 import {
   CALL_TEMPLATE_RUNTIME_CONTRACT,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -30,6 +31,7 @@ import {
 const WAVE1A_OPT_IN_ENV = "OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE";
 const FIRST_REAL_A1_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A1_LIVE_SMOKE";
 const OPT_IN_FLAG = "--live";
+const READ_B_FLAG = "--read-b";
 const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FAKE_FLAG = "--fake";
 const OWNER_ENV = "OPENREAPER_LIVE_BRIDGE_OWNER";
@@ -41,6 +43,35 @@ const FIRST_REAL_A1_ITEM_REF_ENV = "OPENREAPER_FIRST_REAL_A_ITEM_REF";
 const FIRST_REAL_A1_PROJECT_REF_ENV = "OPENREAPER_FIRST_REAL_A_PROJECT_REF";
 const FIRST_REAL_A1_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
 const FIRST_REAL_A1_BATCH = "First-Real-Fixture-A A1";
+const READ_B_BATCH = "read-b-live-handlers";
+const READ_B_ACTION_SECTION_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SECTION";
+const READ_B_ACTION_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_COMMAND_ID";
+const READ_B_ACTION_TOGGLE_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_TOGGLE_COMMAND_ID";
+const READ_B_NAMED_COMMAND_ENV = "OPENREAPER_LIVE_SMOKE_NAMED_COMMAND";
+const READ_B_ACTION_SEARCH_QUERY_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SEARCH_QUERY";
+const READ_B_ACTION_SEARCH_LIMIT_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SEARCH_LIMIT";
+const READ_B_MARKER_ACTION_TEXT_ENV = "OPENREAPER_LIVE_SMOKE_MARKER_ACTION_TEXT";
+const READ_B_MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
+const READ_B_AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
+const READ_B_MEDIA_PATH_ENV = "OPENREAPER_LIVE_SMOKE_MEDIA_PATH";
+
+const READ_B_OPERATIONS = Object.freeze([
+  "query_state:actions.resolve_named_command",
+  "query_state:actions.read_action_metadata",
+  "query_state:actions.read_action_toggle_state",
+  "query_state:actions.read_action_shortcuts",
+  "query_state:actions.parse_marker_action_text",
+  "query_state:actions.search_action_commands",
+  "query_state:midi.resolve_midi_take_ref",
+  "query_state:midi.read_take_event_counts",
+  "query_state:midi.list_take_notes",
+  "query_state:midi.list_take_cc_events",
+  "query_state:midi.list_take_text_sysex_events",
+  "query_state:midi.read_take_grid",
+  "query_state:media.file.probe",
+  "query_state:media.take_source.read",
+  "query_state:media.project_files.read",
+]);
 
 const FIRST_REAL_A1_TEMPLATE_SPECS = Object.freeze([
   Object.freeze({
@@ -167,8 +198,8 @@ if (!executorConfig.configured) {
   process.exit(2);
 }
 
-if (route.name === "first-real-a1") {
-  const blocker = await firstRealA1ConfiguredBlocker({
+if (route.configuredBlocker) {
+  const blocker = await route.configuredBlocker({
     fixtureInputs,
     executorConfig,
   });
@@ -194,11 +225,11 @@ const routeReport = route.name === "first-real-a1"
       contextBase,
       artifactRoot: fixtureInputs.artifact_root,
     })
-  : await runWave1ASmoke({
+  : await runReadOnlySmoke({
       liveRuntime,
       fixtureInputs,
       contextBase,
-      templateIds: route.templateIds,
+      route,
     });
 
 console.log(JSON.stringify({
@@ -225,8 +256,28 @@ function selectRoute(argv, env) {
       templateIds: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
       operations: FIRST_REAL_A1_TEMPLATE_SPECS.map((spec) => spec.operation),
       fixtureInputs: firstRealA1FixtureInputs,
+      configuredBlocker: firstRealA1ConfiguredBlocker,
       passReason: "first_real_fixture_a1_live_readback_passed",
       failReason: "first_real_fixture_a1_live_readback_failed",
+    };
+  }
+
+  if (argv.includes(READ_B_FLAG)) {
+    return {
+      name: "read-b",
+      wave: READ_B_BATCH,
+      batch: READ_B_BATCH,
+      routeFlag: READ_B_FLAG,
+      optInEnv: WAVE1A_OPT_IN_ENV,
+      fake: false,
+      templateIds: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
+      operations: READ_B_OPERATIONS,
+      fixtureInputs: readBFixtureInputs,
+      configuredBlocker: readOnlyConfiguredBlocker,
+      inputBuilder: readBInputs,
+      refsBuilder: readBRefs,
+      passReason: "read_b_live_handlers_passed",
+      failReason: "read_b_live_handlers_failed",
     };
   }
 
@@ -240,6 +291,8 @@ function selectRoute(argv, env) {
     templateIds: CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
     operations: [],
     fixtureInputs: liveSmokeFixtureInputs,
+    inputBuilder: wave1AInputs,
+    refsBuilder: wave1ARefs,
     passReason: "wave1a_live_read_handlers_passed",
     failReason: "wave1a_live_read_handlers_failed",
   };
@@ -259,9 +312,10 @@ function createLiveRuntimeForRoute(selectedRoute, executor, executorConfig) {
   });
 }
 
-async function runWave1ASmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase, templateIds }) {
-  const exampleInputsById = exampleInputs(liveRuntime, fixtureInputsForRun, templateIds);
-  const exampleRefsById = exampleRefs(fixtureInputsForRun);
+async function runReadOnlySmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase, route: selectedRoute }) {
+  const templateIds = selectedRoute.templateIds;
+  const exampleInputsById = selectedRoute.inputBuilder(liveRuntime, fixtureInputsForRun, templateIds);
+  const exampleRefsById = selectedRoute.refsBuilder(fixtureInputsForRun);
   const executions = [];
 
   for (const [index, id] of templateIds.entries()) {
@@ -281,7 +335,7 @@ async function runWave1ASmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun,
   const ok = executions.every((execution) => execution.ok);
   return {
     ok,
-    reason: ok ? "wave1a_live_read_handlers_passed" : firstBlocker(executions) ?? "wave1a_live_read_handlers_failed",
+    reason: ok ? selectedRoute.passReason : firstBlocker(executions) ?? selectedRoute.failReason,
     attempted_template_ids: templateIds,
     executions,
   };
@@ -542,14 +596,57 @@ async function isReadableFile(path) {
   }
 }
 
-function exampleInputs(liveRuntime, fixtureInputsForRun, templateIds) {
+async function readOnlyConfiguredBlocker({ executorConfig }) {
+  const transportDir = executorConfig.config?.transport_dir;
+  const requestsDir = transportDir ? `${transportDir}/requests` : null;
+  const resultsDir = transportDir ? `${transportDir}/results` : null;
+  const missingTransport = [];
+  for (const [label, path] of [
+    ["transport_dir", transportDir],
+    ["requests_dir", requestsDir],
+    ["results_dir", resultsDir],
+  ]) {
+    if (!(await isDirectory(path))) missingTransport.push(label);
+  }
+  if (missingTransport.length > 0) {
+    return {
+      reason: "live_bridge_transport_absent",
+      blocker: "live_bridge_transport_absent",
+      message: "Configured live bridge transport directory is absent or incomplete.",
+      details: {
+        missing: missingTransport,
+        transport_dir: boundedString(transportDir, 240),
+        requests_dir: boundedString(requestsDir, 240),
+        results_dir: boundedString(resultsDir, 240),
+      },
+    };
+  }
+
+  if (!(await isReadableFile(executorConfig.config?.bridge_script_path))) {
+    return {
+      reason: "reaper_bridge_script_absent",
+      blocker: "reaper_bridge_script_absent",
+      message: "Configured REAPER bridge script is absent; live bridge transport cannot handshake.",
+      details: {
+        bridge_script_path: boundedString(executorConfig.config?.bridge_script_path, 240),
+      },
+    };
+  }
+  return null;
+}
+
+function catalogExampleInputs(liveRuntime, templateIds) {
   const menu = liveRuntime.list_templates({
     ids: templateIds,
     fields: ["examples"],
   });
-  const inputs = Object.fromEntries(
+  return Object.fromEntries(
     menu.items.map((item) => [item.id, cloneJson(item.examples?.[0]?.input ?? {})]),
   );
+}
+
+function wave1AInputs(liveRuntime, fixtureInputsForRun, templateIds) {
+  const inputs = catalogExampleInputs(liveRuntime, templateIds);
   if (fixtureInputsForRun.track_ref) {
     inputs["template.tracks.resolve_track_ref"] = { track_ref: fixtureInputsForRun.track_ref };
   }
@@ -559,11 +656,86 @@ function exampleInputs(liveRuntime, fixtureInputsForRun, templateIds) {
   return inputs;
 }
 
-function exampleRefs(fixtureInputsForRun) {
+function wave1ARefs(fixtureInputsForRun) {
   return {
     "template.items.read_item_summary": {
       item_ref: itemObjectRefFromFixture(fixtureInputsForRun.item_ref),
     },
+  };
+}
+
+function readBInputs(_liveRuntime, fixtureInputsForRun) {
+  return {
+    "template.actions.resolve_named_command": {
+      named_command: fixtureInputsForRun.named_command,
+      section: fixtureInputsForRun.action_section,
+    },
+    "template.actions.read_action_metadata": {
+      section: fixtureInputsForRun.action_section,
+      command_id: fixtureInputsForRun.action_command_id,
+    },
+    "template.actions.read_action_toggle_state": {
+      section: fixtureInputsForRun.action_section,
+      command_id: fixtureInputsForRun.action_toggle_command_id,
+    },
+    "template.actions.read_action_shortcuts": {
+      section: fixtureInputsForRun.action_section,
+      command_id: fixtureInputsForRun.action_command_id,
+      max_shortcuts: 8,
+    },
+    "template.actions.parse_marker_action_text": {
+      text: fixtureInputsForRun.marker_action_text,
+      section: fixtureInputsForRun.action_section,
+      resolve_tokens: true,
+    },
+    "template.actions.search_action_commands": {
+      section: fixtureInputsForRun.action_section,
+      query: fixtureInputsForRun.action_search_query,
+      limit: fixtureInputsForRun.action_search_limit,
+    },
+    "template.midi.resolve_midi_take_ref": {
+      ref: fixtureInputsForRun.midi_take_ref,
+    },
+    "template.midi.read_take_event_counts": {},
+    "template.midi.list_take_notes": {
+      limit: 16,
+      include_project_time: true,
+    },
+    "template.midi.list_take_cc_events": {
+      controller: 1,
+      limit: 16,
+    },
+    "template.midi.list_take_text_sysex_events": {
+      event_kind: "any",
+      limit: 16,
+    },
+    "template.midi.read_take_grid": {},
+    "template.media.probe_file": {
+      path: fixtureInputsForRun.media_path,
+      include_metadata_keys: true,
+    },
+    "template.media.read_take_source": {
+      include_metadata_keys: true,
+      include_parent_source: false,
+    },
+    "template.media.read_project_media_files": {
+      include_offline: true,
+      include_metadata_keys: false,
+      max_sources: 25,
+    },
+  };
+}
+
+function readBRefs(fixtureInputsForRun) {
+  const midiTakeRef = takeObjectRefFromFixture(fixtureInputsForRun.midi_take_ref);
+  const audioTakeRef = takeObjectRefFromFixture(fixtureInputsForRun.audio_take_ref);
+  return {
+    "template.midi.read_take_event_counts": { take_ref: midiTakeRef },
+    "template.midi.list_take_notes": { take_ref: midiTakeRef },
+    "template.midi.list_take_cc_events": { take_ref: midiTakeRef },
+    "template.midi.list_take_text_sysex_events": { take_ref: midiTakeRef },
+    "template.midi.read_take_grid": { take_ref: midiTakeRef },
+    "template.media.read_take_source": { take_ref: audioTakeRef },
   };
 }
 
@@ -583,6 +755,54 @@ function liveSmokeFixtureInputs(env) {
         "template.items.resolve_item_ref",
         "template.items.read_item_summary",
       ],
+    },
+  };
+}
+
+function readBFixtureInputs(env) {
+  const actionSection = normalizeActionSection(nonEmpty(env[READ_B_ACTION_SECTION_ENV])) ?? "main";
+  const actionCommandId = positiveInteger(env[READ_B_ACTION_COMMAND_ID_ENV], 40044);
+  const actionToggleCommandId = positiveInteger(env[READ_B_ACTION_TOGGLE_COMMAND_ID_ENV], 40364);
+  const namedCommand = nonEmpty(env[READ_B_NAMED_COMMAND_ENV]) ?? "_OPENREAPER_READ_B_NO_SUCH_COMMAND";
+  const actionSearchQuery = nonEmpty(env[READ_B_ACTION_SEARCH_QUERY_ENV]) ?? "marker";
+  const actionSearchLimit = positiveInteger(env[READ_B_ACTION_SEARCH_LIMIT_ENV], 25);
+  const markerActionText = nonEmpty(env[READ_B_MARKER_ACTION_TEXT_ENV]) ?? "!40044 !40364";
+  const midiTakeRef = normalizeTakeFixtureRef(nonEmpty(env[READ_B_MIDI_TAKE_REF_ENV])) ?? "selected:0";
+  const audioTakeRef = normalizeTakeFixtureRef(nonEmpty(env[READ_B_AUDIO_TAKE_REF_ENV])) ?? "take:index:0";
+  const mediaPath = nonEmpty(env[READ_B_MEDIA_PATH_ENV]) ?? "/Users/Shared/OpenReaper/read-b-fixture/read-b-tone.wav";
+  return {
+    action_section: actionSection,
+    action_command_id: actionCommandId,
+    action_toggle_command_id: actionToggleCommandId,
+    named_command: namedCommand,
+    action_search_query: actionSearchQuery,
+    action_search_limit: actionSearchLimit,
+    marker_action_text: markerActionText,
+    midi_take_ref: midiTakeRef,
+    audio_take_ref: audioTakeRef,
+    media_path: mediaPath,
+    report: {
+      action_section_env: READ_B_ACTION_SECTION_ENV,
+      action_command_id_env: READ_B_ACTION_COMMAND_ID_ENV,
+      action_toggle_command_id_env: READ_B_ACTION_TOGGLE_COMMAND_ID_ENV,
+      named_command_env: READ_B_NAMED_COMMAND_ENV,
+      action_search_query_env: READ_B_ACTION_SEARCH_QUERY_ENV,
+      action_search_limit_env: READ_B_ACTION_SEARCH_LIMIT_ENV,
+      marker_action_text_env: READ_B_MARKER_ACTION_TEXT_ENV,
+      midi_take_ref_env: READ_B_MIDI_TAKE_REF_ENV,
+      audio_take_ref_env: READ_B_AUDIO_TAKE_REF_ENV,
+      media_path_env: READ_B_MEDIA_PATH_ENV,
+      action_section: actionSection,
+      action_command_id: actionCommandId,
+      action_toggle_command_id: actionToggleCommandId,
+      named_command: namedCommand,
+      action_search_query: actionSearchQuery,
+      action_search_limit: actionSearchLimit,
+      marker_action_text: markerActionText,
+      midi_take_ref: midiTakeRef,
+      audio_take_ref: audioTakeRef,
+      media_path: boundedString(mediaPath, 240),
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
     },
   };
 }
@@ -612,6 +832,11 @@ function itemObjectRefFromFixture(itemRef) {
   return createObjectRef("item", parsed.identity, { ref: parsed.ref });
 }
 
+function takeObjectRefFromFixture(takeRef) {
+  const parsed = parseTakeFixtureRef(takeRef) ?? parseTakeFixtureRef("selected:0");
+  return createObjectRef("take", parsed.identity, { ref: parsed.ref });
+}
+
 function projectObjectRefFromFixture(projectRef) {
   const normalized = normalizeProjectFixtureRef(projectRef);
   if (!normalized) return null;
@@ -634,6 +859,10 @@ function normalizeItemFixtureRef(itemRef) {
   return parseItemFixtureRef(itemRef)?.input_ref ?? null;
 }
 
+function normalizeTakeFixtureRef(takeRef) {
+  return parseTakeFixtureRef(takeRef)?.input_ref ?? null;
+}
+
 function parseItemFixtureRef(itemRef) {
   const token = String(itemRef ?? "").trim();
   for (const scheme of ["selected", "index", "guid"]) {
@@ -651,9 +880,33 @@ function parseItemFixtureRef(itemRef) {
   return null;
 }
 
+function parseTakeFixtureRef(takeRef) {
+  const token = String(takeRef ?? "").trim();
+  for (const scheme of ["selected", "index", "guid"]) {
+    const prefix = `${scheme}:`;
+    const typedPrefix = `take:${scheme}:`;
+    if (token.startsWith(typedPrefix)) {
+      const value = token.slice(typedPrefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: token };
+    }
+    if (token.startsWith(prefix)) {
+      const value = token.slice(prefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: `take:${scheme}:${value}` };
+    }
+  }
+  return null;
+}
+
 function normalizeProjectFixtureRef(projectRef) {
   const token = String(projectRef ?? "").trim();
   if (token === "" || token === "current" || token === "project:current") return token ? "project:current" : null;
+  return null;
+}
+
+function normalizeActionSection(value) {
+  if (["main", "midi_editor", "midi_event_list", "media_explorer", "crossfade_editor"].includes(value)) {
+    return value;
+  }
   return null;
 }
 

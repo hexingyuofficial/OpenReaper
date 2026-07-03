@@ -275,7 +275,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /Read-B|LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
   });
 });

@@ -12,6 +12,7 @@ import {
 import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -52,6 +53,21 @@ const EXPECTED_LUA_OPERATIONS = Object.freeze([
   "template_catalog.read_summary",
   "track.resolve_ref",
   "transport.read_state",
+  "actions.parse_marker_action_text",
+  "actions.read_action_metadata",
+  "actions.read_action_shortcuts",
+  "actions.read_action_toggle_state",
+  "actions.resolve_named_command",
+  "actions.search_action_commands",
+  "media.file.probe",
+  "media.project_files.read",
+  "media.take_source.read",
+  "midi.list_take_cc_events",
+  "midi.list_take_notes",
+  "midi.list_take_text_sysex_events",
+  "midi.read_take_event_counts",
+  "midi.read_take_grid",
+  "midi.resolve_midi_take_ref",
 ].sort());
 
 describe("4D.x Wave 1A read-handler expansion", () => {
@@ -201,9 +217,10 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     );
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
+    assert.equal(CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS.length, 15);
   });
 
   it("keeps default live smoke skipped and --live without config non-spawning", async () => {

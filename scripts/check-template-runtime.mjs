@@ -22,6 +22,11 @@ execFileSync(process.execPath, ["--test", "tests/layer4dx/read-handler-expansion
   stdio: "inherit",
 });
 
+execFileSync(process.execPath, ["--test", "tests/layer4dx/read-b-handler-expansion.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 execFileSync(process.execPath, ["--test", "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"], {
   cwd: root,
   stdio: "inherit",

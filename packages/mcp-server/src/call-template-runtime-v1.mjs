@@ -60,6 +60,24 @@ export const CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS = deepFreeze([
   "template.items.read_item_summary",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS = deepFreeze([
+  "template.actions.resolve_named_command",
+  "template.actions.read_action_metadata",
+  "template.actions.read_action_toggle_state",
+  "template.actions.read_action_shortcuts",
+  "template.actions.parse_marker_action_text",
+  "template.actions.search_action_commands",
+  "template.midi.resolve_midi_take_ref",
+  "template.midi.read_take_event_counts",
+  "template.midi.list_take_notes",
+  "template.midi.list_take_cc_events",
+  "template.midi.list_take_text_sysex_events",
+  "template.midi.read_take_grid",
+  "template.media.probe_file",
+  "template.media.read_take_source",
+  "template.media.read_project_media_files",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS = deepFreeze([
   "template.analysis.detect_loop_candidates",
   "template.analysis.measure_loop_click_risk",
@@ -600,24 +618,20 @@ function normalizeLiveRuntimeOptions(input) {
 
 function normalizeLiveAllowedTemplateIds(value) {
   if (!Array.isArray(value)) return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
-  const allowed = new Set([
-    ...CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS,
-    ...CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
-  ]);
+  const allowedGroups = [
+    CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  ];
+  const allowed = new Set(allowedGroups.flatMap((group) => group));
   const ids = [...new Set(value.filter((id) => allowed.has(id)))];
-  if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length
-    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS[index])) {
-    return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
+  for (const group of allowedGroups) {
+    if (ids.length === group.length && group.every((id, index) => id === ids[index])) {
+      return group;
+    }
   }
-  if (ids.length === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS.length
-    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS[index])) {
-    return CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS;
-  }
-  if (ids.length === CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS.length
-    && ids.every((id, index) => id === CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS[index])) {
-    return CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS;
-  }
-  return deepFreeze(ids);
+  return deepFreeze([]);
 }
 
 function boundedLiveExecutorConfig(config) {

@@ -8,6 +8,7 @@ import {
   validateFoundationBridgeResult,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -33,20 +34,35 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
 
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("keeps the approved Wave 0 plus Wave 1A query operations exact", () => {
+  it("keeps the approved Wave 0, Wave 1A, and Read-B query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
 
     assert.deepEqual(operationKeys, [
+      "actions.parse_marker_action_text",
+      "actions.read_action_metadata",
+      "actions.read_action_shortcuts",
+      "actions.read_action_toggle_state",
+      "actions.resolve_named_command",
+      "actions.search_action_commands",
       "items.read_item_summary",
       "items.resolve_item_ref",
       "last_result.read",
+      "media.file.probe",
+      "media.project_files.read",
+      "media.take_source.read",
+      "midi.list_take_cc_events",
+      "midi.list_take_notes",
+      "midi.list_take_text_sysex_events",
+      "midi.read_take_event_counts",
+      "midi.read_take_grid",
+      "midi.resolve_midi_take_ref",
       "openreaper.read_status",
       "project.list_markers_regions",
       "project.read_metadata",
@@ -77,6 +93,23 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "template.tracks.resolve_track_ref",
       "template.items.resolve_item_ref",
       "template.items.read_item_summary",
+    ]);
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS, [
+      "template.actions.resolve_named_command",
+      "template.actions.read_action_metadata",
+      "template.actions.read_action_toggle_state",
+      "template.actions.read_action_shortcuts",
+      "template.actions.parse_marker_action_text",
+      "template.actions.search_action_commands",
+      "template.midi.resolve_midi_take_ref",
+      "template.midi.read_take_event_counts",
+      "template.midi.list_take_notes",
+      "template.midi.list_take_cc_events",
+      "template.midi.list_take_text_sysex_events",
+      "template.midi.read_take_grid",
+      "template.media.probe_file",
+      "template.media.read_take_source",
+      "template.media.read_project_media_files",
     ]);
   });
 
