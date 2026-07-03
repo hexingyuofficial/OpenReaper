@@ -37,6 +37,14 @@ export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
 
 const ACCEPTED_TEMPLATE_ID_SET = new Set(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
 
+export const CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS = deepFreeze([
+  "template.project.read_summary",
+  "template.transport.read_state",
+  "template.core.read_openreaper_status",
+  "template.system.read_runtime_environment",
+  "template.system.read_resource_paths",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS = deepFreeze(
   Object.values(TEMPLATE_CATALOG_SEED_TEMPLATE_IDS).filter((id) => !ACCEPTED_TEMPLATE_ID_SET.has(id)),
 );
@@ -64,6 +72,8 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_ID_SEED_ONLY",
   "CALL_TEMPLATE_ID_HELD",
   "CALL_TEMPLATE_ID_UNKNOWN",
+  "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
+  "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
 ]);
 
 const RUNTIME_ERROR_CODE_SET = new Set(CALL_TEMPLATE_RUNTIME_ERROR_CODES);
@@ -140,12 +150,14 @@ export function createCallTemplateRuntime(options = {}) {
   const retainedEvidence = [];
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
+  const live = normalizeLiveRuntimeOptions(options.live);
 
   async function call_template(request = {}) {
     let id = null;
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      assertLiveRuntimeDispatchAllowed(live, id);
       const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
       const execution = await executeTemplate({
         descriptor,
@@ -154,9 +166,9 @@ export function createCallTemplateRuntime(options = {}) {
         context: normalized.context,
         budget: normalized.budget,
         idempotency_key: normalized.idempotency_key,
-        executor: options.executor,
+        executor: live.enabled ? live.executor : options.executor,
       });
-      retainEvidence(retainedEvidence, evidenceFromExecution(execution), evidenceLimit);
+      retainEvidence(retainedEvidence, evidenceFromExecution(execution, live.evidence), evidenceLimit);
       return execution;
     } catch (error) {
       const envelope = runtimeErrorEnvelope({
@@ -165,7 +177,7 @@ export function createCallTemplateRuntime(options = {}) {
         now,
         budget: safeRuntimeBudget(request?.budget),
       });
-      retainEvidence(retainedEvidence, evidenceFromRuntimeError(envelope), evidenceLimit);
+      retainEvidence(retainedEvidence, evidenceFromRuntimeError(envelope, live.evidence), evidenceLimit);
       return envelope;
     }
   }
@@ -173,6 +185,7 @@ export function createCallTemplateRuntime(options = {}) {
   return Object.freeze({
     contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
     accepted_catalog: acceptedCatalogSummary(catalog),
+    live_gate: live.summary,
     list_templates(request = {}) {
       return discovery.list_templates(request);
     },
@@ -340,6 +353,39 @@ function normalizeCallTemplateRequest(request) {
   };
 }
 
+function assertLiveRuntimeDispatchAllowed(live, id) {
+  if (!live.opted_in) return;
+  if (!live.enabled) {
+    throw new CallTemplateRuntimeError(
+      "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
+      "Live call_template execution requires an explicitly configured live bridge executor.",
+      {
+        recoverable: true,
+        details: {
+          allowed_template_ids: live.allowed_template_ids,
+          spawned_reaper: false,
+        },
+        id,
+      },
+    );
+  }
+  if (!live.allowedTemplateIdSet.has(id)) {
+    throw new CallTemplateRuntimeError(
+      "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
+      "Live bridge executor is restricted to Wave 0 runtime canary template ids.",
+      {
+        recoverable: true,
+        details: {
+          id,
+          allowed_template_ids: live.allowed_template_ids,
+          spawned_reaper: false,
+        },
+        id,
+      },
+    );
+  }
+}
+
 function runtimeErrorEnvelope({ id, error, now, budget }) {
   const normalized = normalizeRuntimeError(error);
   const envelope = {
@@ -387,10 +433,10 @@ function normalizeRuntimeError(error) {
   };
 }
 
-function evidenceFromExecution(execution) {
+function evidenceFromExecution(execution, liveEvidence) {
   const result = execution?.result ?? {};
   const lastResult = result.last_result ?? {};
-  return deepFreeze({
+  return deepFreeze(pruneUndefined({
     contract: CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
     template: {
       id: execution?.template?.id ?? null,
@@ -403,8 +449,14 @@ function evidenceFromExecution(execution) {
       : {
           source: execution?.error?.source ?? null,
           code: execution?.error?.code ?? null,
-        },
+    },
     request_id: execution?.request?.id ?? null,
+    bridge: {
+      expected_owner: execution?.request?.bridge?.expected_owner ?? null,
+      expected_generation: execution?.request?.bridge?.expected_generation ?? null,
+      owner: execution?.bridge?.owner ?? null,
+      generation: execution?.bridge?.generation ?? null,
+    },
     counts: {
       refs: Array.isArray(result.refs) ? result.refs.length : 0,
       artifacts: Array.isArray(result.artifacts) ? result.artifacts.length : 0,
@@ -416,11 +468,12 @@ function evidenceFromExecution(execution) {
       request_created_at: execution?.request?.created_at ?? null,
       completed_at: execution?.completed_at ?? null,
     },
-  });
+    live: liveEvidence,
+  }));
 }
 
-function evidenceFromRuntimeError(envelope) {
-  return deepFreeze({
+function evidenceFromRuntimeError(envelope, liveEvidence) {
+  return deepFreeze(pruneUndefined({
     contract: CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
     template: {
       id: envelope.template.id,
@@ -444,7 +497,8 @@ function evidenceFromRuntimeError(envelope) {
       request_created_at: null,
       completed_at: envelope.completed_at,
     },
-  });
+    live: liveEvidence,
+  }));
 }
 
 function retainEvidence(records, record, limit) {
@@ -473,6 +527,67 @@ function normalizeEvidenceLimit(value) {
   if (value === undefined) return DEFAULT_EVIDENCE_LIMIT;
   if (!Number.isInteger(value) || value < 1) return DEFAULT_EVIDENCE_LIMIT;
   return Math.min(value, MAX_EVIDENCE_LIMIT);
+}
+
+function normalizeLiveRuntimeOptions(input) {
+  if (!isPlainObject(input) || input.opted_in !== true) {
+    return {
+      opted_in: false,
+      enabled: false,
+      executor: null,
+      allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+      allowedTemplateIdSet: new Set(CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS),
+      evidence: undefined,
+      summary: deepFreeze({
+        opted_in: false,
+        executor_configured: false,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+        spawned_reaper: false,
+      }),
+    };
+  }
+
+  const executor = input.executor;
+  const enabled = typeof executor === "function" || Boolean(executor && typeof executor.dispatch === "function");
+  const allowedTemplateIds = normalizeLiveAllowedTemplateIds(input.allowed_template_ids);
+  const evidence = deepFreeze(pruneUndefined({
+    opted_in: true,
+    executor_configured: enabled,
+    allowed_template_ids: allowedTemplateIds,
+    opt_in_env: boundedString(input.opt_in_env),
+    opt_in_flag: boundedString(input.opt_in_flag),
+    executor: boundedLiveExecutorConfig(input.executor_config ?? executor?.config),
+    spawned_reaper: false,
+  }));
+  return {
+    opted_in: true,
+    enabled,
+    executor,
+    allowed_template_ids: allowedTemplateIds,
+    allowedTemplateIdSet: new Set(allowedTemplateIds),
+    evidence,
+    summary: evidence,
+  };
+}
+
+function normalizeLiveAllowedTemplateIds(value) {
+  if (!Array.isArray(value)) return CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS;
+  const ids = value.filter((id) => CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.includes(id));
+  return ids.length === CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS.length
+    ? CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS
+    : deepFreeze([...new Set(ids)]);
+}
+
+function boundedLiveExecutorConfig(config) {
+  if (!isPlainObject(config)) return undefined;
+  return cloneJson(pruneUndefined({
+    contract: boundedString(config.contract),
+    kind: boundedString(config.kind),
+    transport_dir: boundedString(config.transport_dir, 240),
+    bridge_script_path: boundedString(config.bridge_script_path, 240),
+    timeout_ms: Number.isInteger(config.timeout_ms) ? config.timeout_ms : undefined,
+    poll_interval_ms: Number.isInteger(config.poll_interval_ms) ? config.poll_interval_ms : undefined,
+  }));
 }
 
 function safeRuntimeBudget(input) {
@@ -520,6 +635,10 @@ function isPlainObject(value) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function pruneUndefined(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 }
 
 function deepFreeze(value) {

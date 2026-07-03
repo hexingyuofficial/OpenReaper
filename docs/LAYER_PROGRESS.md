@@ -365,6 +365,38 @@ live-smoke promotion.
 
 Next gate after acceptance: Layer 5 Recipe Contract v1.
 
+## Layer 4D.1: Live Bridge Executor Binding / Wave 0 Canary Enablement
+
+Status: candidate_complete
+
+Scope target: add the minimal explicit live bridge executor binding needed for
+the Layer 4D opt-in live gate to progress beyond
+`live_bridge_executor_not_configured` toward Wave 0 runtime canary execution.
+
+Candidate coverage:
+
+- added an explicitly configured, non-spawning file-transport live bridge
+  executor;
+- kept default live smoke behavior as safe skip with `spawned_reaper:false`;
+- kept opt-in with no executor as a clear blocker;
+- restricted configured live execution to the five Wave 0 runtime canary ids;
+- mapped configured-but-absent transport/script/handshake states into typed
+  `foundation.bridge.v1` bridge errors and existing
+  `template.execution.v1` / `template.runtime.evidence.v1` envelopes;
+- retained request id, expected/actual bridge owner and generation, bounded
+  result counts, opt-in flag/env, and `spawned_reaper:false` evidence;
+- added Layer 4D.1 scope guard and focused tests.
+
+Out of scope: REAPER process startup, full Lua runtime, all-template live
+smoke, non-Wave-0 ids, recipes, template descriptors, pack taxonomy, frozen
+ABI changes, raw Lua, raw actions, shell commands, and arbitrary bridge
+requests.
+
+Known risks: the binding prepares a file transport contract and blocker
+classification only. Without an installed REAPER-side bridge script and active
+transport loop, Wave 0 live canary remains blocked at the more specific bridge
+transport/script/handshake state.
+
 ## Layer 5: Recipe Contract v1
 
 Status: frozen
