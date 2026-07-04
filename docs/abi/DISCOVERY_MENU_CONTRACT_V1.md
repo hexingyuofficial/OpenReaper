@@ -98,6 +98,18 @@ tags
 The default template menu must not include full `inputSchema`, `outputSchema`,
 `examples`, or `expectedDelta`.
 
+Template menu calls may explicitly request these compact derived menu fields:
+
+```text
+capability_group
+task_intents
+support
+```
+
+These fields are derived from compact metadata only. They do not expose full
+schemas, refs, bridge operations, examples, expected deltas, live evidence, or
+new support claims.
+
 Template detail fields are:
 
 ```text
@@ -126,6 +138,17 @@ tags
 
 The default recipe menu must not include full `steps`, `assertions`, or
 `recovery`.
+
+Recipe menu calls may explicitly request the same compact derived menu fields:
+
+```text
+capability_group
+task_intents
+support
+```
+
+These fields are derived from compact metadata only. They do not expose steps,
+assertions, recovery branches, a recipe executor, or new support claims.
 
 Recipe detail fields are:
 

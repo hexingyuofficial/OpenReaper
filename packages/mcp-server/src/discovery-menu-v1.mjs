@@ -38,6 +38,12 @@ export const RECIPE_DETAIL_FIELDS = Object.freeze([
   "recovery",
 ]);
 
+export const DISCOVERY_DERIVED_MENU_FIELDS = Object.freeze([
+  "capability_group",
+  "task_intents",
+  "support",
+]);
+
 export const DISCOVERY_MENU_CALL_RULES = Object.freeze({
   atomic_template_direct_call: "allowed_after_discovery",
   complex_task: "recipe_first_or_explicit_ad_hoc_primitive_composition",
@@ -48,11 +54,13 @@ const DEFINITIONS = Object.freeze({
     responseKind: "template_menu",
     summaryFields: TEMPLATE_SUMMARY_FIELDS,
     detailFields: TEMPLATE_DETAIL_FIELDS,
+    derivedFields: DISCOVERY_DERIVED_MENU_FIELDS,
   }),
   recipe: Object.freeze({
     responseKind: "recipe_menu",
     summaryFields: RECIPE_SUMMARY_FIELDS,
     detailFields: RECIPE_DETAIL_FIELDS,
+    derivedFields: DISCOVERY_DERIVED_MENU_FIELDS,
   }),
 });
 
@@ -199,7 +207,11 @@ function normalizeRequest(request, definition) {
 
 function normalizeFields(fields, definition) {
   const normalized = normalizeStringArray(fields, "fields").map(canonicalFieldName);
-  const allowed = new Set([...definition.summaryFields, ...definition.detailFields]);
+  const allowed = new Set([
+    ...definition.summaryFields,
+    ...definition.detailFields,
+    ...definition.derivedFields,
+  ]);
   const unknown = normalized.filter((field) => !allowed.has(field));
 
   if (unknown.length > 0) {
@@ -302,6 +314,7 @@ function matchesQuery(item, query) {
     item.risk,
     item.entity_kind,
     ...(Array.isArray(item.tags) ? item.tags : []),
+    ...discoveryDerivedSearchText(item),
   ]
     .filter((entry) => typeof entry === "string")
     .join("\n")
@@ -320,6 +333,8 @@ function projectItem(item, fields) {
   for (const field of fields) {
     if (Object.hasOwn(item, field)) {
       projected[field] = item[field];
+    } else if (DISCOVERY_DERIVED_MENU_FIELDS.includes(field)) {
+      projected[field] = discoveryDerivedField(item, field);
     }
   }
   return projected;
@@ -336,8 +351,62 @@ function canonicalFieldName(field) {
       output_schema: "outputSchema",
       expected_delta: "expectedDelta",
       entityKind: "entity_kind",
+      capabilityGroup: "capability_group",
+      capability_group: "capability_group",
+      taskIntents: "task_intents",
+      task_intents: "task_intents",
     }[field] ?? field
   );
+}
+
+function discoveryDerivedField(item, field) {
+  if (field === "capability_group") return capabilityGroup(item);
+  if (field === "task_intents") return taskIntents(item);
+  if (field === "support") return supportPosture(item);
+  return undefined;
+}
+
+function discoveryDerivedSearchText(item) {
+  const support = supportPosture(item);
+  return [
+    capabilityGroup(item),
+    ...taskIntents(item),
+    support.status,
+    support.evidence,
+  ];
+}
+
+function capabilityGroup(item) {
+  const pack = stringValue(item.pack) || "unknown";
+  const entityKind = stringValue(item.entity_kind) || "unknown";
+  return `${pack}.${entityKind}`;
+}
+
+function taskIntents(item) {
+  const tags = Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [];
+  const risk = stringValue(item.risk);
+  const entityKind = stringValue(item.entity_kind);
+  return unique([
+    ...tags,
+    risk,
+    entityKind,
+  ].filter(Boolean)).slice(0, 8);
+}
+
+function supportPosture(item) {
+  const lifecycle = stringValue(item.lifecycle) || "unknown";
+  const status =
+    lifecycle === "deprecated"
+      ? "unsupported"
+      : ["stable", "official", "community", "live_smoked", "fake_smoked", "validated"].includes(lifecycle)
+        ? "supported"
+        : "candidate";
+
+  return {
+    status,
+    lifecycle,
+    evidence: `lifecycle:${lifecycle}`,
+  };
 }
 
 function stringValue(value) {

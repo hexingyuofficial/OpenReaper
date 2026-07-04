@@ -149,6 +149,85 @@ describe("Layer 1.5 discovery/menu contract", () => {
     });
   });
 
+  it("supports explicit compact task-oriented menu hints without schema or step dumps", () => {
+    const templateMenu = listTemplates(
+      {
+        query: "render.project",
+        fields: ["title", "capability_group", "task_intents", "support"],
+      },
+      [
+        template({
+          id: "template.render.freeze",
+          title: "Freeze render",
+          summary: "Prepare a bounded render operation.",
+          pack: "render",
+          lifecycle: "experimental",
+          risk: "write",
+          entity_kind: "project",
+          tags: ["render", "delivery", "artifact"],
+        }),
+      ],
+    );
+
+    assert.deepEqual(Object.keys(templateMenu.items[0]), [
+      "id",
+      "title",
+      "capability_group",
+      "task_intents",
+      "support",
+    ]);
+    assert.equal(templateMenu.items[0].capability_group, "render.project");
+    assert.deepEqual(templateMenu.items[0].task_intents, [
+      "render",
+      "delivery",
+      "artifact",
+      "write",
+      "project",
+    ]);
+    assert.deepEqual(templateMenu.items[0].support, {
+      status: "candidate",
+      lifecycle: "experimental",
+      evidence: "lifecycle:experimental",
+    });
+
+    const recipeMenu = listRecipes(
+      {
+        query: "candidate",
+        fields: ["summary", "capabilityGroup", "taskIntents", "support"],
+      },
+      [
+        recipe({
+          id: "recipe.project.cleanup_fingerprint_report",
+          title: "Cleanup fingerprint report",
+          summary: "Create a bounded cleanup report.",
+          pack: "project",
+          lifecycle: "draft",
+          risk: "read",
+          entity_kind: "cleanup_report",
+          tags: ["cleanup", "report", "artifact"],
+        }),
+      ],
+    );
+
+    assert.equal(recipeMenu.items[0].capability_group, "project.cleanup_report");
+    assert.deepEqual(recipeMenu.items[0].task_intents, [
+      "cleanup",
+      "report",
+      "artifact",
+      "read",
+      "cleanup_report",
+    ]);
+    assert.deepEqual(recipeMenu.items[0].support, {
+      status: "candidate",
+      lifecycle: "draft",
+      evidence: "lifecycle:draft",
+    });
+
+    const payload = JSON.stringify({ templateMenu, recipeMenu });
+    assert.doesNotMatch(payload, /inputSchema|outputSchema|examples|expectedDelta/);
+    assert.doesNotMatch(payload, /steps|assertions|recovery/);
+  });
+
   it("uses a stable cursor pagination envelope", () => {
     const firstPage = listTemplates({ limit: 2 }, makeTemplates(5));
 
