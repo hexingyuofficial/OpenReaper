@@ -246,6 +246,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     const uniqueRunJobKeys = [...new Set(runJobKeys)];
     assert.deepEqual(uniqueRunJobKeys, [
       ...A1_OPERATIONS,
+      "items.create_layer_report",
       "render.delivery_report.create",
       "render.region_wav",
     ].sort());
@@ -269,7 +270,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     }
 
     assert.match(BRIDGE_SOURCE, /A2_ARTIFACT_OPERATIONS/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_report/);
+    assert.match(BRIDGE_SOURCE, /A3_ARTIFACT_OPERATIONS/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /Read-B|LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(

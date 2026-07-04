@@ -263,6 +263,7 @@ describe("First-Real-Fixture-A A2 render route", () => {
       "run_job:analysis.create_loop_qa_report",
       "run_job:analysis.detect_loop_candidates",
       "run_job:analysis.measure_loop_click_risk",
+      "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
       ...A2_OPERATION_KEYS,
     ].sort());

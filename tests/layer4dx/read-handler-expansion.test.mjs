@@ -212,6 +212,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         "analysis.create_loop_qa_report",
         "analysis.detect_loop_candidates",
         "analysis.measure_loop_click_risk",
+        "items.create_layer_report",
         "project.create_cleanup_report",
         "render.delivery_report.create",
         "render.region_wav",

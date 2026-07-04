@@ -42,6 +42,11 @@ execFileSync(process.execPath, ["--test", "tests/layer4dx/first-real-a2-render-r
   stdio: "inherit",
 });
 
+execFileSync(process.execPath, ["--test", "tests/layer4dx/first-real-a3-layer-report-route.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
   cwd: root,
   stdio: "inherit",

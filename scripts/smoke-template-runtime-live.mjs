@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
@@ -17,6 +18,7 @@ import {
   artifactIdFromCommandId,
   artifactPathFromRef,
   formatArtifactRef,
+  normalizeArtifactEnvelope,
   parseArtifactRef,
 } from "../packages/core/src/artifact-state-store-v1.mjs";
 import {
@@ -34,12 +36,15 @@ import {
 const WAVE1A_OPT_IN_ENV = "OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE";
 const FIRST_REAL_A1_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A1_LIVE_SMOKE";
 const FIRST_REAL_A2_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A2_LIVE_SMOKE";
+const FIRST_REAL_A3_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A3_LIVE_SMOKE";
 const OPT_IN_FLAG = "--live";
 const READ_B_FLAG = "--read-b";
 const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
+const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const PHASE_FLAG = "--phase";
 const FIRST_REAL_A2_PHASE = "A2-render-delivery";
+const FIRST_REAL_A3_PHASE = "A3-layer-report";
 const FAKE_FLAG = "--fake";
 const OWNER_ENV = "OPENREAPER_LIVE_BRIDGE_OWNER";
 const GENERATION_ENV = "OPENREAPER_LIVE_BRIDGE_GENERATION";
@@ -55,6 +60,11 @@ const FIRST_REAL_A2_PROJECT_REF_ENV = "OPENREAPER_FIRST_REAL_A_PROJECT_REF";
 const FIRST_REAL_A2_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
 const FIRST_REAL_A2_RENDER_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
 const FIRST_REAL_A2_BATCH = "First-Real-Fixture-A A2 Render Route";
+const FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV = "OPENREAPER_FIRST_REAL_A_LAYER_EVIDENCE_REF";
+const FIRST_REAL_A3_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
+const FIRST_REAL_A3_BATCH = "First-Real-Fixture-A A3 Layer Report Route";
+const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
+  "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
 const READ_B_BATCH = "read-b-live-handlers";
 const READ_B_ACTION_SECTION_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SECTION";
 const READ_B_ACTION_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_COMMAND_ID";
@@ -145,6 +155,20 @@ const FIRST_REAL_A2_TEMPLATE_SPECS = Object.freeze([
 
 const FIRST_REAL_A2_SPEC_BY_OPERATION = new Map(FIRST_REAL_A2_TEMPLATE_SPECS.map((spec) => [spec.operation, spec]));
 
+const FIRST_REAL_A3_TEMPLATE_SPECS = Object.freeze([
+  Object.freeze({
+    id: "template.items.create_layer_report",
+    operation: "run_job:items.create_layer_report",
+    owner_pack: "items",
+    input_scope: "layer_evidence",
+    input_schema: "items.layer_evidence.v1",
+    scope: "layer_report",
+    schema: "items.layer_report.v1",
+  }),
+]);
+
+const FIRST_REAL_A3_SPEC_BY_OPERATION = new Map(FIRST_REAL_A3_TEMPLATE_SPECS.map((spec) => [spec.operation, spec]));
+
 const runtime = createCallTemplateRuntime();
 const route = selectRoute(process.argv, process.env);
 const optedIn = route.fake || process.env[route.optInEnv] === "1" || process.argv.includes(OPT_IN_FLAG);
@@ -167,7 +191,9 @@ const baseReport = {
 };
 
 if (route.fake) {
-  const blocker = route.name === "first-real-a2-render"
+  const blocker = route.name === "first-real-a3-layer-report"
+    ? await firstRealA3FakeBlocker(fixtureInputs)
+    : route.name === "first-real-a2-render"
     ? await firstRealA2RootBlocker(fixtureInputs)
     : await firstRealA1ArtifactRootBlocker(fixtureInputs.artifact_root);
   if (blocker) {
@@ -183,13 +209,20 @@ if (route.fake) {
 
   const fakeExecutor = {
     config: {
-      contract: route.name === "first-real-a2-render"
+      contract: route.name === "first-real-a3-layer-report"
+        ? "first_real_fixture_a3.fake_executor.v1"
+        : route.name === "first-real-a2-render"
         ? "first_real_fixture_a2.fake_executor.v1"
         : "first_real_fixture_a1.fake_executor.v1",
       kind: "fake_artifact_writer",
       spawned_reaper: false,
     },
     async dispatch(request) {
+      if (route.name === "first-real-a3-layer-report") {
+        return dispatchFakeFirstRealA3(request, {
+          artifactRoot: fixtureInputs.artifact_root,
+        });
+      }
       if (route.name === "first-real-a2-render") {
         return dispatchFakeFirstRealA2(request, {
           artifactRoot: fixtureInputs.artifact_root,
@@ -201,7 +234,14 @@ if (route.fake) {
   };
   const fakeRuntime = createLiveRuntimeForRoute(route, fakeExecutor, fakeExecutor.config);
   const contextBase = liveContextBase();
-  const fakeReport = route.name === "first-real-a2-render"
+  const fakeReport = route.name === "first-real-a3-layer-report"
+    ? await runFirstRealA3Smoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+        artifactRoot: fixtureInputs.artifact_root,
+      })
+    : route.name === "first-real-a2-render"
     ? await runFirstRealA2Smoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
@@ -280,6 +320,13 @@ const routeReport = route.name === "first-real-a2-render"
       artifactRoot: fixtureInputs.artifact_root,
       renderRoot: fixtureInputs.render_root,
     })
+  : route.name === "first-real-a3-layer-report"
+  ? await runFirstRealA3Smoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+      artifactRoot: fixtureInputs.artifact_root,
+    })
   : route.name === "first-real-a1"
   ? await runFirstRealA1Smoke({
       liveRuntime,
@@ -326,6 +373,27 @@ function selectRoute(argv, env) {
       configuredBlocker: firstRealA2ConfiguredBlocker,
       passReason: "first_real_fixture_a2_render_delivery_readback_passed",
       failReason: "first_real_fixture_a2_render_delivery_readback_failed",
+    };
+  }
+
+  const firstRealA3Selected =
+    argv.includes(FIRST_REAL_A3_FLAG) ||
+    selectedPhase === FIRST_REAL_A3_PHASE ||
+    env[FIRST_REAL_A3_OPT_IN_ENV] === "1";
+  if (firstRealA3Selected) {
+    return {
+      name: "first-real-a3-layer-report",
+      wave: FIRST_REAL_A3_BATCH,
+      batch: FIRST_REAL_A3_BATCH,
+      routeFlag: selectedPhase === FIRST_REAL_A3_PHASE ? `${PHASE_FLAG} ${FIRST_REAL_A3_PHASE}` : FIRST_REAL_A3_FLAG,
+      optInEnv: FIRST_REAL_A3_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+      operations: FIRST_REAL_A3_TEMPLATE_SPECS.map((spec) => spec.operation),
+      fixtureInputs: firstRealA3FixtureInputs,
+      configuredBlocker: firstRealA3ConfiguredBlocker,
+      passReason: "first_real_fixture_a3_layer_report_readback_passed",
+      failReason: "first_real_fixture_a3_layer_report_readback_failed",
     };
   }
 
@@ -612,6 +680,82 @@ async function runFirstRealA2Smoke({
   };
 }
 
+async function runFirstRealA3Smoke({
+  liveRuntime,
+  fixtureInputs: fixtureInputsForRun,
+  contextBase,
+  artifactRoot,
+}) {
+  const stateRuntime = createGetStateArtifactRuntime({ artifactRoot });
+  const spec = FIRST_REAL_A3_TEMPLATE_SPECS[0];
+  const executions = [];
+  const attempted = [];
+  const artifactRefsBySchema = new Map([[spec.input_schema, fixtureInputsForRun.layer_evidence_ref]]);
+
+  const consumedReadback = await readBackArtifact(stateRuntime, fixtureInputsForRun.layer_evidence_ref, spec.input_schema);
+  if (!consumedReadback.summary_ok || !consumedReadback.payload_ok) {
+    executions.push({
+      id: spec.id,
+      ok: false,
+      skipped: true,
+      reason: "layer_evidence_readback_failed",
+      operation: spec.operation,
+      consumed_readbacks: [consumedReadback],
+    });
+    return {
+      ok: false,
+      reason: "layer_evidence_readback_failed",
+      attempted_template_ids: attempted,
+      expected_template_ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+      input_artifact_ref: fixtureInputsForRun.layer_evidence_ref,
+      artifact_refs: Object.fromEntries([...artifactRefsBySchema.entries()].map(([schema, ref]) => [schema, ref])),
+      executions,
+    };
+  }
+
+  attempted.push(spec.id);
+  const response = await liveRuntime.call_template({
+    id: spec.id,
+    input: firstRealA3Input(),
+    refs: {
+      layer_evidence_artifact_ref: artifactObjectRef(fixtureInputsForRun.layer_evidence_ref, spec.input_schema),
+    },
+    context: {
+      ...contextBase,
+      created_at: new Date().toISOString(),
+      request_sequence: 1,
+    },
+  });
+
+  const execution = summarizeExecution(response);
+  execution.operation = spec.operation;
+  execution.consumed_readbacks = [consumedReadback];
+
+  const reportRef = producedArtifactRef(response);
+  if (response?.ok && reportRef) {
+    artifactRefsBySchema.set(spec.schema, reportRef);
+    execution.produced_readback = await readBackArtifact(stateRuntime, reportRef, spec.schema);
+  }
+  executions.push(execution);
+
+  const ok = executions.every((entry) =>
+    entry.ok &&
+      (entry.consumed_readbacks ?? []).every((readback) => readback.summary_ok && readback.payload_ok) &&
+      entry.produced_readback?.summary_ok === true &&
+      entry.produced_readback?.payload_ok === true,
+  );
+
+  return {
+    ok,
+    reason: ok ? "first_real_fixture_a3_layer_report_readback_passed" : firstBlocker(executions) ?? "first_real_fixture_a3_layer_report_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+    input_artifact_ref: fixtureInputsForRun.layer_evidence_ref,
+    artifact_refs: Object.fromEntries([...artifactRefsBySchema.entries()].map(([schema, ref]) => [schema, ref])),
+    executions,
+  };
+}
+
 function dependencyBlocker(spec, artifactRefsBySchema) {
   const missing = (spec.consumes ?? []).filter((schema) => !artifactRefsBySchema.has(schema));
   return missing.length > 0 ? { missing_schemas: missing } : null;
@@ -700,6 +844,15 @@ function firstRealA2DeliveryInput() {
   };
 }
 
+function firstRealA3Input() {
+  return {
+    max_report_rows: 24,
+    include_track_facts: true,
+    include_color_facts: true,
+    include_item_samples: true,
+  };
+}
+
 function firstRealA2DeliveryRefs({ fixtureInputs, outputRef, evidenceRef, renderJobRef }) {
   const refs = {
     output_artifact_refs: artifactObjectRef(outputRef, "render.region_wav_output.v1"),
@@ -784,6 +937,8 @@ function compactArtifactFacts(summary, payload) {
     wav_header: summary.wav_header ?? output.wav_header,
     output_count: summary.output_count,
     nonempty_output_count: summary.nonempty_output_count,
+    evidence_item_count: summary.evidence_item_count,
+    evidence_track_count: summary.evidence_track_count,
     report_row_count: summary.report_row_count,
     issue_count: summary.issue_count,
   });
@@ -875,6 +1030,42 @@ async function firstRealA2ConfiguredBlocker({ fixtureInputs: fixtureInputsForRun
   return readOnlyConfiguredBlocker({ executorConfig });
 }
 
+async function firstRealA3ConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const rootBlocker = await firstRealA3RootBlocker(fixtureInputsForRun);
+  if (rootBlocker) return rootBlocker;
+  const inputBlocker = await firstRealA3InputArtifactBlocker(fixtureInputsForRun);
+  if (inputBlocker) return inputBlocker;
+  return readOnlyConfiguredBlocker({ executorConfig });
+}
+
+async function firstRealA3FakeBlocker(fixtureInputsForRun) {
+  const rootBlocker = await firstRealA3RootBlocker(fixtureInputsForRun);
+  if (rootBlocker) return rootBlocker;
+  if (!fixtureInputsForRun.layer_evidence_ref) {
+    fixtureInputsForRun.layer_evidence_ref = FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF;
+    fixtureInputsForRun.report.layer_evidence_ref = FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF;
+  }
+  const existingBlocker = await firstRealA3InputArtifactBlocker(fixtureInputsForRun, { allowMissing: true });
+  if (!existingBlocker) return null;
+  if (existingBlocker.reason !== "layer_evidence_artifact_absent") return existingBlocker;
+  try {
+    await seedFirstRealA3LayerEvidenceFixture(fixtureInputsForRun);
+    return null;
+  } catch (error) {
+    return {
+      reason: "layer_evidence_fixture_seed_failed",
+      blocker: "layer_evidence_fixture_seed_failed",
+      message: "First-Real-Fixture-A A3 fake smoke could not seed the typed layer evidence fixture artifact.",
+      details: {
+        artifact_root_env: FIRST_REAL_A3_ARTIFACT_ROOT_ENV,
+        layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+        layer_evidence_ref: boundedString(fixtureInputsForRun.layer_evidence_ref, 240),
+        message: boundedString(error?.message, 240),
+      },
+    };
+  }
+}
+
 async function firstRealA2RootBlocker(fixtureInputsForRun) {
   const artifactBlocker = await firstRealA2DirectoryBlocker({
     value: fixtureInputsForRun.artifact_root,
@@ -901,6 +1092,21 @@ async function firstRealA2RootBlocker(fixtureInputsForRun) {
     const repoBlocker = firstRealA2RepoRootBlocker(label, value);
     if (repoBlocker) return repoBlocker;
   }
+  return null;
+}
+
+async function firstRealA3RootBlocker(fixtureInputsForRun) {
+  const artifactBlocker = await firstRealA3DirectoryBlocker({
+    value: fixtureInputsForRun.artifact_root,
+    envName: FIRST_REAL_A3_ARTIFACT_ROOT_ENV,
+    label: "artifact_root",
+    notConfigured: "artifact_root_not_configured",
+    absent: "artifact_root_absent",
+  });
+  if (artifactBlocker) return artifactBlocker;
+
+  const repoBlocker = firstRealA3RepoRootBlocker("artifact_root", fixtureInputsForRun.artifact_root);
+  if (repoBlocker) return repoBlocker;
   return null;
 }
 
@@ -940,6 +1146,42 @@ async function firstRealA2DirectoryBlocker({ value, envName, label, notConfigure
   return null;
 }
 
+async function firstRealA3DirectoryBlocker({ value, envName, label, notConfigured, absent }) {
+  if (!value) {
+    return {
+      reason: notConfigured,
+      blocker: notConfigured,
+      message: `First-Real-Fixture-A A3 live smoke requires an explicit ${label}.`,
+      details: {
+        [`${label}_env`]: envName,
+      },
+    };
+  }
+  if (!path.isAbsolute(value) || value.startsWith("file://")) {
+    return {
+      reason: `${label}_invalid`,
+      blocker: `${label}_invalid`,
+      message: `Configured First-Real-Fixture-A A3 ${label} must be an absolute filesystem directory.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  if (!(await isDirectory(value))) {
+    return {
+      reason: absent,
+      blocker: absent,
+      message: `Configured First-Real-Fixture-A A3 ${label} is absent.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  return null;
+}
+
 function firstRealA2RepoRootBlocker(label, value) {
   const resolved = path.resolve(value);
   const forbiddenRoots = [
@@ -952,6 +1194,25 @@ function firstRealA2RepoRootBlocker(label, value) {
     reason: `${label}_inside_repo`,
     blocker: `${label}_inside_repo`,
     message: `Configured First-Real-Fixture-A A2 ${label} must be outside the OpenReaper and old-control repos.`,
+    details: {
+      [label]: boundedString(resolved, 240),
+      forbidden_root: boundedString(forbidden, 240),
+    },
+  };
+}
+
+function firstRealA3RepoRootBlocker(label, value) {
+  const resolved = path.resolve(value);
+  const forbiddenRoots = [
+    path.resolve(new URL("..", import.meta.url).pathname),
+    "/Users/Zhuanz/Documents/streetlight-reaper-mcp",
+  ];
+  const forbidden = forbiddenRoots.find((root) => isPathInside(resolved, root));
+  if (!forbidden) return null;
+  return {
+    reason: `${label}_inside_repo`,
+    blocker: `${label}_inside_repo`,
+    message: `Configured First-Real-Fixture-A A3 ${label} must be outside the OpenReaper and old-control repos.`,
     details: {
       [label]: boundedString(resolved, 240),
       forbidden_root: boundedString(forbidden, 240),
@@ -982,6 +1243,163 @@ async function firstRealA1ArtifactRootBlocker(artifactRoot) {
     };
   }
   return null;
+}
+
+async function firstRealA3InputArtifactBlocker(fixtureInputsForRun, options = {}) {
+  const ref = fixtureInputsForRun.layer_evidence_ref;
+  if (!ref) {
+    return {
+      reason: "layer_evidence_artifact_ref_not_configured",
+      blocker: "layer_evidence_artifact_ref_not_configured",
+      message: "First-Real-Fixture-A A3 live smoke requires an explicit items.layer_evidence.v1 artifact ref.",
+      details: {
+        layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+      },
+    };
+  }
+
+  let parts;
+  try {
+    parts = parseArtifactRef(ref);
+  } catch (error) {
+    return {
+      reason: "layer_evidence_artifact_ref_invalid",
+      blocker: "layer_evidence_artifact_ref_invalid",
+      message: "Configured First-Real-Fixture-A A3 layer evidence ref must be canonical.",
+      details: {
+        layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+        layer_evidence_ref: boundedString(ref, 240),
+        code: error?.code ?? "PARAMS_INVALID",
+      },
+    };
+  }
+
+  if (parts.owner_pack !== "items" || parts.scope !== "layer_evidence") {
+    return {
+      reason: "layer_evidence_artifact_ref_invalid",
+      blocker: "layer_evidence_artifact_ref_invalid",
+      message: "Configured First-Real-Fixture-A A3 layer evidence ref must use artifact:items:layer_evidence:<id>.",
+      details: {
+        expected_owner_pack: "items",
+        expected_scope: "layer_evidence",
+        owner_pack: parts.owner_pack,
+        scope: parts.scope,
+      },
+    };
+  }
+
+  let envelope;
+  try {
+    const artifactPath = artifactPathFromRef(fixtureInputsForRun.artifact_root, ref);
+    envelope = normalizeArtifactEnvelope(JSON.parse(await readFile(artifactPath, "utf8")));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return {
+        reason: "layer_evidence_artifact_absent",
+        blocker: "layer_evidence_artifact_absent",
+        message: "Configured First-Real-Fixture-A A3 layer evidence artifact is absent.",
+        details: {
+          layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+          layer_evidence_ref: boundedString(ref, 240),
+          allow_fake_seed: options.allowMissing === true,
+        },
+      };
+    }
+    return {
+      reason: "layer_evidence_artifact_invalid",
+      blocker: "layer_evidence_artifact_invalid",
+      message: "Configured First-Real-Fixture-A A3 layer evidence artifact is invalid.",
+      details: {
+        layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+        layer_evidence_ref: boundedString(ref, 240),
+        code: error?.code ?? "ARTIFACT_INVALID",
+        message: boundedString(error?.message, 240),
+      },
+    };
+  }
+
+  if (
+    envelope.schema !== "items.layer_evidence.v1" ||
+    envelope.owner_pack !== "items" ||
+    envelope.scope !== "layer_evidence" ||
+    envelope.producer?.kind !== "template" ||
+    envelope.producer?.pack !== "items"
+  ) {
+    return {
+      reason: "layer_evidence_artifact_invalid",
+      blocker: "layer_evidence_artifact_invalid",
+      message: "Configured First-Real-Fixture-A A3 layer evidence artifact must be items.layer_evidence.v1 from an items template producer.",
+      details: {
+        expected_schema: "items.layer_evidence.v1",
+        schema: boundedString(envelope.schema, 160),
+        producer_kind: boundedString(envelope.producer?.kind, 80),
+        producer_pack: boundedString(envelope.producer?.pack, 80),
+      },
+    };
+  }
+  return null;
+}
+
+async function seedFirstRealA3LayerEvidenceFixture(fixtureInputsForRun) {
+  const ref = fixtureInputsForRun.layer_evidence_ref;
+  const summary = {
+    schema: "items.layer_evidence.v1",
+    item_count: 2,
+    track_count: 2,
+    evidence_family_count: 2,
+    truncated: false,
+    fixture: "first_real_a3_layer_report",
+  };
+  const payload = {
+    fixture: "first_real_a3_layer_report",
+    smoke_only: true,
+    evidence_families: ["items", "tracks"],
+    items: [
+      {
+        item_ref: "item:guid:{A3-FIXTURE-ITEM-001}",
+        track_ref: "track:name:Dialog",
+        name: "dialog-layer-cue",
+        color: "blue",
+        start_seconds: 0,
+        length_seconds: 1.25,
+      },
+      {
+        item_ref: "item:guid:{A3-FIXTURE-ITEM-002}",
+        track_ref: "track:name:Music",
+        name: "music-layer-cue",
+        color: "green",
+        start_seconds: 1.5,
+        length_seconds: 2,
+      },
+    ],
+    tracks: [
+      {
+        track_ref: "track:name:Dialog",
+        name: "Dialog",
+        item_count: 1,
+      },
+      {
+        track_ref: "track:name:Music",
+        name: "Music",
+        item_count: 1,
+      },
+    ],
+  };
+  await writeArtifactStateStoreEnvelope({
+    artifactRoot: fixtureInputsForRun.artifact_root,
+    envelope: createArtifactStateStoreEnvelope({
+      ref,
+      schema: "items.layer_evidence.v1",
+      producer: {
+        kind: "template",
+        id: "template.items.fixture_layer_evidence",
+        pack: "items",
+      },
+      created_at: "2026-07-04T00:00:00.000Z",
+      summary,
+      payload,
+    }),
+  });
 }
 
 async function isDirectory(path) {
@@ -1256,6 +1674,22 @@ function firstRealA2FixtureInputs(env) {
       artifact_root: boundedString(artifactRoot, 240),
       render_root: boundedString(renderRoot, 240),
       applies_to_template_ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
+    },
+  };
+}
+
+function firstRealA3FixtureInputs(env) {
+  const artifactRoot = nonEmpty(env[FIRST_REAL_A3_ARTIFACT_ROOT_ENV]);
+  const layerEvidenceRef = nonEmpty(env[FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV]);
+  return {
+    artifact_root: artifactRoot,
+    layer_evidence_ref: layerEvidenceRef,
+    report: {
+      artifact_root_env: FIRST_REAL_A3_ARTIFACT_ROOT_ENV,
+      layer_evidence_ref_env: FIRST_REAL_A3_LAYER_EVIDENCE_REF_ENV,
+      artifact_root: boundedString(artifactRoot, 240),
+      layer_evidence_ref: boundedString(layerEvidenceRef, 240),
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
     },
   };
 }
@@ -1732,6 +2166,81 @@ async function dispatchFakeFirstRealA2Delivery(request, { artifactRoot, spec }) 
   }
 }
 
+async function dispatchFakeFirstRealA3(request, { artifactRoot }) {
+  const key = `${request?.operation?.family}:${request?.operation?.name}`;
+  const spec = FIRST_REAL_A3_SPEC_BY_OPERATION.get(key);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake A3 executor accepts only First-Real-Fixture-A A3 layer report operations.", {
+      operation: boundedString(key),
+    });
+  }
+  if (request?.artifacts?.allow !== true) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "First-Real-Fixture-A A3 layer report requires artifacts.allow true.", {
+      operation: key,
+    });
+  }
+
+  const layerEvidenceRef = artifactRefBySchemaFromRequest(request, spec.input_schema);
+  if (!layerEvidenceRef) {
+    return bridgeErrorEnvelope(request, "ARTIFACT_NOT_FOUND", "A3 layer report requires an items.layer_evidence.v1 artifact ref.", {
+      blocker: "layer_evidence_ref_missing",
+    });
+  }
+
+  try {
+    const evidenceEnvelope = normalizeArtifactEnvelope(await readArtifactEnvelopeFromRoot(artifactRoot, layerEvidenceRef));
+    assertFakeA3LayerEvidence(evidenceEnvelope);
+    const artifactId = artifactIdFromCommandId(request.id);
+    const reportRef = formatArtifactRef({
+      owner_pack: spec.owner_pack,
+      scope: spec.scope,
+      id: artifactId,
+    });
+    const itemCount = layerEvidenceItemCount(evidenceEnvelope);
+    const trackCount = layerEvidenceTrackCount(evidenceEnvelope);
+    const rowCount = Math.min(positiveInteger(request?.params?.max_report_rows, 24), Math.max(itemCount, trackCount, 1), 24);
+    const summary = {
+      artifact_ref: reportRef,
+      schema: spec.schema,
+      evidence_item_count: itemCount,
+      evidence_track_count: trackCount,
+      report_row_count: rowCount,
+      truncated: false,
+    };
+    await writeArtifactStateStoreEnvelope({
+      artifactRoot,
+      envelope: createArtifactStateStoreEnvelope({
+        ref: reportRef,
+        schema: spec.schema,
+        producer: {
+          kind: "template",
+          id: spec.id,
+          pack: spec.owner_pack,
+        },
+        created_at: request.created_at,
+        summary,
+        payload: {
+          fixture: "first_real_fixture_a3_fake",
+          smoke_only: true,
+          consumed_artifact_refs: [layerEvidenceRef],
+          evidence_summary: compactLayerEvidenceSummary(evidenceEnvelope.summary),
+          rows: fakeA3ReportRows(evidenceEnvelope, rowCount),
+        },
+      }),
+    });
+    return bridgeOkEnvelope(request, {
+      summary,
+      artifacts: [artifactObjectRef(reportRef, spec.schema)],
+    });
+  } catch (error) {
+    return bridgeErrorEnvelope(request, "ARTIFACT_INVALID", "Fake A3 layer report could not read layer evidence or write report artifact.", {
+      blocker: "a3_layer_report_fake_write_failed",
+      layer_evidence_ref: boundedString(layerEvidenceRef, 240),
+      message: boundedString(error?.message),
+    });
+  }
+}
+
 function fakeA1Summary(spec, artifactRef, request) {
   if (spec.schema === "analysis.loop_candidates.v1") {
     return {
@@ -1981,6 +2490,61 @@ function assertFakeA2ArtifactProducer(envelope, producerId, schema) {
   ) {
     throw new Error(`expected render-owned ${schema} from ${producerId}`);
   }
+}
+
+function assertFakeA3LayerEvidence(envelope) {
+  if (
+    envelope?.contract !== "artifact.state_store.v1" ||
+    envelope?.schema !== "items.layer_evidence.v1" ||
+    envelope?.owner_pack !== "items" ||
+    envelope?.scope !== "layer_evidence" ||
+    envelope?.producer?.kind !== "template" ||
+    envelope?.producer?.pack !== "items"
+  ) {
+    throw new Error("expected items.layer_evidence.v1 fixture artifact from an items template producer");
+  }
+}
+
+function layerEvidenceItemCount(envelope) {
+  if (Number.isInteger(envelope?.summary?.item_count) && envelope.summary.item_count >= 0) {
+    return envelope.summary.item_count;
+  }
+  return Array.isArray(envelope?.payload?.items) ? envelope.payload.items.length : 0;
+}
+
+function layerEvidenceTrackCount(envelope) {
+  if (Number.isInteger(envelope?.summary?.track_count) && envelope.summary.track_count >= 0) {
+    return envelope.summary.track_count;
+  }
+  return Array.isArray(envelope?.payload?.tracks) ? envelope.payload.tracks.length : 0;
+}
+
+function compactLayerEvidenceSummary(summary) {
+  if (!isPlainObjectForReport(summary)) return {};
+  return pruneNullValues({
+    schema: summary.schema,
+    item_count: summary.item_count,
+    track_count: summary.track_count,
+    evidence_family_count: summary.evidence_family_count,
+    truncated: summary.truncated,
+    fixture: summary.fixture,
+  });
+}
+
+function fakeA3ReportRows(envelope, rowCount) {
+  const items = Array.isArray(envelope?.payload?.items) ? envelope.payload.items : [];
+  const rows = [];
+  for (let index = 0; index < rowCount; index += 1) {
+    const item = isPlainObjectForReport(items[index]) ? items[index] : {};
+    rows.push(pruneNullValues({
+      row: index + 1,
+      item_ref: boundedString(item.item_ref ?? item.ref, 120),
+      track_ref: boundedString(item.track_ref, 120),
+      name: boundedString(item.name, 120),
+      color: boundedString(item.color, 80),
+    }));
+  }
+  return rows;
 }
 
 function isPlainObjectForReport(value) {

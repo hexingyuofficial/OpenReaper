@@ -272,7 +272,7 @@ describe("Read-B live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
 
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_report|import_file_to_track|relink_take_source/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /import_file_to_track|relink_take_source/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
