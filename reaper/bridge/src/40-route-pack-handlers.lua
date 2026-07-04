@@ -1541,6 +1541,30 @@ local function source_length(source)
   return ok and first_number(length) or 0, ok and length_is_quarter_notes == true or false
 end
 
+local function source_length_with_file_fallback(source, filename)
+  local length, length_is_quarter_notes = source_length(source)
+  if length > 0 and not length_is_quarter_notes then
+    return length, "take_source"
+  end
+  if length_is_quarter_notes then
+    return 0, "quarter_notes"
+  end
+  if filename ~= "" and file_exists(filename) then
+    local ok_file_source, file_source = call_reaper("PCM_Source_CreateFromFile", filename)
+    if ok_file_source and file_source then
+      local fallback_length, fallback_length_is_quarter_notes = source_length(file_source)
+      call_reaper("PCM_Source_Destroy", file_source)
+      if fallback_length > 0 and not fallback_length_is_quarter_notes then
+        return fallback_length, "pcm_source_create_from_file"
+      end
+      if fallback_length_is_quarter_notes then
+        return 0, "quarter_notes"
+      end
+    end
+  end
+  return 0, "unreadable"
+end
+
 local function source_channels(source)
   local ok, channels = call_reaper("GetMediaSourceNumChannels", source)
   return ok and first_number(channels) or 0
@@ -2049,7 +2073,11 @@ local function resolve_region_for_render(request)
     return nil, {
       code = "REGION_NOT_FOUND",
       message = "A2 render_region_wav requires a resolvable region ref.",
-      details = { blocker = "region_ref_missing" },
+      details = {
+        blocker = "region_ref_missing",
+        recommended_region_ref_scheme = "region:name:<unique-region-name>",
+        supported_region_ref_schemes = json_array({ "region:name:<unique-region-name>", "region:index:<zero-based-region-index>" }),
+      },
     }
   end
   if token.scheme == "guid" then
@@ -2058,6 +2086,8 @@ local function resolve_region_for_render(request)
       message = "A2 render_region_wav currently supports region:index and region:name refs.",
       details = {
         blocker = "region_guid_ref_not_supported",
+        recommended_region_ref_scheme = "region:name:<unique-region-name>",
+        supported_region_ref_schemes = json_array({ "region:name:<unique-region-name>", "region:index:<zero-based-region-index>" }),
       },
     }
   end
@@ -2083,6 +2113,9 @@ local function resolve_region_for_render(request)
           start_seconds = first_number(pos) or 0,
           end_seconds = first_number(region_end) or 0,
         }
+        if match.name ~= "" then
+          match.preferred_region_ref = "region:name:" .. match.name
+        end
       end
       region_ordinal = region_ordinal + 1
     end
@@ -2091,14 +2124,25 @@ local function resolve_region_for_render(request)
     return nil, {
       code = "REF_INVALID",
       message = "A2 render region name is ambiguous.",
-      details = { blocker = "region_ref_ambiguous" },
+      details = {
+        blocker = "region_ref_ambiguous",
+        region_name = token.scheme == "name" and bounded_string(token.value, 160) or nil,
+        match_count = matches,
+        recommended_region_ref_scheme = "region:name:<unique-region-name>",
+        fallback_region_ref_scheme = "region:index:<zero-based-region-index>",
+      },
     }
   end
   if not match then
     return nil, {
       code = "REGION_NOT_FOUND",
       message = "A2 render region ref could not be resolved.",
-      details = { blocker = "region_ref_not_found" },
+      details = {
+        blocker = "region_ref_not_found",
+        requested_region_ref_scheme = token.scheme,
+        recommended_region_ref_scheme = "region:name:<unique-region-name>",
+        supported_region_ref_schemes = json_array({ "region:name:<unique-region-name>", "region:index:<zero-based-region-index>" }),
+      },
     }
   end
   match.duration_seconds = match.end_seconds - match.start_seconds
@@ -2108,6 +2152,10 @@ local function resolve_region_for_render(request)
       message = "A2 render region bounds are empty or outside the bounded route limit.",
       details = {
         blocker = "region_bounds_invalid",
+        region_ref = match.region_ref,
+        preferred_region_ref = match.preferred_region_ref,
+        region_start_seconds = match.start_seconds,
+        region_end_seconds = match.end_seconds,
         duration_seconds = match.duration_seconds,
       },
     }
@@ -2115,9 +2163,74 @@ local function resolve_region_for_render(request)
   return match
 end
 
+local A2_UNSUPPORTED_SOURCE_TYPES = {
+  MIDI = true,
+  RPP_PROJECT = true,
+  EMPTY = true,
+  VIDEO = true,
+}
+
+local function a2_region_details(region)
+  return {
+    region_ref = region and region.region_ref or nil,
+    preferred_region_ref = region and region.preferred_region_ref or nil,
+    region_name = region and region.name or nil,
+    region_start_seconds = region and region.start_seconds or nil,
+    region_end_seconds = region and region.end_seconds or nil,
+  }
+end
+
+local function merge_details(...)
+  local merged = {}
+  for index = 1, select("#", ...) do
+    local source = select(index, ...)
+    if is_object(source) then
+      for key, value in pairs(source) do
+        merged[key] = value
+      end
+    end
+  end
+  return merged
+end
+
+local function a2_source_details(region, item_facts, take_facts, source_facts)
+  return merge_details(a2_region_details(region), {
+    item_ref = item_facts and item_facts.item_ref or nil,
+    take_ref = take_facts and take_facts.take_ref or nil,
+    source_type = source_facts and source_facts.source_type or nil,
+    source_filename_present = source_facts and source_facts.source_filename_present == true or false,
+    source_file_exists = source_facts and source_facts.source_file_exists == true or false,
+    item_start_seconds = item_facts and item_facts.item_start_seconds or nil,
+    item_end_seconds = item_facts and item_facts.item_end_seconds or nil,
+    region_start_seconds = region and region.start_seconds or nil,
+    region_end_seconds = region and region.end_seconds or nil,
+  })
+end
+
+local function a2_take_facts(take)
+  if not take then
+    return nil
+  end
+  return {
+    take_ref = take_ref_string(take),
+  }
+end
+
+local function a2_source_facts(source)
+  local filename = source_filename_raw(source)
+  return {
+    source_type = source_type(source),
+    source_filename = filename,
+    source_filename_present = filename ~= "",
+    source_file_exists = filename ~= "" and file_exists(filename) or false,
+  }
+end
+
 local function active_audio_take_for_region(region)
   local ok_count, item_count = call_reaper("CountMediaItems", 0)
   local total_items = ok_count and first_number(item_count) or 0
+  local saw_overlap = false
+  local first_failure = nil
   for item_index = 0, total_items - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
     if ok_item and item then
@@ -2125,35 +2238,148 @@ local function active_audio_take_for_region(region)
       local item_end = item_start + item_number(item, "D_LENGTH")
       local overlaps = item_end > region.start_seconds and item_start < region.end_seconds
       if overlaps then
+        saw_overlap = true
+        local item_facts = {
+          item_ref = item_ref_string(item),
+          item_start_seconds = item_start,
+          item_end_seconds = item_end,
+        }
         local ok_take, take = call_reaper("GetActiveTake", item)
-        if ok_take and take and not take_is_midi(take) then
+        if not ok_take or not take then
+          first_failure = first_failure or {
+            code = "TAKE_NOT_FOUND",
+            message = "A2 render_region_wav found an overlapping item without an active take source.",
+            details = merge_details(a2_region_details(region), item_facts, {
+              blocker = "take_source_missing",
+            }),
+          }
+        elseif take_is_midi(take) then
+          local take_facts = a2_take_facts(take)
+          first_failure = first_failure or {
+            code = "PARAMS_INVALID",
+            message = "A2 render_region_wav requires an audio take; the overlapping take is MIDI.",
+            details = merge_details(a2_source_details(region, item_facts, take_facts, {
+              source_type = "MIDI",
+              source_filename_present = false,
+              source_file_exists = false,
+            }), {
+              blocker = "source_type_unsupported",
+            }),
+          }
+        else
+          local take_facts = a2_take_facts(take)
           local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
-          if ok_source and source then
-            local filename = source_filename_raw(source)
-            if filename ~= "" and file_exists(filename) then
-              local source_len = source_length(source)
-              local take_offset = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS"))) or 0
-              local playrate = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE"))) or 1
-              local overlap_start = math.max(region.start_seconds, item_start)
-              local overlap_end = math.min(region.end_seconds, item_end)
-              local source_start = take_offset + ((overlap_start - item_start) * playrate)
-              local source_end = take_offset + ((overlap_end - item_start) * playrate)
-              return {
-                item_ref = item_ref_string(item),
-                take_ref = take_ref_string(take),
-                source_filename = filename,
-                source_length_seconds = source_len,
-                source_start_seconds = source_start,
-                source_end_seconds = source_end,
-                playrate = playrate,
+          if not ok_source or not source then
+            first_failure = first_failure or {
+              code = "TAKE_NOT_FOUND",
+              message = "A2 render_region_wav could not read the active take source.",
+              details = merge_details(a2_source_details(region, item_facts, take_facts, nil), {
+                blocker = "take_source_missing",
+              }),
+            }
+          else
+            local source_facts = a2_source_facts(source)
+            if A2_UNSUPPORTED_SOURCE_TYPES[source_facts.source_type] then
+              first_failure = first_failure or {
+                code = "PARAMS_INVALID",
+                message = "A2 render_region_wav does not support this take source type.",
+                details = merge_details(a2_source_details(region, item_facts, take_facts, source_facts), {
+                  blocker = "source_type_unsupported",
+                }),
               }
+            elseif not source_facts.source_filename_present or not source_facts.source_file_exists then
+              first_failure = first_failure or {
+                code = "FILE_NOT_FOUND",
+                message = "A2 render_region_wav source file is missing or offline.",
+                details = merge_details(a2_source_details(region, item_facts, take_facts, source_facts), {
+                  blocker = "source_file_missing_or_offline",
+                }),
+              }
+            else
+              local source_len, source_length_method = source_length_with_file_fallback(source, source_facts.source_filename)
+              if source_length_method == "quarter_notes" then
+                first_failure = first_failure or {
+                  code = "PARAMS_INVALID",
+                  message = "A2 render_region_wav does not support quarter-note based source length.",
+                  details = merge_details(a2_source_details(region, item_facts, take_facts, source_facts), {
+                    blocker = "source_type_unsupported",
+                    source_length_method = source_length_method,
+                  }),
+                }
+              elseif not source_len or source_len <= 0 then
+                first_failure = first_failure or {
+                  code = "FILE_NOT_FOUND",
+                  message = "A2 render_region_wav source length could not be measured from the take or file-backed fallback.",
+                  details = merge_details(a2_source_details(region, item_facts, take_facts, source_facts), {
+                    blocker = "source_length_unreadable",
+                    source_length_method = source_length_method,
+                  }),
+                }
+              else
+                local take_offset = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS"))) or 0
+                local playrate = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE"))) or 1
+                local overlap_start = math.max(region.start_seconds, item_start)
+                local overlap_end = math.min(region.end_seconds, item_end)
+                local source_start = take_offset + ((overlap_start - item_start) * playrate)
+                local source_end = take_offset + ((overlap_end - item_start) * playrate)
+                local clamped_source_start = math.max(0, math.min(source_len, source_start))
+                local clamped_source_end = math.max(0, math.min(source_len, source_end))
+                if playrate <= 0 or clamped_source_end <= clamped_source_start then
+                  first_failure = first_failure or {
+                    code = "REGION_NOT_FOUND",
+                    message = "A2 render region does not overlap a renderable source range.",
+                    details = merge_details(a2_source_details(region, item_facts, take_facts, source_facts), {
+                      blocker = "source_range_overlap_invalid",
+                      source_length_seconds = source_len,
+                      source_length_method = source_length_method,
+                      source_start_seconds = source_start,
+                      source_end_seconds = source_end,
+                      playrate = playrate,
+                    }),
+                  }
+                else
+                  return {
+                    item_ref = item_facts.item_ref,
+                    take_ref = take_facts.take_ref,
+                    source_type = source_facts.source_type,
+                    source_filename = source_facts.source_filename,
+                    source_filename_present = source_facts.source_filename_present,
+                    source_file_exists = source_facts.source_file_exists,
+                    source_length_seconds = source_len,
+                    source_length_method = source_length_method,
+                    source_start_seconds = clamped_source_start,
+                    source_end_seconds = clamped_source_end,
+                    item_start_seconds = item_start,
+                    item_end_seconds = item_end,
+                    playrate = playrate,
+                  }
+                end
+              end
             end
           end
         end
       end
     end
   end
-  return nil
+  if first_failure then
+    return nil, first_failure
+  end
+  if saw_overlap then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "A2 render_region_wav found overlapping items but no renderable audio take.",
+      details = merge_details(a2_region_details(region), {
+        blocker = "no_overlapping_audio_item",
+      }),
+    }
+  end
+  return nil, {
+    code = "ITEM_NOT_FOUND",
+    message = "A2 render_region_wav requires an audio item overlapping the resolved region.",
+    details = merge_details(a2_region_details(region), {
+      blocker = "no_overlapping_audio_item",
+    }),
+  }
 end
 
 local function job_object_ref(job_id)
@@ -2195,17 +2421,9 @@ local function render_region_wav(request)
   if not region then
     return nil, region_failure
   end
-  local source = active_audio_take_for_region(region)
+  local source, source_failure = active_audio_take_for_region(region)
   if not source then
-    return handler_error("ITEM_NOT_FOUND", "A2 render_region_wav requires an online audio item overlapping the resolved region.", {
-      blocker = "fixture_audio_item_missing",
-      region_ref = region.region_ref,
-    })
-  end
-  if not source.source_length_seconds or source.source_length_seconds <= 0 then
-    return handler_error("FILE_NOT_FOUND", "A2 render_region_wav source length could not be measured.", {
-      blocker = "fixture_audio_source_invalid",
-    })
+    return nil, source_failure
   end
 
   local output = managed_render_output(request)
@@ -2220,7 +2438,21 @@ local function render_region_wav(request)
   local end_percent = math.max(0, math.min(1, source.source_end_seconds / source.source_length_seconds))
   if end_percent <= start_percent then
     return handler_error("REGION_NOT_FOUND", "A2 render region does not overlap a renderable source range.", {
-      blocker = "region_source_overlap_invalid",
+      blocker = "source_range_overlap_invalid",
+      source_type = source.source_type,
+      source_filename_present = source.source_filename_present,
+      source_file_exists = source.source_file_exists,
+      item_ref = source.item_ref,
+      take_ref = source.take_ref,
+      region_ref = region.region_ref,
+      preferred_region_ref = region.preferred_region_ref,
+      item_start_seconds = source.item_start_seconds,
+      item_end_seconds = source.item_end_seconds,
+      region_start_seconds = region.start_seconds,
+      region_end_seconds = region.end_seconds,
+      source_length_seconds = source.source_length_seconds,
+      source_start_seconds = source.source_start_seconds,
+      source_end_seconds = source.source_end_seconds,
     })
   end
 
@@ -2235,6 +2467,17 @@ local function render_region_wav(request)
   if not render_ok or render_success == false then
     return handler_error("COMMAND_FAILED", "A2 render_region_wav could not render the source section through REAPER.", {
       blocker = "render_file_section_failed",
+      source_type = source.source_type,
+      source_filename_present = source.source_filename_present,
+      source_file_exists = source.source_file_exists,
+      item_ref = source.item_ref,
+      take_ref = source.take_ref,
+      region_ref = region.region_ref,
+      preferred_region_ref = region.preferred_region_ref,
+      item_start_seconds = source.item_start_seconds,
+      item_end_seconds = source.item_end_seconds,
+      region_start_seconds = region.start_seconds,
+      region_end_seconds = region.end_seconds,
     }, false)
   end
 
@@ -2265,6 +2508,11 @@ local function render_region_wav(request)
     source = {
       item_ref = source.item_ref,
       take_ref = source.take_ref,
+      source_type = source.source_type,
+      source_filename_present = source.source_filename_present,
+      source_file_exists = source.source_file_exists,
+      source_length_seconds = source.source_length_seconds,
+      source_length_method = source.source_length_method,
       source_start_seconds = source.source_start_seconds,
       source_end_seconds = source.source_end_seconds,
     },

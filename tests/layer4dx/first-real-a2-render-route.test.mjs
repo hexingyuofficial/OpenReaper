@@ -284,6 +284,49 @@ describe("First-Real-Fixture-A A2 render route", () => {
       /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
   });
+
+  it("keeps A2 render preflight blockers typed and diagnostic without broadening the route", () => {
+    for (const blocker of [
+      "region_ref_missing",
+      "region_ref_ambiguous",
+      "region_bounds_invalid",
+      "no_overlapping_audio_item",
+      "take_source_missing",
+      "source_file_missing_or_offline",
+      "source_type_unsupported",
+      "source_length_unreadable",
+      "source_range_overlap_invalid",
+    ]) {
+      assert.match(BRIDGE_SOURCE, new RegExp(blocker), blocker);
+    }
+
+    for (const field of [
+      "source_type",
+      "source_filename_present",
+      "source_file_exists",
+      "item_ref",
+      "take_ref",
+      "region_ref",
+      "preferred_region_ref",
+      "item_start_seconds",
+      "item_end_seconds",
+      "region_start_seconds",
+      "region_end_seconds",
+    ]) {
+      assert.match(BRIDGE_SOURCE, new RegExp(`${field}\\s*=`), field);
+    }
+
+    assert.match(BRIDGE_SOURCE, /recommended_region_ref_scheme = "region:name:<unique-region-name>"/);
+    assert.match(BRIDGE_SOURCE, /supported_region_ref_schemes/);
+    assert.match(BRIDGE_SOURCE, /fallback_region_ref_scheme = "region:index:<zero-based-region-index>"/);
+    assert.match(BRIDGE_SOURCE, /source_length_with_file_fallback/);
+    assert.match(BRIDGE_SOURCE, /PCM_Source_CreateFromFile/);
+    assert.match(BRIDGE_SOURCE, /source_length_method/);
+    assert.match(BRIDGE_SOURCE, /pcm_source_create_from_file/);
+    assert.match(BRIDGE_SOURCE, /RenderFileSection/);
+    assert.match(BRIDGE_SOURCE, /source\.source_filename/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /RenderProject|RenderTrack|RenderFullProject|output_path\s*=|output_directory\s*=/);
+  });
 });
 
 function a2RenderInput() {
