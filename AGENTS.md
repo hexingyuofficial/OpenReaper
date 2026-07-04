@@ -160,34 +160,34 @@ Critical Fill Render / Analysis and R3 report P0 descriptors are accepted and
 merged into the official catalog as `critical_fill`; accepted runtime/recipe
 template ids now total 126.
 
-Current control-tower decision: the old-control Vision Pressure Pass accepted
-`proceed_with_warnings`. Layer 5 does not need a contract reopen.
+Layer 4D.R bridge handler registry/split is structurally closed for the current
+accepted V1 handler set. The accepted runtime commit is
+`57540d4 runtime: link isolated bridge handler exports`; all 60 registered
+bridge rows are handler modules and zero rows remain `legacy_monolith`.
 
-Layer 4.5C real REAPER artifact helper canary passed. It proves only the
-artifact helper/write/readback canary path, not render, analysis, report,
-First-Real-Fixture-A, or official recipe live-pass evidence.
+Separate old-control live evidence has passed for Wave 0, all nine scoped Wave
+1A read rows, First-Real-Fixture-A A1/A2/A3, Read-B, and Safe-Write-A. Layer
+4.5C artifact helper canary also passed, but it is helper evidence, not a
+template matrix row. Do not update the old live matrix from recipe-level
+portability evidence.
 
-Current next choice: prepare First-Real-Fixture-A v2 planning as a fixture
-batch, then open a scoped handler expansion route for the approved first batch.
-Do not make any path claim four-vision readiness without separate live/evidence
-gates and official recipe acceptance.
+Layer 7 has six lifecycle-`draft` recipe atoms with no-REAPER fake-smoke
+coverage. R1 live recipe evidence and local clean-source live portability are
+accepted only for `recipe.project.cleanup_fingerprint_report`, using the
+`57540d4` clean source and evidence root:
 
-Separate live-smoke track: Wave 0 plus all nine scoped Wave 1A read rows are
-live-passed in the old-control matrix. Layer 4.5C artifact helper canary also
-passed, but it is not a template row and does not update the matrix. Broader
-Wave 1 read-only, Wave 2 safe-write, and Wave 3 fixture-heavy live smoke still
-require separately approved routes. Do not mix live-smoke work into Layer 6.
+```text
+/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001
+```
 
-Layer 6 exposes the frozen Layer 5 recipe contract as narrow user-writable
-recipe rules over the accepted official template catalog. It does not let users
-define templates, raw Lua, raw actions, shell commands, arbitrary bridge
-requests, or bypass paths. It must not claim the four north-star workflows as
-official, artifact-backed, or live-smoked.
+The accepted R1 path used `call_template(template.project.create_cleanup_report)`
+and `get_state(scope:"artifact")` summary/payload readback with
+`spawned_reaper:false`. It does not promote the other five Layer 7 draft atoms,
+does not add a public `call_recipe`, does not update template matrix rows, and
+does not prove remote-clone/new-machine portability.
 
-Layer 6 must not reopen Layer 5, Layer 4.5A, Layer 4D, Layer 4D.1, or Layer
-4D.2 unless a concrete blocker is reported to the control tower.
-
-Layer 7 is the future official recipe acceptance / first real version gate.
-It should turn the four north-star workflows into accepted official recipes
-only after the required critical templates, artifact/report reads, live smoke
-evidence, and portability checks are in place.
+Current next task: finish V1 closure docs. Public wording must stay bound to
+the local macOS manual-bridge, R1-only recipe-level live/local portability
+claim unless a new evidence route explicitly broadens it. Final V1 closure
+still needs public `README.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md`,
+`docs/SUPPORT_MATRIX.md`, final docs review, and final V1 declaration.

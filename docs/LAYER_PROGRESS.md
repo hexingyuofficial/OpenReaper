@@ -513,14 +513,25 @@ the nine approved read templates. These env values apply only to
 
 ## Layer 4D.R: Bridge Handler Registry / Split v1
 
-Status: candidate
+Status: accepted
+
+Accepted commits:
+
+- `c8ed1f5 runtime: add bridge handler registry gate`
+- `a9614b1 runtime: extract wave0 bridge handlers`
+- `648387f runtime: extract wave1a bridge handlers`
+- `2063081 runtime: extract read-b bridge handlers`
+- `74b3d95 runtime: extract first-real bridge handlers`
+- `b576138 runtime: extract safe-write bridge handlers`
+- `bcfefd3 runtime: isolate bridge handler module locals`
+- `57540d4 runtime: link isolated bridge handler exports`
 
 Scope target: add the first bridge handler registry gate so existing live
 bridge handler rows are inventoried against accepted template ids, route
 allowlists, descriptor pack/risk/operation fields, handler location policy,
 tests, and generated bundle determinism before future handler expansion.
 
-Candidate coverage:
+Accepted registry inventory:
 
 - added `reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json` with one
   standard entry shape;
@@ -534,7 +545,7 @@ Candidate coverage:
   paths, and generated bundle freshness;
 - added `bridge-handler-registry` scope guard support and focused 4D.R tests.
 
-Candidate closeout batch 1:
+Accepted closeout batch 1:
 
 - extracted exactly the five Wave 0 read-only rows
   (`template.project.read_summary`, `template.transport.read_state`,
@@ -553,7 +564,7 @@ Candidate closeout batch 1:
 - refreshed focused 4D.R tests for registry parity, handler path policy,
   generated bundle freshness, and no broad route expansion.
 
-Candidate closeout batch 2:
+Accepted closeout batch 2:
 
 - extracted exactly the nine Wave 1A read-only rows
   (`template.core.read_template_catalog_summary`,
@@ -575,7 +586,7 @@ Candidate closeout batch 2:
   policy, generated bundle freshness, registry parity, and no raw execution
   surfaces.
 
-Candidate closeout batch 3:
+Accepted closeout batch 3:
 
 - extracted exactly the 15 Read-B read-only rows
   (`template.actions.resolve_named_command`,
@@ -603,7 +614,7 @@ Candidate closeout batch 3:
   policy, generated bundle freshness, registry parity, and no raw execution
   surfaces.
 
-Candidate closeout batch 4:
+Accepted closeout batch 4:
 
 - extracted exactly the seven First-Real-Fixture-A A1/A2/A3 artifact/report
   rows (`template.analysis.detect_loop_candidates`,
@@ -626,7 +637,7 @@ Candidate closeout batch 4:
   policy, generated bundle freshness, registry parity, and no raw execution
   surfaces.
 
-Candidate closeout batch 5:
+Accepted closeout batch 5:
 
 - extracted exactly the 24 Safe-Write-A write/safe rows
   (`template.project.set_metadata_field`,
@@ -662,10 +673,10 @@ Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
 and `git diff --check`.
 
-Known risks: this remains a candidate closeout batch, not a live-smoke
-promotion. Static/fake coverage proves registry and generated-bundle parity
-only; real REAPER Safe-Write-A live evidence still requires a separately
-approved opt-in route.
+Known risks: this is structural bridge-handler closeout, not a new live-smoke
+promotion. Static/fake coverage proves registry and generated-bundle parity.
+Template-row live status remains owned by the old-control live matrix and
+reviewed evidence reports.
 
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 
@@ -969,13 +980,14 @@ recipes can claim portable first-real-version evidence.
 
 ## Layer 7: Official Recipe Acceptance / First Real Version Gate
 
-Status: draft packet plus no-REAPER fake-smoke accepted; live acceptance still
-pending.
+Status: draft packet plus no-REAPER fake-smoke accepted; R1 recipe-level live
+and local clean-source portability accepted.
 
 Accepted commits:
 
 - `3d21fb0 recipes: add layer 7 draft packet`
 - `8932817 recipes: add layer 7 fake smoke`
+- `fb4b98b recipes: add r1 transcript driver`
 
 Accepted coverage:
 
@@ -989,21 +1001,33 @@ Accepted coverage:
   artifact `get_state` reads;
 - proved fake outputs are descriptor-derived, `$from_step` bindings use only
   earlier descriptor-declared outputs, artifact reads use declared labels, and
-  write/render atoms pause for risk gates.
+  write/render atoms pause for risk gates;
+- added the narrow R1 transcript driver for
+  `recipe.project.cleanup_fingerprint_report` without adding a public
+  `call_recipe`, recipe executor, REAPER startup path, live matrix update, or
+  raw bypass;
+- accepted recipe-level live evidence for R1 through
+  `call_template(template.project.create_cleanup_report)` plus
+  `get_state(scope:"artifact")` summary/payload readback;
+- accepted local clean-source live portability from the `57540d4` clean
+  worktree, with evidence root
+  `/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001`.
 
-Out of scope: REAPER live smoke, live matrix updates, recipe lifecycle
-promotion, a recipe executor, a new MCP tool, template/catalog/runtime changes,
-and official four-vision readiness claims.
+Out of scope: live matrix updates from recipe portability evidence, recipe
+lifecycle promotion beyond the current draft/fake-smoke status, a public recipe
+executor, a new MCP tool, template/catalog/runtime changes, remote-clone or
+true new-machine portability, and official four-vision readiness claims.
 
-Known risks: recipe-level live acceptance, artifact readback evidence,
-portability/new-machine checks, and runbook evidence remain required before
-any atom can be promoted beyond draft/fake-smoke evidence. The
-`recipe.items.layer_report_from_evidence` atom remains fixture-backed and
+Known risks: only `recipe.project.cleanup_fingerprint_report` has accepted
+recipe-level live/local portability evidence. The other five Layer 7 atoms
+remain draft/fake-smoked only. Remote clone/new-machine portability remains a
+future stronger evidence tier unless separately added before V1 declaration.
+The `recipe.items.layer_report_from_evidence` atom remains fixture-backed and
 draft-only until A3-style evidence is upgraded into a recipe-level run.
 
-Next gate: recipe-level live R1, currently planned to start with
-`recipe.project.cleanup_fingerprint_report` after control-tower approval and
-user-operated REAPER fixture setup.
+Next gate: public V1 `README.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md`,
+and `docs/SUPPORT_MATRIX.md`, followed by final docs review and V1 declaration
+under the R1-only local manual-bridge claim set.
 
 ## Template Closure / User Recipe Authoring Target
 
