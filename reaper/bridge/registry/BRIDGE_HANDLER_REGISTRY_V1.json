@@ -96,8 +96,8 @@
       "pack": "core",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "core/read_template_catalog_summary.lua",
+      "handler_export": "read_template_catalog_summary",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -112,8 +112,8 @@
       "pack": "core",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "core/read_last_result.lua",
+      "handler_export": "read_last_result",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -128,8 +128,8 @@
       "pack": "system",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "system/check_api_symbols.lua",
+      "handler_export": "read_api_symbols",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -144,8 +144,8 @@
       "pack": "project",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "project/read_metadata.lua",
+      "handler_export": "read_project_metadata",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -160,8 +160,8 @@
       "pack": "project",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "project/list_markers_regions.lua",
+      "handler_export": "list_markers_regions",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -176,8 +176,8 @@
       "pack": "project",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "project/read_tempo_map.lua",
+      "handler_export": "read_tempo_map",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -192,8 +192,8 @@
       "pack": "tracks",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "tracks/resolve_track_ref.lua",
+      "handler_export": "resolve_track_ref",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -208,8 +208,8 @@
       "pack": "items",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "items/resolve_item_ref.lua",
+      "handler_export": "resolve_item_ref",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"
@@ -224,8 +224,8 @@
       "pack": "items",
       "risk": "read",
       "route": "wave1a-read-handlers",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "items/read_item_summary.lua",
+      "handler_export": "read_item_summary",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-handler-expansion.test.mjs"

@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 55 legacy_monolith row(s); 5 extracted handler row(s); 5 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 46 legacy_monolith row(s); 14 extracted handler row(s); 14 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1494,6 +1494,943 @@ local function read_resource_paths(request)
   }
 end
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/core/read_template_catalog_summary.lua
+-- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
+
+local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
+  template_count = 119,
+  by_pack = {
+    actions = 8,
+    analysis = 4,
+    automation = 15,
+    core = 3,
+    fx = 14,
+    items = 9,
+    media = 6,
+    midi = 12,
+    project = 7,
+    render = 5,
+    routing = 15,
+    system = 3,
+    tracks = 8,
+    transport = 10,
+  },
+  by_risk = {
+    read = 58,
+    safe = 9,
+    write = 52,
+  },
+  by_lifecycle = {
+    experimental = 119,
+  },
+  by_entity_kind = {
+    action = 4,
+    api_symbol = 1,
+    automation_item = 3,
+    automation_mode = 3,
+    automation_point = 4,
+    channel = 4,
+    command_id = 1,
+    core_state = 2,
+    cursor = 1,
+    custom_action = 1,
+    cycle_action = 1,
+    envelope = 5,
+    fx = 5,
+    fx_chain = 3,
+    fx_param = 3,
+    item = 7,
+    last_result = 1,
+    loop_state = 3,
+    marker = 2,
+    marker_action = 1,
+    media_file = 4,
+    media_source = 2,
+    midi_cc = 3,
+    midi_event = 4,
+    midi_item = 2,
+    midi_note = 3,
+    output_file = 2,
+    peak = 1,
+    pin_mapping = 1,
+    preset = 2,
+    project = 3,
+    region = 1,
+    render_matrix = 1,
+    render_region = 1,
+    render_setting = 1,
+    resource_path = 1,
+    rms = 1,
+    send = 10,
+    silence = 1,
+    system_state = 1,
+    take = 2,
+    tempo_map = 1,
+    time_selection = 2,
+    track = 7,
+    track_selection = 1,
+    transient = 1,
+    transport = 4,
+    video_processor = 1,
+  },
+}
+
+local function read_template_catalog_summary_table_key_count(source)
+  local count = 0
+  for _ in pairs(source or {}) do
+    count = count + 1
+  end
+  return count
+end
+
+local function read_template_catalog_summary_clone_counts(source)
+  local result = {}
+  for key, value in pairs(source or {}) do
+    result[key] = value
+  end
+  return result
+end
+
+local function read_template_catalog_summary_count_for_key(source, key)
+  local result = {}
+  result[key] = source[key]
+  return result
+end
+
+local function read_template_catalog_summary_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function read_template_catalog_summary(request)
+  local pack = is_string(request.params.pack) and request.params.pack or nil
+  if pack and not READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack[pack] then
+    return read_template_catalog_summary_error("PARAMS_INVALID", "Requested pack is not in the accepted runtime catalog.", {
+      pack = bounded_string(pack, 80),
+    })
+  end
+
+  local template_count = pack and READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack[pack] or READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.template_count
+  local summary = {
+    template_count = template_count,
+    pack_count = pack and 1 or read_template_catalog_summary_table_key_count(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack),
+    by_pack = pack and read_template_catalog_summary_count_for_key(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack, pack) or read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack),
+    by_lifecycle = request.params.include_lifecycle_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_lifecycle) or nil,
+    by_risk = request.params.include_risk_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_risk) or nil,
+    by_entity_kind = request.params.include_entity_kind_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_entity_kind) or nil,
+    truncated = false,
+  }
+  return summary
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/core/read_last_result.lua
+-- Extracted Wave 1A handler: template.core.read_last_result.
+
+local function read_last_result_bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+local function read_last_result(request)
+  local limit = read_last_result_bounded_limit(request, request.params.limit, 8, 50)
+  local kind = is_string(request.params.kind) and request.params.kind or nil
+  return {
+    owner = ACTIVE_OWNER,
+    generation = ACTIVE_GENERATION,
+    updated = false,
+    kind = kind,
+    limit = limit,
+    refs = json_array({}),
+    truncated = false,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/system/check_api_symbols.lua
+-- Extracted Wave 1A handler: template.system.check_api_symbols.
+
+local CHECK_API_SYMBOLS_CORE_RUNTIME_SYMBOLS = json_array({
+  "APIExists",
+  "CountMediaItems",
+  "CountProjectMarkers",
+  "CountSelectedMediaItems",
+  "CountTempoTimeSigMarkers",
+  "CountTracks",
+  "EnumProjectMarkers3",
+  "EnumProjects",
+  "GetAppVersion",
+  "GetCursorPosition",
+  "GetMediaItem",
+  "GetMediaItemInfo_Value",
+  "GetOS",
+  "GetProjectLength",
+  "GetProjectName",
+  "GetResourcePath",
+  "GetSelectedMediaItem",
+  "GetTrack",
+  "GetTrackGUID",
+})
+
+local CHECK_API_SYMBOLS_EXTENSION_PROBE_SYMBOLS = json_array({
+  "APIExists",
+  "BR_GetMediaItemGUID",
+  "CF_GetSWSVersion",
+  "SNM_GetIntConfigVar",
+})
+
+local function check_api_symbols_profile_defaults(profile)
+  if profile == "extension_probe" then
+    return CHECK_API_SYMBOLS_EXTENSION_PROBE_SYMBOLS
+  end
+  return CHECK_API_SYMBOLS_CORE_RUNTIME_SYMBOLS
+end
+
+local function check_api_symbols_valid_name(name)
+  return is_string(name) and name:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
+end
+
+local function check_api_symbols_available(name)
+  if not reaper then
+    return false
+  end
+  if type(reaper.APIExists) == "function" then
+    local ok, exists = pcall(reaper.APIExists, name)
+    if ok and type(exists) == "boolean" then
+      return exists
+    end
+  end
+  return type(reaper[name]) == "function"
+end
+
+local function check_api_symbols_bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+local function read_api_symbols(request)
+  local profile = is_string(request.params.profile) and request.params.profile or "core_runtime"
+  local source = is_json_array(request.params.symbols) and request.params.symbols or check_api_symbols_profile_defaults(profile)
+  local limit = check_api_symbols_bounded_limit(request, request.params.max_symbols, 16, 50)
+  local symbols = json_array({})
+  local unavailable_count = 0
+  local scanned = 0
+
+  for index = 1, #source do
+    if scanned >= limit then
+      break
+    end
+    local name = source[index]
+    if type(name) == "string" then
+      scanned = scanned + 1
+      local valid = check_api_symbols_valid_name(name)
+      local available = valid and check_api_symbols_available(name) or false
+      if not available then
+        unavailable_count = unavailable_count + 1
+      end
+      symbols[#symbols + 1] = {
+        name = bounded_string(name, 120),
+        available = available,
+        reason = valid and nil or "invalid_symbol_name",
+      }
+    end
+  end
+
+  return {
+    profile = profile,
+    symbol_count = #symbols,
+    symbols = symbols,
+    unavailable_count = unavailable_count,
+    truncated = #source > limit,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_metadata.lua
+-- Extracted Wave 1A handler: template.project.read_metadata.
+
+local PROJECT_READ_METADATA_KEYS = {
+  title = "PROJECT_TITLE",
+  author = "PROJECT_AUTHOR",
+  notes = "PROJECT_NOTES",
+}
+
+local function read_project_metadata_current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function read_project_metadata_info_string(project, key, max_length)
+  local ok, _, value = call_reaper("GetSetProjectInfo_String", project, key, "", false)
+  if ok and type(value) == "string" then
+    return bounded_string(value, max_length or 240)
+  end
+  return ""
+end
+
+local function read_project_metadata_requested_fields(fields)
+  if not is_json_array(fields) or #fields == 0 then
+    return json_array({ "title", "author", "notes" })
+  end
+  local result = json_array({})
+  local seen = {}
+  for index = 1, #fields do
+    local field = fields[index]
+    if PROJECT_READ_METADATA_KEYS[field] and not seen[field] then
+      seen[field] = true
+      result[#result + 1] = field
+    end
+  end
+  if #result == 0 then
+    return json_array({ "title", "author", "notes" })
+  end
+  return result
+end
+
+local function read_project_metadata(request)
+  local project = read_project_metadata_current_project()
+  local fields = read_project_metadata_requested_fields(request.params.fields)
+  local budget = safe_budget(request)
+  local summary = {
+    project_ref = "project:current",
+  }
+  for index = 1, #fields do
+    local field = fields[index]
+    summary[field] = read_project_metadata_info_string(project, PROJECT_READ_METADATA_KEYS[field], math.min(budget.max_inline_value_bytes, 1024))
+  end
+  return summary
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/list_markers_regions.lua
+-- Extracted Wave 1A handler: template.project.list_markers_regions.
+
+local function list_markers_regions_current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function list_markers_regions_bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+local function list_markers_regions_marker_ref(kind, index_number)
+  local prefix = kind == "region" and "region" or "marker"
+  return prefix .. ":index:" .. tostring(index_number or 0)
+end
+
+local function list_markers_regions(request)
+  local project = list_markers_regions_current_project()
+  local include_markers = request.params.include_markers ~= false
+  local include_regions = request.params.include_regions ~= false
+  local limit = list_markers_regions_bounded_limit(request, request.params.limit, 50, 50)
+  local ok_count, _, marker_count, region_count = call_reaper("CountProjectMarkers", project)
+  local total_markers = ok_count and first_number(marker_count) or 0
+  local total_regions = ok_count and first_number(region_count) or 0
+  local total = total_markers + total_regions
+  local items = json_array({})
+  local included_count = 0
+
+  for index = 0, math.max(total - 1, -1) do
+    local ok_enum, retval, is_region, pos, region_end, name, index_number, color = call_reaper("EnumProjectMarkers3", project, index)
+    if ok_enum and retval then
+      local kind = is_region and "region" or "marker"
+      local include = (kind == "marker" and include_markers) or (kind == "region" and include_regions)
+      if include then
+        included_count = included_count + 1
+        if #items < limit then
+          local item = {
+            kind = kind,
+            name = bounded_string(name or "", 160),
+            index = index_number or included_count,
+            position_seconds = first_number(pos) or 0,
+            color_native = type(color) == "number" and color or nil,
+          }
+          if kind == "region" then
+            item.region_ref = list_markers_regions_marker_ref("region", index_number)
+            item.end_seconds = first_number(region_end) or item.position_seconds
+          else
+            item.marker_ref = list_markers_regions_marker_ref("marker", index_number)
+          end
+          items[#items + 1] = item
+        end
+      end
+    end
+  end
+
+  return {
+    items = items,
+    marker_count = include_markers and total_markers or 0,
+    region_count = include_regions and total_regions or 0,
+    truncated = included_count > #items,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_tempo_map.lua
+-- Extracted Wave 1A handler: template.project.read_tempo_map.
+
+local function read_tempo_map_current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function read_tempo_map_bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+local function read_tempo_map(request)
+  local project = read_tempo_map_current_project()
+  local limit = read_tempo_map_bounded_limit(request, request.params.limit, 32, 50)
+  local ok_count, marker_count = call_reaper("CountTempoTimeSigMarkers", project)
+  local total = ok_count and first_number(marker_count) or 0
+  local tempo_markers = json_array({})
+
+  for index = 0, math.max(total - 1, -1) do
+    if #tempo_markers >= limit then
+      break
+    end
+    local ok_marker, retval, timepos, measurepos, beatpos, bpm, timesig_num, timesig_denom, lineartempo = call_reaper("GetTempoTimeSigMarker", project, index)
+    if ok_marker and retval then
+      tempo_markers[#tempo_markers + 1] = {
+        index = index,
+        time_seconds = first_number(timepos) or 0,
+        measure = first_number(measurepos) or 0,
+        beat = first_number(beatpos) or 0,
+        bpm = first_number(bpm) or 0,
+        time_sig_num = first_number(timesig_num) or 0,
+        time_sig_denom = first_number(timesig_denom) or 0,
+        linear_tempo = lineartempo == true,
+      }
+    end
+  end
+
+  local effective = json_array({})
+  local requested_times = is_json_array(request.params.effective_at_seconds) and request.params.effective_at_seconds or json_array({})
+  local effective_limit = read_tempo_map_bounded_limit(request, #requested_times, math.min(#requested_times, 8), 16)
+  for index = 1, math.min(#requested_times, effective_limit) do
+    local time_seconds = requested_times[index]
+    if type(time_seconds) == "number" then
+      local ok_effective, bpm, timesig_num, timesig_denom = call_reaper("TimeMap_GetTimeSigAtTime", project, time_seconds)
+      effective[#effective + 1] = {
+        time_seconds = time_seconds,
+        bpm = ok_effective and first_number(bpm) or 0,
+        time_sig_num = ok_effective and first_number(timesig_num) or 0,
+        time_sig_denom = ok_effective and first_number(timesig_denom) or 0,
+      }
+    end
+  end
+
+  return {
+    tempo_markers = tempo_markers,
+    effective = effective,
+    truncated = total > #tempo_markers,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/resolve_track_ref.lua
+-- Extracted Wave 1A handler: template.tracks.resolve_track_ref.
+
+local function resolve_track_ref_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function resolve_track_ref_track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function resolve_track_ref_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function resolve_track_ref_track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function resolve_track_ref_string(track)
+  local guid = resolve_track_ref_track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(resolve_track_ref_track_index(track))
+end
+
+local function resolve_track_ref_solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function resolve_track_ref_summary(track)
+  local index = resolve_track_ref_track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = resolve_track_ref_string(track),
+    index = index,
+    name = resolve_track_ref_track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = resolve_track_ref_solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function resolve_track_ref_find_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and resolve_track_ref_track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function resolve_track_ref_find_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and resolve_track_ref_track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_ref_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return resolve_track_ref_find_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return resolve_track_ref_find_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_ref(request)
+  local track, reason = resolve_track_ref_token(request.params.track_ref)
+  if reason == "ambiguous" then
+    return resolve_track_ref_error("REF_INVALID", "Track name is ambiguous.", {
+      track_ref = bounded_string(request.params.track_ref, 160),
+    })
+  end
+  if not track then
+    return resolve_track_ref_error("TRACK_NOT_FOUND", "Track ref could not be resolved.", {
+      track_ref = bounded_string(request.params.track_ref, 160),
+    })
+  end
+  return resolve_track_ref_summary(track)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/resolve_item_ref.lua
+-- Extracted Wave 1A handler: template.items.resolve_item_ref.
+
+local function resolve_item_ref_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function resolve_item_ref_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function resolve_item_ref_track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function resolve_item_ref_track_ref_string(track)
+  local guid = resolve_item_ref_track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(resolve_item_ref_track_index(track))
+end
+
+local function resolve_item_ref_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function resolve_item_ref_item_ref_string(item)
+  local guid = resolve_item_ref_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function resolve_item_ref_find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and resolve_item_ref_item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function resolve_item_ref_item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_ref_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return resolve_item_ref_find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_ref_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function resolve_item_ref_summary(item)
+  local track = resolve_item_ref_item_track(item)
+  return {
+    item_ref = resolve_item_ref_item_ref_string(item),
+    track_ref = track and resolve_item_ref_track_ref_string(track) or JSON_NULL,
+    position_seconds = resolve_item_ref_number(item, "D_POSITION"),
+    length_seconds = resolve_item_ref_number(item, "D_LENGTH"),
+    snap_offset_seconds = resolve_item_ref_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = resolve_item_ref_number(item, "D_FADEINLEN"),
+    fade_out_seconds = resolve_item_ref_number(item, "D_FADEOUTLEN"),
+  }
+end
+
+local function resolve_item_ref(request)
+  local item = resolve_item_ref_token(request.params.ref)
+  if not item then
+    return resolve_item_ref_error("ITEM_NOT_FOUND", "Item ref could not be resolved.", {
+      ref = bounded_string(request.params.ref, 160),
+    })
+  end
+  return resolve_item_ref_summary(item)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/read_item_summary.lua
+-- Extracted Wave 1A handler: template.items.read_item_summary.
+
+local function read_item_summary_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function read_item_summary_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function read_item_summary_track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function read_item_summary_track_ref_string(track)
+  local guid = read_item_summary_track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(read_item_summary_track_index(track))
+end
+
+local function read_item_summary_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function read_item_summary_item_ref_string(item)
+  local guid = read_item_summary_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function read_item_summary_find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and read_item_summary_item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function read_item_summary_item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function read_item_summary_resolve_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return read_item_summary_find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function read_item_summary_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return read_item_summary_resolve_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return read_item_summary_resolve_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return read_item_summary_resolve_token("guid:" .. tostring(identity.value))
+  end
+  return read_item_summary_resolve_token(ref.ref)
+end
+
+local function read_item_summary_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function read_item_summary_value(item, include_take_summary)
+  local track = read_item_summary_item_track(item)
+  local summary = {
+    item_ref = read_item_summary_item_ref_string(item),
+    track_ref = track and read_item_summary_track_ref_string(track) or JSON_NULL,
+    position_seconds = read_item_summary_number(item, "D_POSITION"),
+    length_seconds = read_item_summary_number(item, "D_LENGTH"),
+    snap_offset_seconds = read_item_summary_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = read_item_summary_number(item, "D_FADEINLEN"),
+    fade_out_seconds = read_item_summary_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function read_item_summary(request)
+  local item = nil
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      item = read_item_summary_from_ref_object(request.refs[index])
+      if item then
+        break
+      end
+    end
+  end
+  if not item then
+    return read_item_summary_error("ITEM_NOT_FOUND", "Item summary requires a resolvable item ref.", {})
+  end
+  return read_item_summary_value(item, request.params.include_take_summary == true)
+end
+
 local SAFE_WRITE_A_CAPABILITIES = {
   ["project.set_metadata_field"] = { pack = "project", risk = "write" },
   ["project.create_marker"] = { pack = "project", risk = "write" },
@@ -1840,41 +2777,6 @@ local function bounded_limit(request, requested, default_limit, hard_limit)
   return limit
 end
 
-local function read_template_catalog_summary(request)
-  local pack = is_string(request.params.pack) and request.params.pack or nil
-  if pack and not ACCEPTED_CATALOG_COUNTS.by_pack[pack] then
-    return handler_error("PARAMS_INVALID", "Requested pack is not in the accepted runtime catalog.", {
-      pack = bounded_string(pack, 80),
-    })
-  end
-
-  local template_count = pack and ACCEPTED_CATALOG_COUNTS.by_pack[pack] or ACCEPTED_CATALOG_COUNTS.template_count
-  local summary = {
-    template_count = template_count,
-    pack_count = pack and 1 or table_key_count(ACCEPTED_CATALOG_COUNTS.by_pack),
-    by_pack = pack and count_for_key(ACCEPTED_CATALOG_COUNTS.by_pack, pack) or clone_counts(ACCEPTED_CATALOG_COUNTS.by_pack),
-    by_lifecycle = request.params.include_lifecycle_counts == true and clone_counts(ACCEPTED_CATALOG_COUNTS.by_lifecycle) or nil,
-    by_risk = request.params.include_risk_counts == true and clone_counts(ACCEPTED_CATALOG_COUNTS.by_risk) or nil,
-    by_entity_kind = request.params.include_entity_kind_counts == true and clone_counts(ACCEPTED_CATALOG_COUNTS.by_entity_kind) or nil,
-    truncated = false,
-  }
-  return summary
-end
-
-local function read_last_result(request)
-  local limit = bounded_limit(request, request.params.limit, 8, 50)
-  local kind = is_string(request.params.kind) and request.params.kind or nil
-  return {
-    owner = ACTIVE_OWNER,
-    generation = ACTIVE_GENERATION,
-    updated = false,
-    kind = kind,
-    limit = limit,
-    refs = json_array({}),
-    truncated = false,
-  }
-end
-
 local CORE_RUNTIME_SYMBOLS = json_array({
   "APIExists",
   "CountMediaItems",
@@ -1928,43 +2830,6 @@ local function api_symbol_available(name)
   return type(reaper[name]) == "function"
 end
 
-local function read_api_symbols(request)
-  local profile = is_string(request.params.profile) and request.params.profile or "core_runtime"
-  local source = is_json_array(request.params.symbols) and request.params.symbols or symbol_profile_defaults(profile)
-  local limit = bounded_limit(request, request.params.max_symbols, 16, 50)
-  local symbols = json_array({})
-  local unavailable_count = 0
-  local scanned = 0
-
-  for index = 1, #source do
-    if scanned >= limit then
-      break
-    end
-    local name = source[index]
-    if type(name) == "string" then
-      scanned = scanned + 1
-      local valid = valid_api_symbol_name(name)
-      local available = valid and api_symbol_available(name) or false
-      if not available then
-        unavailable_count = unavailable_count + 1
-      end
-      symbols[#symbols + 1] = {
-        name = bounded_string(name, 120),
-        available = available,
-        reason = valid and nil or "invalid_symbol_name",
-      }
-    end
-  end
-
-  return {
-    profile = profile,
-    symbol_count = #symbols,
-    symbols = symbols,
-    unavailable_count = unavailable_count,
-    truncated = #source > limit,
-  }
-end
-
 local function project_info_string(project, key, max_length)
   local ok, _, value = call_reaper("GetSetProjectInfo_String", project, key, "", false)
   if ok and type(value) == "string" then
@@ -1998,119 +2863,9 @@ local function requested_metadata_fields(fields)
   return result
 end
 
-local function read_project_metadata(request)
-  local project = current_project()
-  local fields = requested_metadata_fields(request.params.fields)
-  local budget = safe_budget(request)
-  local summary = {
-    project_ref = "project:current",
-  }
-  for index = 1, #fields do
-    local field = fields[index]
-    summary[field] = project_info_string(project, PROJECT_METADATA_KEYS[field], math.min(budget.max_inline_value_bytes, 1024))
-  end
-  return summary
-end
-
 local function marker_ref(kind, index_number)
   local prefix = kind == "region" and "region" or "marker"
   return prefix .. ":index:" .. tostring(index_number or 0)
-end
-
-local function list_markers_regions(request)
-  local project = current_project()
-  local include_markers = request.params.include_markers ~= false
-  local include_regions = request.params.include_regions ~= false
-  local limit = bounded_limit(request, request.params.limit, 50, 50)
-  local ok_count, _, marker_count, region_count = call_reaper("CountProjectMarkers", project)
-  local total_markers = ok_count and first_number(marker_count) or 0
-  local total_regions = ok_count and first_number(region_count) or 0
-  local total = total_markers + total_regions
-  local items = json_array({})
-  local included_count = 0
-
-  for index = 0, math.max(total - 1, -1) do
-    local ok_enum, retval, is_region, pos, region_end, name, index_number, color = call_reaper("EnumProjectMarkers3", project, index)
-    if ok_enum and retval then
-      local kind = is_region and "region" or "marker"
-      local include = (kind == "marker" and include_markers) or (kind == "region" and include_regions)
-      if include then
-        included_count = included_count + 1
-        if #items < limit then
-          local item = {
-            kind = kind,
-            name = bounded_string(name or "", 160),
-            index = index_number or included_count,
-            position_seconds = first_number(pos) or 0,
-            color_native = type(color) == "number" and color or nil,
-          }
-          if kind == "region" then
-            item.region_ref = marker_ref("region", index_number)
-            item.end_seconds = first_number(region_end) or item.position_seconds
-          else
-            item.marker_ref = marker_ref("marker", index_number)
-          end
-          items[#items + 1] = item
-        end
-      end
-    end
-  end
-
-  return {
-    items = items,
-    marker_count = include_markers and total_markers or 0,
-    region_count = include_regions and total_regions or 0,
-    truncated = included_count > #items,
-  }
-end
-
-local function read_tempo_map(request)
-  local project = current_project()
-  local limit = bounded_limit(request, request.params.limit, 32, 50)
-  local ok_count, marker_count = call_reaper("CountTempoTimeSigMarkers", project)
-  local total = ok_count and first_number(marker_count) or 0
-  local tempo_markers = json_array({})
-
-  for index = 0, math.max(total - 1, -1) do
-    if #tempo_markers >= limit then
-      break
-    end
-    local ok_marker, retval, timepos, measurepos, beatpos, bpm, timesig_num, timesig_denom, lineartempo = call_reaper("GetTempoTimeSigMarker", project, index)
-    if ok_marker and retval then
-      tempo_markers[#tempo_markers + 1] = {
-        index = index,
-        time_seconds = first_number(timepos) or 0,
-        measure = first_number(measurepos) or 0,
-        beat = first_number(beatpos) or 0,
-        bpm = first_number(bpm) or 0,
-        time_sig_num = first_number(timesig_num) or 0,
-        time_sig_denom = first_number(timesig_denom) or 0,
-        linear_tempo = lineartempo == true,
-      }
-    end
-  end
-
-  local effective = json_array({})
-  local requested_times = is_json_array(request.params.effective_at_seconds) and request.params.effective_at_seconds or json_array({})
-  local effective_limit = bounded_limit(request, #requested_times, math.min(#requested_times, 8), 16)
-  for index = 1, math.min(#requested_times, effective_limit) do
-    local time_seconds = requested_times[index]
-    if type(time_seconds) == "number" then
-      local ok_effective, bpm, timesig_num, timesig_denom = call_reaper("TimeMap_GetTimeSigAtTime", project, time_seconds)
-      effective[#effective + 1] = {
-        time_seconds = time_seconds,
-        bpm = ok_effective and first_number(bpm) or 0,
-        time_sig_num = ok_effective and first_number(timesig_num) or 0,
-        time_sig_denom = ok_effective and first_number(timesig_denom) or 0,
-      }
-    end
-  end
-
-  return {
-    tempo_markers = tempo_markers,
-    effective = effective,
-    truncated = total > #tempo_markers,
-  }
 end
 
 local function track_name(track)
@@ -2233,21 +2988,6 @@ local function resolve_track_token(token)
   return nil
 end
 
-local function resolve_track_ref(request)
-  local track, reason = resolve_track_token(request.params.track_ref)
-  if reason == "ambiguous" then
-    return handler_error("REF_INVALID", "Track name is ambiguous.", {
-      track_ref = bounded_string(request.params.track_ref, 160),
-    })
-  end
-  if not track then
-    return handler_error("TRACK_NOT_FOUND", "Track ref could not be resolved.", {
-      track_ref = bounded_string(request.params.track_ref, 160),
-    })
-  end
-  return track_summary(track)
-end
-
 local function item_guid(item)
   local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
   if ok_sws and type(guid) == "string" and guid ~= "" then
@@ -2362,32 +3102,6 @@ local function item_summary(item, include_take_summary)
     summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
   end
   return summary
-end
-
-local function resolve_item_ref(request)
-  local item = resolve_item_token(request.params.ref)
-  if not item then
-    return handler_error("ITEM_NOT_FOUND", "Item ref could not be resolved.", {
-      ref = bounded_string(request.params.ref, 160),
-    })
-  end
-  return item_summary(item, false)
-end
-
-local function read_item_summary(request)
-  local item = nil
-  if is_json_array(request.refs) then
-    for index = 1, #request.refs do
-      item = resolve_item_from_ref_object(request.refs[index])
-      if item then
-        break
-      end
-    end
-  end
-  if not item then
-    return handler_error("ITEM_NOT_FOUND", "Item summary requires a resolvable item ref.", {})
-  end
-  return item_summary(item, request.params.include_take_summary == true)
 end
 
 local ACTION_SECTION_IDS = {

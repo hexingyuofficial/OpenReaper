@@ -534,7 +534,7 @@ Candidate coverage:
   paths, and generated bundle freshness;
 - added `bridge-handler-registry` scope guard support and focused 4D.R tests.
 
-Candidate closeout batch:
+Candidate closeout batch 1:
 
 - extracted exactly the five Wave 0 read-only rows
   (`template.project.read_summary`, `template.transport.read_state`,
@@ -553,14 +553,36 @@ Candidate closeout batch:
 - refreshed focused 4D.R tests for registry parity, handler path policy,
   generated bundle freshness, and no broad route expansion.
 
+Candidate closeout batch 2:
+
+- extracted exactly the nine Wave 1A read-only rows
+  (`template.core.read_template_catalog_summary`,
+  `template.core.read_last_result`, `template.system.check_api_symbols`,
+  `template.project.read_metadata`,
+  `template.project.list_markers_regions`,
+  `template.project.read_tempo_map`,
+  `template.tracks.resolve_track_ref`,
+  `template.items.resolve_item_ref`, and
+  `template.items.read_item_summary`) into
+  `reaper/bridge/src/handlers/**` modules;
+- updated the bridge handler registry so the five Wave 0 rows plus these nine
+  Wave 1A rows are the only extracted rows, for 14 extracted rows total and 46
+  remaining `legacy_monolith` rows;
+- kept the existing route allowlists, operation keys, MCP tools, template ids,
+  recipes, runtime capabilities, live smoke scope, and old live matrix
+  untouched;
+- refreshed focused 4D.R tests for exact extracted-row membership, handler path
+  policy, generated bundle freshness, registry parity, and no raw execution
+  surfaces.
+
 Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
 and `git diff --check`.
 
 Known risks: this remains a candidate closeout batch, not a full handler split.
-Only the five Wave 0 read-only rows are extracted; the remaining registered
-rows intentionally stay `legacy_monolith` until later reviewed extraction
-batches.
+Only the five Wave 0 and nine Wave 1A read-only rows are extracted; the
+remaining 46 registered rows intentionally stay `legacy_monolith` until later
+reviewed extraction batches.
 
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 

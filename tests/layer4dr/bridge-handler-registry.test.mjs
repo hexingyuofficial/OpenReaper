@@ -36,6 +36,21 @@ const EXTRACTED_WAVE0_HANDLERS = Object.freeze(new Map([
   ["template.system.read_runtime_environment", ["system/read_runtime_environment.lua", "read_runtime_environment"]],
   ["template.system.read_resource_paths", ["system/read_resource_paths.lua", "read_resource_paths"]],
 ]));
+const EXTRACTED_WAVE1A_HANDLERS = Object.freeze(new Map([
+  ["template.core.read_template_catalog_summary", ["core/read_template_catalog_summary.lua", "read_template_catalog_summary"]],
+  ["template.core.read_last_result", ["core/read_last_result.lua", "read_last_result"]],
+  ["template.system.check_api_symbols", ["system/check_api_symbols.lua", "read_api_symbols"]],
+  ["template.project.read_metadata", ["project/read_metadata.lua", "read_project_metadata"]],
+  ["template.project.list_markers_regions", ["project/list_markers_regions.lua", "list_markers_regions"]],
+  ["template.project.read_tempo_map", ["project/read_tempo_map.lua", "read_tempo_map"]],
+  ["template.tracks.resolve_track_ref", ["tracks/resolve_track_ref.lua", "resolve_track_ref"]],
+  ["template.items.resolve_item_ref", ["items/resolve_item_ref.lua", "resolve_item_ref"]],
+  ["template.items.read_item_summary", ["items/read_item_summary.lua", "read_item_summary"]],
+]));
+const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
+  ...EXTRACTED_WAVE0_HANDLERS,
+  ...EXTRACTED_WAVE1A_HANDLERS,
+]));
 
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
@@ -51,7 +66,7 @@ describe("Layer 4D.R bridge handler registry", () => {
       assert.match(entry.artifact_policy, /^(none|metadata|write)$/);
       assert.equal(Array.isArray(entry.tests), true);
       assert.equal(entry.tests.length > 0, true);
-      const extractedHandler = EXTRACTED_WAVE0_HANDLERS.get(entry.template_id);
+      const extractedHandler = EXTRACTED_HANDLER_ROWS.get(entry.template_id);
       if (extractedHandler) {
         assert.deepEqual([entry.handler_file, entry.handler_export], extractedHandler, entry.template_id);
         assert.doesNotMatch(entry.handler_file, /^(?:\/|[A-Za-z]:[\\/])/, entry.template_id);
@@ -73,9 +88,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
       entryCount: 60,
-      legacyMonolithCount: 55,
-      extractedHandlerCount: 5,
-      handlerModuleCount: 5,
+      legacyMonolithCount: 46,
+      extractedHandlerCount: 14,
+      handlerModuleCount: 14,
       routeCount: 7,
       operationCount: 37,
     });
@@ -103,15 +118,22 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0 closeout batch into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0 plus Wave 1A closeout batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
-    assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_WAVE0_HANDLERS.keys()]);
+    assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
       handlerModuleFilesFromRegistry(REGISTRY),
-      [...EXTRACTED_WAVE0_HANDLERS.values()].map(([file]) => file),
+      [...EXTRACTED_HANDLER_ROWS.values()].map(([file]) => file),
     );
 
-    for (const [templateId, [file, handlerExport]] of EXTRACTED_WAVE0_HANDLERS) {
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "wave1a-read-handlers" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_WAVE1A_HANDLERS.keys()],
+    );
+
+    for (const [templateId, [file, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
       const moduleSource = readFileSync(new URL(`../../${handlerSourceRoot}/${file}`, import.meta.url), "utf8");
       assert.match(moduleSource, new RegExp(`\\blocal\\s+function\\s+${handlerExport}\\s*\\(`), templateId);
       assert.doesNotMatch(moduleSource, /\b(require\s*\(|dofile|loadstring|os\.execute|io\.popen)\b/, templateId);
@@ -171,7 +193,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 55 legacy_monolith row\(s\); 5 extracted handler row\(s\); 5 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 46 legacy_monolith row\(s\); 14 extracted handler row\(s\); 14 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
@@ -183,8 +205,8 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.ok(BRIDGE_SOURCE.indexOf("local ALLOWED_OPERATIONS = {") > lastIndex);
   });
 
-  it("keeps extracted Wave 0 dispatch behavior bound to the same operations and exports", () => {
-    for (const [templateId, [, handlerExport]] of EXTRACTED_WAVE0_HANDLERS) {
+  it("keeps extracted dispatch behavior bound to the same operations and exports", () => {
+    for (const [templateId, [, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
       const entry = REGISTRY.entries.find((candidate) => candidate.template_id === templateId);
       const key = `${entry.operation.family}:${entry.operation.name}`;
       assert.match(
