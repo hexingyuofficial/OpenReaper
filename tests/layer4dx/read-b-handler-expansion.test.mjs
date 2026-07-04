@@ -254,7 +254,7 @@ describe("Read-B live handler expansion", () => {
     }
   });
 
-  it("keeps the Lua bridge Read-B allowlist exact and free of execution/write routes", () => {
+  it("keeps the Lua bridge Read-B allowlist exact and free of unrelated execution/write routes", () => {
     const readBKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => `query_state:${match[1]}`)
       .filter((key) => READ_B_OPERATION_KEYS.includes(key))
@@ -271,7 +271,11 @@ describe("Read-B live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /read_project_media_files/);
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
 
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
+      ["template.execute"],
+    );
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /import_file_to_track|relink_take_source/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(

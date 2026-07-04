@@ -148,9 +148,10 @@ describe("4D.x Wave 1A read-handler expansion", () => {
       },
     });
 
-    assert.deepEqual(runtime.live_gate.allowed_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
+    assert.deepEqual(runtime.live_gate.allowed_template_ids, []);
 
     for (const id of [
+      "template.core.read_template_catalog_summary",
       "template.project.read_summary",
       "template.tracks.create_track",
       "template.actions.resolve_named_command",
@@ -205,7 +206,11 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /Bridge request JSON is malformed/);
     assert.match(BRIDGE_SOURCE, /#encoded > budget\.max_response_bytes/);
     assert.match(BRIDGE_SOURCE, /bounded_limit/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
+      ["template.execute"],
+    );
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_job:([^"]+)"\]\s*=/g)].map((match) => match[1]))].sort(),
       [

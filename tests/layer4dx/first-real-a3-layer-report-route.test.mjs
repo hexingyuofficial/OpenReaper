@@ -294,10 +294,14 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
     assert.match(BRIDGE_SOURCE, /scope = "layer_evidence"/);
     assert.match(BRIDGE_SOURCE, /A3 layer report requires an items\.layer_evidence\.v1 artifact ref/);
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
+      ["template.execute"],
+    );
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_plan|apply_layer_plan|assign_item_roles|move_items_to_layer_tracks/);
     assert.doesNotMatch(BRIDGE_SOURCE, /role_assignment_plan|target_track_plan|official recipe|call_recipe|list_recipes|recipes\//i);
-    assert.doesNotMatch(BRIDGE_SOURCE, /import_file_to_track|relink_take_source|create_track_send|set_send|insert_notes_batch/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /import_file_to_track|relink_take_source|create_track_send|set_send/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,

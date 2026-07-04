@@ -6,6 +6,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -37,11 +38,13 @@ const WAVE1A_OPT_IN_ENV = "OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE";
 const FIRST_REAL_A1_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A1_LIVE_SMOKE";
 const FIRST_REAL_A2_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A2_LIVE_SMOKE";
 const FIRST_REAL_A3_OPT_IN_ENV = "OPENREAPER_FIRST_REAL_A3_LIVE_SMOKE";
+const SAFE_WRITE_A_OPT_IN_ENV = "OPENREAPER_SAFE_WRITE_A_LIVE_SMOKE";
 const OPT_IN_FLAG = "--live";
 const READ_B_FLAG = "--read-b";
 const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
+const SAFE_WRITE_A_FLAG = "--safe-write-a";
 const PHASE_FLAG = "--phase";
 const FIRST_REAL_A2_PHASE = "A2-render-delivery";
 const FIRST_REAL_A3_PHASE = "A3-layer-report";
@@ -66,6 +69,12 @@ const FIRST_REAL_A3_BATCH = "First-Real-Fixture-A A3 Layer Report Route";
 const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
   "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
 const READ_B_BATCH = "read-b-live-handlers";
+const SAFE_WRITE_A_BATCH = "Safe-Write-A";
+const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
+const SAFE_WRITE_A_PROJECT_REF_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_REF";
+const SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV = "OPENREAPER_SAFE_WRITE_A_ANCHOR_TRACK_REF";
+const SAFE_WRITE_A_ITEM_REF_ENV = "OPENREAPER_SAFE_WRITE_A_ITEM_REF";
+const SAFE_WRITE_A_MIDI_TRACK_REF_ENV = "OPENREAPER_SAFE_WRITE_A_MIDI_TRACK_REF";
 const READ_B_ACTION_SECTION_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_SECTION";
 const READ_B_ACTION_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_COMMAND_ID";
 const READ_B_ACTION_TOGGLE_COMMAND_ID_ENV = "OPENREAPER_LIVE_SMOKE_ACTION_TOGGLE_COMMAND_ID";
@@ -169,6 +178,37 @@ const FIRST_REAL_A3_TEMPLATE_SPECS = Object.freeze([
 
 const FIRST_REAL_A3_SPEC_BY_OPERATION = new Map(FIRST_REAL_A3_TEMPLATE_SPECS.map((spec) => [spec.operation, spec]));
 
+const SAFE_WRITE_A_TEMPLATE_SPECS = Object.freeze([
+  Object.freeze({ id: "template.project.set_metadata_field", pack: "project", risk: "write", capability: "project.set_metadata_field", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.project.create_marker", pack: "project", risk: "write", capability: "project.create_marker", ref_group: "none", idempotent: false }),
+  Object.freeze({ id: "template.project.create_region", pack: "project", risk: "write", capability: "project.create_region", ref_group: "none", idempotent: false }),
+  Object.freeze({ id: "template.tracks.create_track", pack: "tracks", risk: "write", capability: "track.create", ref_group: "none", idempotent: false }),
+  Object.freeze({ id: "template.tracks.rename_track", pack: "tracks", risk: "write", capability: "track.rename", ref_group: "created_track", idempotent: true }),
+  Object.freeze({ id: "template.tracks.set_color", pack: "tracks", risk: "write", capability: "track.set_color", ref_group: "created_track", idempotent: true }),
+  Object.freeze({ id: "template.tracks.select_track", pack: "tracks", risk: "write", capability: "track.select", ref_group: "created_track", idempotent: true }),
+  Object.freeze({ id: "template.tracks.set_mute", pack: "tracks", risk: "write", capability: "track.set_mute", ref_group: "created_track", idempotent: true }),
+  Object.freeze({ id: "template.tracks.set_solo", pack: "tracks", risk: "write", capability: "track.set_solo", ref_group: "created_track", idempotent: true }),
+  Object.freeze({ id: "template.transport.set_edit_cursor", pack: "transport", risk: "safe", capability: "transport.set_edit_cursor", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.transport.set_time_selection", pack: "transport", risk: "safe", capability: "transport.set_time_selection", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.transport.clear_time_selection", pack: "transport", risk: "safe", capability: "transport.clear_time_selection", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.transport.set_loop_points", pack: "transport", risk: "safe", capability: "transport.set_loop_points", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.transport.clear_loop_points", pack: "transport", risk: "safe", capability: "transport.clear_loop_points", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.transport.set_repeat", pack: "transport", risk: "safe", capability: "transport.set_repeat", ref_group: "none", idempotent: true }),
+  Object.freeze({ id: "template.items.move_item", pack: "items", risk: "write", capability: "items.move_item", ref_group: "anchor_item", idempotent: true }),
+  Object.freeze({ id: "template.items.trim_item", pack: "items", risk: "write", capability: "items.trim_item", ref_group: "anchor_item", idempotent: true }),
+  Object.freeze({ id: "template.items.set_item_fades", pack: "items", risk: "write", capability: "items.set_item_fades", ref_group: "anchor_item", idempotent: true }),
+  Object.freeze({ id: "template.items.set_take_pitch", pack: "items", risk: "write", capability: "items.set_take_pitch", ref_group: "anchor_item", idempotent: true }),
+  Object.freeze({ id: "template.items.set_item_snap_offset", pack: "items", risk: "write", capability: "items.set_item_snap_offset", ref_group: "anchor_item", idempotent: true }),
+  Object.freeze({ id: "template.midi.create_midi_item", pack: "midi", risk: "write", capability: "midi.create_midi_item", ref_group: "midi_track", idempotent: false }),
+  Object.freeze({ id: "template.midi.insert_notes_batch", pack: "midi", risk: "write", capability: "midi.insert_notes_batch", ref_group: "created_midi_take", idempotent: false }),
+  Object.freeze({ id: "template.midi.insert_cc_batch", pack: "midi", risk: "write", capability: "midi.insert_cc_batch", ref_group: "created_midi_take", idempotent: false }),
+  Object.freeze({ id: "template.midi.insert_text_sysex_events", pack: "midi", risk: "write", capability: "midi.insert_text_sysex_events", ref_group: "created_midi_take", idempotent: false }),
+]);
+
+const SAFE_WRITE_A_SPEC_BY_CAPABILITY = new Map(
+  SAFE_WRITE_A_TEMPLATE_SPECS.map((spec) => [spec.capability, spec]),
+);
+
 const runtime = createCallTemplateRuntime();
 const route = selectRoute(process.argv, process.env);
 const optedIn = route.fake || process.env[route.optInEnv] === "1" || process.argv.includes(OPT_IN_FLAG);
@@ -187,11 +227,14 @@ const baseReport = {
   batch: route.batch,
   allowed_template_ids: route.templateIds,
   allowed_bridge_operations: route.operations,
+  allowed_capabilities: route.capabilities ?? [],
   fixture_inputs: fixtureInputs.report,
 };
 
 if (route.fake) {
-  const blocker = route.name === "first-real-a3-layer-report"
+  const blocker = route.name === "safe-write-a"
+    ? null
+    : route.name === "first-real-a3-layer-report"
     ? await firstRealA3FakeBlocker(fixtureInputs)
     : route.name === "first-real-a2-render"
     ? await firstRealA2RootBlocker(fixtureInputs)
@@ -209,7 +252,9 @@ if (route.fake) {
 
   const fakeExecutor = {
     config: {
-      contract: route.name === "first-real-a3-layer-report"
+      contract: route.name === "safe-write-a"
+        ? "safe_write_a.fake_executor.v1"
+        : route.name === "first-real-a3-layer-report"
         ? "first_real_fixture_a3.fake_executor.v1"
         : route.name === "first-real-a2-render"
         ? "first_real_fixture_a2.fake_executor.v1"
@@ -218,6 +263,9 @@ if (route.fake) {
       spawned_reaper: false,
     },
     async dispatch(request) {
+      if (route.name === "safe-write-a") {
+        return dispatchFakeSafeWriteA(request);
+      }
       if (route.name === "first-real-a3-layer-report") {
         return dispatchFakeFirstRealA3(request, {
           artifactRoot: fixtureInputs.artifact_root,
@@ -234,7 +282,13 @@ if (route.fake) {
   };
   const fakeRuntime = createLiveRuntimeForRoute(route, fakeExecutor, fakeExecutor.config);
   const contextBase = liveContextBase();
-  const fakeReport = route.name === "first-real-a3-layer-report"
+  const fakeReport = route.name === "safe-write-a"
+    ? await runSafeWriteASmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "first-real-a3-layer-report"
     ? await runFirstRealA3Smoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
@@ -261,7 +315,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: fakeRuntime.evidence(),
+    evidence: route.name === "safe-write-a" ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -327,6 +381,12 @@ const routeReport = route.name === "first-real-a2-render"
       contextBase,
       artifactRoot: fixtureInputs.artifact_root,
     })
+  : route.name === "safe-write-a"
+  ? await runSafeWriteASmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
   : route.name === "first-real-a1"
   ? await runFirstRealA1Smoke({
       liveRuntime,
@@ -347,7 +407,7 @@ console.log(JSON.stringify({
   skipped: false,
   live_executor: executorConfig.config,
   context: contextSummary(contextBase),
-  evidence: liveRuntime.evidence(),
+  evidence: route.name === "safe-write-a" ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
   live_pass_claimed: false,
 }));
 process.exit(routeReport.ok ? 0 : 2);
@@ -412,6 +472,25 @@ function selectRoute(argv, env) {
       configuredBlocker: firstRealA1ConfiguredBlocker,
       passReason: "first_real_fixture_a1_live_readback_passed",
       failReason: "first_real_fixture_a1_live_readback_failed",
+    };
+  }
+
+  const safeWriteASelected = argv.includes(SAFE_WRITE_A_FLAG) || env[SAFE_WRITE_A_OPT_IN_ENV] === "1";
+  if (safeWriteASelected) {
+    return {
+      name: "safe-write-a",
+      wave: SAFE_WRITE_A_BATCH,
+      batch: SAFE_WRITE_A_BATCH,
+      routeFlag: SAFE_WRITE_A_FLAG,
+      optInEnv: SAFE_WRITE_A_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
+      operations: ["run_command:template.execute"],
+      capabilities: SAFE_WRITE_A_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: safeWriteAFixtureInputs,
+      configuredBlocker: safeWriteAConfiguredBlocker,
+      passReason: "safe_write_a_fake_static_readback_passed",
+      failReason: "safe_write_a_fake_static_readback_failed",
     };
   }
 
@@ -490,6 +569,85 @@ async function runReadOnlySmoke({ liveRuntime, fixtureInputs: fixtureInputsForRu
     ok,
     reason: ok ? selectedRoute.passReason : firstBlocker(executions) ?? selectedRoute.failReason,
     attempted_template_ids: templateIds,
+    executions,
+  };
+}
+
+async function runSafeWriteASmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+  let targetTrackRef = null;
+  let midiTakeRef = null;
+
+  for (const [index, spec] of SAFE_WRITE_A_TEMPLATE_SPECS.entries()) {
+    const refs = safeWriteARefs(spec, fixtureInputsForRun, { targetTrackRef, midiTakeRef });
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: false,
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: "run_command:template.execute",
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: safeWriteAInput(spec),
+      refs: refs.value,
+      idempotency_key: spec.idempotent ? `safe-write-a:${spec.id}` : undefined,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = "run_command:template.execute";
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: spec.idempotent ? "idempotent_mutation_keyed" : "create_or_insert_undo_evidence",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && spec.id === "template.tracks.create_track" && produced.track) {
+      targetTrackRef = produced.track;
+      outputRefs.created_track_ref = produced.track.ref;
+    }
+    if (response?.ok && spec.id === "template.midi.create_midi_item") {
+      if (produced.item) outputRefs.created_midi_item_ref = produced.item.ref;
+      if (produced.take) {
+        midiTakeRef = produced.take;
+        outputRefs.created_midi_take_ref = produced.take.ref;
+      }
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "safe_write_a_fake_static_readback_passed" : firstBlocker(executions) ?? "safe_write_a_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
+    expected_capabilities: SAFE_WRITE_A_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
     executions,
   };
 }
@@ -1459,6 +1617,98 @@ async function readOnlyConfiguredBlocker({ executorConfig }) {
   return null;
 }
 
+async function safeWriteAConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  const rootBlocker = await safeWriteADirectoryBlocker({
+    value: fixtureInputsForRun.project_root,
+    envName: SAFE_WRITE_A_PROJECT_ROOT_ENV,
+    label: "project_root",
+    notConfigured: "project_root_not_configured",
+    absent: "project_root_absent",
+  });
+  if (rootBlocker) return rootBlocker;
+
+  const repoBlocker = safeWriteARepoRootBlocker("project_root", fixtureInputsForRun.project_root);
+  if (repoBlocker) return repoBlocker;
+
+  for (const [label, value, envName] of [
+    ["project_ref", fixtureInputsForRun.project_ref, SAFE_WRITE_A_PROJECT_REF_ENV],
+    ["anchor_track_ref", fixtureInputsForRun.anchor_track_ref, SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV],
+    ["item_ref", fixtureInputsForRun.item_ref, SAFE_WRITE_A_ITEM_REF_ENV],
+    ["midi_track_ref", fixtureInputsForRun.midi_track_ref, SAFE_WRITE_A_MIDI_TRACK_REF_ENV],
+  ]) {
+    if (!value || fixtureInputsForRun.configured?.[label] !== true) {
+      return {
+        reason: `${label}_not_configured`,
+        blocker: `${label}_not_configured`,
+        message: `Safe-Write-A live smoke requires an explicit ${label} fixture.`,
+        details: {
+          [`${label}_env`]: envName,
+        },
+      };
+    }
+  }
+
+  return null;
+}
+
+async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured, absent }) {
+  if (!value) {
+    return {
+      reason: notConfigured,
+      blocker: notConfigured,
+      message: `Safe-Write-A live smoke requires an explicit ${label}.`,
+      details: {
+        [`${label}_env`]: envName,
+      },
+    };
+  }
+  if (!path.isAbsolute(value) || value.startsWith("file://")) {
+    return {
+      reason: `${label}_invalid`,
+      blocker: `${label}_invalid`,
+      message: `Configured Safe-Write-A ${label} must be an absolute filesystem directory.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  if (!(await isDirectory(value))) {
+    return {
+      reason: absent,
+      blocker: absent,
+      message: `Configured Safe-Write-A ${label} is absent.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  return null;
+}
+
+function safeWriteARepoRootBlocker(label, value) {
+  const resolved = path.resolve(value);
+  const forbiddenRoots = [
+    path.resolve(new URL("..", import.meta.url).pathname),
+    "/Users/Zhuanz/Documents/streetlight-reaper-mcp",
+  ];
+  const forbidden = forbiddenRoots.find((root) => isPathInside(resolved, root));
+  if (!forbidden) return null;
+  return {
+    reason: `${label}_inside_repo`,
+    blocker: `${label}_inside_repo`,
+    message: `Configured Safe-Write-A ${label} must be outside the OpenReaper and old-control repos.`,
+    details: {
+      [label]: boundedString(resolved, 240),
+      forbidden_root: boundedString(forbidden, 240),
+    },
+  };
+}
+
 function catalogExampleInputs(liveRuntime, templateIds) {
   const menu = liveRuntime.list_templates({
     ids: templateIds,
@@ -1560,6 +1810,188 @@ function readBRefs(fixtureInputsForRun) {
     "template.midi.list_take_text_sysex_events": { take_ref: midiTakeRef },
     "template.midi.read_take_grid": { take_ref: midiTakeRef },
     "template.media.read_take_source": { take_ref: audioTakeRef },
+  };
+}
+
+function safeWriteAInput(spec) {
+  const inputs = {
+    "template.project.set_metadata_field": {
+      field: "title",
+      value: "OpenReaper Safe Write A",
+    },
+    "template.project.create_marker": {
+      name: "OR_SAFE_WRITE_A_MARKER",
+      position_seconds: 0.25,
+    },
+    "template.project.create_region": {
+      name: "OR_SAFE_WRITE_A_REGION",
+      start_seconds: 0.5,
+      end_seconds: 1.5,
+    },
+    "template.tracks.create_track": {
+      name: "OR_SAFE_WRITE_A_TARGET",
+    },
+    "template.tracks.rename_track": {
+      name: "OR_SAFE_WRITE_A_RENAMED",
+    },
+    "template.tracks.set_color": {
+      color: "#2D9CDB",
+    },
+    "template.tracks.select_track": {
+      mode: "replace",
+    },
+    "template.tracks.set_mute": {
+      muted: false,
+    },
+    "template.tracks.set_solo": {
+      mode: "off",
+    },
+    "template.transport.set_edit_cursor": {
+      position_seconds: 0.5,
+      move_view: false,
+      seek_playback: false,
+    },
+    "template.transport.set_time_selection": {
+      start_seconds: 0.25,
+      end_seconds: 0.75,
+    },
+    "template.transport.clear_time_selection": {},
+    "template.transport.set_loop_points": {
+      start_seconds: 0.25,
+      end_seconds: 0.75,
+    },
+    "template.transport.clear_loop_points": {},
+    "template.transport.set_repeat": {
+      enabled: false,
+    },
+    "template.items.move_item": {
+      position_seconds: 0.5,
+    },
+    "template.items.trim_item": {
+      length_seconds: 0.75,
+    },
+    "template.items.set_item_fades": {
+      fade_in_seconds: 0.01,
+      fade_out_seconds: 0.02,
+    },
+    "template.items.set_take_pitch": {
+      semitones: 0,
+    },
+    "template.items.set_item_snap_offset": {
+      snap_offset_seconds: 0,
+    },
+    "template.midi.create_midi_item": {
+      start_seconds: 0,
+      end_seconds: 2,
+    },
+    "template.midi.insert_notes_batch": {
+      position_unit: "ppq",
+      sort_events: true,
+      notes: [
+        {
+          start_ppq: 0,
+          end_ppq: 240,
+          pitch: 60,
+          velocity: 96,
+          channel: 0,
+        },
+      ],
+    },
+    "template.midi.insert_cc_batch": {
+      position_unit: "ppq",
+      sort_events: true,
+      events: [
+        {
+          ppq: 0,
+          channel: 0,
+          controller: 1,
+          value: 64,
+        },
+      ],
+    },
+    "template.midi.insert_text_sysex_events": {
+      position_unit: "ppq",
+      sort_events: true,
+      events: [
+        {
+          ppq: 0,
+          event_kind: "lyric",
+          text: "safe-write-a",
+        },
+      ],
+    },
+  };
+  return inputs[spec.id] ?? {};
+}
+
+function safeWriteARefs(spec, fixtureInputsForRun, state) {
+  if (spec.ref_group === "created_track") {
+    const trackRef = state.targetTrackRef ?? trackObjectRefFromFixture(fixtureInputsForRun.anchor_track_ref);
+    return trackRef
+      ? { value: { track_ref: trackRef } }
+      : { blocker: "track_fixture_ref_unavailable" };
+  }
+  if (spec.ref_group === "anchor_item") {
+    const itemRef = itemObjectRefFromFixture(fixtureInputsForRun.item_ref);
+    return itemRef
+      ? { value: { item_ref: itemRef } }
+      : { blocker: "item_fixture_ref_unavailable" };
+  }
+  if (spec.ref_group === "midi_track") {
+    const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.midi_track_ref);
+    return trackRef
+      ? { value: { track_ref: trackRef } }
+      : { blocker: "midi_track_fixture_ref_unavailable" };
+  }
+  if (spec.ref_group === "created_midi_take") {
+    return state.midiTakeRef
+      ? { value: { take_ref: state.midiTakeRef } }
+      : { blocker: "midi_take_ref_unavailable" };
+  }
+  return { value: {} };
+}
+
+function safeWriteAFixtureInputs(env) {
+  const projectRoot = nonEmpty(env[SAFE_WRITE_A_PROJECT_ROOT_ENV]);
+  const rawProjectRef = nonEmpty(env[SAFE_WRITE_A_PROJECT_REF_ENV]);
+  const rawAnchorTrackRef = nonEmpty(env[SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV]);
+  const rawItemRef = nonEmpty(env[SAFE_WRITE_A_ITEM_REF_ENV]);
+  const rawMidiTrackRef = nonEmpty(env[SAFE_WRITE_A_MIDI_TRACK_REF_ENV]);
+  const projectRef = normalizeProjectFixtureRef(rawProjectRef) ?? "project:current";
+  const anchorTrackRef = normalizeTrackFixtureRef(rawAnchorTrackRef) ?? "track:index:0";
+  const itemRef = normalizeItemFixtureRef(rawItemRef) ?? "item:selected:0";
+  const midiTrackRef = normalizeTrackFixtureRef(rawMidiTrackRef) ?? "track:index:0";
+  return {
+    project_root: projectRoot,
+    project_ref: projectRef,
+    anchor_track_ref: anchorTrackRef,
+    item_ref: itemRef,
+    midi_track_ref: midiTrackRef,
+    configured: {
+      project_ref: Boolean(normalizeProjectFixtureRef(rawProjectRef)),
+      anchor_track_ref: Boolean(normalizeTrackFixtureRef(rawAnchorTrackRef)),
+      item_ref: Boolean(normalizeItemFixtureRef(rawItemRef)),
+      midi_track_ref: Boolean(normalizeTrackFixtureRef(rawMidiTrackRef)),
+    },
+    report: {
+      project_root_env: SAFE_WRITE_A_PROJECT_ROOT_ENV,
+      project_ref_env: SAFE_WRITE_A_PROJECT_REF_ENV,
+      anchor_track_ref_env: SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV,
+      item_ref_env: SAFE_WRITE_A_ITEM_REF_ENV,
+      midi_track_ref_env: SAFE_WRITE_A_MIDI_TRACK_REF_ENV,
+      project_root: boundedString(projectRoot, 240),
+      project_ref: projectRef,
+      anchor_track_ref: anchorTrackRef,
+      item_ref: itemRef,
+      midi_track_ref: midiTrackRef,
+      configured: {
+        project_ref: Boolean(normalizeProjectFixtureRef(rawProjectRef)),
+        anchor_track_ref: Boolean(normalizeTrackFixtureRef(rawAnchorTrackRef)),
+        item_ref: Boolean(normalizeItemFixtureRef(rawItemRef)),
+        midi_track_ref: Boolean(normalizeTrackFixtureRef(rawMidiTrackRef)),
+      },
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
+    },
   };
 }
 
@@ -1699,6 +2131,11 @@ function itemObjectRefFromFixture(itemRef) {
   return createObjectRef("item", parsed.identity, { ref: parsed.ref });
 }
 
+function trackObjectRefFromFixture(trackRef) {
+  const parsed = parseTrackFixtureRef(trackRef);
+  return parsed ? createObjectRef("track", parsed.identity, { ref: parsed.ref }) : null;
+}
+
 function regionObjectRefFromFixture(regionRef) {
   const parsed = parseRegionFixtureRef(regionRef) ?? parseRegionFixtureRef("region:index:0");
   return createObjectRef("region", parsed.identity, { ref: parsed.ref });
@@ -1731,6 +2168,10 @@ function normalizeItemFixtureRef(itemRef) {
   return parseItemFixtureRef(itemRef)?.input_ref ?? null;
 }
 
+function normalizeTrackFixtureRef(trackRef) {
+  return parseTrackFixtureRef(trackRef)?.input_ref ?? null;
+}
+
 function normalizeTakeFixtureRef(takeRef) {
   return parseTakeFixtureRef(takeRef)?.input_ref ?? null;
 }
@@ -1752,6 +2193,31 @@ function parseItemFixtureRef(itemRef) {
       const value = token.slice(prefix.length);
       if (value) return { input_ref: token, identity: { scheme, value }, ref: `item:${scheme}:${value}` };
     }
+  }
+  return null;
+}
+
+function parseTrackFixtureRef(trackRef) {
+  const token = String(trackRef ?? "").trim();
+  for (const scheme of ["selected", "index", "guid", "name"]) {
+    const prefix = `${scheme}:`;
+    const typedPrefix = `track:${scheme}:`;
+    if (token.startsWith(typedPrefix)) {
+      const value = token.slice(typedPrefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: token };
+    }
+    if (token.startsWith(prefix)) {
+      const value = token.slice(prefix.length);
+      if (value) return { input_ref: token, identity: { scheme, value }, ref: `track:${scheme}:${value}` };
+    }
+  }
+  const namedTrack = token.match(/^track:(.+)$/);
+  if (namedTrack?.[1]) {
+    return {
+      input_ref: token,
+      identity: { scheme: "name", value: namedTrack[1] },
+      ref: `track:name:${namedTrack[1]}`,
+    };
   }
   return null;
 }
@@ -1859,6 +2325,38 @@ function summarizeExecution(response) {
   };
 }
 
+function compactRuntimeEvidence(evidence) {
+  const entries = Array.isArray(evidence) ? evidence : [];
+  const last = entries.at(-1);
+  return {
+    contract: "template.runtime.evidence.compact.v1",
+    count: entries.length,
+    ok_count: entries.filter((entry) => entry?.ok === true).length,
+    error_codes: entries
+      .filter((entry) => entry?.ok !== true)
+      .map((entry) => entry?.error?.code)
+      .filter(Boolean)
+      .slice(0, 8),
+    last: last
+      ? {
+          template: last.template,
+          ok: last.ok,
+          error: last.error,
+          request_id: last.request_id,
+          counts: last.counts,
+          last_result_updated: last.last_result_updated,
+          live: {
+            opted_in: last.live?.opted_in,
+            executor_configured: last.live?.executor_configured,
+            opt_in_env: last.live?.opt_in_env,
+            opt_in_flag: last.live?.opt_in_flag,
+            spawned_reaper: last.live?.spawned_reaper,
+          },
+        }
+      : null,
+  };
+}
+
 function producedArtifactRef(response) {
   const artifacts = response?.result?.artifacts;
   if (!Array.isArray(artifacts) || artifacts.length === 0) return null;
@@ -1878,6 +2376,109 @@ function producedJobRef(response) {
   const jobs = response?.result?.jobs;
   if (!Array.isArray(jobs) || jobs.length === 0) return null;
   return jobs[0] ?? null;
+}
+
+function producedRefsByKind(response) {
+  const refs = response?.result?.refs;
+  if (!Array.isArray(refs)) return {};
+  const byKind = {};
+  for (const ref of refs) {
+    if (ref?.kind && !byKind[ref.kind]) byKind[ref.kind] = ref;
+  }
+  return byKind;
+}
+
+async function dispatchFakeSafeWriteA(request) {
+  const spec = SAFE_WRITE_A_SPEC_BY_CAPABILITY.get(request?.pack?.capability);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake Safe-Write-A executor accepts only the approved 24 capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+    });
+  }
+  if (request?.operation?.family !== "run_command" || request?.operation?.name !== "template.execute") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "Safe-Write-A requests must use run_command:template.execute.", {
+      family: boundedString(request?.operation?.family, 80),
+      name: boundedString(request?.operation?.name, 120),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== spec.risk) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "Safe-Write-A pack/risk/capability mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: spec.risk,
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "Safe-Write-A forbids artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "Safe-Write-A write/safe rows require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  const refs = fakeSafeWriteARefs(request, spec);
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      readback_status: "passed",
+      undo_evidence: "required",
+      idempotency_evidence: spec.idempotent ? "keyed_single_row" : "create_or_insert_undo_only",
+      artifacts_allowed: false,
+      bounded: true,
+      smoke_only: true,
+    },
+    refs,
+  });
+}
+
+function fakeSafeWriteARefs(request, spec) {
+  if (spec.capability === "project.set_metadata_field") {
+    return [createObjectRef("project", { scheme: "current", value: "current" }, { ref: "project:current" })];
+  }
+  if (spec.capability === "project.create_marker") {
+    return [createObjectRef("marker", { scheme: "index", value: "1" }, {
+      ref: "marker:index:1",
+      display: { name: request.params.name ?? "OR_SAFE_WRITE_A_MARKER" },
+    })];
+  }
+  if (spec.capability === "project.create_region") {
+    return [createObjectRef("region", { scheme: "index", value: "1" }, {
+      ref: "region:index:1",
+      display: { name: request.params.name ?? "OR_SAFE_WRITE_A_REGION" },
+    })];
+  }
+  if (spec.capability === "track.create") {
+    return [createObjectRef("track", { scheme: "guid", value: "{SAFE-WRITE-A-TRACK}" }, {
+      ref: "track:guid:{SAFE-WRITE-A-TRACK}",
+      display: { name: request.params.name ?? "OR_SAFE_WRITE_A_TARGET" },
+    })];
+  }
+  if (spec.ref_group === "created_track") {
+    return request.refs.filter((ref) => ref.kind === "track").slice(0, 1);
+  }
+  if (spec.ref_group === "anchor_item") {
+    return request.refs.filter((ref) => ref.kind === "item").slice(0, 1);
+  }
+  if (spec.capability === "midi.create_midi_item") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{SAFE-WRITE-A-MIDI-ITEM}" }, {
+        ref: "item:guid:{SAFE-WRITE-A-MIDI-ITEM}",
+      }),
+      createObjectRef("take", { scheme: "guid", value: "{SAFE-WRITE-A-MIDI-TAKE}" }, {
+        ref: "take:guid:{SAFE-WRITE-A-MIDI-TAKE}",
+      }),
+    ];
+  }
+  if (spec.ref_group === "created_midi_take") {
+    return request.refs.filter((ref) => ref.kind === "take").slice(0, 1);
+  }
+  return [];
 }
 
 async function dispatchFakeFirstRealA1(request, { artifactRoot }) {
@@ -2320,19 +2921,19 @@ function bridgeOkEnvelope(request, result) {
     },
     result: {
       summary: result.summary ?? {},
-      refs: [],
+      refs: result.refs ?? [],
       artifacts: result.artifacts ?? [],
       jobs: result.jobs ?? [],
       last_result: {
         updated: false,
-        refs: [],
+        refs: result.last_result_refs ?? [],
         truncated: false,
       },
     },
     undo: {
       mode: request.undo.mode,
-      opened: false,
-      closed: false,
+      opened: request.undo.mode === "required",
+      closed: request.undo.mode === "required",
       label: request.undo.label ?? null,
     },
     verification: {

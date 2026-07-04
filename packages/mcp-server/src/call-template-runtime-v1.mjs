@@ -94,6 +94,33 @@ export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS = deepFreeze(
   "template.items.create_layer_report",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS = deepFreeze([
+  "template.project.set_metadata_field",
+  "template.project.create_marker",
+  "template.project.create_region",
+  "template.tracks.create_track",
+  "template.tracks.rename_track",
+  "template.tracks.set_color",
+  "template.tracks.select_track",
+  "template.tracks.set_mute",
+  "template.tracks.set_solo",
+  "template.transport.set_edit_cursor",
+  "template.transport.set_time_selection",
+  "template.transport.clear_time_selection",
+  "template.transport.set_loop_points",
+  "template.transport.clear_loop_points",
+  "template.transport.set_repeat",
+  "template.items.move_item",
+  "template.items.trim_item",
+  "template.items.set_item_fades",
+  "template.items.set_take_pitch",
+  "template.items.set_item_snap_offset",
+  "template.midi.create_midi_item",
+  "template.midi.insert_notes_batch",
+  "template.midi.insert_cc_batch",
+  "template.midi.insert_text_sysex_events",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -634,6 +661,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const ids = [...new Set(value.filter((id) => allowed.has(id)))];

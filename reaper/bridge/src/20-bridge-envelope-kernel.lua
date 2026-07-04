@@ -75,8 +75,8 @@ local function undo_result(request)
   local mode = is_string(undo.mode) and undo.mode or "none"
   return {
     mode = mode,
-    opened = false,
-    closed = false,
+    opened = request and request.__openreaper_undo_opened == true,
+    closed = request and request.__openreaper_undo_closed == true,
     label = is_string(undo.label) and undo.label or JSON_NULL,
   }
 end
@@ -149,7 +149,7 @@ local function bridge_error_envelope(request, code, message, options)
   return finalize_json_with_budget(envelope)
 end
 
-local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
+local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)
   local completed_at = now_iso()
   local budget = safe_budget(request)
   local envelope = {
@@ -168,7 +168,7 @@ local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
     },
     result = {
       summary = summary or {},
-      refs = json_array({}),
+      refs = refs or json_array({}),
       artifacts = artifacts or json_array({}),
       jobs = jobs or json_array({}),
       last_result = {

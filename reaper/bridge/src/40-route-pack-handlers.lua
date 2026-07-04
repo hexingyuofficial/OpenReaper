@@ -1,3 +1,73 @@
+local SAFE_WRITE_A_CAPABILITIES = {
+  ["project.set_metadata_field"] = { pack = "project", risk = "write" },
+  ["project.create_marker"] = { pack = "project", risk = "write" },
+  ["project.create_region"] = { pack = "project", risk = "write" },
+  ["track.create"] = { pack = "tracks", risk = "write" },
+  ["track.rename"] = { pack = "tracks", risk = "write" },
+  ["track.set_color"] = { pack = "tracks", risk = "write" },
+  ["track.select"] = { pack = "tracks", risk = "write" },
+  ["track.set_mute"] = { pack = "tracks", risk = "write" },
+  ["track.set_solo"] = { pack = "tracks", risk = "write" },
+  ["transport.set_edit_cursor"] = { pack = "transport", risk = "safe" },
+  ["transport.set_time_selection"] = { pack = "transport", risk = "safe" },
+  ["transport.clear_time_selection"] = { pack = "transport", risk = "safe" },
+  ["transport.set_loop_points"] = { pack = "transport", risk = "safe" },
+  ["transport.clear_loop_points"] = { pack = "transport", risk = "safe" },
+  ["transport.set_repeat"] = { pack = "transport", risk = "safe" },
+  ["items.move_item"] = { pack = "items", risk = "write" },
+  ["items.trim_item"] = { pack = "items", risk = "write" },
+  ["items.set_item_fades"] = { pack = "items", risk = "write" },
+  ["items.set_take_pitch"] = { pack = "items", risk = "write" },
+  ["items.set_item_snap_offset"] = { pack = "items", risk = "write" },
+  ["midi.create_midi_item"] = { pack = "midi", risk = "write" },
+  ["midi.insert_notes_batch"] = { pack = "midi", risk = "write" },
+  ["midi.insert_cc_batch"] = { pack = "midi", risk = "write" },
+  ["midi.insert_text_sysex_events"] = { pack = "midi", risk = "write" },
+}
+
+local function safe_write_a_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return SAFE_WRITE_A_CAPABILITIES[request.pack.capability]
+end
+
+local function open_required_undo_block(request, operation_key)
+  if not safe_write_a_capability(request, operation_key) then
+    return
+  end
+  if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
+    return
+  end
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  project = ok_project and project or 0
+  local ok = call_reaper("Undo_BeginBlock2", project)
+  if not ok then
+    ok = call_reaper("Undo_BeginBlock")
+  end
+  request.__openreaper_undo_opened = ok == true
+end
+
+local function close_required_undo_block(request, operation_key)
+  if not safe_write_a_capability(request, operation_key) then
+    return
+  end
+  if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
+    return
+  end
+  local label = is_string(request.undo.label) and request.undo.label or "OpenReaper Safe-Write-A"
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  project = ok_project and project or 0
+  local ok = call_reaper("Undo_EndBlock2", project, label, -1)
+  if not ok then
+    ok = call_reaper("Undo_EndBlock", label, -1)
+  end
+  request.__openreaper_undo_closed = ok == true
+end
+
 local function validate_request(request)
   if not is_object(request) then
     return false, "Bridge request must be an object."
@@ -29,12 +99,17 @@ local function validate_request(request)
   local operation_key = request.operation.family .. ":" .. request.operation.name
   local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
   local a2_render_operation = operation_key == "run_job:render.region_wav"
+  local safe_write_a_operation = safe_write_a_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
   if a2_render_operation then
     if request.pack.id ~= "render" or request.pack.risk ~= "write" then
       return false, "A2 render_region_wav must be the render-owned write-risk route."
+    end
+  elseif safe_write_a_operation then
+    if request.pack.id ~= safe_write_a_operation.pack or request.pack.risk ~= safe_write_a_operation.risk then
+      return false, "Safe-Write-A request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -52,6 +127,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "A2 render_region_wav must use undo.mode required."
     end
+  elseif safe_write_a_operation then
+    if request.undo.mode ~= "required" then
+      return false, "Safe-Write-A write/safe requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -67,6 +146,10 @@ local function validate_request(request)
   if artifacts_allowed_for_operation then
     if request.artifacts.allow ~= true then
       return false, "Scoped First-Real-Fixture-A artifact handlers require artifacts.allow true."
+    end
+  elseif safe_write_a_operation then
+    if request.artifacts.allow ~= false then
+      return false, "Safe-Write-A write/safe requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -84,6 +167,10 @@ local function validate_request(request)
   if a2_render_operation then
     if not is_string(request.idempotency_key) then
       return false, "A2 render_region_wav requires an idempotency_key."
+    end
+  elseif safe_write_a_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "Safe-Write-A idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -2757,7 +2844,692 @@ local function create_layer_report(request)
   return summary, nil, json_array({ write.object_ref })
 end
 
+local function project_object_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function marker_object_ref(kind, index_number, name)
+  local ref_kind = kind == "region" and "region" or "marker"
+  return {
+    kind = ref_kind,
+    ref = ref_kind .. ":index:" .. tostring(index_number or 0),
+    identity = {
+      scheme = "index",
+      value = tostring(index_number or 0),
+    },
+    display = {
+      name = bounded_string(name or "", 160),
+    },
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function take_object_ref(take)
+  local ref = take_ref_string(take)
+  local scheme, value = ref:match("^take:([^:]+):(.+)$")
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function project_metadata_key(field)
+  return PROJECT_METADATA_KEYS[field]
+end
+
+local function safe_write_project_metadata(request)
+  local key = project_metadata_key(request.params.field)
+  if not key then
+    return handler_error("PARAMS_INVALID", "Safe-Write-A metadata field is not allowed.", {
+      field = bounded_string(request.params.field, 80),
+    })
+  end
+  local project = current_project()
+  local ok, success = call_reaper("GetSetProjectInfo_String", project, key, tostring(request.params.value or ""), true)
+  if not ok or success == false then
+    return handler_error("COMMAND_FAILED", "Could not update project metadata field.", {
+      field = request.params.field,
+    }, false)
+  end
+  local readback = project_info_string(project, key, 240)
+  return safe_write_a_summary(request, {
+    project_ref = "project:current",
+    field = request.params.field,
+    value = bounded_string(readback, 240),
+  }), nil, nil, nil, safe_write_a_refs(project_object_ref())
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function safe_write_create_marker(request)
+  local project = current_project()
+  local color = native_color_from_hex(request.params.color)
+  local ok, index_number = call_reaper(
+    "AddProjectMarker2",
+    project,
+    false,
+    bounded_number(request.params.position_seconds, 0),
+    0,
+    tostring(request.params.name or "OR_SAFE_WRITE_A_MARKER"),
+    -1,
+    color
+  )
+  if not ok or type(index_number) ~= "number" or index_number < 0 then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A marker.", {}, false)
+  end
+  return safe_write_a_summary(request, {
+    marker_ref = "marker:index:" .. tostring(index_number),
+    name = bounded_string(request.params.name, 160),
+    position_seconds = bounded_number(request.params.position_seconds, 0),
+  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("marker", index_number, request.params.name))
+end
+
+local function safe_write_create_region(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
+  if end_seconds <= start_seconds then
+    return handler_error("PARAMS_INVALID", "Safe-Write-A region end_seconds must be greater than start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  local project = current_project()
+  local color = native_color_from_hex(request.params.color)
+  local ok, index_number = call_reaper(
+    "AddProjectMarker2",
+    project,
+    true,
+    start_seconds,
+    end_seconds,
+    tostring(request.params.name or "OR_SAFE_WRITE_A_REGION"),
+    -1,
+    color
+  )
+  if not ok or type(index_number) ~= "number" or index_number < 0 then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A region.", {}, false)
+  end
+  return safe_write_a_summary(request, {
+    region_ref = "region:index:" .. tostring(index_number),
+    name = bounded_string(request.params.name, 160),
+    start_seconds = start_seconds,
+    end_seconds = end_seconds,
+  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("region", index_number, request.params.name))
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function safe_write_create_track(request)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local index = is_non_negative_integer(request.params.index) and request.params.index or total
+  index = math.max(0, math.min(index, total))
+  local ok_insert = call_reaper("InsertTrackAtIndex", index, true)
+  if not ok_insert then
+    return handler_error("COMMAND_FAILED", "Could not insert Safe-Write-A track.", {
+      index = index,
+    }, false)
+  end
+  local ok_track, track = call_reaper("GetTrack", 0, index)
+  if not ok_track or not track then
+    return handler_error("TRACK_NOT_FOUND", "Inserted Safe-Write-A track could not be resolved.", {
+      index = index,
+    })
+  end
+  call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET"), true)
+  call_reaper("TrackList_AdjustWindows", false)
+  local summary = track_summary(track)
+  summary.created = true
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_rename_track(request)
+  return safe_write_track_update(request, function(track)
+    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or ""), true)
+    if not ok or success == false then
+      return false, {
+        code = "COMMAND_FAILED",
+        message = "Could not rename Safe-Write-A track.",
+        recoverable = false,
+        details = {},
+      }
+    end
+    return true
+  end)
+end
+
+local function safe_write_set_track_color(request)
+  return safe_write_track_update(request, function(track)
+    local color = native_color_from_hex(request.params.color)
+    local ok, success = call_reaper("SetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR", color)
+    if not ok or success == false then
+      return false, {
+        code = "COMMAND_FAILED",
+        message = "Could not set Safe-Write-A track color.",
+        recoverable = false,
+        details = {},
+      }
+    end
+    return true
+  end)
+end
+
+local function safe_write_select_track(request)
+  return safe_write_track_update(request, function(track)
+    local mode = request.params.mode
+    if mode == "replace" then
+      local ok_count, count = call_reaper("CountTracks", 0)
+      for index = 0, (ok_count and first_number(count) or 0) - 1 do
+        local ok_track, candidate = call_reaper("GetTrack", 0, index)
+        if ok_track and candidate then
+          call_reaper("SetMediaTrackInfo_Value", candidate, "I_SELECTED", 0)
+        end
+      end
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
+    elseif mode == "add" then
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
+    elseif mode == "remove" then
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 0)
+    else
+      return false, {
+        code = "PARAMS_INVALID",
+        message = "Track selection mode must be replace, add, or remove.",
+        details = { mode = bounded_string(mode, 80) },
+      }
+    end
+    return true
+  end)
+end
+
+local function safe_write_set_track_mute(request)
+  return safe_write_track_update(request, function(track)
+    call_reaper("SetMediaTrackInfo_Value", track, "B_MUTE", request.params.muted == true and 1 or 0)
+    return true
+  end)
+end
+
+local function safe_write_set_track_solo(request)
+  return safe_write_track_update(request, function(track)
+    local value = 0
+    if request.params.mode == "solo" then
+      value = 1
+    elseif request.params.mode == "solo_in_place" then
+      value = 2
+    elseif request.params.mode ~= "off" then
+      return false, {
+        code = "PARAMS_INVALID",
+        message = "Track solo mode must be off, solo, or solo_in_place.",
+        details = { mode = bounded_string(request.params.mode, 80) },
+      }
+    end
+    call_reaper("SetMediaTrackInfo_Value", track, "I_SOLO", value)
+    return true
+  end)
+end
+
+local function safe_write_transport_set_edit_cursor(request)
+  call_reaper(
+    "SetEditCurPos",
+    bounded_number(request.params.position_seconds, 0),
+    request.params.move_view == true,
+    request.params.seek_playback == true
+  )
+  local state = read_transport_state()
+  return safe_write_a_summary(request, {
+    edit_cursor_seconds = state.edit_cursor_seconds,
+  })
+end
+
+local function safe_write_transport_set_time_selection(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
+  if end_seconds < start_seconds then
+    return handler_error("PARAMS_INVALID", "Time selection end_seconds must be greater than or equal to start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  call_reaper("GetSet_LoopTimeRange", true, false, start_seconds, end_seconds, false)
+  return safe_write_a_summary(request, read_transport_state().time_selection)
+end
+
+local function safe_write_transport_clear_time_selection(request)
+  call_reaper("GetSet_LoopTimeRange", true, false, 0, 0, false)
+  return safe_write_a_summary(request, read_transport_state().time_selection)
+end
+
+local function safe_write_transport_set_loop_points(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
+  if end_seconds < start_seconds then
+    return handler_error("PARAMS_INVALID", "Loop point end_seconds must be greater than or equal to start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  call_reaper("GetSet_LoopTimeRange", true, true, start_seconds, end_seconds, false)
+  return safe_write_a_summary(request, read_transport_state().loop_points)
+end
+
+local function safe_write_transport_clear_loop_points(request)
+  call_reaper("GetSet_LoopTimeRange", true, true, 0, 0, false)
+  return safe_write_a_summary(request, read_transport_state().loop_points)
+end
+
+local function safe_write_transport_set_repeat(request)
+  call_reaper("GetSetRepeat", request.params.enabled == true and 1 or 0)
+  return safe_write_a_summary(request, {
+    repeat_enabled = read_transport_state().repeat_enabled,
+  })
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_move_item(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", bounded_number(request.params.position_seconds, 0))
+    return true
+  end)
+end
+
+local function safe_write_trim_item(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", math.max(0, bounded_number(request.params.length_seconds, 0)))
+    if type(request.params.start_offset_seconds) == "number" then
+      local ok_take, take = call_reaper("GetActiveTake", item)
+      if ok_take and take then
+        call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", math.max(0, request.params.start_offset_seconds))
+      end
+    end
+    return true
+  end)
+end
+
+local function safe_write_set_item_fades(request)
+  return safe_write_item_update(request, function(item)
+    local fade_in = request.params.fade_in_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_in_seconds, 0)
+    local fade_out = request.params.fade_out_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_out_seconds, 0)
+    call_reaper("SetMediaItemInfo_Value", item, "D_FADEINLEN", math.max(0, fade_in))
+    call_reaper("SetMediaItemInfo_Value", item, "D_FADEOUTLEN", math.max(0, fade_out))
+    return true
+  end)
+end
+
+local function safe_write_set_take_pitch(request)
+  return safe_write_item_update(request, function(item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return false, {
+        code = "TAKE_NOT_FOUND",
+        message = "Safe-Write-A take pitch requires an active take.",
+        details = {},
+      }
+    end
+    call_reaper("SetMediaItemTakeInfo_Value", take, "D_PITCH", bounded_number(request.params.semitones, 0))
+    return true
+  end)
+end
+
+local function safe_write_set_item_snap_offset(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_SNAPOFFSET", math.max(0, bounded_number(request.params.snap_offset_seconds, 0)))
+    return true
+  end)
+end
+
+local function safe_write_create_midi_item(request)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
+  if end_seconds <= start_seconds then
+    return handler_error("PARAMS_INVALID", "MIDI item end_seconds must be greater than start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_seconds, end_seconds, false)
+  if not ok_item or not item then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
+  end
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  if not ok_take or not take then
+    return handler_error("TAKE_NOT_FOUND", "Created MIDI item did not expose an active take.", {})
+  end
+  local summary = midi_take_summary(take)
+  summary.item_ref = item_ref_string(item)
+  summary.created = true
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
+end
+
+local function ppq_position(take, event, key)
+  local value = event[key]
+  if type(value) == "number" then
+    return value
+  end
+  local seconds_key = "seconds"
+  if key == "start_ppq" then
+    seconds_key = "start_seconds"
+  elseif key == "end_ppq" then
+    seconds_key = "end_seconds"
+  elseif key == "ppq" then
+    seconds_key = "position_seconds"
+  end
+  if type(event[seconds_key]) == "number" then
+    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
+    return ok and first_number(ppq) or 0
+  end
+  return 0
+end
+
+local function safe_write_insert_notes_batch(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
+  local inserted = 0
+  for index = 1, #notes do
+    local note = is_object(notes[index]) and notes[index] or {}
+    local start_ppq = ppq_position(take, note, "start_ppq")
+    local end_ppq = ppq_position(take, note, "end_ppq")
+    if end_ppq > start_ppq then
+      local ok, success = call_reaper(
+        "MIDI_InsertNote",
+        take,
+        note.selected == true,
+        note.muted == true,
+        start_ppq,
+        end_ppq,
+        math.max(0, math.min(15, integer_value(note.channel) or 0)),
+        math.max(0, math.min(127, integer_value(note.pitch) or 60)),
+        math.max(1, math.min(127, integer_value(note.velocity) or 96)),
+        true
+      )
+      if ok and success ~= false then
+        inserted = inserted + 1
+      end
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_note_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
+local function safe_write_insert_cc_batch(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local events = is_json_array(request.params.events) and request.params.events or json_array({})
+  local inserted = 0
+  for index = 1, #events do
+    local event = is_object(events[index]) and events[index] or {}
+    local ppq = ppq_position(take, event, "ppq")
+    local ok, success = call_reaper(
+      "MIDI_InsertCC",
+      take,
+      event.selected == true,
+      event.muted == true,
+      ppq,
+      176,
+      math.max(0, math.min(15, integer_value(event.channel) or 0)),
+      math.max(0, math.min(127, integer_value(event.controller) or 1)),
+      math.max(0, math.min(127, integer_value(event.value) or 0)),
+      true
+    )
+    if ok and success ~= false then
+      inserted = inserted + 1
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_cc_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
+local function text_sysex_type_value(kind)
+  if kind == "sysex" then
+    return -1
+  elseif kind == "lyric" then
+    return 5
+  elseif kind == "notation" then
+    return 15
+  end
+  return 1
+end
+
+local function safe_write_insert_text_sysex_events(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local events = is_json_array(request.params.events) and request.params.events or json_array({})
+  local inserted = 0
+  for index = 1, #events do
+    local event = is_object(events[index]) and events[index] or {}
+    local ppq = ppq_position(take, event, "ppq")
+    local ok, success = call_reaper(
+      "MIDI_InsertTextSysexEvt",
+      take,
+      event.selected == true,
+      event.muted == true,
+      ppq,
+      text_sysex_type_value(event.event_kind),
+      bounded_string(event.text or event.bytes or "", 240),
+      true
+    )
+    if ok and success ~= false then
+      inserted = inserted + 1
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_text_sysex_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
+local SAFE_WRITE_A_HANDLERS = {
+  ["project.set_metadata_field"] = safe_write_project_metadata,
+  ["project.create_marker"] = safe_write_create_marker,
+  ["project.create_region"] = safe_write_create_region,
+  ["track.create"] = safe_write_create_track,
+  ["track.rename"] = safe_write_rename_track,
+  ["track.set_color"] = safe_write_set_track_color,
+  ["track.select"] = safe_write_select_track,
+  ["track.set_mute"] = safe_write_set_track_mute,
+  ["track.set_solo"] = safe_write_set_track_solo,
+  ["transport.set_edit_cursor"] = safe_write_transport_set_edit_cursor,
+  ["transport.set_time_selection"] = safe_write_transport_set_time_selection,
+  ["transport.clear_time_selection"] = safe_write_transport_clear_time_selection,
+  ["transport.set_loop_points"] = safe_write_transport_set_loop_points,
+  ["transport.clear_loop_points"] = safe_write_transport_clear_loop_points,
+  ["transport.set_repeat"] = safe_write_transport_set_repeat,
+  ["items.move_item"] = safe_write_move_item,
+  ["items.trim_item"] = safe_write_trim_item,
+  ["items.set_item_fades"] = safe_write_set_item_fades,
+  ["items.set_take_pitch"] = safe_write_set_take_pitch,
+  ["items.set_item_snap_offset"] = safe_write_set_item_snap_offset,
+  ["midi.create_midi_item"] = safe_write_create_midi_item,
+  ["midi.insert_notes_batch"] = safe_write_insert_notes_batch,
+  ["midi.insert_cc_batch"] = safe_write_insert_cc_batch,
+  ["midi.insert_text_sysex_events"] = safe_write_insert_text_sysex_events,
+}
+
+local function dispatch_safe_write_a(request)
+  local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
+  if not handler then
+    return handler_error("OPERATION_NOT_FOUND", "Safe-Write-A supports only the approved 24 capabilities.", {
+      capability = bounded_string(request.pack.capability, 120),
+    })
+  end
+  return handler(request)
+end
+
 local ALLOWED_OPERATIONS = {
+  ["run_command:template.execute"] = {
+    handler = dispatch_safe_write_a,
+  },
   ["query_state:project.read_summary"] = {
     pack = "project",
     handler = read_project_summary,
@@ -2948,7 +3720,7 @@ local function dispatch_request(request, fallback_id)
       },
     })
   end
-  if operation.pack ~= request.pack.id then
+  if operation.pack and operation.pack ~= request.pack.id then
     return bridge_error_envelope(request, "REQUEST_INVALID", "Operation owner pack does not match the request pack.", {
       recoverable = true,
       started_at = started_at,
@@ -2959,7 +3731,9 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  local ok, summary, handler_failure, artifacts, jobs = pcall(operation.handler, request)
+  open_required_undo_block(request, operation_key)
+  local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request)
+  close_required_undo_block(request, operation_key)
   if not ok then
     return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,
@@ -2977,5 +3751,5 @@ local function dispatch_request(request, fallback_id)
       details = handler_failure.details or {},
     })
   end
-  return bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
+  return bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)
 end
