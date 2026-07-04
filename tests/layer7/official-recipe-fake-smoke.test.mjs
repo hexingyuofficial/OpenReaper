@@ -35,12 +35,14 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.project.cleanup_fingerprint_report",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
+  "recipe.routing.send_fx_automation_setup",
 ]);
 
 const WRITE_ATOMS = new Set([
   "recipe.midi.track_phrase_seed",
   "recipe.render.region_wav_render",
   "recipe.media.item_prep_from_folder",
+  "recipe.routing.send_fx_automation_setup",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -56,7 +58,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the seven draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the eight draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -250,6 +252,31 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.equal(run.state_reads.some((read) => read.projection === "project.summary"), true);
     assert.equal(run.expected.refs.has("file_refs"), true);
     assert.equal(run.expected.refs.has("new_item_ref"), true);
+  });
+
+  it("fake-smokes the E6 routing/FX/automation family as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.routing.send_fx_automation_setup");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.routing.create_track_send",
+        "template.routing.set_send_volume",
+        "template.fx.add_track_fx",
+        "template.fx.list_fx_parameters",
+        "template.automation.resolve_send_envelope",
+        "template.automation.set_envelope_lane_state",
+        "template.automation.insert_envelope_point",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 2);
+    assert.equal(run.fixture_artifacts.length, 0);
+    assert.equal(run.state_reads.some((read) => read.projection === "project.summary"), true);
+    assert.equal(run.expected.refs.has("send_ref"), true);
+    assert.equal(run.expected.refs.has("fx_ref"), true);
+    assert.equal(run.expected.refs.has("envelope_ref"), true);
   });
 
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {

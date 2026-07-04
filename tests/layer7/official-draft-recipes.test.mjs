@@ -37,6 +37,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.project.cleanup_fingerprint_report",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
+  "recipe.routing.send_fx_automation_setup",
 ]);
 
 const EXPECTED_DEPENDENCIES = Object.freeze({
@@ -72,6 +73,15 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
     "template.midi.read_take_event_counts",
     "template.midi.list_take_notes",
   ]),
+  "recipe.routing.send_fx_automation_setup": Object.freeze([
+    "template.routing.create_track_send",
+    "template.routing.set_send_volume",
+    "template.fx.add_track_fx",
+    "template.fx.list_fx_parameters",
+    "template.automation.resolve_send_envelope",
+    "template.automation.set_envelope_lane_state",
+    "template.automation.insert_envelope_point",
+  ]),
 });
 
 const ACCEPTED_TEMPLATE_SET = new Set(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS);
@@ -86,7 +96,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the seven first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the eight first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -113,6 +123,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "project.cleanup_fingerprint_report.recipe.json",
       "render.region_delivery_report.recipe.json",
       "render.region_wav_render.recipe.json",
+      "routing.send_fx_automation_setup.recipe.json",
     ]);
   });
 
@@ -239,6 +250,45 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.status, "candidate");
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("playrate"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("adds an E6 routing/FX/automation family over E2 and E5 atoms without creating an executor", () => {
+    const recipe = recipesById().get("recipe.routing.send_fx_automation_setup");
+    const dependencies = recipeTemplateDependencies(recipe);
+
+    assert.deepEqual(dependencies, EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("e6_family"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.routing.create_track_send",
+        "template.routing.set_send_volume",
+        "template.fx.add_track_fx",
+        "template.fx.list_fx_parameters",
+        "template.automation.resolve_send_envelope",
+        "template.automation.set_envelope_lane_state",
+        "template.automation.insert_envelope_point",
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(recipe), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("discovers the E6 routing/FX/automation family through compact recipe-menu intent fields", () => {
+    const menu = listUserRecipes({
+      query: "automation",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.routing.send_fx_automation_setup");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "routing.send_fx_automation_setup");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("automation"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });
