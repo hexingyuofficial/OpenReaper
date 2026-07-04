@@ -534,14 +534,33 @@ Candidate coverage:
   paths, and generated bundle freshness;
 - added `bridge-handler-registry` scope guard support and focused 4D.R tests.
 
+Candidate closeout batch:
+
+- extracted exactly the five Wave 0 read-only rows
+  (`template.project.read_summary`, `template.transport.read_state`,
+  `template.core.read_openreaper_status`,
+  `template.system.read_runtime_environment`, and
+  `template.system.read_resource_paths`) into
+  `reaper/bridge/src/handlers/**` modules;
+- updated the bridge handler registry so only those five rows reference
+  relative handler module paths/exports; all other registered rows remain
+  `legacy_monolith`;
+- updated the live bridge generator to include extracted handler modules from
+  the registry in deterministic registry order while preserving the stable core
+  source module order;
+- kept `reaper/bridge/src/40-route-pack-handlers.lua` as the dispatch owner and
+  bound the extracted rows to the same operation keys and handler export names;
+- refreshed focused 4D.R tests for registry parity, handler path policy,
+  generated bundle freshness, and no broad route expansion.
+
 Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
 and `git diff --check`.
 
-Known risks: this is a structural gate and transitional inventory only. The
-old `40-route-pack-handlers.lua` monolith remains the implementation surface
-until later reviewed extraction batches move handlers into
-`reaper/bridge/src/handlers/**`.
+Known risks: this remains a candidate closeout batch, not a full handler split.
+Only the five Wave 0 read-only rows are extracted; the remaining registered
+rows intentionally stay `legacy_monolith` until later reviewed extraction
+batches.
 
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 

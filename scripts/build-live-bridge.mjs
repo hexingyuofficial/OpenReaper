@@ -48,6 +48,7 @@ export const sourceFiles = Object.freeze([
 ]);
 
 export const registryFile = "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json";
+export const handlerSourceRoot = "reaper/bridge/src/handlers";
 
 export const registryRoutes = Object.freeze({
   wave0: Object.freeze({
@@ -84,14 +85,16 @@ export const registryRoutes = Object.freeze({
 });
 
 export function buildLiveBridgeBundle({ cwd = process.cwd() } = {}) {
-  const registrySummary = validateBridgeHandlerRegistry({ cwd });
+  const registry = loadBridgeHandlerRegistry({ cwd });
+  const registrySummary = validateBridgeHandlerRegistry({ cwd, registry });
+  const handlerModules = readBridgeHandlerModules({ cwd, registry });
   const sourceDir = path.join(cwd, "reaper/bridge/src");
   const body = sourceFiles
-    .map((file) => wrapSourceModule(file, readFileSync(path.join(sourceDir, file), "utf8")))
+    .map((file) => wrapSourceModule(file, readFileSync(path.join(sourceDir, file), "utf8"), handlerModules))
     .join("");
   return [
     "-- OpenReaper generated live bridge.",
-    `-- Handler registry: ${registryFile} (${registrySummary.entryCount} registered template handler row(s); ${registrySummary.legacyMonolithCount} legacy_monolith row(s)).`,
+    `-- Handler registry: ${registryFile} (${registrySummary.entryCount} registered template handler row(s); ${registrySummary.legacyMonolithCount} legacy_monolith row(s); ${registrySummary.extractedHandlerCount} extracted handler row(s); ${registrySummary.handlerModuleCount} handler module file(s)).`,
     "",
     body,
   ].join("\n");
@@ -106,8 +109,26 @@ export function loadBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
   }
 }
 
-export function validateBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
-  const registry = loadBridgeHandlerRegistry({ cwd });
+export function handlerModuleFilesFromRegistry(registry) {
+  const files = [];
+  const seen = new Set();
+  for (const entry of registry?.entries ?? []) {
+    if (!entry || typeof entry !== "object" || entry.handler_file === LEGACY_MONOLITH_MARKER) continue;
+    if (typeof entry.handler_file !== "string" || seen.has(entry.handler_file)) continue;
+    seen.add(entry.handler_file);
+    files.push(entry.handler_file);
+  }
+  return files;
+}
+
+export function readBridgeHandlerModules({ cwd = process.cwd(), registry = loadBridgeHandlerRegistry({ cwd }) } = {}) {
+  return handlerModuleFilesFromRegistry(registry).map((file) => ({
+    file,
+    source: readFileSync(path.join(cwd, handlerSourceRoot, file), "utf8"),
+  }));
+}
+
+export function validateBridgeHandlerRegistry({ cwd = process.cwd(), registry = loadBridgeHandlerRegistry({ cwd }) } = {}) {
   const errors = [];
   if (!registry || typeof registry !== "object" || Array.isArray(registry)) {
     throw new Error(`${registryFile} must be a JSON object.`);
@@ -126,6 +147,8 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
   const operationKeys = new Set();
   const operationCapabilityKeys = new Set();
   let legacyMonolithCount = 0;
+  let extractedHandlerCount = 0;
+  const handlerModuleFiles = new Set();
 
   for (const [index, entry] of entries.entries()) {
     const prefix = `entries[${index}]`;
@@ -203,7 +226,12 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
     }
     validateHandlerLocation({ cwd, entry, prefix, errors });
     validateTestList({ cwd, entry, prefix, errors });
-    if (entry.handler_file === LEGACY_MONOLITH_MARKER) legacyMonolithCount += 1;
+    if (entry.handler_file === LEGACY_MONOLITH_MARKER) {
+      legacyMonolithCount += 1;
+    } else if (typeof entry.handler_file === "string") {
+      extractedHandlerCount += 1;
+      handlerModuleFiles.add(entry.handler_file);
+    }
   }
 
   const expectedIds = Object.values(registryRoutes).flatMap((route) => route.ids);
@@ -215,6 +243,7 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
   const source = readFileSync(path.join(cwd, "reaper/bridge/src/40-route-pack-handlers.lua"), "utf8");
   const luaOperationKeys = extractLuaDispatchOperationKeys(source);
   assertSameList("Lua dispatch operation keys", luaOperationKeys, [...operationKeys].sort(), errors);
+  validateExtractedHandlerBindings({ entries, source, errors });
 
   if (errors.length > 0) {
     throw new Error(`Bridge handler registry validation failed:\n- ${errors.join("\n- ")}`);
@@ -223,19 +252,30 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd() } = {}) {
     contract: registry.contract,
     entryCount: entries.length,
     legacyMonolithCount,
+    extractedHandlerCount,
+    handlerModuleCount: handlerModuleFiles.size,
     routeCount: Object.keys(registryRoutes).length,
     operationCount: operationKeys.size,
   });
 }
 
-function wrapSourceModule(file, source) {
+function wrapSourceModule(file, source, handlerModules) {
   if (file !== "40-route-pack-handlers.lua") return source;
   return [
     "-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk.",
     "local dispatch_request = (function()",
+    ...handlerModules.map(wrapHandlerModule),
     source,
     "return dispatch_request",
     "end)()",
+    "",
+  ].join("\n");
+}
+
+function wrapHandlerModule({ file, source }) {
+  return [
+    `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`,
+    source.trimEnd(),
     "",
   ].join("\n");
 }
@@ -259,19 +299,51 @@ function validateHandlerLocation({ cwd, entry, prefix, errors }) {
     }
     return;
   }
-  if (typeof handlerFile !== "string" || handlerFile.startsWith("/") || handlerFile.includes("..")) {
-    errors.push(`${prefix}.handler_file must be a relative path under reaper/bridge/src/handlers.`);
+  if (
+    typeof handlerFile !== "string" ||
+    handlerFile.includes("\0") ||
+    handlerFile.includes("\\") ||
+    path.isAbsolute(handlerFile) ||
+    /^[A-Za-z]:[\\/]/.test(handlerFile) ||
+    handlerFile.split("/").includes("..") ||
+    !handlerFile.endsWith(".lua")
+  ) {
+    errors.push(`${prefix}.handler_file must be a relative .lua path under reaper/bridge/src/handlers.`);
     return;
   }
-  if (typeof handlerExport !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(handlerExport)) {
+  const handlerExportValid = typeof handlerExport === "string" && /^[A-Za-z_][A-Za-z0-9_]*$/.test(handlerExport);
+  if (!handlerExportValid) {
     errors.push(`${prefix}.handler_export must be a Lua identifier.`);
   }
-  const handlerPath = path.join(cwd, "reaper/bridge/src/handlers", handlerFile);
-  if (!handlerPath.startsWith(path.join(cwd, "reaper/bridge/src/handlers") + path.sep)) {
+  const handlerRoot = path.resolve(cwd, handlerSourceRoot);
+  const handlerPath = path.resolve(handlerRoot, handlerFile);
+  if (!handlerPath.startsWith(handlerRoot + path.sep)) {
     errors.push(`${prefix}.handler_file must remain under reaper/bridge/src/handlers.`);
   }
   if (!existsSync(handlerPath)) {
     errors.push(`${prefix}.handler_file does not exist: ${handlerFile}.`);
+    return;
+  }
+  if (handlerExportValid) {
+    const source = readFileSync(handlerPath, "utf8");
+    const exportPattern = new RegExp(`\\blocal\\s+function\\s+${escapeRegExp(handlerExport)}\\s*\\(`);
+    if (!exportPattern.test(source)) {
+      errors.push(`${prefix}.handler_export was not found as a local function in ${handlerFile}.`);
+    }
+  }
+}
+
+function validateExtractedHandlerBindings({ entries, source, errors }) {
+  for (const entry of entries) {
+    if (!entry || entry.handler_file === LEGACY_MONOLITH_MARKER) continue;
+    if (typeof entry.handler_export !== "string") continue;
+    const key = operationKey(entry);
+    const pattern = new RegExp(
+      `\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?handler\\s*=\\s*${escapeRegExp(entry.handler_export)}\\b`,
+    );
+    if (!pattern.test(source)) {
+      errors.push(`${entry.template_id} extracted handler export is not bound in 40-route-pack-handlers.lua: ${entry.handler_export}.`);
+    }
   }
 }
 
@@ -302,6 +374,10 @@ function extractLuaDispatchOperationKeys(source) {
   ].sort();
 }
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function assertSameList(label, actual, expected, errors) {
   const actualList = [...actual];
   const expectedList = [...expected];
@@ -327,11 +403,12 @@ function run() {
     }
     const registrySummary = validateBridgeHandlerRegistry({ cwd: root });
     console.log(
-      `Live bridge bundle ok (${sourceFiles.length} source module(s), ${registrySummary.entryCount} registered handler row(s)).`,
+      `Live bridge bundle ok (${sourceFiles.length} source module(s), ${registrySummary.handlerModuleCount} handler module file(s), ${registrySummary.entryCount} registered handler row(s)).`,
     );
   } else {
     writeFileSync(outputPath, bundled);
-    console.log(`Built reaper/bridge/openreaper-live-bridge.lua from ${sourceFiles.length} source module(s) plus registry gate.`);
+    const registrySummary = validateBridgeHandlerRegistry({ cwd: root });
+    console.log(`Built reaper/bridge/openreaper-live-bridge.lua from ${sourceFiles.length} source module(s), ${registrySummary.handlerModuleCount} handler module file(s), and registry gate.`);
   }
 }
 

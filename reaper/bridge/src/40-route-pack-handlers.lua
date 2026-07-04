@@ -186,36 +186,6 @@ local function current_project()
   return 0, ""
 end
 
-local function read_project_summary(request)
-  local project, project_path = current_project()
-  local ok_name, name_a, name_b = call_reaper("GetProjectName", project, "")
-  local ok_length, project_length = call_reaper("GetProjectLength", project)
-  local ok_tracks, track_count = call_reaper("CountTracks", project)
-  local ok_items, item_count = call_reaper("CountMediaItems", project)
-  local ok_markers, _, marker_count, region_count = call_reaper("CountProjectMarkers", project)
-  local ok_changes, change_count = call_reaper("GetProjectStateChangeCount", project)
-  local ok_sample_rate, sample_rate = call_reaper("GetSetProjectInfo", project, "PROJECT_SRATE", 0, false)
-  local include_counts = request.params.include_counts == true
-
-  local summary = {
-    kind = "project_summary",
-    project_ref = "project:current",
-    name = bounded_string((ok_name and first_string(name_a, name_b)) or "current", 160),
-    path = bounded_string(project_path or "", 240),
-    length_seconds = ok_length and first_number(project_length) or nil,
-    sample_rate = ok_sample_rate and first_number(sample_rate) or nil,
-    truncated = false,
-  }
-  if include_counts then
-    summary.track_count = ok_tracks and first_number(track_count) or 0
-    summary.item_count = ok_items and first_number(item_count) or 0
-    summary.marker_count = ok_markers and first_number(marker_count) or 0
-    summary.region_count = ok_markers and first_number(region_count) or 0
-    summary.change_count = ok_changes and first_number(change_count) or 0
-  end
-  return summary
-end
-
 local function has_flag(value, flag)
   if type(value) ~= "number" then
     return false
@@ -249,98 +219,6 @@ local function loop_time_range(is_loop)
     start_seconds = 0,
     end_seconds = 0,
     active = false,
-  }
-end
-
-local function read_transport_state()
-  local ok_play_state, play_state = call_reaper("GetPlayState")
-  local ok_cursor, edit_cursor = call_reaper("GetCursorPosition")
-  local ok_play_position, play_position = call_reaper("GetPlayPosition")
-  local ok_repeat, repeat_state = call_reaper("GetSetRepeat", -1)
-  return {
-    kind = "transport_state",
-    play_state = play_state_label(ok_play_state and play_state or nil),
-    edit_cursor_seconds = ok_cursor and first_number(edit_cursor) or 0,
-    play_cursor_seconds = ok_play_position and first_number(play_position) or 0,
-    repeat_enabled = ok_repeat and first_number(repeat_state) == 1 or false,
-    time_selection = loop_time_range(false),
-    loop_points = loop_time_range(true),
-    truncated = false,
-  }
-end
-
-local function read_openreaper_status(request)
-  local include_contracts = request.params.include_contracts == true
-  local include_pack_status = request.params.include_pack_status == true
-  local include_catalog_status = request.params.include_catalog_status == true
-  return {
-    status = "ok",
-    bridge = {
-      owner = ACTIVE_OWNER,
-      generation = ACTIVE_GENERATION,
-      transport = "file_transport",
-      script = SCRIPT_NAME,
-      wave = "wave0-plus-wave1a-read-handlers",
-      spawned_reaper = false,
-    },
-    contracts = include_contracts and {
-      bridge = CONTRACT,
-      executor = "live_bridge.executor.v1",
-    } or nil,
-    enabled_packs = include_pack_status and json_array({ "project", "transport", "core", "system" }) or json_array({}),
-    catalog = include_catalog_status and {
-      accepted_official_catalog = true,
-      wave0_canary_count = 5,
-      wave1a_read_handler_count = 9,
-    } or nil,
-    warnings = json_array({}),
-    truncated = false,
-  }
-end
-
-local function read_runtime_environment(request)
-  local ok_version, version = call_reaper("GetAppVersion")
-  local ok_os, os_name = call_reaper("GetOS")
-  local ok_exe, exe_path = call_reaper("GetExePath")
-  return {
-    reaper_version = bounded_string(ok_version and first_string(version) or "unknown", 120),
-    os = bounded_string(ok_os and first_string(os_name) or "unknown", 120),
-    executable_path = request.params.include_bridge_runtime == true and bounded_string(ok_exe and first_string(exe_path) or "", 240) or nil,
-    bridge_runtime = request.params.include_bridge_runtime == true and "manual_reaper_defer_file_transport" or nil,
-    queue_override_present = non_empty(os.getenv(TRANSPORT_ENV)) ~= nil,
-    runtime_flags = request.params.include_runtime_flags == true and {
-      spawned_reaper = false,
-      writes_project = false,
-      process_spawn = false,
-    } or {},
-  }
-end
-
-local function current_script_dir()
-  if debug and type(debug.getinfo) == "function" then
-    local info = debug.getinfo(1, "S")
-    if info and type(info.source) == "string" then
-      return dirname(info.source:gsub("^@", ""))
-    end
-  end
-  return ""
-end
-
-local function read_resource_paths(request)
-  local ok_resource, resource_path = call_reaper("GetResourcePath")
-  local ok_exe, exe_path = call_reaper("GetExePath")
-  local include_queue_paths = request.params.include_queue_paths == true
-  return {
-    resource_path = bounded_string(ok_resource and first_string(resource_path) or "", 240),
-    executable_path = bounded_string(ok_exe and first_string(exe_path) or "", 240),
-    bridge_script_dir = request.params.include_script_path == true and current_script_dir() or nil,
-    queue_dir = include_queue_paths and bounded_string(TRANSPORT_DIR or "", 240) or nil,
-    transport_dir = include_queue_paths and bounded_string(TRANSPORT_DIR or "", 240) or nil,
-    requests_dir = include_queue_paths and bounded_string(REQUESTS_DIR or "", 240) or nil,
-    results_dir = include_queue_paths and bounded_string(RESULTS_DIR or "", 240) or nil,
-    pending_dir = include_queue_paths and bounded_string(REQUESTS_DIR or "", 240) or nil,
-    done_dir = include_queue_paths and bounded_string(RESULTS_DIR or "", 240) or nil,
-    queue_override_present = TRANSPORT_DIR ~= nil,
   }
 end
 

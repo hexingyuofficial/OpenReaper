@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
   buildLiveBridgeBundle,
+  handlerModuleFilesFromRegistry,
+  handlerSourceRoot,
   loadBridgeHandlerRegistry,
   registryRoutes,
   validateBridgeHandlerRegistry,
@@ -15,6 +17,7 @@ import {
 const ROOT = new URL("../..", import.meta.url);
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
 const REGISTRY = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
+const ROUTE_SOURCE = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
 const REQUIRED_ENTRY_FIELDS = Object.freeze([
   "template_id",
   "operation",
@@ -26,6 +29,13 @@ const REQUIRED_ENTRY_FIELDS = Object.freeze([
   "artifact_policy",
   "tests",
 ]);
+const EXTRACTED_WAVE0_HANDLERS = Object.freeze(new Map([
+  ["template.project.read_summary", ["project/read_summary.lua", "read_project_summary"]],
+  ["template.transport.read_state", ["transport/read_state.lua", "read_transport_state"]],
+  ["template.core.read_openreaper_status", ["core/read_openreaper_status.lua", "read_openreaper_status"]],
+  ["template.system.read_runtime_environment", ["system/read_runtime_environment.lua", "read_runtime_environment"]],
+  ["template.system.read_resource_paths", ["system/read_resource_paths.lua", "read_resource_paths"]],
+]));
 
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
@@ -41,8 +51,15 @@ describe("Layer 4D.R bridge handler registry", () => {
       assert.match(entry.artifact_policy, /^(none|metadata|write)$/);
       assert.equal(Array.isArray(entry.tests), true);
       assert.equal(entry.tests.length > 0, true);
-      assert.equal(entry.handler_file, "legacy_monolith");
-      assert.equal(entry.handler_export, "legacy_monolith");
+      const extractedHandler = EXTRACTED_WAVE0_HANDLERS.get(entry.template_id);
+      if (extractedHandler) {
+        assert.deepEqual([entry.handler_file, entry.handler_export], extractedHandler, entry.template_id);
+        assert.doesNotMatch(entry.handler_file, /^(?:\/|[A-Za-z]:[\\/])/, entry.template_id);
+        assert.doesNotMatch(entry.handler_file, /(?:^|\/)\.\.(?:\/|$)|\\/, entry.template_id);
+      } else {
+        assert.equal(entry.handler_file, "legacy_monolith", entry.template_id);
+        assert.equal(entry.handler_export, "legacy_monolith", entry.template_id);
+      }
       if (entry.operation.name === "template.execute") {
         assert.equal(typeof entry.capability, "string", entry.template_id);
       } else {
@@ -56,7 +73,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
       entryCount: 60,
-      legacyMonolithCount: 60,
+      legacyMonolithCount: 55,
+      extractedHandlerCount: 5,
+      handlerModuleCount: 5,
       routeCount: 7,
       operationCount: 37,
     });
@@ -81,6 +100,22 @@ describe("Layer 4D.R bridge handler registry", () => {
         spec.ids,
         route,
       );
+    }
+  });
+
+  it("extracts exactly the Wave 0 closeout batch into deterministic handler modules", () => {
+    const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
+    assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_WAVE0_HANDLERS.keys()]);
+    assert.deepEqual(
+      handlerModuleFilesFromRegistry(REGISTRY),
+      [...EXTRACTED_WAVE0_HANDLERS.values()].map(([file]) => file),
+    );
+
+    for (const [templateId, [file, handlerExport]] of EXTRACTED_WAVE0_HANDLERS) {
+      const moduleSource = readFileSync(new URL(`../../${handlerSourceRoot}/${file}`, import.meta.url), "utf8");
+      assert.match(moduleSource, new RegExp(`\\blocal\\s+function\\s+${handlerExport}\\s*\\(`), templateId);
+      assert.doesNotMatch(moduleSource, /\b(require\s*\(|dofile|loadstring|os\.execute|io\.popen)\b/, templateId);
+      assert.doesNotMatch(ROUTE_SOURCE, new RegExp(`\\blocal\\s+function\\s+${handlerExport}\\s*\\(`), templateId);
     }
   });
 
@@ -136,6 +171,31 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 60 legacy_monolith row\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 55 legacy_monolith row\(s\); 5 extracted handler row\(s\); 5 handler module file\(s\)\)\./);
+    let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
+    assert.notEqual(lastIndex, -1);
+    for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
+      const marker = `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`;
+      const index = BRIDGE_SOURCE.indexOf(marker);
+      assert.ok(index > lastIndex, marker);
+      lastIndex = index;
+    }
+    assert.ok(BRIDGE_SOURCE.indexOf("local ALLOWED_OPERATIONS = {") > lastIndex);
+  });
+
+  it("keeps extracted Wave 0 dispatch behavior bound to the same operations and exports", () => {
+    for (const [templateId, [, handlerExport]] of EXTRACTED_WAVE0_HANDLERS) {
+      const entry = REGISTRY.entries.find((candidate) => candidate.template_id === templateId);
+      const key = `${entry.operation.family}:${entry.operation.name}`;
+      assert.match(
+        BRIDGE_SOURCE,
+        new RegExp(`\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?pack\\s*=\\s*"${entry.pack}"[\\s\\S]*?handler\\s*=\\s*${handlerExport}\\b`),
+        templateId,
+      );
+    }
   });
 });
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
