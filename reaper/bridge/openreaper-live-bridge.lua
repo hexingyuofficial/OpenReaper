@@ -1547,30 +1547,30 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 119,
+  template_count = 129,
   by_pack = {
     actions = 8,
-    analysis = 4,
+    analysis = 7,
     automation = 15,
     core = 3,
-    fx = 14,
-    items = 9,
-    media = 6,
+    fx = 15,
+    items = 11,
+    media = 7,
     midi = 12,
-    project = 7,
-    render = 5,
+    project = 8,
+    render = 7,
     routing = 15,
     system = 3,
     tracks = 8,
     transport = 10,
   },
   by_risk = {
-    read = 58,
+    read = 66,
     safe = 9,
-    write = 52,
+    write = 54,
   },
   by_lifecycle = {
-    experimental = 119,
+    experimental = 129,
   },
   by_entity_kind = {
     action = 4,
@@ -1579,21 +1579,27 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     automation_mode = 3,
     automation_point = 4,
     channel = 4,
+    cleanup_report = 1,
     command_id = 1,
     core_state = 2,
     cursor = 1,
     custom_action = 1,
     cycle_action = 1,
+    delivery_report = 1,
     envelope = 5,
     fx = 5,
     fx_chain = 3,
     fx_param = 3,
-    item = 7,
+    item = 8,
+    item_layer_report = 1,
     last_result = 1,
+    loop_candidates = 1,
+    loop_click_risk = 1,
+    loop_qa_report = 1,
     loop_state = 3,
     marker = 2,
     marker_action = 1,
-    media_file = 4,
+    media_file = 5,
     media_source = 2,
     midi_cc = 3,
     midi_event = 4,
@@ -1605,6 +1611,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     preset = 2,
     project = 3,
     region = 1,
+    render_job = 1,
     render_matrix = 1,
     render_region = 1,
     render_setting = 1,
@@ -1621,6 +1628,26 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     transient = 1,
     transport = 4,
     video_processor = 1,
+  },
+}
+
+local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
+  template_count = 60,
+  by_pack = {
+    actions = 6,
+    analysis = 3,
+    automation = 0,
+    core = 3,
+    fx = 0,
+    items = 8,
+    media = 3,
+    midi = 10,
+    project = 8,
+    render = 2,
+    routing = 0,
+    system = 3,
+    tracks = 7,
+    transport = 7,
   },
 }
 
@@ -1664,10 +1691,15 @@ local function read_template_catalog_summary(request)
   end
 
   local template_count = pack and READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack[pack] or READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.template_count
+  local live_supported_template_count = pack and READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS.by_pack[pack] or READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS.template_count
   local summary = {
     template_count = template_count,
+    accepted_runtime_template_count = template_count,
+    live_supported_template_count = live_supported_template_count,
+    catalog_count_semantics = "template_count is the accepted runtime catalog count; live_supported_template_count is the current bridge handler row count.",
     pack_count = pack and 1 or read_template_catalog_summary_table_key_count(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack),
     by_pack = pack and read_template_catalog_summary_count_for_key(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack, pack) or read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_pack),
+    live_supported_by_pack = pack and read_template_catalog_summary_count_for_key(READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS.by_pack, pack) or read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS.by_pack),
     by_lifecycle = request.params.include_lifecycle_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_lifecycle) or nil,
     by_risk = request.params.include_risk_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_risk) or nil,
     by_entity_kind = request.params.include_entity_kind_counts == true and read_template_catalog_summary_clone_counts(READ_TEMPLATE_CATALOG_SUMMARY_COUNTS.by_entity_kind) or nil,
@@ -9788,30 +9820,30 @@ local function loop_time_range(is_loop)
 end
 
 local ACCEPTED_CATALOG_COUNTS = {
-  template_count = 119,
+  template_count = 129,
   by_pack = {
     actions = 8,
-    analysis = 4,
+    analysis = 7,
     automation = 15,
     core = 3,
-    fx = 14,
-    items = 9,
-    media = 6,
+    fx = 15,
+    items = 11,
+    media = 7,
     midi = 12,
-    project = 7,
-    render = 5,
+    project = 8,
+    render = 7,
     routing = 15,
     system = 3,
     tracks = 8,
     transport = 10,
   },
   by_risk = {
-    read = 58,
+    read = 66,
     safe = 9,
-    write = 52,
+    write = 54,
   },
   by_lifecycle = {
-    experimental = 119,
+    experimental = 129,
   },
   by_entity_kind = {
     action = 4,
@@ -9820,21 +9852,27 @@ local ACCEPTED_CATALOG_COUNTS = {
     automation_mode = 3,
     automation_point = 4,
     channel = 4,
+    cleanup_report = 1,
     command_id = 1,
     core_state = 2,
     cursor = 1,
     custom_action = 1,
     cycle_action = 1,
+    delivery_report = 1,
     envelope = 5,
     fx = 5,
     fx_chain = 3,
     fx_param = 3,
-    item = 7,
+    item = 8,
+    item_layer_report = 1,
     last_result = 1,
+    loop_candidates = 1,
+    loop_click_risk = 1,
+    loop_qa_report = 1,
     loop_state = 3,
     marker = 2,
     marker_action = 1,
-    media_file = 4,
+    media_file = 5,
     media_source = 2,
     midi_cc = 3,
     midi_event = 4,
@@ -9846,6 +9884,7 @@ local ACCEPTED_CATALOG_COUNTS = {
     preset = 2,
     project = 3,
     region = 1,
+    render_job = 1,
     render_matrix = 1,
     render_region = 1,
     render_setting = 1,
@@ -10854,9 +10893,9 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  open_required_undo_block(request, operation_key)
+  open_required_undo_block(request, key)
   local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request)
-  close_required_undo_block(request, operation_key)
+  close_required_undo_block(request, key)
   if not ok then
     return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,

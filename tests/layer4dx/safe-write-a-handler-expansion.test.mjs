@@ -249,6 +249,11 @@ describe("Safe-Write-A handler expansion", () => {
     for (const capability of EXPECTED_CAPABILITIES) {
       assert.match(BRIDGE_SOURCE, new RegExp(`\\["${escapeRegExp(capability)}"\\]`), capability);
     }
+    assert.match(BRIDGE_SOURCE, /local key = request\.operation\.family \.\. ":" \.\. request\.operation\.name/);
+    assert.match(BRIDGE_SOURCE, /^  open_required_undo_block\(request, key\)$/m);
+    assert.match(BRIDGE_SOURCE, /^  close_required_undo_block\(request, key\)$/m);
+    assert.doesNotMatch(BRIDGE_SOURCE, /^  open_required_undo_block\(request, operation_key\)$/m);
+    assert.doesNotMatch(BRIDGE_SOURCE, /^  close_required_undo_block\(request, operation_key\)$/m);
     for (const forbidden of [
       "media.import_file_to_track",
       "media.import_file_section_to_track",

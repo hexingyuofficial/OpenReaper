@@ -223,30 +223,30 @@ local function loop_time_range(is_loop)
 end
 
 local ACCEPTED_CATALOG_COUNTS = {
-  template_count = 119,
+  template_count = 129,
   by_pack = {
     actions = 8,
-    analysis = 4,
+    analysis = 7,
     automation = 15,
     core = 3,
-    fx = 14,
-    items = 9,
-    media = 6,
+    fx = 15,
+    items = 11,
+    media = 7,
     midi = 12,
-    project = 7,
-    render = 5,
+    project = 8,
+    render = 7,
     routing = 15,
     system = 3,
     tracks = 8,
     transport = 10,
   },
   by_risk = {
-    read = 58,
+    read = 66,
     safe = 9,
-    write = 52,
+    write = 54,
   },
   by_lifecycle = {
-    experimental = 119,
+    experimental = 129,
   },
   by_entity_kind = {
     action = 4,
@@ -255,21 +255,27 @@ local ACCEPTED_CATALOG_COUNTS = {
     automation_mode = 3,
     automation_point = 4,
     channel = 4,
+    cleanup_report = 1,
     command_id = 1,
     core_state = 2,
     cursor = 1,
     custom_action = 1,
     cycle_action = 1,
+    delivery_report = 1,
     envelope = 5,
     fx = 5,
     fx_chain = 3,
     fx_param = 3,
-    item = 7,
+    item = 8,
+    item_layer_report = 1,
     last_result = 1,
+    loop_candidates = 1,
+    loop_click_risk = 1,
+    loop_qa_report = 1,
     loop_state = 3,
     marker = 2,
     marker_action = 1,
-    media_file = 4,
+    media_file = 5,
     media_source = 2,
     midi_cc = 3,
     midi_event = 4,
@@ -281,6 +287,7 @@ local ACCEPTED_CATALOG_COUNTS = {
     preset = 2,
     project = 3,
     region = 1,
+    render_job = 1,
     render_matrix = 1,
     render_region = 1,
     render_setting = 1,
@@ -1289,9 +1296,9 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  open_required_undo_block(request, operation_key)
+  open_required_undo_block(request, key)
   local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request)
-  close_required_undo_block(request, operation_key)
+  close_required_undo_block(request, key)
   if not ok then
     return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,
