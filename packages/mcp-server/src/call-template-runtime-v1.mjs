@@ -12,10 +12,12 @@ import {
 import {
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
@@ -28,7 +30,7 @@ export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidenc
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE = Object.freeze({
   kind: "accepted_official_template_catalog",
-  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill"]),
+  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1"]),
 });
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
@@ -36,6 +38,7 @@ export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
   ...TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
+  ...TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
 ]);
 
 const ACCEPTED_TEMPLATE_ID_SET = new Set(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
@@ -213,6 +216,7 @@ export function createAcceptedOfficialTemplateCatalogTemplates() {
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
+    ...createTemplateCatalogP1Templates(),
   ];
 }
 

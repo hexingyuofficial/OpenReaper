@@ -112,7 +112,7 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.deepEqual(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(RECIPE_CONTRACT_SEED_ONLY_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS);
     assert.deepEqual(RECIPE_CONTRACT_HELD_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS);
-    assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length, 126);
+    assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length, 129);
 
     assertRejectsTemplateId("template.tracks.not_in_catalog", /unknown or non-accepted template id/);
     assertRejectsTemplateId("template.core.read_health", /seed-only template id/);

@@ -23,6 +23,7 @@ import {
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
@@ -303,23 +304,25 @@ describe("P1 template fill descriptors", () => {
     assert.equal(writeBridge.seen.length, 1);
   });
 
-  it("keeps the P1 ids out of the shared accepted catalog until control tower merge", () => {
+  it("promotes the P1 ids into the shared accepted catalog after control tower merge", () => {
     const officialCatalog = createAcceptedOfficialTemplateCatalog();
     const currentSharedIds = [
       ...TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
       ...TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
       ...TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
       ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
+      ...TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
     ];
 
     assert.deepEqual(currentSharedIds, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(currentSharedIds, RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS);
+    assert.deepEqual(TEMPLATE_CATALOG_P1_TEMPLATE_IDS, ALLOWLIST);
 
     for (const id of ALLOWLIST) {
-      assert.equal(officialCatalog.get(id), null, id);
-      assert.equal(currentSharedIds.includes(id), false, id);
-      assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.includes(id), false, id);
-      assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.includes(id), false, id);
+      assert.equal(officialCatalog.get(id) !== null, true, id);
+      assert.equal(currentSharedIds.includes(id), true, id);
+      assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.includes(id), true, id);
+      assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.includes(id), true, id);
     }
   });
 

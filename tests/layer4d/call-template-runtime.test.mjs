@@ -11,6 +11,9 @@ import {
   TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS,
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
+  TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
+} from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
+import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
@@ -24,16 +27,17 @@ import {
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
 describe("Layer 4D call_template runtime binding", () => {
-  it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, and critical-fill official catalog", () => {
+  it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
-    assert.equal(catalog.size, 126);
+    assert.equal(catalog.size, 129);
     assert.deepEqual(catalog.ids, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE.waves, [
       "wave1a",
       "wave2a",
       "wave3b",
       "critical_fill",
+      "p1",
     ]);
 
     assert.equal(catalog.get("template.tracks.create_track") !== null, true);
@@ -42,6 +46,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(catalog.get("template.items.create_layer_report") !== null, true);
     assert.equal(catalog.get("template.project.create_cleanup_report") !== null, true);
     assert.equal(catalog.get("template.render.create_delivery_report") !== null, true);
+    for (const id of TEMPLATE_CATALOG_P1_TEMPLATE_IDS) {
+      assert.equal(catalog.get(id) !== null, true, id);
+    }
     assert.deepEqual([...CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS].sort(), [
       "template.core.read_health",
       "template.render.render_region_job",
