@@ -18,6 +18,9 @@ import {
   LIVE_BRIDGE_EXECUTOR_ENV,
   createLiveBridgeExecutorFromEnv,
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
+import {
+  buildLiveBridgeBundle,
+} from "../../scripts/build-live-bridge.mjs";
 
 const BRIDGE_SCRIPT_URL = new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url);
 const BRIDGE_SOURCE = readFileSync(BRIDGE_SCRIPT_URL, "utf8");
@@ -44,7 +47,9 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
         readFileSync(new URL(`../../reaper/bridge/src/${file}`, import.meta.url), "utf8"),
       ]),
     );
-    assert.equal(Object.values(sourceModules).join(""), BRIDGE_SOURCE);
+    assert.equal(buildLiveBridgeBundle({ cwd: ROOT.pathname }), BRIDGE_SOURCE);
+    assert.match(BRIDGE_SOURCE, /local dispatch_request = \(function\(\)/);
+    assert.match(BRIDGE_SOURCE, /return dispatch_request\nend\)\(\)/);
 
     assert.match(sourceModules["00-bridge-kernel.lua"], /local CONTRACT = "foundation\.bridge\.v1"/);
     assert.match(sourceModules["00-bridge-kernel.lua"], /function json\.decode/);

@@ -1148,6 +1148,8 @@ local function read_artifact_envelope(ref, expected)
   end
   return envelope_or_error
 end
+-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk.
+local dispatch_request = (function()
 local function validate_request(request)
   if not is_object(request) then
     return false, "Bridge request must be an object."
@@ -3771,6 +3773,9 @@ local function dispatch_request(request, fallback_id)
   end
   return bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
 end
+
+return dispatch_request
+end)()
 local function process_request_file(filename)
   local fallback_id = result_id_from_filename(filename)
   local result_path = path_join(RESULTS_DIR, fallback_id .. ".json")
