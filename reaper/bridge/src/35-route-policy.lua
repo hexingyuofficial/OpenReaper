@@ -1,0 +1,179 @@
+local SAFE_WRITE_A_CAPABILITIES = {
+  ["project.set_metadata_field"] = { pack = "project", risk = "write" },
+  ["project.create_marker"] = { pack = "project", risk = "write" },
+  ["project.create_region"] = { pack = "project", risk = "write" },
+  ["track.create"] = { pack = "tracks", risk = "write" },
+  ["track.rename"] = { pack = "tracks", risk = "write" },
+  ["track.set_color"] = { pack = "tracks", risk = "write" },
+  ["track.select"] = { pack = "tracks", risk = "write" },
+  ["track.set_mute"] = { pack = "tracks", risk = "write" },
+  ["track.set_solo"] = { pack = "tracks", risk = "write" },
+  ["transport.set_edit_cursor"] = { pack = "transport", risk = "safe" },
+  ["transport.set_time_selection"] = { pack = "transport", risk = "safe" },
+  ["transport.clear_time_selection"] = { pack = "transport", risk = "safe" },
+  ["transport.set_loop_points"] = { pack = "transport", risk = "safe" },
+  ["transport.clear_loop_points"] = { pack = "transport", risk = "safe" },
+  ["transport.set_repeat"] = { pack = "transport", risk = "safe" },
+  ["items.move_item"] = { pack = "items", risk = "write" },
+  ["items.trim_item"] = { pack = "items", risk = "write" },
+  ["items.set_item_fades"] = { pack = "items", risk = "write" },
+  ["items.set_take_pitch"] = { pack = "items", risk = "write" },
+  ["items.set_item_snap_offset"] = { pack = "items", risk = "write" },
+  ["midi.create_midi_item"] = { pack = "midi", risk = "write" },
+  ["midi.insert_notes_batch"] = { pack = "midi", risk = "write" },
+  ["midi.insert_cc_batch"] = { pack = "midi", risk = "write" },
+  ["midi.insert_text_sysex_events"] = { pack = "midi", risk = "write" },
+}
+
+local function safe_write_a_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return SAFE_WRITE_A_CAPABILITIES[request.pack.capability]
+end
+
+local function open_required_undo_block(request, operation_key)
+  if not safe_write_a_capability(request, operation_key) then
+    return
+  end
+  if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
+    return
+  end
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  project = ok_project and project or 0
+  local ok = call_reaper("Undo_BeginBlock2", project)
+  if not ok then
+    ok = call_reaper("Undo_BeginBlock")
+  end
+  request.__openreaper_undo_opened = ok == true
+end
+
+local function close_required_undo_block(request, operation_key)
+  if not safe_write_a_capability(request, operation_key) then
+    return
+  end
+  if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
+    return
+  end
+  local label = is_string(request.undo.label) and request.undo.label or "OpenReaper Safe-Write-A"
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  project = ok_project and project or 0
+  local ok = call_reaper("Undo_EndBlock2", project, label, -1)
+  if not ok then
+    ok = call_reaper("Undo_EndBlock", label, -1)
+  end
+  request.__openreaper_undo_closed = ok == true
+end
+
+local function validate_request(request)
+  if not is_object(request) then
+    return false, "Bridge request must be an object."
+  end
+  if request.contract ~= CONTRACT then
+    return false, "Bridge request contract must be foundation.bridge.v1."
+  end
+  if not is_request_id(request.id) then
+    return false, "id must be a cmd_ request id."
+  end
+  if not is_string(request.created_at) then
+    return false, "created_at must be a non-empty string."
+  end
+  if not is_object(request.client) or not is_string(request.client.id) or not is_string(request.client.session_id) then
+    return false, "client.id and client.session_id are required."
+  end
+  if not is_object(request.bridge) or not is_string(request.bridge.expected_owner) then
+    return false, "bridge.expected_owner is required."
+  end
+  if not is_non_negative_integer(request.bridge.expected_generation) then
+    return false, "bridge.expected_generation must be a non-negative integer."
+  end
+  if not is_object(request.operation) or not is_string(request.operation.family) or not is_string(request.operation.name) then
+    return false, "operation.family and operation.name are required."
+  end
+  if not FIXED_FAMILIES[request.operation.family] then
+    return false, "operation.family is outside foundation.bridge.v1."
+  end
+  local operation_key = request.operation.family .. ":" .. request.operation.name
+  local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
+  local a2_render_operation = operation_key == "run_job:render.region_wav"
+  local safe_write_a_operation = safe_write_a_capability(request, operation_key)
+  if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
+    return false, "pack.id, pack.capability, and pack.risk are required."
+  end
+  if a2_render_operation then
+    if request.pack.id ~= "render" or request.pack.risk ~= "write" then
+      return false, "A2 render_region_wav must be the render-owned write-risk route."
+    end
+  elseif safe_write_a_operation then
+    if request.pack.id ~= safe_write_a_operation.pack or request.pack.risk ~= safe_write_a_operation.risk then
+      return false, "Safe-Write-A request pack/capability/risk mismatch."
+    end
+  elseif request.pack.risk ~= "read" then
+    return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
+  end
+  if not is_object(request.params) then
+    return false, "params must be a JSON object."
+  end
+  if not is_json_array(request.refs) then
+    return false, "refs must be a JSON array."
+  end
+  if not is_object(request.undo) then
+    return false, "undo policy is required."
+  end
+  if a2_render_operation then
+    if request.undo.mode ~= "required" then
+      return false, "A2 render_region_wav must use undo.mode required."
+    end
+  elseif safe_write_a_operation then
+    if request.undo.mode ~= "required" then
+      return false, "Safe-Write-A write/safe requests must use undo.mode required."
+    end
+  elseif request.undo.mode ~= "none" then
+    return false, "read-only live-smoke requests must use undo.mode none."
+  end
+  if not is_object(request.verification) or not is_string(request.verification.mode) then
+    return false, "verification.mode is required."
+  end
+  if request.verification.checks ~= nil and request.verification.checks ~= JSON_NULL and not is_json_array(request.verification.checks) then
+    return false, "verification.checks must be a JSON array."
+  end
+  if not is_object(request.artifacts) or type(request.artifacts.allow) ~= "boolean" then
+    return false, "artifacts.allow must be a boolean."
+  end
+  if artifacts_allowed_for_operation then
+    if request.artifacts.allow ~= true then
+      return false, "Scoped First-Real-Fixture-A artifact handlers require artifacts.allow true."
+    end
+  elseif safe_write_a_operation then
+    if request.artifacts.allow ~= false then
+      return false, "Safe-Write-A write/safe requests must use artifacts.allow false."
+    end
+  elseif request.artifacts.allow ~= false then
+    return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
+  end
+  local budget = request.budget
+  if not is_object(budget)
+    or not (is_non_negative_integer(budget.max_response_bytes) and budget.max_response_bytes > 0)
+    or not (is_non_negative_integer(budget.max_items) and budget.max_items > 0)
+    or not (is_non_negative_integer(budget.max_inline_value_bytes) and budget.max_inline_value_bytes > 0) then
+    return false, "budget must include positive integer limits."
+  end
+  if not (is_non_negative_integer(request.timeout_ms) and request.timeout_ms > 0) then
+    return false, "timeout_ms must be a positive integer."
+  end
+  if a2_render_operation then
+    if not is_string(request.idempotency_key) then
+      return false, "A2 render_region_wav requires an idempotency_key."
+    end
+  elseif safe_write_a_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "Safe-Write-A idempotency_key must be a string when present."
+    end
+  elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
+    return false, "read-only live-smoke requests must not carry idempotency_key."
+  end
+  return true
+end

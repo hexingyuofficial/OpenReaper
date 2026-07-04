@@ -43,6 +43,7 @@ export const sourceFiles = Object.freeze([
   "10-file-transport.lua",
   "20-bridge-envelope-kernel.lua",
   "30-artifact-helper.lua",
+  "35-route-policy.lua",
   "40-route-pack-handlers.lua",
   "90-file-transport-loop.lua",
 ]);

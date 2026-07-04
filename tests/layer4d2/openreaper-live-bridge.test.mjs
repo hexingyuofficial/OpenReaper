@@ -29,6 +29,7 @@ const BRIDGE_SOURCE_MODULES = Object.freeze([
   "10-file-transport.lua",
   "20-bridge-envelope-kernel.lua",
   "30-artifact-helper.lua",
+  "35-route-policy.lua",
   "40-route-pack-handlers.lua",
   "90-file-transport-loop.lua",
 ]);
@@ -65,15 +66,24 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(sourceModules["10-file-transport.lua"], /os\.rename\(temp_path, path\)/);
     assert.match(sourceModules["30-artifact-helper.lua"], /artifact\.state_store\.v1/);
     assert.match(sourceModules["30-artifact-helper.lua"], /A1_ARTIFACT_OPERATIONS/);
+    assert.match(sourceModules["35-route-policy.lua"], /local SAFE_WRITE_A_CAPABILITIES = \{/);
+    assert.match(sourceModules["35-route-policy.lua"], /local function validate_request\(request\)/);
+    assert.match(sourceModules["35-route-policy.lua"], /ARTIFACT_PRODUCING_OPERATIONS/);
+    assert.match(sourceModules["35-route-policy.lua"], /Safe-Write-A write\/safe requests must use undo\.mode required/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /local ALLOWED_OPERATIONS = \{/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /handler = read_project_summary/);
-    assert.match(sourceModules["40-route-pack-handlers.lua"], /template_count = 129/);
+    assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local function validate_request\(request\)/);
+    assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /template_count = 129/);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /template_count = 119/);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /^  open_required_undo_block\(request, key\)$/m);
     assert.match(sourceModules["40-route-pack-handlers.lua"], /^  close_required_undo_block\(request, key\)$/m);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /^  open_required_undo_block\(request, operation_key\)$/m);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /^  close_required_undo_block\(request, operation_key\)$/m);
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
+    assert.match(
+      readFileSync(new URL("../../reaper/bridge/src/handlers/core/read_template_catalog_summary.lua", import.meta.url), "utf8"),
+      /template_count = 129/,
+    );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.defer\(bridge_loop\)/);
   });
