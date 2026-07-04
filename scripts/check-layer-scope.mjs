@@ -191,6 +191,7 @@ const allowlists = {
     "tests/layer6/**",
   ],
   layer7: [
+    "docs/LAYER_PROGRESS.md",
     "package.json",
     "scripts/check-layer-scope.mjs",
     "scripts/check-official-recipes.mjs",
@@ -635,7 +636,6 @@ const denylists = {
   layer7: [
     "AGENTS.md",
     "README.md",
-    "docs/**",
     "packages/**",
     "reaper/**",
     "scripts/build-live-bridge.mjs",

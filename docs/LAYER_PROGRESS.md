@@ -811,6 +811,44 @@ Known risks: descriptor/fake-smoke only. The report templates still need
 artifact helper/runtime evidence and fixture-batched live smoke before Layer 7
 recipes can claim portable first-real-version evidence.
 
+## Layer 7: Official Recipe Acceptance / First Real Version Gate
+
+Status: draft packet plus no-REAPER fake-smoke accepted; live acceptance still
+pending.
+
+Accepted commits:
+
+- `3d21fb0 recipes: add layer 7 draft packet`
+- `8932817 recipes: add layer 7 fake smoke`
+
+Accepted coverage:
+
+- added six small lifecycle-`draft` recipe atoms under
+  `recipes/official/layer7/first_atoms_a/`;
+- kept the atoms as draft acceptance candidates, not four giant north-star
+  recipes;
+- added `check:official-recipes`;
+- added no-REAPER recipe fake-smoke coverage proving the six draft atoms can
+  execute as composed fake recipe graphs through fake `call_template` and
+  artifact `get_state` reads;
+- proved fake outputs are descriptor-derived, `$from_step` bindings use only
+  earlier descriptor-declared outputs, artifact reads use declared labels, and
+  write/render atoms pause for risk gates.
+
+Out of scope: REAPER live smoke, live matrix updates, recipe lifecycle
+promotion, a recipe executor, a new MCP tool, template/catalog/runtime changes,
+and official four-vision readiness claims.
+
+Known risks: recipe-level live acceptance, artifact readback evidence,
+portability/new-machine checks, and runbook evidence remain required before
+any atom can be promoted beyond draft/fake-smoke evidence. The
+`recipe.items.layer_report_from_evidence` atom remains fixture-backed and
+draft-only until A3-style evidence is upgraded into a recipe-level run.
+
+Next gate: recipe-level live R1, currently planned to start with
+`recipe.project.cleanup_fingerprint_report` after control-tower approval and
+user-operated REAPER fixture setup.
+
 ## Template Closure / User Recipe Authoring Target
 
 Status: accepted product boundary for v1.
