@@ -511,6 +511,38 @@ the nine approved read templates. These env values apply only to
 `template.tracks.resolve_track_ref`, `template.items.resolve_item_ref`, and
 `template.items.read_item_summary`.
 
+## Layer 4D.R: Bridge Handler Registry / Split v1
+
+Status: candidate
+
+Scope target: add the first bridge handler registry gate so existing live
+bridge handler rows are inventoried against accepted template ids, route
+allowlists, descriptor pack/risk/operation fields, handler location policy,
+tests, and generated bundle determinism before future handler expansion.
+
+Candidate coverage:
+
+- added `reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json` with one
+  standard entry shape;
+- registered the current 60 live bridge template rows without adding template
+  ids, operations, routes, recipes, MCP tools, live smoke, or matrix updates;
+- kept every registered row as `legacy_monolith` for this first inventory
+  pass; runtime behavior remains in `reaper/bridge/src/40-route-pack-handlers.lua`;
+- taught `scripts/build-live-bridge.mjs` and `check:template-runtime` to enforce
+  registry parity, Lua dispatch operation drift, handler file policy, route
+  allowlists, accepted catalog ids, descriptor pack/risk/artifact policy, test
+  paths, and generated bundle freshness;
+- added `bridge-handler-registry` scope guard support and focused 4D.R tests.
+
+Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
+`npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
+and `git diff --check`.
+
+Known risks: this is a structural gate and transitional inventory only. The
+old `40-route-pack-handlers.lua` monolith remains the implementation surface
+until later reviewed extraction batches move handlers into
+`reaper/bridge/src/handlers/**`.
+
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 
 Status: accepted

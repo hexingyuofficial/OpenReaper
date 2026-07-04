@@ -1,3 +1,6 @@
+-- OpenReaper generated live bridge.
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 60 legacy_monolith row(s)).
+
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
 -- foundation.bridge.v1 results for approved live-smoke handlers.

@@ -1,0 +1,995 @@
+{
+  "contract": "openreaper.bridge_handler_registry.v1",
+  "generated_from": "Layer 4D.R transitional inventory; behavior remains in reaper/bridge/src/40-route-pack-handlers.lua.",
+  "entries": [
+    {
+      "template_id": "template.project.read_summary",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_summary"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "wave0",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.read_state",
+      "operation": {
+        "family": "query_state",
+        "name": "transport.read_state"
+      },
+      "pack": "transport",
+      "risk": "read",
+      "route": "wave0",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.core.read_openreaper_status",
+      "operation": {
+        "family": "query_state",
+        "name": "openreaper.read_status"
+      },
+      "pack": "core",
+      "risk": "read",
+      "route": "wave0",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.system.read_runtime_environment",
+      "operation": {
+        "family": "query_state",
+        "name": "system.runtime_environment.read"
+      },
+      "pack": "system",
+      "risk": "read",
+      "route": "wave0",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.system.read_resource_paths",
+      "operation": {
+        "family": "query_state",
+        "name": "system.resource_paths.read"
+      },
+      "pack": "system",
+      "risk": "read",
+      "route": "wave0",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.core.read_template_catalog_summary",
+      "operation": {
+        "family": "query_state",
+        "name": "template_catalog.read_summary"
+      },
+      "pack": "core",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.core.read_last_result",
+      "operation": {
+        "family": "query_state",
+        "name": "last_result.read"
+      },
+      "pack": "core",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.system.check_api_symbols",
+      "operation": {
+        "family": "query_state",
+        "name": "system.api_symbols.check"
+      },
+      "pack": "system",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.read_metadata",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_metadata"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.list_markers_regions",
+      "operation": {
+        "family": "query_state",
+        "name": "project.list_markers_regions"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.read_tempo_map",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_tempo_map"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.resolve_track_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "track.resolve_ref"
+      },
+      "pack": "tracks",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.resolve_item_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "items.resolve_item_ref"
+      },
+      "pack": "items",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.read_item_summary",
+      "operation": {
+        "family": "query_state",
+        "name": "items.read_item_summary"
+      },
+      "pack": "items",
+      "risk": "read",
+      "route": "wave1a-read-handlers",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.resolve_named_command",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.resolve_named_command"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.read_action_metadata",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.read_action_metadata"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.read_action_toggle_state",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.read_action_toggle_state"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.read_action_shortcuts",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.read_action_shortcuts"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.parse_marker_action_text",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.parse_marker_action_text"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.search_action_commands",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.search_action_commands"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.resolve_midi_take_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.resolve_midi_take_ref"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.read_take_event_counts",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.read_take_event_counts"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.list_take_notes",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.list_take_notes"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.list_take_cc_events",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.list_take_cc_events"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.list_take_text_sysex_events",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.list_take_text_sysex_events"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.read_take_grid",
+      "operation": {
+        "family": "query_state",
+        "name": "midi.read_take_grid"
+      },
+      "pack": "midi",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.probe_file",
+      "operation": {
+        "family": "query_state",
+        "name": "media.file.probe"
+      },
+      "pack": "media",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.read_take_source",
+      "operation": {
+        "family": "query_state",
+        "name": "media.take_source.read"
+      },
+      "pack": "media",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.read_project_media_files",
+      "operation": {
+        "family": "query_state",
+        "name": "media.project_files.read"
+      },
+      "pack": "media",
+      "risk": "read",
+      "route": "read-b",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.detect_loop_candidates",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.detect_loop_candidates"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.measure_loop_click_risk",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.measure_loop_click_risk"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.create_loop_qa_report",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.create_loop_qa_report"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.create_cleanup_report",
+      "operation": {
+        "family": "run_job",
+        "name": "project.create_cleanup_report"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_region_wav",
+      "operation": {
+        "family": "run_job",
+        "name": "render.region_wav"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "first-real-a2-render",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a2-render-route.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.create_delivery_report",
+      "operation": {
+        "family": "run_job",
+        "name": "render.delivery_report.create"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "first-real-a2-render",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a2-render-route.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.create_layer_report",
+      "operation": {
+        "family": "run_job",
+        "name": "items.create_layer_report"
+      },
+      "pack": "items",
+      "risk": "read",
+      "route": "first-real-a3-layer-report",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a3-layer-report-route.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.set_metadata_field",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "project.set_metadata_field",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.create_marker",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "project.create_marker",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.create_region",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "project.create_region",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.create_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.create",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.rename_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.rename",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_color",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.set_color",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.select_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.select",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_mute",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.set_mute",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_solo",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "track.set_solo",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_edit_cursor",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.set_edit_cursor",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_time_selection",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.set_time_selection",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.clear_time_selection",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.clear_time_selection",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_loop_points",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.set_loop_points",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.clear_loop_points",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.clear_loop_points",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_repeat",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "transport",
+      "risk": "safe",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "transport.set_repeat",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.move_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "items.move_item",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.trim_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "items.trim_item",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.set_item_fades",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "items.set_item_fades",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.set_take_pitch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "items.set_take_pitch",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.set_item_snap_offset",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "items.set_item_snap_offset",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.create_midi_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "midi.create_midi_item",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.insert_notes_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "midi.insert_notes_batch",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.insert_cc_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "midi.insert_cc_batch",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.midi.insert_text_sysex_events",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "safe-write-a",
+      "handler_file": "legacy_monolith",
+      "handler_export": "legacy_monolith",
+      "artifact_policy": "none",
+      "capability": "midi.insert_text_sysex_events",
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ]
+    }
+  ]
+}
