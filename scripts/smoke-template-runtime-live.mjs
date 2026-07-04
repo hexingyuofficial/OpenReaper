@@ -6,6 +6,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
@@ -49,6 +50,7 @@ const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const SAFE_WRITE_A_FLAG = "--safe-write-a";
 const E2_FX_B1_ROUTE_FLAG = "--fx-b1";
+const E5_ROUTING_AUTOMATION_ROUTE_FLAG = "--routing-automation";
 const E3_MEDIA_ROUTE_FLAG = "--media-route";
 const E4_ITEM_ROUTE_FLAG = "--item-route";
 const PHASE_FLAG = "--phase";
@@ -77,6 +79,7 @@ const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
 const READ_B_BATCH = "read-b-live-handlers";
 const SAFE_WRITE_A_BATCH = "Safe-Write-A";
 const E2_FX_B1_ROUTE_BATCH = "E2 FX-B1 Route";
+const E5_ROUTING_AUTOMATION_ROUTE_BATCH = "E5 Routing/Automation Route";
 const E3_MEDIA_ROUTE_BATCH = "E3 Media Route";
 const E4_ITEM_ROUTE_BATCH = "E4 Item Route";
 const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
@@ -109,6 +112,16 @@ const E2_FX_B1_PRESET_NAME_ENV = "OPENREAPER_E2_FX_PRESET_NAME";
 const E2_FX_B1_PRESET_INDEX_ENV = "OPENREAPER_E2_FX_PRESET_INDEX";
 const E2_FX_B1_VIDEO_FX_REF_ENV = "OPENREAPER_E2_FX_VIDEO_REF";
 const E2_FX_B1_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
+const E5_ROUTING_AUTOMATION_OPT_IN_ENV = "OPENREAPER_E5_ROUTING_AUTOMATION_LIVE_SMOKE";
+const E5_TRACK_REF_ENV = "OPENREAPER_E5_TRACK_REF";
+const E5_DESTINATION_TRACK_REF_ENV = "OPENREAPER_E5_DESTINATION_TRACK_REF";
+const E5_SEND_REF_ENV = "OPENREAPER_E5_SEND_REF";
+const E5_FX_REF_ENV = "OPENREAPER_E5_FX_REF";
+const E5_ENVELOPE_REF_ENV = "OPENREAPER_E5_ENVELOPE_REF";
+const E5_TAKE_REF_ENV = "OPENREAPER_E5_TAKE_REF";
+const E5_SEND_VOLUME_ENV = "OPENREAPER_E5_SEND_VOLUME";
+const E5_SEND_PAN_ENV = "OPENREAPER_E5_SEND_PAN";
+const E5_POINT_VALUE_ENV = "OPENREAPER_E5_POINT_VALUE";
 const E3_MEDIA_FOLDER_ROOT_ENV = "OPENREAPER_E3_MEDIA_FOLDER_ROOT";
 const E3_MEDIA_SOURCE_PATH_ENV = "OPENREAPER_E3_MEDIA_SOURCE_PATH";
 const E3_MEDIA_RELINK_PATH_ENV = "OPENREAPER_E3_MEDIA_RELINK_PATH";
@@ -363,6 +376,54 @@ const E2_FX_B1_ROUTE_SPEC_BY_CAPABILITY = new Map(
     .filter((spec) => spec.operation === "run_command:template.execute")
     .map((spec) => [spec.capability, spec]),
 );
+
+const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
+  routeSpec("template.routing.read_track_routing", "query_state:routing.track.read", "routing", "read", "routing.track.read", "track", "routing_read"),
+  routeSpec("template.routing.resolve_send_ref", "query_state:routing.send.resolve_ref", "routing", "read", "routing.send.resolve_ref", "send_locator", "routing_read"),
+  routeSpec("template.routing.create_track_send", "run_command:template.execute", "routing", "write", "routing.send.create", "track_pair", "routing_write"),
+  routeSpec("template.routing.set_send_volume", "run_command:template.execute", "routing", "write", "routing.send.set_volume", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_pan", "run_command:template.execute", "routing", "write", "routing.send.set_pan", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_mute", "run_command:template.execute", "routing", "write", "routing.send.set_mute", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_mode", "run_command:template.execute", "routing", "write", "routing.send.set_mode", "send", "routing_write", true),
+  routeSpec("template.routing.set_master_parent_send", "run_command:template.execute", "routing", "write", "routing.master_parent.set", "track", "routing_write", true),
+  routeSpec("template.routing.set_track_channel_count", "run_command:template.execute", "routing", "write", "routing.track_channels.set", "track", "routing_write", true),
+  routeSpec("template.routing.read_project_routing_graph", "query_state:routing.project_graph.read", "routing", "read", "routing.project_graph.read", "none", "routing_read"),
+  routeSpec("template.routing.set_send_audio_channels", "run_command:template.execute", "routing", "write", "routing.send.audio_channels.set", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_phase", "run_command:template.execute", "routing", "write", "routing.send.set_phase", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_mono", "run_command:template.execute", "routing", "write", "routing.send.set_mono", "send", "routing_write", true),
+  routeSpec("template.routing.set_send_midi_channels", "run_command:template.execute", "routing", "write", "routing.send.midi_channels.set", "send", "routing_write", true),
+  routeSpec("template.routing.read_fx_pin_mapping", "query_state:routing.fx_pin_mapping.read", "routing", "read", "routing.fx_pin_mapping.read", "track_fx", "routing_read"),
+  routeSpec("template.automation.resolve_envelope_ref", "query_state:automation.resolve_envelope_ref", "automation", "read", "automation.resolve_envelope_ref", "automation_parent", "automation_read"),
+  routeSpec("template.automation.read_envelope_summary", "query_state:automation.read_envelope_summary", "automation", "read", "automation.read_envelope_summary", "envelope", "automation_read"),
+  routeSpec("template.automation.read_envelope_points", "query_state:automation.read_envelope_points", "automation", "read", "automation.read_envelope_points", "envelope", "automation_read"),
+  routeSpec("template.automation.evaluate_envelope_at_time", "query_state:automation.evaluate_envelope_at_time", "automation", "read", "automation.evaluate_envelope_at_time", "envelope", "automation_read"),
+  routeSpec("template.automation.set_envelope_lane_state", "run_command:template.execute", "automation", "write", "automation.set_envelope_lane_state", "envelope", "automation_write", true),
+  routeSpec("template.automation.insert_envelope_point", "run_command:template.execute", "automation", "write", "automation.insert_envelope_point", "envelope", "automation_write"),
+  routeSpec("template.automation.set_track_automation_mode", "run_command:template.execute", "automation", "write", "automation.set_track_automation_mode", "track", "automation_write", true),
+  routeSpec("template.automation.read_track_automation_mode", "query_state:automation.read_track_automation_mode", "automation", "read", "automation.read_track_automation_mode", "track", "automation_read"),
+  routeSpec("template.automation.read_automation_items", "query_state:automation.read_automation_items", "automation", "read", "automation.read_automation_items", "envelope", "automation_read"),
+  routeSpec("template.automation.set_envelope_point", "run_command:template.execute", "automation", "write", "automation.set_envelope_point", "envelope", "automation_write", true),
+  routeSpec("template.automation.insert_envelope_points_batch", "run_command:template.execute", "automation", "write", "automation.insert_envelope_points_batch", "envelope", "automation_write"),
+  routeSpec("template.automation.set_send_automation_mode", "run_command:template.execute", "automation", "write", "automation.set_send_automation_mode", "send", "automation_write", true),
+  routeSpec("template.automation.create_automation_item", "run_command:template.execute", "automation", "write", "automation.create_automation_item", "envelope", "automation_write"),
+  routeSpec("template.automation.set_automation_item_bounds", "run_command:template.execute", "automation", "write", "automation.set_automation_item_bounds", "envelope", "automation_write", true),
+  routeSpec("template.automation.resolve_send_envelope", "query_state:automation.resolve_send_envelope", "automation", "read", "automation.resolve_send_envelope", "send", "automation_read"),
+]);
+
+const E5_ROUTING_AUTOMATION_ROUTE_SPEC_BY_OPERATION = new Map(
+  E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS
+    .filter((spec) => spec.operation !== "run_command:template.execute")
+    .map((spec) => [spec.operation, spec]),
+);
+const E5_ROUTING_AUTOMATION_ROUTE_SPEC_BY_CAPABILITY = new Map(
+  E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS
+    .filter((spec) => spec.operation === "run_command:template.execute")
+    .map((spec) => [spec.capability, spec]),
+);
+
+function routeSpec(id, operation, pack, risk, capability, refGroup, phase, idempotent = false) {
+  return Object.freeze({ id, operation, pack, risk, capability, ref_group: refGroup, phase, idempotent });
+}
 const SUPPORTED_MEDIA_EXTENSIONS = Object.freeze([
   "wav",
   "wave",
@@ -520,6 +581,8 @@ if (route.fake) {
     ? null
     : route.name === "e2-fx-b1-route"
     ? null
+    : route.name === "e5-routing-automation-route"
+    ? null
     : route.name === "e3-media-route"
     ? null
     : route.name === "e4-item-route"
@@ -546,6 +609,8 @@ if (route.fake) {
         ? "safe_write_a.fake_executor.v1"
         : route.name === "e2-fx-b1-route"
         ? "e2_fx_b1_route.fake_executor.v1"
+        : route.name === "e5-routing-automation-route"
+        ? "e5_routing_automation_route.fake_executor.v1"
         : route.name === "e3-media-route"
         ? "e3_media_route.fake_executor.v1"
         : route.name === "e4-item-route"
@@ -564,6 +629,9 @@ if (route.fake) {
       }
       if (route.name === "e2-fx-b1-route") {
         return dispatchFakeE2FxB1Route(request);
+      }
+      if (route.name === "e5-routing-automation-route") {
+        return dispatchFakeE5RoutingAutomationRoute(request);
       }
       if (route.name === "e3-media-route") {
         return dispatchFakeE3MediaRoute(request);
@@ -595,6 +663,12 @@ if (route.fake) {
       })
     : route.name === "e2-fx-b1-route"
     ? await runE2FxB1RouteSmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "e5-routing-automation-route"
+    ? await runE5RoutingAutomationRouteSmoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
         contextBase,
@@ -638,7 +712,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: ["safe-write-a", "e2-fx-b1-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e2-fx-b1-route", "e5-routing-automation-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -716,6 +790,12 @@ const routeReport = route.name === "first-real-a2-render"
       fixtureInputs,
       contextBase,
     })
+  : route.name === "e5-routing-automation-route"
+  ? await runE5RoutingAutomationRouteSmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
   : route.name === "e3-media-route"
   ? await runE3MediaRouteSmoke({
       liveRuntime,
@@ -748,7 +828,7 @@ console.log(JSON.stringify({
   skipped: false,
   live_executor: executorConfig.config,
   context: contextSummary(contextBase),
-  evidence: ["safe-write-a", "e2-fx-b1-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
+  evidence: ["safe-write-a", "e2-fx-b1-route", "e5-routing-automation-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
   live_pass_claimed: false,
 }));
 process.exit(routeReport.ok ? 0 : 2);
@@ -837,6 +917,8 @@ function selectRoute(argv, env) {
 
   const e3MediaRouteSelected = argv.includes(E3_MEDIA_ROUTE_FLAG) || env[E3_MEDIA_ROUTE_OPT_IN_ENV] === "1";
   const e2FxB1RouteSelected = argv.includes(E2_FX_B1_ROUTE_FLAG) || env[E2_FX_B1_ROUTE_OPT_IN_ENV] === "1";
+  const e5RoutingAutomationRouteSelected =
+    argv.includes(E5_ROUTING_AUTOMATION_ROUTE_FLAG) || env[E5_ROUTING_AUTOMATION_OPT_IN_ENV] === "1";
   if (e2FxB1RouteSelected) {
     return {
       name: "e2-fx-b1-route",
@@ -861,6 +943,37 @@ function selectRoute(argv, env) {
       configuredBlocker: e2FxB1RouteConfiguredBlocker,
       passReason: "e2_fx_b1_route_fake_static_readback_passed",
       failReason: "e2_fx_b1_route_fake_static_readback_failed",
+    };
+  }
+
+  if (e5RoutingAutomationRouteSelected) {
+    return {
+      name: "e5-routing-automation-route",
+      wave: E5_ROUTING_AUTOMATION_ROUTE_BATCH,
+      batch: E5_ROUTING_AUTOMATION_ROUTE_BATCH,
+      routeFlag: E5_ROUTING_AUTOMATION_ROUTE_FLAG,
+      optInEnv: E5_ROUTING_AUTOMATION_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+      operations: [
+        "query_state:routing.track.read",
+        "query_state:routing.send.resolve_ref",
+        "query_state:routing.project_graph.read",
+        "query_state:routing.fx_pin_mapping.read",
+        "query_state:automation.resolve_envelope_ref",
+        "query_state:automation.read_envelope_summary",
+        "query_state:automation.read_envelope_points",
+        "query_state:automation.evaluate_envelope_at_time",
+        "query_state:automation.read_track_automation_mode",
+        "query_state:automation.read_automation_items",
+        "query_state:automation.resolve_send_envelope",
+        "run_command:template.execute",
+      ],
+      capabilities: E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: e5RoutingAutomationRouteFixtureInputs,
+      configuredBlocker: e5RoutingAutomationRouteConfiguredBlocker,
+      passReason: "e5_routing_automation_route_fake_static_readback_passed",
+      failReason: "e5_routing_automation_route_fake_static_readback_failed",
     };
   }
 
@@ -1319,6 +1432,99 @@ async function runE2FxB1RouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsFo
       "fx_parameter_invalid",
       "fx_preset_fixture_missing",
       "video_processor_fixture_missing",
+    ],
+    live_support_status: "not_claimed",
+    executions,
+  };
+}
+
+async function runE5RoutingAutomationRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS.entries()) {
+    const refs = e5RoutingAutomationRouteRefs(spec, fixtureInputsForRun);
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: false,
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: spec.operation,
+        phase: spec.phase,
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: e5RoutingAutomationRouteInput(spec, fixtureInputsForRun),
+      refs: refs.value,
+      idempotency_key: spec.idempotent ? `e5-routing-automation:${spec.capability}` : undefined,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.phase = spec.phase;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: spec.idempotent ? "keyed_routing_automation_readback" : "one_shot_routing_automation_route",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && produced.send && !outputRefs.send_ref) {
+      outputRefs.send_ref = produced.send.ref;
+    }
+    if (response?.ok && produced.envelope && !outputRefs.envelope_ref) {
+      outputRefs.envelope_ref = produced.envelope.ref;
+    }
+    if (response?.ok && produced.track && !outputRefs.track_ref) {
+      outputRefs.track_ref = produced.track.ref;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "e5_routing_automation_route_fake_static_readback_passed" : firstBlocker(executions) ?? "e5_routing_automation_route_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+    expected_capabilities: E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    routing_template_ids: E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS
+      .filter((spec) => spec.pack === "routing")
+      .map((spec) => spec.id),
+    automation_template_ids: E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS
+      .filter((spec) => spec.pack === "automation")
+      .map((spec) => spec.id),
+    preflight_blockers_covered: [
+      "e5_track_ref_missing",
+      "e5_destination_track_ref_missing",
+      "e5_send_ref_missing",
+      "e5_fx_ref_missing",
+      "e5_envelope_ref_missing",
+      "e5_send_value_invalid",
+      "e5_automation_point_value_invalid",
     ],
     live_support_status: "not_claimed",
     executions,
@@ -2542,6 +2748,66 @@ async function e2FxB1RouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun
   return null;
 }
 
+async function e5RoutingAutomationRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  for (const [label, configured, value, envName, normalizer] of [
+    ["e5_track_ref", fixtureInputsForRun.configured?.track_ref, fixtureInputsForRun.track_ref, E5_TRACK_REF_ENV, normalizeTrackFixtureRef],
+    ["e5_destination_track_ref", fixtureInputsForRun.configured?.destination_track_ref, fixtureInputsForRun.destination_track_ref, E5_DESTINATION_TRACK_REF_ENV, normalizeTrackFixtureRef],
+    ["e5_send_ref", fixtureInputsForRun.configured?.send_ref, fixtureInputsForRun.send_ref, E5_SEND_REF_ENV, normalizeSendFixtureRef],
+    ["e5_fx_ref", fixtureInputsForRun.configured?.fx_ref, fixtureInputsForRun.fx_ref, E5_FX_REF_ENV, normalizeFxFixtureRef],
+    ["e5_envelope_ref", fixtureInputsForRun.configured?.envelope_ref, fixtureInputsForRun.envelope_ref, E5_ENVELOPE_REF_ENV, normalizeEnvelopeFixtureRef],
+  ]) {
+    if (!configured) {
+      return {
+        reason: `${label}_missing`,
+        blocker: `${label}_missing`,
+        message: `E5 routing/automation live smoke requires an explicit ${label} fixture.`,
+        details: { [`${label}_env`]: envName },
+      };
+    }
+    if (!normalizer(value)) {
+      return {
+        reason: `${label}_invalid`,
+        blocker: `${label}_invalid`,
+        message: `E5 routing/automation ${label} fixture is not a supported ref.`,
+        details: {
+          [`${label}_env`]: envName,
+          value: boundedString(value, 160),
+        },
+      };
+    }
+  }
+
+  if (!Number.isFinite(fixtureInputsForRun.send_volume) || fixtureInputsForRun.send_volume < 0 || fixtureInputsForRun.send_volume > 4) {
+    return {
+      reason: "e5_send_value_invalid",
+      blocker: "e5_send_value_invalid",
+      message: "E5 routing live smoke send volume must be a finite 0..4 scalar.",
+      details: { send_volume_env: E5_SEND_VOLUME_ENV },
+    };
+  }
+  if (!Number.isFinite(fixtureInputsForRun.send_pan) || fixtureInputsForRun.send_pan < -1 || fixtureInputsForRun.send_pan > 1) {
+    return {
+      reason: "e5_send_value_invalid",
+      blocker: "e5_send_value_invalid",
+      message: "E5 routing live smoke send pan must be a finite -1..1 scalar.",
+      details: { send_pan_env: E5_SEND_PAN_ENV },
+    };
+  }
+  if (!Number.isFinite(fixtureInputsForRun.point_value) || fixtureInputsForRun.point_value < 0 || fixtureInputsForRun.point_value > 1) {
+    return {
+      reason: "e5_automation_point_value_invalid",
+      blocker: "e5_automation_point_value_invalid",
+      message: "E5 automation live smoke point value must be a finite 0..1 scalar.",
+      details: { point_value_env: E5_POINT_VALUE_ENV },
+    };
+  }
+
+  return null;
+}
+
 async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured, absent }) {
   if (!value) {
     return {
@@ -2961,6 +3227,162 @@ function e2FxB1RouteRefs(spec, fixtureInputsForRun) {
   return { value: {} };
 }
 
+function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
+  const inputs = {
+    "template.routing.read_track_routing": {
+      include_receives: true,
+      include_master_parent: true,
+      max_routes: 32,
+    },
+    "template.routing.resolve_send_ref": {
+      send_ref: fixtureInputsForRun.send_ref,
+    },
+    "template.routing.create_track_send": {
+      duplicate_policy: "reject_existing",
+    },
+    "template.routing.set_send_volume": {
+      volume: fixtureInputsForRun.send_volume,
+    },
+    "template.routing.set_send_pan": {
+      pan: fixtureInputsForRun.send_pan,
+    },
+    "template.routing.set_send_mute": {
+      muted: false,
+    },
+    "template.routing.set_send_mode": {
+      mode: "post_fader",
+    },
+    "template.routing.set_master_parent_send": {
+      enabled: true,
+    },
+    "template.routing.set_track_channel_count": {
+      channel_count: 4,
+    },
+    "template.routing.read_project_routing_graph": {
+      include_master_parent: true,
+      max_tracks: 16,
+      max_edges: 64,
+    },
+    "template.routing.set_send_audio_channels": {
+      source_channel_offset: 0,
+      source_channel_count: 2,
+      destination_channel_offset: 0,
+      mix_to_mono: false,
+    },
+    "template.routing.set_send_phase": {
+      phase_inverted: false,
+    },
+    "template.routing.set_send_mono": {
+      mono: false,
+    },
+    "template.routing.set_send_midi_channels": {
+      source_channel: "all",
+      destination_channel: "original",
+    },
+    "template.routing.read_fx_pin_mapping": {
+      direction: "input",
+      pin_index: 0,
+    },
+    "template.automation.resolve_envelope_ref": {
+      parent_kind: "track",
+      envelope_name: "Volume",
+    },
+    "template.automation.read_envelope_points": {
+      limit: 16,
+    },
+    "template.automation.evaluate_envelope_at_time": {
+      time_seconds: 1,
+    },
+    "template.automation.set_envelope_lane_state": {
+      active: true,
+      visible: true,
+      show_lane: true,
+      armed: false,
+    },
+    "template.automation.insert_envelope_point": {
+      time_seconds: 1,
+      value: fixtureInputsForRun.point_value,
+      shape: 0,
+      tension: 0,
+      selected: false,
+    },
+    "template.automation.set_track_automation_mode": {
+      mode: "read",
+    },
+    "template.automation.set_envelope_point": {
+      point_index: 0,
+      time_seconds: 1,
+      value: fixtureInputsForRun.point_value,
+      shape: 0,
+      tension: 0,
+      selected: false,
+    },
+    "template.automation.insert_envelope_points_batch": {
+      points: [
+        { time_seconds: 1, value: fixtureInputsForRun.point_value, shape: 0, tension: 0, selected: false },
+        { time_seconds: 2, value: Math.min(1, fixtureInputsForRun.point_value + 0.1), shape: 0, tension: 0, selected: false },
+      ],
+    },
+    "template.automation.set_send_automation_mode": {
+      mode: "use_track",
+    },
+    "template.automation.create_automation_item": {
+      position_seconds: 1,
+      length_seconds: 2,
+      pool_mode: "new_empty",
+    },
+    "template.automation.set_automation_item_bounds": {
+      automation_item_index: 0,
+      position_seconds: 1,
+      length_seconds: 2,
+    },
+    "template.automation.resolve_send_envelope": {
+      envelope_type: "volume",
+    },
+  };
+  return inputs[spec.id] ?? {};
+}
+
+function e5RoutingAutomationRouteRefs(spec, fixtureInputsForRun) {
+  const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.track_ref);
+  const destinationTrackRef = trackObjectRefFromFixture(fixtureInputsForRun.destination_track_ref);
+  const sendRef = sendObjectRefFromFixture(fixtureInputsForRun.send_ref);
+  const fxRef = fxObjectRefFromFixture(fixtureInputsForRun.fx_ref);
+  const envelopeRef = envelopeObjectRefFromFixture(fixtureInputsForRun.envelope_ref);
+  const takeRef = takeObjectRefFromFixture(fixtureInputsForRun.take_ref);
+
+  if (spec.ref_group === "none") {
+    return { value: {} };
+  }
+  if (spec.ref_group === "track") {
+    if (!trackRef) return { blocker: "e5_track_ref_missing" };
+    return { value: { track_ref: trackRef } };
+  }
+  if (spec.ref_group === "track_pair") {
+    if (!trackRef) return { blocker: "e5_track_ref_missing" };
+    if (!destinationTrackRef) return { blocker: "e5_destination_track_ref_missing" };
+    return { value: { source_track_ref: trackRef, destination_track_ref: destinationTrackRef } };
+  }
+  if (spec.ref_group === "send" || spec.ref_group === "send_locator") {
+    if (!sendRef) return { blocker: "e5_send_ref_missing" };
+    return spec.ref_group === "send" ? { value: { send_ref: sendRef } } : { value: {} };
+  }
+  if (spec.ref_group === "track_fx") {
+    if (!trackRef) return { blocker: "e5_track_ref_missing" };
+    if (!fxRef) return { blocker: "e5_fx_ref_missing" };
+    return { value: { track_ref: trackRef, fx_ref: fxRef } };
+  }
+  if (spec.ref_group === "automation_parent") {
+    if (!trackRef && !takeRef) return { blocker: "e5_track_ref_missing" };
+    return { value: trackRef ? { track_ref: trackRef } : { take_ref: takeRef } };
+  }
+  if (spec.ref_group === "envelope") {
+    if (!envelopeRef) return { blocker: "e5_envelope_ref_missing" };
+    return { value: { envelope_ref: envelopeRef } };
+  }
+  return { value: {} };
+}
+
 function safeWriteAInput(spec) {
   const inputs = {
     "template.project.set_metadata_field": {
@@ -3311,6 +3733,78 @@ function e2FxB1RouteFixtureInputs(env) {
   };
 }
 
+function e5RoutingAutomationRouteFixtureInputs(env) {
+  const rawTrackRef = nonEmpty(env[E5_TRACK_REF_ENV]);
+  const rawDestinationTrackRef = nonEmpty(env[E5_DESTINATION_TRACK_REF_ENV]);
+  const rawSendRef = nonEmpty(env[E5_SEND_REF_ENV]);
+  const rawFxRef = nonEmpty(env[E5_FX_REF_ENV]);
+  const rawEnvelopeRef = nonEmpty(env[E5_ENVELOPE_REF_ENV]);
+  const rawTakeRef = nonEmpty(env[E5_TAKE_REF_ENV]);
+  const trackRef = rawTrackRef ? normalizeTrackFixtureRef(rawTrackRef) ?? rawTrackRef : "track:index:0";
+  const destinationTrackRef = rawDestinationTrackRef ? normalizeTrackFixtureRef(rawDestinationTrackRef) ?? rawDestinationTrackRef : "track:index:1";
+  const sendRef = rawSendRef ? normalizeSendFixtureRef(rawSendRef) ?? rawSendRef : "send:track:0:0";
+  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:0";
+  const envelopeRef = rawEnvelopeRef ? normalizeEnvelopeFixtureRef(rawEnvelopeRef) ?? rawEnvelopeRef : "envelope:track:volume";
+  const takeRef = rawTakeRef ? normalizeTakeFixtureRef(rawTakeRef) ?? rawTakeRef : "take:index:0";
+  const sendVolume = finiteNumber(env[E5_SEND_VOLUME_ENV], 1);
+  const sendPan = finiteNumber(env[E5_SEND_PAN_ENV], 0);
+  const pointValue = boundedUnitNumber(env[E5_POINT_VALUE_ENV], 0.75);
+  return {
+    track_ref: trackRef,
+    destination_track_ref: destinationTrackRef,
+    send_ref: sendRef,
+    fx_ref: fxRef,
+    envelope_ref: envelopeRef,
+    take_ref: takeRef,
+    send_volume: sendVolume,
+    send_pan: sendPan,
+    point_value: pointValue,
+    configured: {
+      track_ref: Boolean(rawTrackRef),
+      destination_track_ref: Boolean(rawDestinationTrackRef),
+      send_ref: Boolean(rawSendRef),
+      fx_ref: Boolean(rawFxRef),
+      envelope_ref: Boolean(rawEnvelopeRef),
+      take_ref: Boolean(rawTakeRef),
+      send_volume: nonEmpty(env[E5_SEND_VOLUME_ENV]) !== null,
+      send_pan: nonEmpty(env[E5_SEND_PAN_ENV]) !== null,
+      point_value: nonEmpty(env[E5_POINT_VALUE_ENV]) !== null,
+    },
+    report: {
+      track_ref_env: E5_TRACK_REF_ENV,
+      destination_track_ref_env: E5_DESTINATION_TRACK_REF_ENV,
+      send_ref_env: E5_SEND_REF_ENV,
+      fx_ref_env: E5_FX_REF_ENV,
+      envelope_ref_env: E5_ENVELOPE_REF_ENV,
+      take_ref_env: E5_TAKE_REF_ENV,
+      send_volume_env: E5_SEND_VOLUME_ENV,
+      send_pan_env: E5_SEND_PAN_ENV,
+      point_value_env: E5_POINT_VALUE_ENV,
+      track_ref: trackRef,
+      destination_track_ref: destinationTrackRef,
+      send_ref: sendRef,
+      fx_ref: fxRef,
+      envelope_ref: envelopeRef,
+      take_ref: takeRef,
+      send_volume: sendVolume,
+      send_pan: sendPan,
+      point_value: pointValue,
+      configured: {
+        track_ref: Boolean(rawTrackRef),
+        destination_track_ref: Boolean(rawDestinationTrackRef),
+        send_ref: Boolean(rawSendRef),
+        fx_ref: Boolean(rawFxRef),
+        envelope_ref: Boolean(rawEnvelopeRef),
+        take_ref: Boolean(rawTakeRef),
+        send_volume: nonEmpty(env[E5_SEND_VOLUME_ENV]) !== null,
+        send_pan: nonEmpty(env[E5_SEND_PAN_ENV]) !== null,
+        point_value: nonEmpty(env[E5_POINT_VALUE_ENV]) !== null,
+      },
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+    },
+  };
+}
+
 function liveSmokeFixtureInputs(env) {
   const trackRef = nonEmpty(env[TRACK_REF_ENV]);
   const itemRef = normalizeItemFixtureRef(nonEmpty(env[ITEM_REF_ENV])) ?? "selected:0";
@@ -3467,6 +3961,16 @@ function fxObjectRefFromFixture(fxRef) {
   return createObjectRef("fx", parsed.identity, { ref: parsed.ref });
 }
 
+function sendObjectRefFromFixture(sendRef) {
+  const parsed = parseSendFixtureRef(sendRef);
+  return parsed ? createObjectRef("send", parsed.identity, { ref: parsed.ref }) : null;
+}
+
+function envelopeObjectRefFromFixture(envelopeRef) {
+  const parsed = parseEnvelopeFixtureRef(envelopeRef);
+  return parsed ? createObjectRef("envelope", parsed.identity, { ref: parsed.ref }) : null;
+}
+
 function projectObjectRefFromFixture(projectRef) {
   const normalized = normalizeProjectFixtureRef(projectRef);
   if (!normalized) return null;
@@ -3510,6 +4014,14 @@ function normalizeTakeFixtureRef(takeRef) {
 
 function normalizeFxFixtureRef(fxRef) {
   return parseFxFixtureRef(fxRef)?.input_ref ?? null;
+}
+
+function normalizeSendFixtureRef(sendRef) {
+  return parseSendFixtureRef(sendRef)?.input_ref ?? null;
+}
+
+function normalizeEnvelopeFixtureRef(envelopeRef) {
+  return parseEnvelopeFixtureRef(envelopeRef)?.input_ref ?? null;
 }
 
 function normalizeRegionFixtureRef(regionRef) {
@@ -3608,6 +4120,48 @@ function parseFxFixtureRef(fxRef) {
       input_ref: token,
       identity: { scheme: compact[1], value: compact[2] },
       ref: `fx:${compact[1]}:${compact[2]}`,
+    };
+  }
+  return null;
+}
+
+function parseSendFixtureRef(sendRef) {
+  const token = String(sendRef ?? "").trim();
+  const typed = token.match(/^send:([a-z][a-z0-9_]*):(.+)$/);
+  if (typed?.[1] && typed?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: typed[1], value: typed[2] },
+      ref: token,
+    };
+  }
+  const compact = token.match(/^(track|receive|guid|index):(.+)$/);
+  if (compact?.[1] && compact?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: compact[1], value: compact[2] },
+      ref: `send:${compact[1]}:${compact[2]}`,
+    };
+  }
+  return null;
+}
+
+function parseEnvelopeFixtureRef(envelopeRef) {
+  const token = String(envelopeRef ?? "").trim();
+  const typed = token.match(/^envelope:([a-z][a-z0-9_]*):(.+)$/);
+  if (typed?.[1] && typed?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: typed[1], value: typed[2] },
+      ref: token,
+    };
+  }
+  const compact = token.match(/^(track|take|send|guid):(.+)$/);
+  if (compact?.[1] && compact?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: compact[1], value: compact[2] },
+      ref: `envelope:${compact[1]}:${compact[2]}`,
     };
   }
   return null;
@@ -4124,6 +4678,108 @@ function fakeE2FxB1RouteArtifacts(request, spec) {
     id: "art_20260704000000000_014_abc123",
   });
   return [artifactObjectRef(ref, "fx.video_processor_code.v1")];
+}
+
+async function dispatchFakeE5RoutingAutomationRoute(request) {
+  const key = `${request?.operation?.family}:${request?.operation?.name}`;
+  const spec = key === "run_command:template.execute"
+    ? E5_ROUTING_AUTOMATION_ROUTE_SPEC_BY_CAPABILITY.get(request?.pack?.capability)
+    : E5_ROUTING_AUTOMATION_ROUTE_SPEC_BY_OPERATION.get(key);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake E5 routing/automation executor accepts only the approved route capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+      operation: boundedString(key, 160),
+    });
+  }
+  if (key !== spec.operation) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E5 routing/automation request operation does not match the route spec.", {
+      expected_operation: spec.operation,
+      operation: boundedString(key, 160),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== spec.risk) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E5 routing/automation pack/risk mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: spec.risk,
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E5 routing/automation route forbids artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (spec.risk === "write" && request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E5 routing/automation write rows require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+  if (spec.risk === "read" && request?.undo?.mode !== "none") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E5 routing/automation read rows require undo.mode none.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      phase: spec.phase,
+      readback_status: "passed",
+      typed_blockers: [
+        "e5_track_ref_missing",
+        "e5_destination_track_ref_missing",
+        "e5_send_ref_missing",
+        "e5_fx_ref_missing",
+        "e5_envelope_ref_missing",
+        "e5_send_value_invalid",
+        "e5_automation_point_value_invalid",
+      ],
+      artifacts_allowed: false,
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: fakeE5RoutingAutomationRouteRefs(request, spec),
+  });
+}
+
+function fakeE5RoutingAutomationRouteRefs(request, spec) {
+  if (spec.capability === "routing.send.create") {
+    return [
+      createObjectRef("send", { scheme: "track", value: "created:0" }, { ref: "send:track:created:0" }),
+      ...request.refs.filter((ref) => ref.kind === "track").slice(0, 2),
+    ];
+  }
+  if (spec.pack === "routing" && spec.ref_group === "none") {
+    return [
+      createObjectRef("track", { scheme: "index", value: "0" }, { ref: "track:index:0" }),
+      createObjectRef("send", { scheme: "track", value: "0:0" }, { ref: "send:track:0:0" }),
+    ];
+  }
+  if (spec.pack === "routing" && spec.ref_group === "track") {
+    return request.refs.filter((ref) => ref.kind === "track").slice(0, 1);
+  }
+  if (spec.pack === "routing" && spec.ref_group === "send_locator") {
+    return [createObjectRef("send", { scheme: "track", value: "0:0" }, { ref: "send:track:0:0" })];
+  }
+  if (spec.pack === "routing") {
+    return request.refs.filter((ref) => ["send", "track", "fx"].includes(ref.kind)).slice(0, 2);
+  }
+  if (spec.capability === "automation.resolve_envelope_ref" || spec.capability === "automation.resolve_send_envelope") {
+    return [
+      createObjectRef("envelope", { scheme: "track", value: "volume" }, { ref: "envelope:track:volume" }),
+      ...request.refs.filter((ref) => ["track", "take", "send"].includes(ref.kind)).slice(0, 1),
+    ];
+  }
+  if (spec.ref_group === "track") {
+    return request.refs.filter((ref) => ref.kind === "track").slice(0, 1);
+  }
+  if (spec.ref_group === "send") {
+    return request.refs.filter((ref) => ref.kind === "send").slice(0, 1);
+  }
+  return request.refs.filter((ref) => ref.kind === "envelope").slice(0, 1);
 }
 
 async function dispatchFakeFirstRealA1(request, { artifactRoot }) {

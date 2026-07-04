@@ -22,6 +22,7 @@ import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
   CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
@@ -495,6 +496,153 @@ describe("Layer 4D call_template runtime binding", () => {
     });
     assert.equal(missingPlugin.reason, "fx_plugin_name_missing");
     assert.equal(missingPlugin.spawned_reaper, false);
+  });
+
+  it("exposes the E5 routing/automation route as an explicit fake/static route without broadening default live ids", async () => {
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS, [
+      "template.routing.read_track_routing",
+      "template.routing.resolve_send_ref",
+      "template.routing.create_track_send",
+      "template.routing.set_send_volume",
+      "template.routing.set_send_pan",
+      "template.routing.set_send_mute",
+      "template.routing.set_send_mode",
+      "template.routing.set_master_parent_send",
+      "template.routing.set_track_channel_count",
+      "template.routing.read_project_routing_graph",
+      "template.routing.set_send_audio_channels",
+      "template.routing.set_send_phase",
+      "template.routing.set_send_mono",
+      "template.routing.set_send_midi_channels",
+      "template.routing.read_fx_pin_mapping",
+      "template.automation.resolve_envelope_ref",
+      "template.automation.read_envelope_summary",
+      "template.automation.read_envelope_points",
+      "template.automation.evaluate_envelope_at_time",
+      "template.automation.set_envelope_lane_state",
+      "template.automation.insert_envelope_point",
+      "template.automation.set_track_automation_mode",
+      "template.automation.read_track_automation_mode",
+      "template.automation.read_automation_items",
+      "template.automation.set_envelope_point",
+      "template.automation.insert_envelope_points_batch",
+      "template.automation.set_send_automation_mode",
+      "template.automation.create_automation_item",
+      "template.automation.set_automation_item_bounds",
+      "template.automation.resolve_send_envelope",
+    ]);
+
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+        opt_in_env: "OPENREAPER_E5_ROUTING_AUTOMATION_LIVE_SMOKE",
+        opt_in_flag: "--live",
+      },
+      evidenceLimit: 40,
+    });
+
+    for (const [index, id] of CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS.entries()) {
+      const response = await runtime.call_template({
+        id,
+        input: e5RouteInput(id),
+        refs: e5RouteRefs(id),
+        idempotency_key: e5RouteIdempotencyKey(id),
+        context: context({ request_sequence: index + 1 }),
+      });
+      assert.equal(response.ok, true, id);
+    }
+
+    assert.equal(bridge.seen.length, 30);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 11);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 19);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 15);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 15);
+    for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
+      assert.equal(request.undo.mode, "none");
+      assert.equal(request.artifacts.allow, false);
+    }
+    for (const request of bridge.seen.filter((entry) => entry.pack.risk === "write")) {
+      assert.equal(request.operation.family, "run_command");
+      assert.equal(request.operation.name, "template.execute");
+      assert.equal(request.undo.mode, "required");
+      assert.equal(request.verification.mode, "required");
+      assert.equal(request.artifacts.allow, false);
+    }
+
+    const mixed = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: [
+          ...CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+          "template.routing.read_track_routing",
+          "template.fx.search_installed_fx",
+        ],
+      },
+    });
+    assert.deepEqual(mixed.live_gate.allowed_template_ids, []);
+  });
+
+  it("runs the E5 routing/automation fake smoke and reports live preflight blockers without starting REAPER", () => {
+    const fake = runE5RouteSmoke(["--routing-automation", "--fake"]);
+    assert.equal(fake.ok, true);
+    assert.equal(fake.mode, "fake");
+    assert.equal(fake.spawned_reaper, false);
+    assert.equal(fake.live_pass_claimed, false);
+    assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS);
+    assert.equal(fake.executions.length, 30);
+    assert.equal(fake.executions.every((execution) => execution.ok), true);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 11);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 19);
+    assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 0);
+    assert.deepEqual(fake.preflight_blockers_covered, [
+      "e5_track_ref_missing",
+      "e5_destination_track_ref_missing",
+      "e5_send_ref_missing",
+      "e5_fx_ref_missing",
+      "e5_envelope_ref_missing",
+      "e5_send_value_invalid",
+      "e5_automation_point_value_invalid",
+    ]);
+    assert.equal(fake.routing_template_ids.length, 15);
+    assert.equal(fake.automation_template_ids.length, 15);
+
+    const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
+    const transportDir = join(root, "transport");
+    mkdirSync(join(transportDir, "requests"), { recursive: true });
+    mkdirSync(join(transportDir, "results"), { recursive: true });
+    const baseEnv = {
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      OPENREAPER_E5_TRACK_REF: "track:index:0",
+      OPENREAPER_E5_DESTINATION_TRACK_REF: "track:index:1",
+      OPENREAPER_E5_SEND_REF: "send:track:0:0",
+      OPENREAPER_E5_FX_REF: "fx:track:0",
+      OPENREAPER_E5_ENVELOPE_REF: "envelope:track:volume",
+    };
+
+    const missingSend = runE5RouteSmokeExpectingFailure(["--routing-automation", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E5_SEND_REF: "",
+    });
+    assert.equal(missingSend.reason, "e5_send_ref_missing");
+    assert.equal(missingSend.spawned_reaper, false);
+
+    const invalidEnvelope = runE5RouteSmokeExpectingFailure(["--routing-automation", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E5_ENVELOPE_REF: "bad-envelope-ref",
+    });
+    assert.equal(invalidEnvelope.reason, "e5_envelope_ref_invalid");
+    assert.equal(invalidEnvelope.spawned_reaper, false);
+
+    const invalidPan = runE5RouteSmokeExpectingFailure(["--routing-automation", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E5_SEND_PAN: "2",
+    });
+    assert.equal(invalidPan.reason, "e5_send_value_invalid");
+    assert.equal(invalidPan.spawned_reaper, false);
   });
 
   it("exposes the E3 media route as an explicit fake/static route without broadening default live ids", async () => {
@@ -1088,6 +1236,146 @@ function runItemRouteSmoke(args, env = {}) {
 function runItemRouteSmokeExpectingFailure(args, env = {}) {
   try {
     return runItemRouteSmoke(args, env);
+  } catch (error) {
+    assert.equal(error.status, 2);
+    const report = JSON.parse(String(error.stdout));
+    assert.equal(report.ok, false);
+    return report;
+  }
+}
+
+function e5RouteInput(id) {
+  const inputs = {
+    "template.routing.read_track_routing": { include_receives: true, include_master_parent: true, max_routes: 32 },
+    "template.routing.resolve_send_ref": { send_ref: "send:track:0:0" },
+    "template.routing.create_track_send": { duplicate_policy: "reject_existing" },
+    "template.routing.set_send_volume": { volume: 1 },
+    "template.routing.set_send_pan": { pan: 0 },
+    "template.routing.set_send_mute": { muted: false },
+    "template.routing.set_send_mode": { mode: "post_fader" },
+    "template.routing.set_master_parent_send": { enabled: true },
+    "template.routing.set_track_channel_count": { channel_count: 4 },
+    "template.routing.read_project_routing_graph": { include_master_parent: true, max_tracks: 16, max_edges: 64 },
+    "template.routing.set_send_audio_channels": {
+      source_channel_offset: 0,
+      source_channel_count: 2,
+      destination_channel_offset: 0,
+      mix_to_mono: false,
+    },
+    "template.routing.set_send_phase": { phase_inverted: false },
+    "template.routing.set_send_mono": { mono: false },
+    "template.routing.set_send_midi_channels": { source_channel: "all", destination_channel: "original" },
+    "template.routing.read_fx_pin_mapping": { direction: "input", pin_index: 0 },
+    "template.automation.resolve_envelope_ref": { parent_kind: "track", envelope_name: "Volume" },
+    "template.automation.read_envelope_points": { limit: 16 },
+    "template.automation.evaluate_envelope_at_time": { time_seconds: 1 },
+    "template.automation.set_envelope_lane_state": { active: true, visible: true, show_lane: true, armed: false },
+    "template.automation.insert_envelope_point": { time_seconds: 1, value: 0.75, shape: 0, tension: 0, selected: false },
+    "template.automation.set_track_automation_mode": { mode: "read" },
+    "template.automation.set_envelope_point": { point_index: 0, time_seconds: 1, value: 0.75, shape: 0, tension: 0, selected: false },
+    "template.automation.insert_envelope_points_batch": {
+      points: [
+        { time_seconds: 1, value: 0.75, shape: 0, tension: 0, selected: false },
+        { time_seconds: 2, value: 0.85, shape: 0, tension: 0, selected: false },
+      ],
+    },
+    "template.automation.set_send_automation_mode": { mode: "use_track" },
+    "template.automation.create_automation_item": { position_seconds: 1, length_seconds: 2, pool_mode: "new_empty" },
+    "template.automation.set_automation_item_bounds": { automation_item_index: 0, position_seconds: 1, length_seconds: 2 },
+    "template.automation.resolve_send_envelope": { envelope_type: "volume" },
+  };
+  return inputs[id] ?? {};
+}
+
+function e5RouteRefs(id) {
+  const trackRef = createObjectRef("track", { scheme: "guid", value: "{E5-SOURCE-TRACK}" }, {
+    ref: "track:guid:{E5-SOURCE-TRACK}",
+  });
+  const destinationTrackRef = createObjectRef("track", { scheme: "guid", value: "{E5-DESTINATION-TRACK}" }, {
+    ref: "track:guid:{E5-DESTINATION-TRACK}",
+  });
+  const sendRef = createObjectRef("send", { scheme: "track", value: "0:0" }, {
+    ref: "send:track:0:0",
+  });
+  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
+    ref: "fx:track:0",
+  });
+  const envelopeRef = createObjectRef("envelope", { scheme: "track", value: "volume" }, {
+    ref: "envelope:track:volume",
+  });
+
+  if (id === "template.routing.create_track_send") {
+    return { source_track_ref: trackRef, destination_track_ref: destinationTrackRef };
+  }
+  if (id === "template.routing.read_track_routing"
+    || id === "template.routing.set_master_parent_send"
+    || id === "template.routing.set_track_channel_count"
+    || id === "template.automation.set_track_automation_mode"
+    || id === "template.automation.read_track_automation_mode"
+    || id === "template.automation.resolve_envelope_ref") {
+    return { track_ref: trackRef };
+  }
+  if (id === "template.routing.read_fx_pin_mapping") {
+    return { track_ref: trackRef, fx_ref: fxRef };
+  }
+  if (id.startsWith("template.routing.set_send_")
+    || id === "template.routing.set_send_volume"
+    || id === "template.routing.set_send_pan"
+    || id === "template.routing.set_send_mute"
+    || id === "template.routing.set_send_mode"
+    || id === "template.automation.set_send_automation_mode"
+    || id === "template.automation.resolve_send_envelope") {
+    return { send_ref: sendRef };
+  }
+  if (id.startsWith("template.automation.")
+    && id !== "template.automation.resolve_envelope_ref"
+    && id !== "template.automation.set_track_automation_mode"
+    && id !== "template.automation.read_track_automation_mode"
+    && id !== "template.automation.resolve_send_envelope"
+    && id !== "template.automation.set_send_automation_mode") {
+    return { envelope_ref: envelopeRef };
+  }
+  return {};
+}
+
+function e5RouteIdempotencyKey(id) {
+  return [
+    "template.routing.set_send_volume",
+    "template.routing.set_send_pan",
+    "template.routing.set_send_mute",
+    "template.routing.set_send_mode",
+    "template.routing.set_master_parent_send",
+    "template.routing.set_track_channel_count",
+    "template.routing.set_send_audio_channels",
+    "template.routing.set_send_phase",
+    "template.routing.set_send_mono",
+    "template.routing.set_send_midi_channels",
+    "template.automation.set_envelope_lane_state",
+    "template.automation.set_track_automation_mode",
+    "template.automation.set_envelope_point",
+    "template.automation.set_send_automation_mode",
+    "template.automation.set_automation_item_bounds",
+  ].includes(id) ? `e5-routing-automation:${id}` : undefined;
+}
+
+function runE5RouteSmoke(args, env = {}) {
+  const output = execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs", ...args], {
+    cwd: new URL("../..", import.meta.url),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+      OPENREAPER_E5_ROUTING_AUTOMATION_LIVE_SMOKE: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      ...env,
+    },
+  }).trim();
+  return JSON.parse(output);
+}
+
+function runE5RouteSmokeExpectingFailure(args, env = {}) {
+  try {
+    return runE5RouteSmoke(args, env);
   } catch (error) {
     assert.equal(error.status, 2);
     const report = JSON.parse(String(error.stdout));

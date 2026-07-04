@@ -154,6 +154,39 @@ export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.fx.read_video_processor_code",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = deepFreeze([
+  "template.routing.read_track_routing",
+  "template.routing.resolve_send_ref",
+  "template.routing.create_track_send",
+  "template.routing.set_send_volume",
+  "template.routing.set_send_pan",
+  "template.routing.set_send_mute",
+  "template.routing.set_send_mode",
+  "template.routing.set_master_parent_send",
+  "template.routing.set_track_channel_count",
+  "template.routing.read_project_routing_graph",
+  "template.routing.set_send_audio_channels",
+  "template.routing.set_send_phase",
+  "template.routing.set_send_mono",
+  "template.routing.set_send_midi_channels",
+  "template.routing.read_fx_pin_mapping",
+  "template.automation.resolve_envelope_ref",
+  "template.automation.read_envelope_summary",
+  "template.automation.read_envelope_points",
+  "template.automation.evaluate_envelope_at_time",
+  "template.automation.set_envelope_lane_state",
+  "template.automation.insert_envelope_point",
+  "template.automation.set_track_automation_mode",
+  "template.automation.read_track_automation_mode",
+  "template.automation.read_automation_items",
+  "template.automation.set_envelope_point",
+  "template.automation.insert_envelope_points_batch",
+  "template.automation.set_send_automation_mode",
+  "template.automation.create_automation_item",
+  "template.automation.set_automation_item_bounds",
+  "template.automation.resolve_send_envelope",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -699,6 +732,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];
