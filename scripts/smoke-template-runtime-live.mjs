@@ -5,6 +5,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
@@ -47,6 +48,7 @@ const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const SAFE_WRITE_A_FLAG = "--safe-write-a";
 const E3_MEDIA_ROUTE_FLAG = "--media-route";
+const E4_ITEM_ROUTE_FLAG = "--item-route";
 const PHASE_FLAG = "--phase";
 const FIRST_REAL_A2_PHASE = "A2-render-delivery";
 const FIRST_REAL_A3_PHASE = "A3-layer-report";
@@ -73,6 +75,7 @@ const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
 const READ_B_BATCH = "read-b-live-handlers";
 const SAFE_WRITE_A_BATCH = "Safe-Write-A";
 const E3_MEDIA_ROUTE_BATCH = "E3 Media Route";
+const E4_ITEM_ROUTE_BATCH = "E4 Item Route";
 const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
 const SAFE_WRITE_A_PROJECT_REF_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_REF";
 const SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV = "OPENREAPER_SAFE_WRITE_A_ANCHOR_TRACK_REF";
@@ -96,6 +99,13 @@ const E3_MEDIA_SOURCE_PATH_ENV = "OPENREAPER_E3_MEDIA_SOURCE_PATH";
 const E3_MEDIA_RELINK_PATH_ENV = "OPENREAPER_E3_MEDIA_RELINK_PATH";
 const E3_MEDIA_TARGET_TRACK_REF_ENV = "OPENREAPER_E3_MEDIA_TARGET_TRACK_REF";
 const E3_MEDIA_TAKE_REF_ENV = "OPENREAPER_E3_MEDIA_TAKE_REF";
+const E4_ITEM_ROUTE_OPT_IN_ENV = "OPENREAPER_E4_ITEM_ROUTE_LIVE_SMOKE";
+const E4_ITEM_REF_ENV = "OPENREAPER_E4_ITEM_REF";
+const E4_TARGET_TRACK_REF_ENV = "OPENREAPER_E4_TARGET_TRACK_REF";
+const E4_ITEM_START_SECONDS_ENV = "OPENREAPER_E4_ITEM_START_SECONDS";
+const E4_ITEM_LENGTH_SECONDS_ENV = "OPENREAPER_E4_ITEM_LENGTH_SECONDS";
+const E4_SPLIT_POSITION_SECONDS_ENV = "OPENREAPER_E4_SPLIT_POSITION_SECONDS";
+const E4_PLAYRATE_ENV = "OPENREAPER_E4_PLAYRATE";
 
 const READ_B_OPERATIONS = Object.freeze([
   "query_state:actions.resolve_named_command",
@@ -155,6 +165,40 @@ const E3_MEDIA_ROUTE_SPEC_BY_CAPABILITY = new Map(
   E3_MEDIA_ROUTE_TEMPLATE_SPECS
     .filter((spec) => spec.operation === "run_command:template.execute")
     .map((spec) => [spec.capability, spec]),
+);
+
+const E4_ITEM_ROUTE_TEMPLATE_SPECS = Object.freeze([
+  Object.freeze({
+    id: "template.items.copy_item_to_track",
+    operation: "run_command:template.execute",
+    pack: "items",
+    risk: "write",
+    capability: "item.copy_to_track",
+    ref_group: "source_target",
+    idempotent: false,
+  }),
+  Object.freeze({
+    id: "template.items.split_item_at_time",
+    operation: "run_command:template.execute",
+    pack: "items",
+    risk: "write",
+    capability: "items.split_item_at_time",
+    ref_group: "source_item",
+    idempotent: false,
+  }),
+  Object.freeze({
+    id: "template.items.set_take_playrate",
+    operation: "run_command:template.execute",
+    pack: "items",
+    risk: "write",
+    capability: "items.set_take_playrate",
+    ref_group: "source_item",
+    idempotent: true,
+  }),
+]);
+
+const E4_ITEM_ROUTE_SPEC_BY_CAPABILITY = new Map(
+  E4_ITEM_ROUTE_TEMPLATE_SPECS.map((spec) => [spec.capability, spec]),
 );
 const SUPPORTED_MEDIA_EXTENSIONS = Object.freeze([
   "wav",
@@ -313,6 +357,8 @@ if (route.fake) {
     ? null
     : route.name === "e3-media-route"
     ? null
+    : route.name === "e4-item-route"
+    ? null
     : route.name === "first-real-a3-layer-report"
     ? await firstRealA3FakeBlocker(fixtureInputs)
     : route.name === "first-real-a2-render"
@@ -335,6 +381,8 @@ if (route.fake) {
         ? "safe_write_a.fake_executor.v1"
         : route.name === "e3-media-route"
         ? "e3_media_route.fake_executor.v1"
+        : route.name === "e4-item-route"
+        ? "e4_item_route.fake_executor.v1"
         : route.name === "first-real-a3-layer-report"
         ? "first_real_fixture_a3.fake_executor.v1"
         : route.name === "first-real-a2-render"
@@ -349,6 +397,9 @@ if (route.fake) {
       }
       if (route.name === "e3-media-route") {
         return dispatchFakeE3MediaRoute(request);
+      }
+      if (route.name === "e4-item-route") {
+        return dispatchFakeE4ItemRoute(request);
       }
       if (route.name === "first-real-a3-layer-report") {
         return dispatchFakeFirstRealA3(request, {
@@ -374,6 +425,12 @@ if (route.fake) {
       })
     : route.name === "e3-media-route"
     ? await runE3MediaRouteSmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "e4-item-route"
+    ? await runE4ItemRouteSmoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
         contextBase,
@@ -405,7 +462,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: ["safe-write-a", "e3-media-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -473,6 +530,18 @@ const routeReport = route.name === "first-real-a2-render"
     })
   : route.name === "safe-write-a"
   ? await runSafeWriteASmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
+  : route.name === "e3-media-route"
+  ? await runE3MediaRouteSmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
+  : route.name === "e4-item-route"
+  ? await runE4ItemRouteSmoke({
       liveRuntime,
       fixtureInputs,
       contextBase,
@@ -603,6 +672,25 @@ function selectRoute(argv, env) {
       configuredBlocker: e3MediaRouteConfiguredBlocker,
       passReason: "e3_media_route_fake_static_readback_passed",
       failReason: "e3_media_route_fake_static_readback_failed",
+    };
+  }
+
+  const e4ItemRouteSelected = argv.includes(E4_ITEM_ROUTE_FLAG) || env[E4_ITEM_ROUTE_OPT_IN_ENV] === "1";
+  if (e4ItemRouteSelected) {
+    return {
+      name: "e4-item-route",
+      wave: E4_ITEM_ROUTE_BATCH,
+      batch: E4_ITEM_ROUTE_BATCH,
+      routeFlag: E4_ITEM_ROUTE_FLAG,
+      optInEnv: E4_ITEM_ROUTE_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+      operations: ["run_command:template.execute"],
+      capabilities: E4_ITEM_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: e4ItemRouteFixtureInputs,
+      configuredBlocker: e4ItemRouteConfiguredBlocker,
+      passReason: "e4_item_route_fake_static_readback_passed",
+      failReason: "e4_item_route_fake_static_readback_failed",
     };
   }
 
@@ -841,6 +929,91 @@ async function runE3MediaRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsF
       "media_source_absent",
       "relink_target_type_mismatch",
     ],
+    executions,
+  };
+}
+
+async function runE4ItemRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of E4_ITEM_ROUTE_TEMPLATE_SPECS.entries()) {
+    const refs = e4ItemRouteRefs(spec, fixtureInputsForRun);
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: false,
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: spec.operation,
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: e4ItemRouteInput(spec, fixtureInputsForRun),
+      refs: refs.value,
+      idempotency_key: spec.id === "template.items.set_take_playrate" ? "e4-item-route:set-take-playrate" : undefined,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: spec.id === "template.items.set_take_playrate" ? "keyed_playrate_readback" : "one_shot_item_route",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && spec.id === "template.items.copy_item_to_track" && produced.item) {
+      outputRefs.copied_item_ref = produced.item.ref;
+    }
+    if (response?.ok && spec.id === "template.items.split_item_at_time") {
+      const producedItems = producedRefsByKindAll(response).item;
+      if (producedItems?.[0]) outputRefs.left_item_ref = producedItems[0].ref;
+      if (producedItems?.[1]) outputRefs.right_item_ref = producedItems[1].ref;
+    }
+    if (response?.ok && spec.id === "template.items.set_take_playrate" && produced.item) {
+      outputRefs.playrate_item_ref = produced.item.ref;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "e4_item_route_fake_static_readback_passed" : firstBlocker(executions) ?? "e4_item_route_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+    expected_capabilities: E4_ITEM_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    preflight_blockers_covered: [
+      "selected_item_missing",
+      "invalid_item_ref",
+      "destination_track_missing",
+      "split_outside_item_bounds",
+      "invalid_playrate",
+    ],
+    loop_source_status: "held",
     executions,
   };
 }
@@ -1913,6 +2086,89 @@ async function e3MediaRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRu
   return null;
 }
 
+async function e4ItemRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  if (!fixtureInputsForRun.configured?.item_ref) {
+    return {
+      reason: "selected_item_missing",
+      blocker: "selected_item_missing",
+      message: "E4 item route live smoke requires an explicit source item fixture.",
+      details: {
+        item_ref_env: E4_ITEM_REF_ENV,
+      },
+    };
+  }
+  if (!normalizeItemFixtureRef(fixtureInputsForRun.item_ref)) {
+    return {
+      reason: "invalid_item_ref",
+      blocker: "invalid_item_ref",
+      message: "E4 item route source item fixture is not a supported item ref.",
+      details: {
+        item_ref_env: E4_ITEM_REF_ENV,
+        item_ref: boundedString(fixtureInputsForRun.item_ref, 160),
+      },
+    };
+  }
+  if (!fixtureInputsForRun.configured?.target_track_ref) {
+    return {
+      reason: "destination_track_missing",
+      blocker: "destination_track_missing",
+      message: "E4 item route live smoke requires an explicit destination track fixture.",
+      details: {
+        target_track_ref_env: E4_TARGET_TRACK_REF_ENV,
+      },
+    };
+  }
+  if (!normalizeTrackFixtureRef(fixtureInputsForRun.target_track_ref)) {
+    return {
+      reason: "destination_track_missing",
+      blocker: "destination_track_missing",
+      message: "E4 item route destination track fixture is not a supported track ref.",
+      details: {
+        target_track_ref_env: E4_TARGET_TRACK_REF_ENV,
+        target_track_ref: boundedString(fixtureInputsForRun.target_track_ref, 160),
+      },
+    };
+  }
+  if (
+    !Number.isFinite(fixtureInputsForRun.item_start_seconds)
+    || !Number.isFinite(fixtureInputsForRun.item_length_seconds)
+    || fixtureInputsForRun.item_length_seconds <= 0
+    || !Number.isFinite(fixtureInputsForRun.split_position_seconds)
+    || fixtureInputsForRun.split_position_seconds <= fixtureInputsForRun.item_start_seconds
+    || fixtureInputsForRun.split_position_seconds >= fixtureInputsForRun.item_start_seconds + fixtureInputsForRun.item_length_seconds
+  ) {
+    return {
+      reason: "split_outside_item_bounds",
+      blocker: "split_outside_item_bounds",
+      message: "E4 item route split position must be strictly inside the configured item bounds.",
+      details: {
+        item_start_seconds_env: E4_ITEM_START_SECONDS_ENV,
+        item_length_seconds_env: E4_ITEM_LENGTH_SECONDS_ENV,
+        split_position_seconds_env: E4_SPLIT_POSITION_SECONDS_ENV,
+        item_start_seconds: fixtureInputsForRun.item_start_seconds,
+        item_length_seconds: fixtureInputsForRun.item_length_seconds,
+        split_position_seconds: fixtureInputsForRun.split_position_seconds,
+      },
+    };
+  }
+  if (!Number.isFinite(fixtureInputsForRun.playrate) || fixtureInputsForRun.playrate <= 0 || fixtureInputsForRun.playrate > 16) {
+    return {
+      reason: "invalid_playrate",
+      blocker: "invalid_playrate",
+      message: "E4 item route playrate must be greater than zero and no more than 16.",
+      details: {
+        playrate_env: E4_PLAYRATE_ENV,
+        playrate: fixtureInputsForRun.playrate,
+      },
+    };
+  }
+
+  return null;
+}
+
 async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured, absent }) {
   if (!value) {
     return {
@@ -2202,6 +2458,36 @@ function e3MediaRouteRefs(spec, fixtureInputsForRun) {
   return { value: {} };
 }
 
+function e4ItemRouteInput(spec, fixtureInputsForRun) {
+  const inputs = {
+    "template.items.copy_item_to_track": {
+      position_seconds: fixtureInputsForRun.copy_position_seconds,
+    },
+    "template.items.split_item_at_time": {
+      position_seconds: fixtureInputsForRun.split_position_seconds,
+    },
+    "template.items.set_take_playrate": {
+      playrate: fixtureInputsForRun.playrate,
+      preserve_pitch: true,
+    },
+  };
+  return inputs[spec.id] ?? {};
+}
+
+function e4ItemRouteRefs(spec, fixtureInputsForRun) {
+  const itemRef = itemObjectRefFromFixture(fixtureInputsForRun.item_ref);
+  if (!itemRef) return { blocker: "item_ref_unavailable" };
+  if (spec.ref_group === "source_target") {
+    const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.target_track_ref);
+    if (!trackRef) return { blocker: "target_track_ref_unavailable" };
+    return { value: { source_item_ref: itemRef, target_track_ref: trackRef } };
+  }
+  if (spec.ref_group === "source_item") {
+    return { value: { item_ref: itemRef } };
+  }
+  return { value: {} };
+}
+
 function safeWriteAInput(spec) {
   const inputs = {
     "template.project.set_metadata_field": {
@@ -2423,6 +2709,51 @@ function e3MediaRouteFixtureInputs(env) {
         take_ref: Boolean(normalizeTakeFixtureRef(rawTakeRef)),
       },
       applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
+    },
+  };
+}
+
+function e4ItemRouteFixtureInputs(env) {
+  const rawItemRef = nonEmpty(env[E4_ITEM_REF_ENV]);
+  const rawTargetTrackRef = nonEmpty(env[E4_TARGET_TRACK_REF_ENV]);
+  const itemRef = rawItemRef ?? "item:selected:0";
+  const targetTrackRef = rawTargetTrackRef ?? "track:index:0";
+  const itemStartSeconds = finiteNumber(env[E4_ITEM_START_SECONDS_ENV], 0);
+  const itemLengthSeconds = finiteNumber(env[E4_ITEM_LENGTH_SECONDS_ENV], 4);
+  const splitPositionSeconds = finiteNumber(env[E4_SPLIT_POSITION_SECONDS_ENV], 2);
+  const playrate = finiteNumber(env[E4_PLAYRATE_ENV], 0.75);
+  return {
+    item_ref: itemRef,
+    target_track_ref: targetTrackRef,
+    item_start_seconds: itemStartSeconds,
+    item_length_seconds: itemLengthSeconds,
+    split_position_seconds: splitPositionSeconds,
+    copy_position_seconds: itemStartSeconds + itemLengthSeconds + 1,
+    playrate,
+    configured: {
+      item_ref: rawItemRef !== null,
+      target_track_ref: rawTargetTrackRef !== null,
+    },
+    report: {
+      item_ref_env: E4_ITEM_REF_ENV,
+      target_track_ref_env: E4_TARGET_TRACK_REF_ENV,
+      item_start_seconds_env: E4_ITEM_START_SECONDS_ENV,
+      item_length_seconds_env: E4_ITEM_LENGTH_SECONDS_ENV,
+      split_position_seconds_env: E4_SPLIT_POSITION_SECONDS_ENV,
+      playrate_env: E4_PLAYRATE_ENV,
+      item_ref: itemRef,
+      target_track_ref: targetTrackRef,
+      item_start_seconds: itemStartSeconds,
+      item_length_seconds: itemLengthSeconds,
+      split_position_seconds: splitPositionSeconds,
+      copy_position_seconds: itemStartSeconds + itemLengthSeconds + 1,
+      playrate,
+      loop_source_status: "held",
+      configured: {
+        item_ref: rawItemRef !== null,
+        target_track_ref: rawTargetTrackRef !== null,
+      },
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
     },
   };
 }
@@ -2831,6 +3162,18 @@ function producedRefsByKind(response) {
   return byKind;
 }
 
+function producedRefsByKindAll(response) {
+  const refs = response?.result?.refs;
+  if (!Array.isArray(refs)) return {};
+  const byKind = {};
+  for (const ref of refs) {
+    if (!ref?.kind) continue;
+    byKind[ref.kind] ??= [];
+    byKind[ref.kind].push(ref);
+  }
+  return byKind;
+}
+
 async function dispatchFakeSafeWriteA(request) {
   const spec = SAFE_WRITE_A_SPEC_BY_CAPABILITY.get(request?.pack?.capability);
   if (!spec) {
@@ -3009,6 +3352,80 @@ function fakeE3MediaRouteRefs(request, spec) {
       ...request.refs.filter((ref) => ref.kind === "take").slice(0, 1),
       ...request.refs.filter((ref) => ref.kind === "file").slice(0, 1),
     ];
+  }
+  return [];
+}
+
+async function dispatchFakeE4ItemRoute(request) {
+  const spec = E4_ITEM_ROUTE_SPEC_BY_CAPABILITY.get(request?.pack?.capability);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake E4 item route executor accepts only the approved item route capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+    });
+  }
+  if (request?.operation?.family !== "run_command" || request?.operation?.name !== "template.execute") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E4 item route requests must use run_command:template.execute.", {
+      family: boundedString(request?.operation?.family, 80),
+      name: boundedString(request?.operation?.name, 120),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== spec.risk) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E4 item route pack/risk mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: spec.risk,
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E4 item route forbids artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E4 item route write rows require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      readback_status: "passed",
+      typed_blockers: [
+        "selected_item_missing",
+        "invalid_item_ref",
+        "destination_track_missing",
+        "split_outside_item_bounds",
+        "invalid_playrate",
+      ],
+      artifacts_allowed: false,
+      loop_source_status: "held",
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: fakeE4ItemRouteRefs(request, spec),
+  });
+}
+
+function fakeE4ItemRouteRefs(request, spec) {
+  if (spec.id === "template.items.copy_item_to_track") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{E4-ITEM-COPY}" }, { ref: "item:guid:{E4-ITEM-COPY}" }),
+      ...request.refs.filter((ref) => ref.kind === "item").slice(0, 1),
+      ...request.refs.filter((ref) => ref.kind === "track").slice(0, 1),
+    ];
+  }
+  if (spec.id === "template.items.split_item_at_time") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{E4-ITEM-SPLIT-LEFT}" }, { ref: "item:guid:{E4-ITEM-SPLIT-LEFT}" }),
+      createObjectRef("item", { scheme: "guid", value: "{E4-ITEM-SPLIT-RIGHT}" }, { ref: "item:guid:{E4-ITEM-SPLIT-RIGHT}" }),
+    ];
+  }
+  if (spec.id === "template.items.set_take_playrate") {
+    return request.refs.filter((ref) => ref.kind === "item").slice(0, 1);
   }
   return [];
 }
@@ -3704,6 +4121,11 @@ function nonEmpty(value) {
 function positiveInteger(value, fallback) {
   const number = Number.parseInt(value, 10);
   return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function finiteNumber(value, fallback) {
+  const number = Number.parseFloat(value);
+  return Number.isFinite(number) ? number : fallback;
 }
 
 function boundedString(value, maxLength = 240) {

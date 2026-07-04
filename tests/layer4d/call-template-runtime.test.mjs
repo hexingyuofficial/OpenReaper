@@ -21,6 +21,7 @@ import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
@@ -454,6 +455,154 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(mismatch.spawned_reaper, false);
   });
 
+  it("exposes the E4 item route as an explicit fake/static route with loop-source held", async () => {
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS, [
+      "template.items.copy_item_to_track",
+      "template.items.split_item_at_time",
+      "template.items.set_take_playrate",
+    ]);
+
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+        opt_in_env: "OPENREAPER_E4_ITEM_ROUTE_LIVE_SMOKE",
+        opt_in_flag: "--live",
+      },
+      evidenceLimit: 10,
+    });
+
+    for (const [index, id] of CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS.entries()) {
+      const response = await runtime.call_template({
+        id,
+        input: itemRouteInput(id),
+        refs: itemRouteRefs(id),
+        idempotency_key: id === "template.items.set_take_playrate" ? "e4-item-route:set-take-playrate" : undefined,
+        context: context({ request_sequence: index + 1 }),
+      });
+      assert.equal(response.ok, true, id);
+    }
+
+    assert.deepEqual(
+      bridge.seen.map((request) => `${request.operation.family}:${request.operation.name}`),
+      [
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+      ],
+    );
+    assert.deepEqual(
+      bridge.seen.map((request) => request.pack.capability),
+      [
+        "item.copy_to_track",
+        "items.split_item_at_time",
+        "items.set_take_playrate",
+      ],
+    );
+    for (const request of bridge.seen) {
+      assert.equal(request.pack.id, "items");
+      assert.equal(request.pack.risk, "write");
+      assert.equal(request.undo.mode, "required");
+      assert.equal(request.verification.mode, "required");
+      assert.equal(request.artifacts.allow, false);
+    }
+    assert.equal(bridge.seen[2].idempotency_key, "e4-item-route:set-take-playrate");
+
+    const mixed = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: [
+          ...CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+          "template.items.move_item",
+        ],
+      },
+    });
+    assert.deepEqual(mixed.live_gate.allowed_template_ids, []);
+  });
+
+  it("runs the E4 item route fake smoke and reports live preflight blockers without starting REAPER", () => {
+    const fake = runItemRouteSmoke(["--item-route", "--fake"]);
+    assert.equal(fake.ok, true);
+    assert.equal(fake.mode, "fake");
+    assert.equal(fake.spawned_reaper, false);
+    assert.equal(fake.live_pass_claimed, false);
+    assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS);
+    assert.deepEqual(fake.allowed_bridge_operations, ["run_command:template.execute"]);
+    assert.deepEqual(fake.expected_capabilities, [
+      "item.copy_to_track",
+      "items.split_item_at_time",
+      "items.set_take_playrate",
+    ]);
+    assert.deepEqual(fake.preflight_blockers_covered, [
+      "selected_item_missing",
+      "invalid_item_ref",
+      "destination_track_missing",
+      "split_outside_item_bounds",
+      "invalid_playrate",
+    ]);
+    assert.equal(fake.loop_source_status, "held");
+    assert.equal(fake.executions.length, 3);
+    assert.equal(fake.executions.every((execution) => execution.ok), true);
+    for (const execution of fake.executions) {
+      assert.equal(execution.operation, "run_command:template.execute");
+      assert.equal(execution.undo.mode, "required");
+      assert.equal(execution.artifacts_allowed, false);
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "openreaper-e4-item-route-"));
+    const transportDir = join(root, "transport");
+    mkdirSync(join(transportDir, "requests"), { recursive: true });
+    mkdirSync(join(transportDir, "results"), { recursive: true });
+    const baseEnv = {
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      OPENREAPER_E4_ITEM_REF: "item:guid:{E4-SOURCE-ITEM}",
+      OPENREAPER_E4_TARGET_TRACK_REF: "track:guid:{E4-TARGET-TRACK}",
+      OPENREAPER_E4_ITEM_START_SECONDS: "0",
+      OPENREAPER_E4_ITEM_LENGTH_SECONDS: "4",
+      OPENREAPER_E4_SPLIT_POSITION_SECONDS: "2",
+      OPENREAPER_E4_PLAYRATE: "0.75",
+    };
+
+    const missingSelected = runItemRouteSmokeExpectingFailure(["--item-route", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E4_ITEM_REF: "",
+    });
+    assert.equal(missingSelected.reason, "selected_item_missing");
+    assert.equal(missingSelected.spawned_reaper, false);
+    assert.equal("attempted_template_ids" in missingSelected, false);
+
+    const invalidItem = runItemRouteSmokeExpectingFailure(["--item-route", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E4_ITEM_REF: "bad:item",
+    });
+    assert.equal(invalidItem.reason, "invalid_item_ref");
+    assert.equal(invalidItem.spawned_reaper, false);
+
+    const missingTrack = runItemRouteSmokeExpectingFailure(["--item-route", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E4_TARGET_TRACK_REF: "",
+    });
+    assert.equal(missingTrack.reason, "destination_track_missing");
+    assert.equal(missingTrack.spawned_reaper, false);
+
+    const splitOutside = runItemRouteSmokeExpectingFailure(["--item-route", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E4_SPLIT_POSITION_SECONDS: "4",
+    });
+    assert.equal(splitOutside.reason, "split_outside_item_bounds");
+    assert.equal(splitOutside.spawned_reaper, false);
+
+    const invalidPlayrate = runItemRouteSmokeExpectingFailure(["--item-route", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E4_PLAYRATE: "0",
+    });
+    assert.equal(invalidPlayrate.reason, "invalid_playrate");
+    assert.equal(invalidPlayrate.spawned_reaper, false);
+  });
+
   it("keeps Layer 4D outside recipes, process spawning, and live REAPER startup by default", () => {
     const runtimeSource = readFileSync(
       new URL("../../packages/mcp-server/src/call-template-runtime-v1.mjs", import.meta.url),
@@ -591,6 +740,66 @@ function runMediaRouteSmoke(args, env = {}) {
 function runMediaRouteSmokeExpectingFailure(args, env = {}) {
   try {
     return runMediaRouteSmoke(args, env);
+  } catch (error) {
+    assert.equal(error.status, 2);
+    const report = JSON.parse(String(error.stdout));
+    assert.equal(report.ok, false);
+    return report;
+  }
+}
+
+function itemRouteInput(id) {
+  if (id === "template.items.copy_item_to_track") {
+    return { position_seconds: 5 };
+  }
+  if (id === "template.items.split_item_at_time") {
+    return { position_seconds: 2 };
+  }
+  if (id === "template.items.set_take_playrate") {
+    return { playrate: 0.75, preserve_pitch: true };
+  }
+  return {};
+}
+
+function itemRouteRefs(id) {
+  const itemRef = createObjectRef("item", { scheme: "guid", value: "{E4-SOURCE-ITEM}" }, {
+    ref: "item:guid:{E4-SOURCE-ITEM}",
+  });
+  const trackRef = createObjectRef("track", { scheme: "guid", value: "{E4-TARGET-TRACK}" }, {
+    ref: "track:guid:{E4-TARGET-TRACK}",
+  });
+  if (id === "template.items.copy_item_to_track") {
+    return {
+      source_item_ref: itemRef,
+      target_track_ref: trackRef,
+    };
+  }
+  if (id === "template.items.split_item_at_time" || id === "template.items.set_take_playrate") {
+    return {
+      item_ref: itemRef,
+    };
+  }
+  return {};
+}
+
+function runItemRouteSmoke(args, env = {}) {
+  const output = execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs", ...args], {
+    cwd: new URL("../..", import.meta.url),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+      OPENREAPER_E4_ITEM_ROUTE_LIVE_SMOKE: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      ...env,
+    },
+  }).trim();
+  return JSON.parse(output);
+}
+
+function runItemRouteSmokeExpectingFailure(args, env = {}) {
+  try {
+    return runItemRouteSmoke(args, env);
   } catch (error) {
     assert.equal(error.status, 2);
     const report = JSON.parse(String(error.stdout));
