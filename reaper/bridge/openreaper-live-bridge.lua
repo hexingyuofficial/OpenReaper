@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 24 legacy_monolith row(s); 36 extracted handler row(s); 36 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 0 legacy_monolith row(s); 60 extracted handler row(s); 60 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -4940,6 +4940,4187 @@ local function create_layer_report(request)
   return summary, nil, json_array({ write.object_ref })
 end
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/set_metadata_field.lua
+-- Extracted Safe-Write-A handler: template.project.set_metadata_field.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local PROJECT_METADATA_KEYS = {
+  title = "PROJECT_TITLE",
+  author = "PROJECT_AUTHOR",
+  notes = "PROJECT_NOTES",
+}
+
+local function current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function project_info_string(project, key, max_length)
+  local ok, _, value = call_reaper("GetSetProjectInfo_String", project, key, "", false)
+  if ok and type(value) == "string" then
+    return bounded_string(value, max_length or 240)
+  end
+  return ""
+end
+
+local function project_object_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function marker_object_ref(kind, index_number, name)
+  local ref_kind = kind == "region" and "region" or "marker"
+  return {
+    kind = ref_kind,
+    ref = ref_kind .. ":index:" .. tostring(index_number or 0),
+    identity = {
+      scheme = "index",
+      value = tostring(index_number or 0),
+    },
+    display = {
+      name = bounded_string(name or "", 160),
+    },
+  }
+end
+
+local function project_metadata_key(field)
+  return PROJECT_METADATA_KEYS[field]
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function safe_write_project_metadata(request)
+  local key = project_metadata_key(request.params.field)
+  if not key then
+    return handler_error("PARAMS_INVALID", "Safe-Write-A metadata field is not allowed.", {
+      field = bounded_string(request.params.field, 80),
+    })
+  end
+  local project = current_project()
+  local ok, success = call_reaper("GetSetProjectInfo_String", project, key, tostring(request.params.value or ""), true)
+  if not ok or success == false then
+    return handler_error("COMMAND_FAILED", "Could not update project metadata field.", {
+      field = request.params.field,
+    }, false)
+  end
+  local readback = project_info_string(project, key, 240)
+  return safe_write_a_summary(request, {
+    project_ref = "project:current",
+    field = request.params.field,
+    value = bounded_string(readback, 240),
+  }), nil, nil, nil, safe_write_a_refs(project_object_ref())
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_marker.lua
+-- Extracted Safe-Write-A handler: template.project.create_marker.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local PROJECT_METADATA_KEYS = {
+  title = "PROJECT_TITLE",
+  author = "PROJECT_AUTHOR",
+  notes = "PROJECT_NOTES",
+}
+
+local function current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function project_info_string(project, key, max_length)
+  local ok, _, value = call_reaper("GetSetProjectInfo_String", project, key, "", false)
+  if ok and type(value) == "string" then
+    return bounded_string(value, max_length or 240)
+  end
+  return ""
+end
+
+local function project_object_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function marker_object_ref(kind, index_number, name)
+  local ref_kind = kind == "region" and "region" or "marker"
+  return {
+    kind = ref_kind,
+    ref = ref_kind .. ":index:" .. tostring(index_number or 0),
+    identity = {
+      scheme = "index",
+      value = tostring(index_number or 0),
+    },
+    display = {
+      name = bounded_string(name or "", 160),
+    },
+  }
+end
+
+local function project_metadata_key(field)
+  return PROJECT_METADATA_KEYS[field]
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function safe_write_create_marker(request)
+  local project = current_project()
+  local color = native_color_from_hex(request.params.color)
+  local ok, index_number = call_reaper(
+    "AddProjectMarker2",
+    project,
+    false,
+    bounded_number(request.params.position_seconds, 0),
+    0,
+    tostring(request.params.name or "OR_SAFE_WRITE_A_MARKER"),
+    -1,
+    color
+  )
+  if not ok or type(index_number) ~= "number" or index_number < 0 then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A marker.", {}, false)
+  end
+  return safe_write_a_summary(request, {
+    marker_ref = "marker:index:" .. tostring(index_number),
+    name = bounded_string(request.params.name, 160),
+    position_seconds = bounded_number(request.params.position_seconds, 0),
+  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("marker", index_number, request.params.name))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_region.lua
+-- Extracted Safe-Write-A handler: template.project.create_region.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local PROJECT_METADATA_KEYS = {
+  title = "PROJECT_TITLE",
+  author = "PROJECT_AUTHOR",
+  notes = "PROJECT_NOTES",
+}
+
+local function current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function project_info_string(project, key, max_length)
+  local ok, _, value = call_reaper("GetSetProjectInfo_String", project, key, "", false)
+  if ok and type(value) == "string" then
+    return bounded_string(value, max_length or 240)
+  end
+  return ""
+end
+
+local function project_object_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function marker_object_ref(kind, index_number, name)
+  local ref_kind = kind == "region" and "region" or "marker"
+  return {
+    kind = ref_kind,
+    ref = ref_kind .. ":index:" .. tostring(index_number or 0),
+    identity = {
+      scheme = "index",
+      value = tostring(index_number or 0),
+    },
+    display = {
+      name = bounded_string(name or "", 160),
+    },
+  }
+end
+
+local function project_metadata_key(field)
+  return PROJECT_METADATA_KEYS[field]
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function safe_write_create_region(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
+  if end_seconds <= start_seconds then
+    return handler_error("PARAMS_INVALID", "Safe-Write-A region end_seconds must be greater than start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  local project = current_project()
+  local color = native_color_from_hex(request.params.color)
+  local ok, index_number = call_reaper(
+    "AddProjectMarker2",
+    project,
+    true,
+    start_seconds,
+    end_seconds,
+    tostring(request.params.name or "OR_SAFE_WRITE_A_REGION"),
+    -1,
+    color
+  )
+  if not ok or type(index_number) ~= "number" or index_number < 0 then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A region.", {}, false)
+  end
+  return safe_write_a_summary(request, {
+    region_ref = "region:index:" .. tostring(index_number),
+    name = bounded_string(request.params.name, 160),
+    start_seconds = start_seconds,
+    end_seconds = end_seconds,
+  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("region", index_number, request.params.name))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/create_track.lua
+-- Extracted Safe-Write-A handler: template.tracks.create_track.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_create_track(request)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local index = is_non_negative_integer(request.params.index) and request.params.index or total
+  index = math.max(0, math.min(index, total))
+  local ok_insert = call_reaper("InsertTrackAtIndex", index, true)
+  if not ok_insert then
+    return handler_error("COMMAND_FAILED", "Could not insert Safe-Write-A track.", {
+      index = index,
+    }, false)
+  end
+  local ok_track, track = call_reaper("GetTrack", 0, index)
+  if not ok_track or not track then
+    return handler_error("TRACK_NOT_FOUND", "Inserted Safe-Write-A track could not be resolved.", {
+      index = index,
+    })
+  end
+  call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET"), true)
+  call_reaper("TrackList_AdjustWindows", false)
+  local summary = track_summary(track)
+  summary.created = true
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/rename_track.lua
+-- Extracted Safe-Write-A handler: template.tracks.rename_track.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_rename_track(request)
+  return safe_write_track_update(request, function(track)
+    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or ""), true)
+    if not ok or success == false then
+      return false, {
+        code = "COMMAND_FAILED",
+        message = "Could not rename Safe-Write-A track.",
+        recoverable = false,
+        details = {},
+      }
+    end
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_color.lua
+-- Extracted Safe-Write-A handler: template.tracks.set_color.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_set_track_color(request)
+  return safe_write_track_update(request, function(track)
+    local color = native_color_from_hex(request.params.color)
+    local ok, success = call_reaper("SetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR", color)
+    if not ok or success == false then
+      return false, {
+        code = "COMMAND_FAILED",
+        message = "Could not set Safe-Write-A track color.",
+        recoverable = false,
+        details = {},
+      }
+    end
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/select_track.lua
+-- Extracted Safe-Write-A handler: template.tracks.select_track.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_select_track(request)
+  return safe_write_track_update(request, function(track)
+    local mode = request.params.mode
+    if mode == "replace" then
+      local ok_count, count = call_reaper("CountTracks", 0)
+      for index = 0, (ok_count and first_number(count) or 0) - 1 do
+        local ok_track, candidate = call_reaper("GetTrack", 0, index)
+        if ok_track and candidate then
+          call_reaper("SetMediaTrackInfo_Value", candidate, "I_SELECTED", 0)
+        end
+      end
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
+    elseif mode == "add" then
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
+    elseif mode == "remove" then
+      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 0)
+    else
+      return false, {
+        code = "PARAMS_INVALID",
+        message = "Track selection mode must be replace, add, or remove.",
+        details = { mode = bounded_string(mode, 80) },
+      }
+    end
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_mute.lua
+-- Extracted Safe-Write-A handler: template.tracks.set_mute.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_set_track_mute(request)
+  return safe_write_track_update(request, function(track)
+    call_reaper("SetMediaTrackInfo_Value", track, "B_MUTE", request.params.muted == true and 1 or 0)
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_solo.lua
+-- Extracted Safe-Write-A handler: template.tracks.set_solo.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function native_color_from_hex(value)
+  if value == nil or value == JSON_NULL then
+    return 0
+  end
+  if not is_string(value) then
+    return 0
+  end
+  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
+  if not r then
+    return 0
+  end
+  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
+  if ok and type(native) == "number" then
+    return math.floor(native) + 0x1000000
+  end
+  return 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function solo_label(value)
+  if value == 1 then
+    return "solo"
+  elseif value == 2 then
+    return "solo_in_place"
+  end
+  return "off"
+end
+
+local function track_summary(track)
+  local index = track_index(track)
+  local ok_selected, selected = call_reaper("GetMediaTrackInfo_Value", track, "I_SELECTED")
+  local ok_mute, muted = call_reaper("GetMediaTrackInfo_Value", track, "B_MUTE")
+  local ok_solo, solo = call_reaper("GetMediaTrackInfo_Value", track, "I_SOLO")
+  local ok_arm, armed = call_reaper("GetMediaTrackInfo_Value", track, "I_RECARM")
+  local ok_color, color = call_reaper("GetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR")
+  return {
+    track_ref = track_ref_string(track),
+    index = index,
+    name = track_name(track),
+    selected = ok_selected and first_number(selected) == 1 or false,
+    muted = ok_mute and first_number(muted) == 1 or false,
+    solo_mode = solo_label(ok_solo and first_number(solo) or 0),
+    record_armed = ok_arm and first_number(armed) == 1 or false,
+    color = ok_color and type(color) == "number" and color > 0 and tostring(math.floor(color)) or JSON_NULL,
+  }
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function track_object_ref(track)
+  local ref = track_ref_string(track)
+  local scheme, value = ref:match("^track:([^:]+):(.+)$")
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or track_index(track)),
+    },
+    display = {
+      name = track_name(track),
+    },
+  }
+end
+
+local function safe_write_track_update(request, updater)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(track)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
+end
+
+local function safe_write_set_track_solo(request)
+  return safe_write_track_update(request, function(track)
+    local value = 0
+    if request.params.mode == "solo" then
+      value = 1
+    elseif request.params.mode == "solo_in_place" then
+      value = 2
+    elseif request.params.mode ~= "off" then
+      return false, {
+        code = "PARAMS_INVALID",
+        message = "Track solo mode must be off, solo, or solo_in_place.",
+        details = { mode = bounded_string(request.params.mode, 80) },
+      }
+    end
+    call_reaper("SetMediaTrackInfo_Value", track, "I_SOLO", value)
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_edit_cursor.lua
+-- Extracted Safe-Write-A handler: template.transport.set_edit_cursor.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_set_edit_cursor(request)
+  call_reaper(
+    "SetEditCurPos",
+    bounded_number(request.params.position_seconds, 0),
+    request.params.move_view == true,
+    request.params.seek_playback == true
+  )
+  local state = read_transport_state()
+  return safe_write_a_summary(request, {
+    edit_cursor_seconds = state.edit_cursor_seconds,
+  })
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_time_selection.lua
+-- Extracted Safe-Write-A handler: template.transport.set_time_selection.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_set_time_selection(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
+  if end_seconds < start_seconds then
+    return handler_error("PARAMS_INVALID", "Time selection end_seconds must be greater than or equal to start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  call_reaper("GetSet_LoopTimeRange", true, false, start_seconds, end_seconds, false)
+  return safe_write_a_summary(request, read_transport_state().time_selection)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_time_selection.lua
+-- Extracted Safe-Write-A handler: template.transport.clear_time_selection.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_clear_time_selection(request)
+  call_reaper("GetSet_LoopTimeRange", true, false, 0, 0, false)
+  return safe_write_a_summary(request, read_transport_state().time_selection)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_loop_points.lua
+-- Extracted Safe-Write-A handler: template.transport.set_loop_points.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_set_loop_points(request)
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
+  if end_seconds < start_seconds then
+    return handler_error("PARAMS_INVALID", "Loop point end_seconds must be greater than or equal to start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  call_reaper("GetSet_LoopTimeRange", true, true, start_seconds, end_seconds, false)
+  return safe_write_a_summary(request, read_transport_state().loop_points)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_loop_points.lua
+-- Extracted Safe-Write-A handler: template.transport.clear_loop_points.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_clear_loop_points(request)
+  call_reaper("GetSet_LoopTimeRange", true, true, 0, 0, false)
+  return safe_write_a_summary(request, read_transport_state().loop_points)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_repeat.lua
+-- Extracted Safe-Write-A handler: template.transport.set_repeat.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function safe_write_transport_set_repeat(request)
+  call_reaper("GetSetRepeat", request.params.enabled == true and 1 or 0)
+  return safe_write_a_summary(request, {
+    repeat_enabled = read_transport_state().repeat_enabled,
+  })
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/move_item.lua
+-- Extracted Safe-Write-A handler: template.items.move_item.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function item_ref_string(item)
+  local guid = item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return resolve_item_token(ref.ref)
+end
+
+local function item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function item_summary(item, include_take_summary)
+  local track = item_track(item)
+  local summary = {
+    item_ref = item_ref_string(item),
+    track_ref = track and track_ref_string(track) or JSON_NULL,
+    position_seconds = item_number(item, "D_POSITION"),
+    length_seconds = item_number(item, "D_LENGTH"),
+    snap_offset_seconds = item_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = item_number(item, "D_FADEINLEN"),
+    fade_out_seconds = item_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_move_item(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", bounded_number(request.params.position_seconds, 0))
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/trim_item.lua
+-- Extracted Safe-Write-A handler: template.items.trim_item.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function item_ref_string(item)
+  local guid = item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return resolve_item_token(ref.ref)
+end
+
+local function item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function item_summary(item, include_take_summary)
+  local track = item_track(item)
+  local summary = {
+    item_ref = item_ref_string(item),
+    track_ref = track and track_ref_string(track) or JSON_NULL,
+    position_seconds = item_number(item, "D_POSITION"),
+    length_seconds = item_number(item, "D_LENGTH"),
+    snap_offset_seconds = item_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = item_number(item, "D_FADEINLEN"),
+    fade_out_seconds = item_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_trim_item(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", math.max(0, bounded_number(request.params.length_seconds, 0)))
+    if type(request.params.start_offset_seconds) == "number" then
+      local ok_take, take = call_reaper("GetActiveTake", item)
+      if ok_take and take then
+        call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", math.max(0, request.params.start_offset_seconds))
+      end
+    end
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_item_fades.lua
+-- Extracted Safe-Write-A handler: template.items.set_item_fades.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function item_ref_string(item)
+  local guid = item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return resolve_item_token(ref.ref)
+end
+
+local function item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function item_summary(item, include_take_summary)
+  local track = item_track(item)
+  local summary = {
+    item_ref = item_ref_string(item),
+    track_ref = track and track_ref_string(track) or JSON_NULL,
+    position_seconds = item_number(item, "D_POSITION"),
+    length_seconds = item_number(item, "D_LENGTH"),
+    snap_offset_seconds = item_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = item_number(item, "D_FADEINLEN"),
+    fade_out_seconds = item_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_set_item_fades(request)
+  return safe_write_item_update(request, function(item)
+    local fade_in = request.params.fade_in_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_in_seconds, 0)
+    local fade_out = request.params.fade_out_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_out_seconds, 0)
+    call_reaper("SetMediaItemInfo_Value", item, "D_FADEINLEN", math.max(0, fade_in))
+    call_reaper("SetMediaItemInfo_Value", item, "D_FADEOUTLEN", math.max(0, fade_out))
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_take_pitch.lua
+-- Extracted Safe-Write-A handler: template.items.set_take_pitch.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function item_ref_string(item)
+  local guid = item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return resolve_item_token(ref.ref)
+end
+
+local function item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function item_summary(item, include_take_summary)
+  local track = item_track(item)
+  local summary = {
+    item_ref = item_ref_string(item),
+    track_ref = track and track_ref_string(track) or JSON_NULL,
+    position_seconds = item_number(item, "D_POSITION"),
+    length_seconds = item_number(item, "D_LENGTH"),
+    snap_offset_seconds = item_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = item_number(item, "D_FADEINLEN"),
+    fade_out_seconds = item_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_set_take_pitch(request)
+  return safe_write_item_update(request, function(item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_take or not take then
+      return false, {
+        code = "TAKE_NOT_FOUND",
+        message = "Safe-Write-A take pitch requires an active take.",
+        details = {},
+      }
+    end
+    call_reaper("SetMediaItemTakeInfo_Value", take, "D_PITCH", bounded_number(request.params.semitones, 0))
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_item_snap_offset.lua
+-- Extracted Safe-Write-A handler: template.items.set_item_snap_offset.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function track_ref_string(track)
+  local guid = track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(track_index(track))
+end
+
+local function item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function item_ref_string(item)
+  local guid = item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return resolve_item_token(ref.ref)
+end
+
+local function item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function item_summary(item, include_take_summary)
+  local track = item_track(item)
+  local summary = {
+    item_ref = item_ref_string(item),
+    track_ref = track and track_ref_string(track) or JSON_NULL,
+    position_seconds = item_number(item, "D_POSITION"),
+    length_seconds = item_number(item, "D_LENGTH"),
+    snap_offset_seconds = item_number(item, "D_SNAPOFFSET"),
+    fade_in_seconds = item_number(item, "D_FADEINLEN"),
+    fade_out_seconds = item_number(item, "D_FADEOUTLEN"),
+  }
+  if include_take_summary then
+    local ok_take_count, take_count = call_reaper("CountTakes", item)
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    local ok_name, take_name = false, nil
+    if ok_take and take then
+      ok_name, take_name = call_reaper("GetTakeName", take)
+    end
+    summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
+  end
+  return summary
+end
+
+local function item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function item_object_ref(item)
+  local ref = item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function item_from_safe_write_refs(request)
+  local item = item_from_request_refs(request)
+  if not item then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "Safe-Write-A item request requires a resolvable item ref.",
+      details = {},
+    }
+  end
+  return item
+end
+
+local function safe_write_item_update(request, updater)
+  local item, failure = item_from_safe_write_refs(request)
+  if not item then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local ok, fail = updater(item)
+  if not ok then
+    return nil, fail
+  end
+  call_reaper("UpdateItemInProject", item)
+  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
+end
+
+local function safe_write_set_item_snap_offset(request)
+  return safe_write_item_update(request, function(item)
+    call_reaper("SetMediaItemInfo_Value", item, "D_SNAPOFFSET", math.max(0, bounded_number(request.params.snap_offset_seconds, 0)))
+    return true
+  end)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/create_midi_item.lua
+-- Extracted Safe-Write-A handler: template.midi.create_midi_item.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function find_track_by_name(name)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches > 1 then
+    return nil, "ambiguous"
+  end
+  return found
+end
+
+local function resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return find_track_by_guid(guid)
+  end
+
+  local name = token:match("^track:(.+)$")
+  if name then
+    return find_track_by_name(name)
+  end
+  return nil
+end
+
+local function resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return resolve_track_token("guid:" .. tostring(identity.value))
+  elseif identity.scheme == "name" then
+    return find_track_by_name(tostring(identity.value))
+  end
+  return resolve_track_token(ref.ref)
+end
+
+local function track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track, reason = resolve_track_from_ref_object(request.refs[index])
+      if reason == "ambiguous" then
+        return nil, {
+          code = "REF_INVALID",
+          message = "Track name is ambiguous.",
+          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
+        }
+      end
+      if track then
+        return track
+      end
+    end
+  end
+  return nil, {
+    code = "TRACK_NOT_FOUND",
+    message = "Safe-Write-A track request requires a resolvable track ref.",
+    details = {},
+  }
+end
+
+local function item_ref_string(item)
+  return READ_B_MIDI.item_ref_string(item)
+end
+
+local function midi_take_summary(take)
+  return READ_B_MIDI.midi_take_summary(take)
+end
+
+local function item_object_ref(item)
+  local ref = READ_B_MIDI.item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function take_object_ref(take)
+  local ref = READ_B_MIDI.take_ref_string(take)
+  local scheme, value = ref:match("^take:([^:]+):(.+)$")
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function safe_write_create_midi_item(request)
+  local track, failure = track_from_request_refs(request)
+  if not track then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local start_seconds = bounded_number(request.params.start_seconds, 0)
+  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
+  if end_seconds <= start_seconds then
+    return handler_error("PARAMS_INVALID", "MIDI item end_seconds must be greater than start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_seconds, end_seconds, false)
+  if not ok_item or not item then
+    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
+  end
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  if not ok_take or not take then
+    return handler_error("TAKE_NOT_FOUND", "Created MIDI item did not expose an active take.", {})
+  end
+  local summary = midi_take_summary(take)
+  summary.item_ref = item_ref_string(item)
+  summary.created = true
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_notes_batch.lua
+-- Extracted Safe-Write-A handler: template.midi.insert_notes_batch.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function integer_value(value)
+  if type(value) == "number" and value == math.floor(value) then
+    return value
+  end
+  return nil
+end
+
+local function resolve_midi_take_for_request(request)
+  return READ_B_MIDI.resolve_midi_take_for_request(request)
+end
+
+local function take_object_ref(take)
+  local ref = READ_B_MIDI.take_ref_string(take)
+  local scheme, value = ref:match("^take:([^:]+):(.+)$")
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function ppq_position(take, event, key)
+  local value = event[key]
+  if type(value) == "number" then
+    return value
+  end
+  local seconds_key = "seconds"
+  if key == "start_ppq" then
+    seconds_key = "start_seconds"
+  elseif key == "end_ppq" then
+    seconds_key = "end_seconds"
+  elseif key == "ppq" then
+    seconds_key = "position_seconds"
+  end
+  if type(event[seconds_key]) == "number" then
+    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
+    return ok and first_number(ppq) or 0
+  end
+  return 0
+end
+
+local function text_sysex_type_value(kind)
+  if kind == "sysex" then
+    return -1
+  elseif kind == "lyric" then
+    return 5
+  elseif kind == "notation" then
+    return 15
+  end
+  return 1
+end
+
+local function safe_write_insert_notes_batch(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
+  local inserted = 0
+  for index = 1, #notes do
+    local note = is_object(notes[index]) and notes[index] or {}
+    local start_ppq = ppq_position(take, note, "start_ppq")
+    local end_ppq = ppq_position(take, note, "end_ppq")
+    if end_ppq > start_ppq then
+      local ok, success = call_reaper(
+        "MIDI_InsertNote",
+        take,
+        note.selected == true,
+        note.muted == true,
+        start_ppq,
+        end_ppq,
+        math.max(0, math.min(15, integer_value(note.channel) or 0)),
+        math.max(0, math.min(127, integer_value(note.pitch) or 60)),
+        math.max(1, math.min(127, integer_value(note.velocity) or 96)),
+        true
+      )
+      if ok and success ~= false then
+        inserted = inserted + 1
+      end
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_note_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_cc_batch.lua
+-- Extracted Safe-Write-A handler: template.midi.insert_cc_batch.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function integer_value(value)
+  if type(value) == "number" and value == math.floor(value) then
+    return value
+  end
+  return nil
+end
+
+local function resolve_midi_take_for_request(request)
+  return READ_B_MIDI.resolve_midi_take_for_request(request)
+end
+
+local function take_object_ref(take)
+  local ref = READ_B_MIDI.take_ref_string(take)
+  local scheme, value = ref:match("^take:([^:]+):(.+)$")
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function ppq_position(take, event, key)
+  local value = event[key]
+  if type(value) == "number" then
+    return value
+  end
+  local seconds_key = "seconds"
+  if key == "start_ppq" then
+    seconds_key = "start_seconds"
+  elseif key == "end_ppq" then
+    seconds_key = "end_seconds"
+  elseif key == "ppq" then
+    seconds_key = "position_seconds"
+  end
+  if type(event[seconds_key]) == "number" then
+    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
+    return ok and first_number(ppq) or 0
+  end
+  return 0
+end
+
+local function text_sysex_type_value(kind)
+  if kind == "sysex" then
+    return -1
+  elseif kind == "lyric" then
+    return 5
+  elseif kind == "notation" then
+    return 15
+  end
+  return 1
+end
+
+local function safe_write_insert_cc_batch(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local events = is_json_array(request.params.events) and request.params.events or json_array({})
+  local inserted = 0
+  for index = 1, #events do
+    local event = is_object(events[index]) and events[index] or {}
+    local ppq = ppq_position(take, event, "ppq")
+    local ok, success = call_reaper(
+      "MIDI_InsertCC",
+      take,
+      event.selected == true,
+      event.muted == true,
+      ppq,
+      176,
+      math.max(0, math.min(15, integer_value(event.channel) or 0)),
+      math.max(0, math.min(127, integer_value(event.controller) or 1)),
+      math.max(0, math.min(127, integer_value(event.value) or 0)),
+      true
+    )
+    if ok and success ~= false then
+      inserted = inserted + 1
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_cc_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua
+-- Extracted Safe-Write-A handler: template.midi.insert_text_sysex_events.
+
+local function handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function safe_write_a_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.truncated = false
+  return readback
+end
+
+local function safe_write_a_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function bounded_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function integer_value(value)
+  if type(value) == "number" and value == math.floor(value) then
+    return value
+  end
+  return nil
+end
+
+local function resolve_midi_take_for_request(request)
+  return READ_B_MIDI.resolve_midi_take_for_request(request)
+end
+
+local function take_object_ref(take)
+  local ref = READ_B_MIDI.take_ref_string(take)
+  local scheme, value = ref:match("^take:([^:]+):(.+)$")
+  return {
+    kind = "take",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function ppq_position(take, event, key)
+  local value = event[key]
+  if type(value) == "number" then
+    return value
+  end
+  local seconds_key = "seconds"
+  if key == "start_ppq" then
+    seconds_key = "start_seconds"
+  elseif key == "end_ppq" then
+    seconds_key = "end_seconds"
+  elseif key == "ppq" then
+    seconds_key = "position_seconds"
+  end
+  if type(event[seconds_key]) == "number" then
+    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
+    return ok and first_number(ppq) or 0
+  end
+  return 0
+end
+
+local function text_sysex_type_value(kind)
+  if kind == "sysex" then
+    return -1
+  elseif kind == "lyric" then
+    return 5
+  elseif kind == "notation" then
+    return 15
+  end
+  return 1
+end
+
+local function safe_write_insert_text_sysex_events(request)
+  local take, failure = resolve_midi_take_for_request(request)
+  if not take then
+    return handler_error(failure.code, failure.message, failure.details)
+  end
+  local events = is_json_array(request.params.events) and request.params.events or json_array({})
+  local inserted = 0
+  for index = 1, #events do
+    local event = is_object(events[index]) and events[index] or {}
+    local ppq = ppq_position(take, event, "ppq")
+    local ok, success = call_reaper(
+      "MIDI_InsertTextSysexEvt",
+      take,
+      event.selected == true,
+      event.muted == true,
+      ppq,
+      text_sysex_type_value(event.event_kind),
+      bounded_string(event.text or event.bytes or "", 240),
+      true
+    )
+    if ok and success ~= false then
+      inserted = inserted + 1
+    end
+  end
+  if request.params.sort_events ~= false then
+    call_reaper("MIDI_Sort", take)
+  end
+  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  summary.inserted_text_sysex_count = inserted
+  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
+end
+
 local SAFE_WRITE_A_CAPABILITIES = {
   ["project.set_metadata_field"] = { pack = "project", risk = "write" },
   ["project.create_marker"] = { pack = "project", risk = "write" },
@@ -5988,657 +10169,6 @@ local function artifact_ref_from_request_refs(request, expected)
   return nil
 end
 
-local function bounded_number(value, fallback)
-  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
-    return value
-  end
-  return fallback or 0
-end
-
-local function project_object_ref()
-  return {
-    kind = "project",
-    ref = "project:current",
-    identity = {
-      scheme = "current",
-      value = "current",
-    },
-  }
-end
-
-local function marker_object_ref(kind, index_number, name)
-  local ref_kind = kind == "region" and "region" or "marker"
-  return {
-    kind = ref_kind,
-    ref = ref_kind .. ":index:" .. tostring(index_number or 0),
-    identity = {
-      scheme = "index",
-      value = tostring(index_number or 0),
-    },
-    display = {
-      name = bounded_string(name or "", 160),
-    },
-  }
-end
-
-local function track_object_ref(track)
-  local ref = track_ref_string(track)
-  local scheme, value = ref:match("^track:([^:]+):(.+)$")
-  return {
-    kind = "track",
-    ref = ref,
-    identity = {
-      scheme = scheme or "index",
-      value = tostring(value or track_index(track)),
-    },
-    display = {
-      name = track_name(track),
-    },
-  }
-end
-
-local function item_object_ref(item)
-  local ref = item_ref_string(item)
-  local scheme, value = ref:match("^item:([^:]+):(.+)$")
-  return {
-    kind = "item",
-    ref = ref,
-    identity = {
-      scheme = scheme or "index",
-      value = tostring(value or "0"),
-    },
-  }
-end
-
-local function take_object_ref(take)
-  local ref = take_ref_string(take)
-  local scheme, value = ref:match("^take:([^:]+):(.+)$")
-  return {
-    kind = "take",
-    ref = ref,
-    identity = {
-      scheme = scheme or "index",
-      value = tostring(value or "0"),
-    },
-  }
-end
-
-local function safe_write_a_summary(request, readback)
-  readback = readback or {}
-  readback.capability = request.pack.capability
-  readback.pack = request.pack.id
-  readback.risk = request.pack.risk
-  readback.readback_status = "passed"
-  readback.undo_evidence = "required"
-  readback.artifacts_allowed = false
-  readback.truncated = false
-  return readback
-end
-
-local function safe_write_a_refs(...)
-  local refs = json_array({})
-  for index = 1, select("#", ...) do
-    local ref = select(index, ...)
-    if ref then
-      refs[#refs + 1] = ref
-    end
-  end
-  return refs
-end
-
-local function project_metadata_key(field)
-  return PROJECT_METADATA_KEYS[field]
-end
-
-local function safe_write_project_metadata(request)
-  local key = project_metadata_key(request.params.field)
-  if not key then
-    return handler_error("PARAMS_INVALID", "Safe-Write-A metadata field is not allowed.", {
-      field = bounded_string(request.params.field, 80),
-    })
-  end
-  local project = current_project()
-  local ok, success = call_reaper("GetSetProjectInfo_String", project, key, tostring(request.params.value or ""), true)
-  if not ok or success == false then
-    return handler_error("COMMAND_FAILED", "Could not update project metadata field.", {
-      field = request.params.field,
-    }, false)
-  end
-  local readback = project_info_string(project, key, 240)
-  return safe_write_a_summary(request, {
-    project_ref = "project:current",
-    field = request.params.field,
-    value = bounded_string(readback, 240),
-  }), nil, nil, nil, safe_write_a_refs(project_object_ref())
-end
-
-local function native_color_from_hex(value)
-  if value == nil or value == JSON_NULL then
-    return 0
-  end
-  if not is_string(value) then
-    return 0
-  end
-  local r, g, b = value:match("^#(%x%x)(%x%x)(%x%x)$")
-  if not r then
-    return 0
-  end
-  local ok, native = call_reaper("ColorToNative", tonumber(r, 16), tonumber(g, 16), tonumber(b, 16))
-  if ok and type(native) == "number" then
-    return math.floor(native) + 0x1000000
-  end
-  return 0
-end
-
-local function safe_write_create_marker(request)
-  local project = current_project()
-  local color = native_color_from_hex(request.params.color)
-  local ok, index_number = call_reaper(
-    "AddProjectMarker2",
-    project,
-    false,
-    bounded_number(request.params.position_seconds, 0),
-    0,
-    tostring(request.params.name or "OR_SAFE_WRITE_A_MARKER"),
-    -1,
-    color
-  )
-  if not ok or type(index_number) ~= "number" or index_number < 0 then
-    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A marker.", {}, false)
-  end
-  return safe_write_a_summary(request, {
-    marker_ref = "marker:index:" .. tostring(index_number),
-    name = bounded_string(request.params.name, 160),
-    position_seconds = bounded_number(request.params.position_seconds, 0),
-  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("marker", index_number, request.params.name))
-end
-
-local function safe_write_create_region(request)
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
-  if end_seconds <= start_seconds then
-    return handler_error("PARAMS_INVALID", "Safe-Write-A region end_seconds must be greater than start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
-  end
-  local project = current_project()
-  local color = native_color_from_hex(request.params.color)
-  local ok, index_number = call_reaper(
-    "AddProjectMarker2",
-    project,
-    true,
-    start_seconds,
-    end_seconds,
-    tostring(request.params.name or "OR_SAFE_WRITE_A_REGION"),
-    -1,
-    color
-  )
-  if not ok or type(index_number) ~= "number" or index_number < 0 then
-    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A region.", {}, false)
-  end
-  return safe_write_a_summary(request, {
-    region_ref = "region:index:" .. tostring(index_number),
-    name = bounded_string(request.params.name, 160),
-    start_seconds = start_seconds,
-    end_seconds = end_seconds,
-  }), nil, nil, nil, safe_write_a_refs(marker_object_ref("region", index_number, request.params.name))
-end
-
-local function resolve_track_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "track" then
-    return nil
-  end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return resolve_track_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return resolve_track_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return resolve_track_token("guid:" .. tostring(identity.value))
-  elseif identity.scheme == "name" then
-    return find_track_by_name(tostring(identity.value))
-  end
-  return resolve_track_token(ref.ref)
-end
-
-local function track_from_request_refs(request)
-  if is_json_array(request.refs) then
-    for index = 1, #request.refs do
-      local track, reason = resolve_track_from_ref_object(request.refs[index])
-      if reason == "ambiguous" then
-        return nil, {
-          code = "REF_INVALID",
-          message = "Track name is ambiguous.",
-          details = { track_ref = bounded_string(request.refs[index].ref, 160) },
-        }
-      end
-      if track then
-        return track
-      end
-    end
-  end
-  return nil, {
-    code = "TRACK_NOT_FOUND",
-    message = "Safe-Write-A track request requires a resolvable track ref.",
-    details = {},
-  }
-end
-
-local function safe_write_create_track(request)
-  local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and first_number(count) or 0
-  local index = is_non_negative_integer(request.params.index) and request.params.index or total
-  index = math.max(0, math.min(index, total))
-  local ok_insert = call_reaper("InsertTrackAtIndex", index, true)
-  if not ok_insert then
-    return handler_error("COMMAND_FAILED", "Could not insert Safe-Write-A track.", {
-      index = index,
-    }, false)
-  end
-  local ok_track, track = call_reaper("GetTrack", 0, index)
-  if not ok_track or not track then
-    return handler_error("TRACK_NOT_FOUND", "Inserted Safe-Write-A track could not be resolved.", {
-      index = index,
-    })
-  end
-  call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or "OR_SAFE_WRITE_A_TARGET"), true)
-  call_reaper("TrackList_AdjustWindows", false)
-  local summary = track_summary(track)
-  summary.created = true
-  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
-end
-
-local function safe_write_track_update(request, updater)
-  local track, failure = track_from_request_refs(request)
-  if not track then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local ok, fail = updater(track)
-  if not ok then
-    return nil, fail
-  end
-  call_reaper("TrackList_AdjustWindows", false)
-  return safe_write_a_summary(request, track_summary(track)), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
-end
-
-local function safe_write_rename_track(request)
-  return safe_write_track_update(request, function(track)
-    local ok, success = call_reaper("GetSetMediaTrackInfo_String", track, "P_NAME", tostring(request.params.name or ""), true)
-    if not ok or success == false then
-      return false, {
-        code = "COMMAND_FAILED",
-        message = "Could not rename Safe-Write-A track.",
-        recoverable = false,
-        details = {},
-      }
-    end
-    return true
-  end)
-end
-
-local function safe_write_set_track_color(request)
-  return safe_write_track_update(request, function(track)
-    local color = native_color_from_hex(request.params.color)
-    local ok, success = call_reaper("SetMediaTrackInfo_Value", track, "I_CUSTOMCOLOR", color)
-    if not ok or success == false then
-      return false, {
-        code = "COMMAND_FAILED",
-        message = "Could not set Safe-Write-A track color.",
-        recoverable = false,
-        details = {},
-      }
-    end
-    return true
-  end)
-end
-
-local function safe_write_select_track(request)
-  return safe_write_track_update(request, function(track)
-    local mode = request.params.mode
-    if mode == "replace" then
-      local ok_count, count = call_reaper("CountTracks", 0)
-      for index = 0, (ok_count and first_number(count) or 0) - 1 do
-        local ok_track, candidate = call_reaper("GetTrack", 0, index)
-        if ok_track and candidate then
-          call_reaper("SetMediaTrackInfo_Value", candidate, "I_SELECTED", 0)
-        end
-      end
-      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
-    elseif mode == "add" then
-      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 1)
-    elseif mode == "remove" then
-      call_reaper("SetMediaTrackInfo_Value", track, "I_SELECTED", 0)
-    else
-      return false, {
-        code = "PARAMS_INVALID",
-        message = "Track selection mode must be replace, add, or remove.",
-        details = { mode = bounded_string(mode, 80) },
-      }
-    end
-    return true
-  end)
-end
-
-local function safe_write_set_track_mute(request)
-  return safe_write_track_update(request, function(track)
-    call_reaper("SetMediaTrackInfo_Value", track, "B_MUTE", request.params.muted == true and 1 or 0)
-    return true
-  end)
-end
-
-local function safe_write_set_track_solo(request)
-  return safe_write_track_update(request, function(track)
-    local value = 0
-    if request.params.mode == "solo" then
-      value = 1
-    elseif request.params.mode == "solo_in_place" then
-      value = 2
-    elseif request.params.mode ~= "off" then
-      return false, {
-        code = "PARAMS_INVALID",
-        message = "Track solo mode must be off, solo, or solo_in_place.",
-        details = { mode = bounded_string(request.params.mode, 80) },
-      }
-    end
-    call_reaper("SetMediaTrackInfo_Value", track, "I_SOLO", value)
-    return true
-  end)
-end
-
-local function safe_write_transport_set_edit_cursor(request)
-  call_reaper(
-    "SetEditCurPos",
-    bounded_number(request.params.position_seconds, 0),
-    request.params.move_view == true,
-    request.params.seek_playback == true
-  )
-  local state = read_transport_state()
-  return safe_write_a_summary(request, {
-    edit_cursor_seconds = state.edit_cursor_seconds,
-  })
-end
-
-local function safe_write_transport_set_time_selection(request)
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
-  if end_seconds < start_seconds then
-    return handler_error("PARAMS_INVALID", "Time selection end_seconds must be greater than or equal to start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
-  end
-  call_reaper("GetSet_LoopTimeRange", true, false, start_seconds, end_seconds, false)
-  return safe_write_a_summary(request, read_transport_state().time_selection)
-end
-
-local function safe_write_transport_clear_time_selection(request)
-  call_reaper("GetSet_LoopTimeRange", true, false, 0, 0, false)
-  return safe_write_a_summary(request, read_transport_state().time_selection)
-end
-
-local function safe_write_transport_set_loop_points(request)
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds)
-  if end_seconds < start_seconds then
-    return handler_error("PARAMS_INVALID", "Loop point end_seconds must be greater than or equal to start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
-  end
-  call_reaper("GetSet_LoopTimeRange", true, true, start_seconds, end_seconds, false)
-  return safe_write_a_summary(request, read_transport_state().loop_points)
-end
-
-local function safe_write_transport_clear_loop_points(request)
-  call_reaper("GetSet_LoopTimeRange", true, true, 0, 0, false)
-  return safe_write_a_summary(request, read_transport_state().loop_points)
-end
-
-local function safe_write_transport_set_repeat(request)
-  call_reaper("GetSetRepeat", request.params.enabled == true and 1 or 0)
-  return safe_write_a_summary(request, {
-    repeat_enabled = read_transport_state().repeat_enabled,
-  })
-end
-
-local function item_from_safe_write_refs(request)
-  local item = item_from_request_refs(request)
-  if not item then
-    return nil, {
-      code = "ITEM_NOT_FOUND",
-      message = "Safe-Write-A item request requires a resolvable item ref.",
-      details = {},
-    }
-  end
-  return item
-end
-
-local function safe_write_item_update(request, updater)
-  local item, failure = item_from_safe_write_refs(request)
-  if not item then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local ok, fail = updater(item)
-  if not ok then
-    return nil, fail
-  end
-  call_reaper("UpdateItemInProject", item)
-  return safe_write_a_summary(request, item_summary(item, true)), nil, nil, nil, safe_write_a_refs(item_object_ref(item))
-end
-
-local function safe_write_move_item(request)
-  return safe_write_item_update(request, function(item)
-    call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", bounded_number(request.params.position_seconds, 0))
-    return true
-  end)
-end
-
-local function safe_write_trim_item(request)
-  return safe_write_item_update(request, function(item)
-    call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", math.max(0, bounded_number(request.params.length_seconds, 0)))
-    if type(request.params.start_offset_seconds) == "number" then
-      local ok_take, take = call_reaper("GetActiveTake", item)
-      if ok_take and take then
-        call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", math.max(0, request.params.start_offset_seconds))
-      end
-    end
-    return true
-  end)
-end
-
-local function safe_write_set_item_fades(request)
-  return safe_write_item_update(request, function(item)
-    local fade_in = request.params.fade_in_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_in_seconds, 0)
-    local fade_out = request.params.fade_out_seconds == JSON_NULL and 0 or bounded_number(request.params.fade_out_seconds, 0)
-    call_reaper("SetMediaItemInfo_Value", item, "D_FADEINLEN", math.max(0, fade_in))
-    call_reaper("SetMediaItemInfo_Value", item, "D_FADEOUTLEN", math.max(0, fade_out))
-    return true
-  end)
-end
-
-local function safe_write_set_take_pitch(request)
-  return safe_write_item_update(request, function(item)
-    local ok_take, take = call_reaper("GetActiveTake", item)
-    if not ok_take or not take then
-      return false, {
-        code = "TAKE_NOT_FOUND",
-        message = "Safe-Write-A take pitch requires an active take.",
-        details = {},
-      }
-    end
-    call_reaper("SetMediaItemTakeInfo_Value", take, "D_PITCH", bounded_number(request.params.semitones, 0))
-    return true
-  end)
-end
-
-local function safe_write_set_item_snap_offset(request)
-  return safe_write_item_update(request, function(item)
-    call_reaper("SetMediaItemInfo_Value", item, "D_SNAPOFFSET", math.max(0, bounded_number(request.params.snap_offset_seconds, 0)))
-    return true
-  end)
-end
-
-local function safe_write_create_midi_item(request)
-  local track, failure = track_from_request_refs(request)
-  if not track then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
-  if end_seconds <= start_seconds then
-    return handler_error("PARAMS_INVALID", "MIDI item end_seconds must be greater than start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
-  end
-  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_seconds, end_seconds, false)
-  if not ok_item or not item then
-    return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
-  end
-  local ok_take, take = call_reaper("GetActiveTake", item)
-  if not ok_take or not take then
-    return handler_error("TAKE_NOT_FOUND", "Created MIDI item did not expose an active take.", {})
-  end
-  local summary = midi_take_summary(take)
-  summary.item_ref = item_ref_string(item)
-  summary.created = true
-  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
-end
-
-local function ppq_position(take, event, key)
-  local value = event[key]
-  if type(value) == "number" then
-    return value
-  end
-  local seconds_key = "seconds"
-  if key == "start_ppq" then
-    seconds_key = "start_seconds"
-  elseif key == "end_ppq" then
-    seconds_key = "end_seconds"
-  elseif key == "ppq" then
-    seconds_key = "position_seconds"
-  end
-  if type(event[seconds_key]) == "number" then
-    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
-    return ok and first_number(ppq) or 0
-  end
-  return 0
-end
-
-local function safe_write_insert_notes_batch(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
-  local inserted = 0
-  for index = 1, #notes do
-    local note = is_object(notes[index]) and notes[index] or {}
-    local start_ppq = ppq_position(take, note, "start_ppq")
-    local end_ppq = ppq_position(take, note, "end_ppq")
-    if end_ppq > start_ppq then
-      local ok, success = call_reaper(
-        "MIDI_InsertNote",
-        take,
-        note.selected == true,
-        note.muted == true,
-        start_ppq,
-        end_ppq,
-        math.max(0, math.min(15, integer_value(note.channel) or 0)),
-        math.max(0, math.min(127, integer_value(note.pitch) or 60)),
-        math.max(1, math.min(127, integer_value(note.velocity) or 96)),
-        true
-      )
-      if ok and success ~= false then
-        inserted = inserted + 1
-      end
-    end
-  end
-  if request.params.sort_events ~= false then
-    call_reaper("MIDI_Sort", take)
-  end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
-  summary.inserted_note_count = inserted
-  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
-end
-
-local function safe_write_insert_cc_batch(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local events = is_json_array(request.params.events) and request.params.events or json_array({})
-  local inserted = 0
-  for index = 1, #events do
-    local event = is_object(events[index]) and events[index] or {}
-    local ppq = ppq_position(take, event, "ppq")
-    local ok, success = call_reaper(
-      "MIDI_InsertCC",
-      take,
-      event.selected == true,
-      event.muted == true,
-      ppq,
-      176,
-      math.max(0, math.min(15, integer_value(event.channel) or 0)),
-      math.max(0, math.min(127, integer_value(event.controller) or 1)),
-      math.max(0, math.min(127, integer_value(event.value) or 0)),
-      true
-    )
-    if ok and success ~= false then
-      inserted = inserted + 1
-    end
-  end
-  if request.params.sort_events ~= false then
-    call_reaper("MIDI_Sort", take)
-  end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
-  summary.inserted_cc_count = inserted
-  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
-end
-
-local function text_sysex_type_value(kind)
-  if kind == "sysex" then
-    return -1
-  elseif kind == "lyric" then
-    return 5
-  elseif kind == "notation" then
-    return 15
-  end
-  return 1
-end
-
-local function safe_write_insert_text_sysex_events(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return handler_error(failure.code, failure.message, failure.details)
-  end
-  local events = is_json_array(request.params.events) and request.params.events or json_array({})
-  local inserted = 0
-  for index = 1, #events do
-    local event = is_object(events[index]) and events[index] or {}
-    local ppq = ppq_position(take, event, "ppq")
-    local ok, success = call_reaper(
-      "MIDI_InsertTextSysexEvt",
-      take,
-      event.selected == true,
-      event.muted == true,
-      ppq,
-      text_sysex_type_value(event.event_kind),
-      bounded_string(event.text or event.bytes or "", 240),
-      true
-    )
-    if ok and success ~= false then
-      inserted = inserted + 1
-    end
-  end
-  if request.params.sort_events ~= false then
-    call_reaper("MIDI_Sort", take)
-  end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
-  summary.inserted_text_sysex_count = inserted
-  return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
-end
 
 local SAFE_WRITE_A_HANDLERS = {
   ["project.set_metadata_field"] = safe_write_project_metadata,

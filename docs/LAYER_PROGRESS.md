@@ -626,14 +626,46 @@ Candidate closeout batch 4:
   policy, generated bundle freshness, registry parity, and no raw execution
   surfaces.
 
+Candidate closeout batch 5:
+
+- extracted exactly the 24 Safe-Write-A write/safe rows
+  (`template.project.set_metadata_field`,
+  `template.project.create_marker`, `template.project.create_region`,
+  `template.tracks.create_track`, `template.tracks.rename_track`,
+  `template.tracks.set_color`, `template.tracks.select_track`,
+  `template.tracks.set_mute`, `template.tracks.set_solo`,
+  `template.transport.set_edit_cursor`,
+  `template.transport.set_time_selection`,
+  `template.transport.clear_time_selection`,
+  `template.transport.set_loop_points`,
+  `template.transport.clear_loop_points`,
+  `template.transport.set_repeat`, `template.items.move_item`,
+  `template.items.trim_item`, `template.items.set_item_fades`,
+  `template.items.set_take_pitch`, `template.items.set_item_snap_offset`,
+  `template.midi.create_midi_item`, `template.midi.insert_notes_batch`,
+  `template.midi.insert_cc_batch`, and
+  `template.midi.insert_text_sysex_events`) into
+  `reaper/bridge/src/handlers/**` modules;
+- updated the bridge handler registry so all 60 registered rows are extracted,
+  for 60 extracted rows total and zero remaining `legacy_monolith` rows;
+- kept the Safe-Write-A bridge surface as only
+  `run_command:template.execute` with the existing 24 approved capabilities,
+  required undo, required verification, and `artifacts.allow:false`;
+- kept existing route allowlists, operation keys, MCP tools, template ids,
+  recipes, runtime capabilities, live smoke scope, old live matrix, raw
+  Lua/action/shell/process policy, and arbitrary output paths untouched;
+- refreshed focused 4D.R tests for exact extracted-row membership,
+  capability-dispatch binding, handler path policy, generated bundle
+  freshness, registry parity, and no raw execution surfaces.
+
 Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
 and `git diff --check`.
 
-Known risks: this remains a candidate closeout batch, not a full handler split.
-Only the five Wave 0, nine Wave 1A, 15 Read-B, and seven First-Real-Fixture-A
-A1/A2/A3 artifact/report rows are extracted; the remaining 24 registered rows
-intentionally stay `legacy_monolith` until later reviewed extraction batches.
+Known risks: this remains a candidate closeout batch, not a live-smoke
+promotion. Static/fake coverage proves registry and generated-bundle parity
+only; real REAPER Safe-Write-A live evidence still requires a separately
+approved opt-in route.
 
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 

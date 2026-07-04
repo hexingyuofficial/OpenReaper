@@ -73,11 +73,38 @@ const EXTRACTED_FIRST_REAL_A_HANDLERS = Object.freeze(new Map([
   ["template.render.create_delivery_report", ["render/create_delivery_report.lua", "create_delivery_report"]],
   ["template.items.create_layer_report", ["items/create_layer_report.lua", "create_layer_report"]],
 ]));
+const EXTRACTED_SAFE_WRITE_A_HANDLERS = Object.freeze(new Map([
+  ["template.project.set_metadata_field", ["project/set_metadata_field.lua", "safe_write_project_metadata"]],
+  ["template.project.create_marker", ["project/create_marker.lua", "safe_write_create_marker"]],
+  ["template.project.create_region", ["project/create_region.lua", "safe_write_create_region"]],
+  ["template.tracks.create_track", ["tracks/create_track.lua", "safe_write_create_track"]],
+  ["template.tracks.rename_track", ["tracks/rename_track.lua", "safe_write_rename_track"]],
+  ["template.tracks.set_color", ["tracks/set_color.lua", "safe_write_set_track_color"]],
+  ["template.tracks.select_track", ["tracks/select_track.lua", "safe_write_select_track"]],
+  ["template.tracks.set_mute", ["tracks/set_mute.lua", "safe_write_set_track_mute"]],
+  ["template.tracks.set_solo", ["tracks/set_solo.lua", "safe_write_set_track_solo"]],
+  ["template.transport.set_edit_cursor", ["transport/set_edit_cursor.lua", "safe_write_transport_set_edit_cursor"]],
+  ["template.transport.set_time_selection", ["transport/set_time_selection.lua", "safe_write_transport_set_time_selection"]],
+  ["template.transport.clear_time_selection", ["transport/clear_time_selection.lua", "safe_write_transport_clear_time_selection"]],
+  ["template.transport.set_loop_points", ["transport/set_loop_points.lua", "safe_write_transport_set_loop_points"]],
+  ["template.transport.clear_loop_points", ["transport/clear_loop_points.lua", "safe_write_transport_clear_loop_points"]],
+  ["template.transport.set_repeat", ["transport/set_repeat.lua", "safe_write_transport_set_repeat"]],
+  ["template.items.move_item", ["items/move_item.lua", "safe_write_move_item"]],
+  ["template.items.trim_item", ["items/trim_item.lua", "safe_write_trim_item"]],
+  ["template.items.set_item_fades", ["items/set_item_fades.lua", "safe_write_set_item_fades"]],
+  ["template.items.set_take_pitch", ["items/set_take_pitch.lua", "safe_write_set_take_pitch"]],
+  ["template.items.set_item_snap_offset", ["items/set_item_snap_offset.lua", "safe_write_set_item_snap_offset"]],
+  ["template.midi.create_midi_item", ["midi/create_midi_item.lua", "safe_write_create_midi_item"]],
+  ["template.midi.insert_notes_batch", ["midi/insert_notes_batch.lua", "safe_write_insert_notes_batch"]],
+  ["template.midi.insert_cc_batch", ["midi/insert_cc_batch.lua", "safe_write_insert_cc_batch"]],
+  ["template.midi.insert_text_sysex_events", ["midi/insert_text_sysex_events.lua", "safe_write_insert_text_sysex_events"]],
+]));
 const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_WAVE0_HANDLERS,
   ...EXTRACTED_WAVE1A_HANDLERS,
   ...EXTRACTED_READ_B_HANDLERS,
   ...EXTRACTED_FIRST_REAL_A_HANDLERS,
+  ...EXTRACTED_SAFE_WRITE_A_HANDLERS,
 ]));
 
 describe("Layer 4D.R bridge handler registry", () => {
@@ -116,9 +143,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
       entryCount: 60,
-      legacyMonolithCount: 24,
-      extractedHandlerCount: 36,
-      handlerModuleCount: 36,
+      legacyMonolithCount: 0,
+      extractedHandlerCount: 60,
+      handlerModuleCount: 60,
       routeCount: 7,
       operationCount: 37,
     });
@@ -146,7 +173,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0, Wave 1A, Read-B, and First-Real-Fixture-A A1/A2/A3 batches into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0, Wave 1A, Read-B, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
     assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
@@ -171,6 +198,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => ["first-real-a1", "first-real-a2-render", "first-real-a3-layer-report"].includes(entry.route) && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_FIRST_REAL_A_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "safe-write-a" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_SAFE_WRITE_A_HANDLERS.keys()],
     );
 
     for (const [templateId, [file, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
@@ -233,7 +266,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 24 legacy_monolith row\(s\); 36 extracted handler row\(s\); 36 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 0 legacy_monolith row\(s\); 60 extracted handler row\(s\); 60 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
@@ -249,6 +282,14 @@ describe("Layer 4D.R bridge handler registry", () => {
     for (const [templateId, [, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
       const entry = REGISTRY.entries.find((candidate) => candidate.template_id === templateId);
       const key = `${entry.operation.family}:${entry.operation.name}`;
+      if (entry.operation.name === "template.execute") {
+        assert.match(
+          BRIDGE_SOURCE,
+          new RegExp(`\\["${escapeRegExp(entry.capability)}"\\]\\s*=\\s*${handlerExport}\\b`),
+          templateId,
+        );
+        continue;
+      }
       assert.match(
         BRIDGE_SOURCE,
         new RegExp(`\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?pack\\s*=\\s*"${entry.pack}"[\\s\\S]*?handler\\s*=\\s*${handlerExport}\\b`),

@@ -337,6 +337,16 @@ function validateExtractedHandlerBindings({ entries, source, errors }) {
   for (const entry of entries) {
     if (!entry || entry.handler_file === LEGACY_MONOLITH_MARKER) continue;
     if (typeof entry.handler_export !== "string") continue;
+    if (entry.operation?.name === "template.execute") {
+      const capability = typeof entry.capability === "string" ? entry.capability : "";
+      const pattern = new RegExp(
+        `\\["${escapeRegExp(capability)}"\\]\\s*=\\s*${escapeRegExp(entry.handler_export)}\\b`,
+      );
+      if (!pattern.test(source)) {
+        errors.push(`${entry.template_id} extracted Safe-Write-A handler export is not bound in 40-route-pack-handlers.lua: ${entry.handler_export}.`);
+      }
+      continue;
+    }
     const key = operationKey(entry);
     const pattern = new RegExp(
       `\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?handler\\s*=\\s*${escapeRegExp(entry.handler_export)}\\b`,
