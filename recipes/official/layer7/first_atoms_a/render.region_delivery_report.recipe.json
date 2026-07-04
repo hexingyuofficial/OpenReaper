@@ -1,0 +1,222 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.render.region_delivery_report",
+  "title": "Region delivery report",
+  "summary": "Draft read-only atom that reports retained region WAV render artifacts without delivery actions.",
+  "pack": "render",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "delivery_report",
+  "tags": ["render", "delivery", "report", "artifact", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "create_delivery_report",
+      "title": "Create delivery report",
+      "summary": "Create a bounded delivery report from retained render output and job evidence artifacts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.render.create_delivery_report",
+        "input": {
+          "max_report_rows": 12,
+          "include_output_metadata": true,
+          "include_job_evidence": true,
+          "include_region_summary": true
+        },
+        "refs": {
+          "output_artifact_refs": [
+            {
+              "kind": "artifact",
+              "ref": "artifact:render:region_wav_output:art_20260704000000000_002_a2a2a2",
+              "identity": {
+                "scheme": "artifact_ref",
+                "value": "artifact:render:region_wav_output:art_20260704000000000_002_a2a2a2"
+              },
+              "summary": {
+                "schema": "render.region_wav_output.v1"
+              }
+            }
+          ],
+          "render_job_evidence_ref": {
+            "kind": "artifact",
+            "ref": "artifact:render:render_job_evidence:art_20260704000000100_002_b2b2b2",
+            "identity": {
+              "scheme": "artifact_ref",
+              "value": "artifact:render:render_job_evidence:art_20260704000000100_002_b2b2b2"
+            },
+            "summary": {
+              "schema": "render.render_job_evidence.v1"
+            }
+          },
+          "region_ref": {
+            "kind": "region",
+            "ref": "region:caller:bounded_region",
+            "identity": {
+              "scheme": "caller_supplied",
+              "value": "bounded_region"
+            }
+          },
+          "job_ref": {
+            "kind": "job",
+            "ref": "job:render:region_wav",
+            "identity": {
+              "scheme": "job_id",
+              "value": "render.region_wav"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_delivery_report",
+      "evidence": "evidence_create_delivery_report",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_report"
+    },
+    {
+      "id": "read_delivery_summary",
+      "title": "Read delivery summary",
+      "summary": "Read a bounded delivery report summary by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["delivery_report"]
+      },
+      "checkpoint": "checkpoint_read_delivery_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_delivery_payload",
+      "title": "Read delivery payload",
+      "summary": "Read the bounded delivery report payload by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": ["delivery_report"]
+      },
+      "checkpoint": "checkpoint_read_delivery_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_delivery_report_artifact",
+      "kind": "expected_output",
+      "summary": "The atom must retain one render delivery report artifact ref.",
+      "required": true,
+      "evidence": ["evidence_create_delivery_report"],
+      "outputs": {
+        "refs": ["region_ref", "job_ref"],
+        "artifacts": ["region_wav_output", "render_job_evidence", "delivery_report"],
+        "jobs": [],
+        "state": ["artifact_provenance"]
+      }
+    },
+    {
+      "id": "assert_no_delivery_transfer",
+      "kind": "checkpoint",
+      "summary": "The report summarizes retained facts only and performs no copy, upload, or publish work.",
+      "required": true,
+      "evidence": ["evidence_create_delivery_report"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_delivery_report",
+        "after_step": "create_delivery_report",
+        "required_evidence": ["evidence_create_delivery_report"],
+        "on_resume": "continue_next_step",
+        "summary": "Delivery report artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_delivery_summary",
+        "after_step": "read_delivery_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Delivery report summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_delivery_payload",
+        "after_step": "read_delivery_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Delivery report payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_delivery_report",
+        "step": "create_delivery_report",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.render.create_delivery_report",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "retained"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_report",
+        "trigger": "template_error",
+        "step": "create_delivery_report",
+        "strategy": "retry_step",
+        "summary": "Retry report creation only after retained render artifact provenance is still valid."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "missing_evidence",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause when retained render artifacts or job evidence are missing."
+      }
+    ],
+    "risk_gates": []
+  }
+}

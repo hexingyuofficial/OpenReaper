@@ -1,0 +1,185 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.project.cleanup_fingerprint_report",
+  "title": "Cleanup fingerprint report",
+  "summary": "Draft read-only atom that emits a bounded project cleanup fingerprint report artifact.",
+  "pack": "project",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "cleanup_report",
+  "tags": ["project", "cleanup", "report", "artifact", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "create_cleanup_report",
+      "title": "Create cleanup report",
+      "summary": "Create a bounded project cleanup report with fingerprint facts only.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.project.create_cleanup_report",
+        "input": {
+          "max_report_rows": 24,
+          "marker_region_limit": 64,
+          "tempo_marker_limit": 32,
+          "include_markers": true,
+          "include_regions": true,
+          "include_metadata": true,
+          "include_tempo": true,
+          "include_project_fingerprint": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_cleanup_report",
+      "evidence": "evidence_create_cleanup_report",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_report"
+    },
+    {
+      "id": "read_cleanup_summary",
+      "title": "Read cleanup summary",
+      "summary": "Read the cleanup report summary by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["cleanup_report"]
+      },
+      "checkpoint": "checkpoint_read_cleanup_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_cleanup_payload",
+      "title": "Read cleanup payload",
+      "summary": "Read the bounded cleanup report payload by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": ["cleanup_report"]
+      },
+      "checkpoint": "checkpoint_read_cleanup_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_cleanup_report_artifact",
+      "kind": "expected_output",
+      "summary": "The atom must retain one project cleanup report artifact ref.",
+      "required": true,
+      "evidence": ["evidence_create_cleanup_report"],
+      "outputs": {
+        "refs": [],
+        "artifacts": ["cleanup_report"],
+        "jobs": [],
+        "state": ["project_fingerprint"]
+      }
+    },
+    {
+      "id": "assert_no_cleanup_apply_authority",
+      "kind": "checkpoint",
+      "summary": "The report is not delete, move, or apply authority for cleanup changes.",
+      "required": true,
+      "evidence": ["evidence_create_cleanup_report"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_cleanup_report",
+        "after_step": "create_cleanup_report",
+        "required_evidence": ["evidence_create_cleanup_report"],
+        "on_resume": "continue_next_step",
+        "summary": "Cleanup report artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_cleanup_summary",
+        "after_step": "read_cleanup_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Cleanup report summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_cleanup_payload",
+        "after_step": "read_cleanup_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Cleanup report payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_cleanup_report",
+        "step": "create_cleanup_report",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.project.create_cleanup_report",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_report",
+        "trigger": "template_error",
+        "step": "create_cleanup_report",
+        "strategy": "retry_step",
+        "summary": "Retry report creation if project identity remains stable."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if retained project fingerprint evidence conflicts."
+      }
+    ],
+    "risk_gates": []
+  }
+}

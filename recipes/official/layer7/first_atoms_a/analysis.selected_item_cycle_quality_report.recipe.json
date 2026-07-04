@@ -1,0 +1,333 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.analysis.selected_item_cycle_quality_report",
+  "title": "Selected item cycle quality report",
+  "summary": "Draft atom that analyzes one bounded selected item and emits compact loop QA artifact evidence.",
+  "pack": "analysis",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "loop_qa_report",
+  "tags": ["analysis", "loop", "report", "artifact", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "detect_loop_candidates",
+      "title": "Detect loop candidates",
+      "summary": "Analyze one caller-bounded selected item for compact loop candidate facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.detect_loop_candidates",
+        "input": {
+          "max_candidates": 8
+        },
+        "refs": {
+          "item_ref": {
+            "kind": "item",
+            "ref": "item:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_detect_loop_candidates",
+      "evidence": "evidence_detect_loop_candidates",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_detect"
+    },
+    {
+      "id": "measure_click_risk",
+      "title": "Measure click risk",
+      "summary": "Measure loop-boundary click risk from the retained loop candidate artifact.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.measure_loop_click_risk",
+        "input": {
+          "boundary_window_ms": 12,
+          "max_candidates": 8
+        },
+        "refs": {
+          "item_ref": {
+            "kind": "item",
+            "ref": "item:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          },
+          "candidate_artifact_ref": {
+            "$from_step": "detect_loop_candidates",
+            "output": "artifact_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_measure_click_risk",
+      "evidence": "evidence_measure_click_risk",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_measure"
+    },
+    {
+      "id": "create_loop_qa_report",
+      "title": "Create loop QA report",
+      "summary": "Create the bounded loop QA report artifact from retained analysis artifacts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.create_loop_qa_report",
+        "input": {
+          "max_report_rows": 12
+        },
+        "refs": {
+          "candidate_artifact_ref": {
+            "$from_step": "detect_loop_candidates",
+            "output": "artifact_ref"
+          },
+          "click_risk_artifact_ref": {
+            "$from_step": "measure_click_risk",
+            "output": "artifact_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_loop_qa_report",
+      "evidence": "evidence_create_loop_qa_report",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_report"
+    },
+    {
+      "id": "read_loop_qa_summary",
+      "title": "Read loop QA summary",
+      "summary": "Read a bounded summary of the loop QA artifact by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["loop_qa_report"]
+      },
+      "checkpoint": "checkpoint_read_loop_qa_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_loop_qa_payload",
+      "title": "Read loop QA payload",
+      "summary": "Read the bounded loop QA payload only through the declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": ["loop_qa_report"]
+      },
+      "checkpoint": "checkpoint_read_loop_qa_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_loop_artifacts",
+      "kind": "expected_output",
+      "summary": "The atom must retain candidate, click-risk, and loop QA artifact refs.",
+      "required": true,
+      "evidence": [
+        "evidence_detect_loop_candidates",
+        "evidence_measure_click_risk",
+        "evidence_create_loop_qa_report"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": ["loop_candidates", "loop_click_risk", "loop_qa_report"],
+        "jobs": [],
+        "state": []
+      }
+    },
+    {
+      "id": "assert_selected_item_boundary",
+      "kind": "state",
+      "summary": "The selected item input must be caller-bounded and non-ambiguous before analysis.",
+      "required": true,
+      "evidence": ["evidence_detect_loop_candidates"],
+      "outputs": {
+        "refs": ["item_ref"],
+        "artifacts": [],
+        "jobs": [],
+        "state": ["selected_item"]
+      }
+    },
+    {
+      "id": "assert_runtime_evidence",
+      "kind": "template_evidence",
+      "summary": "Each template step must retain compact template.runtime.evidence.v1 evidence only.",
+      "required": true,
+      "evidence": [
+        "evidence_detect_loop_candidates",
+        "evidence_measure_click_risk",
+        "evidence_create_loop_qa_report"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_detect_loop_candidates",
+        "after_step": "detect_loop_candidates",
+        "required_evidence": ["evidence_detect_loop_candidates"],
+        "on_resume": "continue_next_step",
+        "summary": "Loop candidate artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_measure_click_risk",
+        "after_step": "measure_click_risk",
+        "required_evidence": ["evidence_measure_click_risk"],
+        "on_resume": "continue_next_step",
+        "summary": "Click-risk artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_create_loop_qa_report",
+        "after_step": "create_loop_qa_report",
+        "required_evidence": ["evidence_create_loop_qa_report"],
+        "on_resume": "continue_next_step",
+        "summary": "Loop QA report artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_loop_qa_summary",
+        "after_step": "read_loop_qa_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Bounded loop QA artifact summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_loop_qa_payload",
+        "after_step": "read_loop_qa_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Bounded loop QA artifact payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_detect_loop_candidates",
+        "step": "detect_loop_candidates",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.detect_loop_candidates",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_measure_click_risk",
+        "step": "measure_click_risk",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.measure_loop_click_risk",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_loop_qa_report",
+        "step": "create_loop_qa_report",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.create_loop_qa_report",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_detect",
+        "trigger": "template_error",
+        "step": "detect_loop_candidates",
+        "strategy": "retry_step",
+        "summary": "Retry candidate detection if the selected item remains bounded."
+      },
+      {
+        "id": "branch_retry_measure",
+        "trigger": "template_error",
+        "step": "measure_click_risk",
+        "strategy": "retry_step",
+        "summary": "Retry click-risk measurement from retained candidate evidence."
+      },
+      {
+        "id": "branch_retry_report",
+        "trigger": "template_error",
+        "step": "create_loop_qa_report",
+        "strategy": "retry_step",
+        "summary": "Retry report creation from retained analysis artifacts."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if selected item identity or retained evidence is ambiguous."
+      }
+    ],
+    "risk_gates": []
+  }
+}

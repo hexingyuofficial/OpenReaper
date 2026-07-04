@@ -1,0 +1,456 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.midi.track_phrase_seed",
+  "title": "Track phrase seed",
+  "summary": "Draft write-risk atom that creates one track and MIDI item, inserts a small phrase, and reads it back.",
+  "pack": "midi",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "midi_phrase",
+  "tags": ["midi", "track", "phrase", "seed", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "read_project_state",
+      "title": "Read project state",
+      "summary": "Read bounded project state before creating track and MIDI content.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "project.summary",
+        "refs": []
+      },
+      "checkpoint": "checkpoint_read_project_state",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "create_phrase_track",
+      "title": "Create phrase track",
+      "summary": "Create one track for the phrase seed.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.create_track",
+        "input": {
+          "name": "OpenReaper Phrase Seed"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_phrase_track",
+      "evidence": "evidence_create_phrase_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_track"
+    },
+    {
+      "id": "create_midi_item",
+      "title": "Create MIDI item",
+      "summary": "Create a short MIDI item on the phrase track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.midi.create_midi_item",
+        "input": {
+          "start_seconds": 0,
+          "end_seconds": 2
+        },
+        "refs": {
+          "track_ref": {
+            "$from_step": "create_phrase_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_midi_item",
+      "evidence": "evidence_create_midi_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_item"
+    },
+    {
+      "id": "read_take_grid",
+      "title": "Read take grid",
+      "summary": "Read bounded grid facts for the created MIDI take.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.midi.read_take_grid",
+        "input": {},
+        "refs": {
+          "take_ref": {
+            "$from_step": "create_midi_item",
+            "output": "take_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_take_grid",
+      "evidence": "evidence_read_take_grid",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "insert_notes",
+      "title": "Insert notes",
+      "summary": "Insert a tiny deterministic note phrase into the MIDI take.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.midi.insert_notes_batch",
+        "input": {
+          "notes": [
+            {
+              "pitch": 60,
+              "velocity": 88,
+              "start_ppq": 0,
+              "end_ppq": 480,
+              "channel": 0
+            },
+            {
+              "pitch": 64,
+              "velocity": 84,
+              "start_ppq": 480,
+              "end_ppq": 960,
+              "channel": 0
+            },
+            {
+              "pitch": 67,
+              "velocity": 82,
+              "start_ppq": 960,
+              "end_ppq": 1440,
+              "channel": 0
+            }
+          ],
+          "position_unit": "ppq",
+          "sort_events": true
+        },
+        "refs": {
+          "take_ref": {
+            "$from_step": "create_midi_item",
+            "output": "take_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_insert_notes",
+      "evidence": "evidence_insert_notes",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_notes"
+    },
+    {
+      "id": "read_event_counts",
+      "title": "Read event counts",
+      "summary": "Read bounded MIDI event counts after note insertion.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.midi.read_take_event_counts",
+        "input": {},
+        "refs": {
+          "take_ref": {
+            "$from_step": "create_midi_item",
+            "output": "take_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_event_counts",
+      "evidence": "evidence_read_event_counts",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "list_take_notes",
+      "title": "List take notes",
+      "summary": "Read back a bounded sample of inserted MIDI notes.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.midi.list_take_notes",
+        "input": {
+          "limit": 16,
+          "include_project_time": true
+        },
+        "refs": {
+          "take_ref": {
+            "$from_step": "create_midi_item",
+            "output": "take_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_list_take_notes",
+      "evidence": "evidence_list_take_notes",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_midi_phrase_refs",
+      "kind": "expected_output",
+      "summary": "The atom must retain compact refs for the created track, MIDI item, and take.",
+      "required": true,
+      "evidence": [
+        "evidence_create_phrase_track",
+        "evidence_create_midi_item",
+        "evidence_insert_notes",
+        "evidence_read_event_counts",
+        "evidence_list_take_notes"
+      ],
+      "outputs": {
+        "refs": ["track_ref", "item_ref", "take_ref"],
+        "artifacts": [],
+        "jobs": [],
+        "state": ["midi_event_counts", "midi_notes"]
+      }
+    },
+    {
+      "id": "assert_current_tempo_only",
+      "kind": "checkpoint",
+      "summary": "The phrase seed uses the current project tempo and does not write tempo or transport state.",
+      "required": true,
+      "evidence": ["evidence_read_take_grid"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": ["take_grid"]
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_project_state",
+        "after_step": "read_project_state",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Fresh bounded project state was read before writes."
+      },
+      {
+        "id": "checkpoint_create_phrase_track",
+        "after_step": "create_phrase_track",
+        "required_evidence": ["evidence_create_phrase_track"],
+        "on_resume": "continue_next_step",
+        "summary": "Phrase track ref evidence is retained."
+      },
+      {
+        "id": "checkpoint_create_midi_item",
+        "after_step": "create_midi_item",
+        "required_evidence": ["evidence_create_midi_item"],
+        "on_resume": "continue_next_step",
+        "summary": "MIDI item and take ref evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_take_grid",
+        "after_step": "read_take_grid",
+        "required_evidence": ["evidence_read_take_grid"],
+        "on_resume": "continue_next_step",
+        "summary": "MIDI take grid evidence is retained."
+      },
+      {
+        "id": "checkpoint_insert_notes",
+        "after_step": "insert_notes",
+        "required_evidence": ["evidence_insert_notes"],
+        "on_resume": "continue_next_step",
+        "summary": "Inserted MIDI note evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_event_counts",
+        "after_step": "read_event_counts",
+        "required_evidence": ["evidence_read_event_counts"],
+        "on_resume": "continue_next_step",
+        "summary": "MIDI event count evidence is retained."
+      },
+      {
+        "id": "checkpoint_list_take_notes",
+        "after_step": "list_take_notes",
+        "required_evidence": ["evidence_list_take_notes"],
+        "on_resume": "continue_next_step",
+        "summary": "Bounded MIDI note readback evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_phrase_track",
+        "step": "create_phrase_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.create_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_midi_item",
+        "step": "create_midi_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.midi.create_midi_item",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_take_grid",
+        "step": "read_take_grid",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.midi.read_take_grid",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_insert_notes",
+        "step": "insert_notes",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.midi.insert_notes_batch",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_event_counts",
+        "step": "read_event_counts",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.midi.read_take_event_counts",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_list_take_notes",
+        "step": "list_take_notes",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.midi.list_take_notes",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_track",
+        "trigger": "template_error",
+        "step": "create_phrase_track",
+        "strategy": "retry_step",
+        "summary": "Retry track creation only when fresh-state evidence permits."
+      },
+      {
+        "id": "branch_retry_item",
+        "trigger": "template_error",
+        "step": "create_midi_item",
+        "strategy": "retry_step",
+        "summary": "Retry MIDI item creation from the retained track ref."
+      },
+      {
+        "id": "branch_retry_notes",
+        "trigger": "template_error",
+        "step": "insert_notes",
+        "strategy": "retry_step",
+        "summary": "Retry note insertion only when resume evidence confirms it is safe."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause when project freshness, refs, or MIDI readback evidence conflict."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_fresh_state",
+        "applies_to": ["write"],
+        "required_before_step": "create_phrase_track",
+        "policy": "fresh_state",
+        "blocks_auto_resume": true,
+        "summary": "Require fresh bounded project state before track and MIDI writes."
+      },
+      {
+        "id": "gate_manual_approval",
+        "applies_to": ["write"],
+        "required_before_step": "create_phrase_track",
+        "policy": "manual_approval",
+        "blocks_auto_resume": true,
+        "summary": "Require manual approval before creating track and MIDI content."
+      }
+    ]
+  }
+}

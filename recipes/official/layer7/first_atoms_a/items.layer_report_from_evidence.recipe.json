@@ -1,0 +1,194 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.items.layer_report_from_evidence",
+  "title": "Layer report from evidence",
+  "summary": "Draft A3 atom that reports a typed fixture layer evidence artifact; it does not derive live layer roles.",
+  "pack": "items",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "item_layer_report",
+  "tags": ["items", "layer", "report", "artifact", "fixture", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "create_layer_report",
+      "title": "Create layer report",
+      "summary": "Create a bounded item-layer report from a typed items.layer_evidence.v1 fixture artifact.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.create_layer_report",
+        "input": {
+          "max_report_rows": 24,
+          "include_track_facts": true,
+          "include_color_facts": true,
+          "include_item_samples": true
+        },
+        "refs": {
+          "layer_evidence_artifact_ref": {
+            "kind": "artifact",
+            "ref": "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3",
+            "identity": {
+              "scheme": "artifact_ref",
+              "value": "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3"
+            },
+            "summary": {
+              "schema": "items.layer_evidence.v1",
+              "source": "typed_fixture"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_layer_report",
+      "evidence": "evidence_create_layer_report",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_report"
+    },
+    {
+      "id": "read_layer_report_summary",
+      "title": "Read layer report summary",
+      "summary": "Read a bounded layer report summary by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["layer_report"]
+      },
+      "checkpoint": "checkpoint_read_layer_report_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_layer_report_payload",
+      "title": "Read layer report payload",
+      "summary": "Read the bounded layer report payload by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": ["layer_report"]
+      },
+      "checkpoint": "checkpoint_read_layer_report_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_layer_report_artifact",
+      "kind": "expected_output",
+      "summary": "The atom must retain the fixture evidence label and one layer report artifact ref.",
+      "required": true,
+      "evidence": ["evidence_create_layer_report"],
+      "outputs": {
+        "refs": [],
+        "artifacts": ["layer_evidence", "layer_report"],
+        "jobs": [],
+        "state": ["typed_fixture_artifact"]
+      }
+    },
+    {
+      "id": "assert_a3_fixture_caveat",
+      "kind": "checkpoint",
+      "summary": "A3 is fixture-backed report evidence only, not live role classification or arrangement.",
+      "required": true,
+      "evidence": ["evidence_create_layer_report"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_layer_report",
+        "after_step": "create_layer_report",
+        "required_evidence": ["evidence_create_layer_report"],
+        "on_resume": "continue_next_step",
+        "summary": "Layer report artifact evidence is retained from a typed fixture input."
+      },
+      {
+        "id": "checkpoint_read_layer_report_summary",
+        "after_step": "read_layer_report_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Layer report summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_layer_report_payload",
+        "after_step": "read_layer_report_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Layer report payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_layer_report",
+        "step": "create_layer_report",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.create_layer_report",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "retained"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_report",
+        "trigger": "template_error",
+        "step": "create_layer_report",
+        "strategy": "retry_step",
+        "summary": "Retry only if the typed fixture artifact remains available and unchanged."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "missing_evidence",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if the typed fixture artifact or report artifact is missing."
+      }
+    ],
+    "risk_gates": []
+  }
+}

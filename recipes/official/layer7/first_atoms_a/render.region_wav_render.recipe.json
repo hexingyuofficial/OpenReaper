@@ -1,0 +1,244 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.render.region_wav_render",
+  "title": "Region WAV render",
+  "summary": "Draft write-risk atom that renders one caller-supplied region to a managed WAV artifact.",
+  "pack": "render",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "render_job",
+  "tags": ["render", "region", "wav", "artifact", "first_atoms_a"],
+  "steps": [
+    {
+      "id": "read_project_state",
+      "title": "Read project state",
+      "summary": "Read bounded project state before the write-risk render step.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "project.summary",
+        "refs": []
+      },
+      "checkpoint": "checkpoint_read_project_state",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "render_region_wav",
+      "title": "Render region WAV",
+      "summary": "Render one existing region to the OpenReaper managed render root.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.render.render_region_wav",
+        "input": {
+          "format": "wav",
+          "output_policy": "openreaper_managed_render_root",
+          "collision_policy": "fail_if_exists",
+          "sample_rate_hz": 48000,
+          "bit_depth": 24,
+          "channel_count": 2,
+          "include_sidecar_manifest": true
+        },
+        "refs": {
+          "region_ref": {
+            "kind": "region",
+            "ref": "region:caller:bounded_region",
+            "identity": {
+              "scheme": "caller_supplied",
+              "value": "bounded_region"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_render_region_wav",
+      "evidence": "evidence_render_region_wav",
+      "idempotency": {
+        "mode": "required",
+        "key_scope": "input_refs",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_render"
+    },
+    {
+      "id": "read_render_output_summary",
+      "title": "Read render output summary",
+      "summary": "Read bounded metadata for the rendered WAV artifact by declared label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["region_wav_output"]
+      },
+      "checkpoint": "checkpoint_read_render_output_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_render_evidence_summary",
+      "title": "Read render evidence summary",
+      "summary": "Read bounded render job evidence by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": ["render_job_evidence"]
+      },
+      "checkpoint": "checkpoint_read_render_evidence_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_render_outputs",
+      "kind": "expected_output",
+      "summary": "The atom must retain render job and managed WAV artifact evidence refs.",
+      "required": true,
+      "evidence": ["evidence_render_region_wav"],
+      "outputs": {
+        "refs": ["region_ref"],
+        "artifacts": ["region_wav_output", "render_job_evidence"],
+        "jobs": ["job_ref"],
+        "state": ["managed_wav_metadata"]
+      }
+    },
+    {
+      "id": "assert_managed_render_root",
+      "kind": "checkpoint",
+      "summary": "The render must use the managed render root and declared collision policy.",
+      "required": true,
+      "evidence": ["evidence_render_region_wav"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": ["collision_policy"]
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_project_state",
+        "after_step": "read_project_state",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Fresh bounded project state was read before rendering."
+      },
+      {
+        "id": "checkpoint_render_region_wav",
+        "after_step": "render_region_wav",
+        "required_evidence": ["evidence_render_region_wav"],
+        "on_resume": "continue_next_step",
+        "summary": "Render job and output artifact evidence are retained."
+      },
+      {
+        "id": "checkpoint_read_render_output_summary",
+        "after_step": "read_render_output_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Rendered WAV artifact summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_render_evidence_summary",
+        "after_step": "read_render_evidence_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Render job evidence summary was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_render_region_wav",
+        "step": "render_region_wav",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.render.render_region_wav",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 2,
+          "jobs_min": 1,
+          "last_result_refs_min": 1
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_render",
+        "trigger": "template_error",
+        "step": "render_region_wav",
+        "strategy": "retry_step",
+        "summary": "Retry only when idempotency and collision policy evidence allow it."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "risk_gate_blocked",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause when managed root, collision policy, or region identity needs review."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_fresh_state",
+        "applies_to": ["write"],
+        "required_before_step": "render_region_wav",
+        "policy": "fresh_state",
+        "blocks_auto_resume": true,
+        "summary": "Require fresh bounded project state before rendering."
+      },
+      {
+        "id": "gate_artifact_path_review",
+        "applies_to": ["write"],
+        "required_before_step": "render_region_wav",
+        "policy": "artifact_path_review",
+        "blocks_auto_resume": true,
+        "summary": "Review managed render root and collision policy before output creation."
+      },
+      {
+        "id": "gate_manual_approval",
+        "applies_to": ["write"],
+        "required_before_step": "render_region_wav",
+        "policy": "manual_approval",
+        "blocks_auto_resume": true,
+        "summary": "Require manual approval before the write-risk render step."
+      }
+    ]
+  }
+}

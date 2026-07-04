@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring",
+    "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes",
     "check:layout": "node scripts/check-repo-layout.mjs",
     "check:tool-abi": "node scripts/check-tool-abi.mjs",
     "check:discovery-menu": "node scripts/check-discovery-menu.mjs",
@@ -19,8 +19,9 @@
     "check:artifact-state-store": "node scripts/check-artifact-state-store.mjs",
     "check:recipe-contract": "node scripts/check-recipe-contract.mjs",
     "check:user-recipe-authoring": "node scripts/check-user-recipe-authoring.mjs && node --test tests/layer6/user-recipe-authoring.test.mjs",
+    "check:official-recipes": "node scripts/check-official-recipes.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
     "build:live-bridge": "node scripts/build-live-bridge.mjs",
-    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring"
+    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes"
   }
 }
