@@ -1311,9 +1311,28 @@ local function read_artifact_envelope(ref, expected)
   end
   return envelope_or_error
 end
--- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk.
+-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk and out of one giant function.
 local dispatch_request = (function()
+local OPENREAPER_HANDLER_EXPORTS = {}
+local OPENREAPER_HANDLER_SHARED = {}
+local function __openreaper_register_handler_module(module_name, loader)
+  local module = loader()
+  if type(module) ~= "table" then
+    error("OpenReaper bridge handler module did not return exports: " .. tostring(module_name))
+  end
+  if type(module.shared) == "table" then
+    for key, value in pairs(module.shared) do
+      OPENREAPER_HANDLER_SHARED[key] = value
+    end
+  end
+  if type(module.exports) == "table" then
+    for key, value in pairs(module.exports) do
+      OPENREAPER_HANDLER_EXPORTS[key] = value
+    end
+  end
+end
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_summary.lua
+__openreaper_register_handler_module("project/read_summary.lua", function()
 -- Extracted Wave 0 handler: template.project.read_summary.
 
 local function read_project_summary_current_project()
@@ -1353,8 +1372,14 @@ local function read_project_summary(request)
   end
   return summary
 end
+return {
+  exports = { read_project_summary = read_project_summary },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/read_state.lua
+__openreaper_register_handler_module("transport/read_state.lua", function()
 -- Extracted Wave 0 handler: template.transport.read_state.
 
 local function read_transport_state_has_flag(value, flag)
@@ -1409,8 +1434,14 @@ local function read_transport_state()
     truncated = false,
   }
 end
+return {
+  exports = { read_transport_state = read_transport_state },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/core/read_openreaper_status.lua
+__openreaper_register_handler_module("core/read_openreaper_status.lua", function()
 -- Extracted Wave 0 handler: template.core.read_openreaper_status.
 
 local function read_openreaper_status(request)
@@ -1441,8 +1472,14 @@ local function read_openreaper_status(request)
     truncated = false,
   }
 end
+return {
+  exports = { read_openreaper_status = read_openreaper_status },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/system/read_runtime_environment.lua
+__openreaper_register_handler_module("system/read_runtime_environment.lua", function()
 -- Extracted Wave 0 handler: template.system.read_runtime_environment.
 
 local function read_runtime_environment(request)
@@ -1462,8 +1499,14 @@ local function read_runtime_environment(request)
     } or {},
   }
 end
+return {
+  exports = { read_runtime_environment = read_runtime_environment },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/system/read_resource_paths.lua
+__openreaper_register_handler_module("system/read_resource_paths.lua", function()
 -- Extracted Wave 0 handler: template.system.read_resource_paths.
 
 local function read_resource_paths_current_script_dir()
@@ -1493,8 +1536,14 @@ local function read_resource_paths(request)
     queue_override_present = TRANSPORT_DIR ~= nil,
   }
 end
+return {
+  exports = { read_resource_paths = read_resource_paths },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/core/read_template_catalog_summary.lua
+__openreaper_register_handler_module("core/read_template_catalog_summary.lua", function()
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
@@ -1626,8 +1675,14 @@ local function read_template_catalog_summary(request)
   }
   return summary
 end
+return {
+  exports = { read_template_catalog_summary = read_template_catalog_summary },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/core/read_last_result.lua
+__openreaper_register_handler_module("core/read_last_result.lua", function()
 -- Extracted Wave 1A handler: template.core.read_last_result.
 
 local function read_last_result_bounded_limit(request, requested, default_limit, hard_limit)
@@ -1656,8 +1711,14 @@ local function read_last_result(request)
     truncated = false,
   }
 end
+return {
+  exports = { read_last_result = read_last_result },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/system/check_api_symbols.lua
+__openreaper_register_handler_module("system/check_api_symbols.lua", function()
 -- Extracted Wave 1A handler: template.system.check_api_symbols.
 
 local CHECK_API_SYMBOLS_CORE_RUNTIME_SYMBOLS = json_array({
@@ -1762,8 +1823,14 @@ local function read_api_symbols(request)
     truncated = #source > limit,
   }
 end
+return {
+  exports = { read_api_symbols = read_api_symbols },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_metadata.lua
+__openreaper_register_handler_module("project/read_metadata.lua", function()
 -- Extracted Wave 1A handler: template.project.read_metadata.
 
 local PROJECT_READ_METADATA_KEYS = {
@@ -1820,8 +1887,14 @@ local function read_project_metadata(request)
   end
   return summary
 end
+return {
+  exports = { read_project_metadata = read_project_metadata },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/list_markers_regions.lua
+__openreaper_register_handler_module("project/list_markers_regions.lua", function()
 -- Extracted Wave 1A handler: template.project.list_markers_regions.
 
 local function list_markers_regions_current_project()
@@ -1896,8 +1969,14 @@ local function list_markers_regions(request)
     truncated = included_count > #items,
   }
 end
+return {
+  exports = { list_markers_regions = list_markers_regions },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_tempo_map.lua
+__openreaper_register_handler_module("project/read_tempo_map.lua", function()
 -- Extracted Wave 1A handler: template.project.read_tempo_map.
 
 local function read_tempo_map_current_project()
@@ -1969,8 +2048,14 @@ local function read_tempo_map(request)
     truncated = total > #tempo_markers,
   }
 end
+return {
+  exports = { read_tempo_map = read_tempo_map },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/resolve_track_ref.lua
+__openreaper_register_handler_module("tracks/resolve_track_ref.lua", function()
 -- Extracted Wave 1A handler: template.tracks.resolve_track_ref.
 
 local function resolve_track_ref_error(code, message, details, recoverable)
@@ -2116,8 +2201,14 @@ local function resolve_track_ref(request)
   end
   return resolve_track_ref_summary(track)
 end
+return {
+  exports = { resolve_track_ref = resolve_track_ref },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/resolve_item_ref.lua
+__openreaper_register_handler_module("items/resolve_item_ref.lua", function()
 -- Extracted Wave 1A handler: template.items.resolve_item_ref.
 
 local function resolve_item_ref_error(code, message, details, recoverable)
@@ -2257,8 +2348,14 @@ local function resolve_item_ref(request)
   end
   return resolve_item_ref_summary(item)
 end
+return {
+  exports = { resolve_item_ref = resolve_item_ref },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/read_item_summary.lua
+__openreaper_register_handler_module("items/read_item_summary.lua", function()
 -- Extracted Wave 1A handler: template.items.read_item_summary.
 
 local function read_item_summary_error(code, message, details, recoverable)
@@ -2430,8 +2527,14 @@ local function read_item_summary(request)
   end
   return read_item_summary_value(item, request.params.include_take_summary == true)
 end
+return {
+  exports = { read_item_summary = read_item_summary },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/resolve_named_command.lua
+__openreaper_register_handler_module("actions/resolve_named_command.lua", function()
 -- Extracted read-only handler: template.actions.resolve_named_command.
 
 local READ_B_ACTIONS = {}
@@ -2526,8 +2629,15 @@ local function resolve_named_command(request)
     source = READ_B_ACTIONS.action_source(named_command, command_id),
   }
 end
+return {
+  exports = { resolve_named_command = resolve_named_command },
+  shared = { READ_B_ACTIONS = READ_B_ACTIONS },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_metadata.lua
+__openreaper_register_handler_module("actions/read_action_metadata.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
 -- Extracted read-only handler: template.actions.read_action_metadata.
 
 local function read_action_metadata(request)
@@ -2545,8 +2655,15 @@ local function read_action_metadata(request)
     source = READ_B_ACTIONS.action_source(named_command, command_id),
   }
 end
+return {
+  exports = { read_action_metadata = read_action_metadata },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_toggle_state.lua
+__openreaper_register_handler_module("actions/read_action_toggle_state.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
 -- Extracted read-only handler: template.actions.read_action_toggle_state.
 
 local function read_action_toggle_state(request)
@@ -2571,8 +2688,15 @@ local function read_action_toggle_state(request)
     available = command_id ~= nil and command_id > 0,
   }
 end
+return {
+  exports = { read_action_toggle_state = read_action_toggle_state },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_shortcuts.lua
+__openreaper_register_handler_module("actions/read_action_shortcuts.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
 -- Extracted read-only handler: template.actions.read_action_shortcuts.
 
 local function read_action_shortcuts(request)
@@ -2601,8 +2725,15 @@ local function read_action_shortcuts(request)
     truncated = shortcut_count > #shortcuts,
   }
 end
+return {
+  exports = { read_action_shortcuts = read_action_shortcuts },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/parse_marker_action_text.lua
+__openreaper_register_handler_module("actions/parse_marker_action_text.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
 -- Extracted read-only handler: template.actions.parse_marker_action_text.
 
 local function parse_marker_action_text(request)
@@ -2649,8 +2780,15 @@ local function parse_marker_action_text(request)
     unresolved_count = unresolved_count,
   }
 end
+return {
+  exports = { parse_marker_action_text = parse_marker_action_text },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/search_action_commands.lua
+__openreaper_register_handler_module("actions/search_action_commands.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
 -- Extracted read-only handler: template.actions.search_action_commands.
 
 local ACTION_SEARCH_DEFAULT_LIMIT = 6
@@ -2701,8 +2839,14 @@ local function search_action_commands(request)
     truncated = truncated,
   }
 end
+return {
+  exports = { search_action_commands = search_action_commands },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/resolve_midi_take_ref.lua
+__openreaper_register_handler_module("midi/resolve_midi_take_ref.lua", function()
 -- Extracted read-only handler: template.midi.resolve_midi_take_ref.
 
 local READ_B_MIDI = {}
@@ -2978,8 +3122,15 @@ local function resolve_midi_take_ref(request)
   end
   return READ_B_MIDI.midi_take_summary(take)
 end
+return {
+  exports = { resolve_midi_take_ref = resolve_midi_take_ref },
+  shared = { READ_B_MIDI = READ_B_MIDI },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_event_counts.lua
+__openreaper_register_handler_module("midi/read_take_event_counts.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted read-only handler: template.midi.read_take_event_counts.
 
 local function read_take_event_counts(request)
@@ -2997,8 +3148,15 @@ local function read_take_event_counts(request)
     take_hash = take_ref .. ":" .. tostring(note_count or 0) .. ":" .. tostring(cc_count or 0) .. ":" .. tostring(text_sysex_count or 0),
   }
 end
+return {
+  exports = { read_take_event_counts = read_take_event_counts },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_notes.lua
+__openreaper_register_handler_module("midi/list_take_notes.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted read-only handler: template.midi.list_take_notes.
 
 local function list_take_notes(request)
@@ -3043,8 +3201,15 @@ local function list_take_notes(request)
     truncated = total > #notes,
   }
 end
+return {
+  exports = { list_take_notes = list_take_notes },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_cc_events.lua
+__openreaper_register_handler_module("midi/list_take_cc_events.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted read-only handler: template.midi.list_take_cc_events.
 
 local function list_take_cc_events(request)
@@ -3087,8 +3252,15 @@ local function list_take_cc_events(request)
     truncated = matched > #events,
   }
 end
+return {
+  exports = { list_take_cc_events = list_take_cc_events },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_text_sysex_events.lua
+__openreaper_register_handler_module("midi/list_take_text_sysex_events.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted read-only handler: template.midi.list_take_text_sysex_events.
 
 local function read_b_midi_text_sysex_kind(type_value)
@@ -3142,8 +3314,15 @@ local function list_take_text_sysex_events(request)
     truncated = matched > #events,
   }
 end
+return {
+  exports = { list_take_text_sysex_events = list_take_text_sysex_events },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_grid.lua
+__openreaper_register_handler_module("midi/read_take_grid.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted read-only handler: template.midi.read_take_grid.
 
 local function read_take_grid(request)
@@ -3159,8 +3338,14 @@ local function read_take_grid(request)
     note_length_ppq = ok_grid and first_number(note_length) or 0,
   }
 end
+return {
+  exports = { read_take_grid = read_take_grid },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/probe_file.lua
+__openreaper_register_handler_module("media/probe_file.lua", function()
 -- Extracted read-only handler: template.media.probe_file.
 
 local READ_B_MEDIA = {}
@@ -3432,8 +3617,15 @@ local function probe_media_file(request)
   call_reaper("PCM_Source_Destroy", source)
   return summary
 end
+return {
+  exports = { probe_media_file = probe_media_file },
+  shared = { READ_B_MEDIA = READ_B_MEDIA },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_take_source.lua
+__openreaper_register_handler_module("media/read_take_source.lua", function()
+local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
 -- Extracted read-only handler: template.media.read_take_source.
 
 local function read_take_source(request)
@@ -3465,8 +3657,15 @@ local function read_take_source(request)
   end
   return summary
 end
+return {
+  exports = { read_take_source = read_take_source },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_project_media_files.lua
+__openreaper_register_handler_module("media/read_project_media_files.lua", function()
+local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
 -- Extracted read-only handler: template.media.read_project_media_files.
 
 local function read_project_media_files(request)
@@ -3518,8 +3717,14 @@ local function read_project_media_files(request)
     truncated = truncated,
   }
 end
+return {
+  exports = { read_project_media_files = read_project_media_files },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/detect_loop_candidates.lua
+__openreaper_register_handler_module("analysis/detect_loop_candidates.lua", function()
 -- Extracted First-Real-Fixture-A A1 handler: template.analysis.detect_loop_candidates.
 
 local function detect_loop_candidates_error(code, message, details, recoverable)
@@ -3615,8 +3820,14 @@ local function detect_loop_candidates(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { detect_loop_candidates = detect_loop_candidates },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/measure_loop_click_risk.lua
+__openreaper_register_handler_module("analysis/measure_loop_click_risk.lua", function()
 -- Extracted First-Real-Fixture-A A1 handler: template.analysis.measure_loop_click_risk.
 
 local function measure_loop_click_risk_error(code, message, details, recoverable)
@@ -3718,8 +3929,14 @@ local function measure_loop_click_risk(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { measure_loop_click_risk = measure_loop_click_risk },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/create_loop_qa_report.lua
+__openreaper_register_handler_module("analysis/create_loop_qa_report.lua", function()
 -- Extracted First-Real-Fixture-A A1 handler: template.analysis.create_loop_qa_report.
 
 local function create_loop_qa_report_error(code, message, details, recoverable)
@@ -3821,8 +4038,14 @@ local function create_loop_qa_report(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { create_loop_qa_report = create_loop_qa_report },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_cleanup_report.lua
+__openreaper_register_handler_module("project/create_cleanup_report.lua", function()
 -- Extracted First-Real-Fixture-A A1 handler: template.project.create_cleanup_report.
 
 local function create_cleanup_report_error(code, message, details, recoverable)
@@ -3915,8 +4138,14 @@ local function create_cleanup_report(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { create_cleanup_report = create_cleanup_report },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/render/render_region_wav.lua
+__openreaper_register_handler_module("render/render_region_wav.lua", function()
 -- Extracted First-Real-Fixture-A A2 handler: template.render.render_region_wav.
 
 local function render_region_wav_error(code, message, details, recoverable)
@@ -4644,8 +4873,14 @@ local function render_region_wav(request)
   }
   return summary, nil, json_array({ output_write.object_ref, evidence_write.object_ref }), json_array({ job_ref })
 end
+return {
+  exports = { render_region_wav = render_region_wav },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/render/create_delivery_report.lua
+__openreaper_register_handler_module("render/create_delivery_report.lua", function()
 -- Extracted First-Real-Fixture-A A2 handler: template.render.create_delivery_report.
 
 local function create_delivery_report_error(code, message, details, recoverable)
@@ -4780,8 +5015,14 @@ local function create_delivery_report(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { create_delivery_report = create_delivery_report },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/create_layer_report.lua
+__openreaper_register_handler_module("items/create_layer_report.lua", function()
 -- Extracted First-Real-Fixture-A A3 handler: template.items.create_layer_report.
 
 local function create_layer_report_error(code, message, details, recoverable)
@@ -4939,8 +5180,14 @@ local function create_layer_report(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+return {
+  exports = { create_layer_report = create_layer_report },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/set_metadata_field.lua
+__openreaper_register_handler_module("project/set_metadata_field.lua", function()
 -- Extracted Safe-Write-A handler: template.project.set_metadata_field.
 
 local function handler_error(code, message, details, recoverable)
@@ -5073,8 +5320,14 @@ local function safe_write_project_metadata(request)
     value = bounded_string(readback, 240),
   }), nil, nil, nil, safe_write_a_refs(project_object_ref())
 end
+return {
+  exports = { safe_write_project_metadata = safe_write_project_metadata },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_marker.lua
+__openreaper_register_handler_module("project/create_marker.lua", function()
 -- Extracted Safe-Write-A handler: template.project.create_marker.
 
 local function handler_error(code, message, details, recoverable)
@@ -5208,8 +5461,14 @@ local function safe_write_create_marker(request)
     position_seconds = bounded_number(request.params.position_seconds, 0),
   }), nil, nil, nil, safe_write_a_refs(marker_object_ref("marker", index_number, request.params.name))
 end
+return {
+  exports = { safe_write_create_marker = safe_write_create_marker },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_region.lua
+__openreaper_register_handler_module("project/create_region.lua", function()
 -- Extracted Safe-Write-A handler: template.project.create_region.
 
 local function handler_error(code, message, details, recoverable)
@@ -5352,8 +5611,14 @@ local function safe_write_create_region(request)
     end_seconds = end_seconds,
   }), nil, nil, nil, safe_write_a_refs(marker_object_ref("region", index_number, request.params.name))
 end
+return {
+  exports = { safe_write_create_region = safe_write_create_region },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/create_track.lua
+__openreaper_register_handler_module("tracks/create_track.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.create_track.
 
 local function handler_error(code, message, details, recoverable)
@@ -5625,8 +5890,14 @@ local function safe_write_create_track(request)
   summary.created = true
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(track_object_ref(track))
 end
+return {
+  exports = { safe_write_create_track = safe_write_create_track },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/rename_track.lua
+__openreaper_register_handler_module("tracks/rename_track.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.rename_track.
 
 local function handler_error(code, message, details, recoverable)
@@ -5889,8 +6160,14 @@ local function safe_write_rename_track(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_rename_track = safe_write_rename_track },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_color.lua
+__openreaper_register_handler_module("tracks/set_color.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.set_color.
 
 local function handler_error(code, message, details, recoverable)
@@ -6154,8 +6431,14 @@ local function safe_write_set_track_color(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_track_color = safe_write_set_track_color },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/select_track.lua
+__openreaper_register_handler_module("tracks/select_track.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.select_track.
 
 local function handler_error(code, message, details, recoverable)
@@ -6430,8 +6713,14 @@ local function safe_write_select_track(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_select_track = safe_write_select_track },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_mute.lua
+__openreaper_register_handler_module("tracks/set_mute.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.set_mute.
 
 local function handler_error(code, message, details, recoverable)
@@ -6686,8 +6975,14 @@ local function safe_write_set_track_mute(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_track_mute = safe_write_set_track_mute },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/set_solo.lua
+__openreaper_register_handler_module("tracks/set_solo.lua", function()
 -- Extracted Safe-Write-A handler: template.tracks.set_solo.
 
 local function handler_error(code, message, details, recoverable)
@@ -6954,8 +7249,14 @@ local function safe_write_set_track_solo(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_track_solo = safe_write_set_track_solo },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_edit_cursor.lua
+__openreaper_register_handler_module("transport/set_edit_cursor.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.set_edit_cursor.
 
 local function handler_error(code, message, details, recoverable)
@@ -7009,8 +7310,14 @@ local function safe_write_transport_set_edit_cursor(request)
     edit_cursor_seconds = state.edit_cursor_seconds,
   })
 end
+return {
+  exports = { safe_write_transport_set_edit_cursor = safe_write_transport_set_edit_cursor },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_time_selection.lua
+__openreaper_register_handler_module("transport/set_time_selection.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.set_time_selection.
 
 local function handler_error(code, message, details, recoverable)
@@ -7064,8 +7371,14 @@ local function safe_write_transport_set_time_selection(request)
   call_reaper("GetSet_LoopTimeRange", true, false, start_seconds, end_seconds, false)
   return safe_write_a_summary(request, read_transport_state().time_selection)
 end
+return {
+  exports = { safe_write_transport_set_time_selection = safe_write_transport_set_time_selection },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_time_selection.lua
+__openreaper_register_handler_module("transport/clear_time_selection.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.clear_time_selection.
 
 local function handler_error(code, message, details, recoverable)
@@ -7111,8 +7424,14 @@ local function safe_write_transport_clear_time_selection(request)
   call_reaper("GetSet_LoopTimeRange", true, false, 0, 0, false)
   return safe_write_a_summary(request, read_transport_state().time_selection)
 end
+return {
+  exports = { safe_write_transport_clear_time_selection = safe_write_transport_clear_time_selection },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_loop_points.lua
+__openreaper_register_handler_module("transport/set_loop_points.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.set_loop_points.
 
 local function handler_error(code, message, details, recoverable)
@@ -7166,8 +7485,14 @@ local function safe_write_transport_set_loop_points(request)
   call_reaper("GetSet_LoopTimeRange", true, true, start_seconds, end_seconds, false)
   return safe_write_a_summary(request, read_transport_state().loop_points)
 end
+return {
+  exports = { safe_write_transport_set_loop_points = safe_write_transport_set_loop_points },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_loop_points.lua
+__openreaper_register_handler_module("transport/clear_loop_points.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.clear_loop_points.
 
 local function handler_error(code, message, details, recoverable)
@@ -7213,8 +7538,14 @@ local function safe_write_transport_clear_loop_points(request)
   call_reaper("GetSet_LoopTimeRange", true, true, 0, 0, false)
   return safe_write_a_summary(request, read_transport_state().loop_points)
 end
+return {
+  exports = { safe_write_transport_clear_loop_points = safe_write_transport_clear_loop_points },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_repeat.lua
+__openreaper_register_handler_module("transport/set_repeat.lua", function()
 -- Extracted Safe-Write-A handler: template.transport.set_repeat.
 
 local function handler_error(code, message, details, recoverable)
@@ -7262,8 +7593,14 @@ local function safe_write_transport_set_repeat(request)
     repeat_enabled = read_transport_state().repeat_enabled,
   })
 end
+return {
+  exports = { safe_write_transport_set_repeat = safe_write_transport_set_repeat },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/move_item.lua
+__openreaper_register_handler_module("items/move_item.lua", function()
 -- Extracted Safe-Write-A handler: template.items.move_item.
 
 local function handler_error(code, message, details, recoverable)
@@ -7506,8 +7843,14 @@ local function safe_write_move_item(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_move_item = safe_write_move_item },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/trim_item.lua
+__openreaper_register_handler_module("items/trim_item.lua", function()
 -- Extracted Safe-Write-A handler: template.items.trim_item.
 
 local function handler_error(code, message, details, recoverable)
@@ -7756,8 +8099,14 @@ local function safe_write_trim_item(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_trim_item = safe_write_trim_item },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_item_fades.lua
+__openreaper_register_handler_module("items/set_item_fades.lua", function()
 -- Extracted Safe-Write-A handler: template.items.set_item_fades.
 
 local function handler_error(code, message, details, recoverable)
@@ -8003,8 +8352,14 @@ local function safe_write_set_item_fades(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_item_fades = safe_write_set_item_fades },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_take_pitch.lua
+__openreaper_register_handler_module("items/set_take_pitch.lua", function()
 -- Extracted Safe-Write-A handler: template.items.set_take_pitch.
 
 local function handler_error(code, message, details, recoverable)
@@ -8255,8 +8610,14 @@ local function safe_write_set_take_pitch(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_take_pitch = safe_write_set_take_pitch },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/set_item_snap_offset.lua
+__openreaper_register_handler_module("items/set_item_snap_offset.lua", function()
 -- Extracted Safe-Write-A handler: template.items.set_item_snap_offset.
 
 local function handler_error(code, message, details, recoverable)
@@ -8499,8 +8860,15 @@ local function safe_write_set_item_snap_offset(request)
     return true
   end)
 end
+return {
+  exports = { safe_write_set_item_snap_offset = safe_write_set_item_snap_offset },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/create_midi_item.lua
+__openreaper_register_handler_module("midi/create_midi_item.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted Safe-Write-A handler: template.midi.create_midi_item.
 
 local function handler_error(code, message, details, recoverable)
@@ -8726,8 +9094,15 @@ local function safe_write_create_midi_item(request)
   summary.created = true
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
 end
+return {
+  exports = { safe_write_create_midi_item = safe_write_create_midi_item },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_notes_batch.lua
+__openreaper_register_handler_module("midi/insert_notes_batch.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted Safe-Write-A handler: template.midi.insert_notes_batch.
 
 local function handler_error(code, message, details, recoverable)
@@ -8860,8 +9235,15 @@ local function safe_write_insert_notes_batch(request)
   summary.inserted_note_count = inserted
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end
+return {
+  exports = { safe_write_insert_notes_batch = safe_write_insert_notes_batch },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_cc_batch.lua
+__openreaper_register_handler_module("midi/insert_cc_batch.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted Safe-Write-A handler: template.midi.insert_cc_batch.
 
 local function handler_error(code, message, details, recoverable)
@@ -8991,8 +9373,15 @@ local function safe_write_insert_cc_batch(request)
   summary.inserted_cc_count = inserted
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end
+return {
+  exports = { safe_write_insert_cc_batch = safe_write_insert_cc_batch },
+  shared = {  },
+}
+end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua
+__openreaper_register_handler_module("midi/insert_text_sysex_events.lua", function()
+local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
 -- Extracted Safe-Write-A handler: template.midi.insert_text_sysex_events.
 
 local function handler_error(code, message, details, recoverable)
@@ -9120,6 +9509,11 @@ local function safe_write_insert_text_sysex_events(request)
   summary.inserted_text_sysex_count = inserted
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end
+return {
+  exports = { safe_write_insert_text_sysex_events = safe_write_insert_text_sysex_events },
+  shared = {  },
+}
+end)
 
 local SAFE_WRITE_A_CAPABILITIES = {
   ["project.set_metadata_field"] = { pack = "project", risk = "write" },
@@ -10171,30 +10565,30 @@ end
 
 
 local SAFE_WRITE_A_HANDLERS = {
-  ["project.set_metadata_field"] = safe_write_project_metadata,
-  ["project.create_marker"] = safe_write_create_marker,
-  ["project.create_region"] = safe_write_create_region,
-  ["track.create"] = safe_write_create_track,
-  ["track.rename"] = safe_write_rename_track,
-  ["track.set_color"] = safe_write_set_track_color,
-  ["track.select"] = safe_write_select_track,
-  ["track.set_mute"] = safe_write_set_track_mute,
-  ["track.set_solo"] = safe_write_set_track_solo,
-  ["transport.set_edit_cursor"] = safe_write_transport_set_edit_cursor,
-  ["transport.set_time_selection"] = safe_write_transport_set_time_selection,
-  ["transport.clear_time_selection"] = safe_write_transport_clear_time_selection,
-  ["transport.set_loop_points"] = safe_write_transport_set_loop_points,
-  ["transport.clear_loop_points"] = safe_write_transport_clear_loop_points,
-  ["transport.set_repeat"] = safe_write_transport_set_repeat,
-  ["items.move_item"] = safe_write_move_item,
-  ["items.trim_item"] = safe_write_trim_item,
-  ["items.set_item_fades"] = safe_write_set_item_fades,
-  ["items.set_take_pitch"] = safe_write_set_take_pitch,
-  ["items.set_item_snap_offset"] = safe_write_set_item_snap_offset,
-  ["midi.create_midi_item"] = safe_write_create_midi_item,
-  ["midi.insert_notes_batch"] = safe_write_insert_notes_batch,
-  ["midi.insert_cc_batch"] = safe_write_insert_cc_batch,
-  ["midi.insert_text_sysex_events"] = safe_write_insert_text_sysex_events,
+  ["project.set_metadata_field"] = OPENREAPER_HANDLER_EXPORTS.safe_write_project_metadata,
+  ["project.create_marker"] = OPENREAPER_HANDLER_EXPORTS.safe_write_create_marker,
+  ["project.create_region"] = OPENREAPER_HANDLER_EXPORTS.safe_write_create_region,
+  ["track.create"] = OPENREAPER_HANDLER_EXPORTS.safe_write_create_track,
+  ["track.rename"] = OPENREAPER_HANDLER_EXPORTS.safe_write_rename_track,
+  ["track.set_color"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_track_color,
+  ["track.select"] = OPENREAPER_HANDLER_EXPORTS.safe_write_select_track,
+  ["track.set_mute"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_track_mute,
+  ["track.set_solo"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_track_solo,
+  ["transport.set_edit_cursor"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_set_edit_cursor,
+  ["transport.set_time_selection"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_set_time_selection,
+  ["transport.clear_time_selection"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_clear_time_selection,
+  ["transport.set_loop_points"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_set_loop_points,
+  ["transport.clear_loop_points"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_clear_loop_points,
+  ["transport.set_repeat"] = OPENREAPER_HANDLER_EXPORTS.safe_write_transport_set_repeat,
+  ["items.move_item"] = OPENREAPER_HANDLER_EXPORTS.safe_write_move_item,
+  ["items.trim_item"] = OPENREAPER_HANDLER_EXPORTS.safe_write_trim_item,
+  ["items.set_item_fades"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_item_fades,
+  ["items.set_take_pitch"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_take_pitch,
+  ["items.set_item_snap_offset"] = OPENREAPER_HANDLER_EXPORTS.safe_write_set_item_snap_offset,
+  ["midi.create_midi_item"] = OPENREAPER_HANDLER_EXPORTS.safe_write_create_midi_item,
+  ["midi.insert_notes_batch"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_notes_batch,
+  ["midi.insert_cc_batch"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_cc_batch,
+  ["midi.insert_text_sysex_events"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_text_sysex_events,
 }
 
 local function dispatch_safe_write_a(request)
@@ -10213,147 +10607,147 @@ local ALLOWED_OPERATIONS = {
   },
   ["query_state:project.read_summary"] = {
     pack = "project",
-    handler = read_project_summary,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_project_summary,
   },
   ["query_state:project.read_metadata"] = {
     pack = "project",
-    handler = read_project_metadata,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_project_metadata,
   },
   ["query_state:project.list_markers_regions"] = {
     pack = "project",
-    handler = list_markers_regions,
+    handler = OPENREAPER_HANDLER_EXPORTS.list_markers_regions,
   },
   ["query_state:project.read_tempo_map"] = {
     pack = "project",
-    handler = read_tempo_map,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_tempo_map,
   },
   ["query_state:transport.read_state"] = {
     pack = "transport",
-    handler = read_transport_state,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_transport_state,
   },
   ["query_state:openreaper.read_status"] = {
     pack = "core",
-    handler = read_openreaper_status,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_openreaper_status,
   },
   ["query_state:template_catalog.read_summary"] = {
     pack = "core",
-    handler = read_template_catalog_summary,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_template_catalog_summary,
   },
   ["query_state:last_result.read"] = {
     pack = "core",
-    handler = read_last_result,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_last_result,
   },
   ["query_state:track.resolve_ref"] = {
     pack = "tracks",
-    handler = resolve_track_ref,
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_track_ref,
   },
   ["query_state:items.resolve_item_ref"] = {
     pack = "items",
-    handler = resolve_item_ref,
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_item_ref,
   },
   ["query_state:items.read_item_summary"] = {
     pack = "items",
-    handler = read_item_summary,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_item_summary,
   },
   ["query_state:system.runtime_environment.read"] = {
     pack = "system",
-    handler = read_runtime_environment,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_runtime_environment,
   },
   ["query_state:system.resource_paths.read"] = {
     pack = "system",
-    handler = read_resource_paths,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_resource_paths,
   },
   ["query_state:system.api_symbols.check"] = {
     pack = "system",
-    handler = read_api_symbols,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_api_symbols,
   },
   ["query_state:actions.resolve_named_command"] = {
     pack = "actions",
-    handler = resolve_named_command,
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_named_command,
   },
   ["query_state:actions.read_action_metadata"] = {
     pack = "actions",
-    handler = read_action_metadata,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_action_metadata,
   },
   ["query_state:actions.read_action_toggle_state"] = {
     pack = "actions",
-    handler = read_action_toggle_state,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_action_toggle_state,
   },
   ["query_state:actions.read_action_shortcuts"] = {
     pack = "actions",
-    handler = read_action_shortcuts,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_action_shortcuts,
   },
   ["query_state:actions.parse_marker_action_text"] = {
     pack = "actions",
-    handler = parse_marker_action_text,
+    handler = OPENREAPER_HANDLER_EXPORTS.parse_marker_action_text,
   },
   ["query_state:actions.search_action_commands"] = {
     pack = "actions",
-    handler = search_action_commands,
+    handler = OPENREAPER_HANDLER_EXPORTS.search_action_commands,
   },
   ["query_state:midi.resolve_midi_take_ref"] = {
     pack = "midi",
-    handler = resolve_midi_take_ref,
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_midi_take_ref,
   },
   ["query_state:midi.read_take_event_counts"] = {
     pack = "midi",
-    handler = read_take_event_counts,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_take_event_counts,
   },
   ["query_state:midi.list_take_notes"] = {
     pack = "midi",
-    handler = list_take_notes,
+    handler = OPENREAPER_HANDLER_EXPORTS.list_take_notes,
   },
   ["query_state:midi.list_take_cc_events"] = {
     pack = "midi",
-    handler = list_take_cc_events,
+    handler = OPENREAPER_HANDLER_EXPORTS.list_take_cc_events,
   },
   ["query_state:midi.list_take_text_sysex_events"] = {
     pack = "midi",
-    handler = list_take_text_sysex_events,
+    handler = OPENREAPER_HANDLER_EXPORTS.list_take_text_sysex_events,
   },
   ["query_state:midi.read_take_grid"] = {
     pack = "midi",
-    handler = read_take_grid,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_take_grid,
   },
   ["query_state:media.file.probe"] = {
     pack = "media",
-    handler = probe_media_file,
+    handler = OPENREAPER_HANDLER_EXPORTS.probe_media_file,
   },
   ["query_state:media.take_source.read"] = {
     pack = "media",
-    handler = read_take_source,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_take_source,
   },
   ["query_state:media.project_files.read"] = {
     pack = "media",
-    handler = read_project_media_files,
+    handler = OPENREAPER_HANDLER_EXPORTS.read_project_media_files,
   },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
-    handler = detect_loop_candidates,
+    handler = OPENREAPER_HANDLER_EXPORTS.detect_loop_candidates,
   },
   ["run_job:analysis.measure_loop_click_risk"] = {
     pack = "analysis",
-    handler = measure_loop_click_risk,
+    handler = OPENREAPER_HANDLER_EXPORTS.measure_loop_click_risk,
   },
   ["run_job:analysis.create_loop_qa_report"] = {
     pack = "analysis",
-    handler = create_loop_qa_report,
+    handler = OPENREAPER_HANDLER_EXPORTS.create_loop_qa_report,
   },
   ["run_job:project.create_cleanup_report"] = {
     pack = "project",
-    handler = create_cleanup_report,
+    handler = OPENREAPER_HANDLER_EXPORTS.create_cleanup_report,
   },
   ["run_job:render.region_wav"] = {
     pack = "render",
-    handler = render_region_wav,
+    handler = OPENREAPER_HANDLER_EXPORTS.render_region_wav,
   },
   ["run_job:render.delivery_report.create"] = {
     pack = "render",
-    handler = create_delivery_report,
+    handler = OPENREAPER_HANDLER_EXPORTS.create_delivery_report,
   },
   ["run_job:items.create_layer_report"] = {
     pack = "items",
-    handler = create_layer_report,
+    handler = OPENREAPER_HANDLER_EXPORTS.create_layer_report,
   },
 }
 

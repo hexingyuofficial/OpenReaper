@@ -122,8 +122,17 @@ export function handlerModuleFilesFromRegistry(registry) {
 }
 
 export function readBridgeHandlerModules({ cwd = process.cwd(), registry = loadBridgeHandlerRegistry({ cwd }) } = {}) {
+  const exportsByFile = new Map();
+  for (const entry of registry.entries ?? []) {
+    if (!entry || entry.handler_file === LEGACY_MONOLITH_MARKER) continue;
+    if (typeof entry.handler_file !== "string" || typeof entry.handler_export !== "string") continue;
+    const exports = exportsByFile.get(entry.handler_file) ?? [];
+    if (!exports.includes(entry.handler_export)) exports.push(entry.handler_export);
+    exportsByFile.set(entry.handler_file, exports);
+  }
   return handlerModuleFilesFromRegistry(registry).map((file) => ({
     file,
+    exports: Object.freeze(exportsByFile.get(file) ?? []),
     source: readFileSync(path.join(cwd, handlerSourceRoot, file), "utf8"),
   }));
 }
@@ -261,23 +270,77 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd(), registry = 
 
 function wrapSourceModule(file, source, handlerModules) {
   if (file !== "40-route-pack-handlers.lua") return source;
+  const handlerExportNames = [...new Set(handlerModules.flatMap((module) => module.exports))].sort();
+  const routedSource = bindRouteSourceToHandlerExports(source, handlerExportNames);
   return [
-    "-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk.",
+    "-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk and out of one giant function.",
     "local dispatch_request = (function()",
+    "local OPENREAPER_HANDLER_EXPORTS = {}",
+    "local OPENREAPER_HANDLER_SHARED = {}",
+    "local function __openreaper_register_handler_module(module_name, loader)",
+    "  local module = loader()",
+    "  if type(module) ~= \"table\" then",
+    "    error(\"OpenReaper bridge handler module did not return exports: \" .. tostring(module_name))",
+    "  end",
+    "  if type(module.shared) == \"table\" then",
+    "    for key, value in pairs(module.shared) do",
+    "      OPENREAPER_HANDLER_SHARED[key] = value",
+    "    end",
+    "  end",
+    "  if type(module.exports) == \"table\" then",
+    "    for key, value in pairs(module.exports) do",
+    "      OPENREAPER_HANDLER_EXPORTS[key] = value",
+    "    end",
+    "  end",
+    "end",
     ...handlerModules.map(wrapHandlerModule),
-    source,
+    routedSource,
     "return dispatch_request",
     "end)()",
     "",
   ].join("\n");
 }
 
-function wrapHandlerModule({ file, source }) {
+function wrapHandlerModule({ file, exports, source }) {
+  const sharedPreamble = sharedHandlerNames
+    .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
+    .map((name) => `local ${name} = OPENREAPER_HANDLER_SHARED.${name}`);
+  const sharedExports = sharedHandlerNames
+    .filter((name) => new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
+    .map((name) => `${name} = ${name}`);
   return [
     `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`,
+    `__openreaper_register_handler_module(${JSON.stringify(file)}, function()`,
+    ...sharedPreamble,
     source.trimEnd(),
+    "return {",
+    `  exports = { ${exports.map((name) => `${name} = ${name}`).join(", ")} },`,
+    `  shared = { ${sharedExports.join(", ")} },`,
+    "}",
+    "end)",
     "",
   ].join("\n");
+}
+
+const sharedHandlerNames = Object.freeze([
+  "READ_B_ACTIONS",
+  "READ_B_MEDIA",
+  "READ_B_MIDI",
+]);
+
+function bindRouteSourceToHandlerExports(source, handlerExportNames) {
+  let routedSource = source;
+  for (const exportName of handlerExportNames) {
+    routedSource = routedSource.replace(
+      new RegExp(`(\\bhandler\\s*=\\s*)${escapeRegExp(exportName)}\\b`, "g"),
+      `$1OPENREAPER_HANDLER_EXPORTS.${exportName}`,
+    );
+    routedSource = routedSource.replace(
+      new RegExp(`(\\[[^\\n\\]]+\\]\\s*=\\s*)${escapeRegExp(exportName)}\\b`, "g"),
+      `$1OPENREAPER_HANDLER_EXPORTS.${exportName}`,
+    );
+  }
+  return routedSource;
 }
 
 function artifactPolicyForDescriptor(descriptor) {

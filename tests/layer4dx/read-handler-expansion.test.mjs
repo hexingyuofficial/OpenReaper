@@ -189,7 +189,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     for (const [operation, handler] of Object.entries(handlerMappings)) {
       assert.match(
         BRIDGE_SOURCE,
-        new RegExp(`\\["query_state:${escapeRegExp(operation)}"\\]\\s*=\\s*\\{[\\s\\S]*?handler\\s*=\\s*${handler}`),
+        new RegExp(`\\["query_state:${escapeRegExp(operation)}"\\]\\s*=\\s*\\{[\\s\\S]*?handler\\s*=\\s*OPENREAPER_HANDLER_EXPORTS\\.${handler}\\b`),
         operation,
       );
     }

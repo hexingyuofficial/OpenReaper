@@ -269,10 +269,17 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 0 legacy_monolith row\(s\); 60 extracted handler row\(s\); 60 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
+    assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);
+    assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_SHARED = \{\}/);
+    assert.match(BRIDGE_SOURCE, /local function __openreaper_register_handler_module\(module_name, loader\)/);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
       const marker = `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`;
       const index = BRIDGE_SOURCE.indexOf(marker);
       assert.ok(index > lastIndex, marker);
+      assert.ok(
+        BRIDGE_SOURCE.indexOf(`__openreaper_register_handler_module("${file}", function()`, index) > index,
+        `${file} is loaded through an isolated module function`,
+      );
       lastIndex = index;
     }
     assert.ok(BRIDGE_SOURCE.indexOf("local ALLOWED_OPERATIONS = {") > lastIndex);
@@ -285,14 +292,14 @@ describe("Layer 4D.R bridge handler registry", () => {
       if (entry.operation.name === "template.execute") {
         assert.match(
           BRIDGE_SOURCE,
-          new RegExp(`\\["${escapeRegExp(entry.capability)}"\\]\\s*=\\s*${handlerExport}\\b`),
+          new RegExp(`\\["${escapeRegExp(entry.capability)}"\\]\\s*=\\s*OPENREAPER_HANDLER_EXPORTS\\.${handlerExport}\\b`),
           templateId,
         );
         continue;
       }
       assert.match(
         BRIDGE_SOURCE,
-        new RegExp(`\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?pack\\s*=\\s*"${entry.pack}"[\\s\\S]*?handler\\s*=\\s*${handlerExport}\\b`),
+        new RegExp(`\\["${escapeRegExp(key)}"\\]\\s*=\\s*\\{[\\s\\S]*?pack\\s*=\\s*"${entry.pack}"[\\s\\S]*?handler\\s*=\\s*OPENREAPER_HANDLER_EXPORTS\\.${handlerExport}\\b`),
         templateId,
       );
     }
