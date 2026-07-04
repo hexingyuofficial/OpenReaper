@@ -64,10 +64,20 @@ const EXTRACTED_READ_B_HANDLERS = Object.freeze(new Map([
   ["template.media.read_take_source", ["media/read_take_source.lua", "read_take_source"]],
   ["template.media.read_project_media_files", ["media/read_project_media_files.lua", "read_project_media_files"]],
 ]));
+const EXTRACTED_FIRST_REAL_A_HANDLERS = Object.freeze(new Map([
+  ["template.analysis.detect_loop_candidates", ["analysis/detect_loop_candidates.lua", "detect_loop_candidates"]],
+  ["template.analysis.measure_loop_click_risk", ["analysis/measure_loop_click_risk.lua", "measure_loop_click_risk"]],
+  ["template.analysis.create_loop_qa_report", ["analysis/create_loop_qa_report.lua", "create_loop_qa_report"]],
+  ["template.project.create_cleanup_report", ["project/create_cleanup_report.lua", "create_cleanup_report"]],
+  ["template.render.render_region_wav", ["render/render_region_wav.lua", "render_region_wav"]],
+  ["template.render.create_delivery_report", ["render/create_delivery_report.lua", "create_delivery_report"]],
+  ["template.items.create_layer_report", ["items/create_layer_report.lua", "create_layer_report"]],
+]));
 const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_WAVE0_HANDLERS,
   ...EXTRACTED_WAVE1A_HANDLERS,
   ...EXTRACTED_READ_B_HANDLERS,
+  ...EXTRACTED_FIRST_REAL_A_HANDLERS,
 ]));
 
 describe("Layer 4D.R bridge handler registry", () => {
@@ -106,9 +116,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
       entryCount: 60,
-      legacyMonolithCount: 31,
-      extractedHandlerCount: 29,
-      handlerModuleCount: 29,
+      legacyMonolithCount: 24,
+      extractedHandlerCount: 36,
+      handlerModuleCount: 36,
       routeCount: 7,
       operationCount: 37,
     });
@@ -136,7 +146,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0, Wave 1A, and Read-B batches into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0, Wave 1A, Read-B, and First-Real-Fixture-A A1/A2/A3 batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
     assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
@@ -155,6 +165,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => entry.route === "read-b" && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_READ_B_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => ["first-real-a1", "first-real-a2-render", "first-real-a3-layer-report"].includes(entry.route) && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_FIRST_REAL_A_HANDLERS.keys()],
     );
 
     for (const [templateId, [file, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
@@ -217,7 +233,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 31 legacy_monolith row\(s\); 29 extracted handler row\(s\); 29 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 24 legacy_monolith row\(s\); 36 extracted handler row\(s\); 36 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {

@@ -603,14 +603,37 @@ Candidate closeout batch 3:
   policy, generated bundle freshness, registry parity, and no raw execution
   surfaces.
 
+Candidate closeout batch 4:
+
+- extracted exactly the seven First-Real-Fixture-A A1/A2/A3 artifact/report
+  rows (`template.analysis.detect_loop_candidates`,
+  `template.analysis.measure_loop_click_risk`,
+  `template.analysis.create_loop_qa_report`,
+  `template.project.create_cleanup_report`,
+  `template.render.render_region_wav`,
+  `template.render.create_delivery_report`, and
+  `template.items.create_layer_report`) into
+  `reaper/bridge/src/handlers/**` modules;
+- updated the bridge handler registry so the five Wave 0 rows, nine Wave 1A
+  rows, 15 Read-B rows, and these seven First-Real-Fixture-A rows are the only
+  extracted rows, for 36 extracted rows total and 24 remaining
+  `legacy_monolith` rows;
+- kept existing route allowlists, operation keys, MCP tools, template ids,
+  recipes, runtime capabilities, live smoke scope, old live matrix, raw
+  Lua/action/shell/process policy, arbitrary output paths, and A2 managed
+  render-root policy untouched;
+- refreshed focused 4D.R tests for exact extracted-row membership, handler path
+  policy, generated bundle freshness, registry parity, and no raw execution
+  surfaces.
+
 Tests: `npm run build:live-bridge`, `npm run check:template-runtime`,
 `npm test`, `npm run build`, `npm run check:layer -- bridge-handler-registry`,
 and `git diff --check`.
 
 Known risks: this remains a candidate closeout batch, not a full handler split.
-Only the five Wave 0, nine Wave 1A, and 15 Read-B read-only rows are extracted;
-the remaining 31 registered rows intentionally stay `legacy_monolith` until
-later reviewed extraction batches.
+Only the five Wave 0, nine Wave 1A, 15 Read-B, and seven First-Real-Fixture-A
+A1/A2/A3 artifact/report rows are extracted; the remaining 24 registered rows
+intentionally stay `legacy_monolith` until later reviewed extraction batches.
 
 ## Layer 4.5A: Artifact / State Store Contract + Core Helpers
 

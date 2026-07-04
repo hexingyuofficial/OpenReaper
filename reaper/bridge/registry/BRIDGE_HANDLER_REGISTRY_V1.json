@@ -480,8 +480,8 @@
       "pack": "analysis",
       "risk": "read",
       "route": "first-real-a1",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "analysis/detect_loop_candidates.lua",
+      "handler_export": "detect_loop_candidates",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
@@ -496,8 +496,8 @@
       "pack": "analysis",
       "risk": "read",
       "route": "first-real-a1",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "analysis/measure_loop_click_risk.lua",
+      "handler_export": "measure_loop_click_risk",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
@@ -512,8 +512,8 @@
       "pack": "analysis",
       "risk": "read",
       "route": "first-real-a1",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "analysis/create_loop_qa_report.lua",
+      "handler_export": "create_loop_qa_report",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
@@ -528,8 +528,8 @@
       "pack": "project",
       "risk": "read",
       "route": "first-real-a1",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "project/create_cleanup_report.lua",
+      "handler_export": "create_cleanup_report",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
@@ -544,8 +544,8 @@
       "pack": "render",
       "risk": "write",
       "route": "first-real-a2-render",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "render/render_region_wav.lua",
+      "handler_export": "render_region_wav",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a2-render-route.test.mjs"
@@ -560,8 +560,8 @@
       "pack": "render",
       "risk": "read",
       "route": "first-real-a2-render",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "render/create_delivery_report.lua",
+      "handler_export": "create_delivery_report",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a2-render-route.test.mjs"
@@ -576,8 +576,8 @@
       "pack": "items",
       "risk": "read",
       "route": "first-real-a3-layer-report",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "items/create_layer_report.lua",
+      "handler_export": "create_layer_report",
       "artifact_policy": "write",
       "tests": [
         "tests/layer4dx/first-real-a3-layer-report-route.test.mjs"
