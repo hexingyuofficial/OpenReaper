@@ -47,9 +47,27 @@ const EXTRACTED_WAVE1A_HANDLERS = Object.freeze(new Map([
   ["template.items.resolve_item_ref", ["items/resolve_item_ref.lua", "resolve_item_ref"]],
   ["template.items.read_item_summary", ["items/read_item_summary.lua", "read_item_summary"]],
 ]));
+const EXTRACTED_READ_B_HANDLERS = Object.freeze(new Map([
+  ["template.actions.resolve_named_command", ["actions/resolve_named_command.lua", "resolve_named_command"]],
+  ["template.actions.read_action_metadata", ["actions/read_action_metadata.lua", "read_action_metadata"]],
+  ["template.actions.read_action_toggle_state", ["actions/read_action_toggle_state.lua", "read_action_toggle_state"]],
+  ["template.actions.read_action_shortcuts", ["actions/read_action_shortcuts.lua", "read_action_shortcuts"]],
+  ["template.actions.parse_marker_action_text", ["actions/parse_marker_action_text.lua", "parse_marker_action_text"]],
+  ["template.actions.search_action_commands", ["actions/search_action_commands.lua", "search_action_commands"]],
+  ["template.midi.resolve_midi_take_ref", ["midi/resolve_midi_take_ref.lua", "resolve_midi_take_ref"]],
+  ["template.midi.read_take_event_counts", ["midi/read_take_event_counts.lua", "read_take_event_counts"]],
+  ["template.midi.list_take_notes", ["midi/list_take_notes.lua", "list_take_notes"]],
+  ["template.midi.list_take_cc_events", ["midi/list_take_cc_events.lua", "list_take_cc_events"]],
+  ["template.midi.list_take_text_sysex_events", ["midi/list_take_text_sysex_events.lua", "list_take_text_sysex_events"]],
+  ["template.midi.read_take_grid", ["midi/read_take_grid.lua", "read_take_grid"]],
+  ["template.media.probe_file", ["media/probe_file.lua", "probe_media_file"]],
+  ["template.media.read_take_source", ["media/read_take_source.lua", "read_take_source"]],
+  ["template.media.read_project_media_files", ["media/read_project_media_files.lua", "read_project_media_files"]],
+]));
 const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_WAVE0_HANDLERS,
   ...EXTRACTED_WAVE1A_HANDLERS,
+  ...EXTRACTED_READ_B_HANDLERS,
 ]));
 
 describe("Layer 4D.R bridge handler registry", () => {
@@ -88,9 +106,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
       entryCount: 60,
-      legacyMonolithCount: 46,
-      extractedHandlerCount: 14,
-      handlerModuleCount: 14,
+      legacyMonolithCount: 31,
+      extractedHandlerCount: 29,
+      handlerModuleCount: 29,
       routeCount: 7,
       operationCount: 37,
     });
@@ -118,7 +136,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0 plus Wave 1A closeout batches into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0, Wave 1A, and Read-B batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
     assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
@@ -131,6 +149,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => entry.route === "wave1a-read-handlers" && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_WAVE1A_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "read-b" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_READ_B_HANDLERS.keys()],
     );
 
     for (const [templateId, [file, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
@@ -193,7 +217,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 46 legacy_monolith row\(s\); 14 extracted handler row\(s\); 14 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(60 registered template handler row\(s\); 31 legacy_monolith row\(s\); 29 extracted handler row\(s\); 29 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {

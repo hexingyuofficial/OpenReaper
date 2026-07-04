@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 46 legacy_monolith row(s); 14 extracted handler row(s); 14 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (60 registered template handler row(s); 31 legacy_monolith row(s); 29 extracted handler row(s); 29 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -2431,6 +2431,1094 @@ local function read_item_summary(request)
   return read_item_summary_value(item, request.params.include_take_summary == true)
 end
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/resolve_named_command.lua
+-- Extracted read-only handler: template.actions.resolve_named_command.
+
+local READ_B_ACTIONS = {}
+
+READ_B_ACTIONS.SECTION_IDS = {
+  main = 0,
+  midi_editor = 32060,
+  midi_event_list = 32061,
+  crossfade_editor = 32062,
+  media_explorer = 32063,
+}
+
+function READ_B_ACTIONS.section_name(value)
+  if READ_B_ACTIONS.SECTION_IDS[value] ~= nil then
+    return value
+  end
+  return "main"
+end
+
+function READ_B_ACTIONS.section_id(value)
+  return READ_B_ACTIONS.SECTION_IDS[READ_B_ACTIONS.section_name(value)]
+end
+
+function READ_B_ACTIONS.integer_value(value)
+  if type(value) == "number" and value == math.floor(value) then
+    return value
+  end
+  return nil
+end
+
+function READ_B_ACTIONS.action_source(named_command, command_id)
+  if is_string(named_command) and named_command:sub(1, 1) == "_" then
+    return "extension"
+  end
+  if type(command_id) == "number" and command_id > 0 then
+    return "native"
+  end
+  return "unknown"
+end
+
+function READ_B_ACTIONS.lookup_named_command(named_command)
+  if not is_string(named_command) then
+    return 0
+  end
+  local ok, command_id = call_reaper("NamedCommandLookup", named_command)
+  if ok and type(command_id) == "number" and command_id > 0 then
+    return math.floor(command_id)
+  end
+  return 0
+end
+
+function READ_B_ACTIONS.reverse_named_command(command_id)
+  local ok, named = call_reaper("ReverseNamedCommandLookup", command_id)
+  if ok and type(named) == "string" and named ~= "" then
+    return named
+  end
+  return nil
+end
+
+function READ_B_ACTIONS.action_display_name(section_id, command_id)
+  local ok, name = call_reaper("kbd_getTextFromCmd", command_id, section_id)
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+function READ_B_ACTIONS.bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+function READ_B_ACTIONS.lower_string(value)
+  return tostring(value or ""):lower()
+end
+
+local function resolve_named_command(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local named_command = bounded_string(request.params.named_command, 160)
+  local command_id = READ_B_ACTIONS.lookup_named_command(named_command)
+  local resolved = command_id > 0
+  return {
+    named_command = named_command,
+    section = section,
+    resolved = resolved,
+    command_id = resolved and command_id or nil,
+    source = READ_B_ACTIONS.action_source(named_command, command_id),
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_metadata.lua
+-- Extracted read-only handler: template.actions.read_action_metadata.
+
+local function read_action_metadata(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
+  local named_command = READ_B_ACTIONS.reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
+  local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
+  return {
+    section = section,
+    command_id = command_id,
+    named_command = named_command,
+    display_name = display_name,
+    available = command_id ~= nil and command_id > 0,
+    source = READ_B_ACTIONS.action_source(named_command, command_id),
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_toggle_state.lua
+-- Extracted read-only handler: template.actions.read_action_toggle_state.
+
+local function read_action_toggle_state(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
+  local ok, state = call_reaper("GetToggleCommandStateEx", section_id, command_id or 0)
+  local label = "unknown"
+  if ok and type(state) == "number" then
+    if state == 1 then
+      label = "on"
+    elseif state == 0 then
+      label = "off"
+    elseif state == -1 then
+      label = "not_applicable"
+    end
+  end
+  return {
+    section = section,
+    command_id = command_id,
+    state = label,
+    available = command_id ~= nil and command_id > 0,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_shortcuts.lua
+-- Extracted read-only handler: template.actions.read_action_shortcuts.
+
+local function read_action_shortcuts(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or 0
+  local limit = READ_B_ACTIONS.bounded_limit(request, request.params.max_shortcuts, 8, 16)
+  local ok_count, count = call_reaper("CountActionShortcuts", section_id, command_id)
+  local shortcut_count = ok_count and first_number(count) or 0
+  local shortcuts = json_array({})
+  for index = 0, math.max(shortcut_count - 1, -1) do
+    if #shortcuts >= limit then
+      break
+    end
+    local ok_desc, desc = call_reaper("GetActionShortcutDesc", section_id, command_id, index, "")
+    shortcuts[#shortcuts + 1] = {
+      index = index,
+      description = bounded_string(ok_desc and first_string(desc) or "", 160),
+    }
+  end
+  return {
+    section = section,
+    command_id = command_id,
+    shortcut_count = shortcut_count,
+    shortcuts = shortcuts,
+    truncated = shortcut_count > #shortcuts,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/parse_marker_action_text.lua
+-- Extracted read-only handler: template.actions.parse_marker_action_text.
+
+local function parse_marker_action_text(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local resolve_tokens = request.params.resolve_tokens == true
+  local text = bounded_string(request.params.text, safe_budget(request).max_inline_value_bytes)
+  local tokens = json_array({})
+  local unresolved_count = 0
+
+  for token in tostring(text or ""):gmatch("%S+") do
+    local marker_token = token:sub(1, 1) == "!"
+    local body = marker_token and token:sub(2) or token
+    local command_id = tonumber(body)
+    local named_command = nil
+    local resolved = false
+    if marker_token and command_id and command_id > 0 then
+      command_id = math.floor(command_id)
+      resolved = true
+    elseif marker_token and body:sub(1, 1) == "_" then
+      named_command = bounded_string(body, 160)
+      if resolve_tokens then
+        command_id = READ_B_ACTIONS.lookup_named_command(named_command)
+        resolved = command_id > 0
+      end
+    end
+    if marker_token and not resolved then
+      unresolved_count = unresolved_count + 1
+    end
+    tokens[#tokens + 1] = {
+      raw = bounded_string(token, 160),
+      marker_token = marker_token,
+      command_id = resolved and command_id or nil,
+      named_command = named_command,
+      resolved = resolved,
+      section = section,
+    }
+  end
+
+  return {
+    is_marker_action = #tokens > 0 and tokens[1].marker_token == true,
+    token_count = #tokens,
+    tokens = tokens,
+    macro_shaped = #tokens > 1,
+    unresolved_count = unresolved_count,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/search_action_commands.lua
+-- Extracted read-only handler: template.actions.search_action_commands.
+
+local ACTION_SEARCH_DEFAULT_LIMIT = 6
+local ACTION_SEARCH_MAX_LIMIT = 6
+local ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS = 96
+local ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS = 80
+
+local function search_action_commands(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local query = READ_B_ACTIONS.lower_string(request.params.query)
+  local limit = READ_B_ACTIONS.bounded_limit(request, request.params.limit, ACTION_SEARCH_DEFAULT_LIMIT, ACTION_SEARCH_MAX_LIMIT)
+  local cursor = READ_B_ACTIONS.integer_value(tonumber(request.params.cursor)) or 0
+  local items = json_array({})
+  local scanned = 0
+  local index = cursor
+  local truncated = false
+
+  while scanned < 10000 do
+    local ok_enum, command_id = call_reaper("kbd_enumerateActions", section_id, index)
+    if not ok_enum or type(command_id) ~= "number" or command_id <= 0 then
+      break
+    end
+    scanned = scanned + 1
+    local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
+    local named_command = READ_B_ACTIONS.reverse_named_command(command_id)
+    local haystack = READ_B_ACTIONS.lower_string(display_name .. " " .. tostring(named_command or "") .. " " .. tostring(command_id))
+    if query == "" or haystack:find(query, 1, true) then
+      if #items >= limit then
+        truncated = true
+        break
+      end
+      items[#items + 1] = {
+        section = section,
+        command_id = math.floor(command_id),
+        display_name = bounded_string(display_name, ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS),
+        named_command = bounded_string(named_command, ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS),
+        source = READ_B_ACTIONS.action_source(named_command, command_id),
+      }
+    end
+    index = index + 1
+  end
+
+  return {
+    section = section,
+    items = items,
+    next_cursor = truncated and tostring(index) or nil,
+    truncated = truncated,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/resolve_midi_take_ref.lua
+-- Extracted read-only handler: template.midi.resolve_midi_take_ref.
+
+local READ_B_MIDI = {}
+
+function READ_B_MIDI.handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+function READ_B_MIDI.bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+function READ_B_MIDI.integer_value(value)
+  if type(value) == "number" and value == math.floor(value) then
+    return value
+  end
+  return nil
+end
+
+function READ_B_MIDI.item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+function READ_B_MIDI.item_ref_string(item)
+  local guid = READ_B_MIDI.item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+function READ_B_MIDI.find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and READ_B_MIDI.item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+function READ_B_MIDI.item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+function READ_B_MIDI.take_guid(take)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemTakeGUID", take)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+function READ_B_MIDI.take_item(take)
+  local ok, item = call_reaper("GetMediaItemTake_Item", take)
+  return ok and item or nil
+end
+
+function READ_B_MIDI.take_ref_string(take)
+  local guid = READ_B_MIDI.take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, candidate = call_reaper("GetTake", item, index)
+        if ok_take and candidate == take then
+          return "take:index:" .. tostring(take_index)
+        end
+        take_index = take_index + 1
+      end
+    end
+  end
+  return "take:unknown"
+end
+
+function READ_B_MIDI.find_take_by_index(target_index)
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, take = call_reaper("GetTake", item, index)
+        if ok_take and take then
+          if take_index == target_index then
+            return take
+          end
+          take_index = take_index + 1
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function READ_B_MIDI.find_take_by_guid(guid)
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, take = call_reaper("GetTake", item, index)
+        if ok_take and take and READ_B_MIDI.take_guid(take) == guid then
+          return take
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function READ_B_MIDI.resolve_take_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^take:selected:(%d+)$")
+  if selected_index then
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    if ok_item and item then
+      local ok_take, take = call_reaper("GetActiveTake", item)
+      return ok_take and take or nil
+    end
+    return nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^take:index:(%d+)$")
+  if index then
+    return READ_B_MIDI.find_take_by_index(tonumber(index))
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^take:guid:(.+)$")
+  if guid then
+    return READ_B_MIDI.find_take_by_guid(guid)
+  end
+
+  local item_selected = token:match("^item:selected:(%d+)$")
+  local item_index = token:match("^item:index:(%d+)$")
+  local item_guid_value = token:match("^item:guid:(.+)$")
+  local item = nil
+  if item_selected then
+    local ok, selected_item = call_reaper("GetSelectedMediaItem", 0, tonumber(item_selected))
+    item = ok and selected_item or nil
+  elseif item_index then
+    local ok, indexed_item = call_reaper("GetMediaItem", 0, tonumber(item_index))
+    item = ok and indexed_item or nil
+  elseif item_guid_value then
+    item = READ_B_MIDI.find_item_by_guid(item_guid_value)
+  end
+  if item then
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    return ok_take and take or nil
+  end
+  return nil
+end
+
+function READ_B_MIDI.resolve_take_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "take" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return READ_B_MIDI.resolve_take_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return READ_B_MIDI.resolve_take_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return READ_B_MIDI.resolve_take_token("guid:" .. tostring(identity.value))
+  end
+  return READ_B_MIDI.resolve_take_token(ref.ref)
+end
+
+function READ_B_MIDI.take_is_midi(take)
+  local ok, is_midi = call_reaper("TakeIsMIDI", take)
+  return ok and is_midi == true
+end
+
+function READ_B_MIDI.resolve_take_for_request(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local take = READ_B_MIDI.resolve_take_from_ref_object(request.refs[index])
+      if take then
+        return take
+      end
+    end
+  end
+  return READ_B_MIDI.resolve_take_token(request.params.ref)
+end
+
+function READ_B_MIDI.resolve_midi_take_for_request(request)
+  local take = READ_B_MIDI.resolve_take_for_request(request)
+  if not take or not READ_B_MIDI.take_is_midi(take) then
+    local _, failure = READ_B_MIDI.handler_error("TAKE_NOT_FOUND", "MIDI take ref could not be resolved.", {
+      ref = bounded_string(request.params.ref, 160),
+    })
+    return nil, failure
+  end
+  return take
+end
+
+function READ_B_MIDI.midi_take_summary(take)
+  local item = READ_B_MIDI.take_item(take)
+  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local start_ppq = 0
+  local end_ppq = 0
+  if item then
+    local start_seconds = READ_B_MIDI.item_number(item, "D_POSITION")
+    local end_seconds = start_seconds + READ_B_MIDI.item_number(item, "D_LENGTH")
+    local ok_start, ppq_start = call_reaper("MIDI_GetPPQPosFromProjTime", take, start_seconds)
+    local ok_end, ppq_end = call_reaper("MIDI_GetPPQPosFromProjTime", take, end_seconds)
+    start_ppq = ok_start and first_number(ppq_start) or 0
+    end_ppq = ok_end and first_number(ppq_end) or 0
+  end
+  return {
+    take_ref = READ_B_MIDI.take_ref_string(take),
+    item_ref = item and READ_B_MIDI.item_ref_string(item) or JSON_NULL,
+    event_count = ok_count and ((note_count or 0) + (cc_count or 0) + (text_sysex_count or 0)) or 0,
+    ppq_start = start_ppq,
+    ppq_end = end_ppq,
+  }
+end
+
+local function resolve_midi_take_ref(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  return READ_B_MIDI.midi_take_summary(take)
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_event_counts.lua
+-- Extracted read-only handler: template.midi.read_take_event_counts.
+
+local function read_take_event_counts(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local take_ref = READ_B_MIDI.take_ref_string(take)
+  return {
+    take_ref = take_ref,
+    note_count = ok_count and first_number(note_count) or 0,
+    cc_count = ok_count and first_number(cc_count) or 0,
+    text_sysex_count = ok_count and first_number(text_sysex_count) or 0,
+    take_hash = take_ref .. ":" .. tostring(note_count or 0) .. ":" .. tostring(cc_count or 0) .. ":" .. tostring(text_sysex_count or 0),
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_notes.lua
+-- Extracted read-only handler: template.midi.list_take_notes.
+
+local function list_take_notes(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  local ok_count, note_count = call_reaper("MIDI_CountEvts", take)
+  local total = ok_count and first_number(note_count) or 0
+  local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
+  local notes = json_array({})
+  for index = 0, math.max(total - 1, -1) do
+    if #notes >= limit then
+      break
+    end
+    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if ok_note and selected ~= nil then
+      local note = {
+        index = index,
+        selected = selected == true,
+        muted = muted == true,
+        start_ppq = first_number(start_ppq) or 0,
+        end_ppq = first_number(end_ppq) or 0,
+        channel = first_number(channel) or 0,
+        pitch = first_number(pitch) or 0,
+        velocity = first_number(velocity) or 0,
+      }
+      if request.params.include_project_time == true then
+        local ok_start, start_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.start_ppq)
+        local ok_end, end_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.end_ppq)
+        note.start_seconds = ok_start and first_number(start_time) or nil
+        note.end_seconds = ok_end and first_number(end_time) or nil
+      end
+      notes[#notes + 1] = note
+    end
+  end
+  return {
+    take_ref = READ_B_MIDI.take_ref_string(take),
+    notes = notes,
+    returned_count = #notes,
+    next_cursor = total > #notes and tostring(#notes) or nil,
+    truncated = total > #notes,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_cc_events.lua
+-- Extracted read-only handler: template.midi.list_take_cc_events.
+
+local function list_take_cc_events(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  local ok_count, _, cc_count = call_reaper("MIDI_CountEvts", take)
+  local total = ok_count and first_number(cc_count) or 0
+  local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
+  local controller = READ_B_MIDI.integer_value(request.params.controller)
+  local events = json_array({})
+  local matched = 0
+  for index = 0, math.max(total - 1, -1) do
+    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
+    if ok_cc and selected ~= nil then
+      local event_controller = first_number(msg2) or 0
+      if controller == nil or controller == event_controller then
+        matched = matched + 1
+        if #events < limit then
+          events[#events + 1] = {
+            index = index,
+            selected = selected == true,
+            muted = muted == true,
+            ppq = first_number(ppq) or 0,
+            channel_message = first_number(chanmsg) or 0,
+            channel = first_number(channel) or 0,
+            controller = event_controller,
+            value = first_number(msg3) or 0,
+          }
+        end
+      end
+    end
+  end
+  return {
+    take_ref = READ_B_MIDI.take_ref_string(take),
+    cc_events = events,
+    returned_count = #events,
+    next_cursor = matched > #events and tostring(#events) or nil,
+    truncated = matched > #events,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_text_sysex_events.lua
+-- Extracted read-only handler: template.midi.list_take_text_sysex_events.
+
+local function read_b_midi_text_sysex_kind(type_value)
+  if type_value == -1 then
+    return "sysex"
+  elseif type_value == 1 then
+    return "text"
+  elseif type_value == 5 then
+    return "lyric"
+  elseif type_value == 15 then
+    return "notation"
+  end
+  return "text"
+end
+
+local function list_take_text_sysex_events(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  local ok_count, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local total = ok_count and first_number(text_sysex_count) or 0
+  local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
+  local requested_kind = is_string(request.params.event_kind) and request.params.event_kind or "any"
+  local events = json_array({})
+  local matched = 0
+  for index = 0, math.max(total - 1, -1) do
+    local ok_event, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
+    if ok_event and selected ~= nil then
+      local kind = read_b_midi_text_sysex_kind(first_number(type_value) or 1)
+      if requested_kind == "any" or requested_kind == kind then
+        matched = matched + 1
+        if #events < limit then
+          events[#events + 1] = {
+            index = index,
+            selected = selected == true,
+            muted = muted == true,
+            ppq = first_number(ppq) or 0,
+            event_kind = kind,
+            text = bounded_string(message, 160),
+          }
+        end
+      end
+    end
+  end
+  return {
+    take_ref = READ_B_MIDI.take_ref_string(take),
+    events = events,
+    returned_count = #events,
+    next_cursor = matched > #events and tostring(#events) or nil,
+    truncated = matched > #events,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_grid.lua
+-- Extracted read-only handler: template.midi.read_take_grid.
+
+local function read_take_grid(request)
+  local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
+  if not take then
+    return nil, failure
+  end
+  local ok_grid, grid, swing, note_length = call_reaper("MIDI_GetGrid", take)
+  return {
+    take_ref = READ_B_MIDI.take_ref_string(take),
+    grid_ppq = ok_grid and first_number(grid) or 0,
+    swing = ok_grid and first_number(swing) or 0,
+    note_length_ppq = ok_grid and first_number(note_length) or 0,
+  }
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/probe_file.lua
+-- Extracted read-only handler: template.media.probe_file.
+
+local READ_B_MEDIA = {}
+
+function READ_B_MEDIA.handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+function READ_B_MEDIA.bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+function READ_B_MEDIA.source_type(source)
+  local ok, source_type_value = call_reaper("GetMediaSourceType", source, "")
+  return bounded_string(ok and first_string(source_type_value) or "", 80)
+end
+
+function READ_B_MEDIA.source_length(source)
+  local ok, length, length_is_quarter_notes = call_reaper("GetMediaSourceLength", source)
+  return ok and first_number(length) or 0, ok and length_is_quarter_notes == true or false
+end
+
+function READ_B_MEDIA.source_channels(source)
+  local ok, channels = call_reaper("GetMediaSourceNumChannels", source)
+  return ok and first_number(channels) or 0
+end
+
+function READ_B_MEDIA.source_filename(source)
+  local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
+  return bounded_string(ok and first_string(filename) or "", 240)
+end
+
+function READ_B_MEDIA.source_filename_raw(source)
+  local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
+  return ok and first_string(filename) or ""
+end
+
+function READ_B_MEDIA.metadata_keys_for_source(source, include_metadata_keys)
+  local keys = json_array({})
+  if include_metadata_keys ~= true then
+    return keys
+  end
+  for _, key in ipairs({ "TITLE", "ARTIST", "ALBUM", "DATE", "BPM" }) do
+    local ok_meta, value = call_reaper("GetMediaFileMetadata", source, key, "")
+    if ok_meta and type(value) == "string" and value ~= "" then
+      keys[#keys + 1] = key
+    end
+  end
+  return keys
+end
+
+function READ_B_MEDIA.file_ref_for_path(path_value)
+  return "file:path:" .. bounded_string(path_value, 220)
+end
+
+function READ_B_MEDIA.item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+function READ_B_MEDIA.find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and READ_B_MEDIA.item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+function READ_B_MEDIA.take_guid(take)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemTakeGUID", take)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+function READ_B_MEDIA.take_ref_string(take)
+  local guid = READ_B_MEDIA.take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, candidate = call_reaper("GetTake", item, index)
+        if ok_take and candidate == take then
+          return "take:index:" .. tostring(take_index)
+        end
+        take_index = take_index + 1
+      end
+    end
+  end
+  return "take:unknown"
+end
+
+function READ_B_MEDIA.find_take_by_index(target_index)
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, take = call_reaper("GetTake", item, index)
+        if ok_take and take then
+          if take_index == target_index then
+            return take
+          end
+          take_index = take_index + 1
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function READ_B_MEDIA.find_take_by_guid(guid)
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, take = call_reaper("GetTake", item, index)
+        if ok_take and take and READ_B_MEDIA.take_guid(take) == guid then
+          return take
+        end
+      end
+    end
+  end
+  return nil
+end
+
+function READ_B_MEDIA.resolve_take_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^take:selected:(%d+)$")
+  if selected_index then
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    if ok_item and item then
+      local ok_take, take = call_reaper("GetActiveTake", item)
+      return ok_take and take or nil
+    end
+    return nil
+  end
+
+  local index = token:match("^index:(%d+)$") or token:match("^take:index:(%d+)$")
+  if index then
+    return READ_B_MEDIA.find_take_by_index(tonumber(index))
+  end
+
+  local guid = token:match("^guid:(.+)$") or token:match("^take:guid:(.+)$")
+  if guid then
+    return READ_B_MEDIA.find_take_by_guid(guid)
+  end
+
+  local item_selected = token:match("^item:selected:(%d+)$")
+  local item_index = token:match("^item:index:(%d+)$")
+  local item_guid_value = token:match("^item:guid:(.+)$")
+  local item = nil
+  if item_selected then
+    local ok, selected_item = call_reaper("GetSelectedMediaItem", 0, tonumber(item_selected))
+    item = ok and selected_item or nil
+  elseif item_index then
+    local ok, indexed_item = call_reaper("GetMediaItem", 0, tonumber(item_index))
+    item = ok and indexed_item or nil
+  elseif item_guid_value then
+    item = READ_B_MEDIA.find_item_by_guid(item_guid_value)
+  end
+  if item then
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    return ok_take and take or nil
+  end
+  return nil
+end
+
+function READ_B_MEDIA.resolve_take_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "take" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return READ_B_MEDIA.resolve_take_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return READ_B_MEDIA.resolve_take_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return READ_B_MEDIA.resolve_take_token("guid:" .. tostring(identity.value))
+  end
+  return READ_B_MEDIA.resolve_take_token(ref.ref)
+end
+
+function READ_B_MEDIA.resolve_take_for_request(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local take = READ_B_MEDIA.resolve_take_from_ref_object(request.refs[index])
+      if take then
+        return take
+      end
+    end
+  end
+  return READ_B_MEDIA.resolve_take_token(request.params.ref)
+end
+
+local function probe_media_file(request)
+  local path_value = request.params.path
+  if not is_string(path_value) then
+    return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Media probe requires an absolute file path.", {
+      field = "path",
+    })
+  end
+  if not file_exists(path_value) then
+    return READ_B_MEDIA.handler_error("FILE_NOT_FOUND", "Media probe file does not exist.", {
+      path = bounded_string(path_value, 240),
+    })
+  end
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", path_value)
+  if not ok_source or not source then
+    return READ_B_MEDIA.handler_error("FILE_NOT_FOUND", "Media probe file could not be decoded as a REAPER source.", {
+      path = bounded_string(path_value, 240),
+    })
+  end
+  local length, length_is_quarter_notes = READ_B_MEDIA.source_length(source)
+  local summary = {
+    file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
+    source_type = READ_B_MEDIA.source_type(source),
+    length_seconds = length,
+    length_is_quarter_notes = length_is_quarter_notes,
+    channel_count = READ_B_MEDIA.source_channels(source),
+    metadata_keys = READ_B_MEDIA.metadata_keys_for_source(source, request.params.include_metadata_keys),
+    decodable = true,
+  }
+  call_reaper("PCM_Source_Destroy", source)
+  return summary
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_take_source.lua
+-- Extracted read-only handler: template.media.read_take_source.
+
+local function read_take_source(request)
+  local take = READ_B_MEDIA.resolve_take_for_request(request)
+  if not take then
+    return READ_B_MEDIA.handler_error("TAKE_NOT_FOUND", "Take source read requires a resolvable take ref.", {})
+  end
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if not ok_source or not source then
+    return READ_B_MEDIA.handler_error("FILE_NOT_FOUND", "Take source could not be read.", {
+      take_ref = READ_B_MEDIA.take_ref_string(take),
+    })
+  end
+  local filename = READ_B_MEDIA.source_filename(source)
+  local length, _ = READ_B_MEDIA.source_length(source)
+  local summary = {
+    take_ref = READ_B_MEDIA.take_ref_string(take),
+    file_ref = filename ~= "" and READ_B_MEDIA.file_ref_for_path(filename) or JSON_NULL,
+    source_type = READ_B_MEDIA.source_type(source),
+    filename = filename,
+    length_seconds = length,
+    channel_count = READ_B_MEDIA.source_channels(source),
+    offline = filename ~= "" and not file_exists(filename) or false,
+    metadata_keys = READ_B_MEDIA.metadata_keys_for_source(source, request.params.include_metadata_keys),
+  }
+  if request.params.include_parent_source == true then
+    local ok_parent, parent = call_reaper("GetMediaSourceParent", source)
+    summary.parent_source_type = ok_parent and parent and READ_B_MEDIA.source_type(parent) or nil
+  end
+  return summary
+end
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_project_media_files.lua
+-- Extracted read-only handler: template.media.read_project_media_files.
+
+local function read_project_media_files(request)
+  local max_sources = READ_B_MEDIA.bounded_limit(request, request.params.max_sources, 25, 100)
+  local include_offline = request.params.include_offline == true
+  local seen = {}
+  local file_refs = json_array({})
+  local offline_count = 0
+  local source_count = 0
+  local truncated = false
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for take_index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, take = call_reaper("GetTake", item, take_index)
+        if ok_take and take then
+          local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+          if ok_source and source then
+            local filename = READ_B_MEDIA.source_filename_raw(source)
+            if filename ~= "" and not seen[filename] then
+              seen[filename] = true
+              local offline = not file_exists(filename)
+              if offline then
+                offline_count = offline_count + 1
+              end
+              if include_offline or not offline then
+                source_count = source_count + 1
+                if #file_refs < max_sources then
+                  file_refs[#file_refs + 1] = READ_B_MEDIA.file_ref_for_path(filename)
+                else
+                  truncated = true
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+
+  return {
+    source_count = source_count,
+    file_refs = file_refs,
+    offline_count = offline_count,
+    truncated = truncated,
+  }
+end
+
 local SAFE_WRITE_A_CAPABILITIES = {
   ["project.set_metadata_field"] = { pack = "project", risk = "write" },
   ["project.create_marker"] = { pack = "project", risk = "write" },
@@ -3164,131 +4252,6 @@ local function action_display_name(section_id, command_id)
   return bounded_string(ok and first_string(name) or "", 160)
 end
 
-local function resolve_named_command(request)
-  local section = action_section_name(request.params.section)
-  local named_command = bounded_string(request.params.named_command, 160)
-  local command_id = lookup_named_command(named_command)
-  local resolved = command_id > 0
-  return {
-    named_command = named_command,
-    section = section,
-    resolved = resolved,
-    command_id = resolved and command_id or nil,
-    source = action_source(named_command, command_id),
-  }
-end
-
-local function read_action_metadata(request)
-  local section = action_section_name(request.params.section)
-  local section_id = action_section_id(section)
-  local command_id = integer_value(request.params.command_id) or lookup_named_command(request.params.named_command)
-  local named_command = reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
-  local display_name = action_display_name(section_id, command_id)
-  return {
-    section = section,
-    command_id = command_id,
-    named_command = named_command,
-    display_name = display_name,
-    available = command_id ~= nil and command_id > 0,
-    source = action_source(named_command, command_id),
-  }
-end
-
-local function read_action_toggle_state(request)
-  local section = action_section_name(request.params.section)
-  local section_id = action_section_id(section)
-  local command_id = integer_value(request.params.command_id) or lookup_named_command(request.params.named_command)
-  local ok, state = call_reaper("GetToggleCommandStateEx", section_id, command_id or 0)
-  local label = "unknown"
-  if ok and type(state) == "number" then
-    if state == 1 then
-      label = "on"
-    elseif state == 0 then
-      label = "off"
-    elseif state == -1 then
-      label = "not_applicable"
-    end
-  end
-  return {
-    section = section,
-    command_id = command_id,
-    state = label,
-    available = command_id ~= nil and command_id > 0,
-  }
-end
-
-local function read_action_shortcuts(request)
-  local section = action_section_name(request.params.section)
-  local section_id = action_section_id(section)
-  local command_id = integer_value(request.params.command_id) or 0
-  local limit = bounded_limit(request, request.params.max_shortcuts, 8, 16)
-  local ok_count, count = call_reaper("CountActionShortcuts", section_id, command_id)
-  local shortcut_count = ok_count and first_number(count) or 0
-  local shortcuts = json_array({})
-  for index = 0, math.max(shortcut_count - 1, -1) do
-    if #shortcuts >= limit then
-      break
-    end
-    local ok_desc, desc = call_reaper("GetActionShortcutDesc", section_id, command_id, index, "")
-    shortcuts[#shortcuts + 1] = {
-      index = index,
-      description = bounded_string(ok_desc and first_string(desc) or "", 160),
-    }
-  end
-  return {
-    section = section,
-    command_id = command_id,
-    shortcut_count = shortcut_count,
-    shortcuts = shortcuts,
-    truncated = shortcut_count > #shortcuts,
-  }
-end
-
-local function parse_marker_action_text(request)
-  local section = action_section_name(request.params.section)
-  local resolve_tokens = request.params.resolve_tokens == true
-  local text = bounded_string(request.params.text, safe_budget(request).max_inline_value_bytes)
-  local tokens = json_array({})
-  local unresolved_count = 0
-
-  for token in tostring(text or ""):gmatch("%S+") do
-    local marker_token = token:sub(1, 1) == "!"
-    local body = marker_token and token:sub(2) or token
-    local command_id = tonumber(body)
-    local named_command = nil
-    local resolved = false
-    if marker_token and command_id and command_id > 0 then
-      command_id = math.floor(command_id)
-      resolved = true
-    elseif marker_token and body:sub(1, 1) == "_" then
-      named_command = bounded_string(body, 160)
-      if resolve_tokens then
-        command_id = lookup_named_command(named_command)
-        resolved = command_id > 0
-      end
-    end
-    if marker_token and not resolved then
-      unresolved_count = unresolved_count + 1
-    end
-    tokens[#tokens + 1] = {
-      raw = bounded_string(token, 160),
-      marker_token = marker_token,
-      command_id = resolved and command_id or nil,
-      named_command = named_command,
-      resolved = resolved,
-      section = section,
-    }
-  end
-
-  return {
-    is_marker_action = #tokens > 0 and tokens[1].marker_token == true,
-    token_count = #tokens,
-    tokens = tokens,
-    macro_shaped = #tokens > 1,
-    unresolved_count = unresolved_count,
-  }
-end
-
 local function lower_string(value)
   return tostring(value or ""):lower()
 end
@@ -3297,50 +4260,6 @@ local ACTION_SEARCH_DEFAULT_LIMIT = 6
 local ACTION_SEARCH_MAX_LIMIT = 6
 local ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS = 96
 local ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS = 80
-
-local function search_action_commands(request)
-  local section = action_section_name(request.params.section)
-  local section_id = action_section_id(section)
-  local query = lower_string(request.params.query)
-  local limit = bounded_limit(request, request.params.limit, ACTION_SEARCH_DEFAULT_LIMIT, ACTION_SEARCH_MAX_LIMIT)
-  local cursor = integer_value(tonumber(request.params.cursor)) or 0
-  local items = json_array({})
-  local scanned = 0
-  local index = cursor
-  local truncated = false
-
-  while scanned < 10000 do
-    local ok_enum, command_id = call_reaper("kbd_enumerateActions", section_id, index)
-    if not ok_enum or type(command_id) ~= "number" or command_id <= 0 then
-      break
-    end
-    scanned = scanned + 1
-    local display_name = action_display_name(section_id, command_id)
-    local named_command = reverse_named_command(command_id)
-    local haystack = lower_string(display_name .. " " .. tostring(named_command or "") .. " " .. tostring(command_id))
-    if query == "" or haystack:find(query, 1, true) then
-      if #items >= limit then
-        truncated = true
-        break
-      end
-      items[#items + 1] = {
-        section = section,
-        command_id = math.floor(command_id),
-        display_name = bounded_string(display_name, ACTION_SEARCH_DISPLAY_NAME_MAX_CHARS),
-        named_command = bounded_string(named_command, ACTION_SEARCH_NAMED_COMMAND_MAX_CHARS),
-        source = action_source(named_command, command_id),
-      }
-    end
-    index = index + 1
-  end
-
-  return {
-    section = section,
-    items = items,
-    next_cursor = truncated and tostring(index) or nil,
-    truncated = truncated,
-  }
-end
 
 local function take_guid(take)
   local ok_sws, guid = call_reaper("BR_GetMediaItemTakeGUID", take)
@@ -3532,114 +4451,6 @@ local function midi_take_summary(take)
   }
 end
 
-local function resolve_midi_take_ref(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  return midi_take_summary(take)
-end
-
-local function read_take_event_counts(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
-  local take_ref = take_ref_string(take)
-  return {
-    take_ref = take_ref,
-    note_count = ok_count and first_number(note_count) or 0,
-    cc_count = ok_count and first_number(cc_count) or 0,
-    text_sysex_count = ok_count and first_number(text_sysex_count) or 0,
-    take_hash = take_ref .. ":" .. tostring(note_count or 0) .. ":" .. tostring(cc_count or 0) .. ":" .. tostring(text_sysex_count or 0),
-  }
-end
-
-local function list_take_notes(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  local ok_count, note_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(note_count) or 0
-  local limit = bounded_limit(request, request.params.limit, 16, 100)
-  local notes = json_array({})
-  for index = 0, math.max(total - 1, -1) do
-    if #notes >= limit then
-      break
-    end
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and selected ~= nil then
-      local note = {
-        index = index,
-        selected = selected == true,
-        muted = muted == true,
-        start_ppq = first_number(start_ppq) or 0,
-        end_ppq = first_number(end_ppq) or 0,
-        channel = first_number(channel) or 0,
-        pitch = first_number(pitch) or 0,
-        velocity = first_number(velocity) or 0,
-      }
-      if request.params.include_project_time == true then
-        local ok_start, start_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.start_ppq)
-        local ok_end, end_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.end_ppq)
-        note.start_seconds = ok_start and first_number(start_time) or nil
-        note.end_seconds = ok_end and first_number(end_time) or nil
-      end
-      notes[#notes + 1] = note
-    end
-  end
-  return {
-    take_ref = take_ref_string(take),
-    notes = notes,
-    returned_count = #notes,
-    next_cursor = total > #notes and tostring(#notes) or nil,
-    truncated = total > #notes,
-  }
-end
-
-local function list_take_cc_events(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  local ok_count, _, cc_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(cc_count) or 0
-  local limit = bounded_limit(request, request.params.limit, 16, 100)
-  local controller = integer_value(request.params.controller)
-  local events = json_array({})
-  local matched = 0
-  for index = 0, math.max(total - 1, -1) do
-    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
-    if ok_cc and selected ~= nil then
-      local event_controller = first_number(msg2) or 0
-      if controller == nil or controller == event_controller then
-        matched = matched + 1
-        if #events < limit then
-          events[#events + 1] = {
-            index = index,
-            selected = selected == true,
-            muted = muted == true,
-            ppq = first_number(ppq) or 0,
-            channel_message = first_number(chanmsg) or 0,
-            channel = first_number(channel) or 0,
-            controller = event_controller,
-            value = first_number(msg3) or 0,
-          }
-        end
-      end
-    end
-  end
-  return {
-    take_ref = take_ref_string(take),
-    cc_events = events,
-    returned_count = #events,
-    next_cursor = matched > #events and tostring(#events) or nil,
-    truncated = matched > #events,
-  }
-end
-
 local function text_sysex_kind(type_value)
   if type_value == -1 then
     return "sysex"
@@ -3651,59 +4462,6 @@ local function text_sysex_kind(type_value)
     return "notation"
   end
   return "text"
-end
-
-local function list_take_text_sysex_events(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  local ok_count, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(text_sysex_count) or 0
-  local limit = bounded_limit(request, request.params.limit, 16, 100)
-  local requested_kind = is_string(request.params.event_kind) and request.params.event_kind or "any"
-  local events = json_array({})
-  local matched = 0
-  for index = 0, math.max(total - 1, -1) do
-    local ok_event, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
-    if ok_event and selected ~= nil then
-      local kind = text_sysex_kind(first_number(type_value) or 1)
-      if requested_kind == "any" or requested_kind == kind then
-        matched = matched + 1
-        if #events < limit then
-          events[#events + 1] = {
-            index = index,
-            selected = selected == true,
-            muted = muted == true,
-            ppq = first_number(ppq) or 0,
-            event_kind = kind,
-            text = bounded_string(message, 160),
-          }
-        end
-      end
-    end
-  end
-  return {
-    take_ref = take_ref_string(take),
-    events = events,
-    returned_count = #events,
-    next_cursor = matched > #events and tostring(#events) or nil,
-    truncated = matched > #events,
-  }
-end
-
-local function read_take_grid(request)
-  local take, failure = resolve_midi_take_for_request(request)
-  if not take then
-    return nil, failure
-  end
-  local ok_grid, grid, swing, note_length = call_reaper("MIDI_GetGrid", take)
-  return {
-    take_ref = take_ref_string(take),
-    grid_ppq = ok_grid and first_number(grid) or 0,
-    swing = ok_grid and first_number(swing) or 0,
-    note_length_ppq = ok_grid and first_number(note_length) or 0,
-  }
 end
 
 local function source_type(source)
@@ -3771,118 +4529,6 @@ end
 
 local function file_ref_for_path(path_value)
   return "file:path:" .. bounded_string(path_value, 220)
-end
-
-local function probe_media_file(request)
-  local path_value = request.params.path
-  if not is_string(path_value) then
-    return handler_error("PARAMS_INVALID", "Media probe requires an absolute file path.", {
-      field = "path",
-    })
-  end
-  if not file_exists(path_value) then
-    return handler_error("FILE_NOT_FOUND", "Media probe file does not exist.", {
-      path = bounded_string(path_value, 240),
-    })
-  end
-  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", path_value)
-  if not ok_source or not source then
-    return handler_error("FILE_NOT_FOUND", "Media probe file could not be decoded as a REAPER source.", {
-      path = bounded_string(path_value, 240),
-    })
-  end
-  local length, length_is_quarter_notes = source_length(source)
-  local summary = {
-    file_ref = file_ref_for_path(path_value),
-    source_type = source_type(source),
-    length_seconds = length,
-    length_is_quarter_notes = length_is_quarter_notes,
-    channel_count = source_channels(source),
-    metadata_keys = metadata_keys_for_source(source, request.params.include_metadata_keys),
-    decodable = true,
-  }
-  call_reaper("PCM_Source_Destroy", source)
-  return summary
-end
-
-local function read_take_source(request)
-  local take = resolve_take_for_request(request)
-  if not take then
-    return handler_error("TAKE_NOT_FOUND", "Take source read requires a resolvable take ref.", {})
-  end
-  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
-  if not ok_source or not source then
-    return handler_error("FILE_NOT_FOUND", "Take source could not be read.", {
-      take_ref = take_ref_string(take),
-    })
-  end
-  local filename = source_filename(source)
-  local length, _ = source_length(source)
-  local summary = {
-    take_ref = take_ref_string(take),
-    file_ref = filename ~= "" and file_ref_for_path(filename) or JSON_NULL,
-    source_type = source_type(source),
-    filename = filename,
-    length_seconds = length,
-    channel_count = source_channels(source),
-    offline = filename ~= "" and not file_exists(filename) or false,
-    metadata_keys = metadata_keys_for_source(source, request.params.include_metadata_keys),
-  }
-  if request.params.include_parent_source == true then
-    local ok_parent, parent = call_reaper("GetMediaSourceParent", source)
-    summary.parent_source_type = ok_parent and parent and source_type(parent) or nil
-  end
-  return summary
-end
-
-local function read_project_media_files(request)
-  local max_sources = bounded_limit(request, request.params.max_sources, 25, 100)
-  local include_offline = request.params.include_offline == true
-  local seen = {}
-  local file_refs = json_array({})
-  local offline_count = 0
-  local source_count = 0
-  local truncated = false
-  local ok_count, item_count = call_reaper("CountMediaItems", 0)
-  local total_items = ok_count and first_number(item_count) or 0
-
-  for item_index = 0, total_items - 1 do
-    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
-    if ok_item and item then
-      local ok_takes, take_count = call_reaper("CountTakes", item)
-      for take_index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
-        local ok_take, take = call_reaper("GetTake", item, take_index)
-        if ok_take and take then
-          local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
-          if ok_source and source then
-            local filename = source_filename_raw(source)
-            if filename ~= "" and not seen[filename] then
-              seen[filename] = true
-              local offline = not file_exists(filename)
-              if offline then
-                offline_count = offline_count + 1
-              end
-              if include_offline or not offline then
-                source_count = source_count + 1
-                if #file_refs < max_sources then
-                  file_refs[#file_refs + 1] = file_ref_for_path(filename)
-                else
-                  truncated = true
-                end
-              end
-            end
-          end
-        end
-      end
-    end
-  end
-
-  return {
-    source_count = source_count,
-    file_refs = file_refs,
-    offline_count = offline_count,
-    truncated = truncated,
-  }
 end
 
 local function item_from_request_refs(request)

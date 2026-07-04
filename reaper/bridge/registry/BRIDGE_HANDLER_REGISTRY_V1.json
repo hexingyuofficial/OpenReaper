@@ -240,8 +240,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/resolve_named_command.lua",
+      "handler_export": "resolve_named_command",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -256,8 +256,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/read_action_metadata.lua",
+      "handler_export": "read_action_metadata",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -272,8 +272,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/read_action_toggle_state.lua",
+      "handler_export": "read_action_toggle_state",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -288,8 +288,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/read_action_shortcuts.lua",
+      "handler_export": "read_action_shortcuts",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -304,8 +304,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/parse_marker_action_text.lua",
+      "handler_export": "parse_marker_action_text",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -320,8 +320,8 @@
       "pack": "actions",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "actions/search_action_commands.lua",
+      "handler_export": "search_action_commands",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -336,8 +336,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/resolve_midi_take_ref.lua",
+      "handler_export": "resolve_midi_take_ref",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -352,8 +352,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/read_take_event_counts.lua",
+      "handler_export": "read_take_event_counts",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -368,8 +368,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/list_take_notes.lua",
+      "handler_export": "list_take_notes",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -384,8 +384,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/list_take_cc_events.lua",
+      "handler_export": "list_take_cc_events",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -400,8 +400,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/list_take_text_sysex_events.lua",
+      "handler_export": "list_take_text_sysex_events",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -416,8 +416,8 @@
       "pack": "midi",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "midi/read_take_grid.lua",
+      "handler_export": "read_take_grid",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -432,8 +432,8 @@
       "pack": "media",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "media/probe_file.lua",
+      "handler_export": "probe_media_file",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -448,8 +448,8 @@
       "pack": "media",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "media/read_take_source.lua",
+      "handler_export": "read_take_source",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
@@ -464,8 +464,8 @@
       "pack": "media",
       "risk": "read",
       "route": "read-b",
-      "handler_file": "legacy_monolith",
-      "handler_export": "legacy_monolith",
+      "handler_file": "media/read_project_media_files.lua",
+      "handler_export": "read_project_media_files",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/read-b-handler-expansion.test.mjs"
