@@ -7,6 +7,7 @@ import {
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
@@ -213,6 +214,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
+    ...createTemplateCatalogP1Templates(),
   ],
 });
 const ACCEPTED_TEMPLATE_BY_ID = new Map(

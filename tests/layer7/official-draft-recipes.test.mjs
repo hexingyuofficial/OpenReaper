@@ -13,7 +13,11 @@ import {
   loadUserRecipeAuthoringCatalog,
 } from "../../packages/core/src/user-recipe-authoring-v1.mjs";
 import {
+  listUserRecipes,
+} from "../../packages/mcp-server/src/user-recipe-discovery-v1.mjs";
+import {
   createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
@@ -28,6 +32,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
   "recipe.items.layer_report_from_evidence",
+  "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.render.region_delivery_report",
@@ -52,6 +57,13 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   "recipe.items.layer_report_from_evidence": Object.freeze([
     "template.items.create_layer_report",
   ]),
+  "recipe.media.item_prep_from_folder": Object.freeze([
+    "template.media.list_folder_media_files",
+    "template.media.import_file_section_to_track",
+    "template.items.set_take_playrate",
+    "template.items.split_item_at_time",
+    "template.items.copy_item_to_track",
+  ]),
   "recipe.midi.track_phrase_seed": Object.freeze([
     "template.tracks.create_track",
     "template.midi.create_midi_item",
@@ -69,11 +81,12 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
+    ...createTemplateCatalogP1Templates(),
   ],
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the six first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the seven first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -95,6 +108,7 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.deepEqual(files.map((file) => path.basename(file)).sort(), [
       "analysis.selected_item_cycle_quality_report.recipe.json",
       "items.layer_report_from_evidence.recipe.json",
+      "media.item_prep_from_folder.recipe.json",
       "midi.track_phrase_seed.recipe.json",
       "project.cleanup_fingerprint_report.recipe.json",
       "render.region_delivery_report.recipe.json",
@@ -130,6 +144,10 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.match(a3.summary, /does not derive live layer roles/);
     assert.match(a3Text, /typed fixture/i);
     assert.match(a3Text, /not live role classification/i);
+
+    const e6 = recipesById().get("recipe.media.item_prep_from_folder");
+    assert.match(e6.summary, /Draft write-risk family recipe/);
+    assert.match(e6.tags.join(" "), /e6_family/);
   });
 
   it("contains no absolute local paths or public last-result artifact aliases", () => {
@@ -178,6 +196,51 @@ describe("Layer 7 official draft recipe packet", () => {
       recipeTemplateDependencies(render).includes("template.render.output_file_metadata"),
       false,
     );
+  });
+
+  it("adds an E6 media/item family over post-V1 atoms without creating an executor", () => {
+    const recipe = recipesById().get("recipe.media.item_prep_from_folder");
+    const dependencies = recipeTemplateDependencies(recipe);
+
+    assert.deepEqual(dependencies, EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("e6_family"), true);
+    assert.equal(recipe.steps.some((step) => step.uses === "get_state"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.media.list_folder_media_files",
+        "template.media.import_file_section_to_track",
+        "template.items.set_take_playrate",
+        "template.items.split_item_at_time",
+        "template.items.copy_item_to_track",
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(recipe), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("discovers the E6 family through compact recipe-menu intent fields", () => {
+    const menu = listUserRecipes({
+      query: "playrate",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.media.item_prep_from_folder");
+
+    assert.ok(item);
+    assert.deepEqual(Object.keys(item).sort(), [
+      "capability_group",
+      "id",
+      "summary",
+      "support",
+      "task_intents",
+    ].sort());
+    assert.equal(item.capability_group, "media.media_item_prep");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("playrate"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
   });
 
   it("does not create north-star or workflow-shaped recipe packs", () => {

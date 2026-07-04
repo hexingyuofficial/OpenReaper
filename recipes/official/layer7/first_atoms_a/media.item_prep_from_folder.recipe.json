@@ -1,0 +1,410 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.media.item_prep_from_folder",
+  "title": "Media item prep from folder",
+  "summary": "Draft write-risk family recipe that lists approved folder media, imports one section, adjusts playrate, splits it, and copies the right side.",
+  "pack": "media",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "media_item_prep",
+  "tags": ["media", "items", "folder", "import", "split", "playrate", "copy", "e6_family"],
+  "steps": [
+    {
+      "id": "read_project_state",
+      "title": "Read project state",
+      "summary": "Read bounded project state before media and item writes.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "project.summary",
+        "refs": []
+      },
+      "checkpoint": "checkpoint_read_project_state",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "list_folder_media",
+      "title": "List folder media",
+      "summary": "List bounded audio candidates from an approved folder ref.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.list_folder_media_files",
+        "input": {
+          "folder_ref": "approved_fixture:media_folder",
+          "media_type": "audio",
+          "extension_filter": ["wav", "aif", "aiff", "mp3"],
+          "limit": 8,
+          "offset": 0
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_list_folder_media",
+      "evidence": "evidence_list_folder_media",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "import_media_section",
+      "title": "Import media section",
+      "summary": "Import the first listed media candidate as a bounded section to the target track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.import_file_section_to_track",
+        "input": {
+          "position_seconds": 0,
+          "start_percent": 0,
+          "end_percent": 50,
+          "preserve_selection": true
+        },
+        "refs": {
+          "source_file_ref": {
+            "$from_step": "list_folder_media",
+            "output": "file_refs"
+          },
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_import_media_section",
+      "evidence": "evidence_import_media_section",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_import"
+    },
+    {
+      "id": "set_take_playrate",
+      "title": "Set take playrate",
+      "summary": "Apply an explicit preserve-pitch playrate to the imported item.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.set_take_playrate",
+        "input": {
+          "playrate": 0.5,
+          "preserve_pitch": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "import_media_section",
+            "output": "imported_item_refs"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_set_take_playrate",
+      "evidence": "evidence_set_take_playrate",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_item_prep"
+    },
+    {
+      "id": "split_prepped_item",
+      "title": "Split prepped item",
+      "summary": "Split the adjusted item at an explicit project-time boundary.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.split_item_at_time",
+        "input": {
+          "position_seconds": 1
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "set_take_playrate",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_split_prepped_item",
+      "evidence": "evidence_split_prepped_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_item_prep"
+    },
+    {
+      "id": "copy_right_item",
+      "title": "Copy right item",
+      "summary": "Copy the right split item to the same bounded target track at a later position.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.copy_item_to_track",
+        "input": {
+          "position_seconds": 2
+        },
+        "refs": {
+          "source_item_ref": {
+            "$from_step": "split_prepped_item",
+            "output": "right_item_ref"
+          },
+          "target_track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_copy_right_item",
+      "evidence": "evidence_copy_right_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_item_prep"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_media_item_prep_refs",
+      "kind": "expected_output",
+      "summary": "The family run must retain folder media, imported item, adjusted item, split refs, and copied item refs.",
+      "required": true,
+      "evidence": [
+        "evidence_list_folder_media",
+        "evidence_import_media_section",
+        "evidence_set_take_playrate",
+        "evidence_split_prepped_item",
+        "evidence_copy_right_item"
+      ],
+      "outputs": {
+        "refs": [
+          "file_refs",
+          "imported_item_refs",
+          "source_file_ref",
+          "item_ref",
+          "left_item_ref",
+          "right_item_ref",
+          "new_item_ref"
+        ],
+        "artifacts": [],
+        "jobs": [],
+        "state": ["media_folder_candidates", "media_item_prep_graph"]
+      }
+    },
+    {
+      "id": "assert_no_loop_source_authority",
+      "kind": "checkpoint",
+      "summary": "The family does not enable loop-source edits, media relink, FX insertion, routing, automation, or raw actions.",
+      "required": true,
+      "evidence": ["evidence_copy_right_item"],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
+      "terminal": ["succeeded", "failed", "blocked"]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_project_state",
+        "after_step": "read_project_state",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Fresh bounded project state was read before media/item writes."
+      },
+      {
+        "id": "checkpoint_list_folder_media",
+        "after_step": "list_folder_media",
+        "required_evidence": ["evidence_list_folder_media"],
+        "on_resume": "continue_next_step",
+        "summary": "Folder media candidate evidence is retained."
+      },
+      {
+        "id": "checkpoint_import_media_section",
+        "after_step": "import_media_section",
+        "required_evidence": ["evidence_import_media_section"],
+        "on_resume": "continue_next_step",
+        "summary": "Imported media section evidence is retained."
+      },
+      {
+        "id": "checkpoint_set_take_playrate",
+        "after_step": "set_take_playrate",
+        "required_evidence": ["evidence_set_take_playrate"],
+        "on_resume": "continue_next_step",
+        "summary": "Playrate mutation evidence is retained."
+      },
+      {
+        "id": "checkpoint_split_prepped_item",
+        "after_step": "split_prepped_item",
+        "required_evidence": ["evidence_split_prepped_item"],
+        "on_resume": "continue_next_step",
+        "summary": "Split item evidence is retained."
+      },
+      {
+        "id": "checkpoint_copy_right_item",
+        "after_step": "copy_right_item",
+        "required_evidence": ["evidence_copy_right_item"],
+        "on_resume": "continue_next_step",
+        "summary": "Copied item evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_list_folder_media",
+        "step": "list_folder_media",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.list_folder_media_files",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_import_media_section",
+        "step": "import_media_section",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.import_file_section_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_set_take_playrate",
+        "step": "set_take_playrate",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.set_take_playrate",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_split_prepped_item",
+        "step": "split_prepped_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.split_item_at_time",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_copy_right_item",
+        "step": "copy_right_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.copy_item_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_import",
+        "trigger": "template_error",
+        "step": "import_media_section",
+        "strategy": "retry_step",
+        "summary": "Retry import only when folder candidate and target track evidence are still current."
+      },
+      {
+        "id": "branch_retry_item_prep",
+        "trigger": "template_error",
+        "step": null,
+        "strategy": "retry_step",
+        "summary": "Retry item prep only from the latest retained upstream item evidence."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "risk_gate_blocked",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause when approved folder, target track, source media, or item identity needs review."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_fresh_state",
+        "applies_to": ["write"],
+        "required_before_step": "import_media_section",
+        "policy": "fresh_state",
+        "blocks_auto_resume": true,
+        "summary": "Require fresh bounded project state before media import and item writes."
+      },
+      {
+        "id": "gate_manual_approval",
+        "applies_to": ["write"],
+        "required_before_step": "import_media_section",
+        "policy": "manual_approval",
+        "blocks_auto_resume": true,
+        "summary": "Require manual approval before importing media and mutating items."
+      }
+    ]
+  }
+}

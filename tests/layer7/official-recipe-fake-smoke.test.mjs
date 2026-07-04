@@ -15,6 +15,7 @@ import {
 } from "../../packages/core/src/user-recipe-authoring-v1.mjs";
 import {
   createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
@@ -29,6 +30,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
   "recipe.items.layer_report_from_evidence",
+  "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.render.region_delivery_report",
@@ -38,6 +40,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
 const WRITE_ATOMS = new Set([
   "recipe.midi.track_phrase_seed",
   "recipe.render.region_wav_render",
+  "recipe.media.item_prep_from_folder",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -48,11 +51,12 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
+    ...createTemplateCatalogP1Templates(),
   ],
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the six draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the seven draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -224,6 +228,28 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.match(layerReport.summary, /does not derive live layer roles/);
     assert.equal(run.fixture_caveat, "typed_fixture_not_live_layer_planning");
     assert.equal(run.fixture_artifacts.some((artifact) => artifact.label === "layer_evidence"), true);
+  });
+
+  it("fake-smokes the E6 media/item family as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.media.item_prep_from_folder");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.media.list_folder_media_files",
+        "template.media.import_file_section_to_track",
+        "template.items.set_take_playrate",
+        "template.items.split_item_at_time",
+        "template.items.copy_item_to_track",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 2);
+    assert.equal(run.fixture_artifacts.length, 0);
+    assert.equal(run.state_reads.some((read) => read.projection === "project.summary"), true);
+    assert.equal(run.expected.refs.has("file_refs"), true);
+    assert.equal(run.expected.refs.has("new_item_ref"), true);
   });
 
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {
