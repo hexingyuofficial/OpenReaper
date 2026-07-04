@@ -208,6 +208,7 @@ const allowlists = {
     "package.json",
     "scripts/check-layer-scope.mjs",
     "scripts/check-official-recipes.mjs",
+    "scripts/run-layer7-r1-recipe-transcript.mjs",
     "recipes/official/**",
     "tests/layer7/**",
   ],
