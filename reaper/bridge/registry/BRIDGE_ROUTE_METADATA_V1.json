@@ -1,0 +1,232 @@
+{
+  "contract": "openreaper.bridge_route_metadata.v1",
+  "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
+  "registry_summary": {
+    "contract": "openreaper.bridge_handler_registry.v1",
+    "entryCount": 60,
+    "legacyMonolithCount": 0,
+    "extractedHandlerCount": 60,
+    "handlerModuleCount": 60,
+    "routeCount": 7,
+    "operationCount": 37
+  },
+  "routes": [
+    {
+      "route": "wave0",
+      "template_count": 5,
+      "handler_module_count": 5,
+      "operation_count": 5,
+      "packs": [
+        "core",
+        "project",
+        "system",
+        "transport"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4d2/openreaper-live-bridge.test.mjs",
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.project.read_summary",
+        "template.transport.read_state",
+        "template.core.read_openreaper_status",
+        "template.system.read_runtime_environment",
+        "template.system.read_resource_paths"
+      ]
+    },
+    {
+      "route": "wave1a-read-handlers",
+      "template_count": 9,
+      "handler_module_count": 9,
+      "operation_count": 9,
+      "packs": [
+        "core",
+        "items",
+        "project",
+        "system",
+        "tracks"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/read-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.core.read_template_catalog_summary",
+        "template.core.read_last_result",
+        "template.system.check_api_symbols",
+        "template.project.read_metadata",
+        "template.project.list_markers_regions",
+        "template.project.read_tempo_map",
+        "template.tracks.resolve_track_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary"
+      ]
+    },
+    {
+      "route": "read-b",
+      "template_count": 15,
+      "handler_module_count": 15,
+      "operation_count": 15,
+      "packs": [
+        "actions",
+        "media",
+        "midi"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/read-b-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.actions.resolve_named_command",
+        "template.actions.read_action_metadata",
+        "template.actions.read_action_toggle_state",
+        "template.actions.read_action_shortcuts",
+        "template.actions.parse_marker_action_text",
+        "template.actions.search_action_commands",
+        "template.midi.resolve_midi_take_ref",
+        "template.midi.read_take_event_counts",
+        "template.midi.list_take_notes",
+        "template.midi.list_take_cc_events",
+        "template.midi.list_take_text_sysex_events",
+        "template.midi.read_take_grid",
+        "template.media.probe_file",
+        "template.media.read_take_source",
+        "template.media.read_project_media_files"
+      ]
+    },
+    {
+      "route": "first-real-a1",
+      "template_count": 4,
+      "handler_module_count": 4,
+      "operation_count": 4,
+      "packs": [
+        "analysis",
+        "project"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "write"
+      ],
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.analysis.detect_loop_candidates",
+        "template.analysis.measure_loop_click_risk",
+        "template.analysis.create_loop_qa_report",
+        "template.project.create_cleanup_report"
+      ]
+    },
+    {
+      "route": "first-real-a2-render",
+      "template_count": 2,
+      "handler_module_count": 2,
+      "operation_count": 2,
+      "packs": [
+        "render"
+      ],
+      "risks": [
+        "read",
+        "write"
+      ],
+      "artifact_policies": [
+        "write"
+      ],
+      "tests": [
+        "tests/layer4dx/first-real-a2-render-route.test.mjs"
+      ],
+      "template_ids": [
+        "template.render.render_region_wav",
+        "template.render.create_delivery_report"
+      ]
+    },
+    {
+      "route": "first-real-a3-layer-report",
+      "template_count": 1,
+      "handler_module_count": 1,
+      "operation_count": 1,
+      "packs": [
+        "items"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "write"
+      ],
+      "tests": [
+        "tests/layer4dx/first-real-a3-layer-report-route.test.mjs"
+      ],
+      "template_ids": [
+        "template.items.create_layer_report"
+      ]
+    },
+    {
+      "route": "safe-write-a",
+      "template_count": 24,
+      "handler_module_count": 24,
+      "operation_count": 24,
+      "packs": [
+        "items",
+        "midi",
+        "project",
+        "tracks",
+        "transport"
+      ],
+      "risks": [
+        "safe",
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.project.set_metadata_field",
+        "template.project.create_marker",
+        "template.project.create_region",
+        "template.tracks.create_track",
+        "template.tracks.rename_track",
+        "template.tracks.set_color",
+        "template.tracks.select_track",
+        "template.tracks.set_mute",
+        "template.tracks.set_solo",
+        "template.transport.set_edit_cursor",
+        "template.transport.set_time_selection",
+        "template.transport.clear_time_selection",
+        "template.transport.set_loop_points",
+        "template.transport.clear_loop_points",
+        "template.transport.set_repeat",
+        "template.items.move_item",
+        "template.items.trim_item",
+        "template.items.set_item_fades",
+        "template.items.set_take_pitch",
+        "template.items.set_item_snap_offset",
+        "template.midi.create_midi_item",
+        "template.midi.insert_notes_batch",
+        "template.midi.insert_cc_batch",
+        "template.midi.insert_text_sysex_events"
+      ]
+    }
+  ]
+}

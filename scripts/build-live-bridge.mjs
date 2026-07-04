@@ -49,6 +49,7 @@ export const sourceFiles = Object.freeze([
 ]);
 
 export const registryFile = "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json";
+export const routeMetadataFile = "reaper/bridge/registry/BRIDGE_ROUTE_METADATA_V1.json";
 export const handlerSourceRoot = "reaper/bridge/src/handlers";
 
 export const registryRoutes = Object.freeze({
@@ -269,6 +270,30 @@ export function validateBridgeHandlerRegistry({ cwd = process.cwd(), registry = 
   });
 }
 
+export function buildBridgeRouteMetadata({ cwd = process.cwd(), registry = loadBridgeHandlerRegistry({ cwd }) } = {}) {
+  const registrySummary = validateBridgeHandlerRegistry({ cwd, registry });
+  const entries = registry.entries ?? [];
+  return {
+    contract: "openreaper.bridge_route_metadata.v1",
+    generated_from: registryFile,
+    registry_summary: registrySummary,
+    routes: Object.entries(registryRoutes).map(([route, spec]) => {
+      const routeEntries = entries.filter((entry) => entry.route === route);
+      return {
+        route,
+        template_count: routeEntries.length,
+        handler_module_count: new Set(routeEntries.map((entry) => entry.handler_file)).size,
+        operation_count: new Set(routeEntries.map(operationCapabilityKey)).size,
+        packs: sortedUnique(routeEntries.map((entry) => entry.pack)),
+        risks: sortedUnique(routeEntries.map((entry) => entry.risk)),
+        artifact_policies: sortedUnique(routeEntries.map((entry) => entry.artifact_policy)),
+        tests: [...spec.tests],
+        template_ids: routeEntries.map((entry) => entry.template_id),
+      };
+    }),
+  };
+}
+
 function wrapSourceModule(file, source, handlerModules) {
   if (file !== "40-route-pack-handlers.lua") return source;
   const handlerExportNames = [...new Set(handlerModules.flatMap((module) => module.exports))].sort();
@@ -361,6 +386,15 @@ function artifactPolicyForDescriptor(descriptor) {
 
 function operationKey(entry) {
   return `${entry.operation.family}:${entry.operation.name}`;
+}
+
+function operationCapabilityKey(entry) {
+  const capability = entry.capability ? `:${entry.capability}` : "";
+  return `${operationKey(entry)}${capability}`;
+}
+
+function sortedUnique(values) {
+  return [...new Set(values)].sort();
 }
 
 function validateHandlerLocation({ cwd, entry, prefix, errors }) {
@@ -474,13 +508,21 @@ function assertSameList(label, actual, expected, errors) {
 
 function run() {
   const outputPath = path.join(root, "reaper/bridge/openreaper-live-bridge.lua");
+  const metadataPath = path.join(root, routeMetadataFile);
   const check = process.argv.includes("--check");
   const bundled = buildLiveBridgeBundle({ cwd: root });
+  const routeMetadata = `${JSON.stringify(buildBridgeRouteMetadata({ cwd: root }), null, 2)}\n`;
 
   if (check) {
     const current = readFileSync(outputPath, "utf8");
     if (current !== bundled) {
       console.error("openreaper-live-bridge.lua is not up to date with reaper/bridge/src.");
+      console.error("Run: npm run build:live-bridge");
+      process.exit(1);
+    }
+    const currentRouteMetadata = readFileSync(metadataPath, "utf8");
+    if (currentRouteMetadata !== routeMetadata) {
+      console.error(`${routeMetadataFile} is not up to date with ${registryFile}.`);
       console.error("Run: npm run build:live-bridge");
       process.exit(1);
     }
@@ -490,8 +532,9 @@ function run() {
     );
   } else {
     writeFileSync(outputPath, bundled);
+    writeFileSync(metadataPath, routeMetadata);
     const registrySummary = validateBridgeHandlerRegistry({ cwd: root });
-    console.log(`Built reaper/bridge/openreaper-live-bridge.lua from ${sourceFiles.length} source module(s), ${registrySummary.handlerModuleCount} handler module file(s), and registry gate.`);
+    console.log(`Built reaper/bridge/openreaper-live-bridge.lua and ${routeMetadataFile} from ${sourceFiles.length} source module(s), ${registrySummary.handlerModuleCount} handler module file(s), and registry gate.`);
   }
 }
 

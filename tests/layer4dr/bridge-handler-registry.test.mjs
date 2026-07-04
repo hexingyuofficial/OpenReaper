@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import {
+  buildBridgeRouteMetadata,
   buildLiveBridgeBundle,
   handlerModuleFilesFromRegistry,
   handlerSourceRoot,
   loadBridgeHandlerRegistry,
+  routeMetadataFile,
   registryRoutes,
   validateBridgeHandlerRegistry,
 } from "../../scripts/build-live-bridge.mjs";
@@ -16,6 +18,8 @@ import {
 
 const ROOT = new URL("../..", import.meta.url);
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const ROUTE_METADATA_SOURCE = readFileSync(new URL(`../../${routeMetadataFile}`, import.meta.url), "utf8");
+const ROUTE_METADATA = JSON.parse(ROUTE_METADATA_SOURCE);
 const REGISTRY = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
 const ROUTE_SOURCE = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
 const REQUIRED_ENTRY_FIELDS = Object.freeze([
@@ -287,6 +291,27 @@ describe("Layer 4D.R bridge handler registry", () => {
       BRIDGE_SOURCE,
       /project\/create_cleanup_report\.lua[\s\S]*local function read_project_summary\(\.\.\.\)[\s\S]*OPENREAPER_HANDLER_EXPORTS\.read_project_summary\(\.\.\.\)/,
     );
+  });
+
+  it("keeps generated route metadata deterministic, compact, and registry-derived", () => {
+    const rebuilt = buildBridgeRouteMetadata({ cwd: ROOT.pathname });
+    assert.deepEqual(ROUTE_METADATA, rebuilt);
+    assert.equal(ROUTE_METADATA.contract, "openreaper.bridge_route_metadata.v1");
+    assert.equal(ROUTE_METADATA.generated_from, "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json");
+    assert.deepEqual(ROUTE_METADATA.registry_summary, validateBridgeHandlerRegistry({ cwd: ROOT.pathname }));
+    assert.deepEqual(
+      ROUTE_METADATA.routes.map((route) => route.route),
+      Object.keys(registryRoutes),
+    );
+    for (const route of ROUTE_METADATA.routes) {
+      const entries = REGISTRY.entries.filter((entry) => entry.route === route.route);
+      assert.equal(route.template_count, entries.length, route.route);
+      assert.deepEqual(route.template_ids, entries.map((entry) => entry.template_id), route.route);
+      assert.deepEqual(route.tests, registryRoutes[route.route].tests, route.route);
+      assert.equal(Object.hasOwn(route, "live_pass"), false, route.route);
+      assert.equal(Object.hasOwn(route, "public_support"), false, route.route);
+    }
+    assert.doesNotMatch(ROUTE_METADATA_SOURCE, /LIVE_SMOKE_MATRIX|call_recipe|recipes\//);
   });
 
   it("keeps extracted dispatch behavior bound to the same operations and exports", () => {
