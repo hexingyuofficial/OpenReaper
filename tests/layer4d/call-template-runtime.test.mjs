@@ -21,6 +21,7 @@ import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
@@ -303,6 +304,197 @@ describe("Layer 4D call_template runtime binding", () => {
       "ping",
     ].sort());
     assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+  });
+
+  it("exposes the E2 FX-B1 route as an explicit fake/static route without broadening default live ids", async () => {
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS, [
+      "template.fx.resolve_fx_ref",
+      "template.fx.list_track_fx_chain",
+      "template.fx.list_take_fx_chain",
+      "template.fx.read_fx_summary",
+      "template.fx.list_fx_parameters",
+      "template.fx.read_fx_parameter",
+      "template.fx.add_track_fx",
+      "template.fx.add_take_fx",
+      "template.fx.set_fx_bypass",
+      "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_fx_preset_by_name",
+      "template.fx.set_fx_preset_by_index",
+      "template.fx.reorder_fx",
+      "template.fx.read_video_processor_code",
+    ]);
+
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+        opt_in_env: "OPENREAPER_E2_FX_B1_LIVE_SMOKE",
+        opt_in_flag: "--live",
+      },
+      evidenceLimit: 20,
+    });
+
+    for (const [index, id] of CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS.entries()) {
+      const response = await runtime.call_template({
+        id,
+        input: fxB1RouteInput(id),
+        refs: fxB1RouteRefs(id),
+        idempotency_key: fxB1IdempotencyKey(id),
+        context: context({ request_sequence: index + 1 }),
+      });
+      assert.equal(response.ok, true, id);
+    }
+
+    assert.deepEqual(
+      bridge.seen.map((request) => `${request.operation.family}:${request.operation.name}`),
+      [
+        "query_state:fx.resolve_ref",
+        "query_state:fx.list_track_chain",
+        "query_state:fx.list_take_chain",
+        "query_state:fx.read_summary",
+        "query_state:fx.list_parameters",
+        "query_state:fx.read_parameter",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "run_command:template.execute",
+        "query_state:fx.read_video_processor_code",
+      ],
+    );
+    assert.deepEqual(
+      bridge.seen.map((request) => request.pack.capability),
+      [
+        "fx.resolve_ref",
+        "fx.list_track_chain",
+        "fx.list_take_chain",
+        "fx.read_summary",
+        "fx.list_parameters",
+        "fx.read_parameter",
+        "fx.add_track",
+        "fx.add_take",
+        "fx.set_bypass",
+        "fx.set_parameter_normalized",
+        "fx.set_preset_by_name",
+        "fx.set_preset_by_index",
+        "fx.reorder",
+        "fx.read_video_processor_code",
+      ],
+    );
+    for (const request of bridge.seen.slice(0, 6)) {
+      assert.equal(request.pack.id, "fx");
+      assert.equal(request.pack.risk, "read");
+      assert.equal(request.undo.mode, "none");
+      assert.equal(request.artifacts.allow, false);
+    }
+    for (const request of bridge.seen.slice(6, 13)) {
+      assert.equal(request.pack.id, "fx");
+      assert.equal(request.pack.risk, "write");
+      assert.equal(request.undo.mode, "required");
+      assert.equal(request.verification.mode, "required");
+      assert.equal(request.artifacts.allow, false);
+    }
+    assert.equal(bridge.seen[13].pack.risk, "read");
+    assert.equal(bridge.seen[13].artifacts.allow, true);
+
+    const mixed = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: [
+          ...CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+          "template.fx.search_installed_fx",
+        ],
+      },
+    });
+    assert.deepEqual(mixed.live_gate.allowed_template_ids, []);
+  });
+
+  it("runs the E2 FX-B1 fake smoke and reports live preflight blockers without starting REAPER", () => {
+    const fake = runFxB1RouteSmoke(["--fx-b1", "--fake"]);
+    assert.equal(fake.ok, true);
+    assert.equal(fake.mode, "fake");
+    assert.equal(fake.spawned_reaper, false);
+    assert.equal(fake.live_pass_claimed, false);
+    assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS);
+    assert.deepEqual(fake.allowed_bridge_operations, [
+      "query_state:fx.resolve_ref",
+      "query_state:fx.list_track_chain",
+      "query_state:fx.list_take_chain",
+      "query_state:fx.read_summary",
+      "query_state:fx.list_parameters",
+      "query_state:fx.read_parameter",
+      "query_state:fx.read_video_processor_code",
+      "run_command:template.execute",
+    ]);
+    assert.deepEqual(fake.preflight_blockers_covered, [
+      "fx_track_ref_missing",
+      "fx_take_ref_missing",
+      "fx_ref_missing",
+      "fx_plugin_name_missing",
+      "fx_parameter_invalid",
+      "fx_preset_fixture_missing",
+      "video_processor_fixture_missing",
+    ]);
+    assert.equal(fake.executions.length, 14);
+    assert.equal(fake.executions.every((execution) => execution.ok), true);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 5);
+    assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 1);
+    assert.deepEqual(
+      fake.executions
+        .filter((execution) => execution.skipped)
+        .map((execution) => execution.id),
+      [
+        "template.fx.set_fx_preset_by_name",
+        "template.fx.set_fx_preset_by_index",
+      ],
+    );
+    for (const execution of fake.executions.filter((entry) => entry.risk === "write")) {
+      assert.equal(execution.operation, "run_command:template.execute");
+      assert.equal(execution.undo.mode, "required");
+      assert.equal(execution.artifacts_allowed, false);
+    }
+
+    const root = mkdtempSync(join(tmpdir(), "openreaper-e2-fx-b1-"));
+    const transportDir = join(root, "transport");
+    mkdirSync(join(transportDir, "requests"), { recursive: true });
+    mkdirSync(join(transportDir, "results"), { recursive: true });
+    const baseEnv = {
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      OPENREAPER_E2_FX_TRACK_REF: "track:index:0",
+      OPENREAPER_E2_FX_TAKE_REF: "take:index:0",
+      OPENREAPER_E2_FX_REF: "fx:track:0",
+      OPENREAPER_E2_FX_PLUGIN_NAME: "ReaEQ (Cockos)",
+      OPENREAPER_E2_FX_SECOND_PLUGIN_NAME: "ReaComp (Cockos)",
+      OPENREAPER_E2_FX_PARAM_INDEX: "0",
+      OPENREAPER_E2_FX_PARAM_VALUE: "0.5",
+    };
+
+    const missingTrack = runFxB1RouteSmokeExpectingFailure(["--fx-b1", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E2_FX_TRACK_REF: "",
+    });
+    assert.equal(missingTrack.reason, "fx_track_ref_missing");
+    assert.equal(missingTrack.spawned_reaper, false);
+    assert.equal("attempted_template_ids" in missingTrack, false);
+
+    const invalidFx = runFxB1RouteSmokeExpectingFailure(["--fx-b1", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E2_FX_REF: "bad-fx-ref",
+    });
+    assert.equal(invalidFx.reason, "fx_ref_invalid");
+    assert.equal(invalidFx.spawned_reaper, false);
+
+    const missingPlugin = runFxB1RouteSmokeExpectingFailure(["--fx-b1", "--live"], {
+      ...baseEnv,
+      OPENREAPER_E2_FX_PLUGIN_NAME: "",
+    });
+    assert.equal(missingPlugin.reason, "fx_plugin_name_missing");
+    assert.equal(missingPlugin.spawned_reaper, false);
   });
 
   it("exposes the E3 media route as an explicit fake/static route without broadening default live ids", async () => {
@@ -659,6 +851,102 @@ function sampleObjectRef(kind, index, refIndex) {
   const scheme = kind === "job" ? "job_id" : kind === "file" ? "path" : "guid";
   const value = kind === "file" ? `/tmp/openreaper-${index}-${refIndex}.wav` : `{${kind.toUpperCase()}-${index}-${refIndex}}`;
   return createObjectRef(kind, { scheme, value });
+}
+
+function fxB1RouteInput(id) {
+  if (id === "template.fx.resolve_fx_ref") {
+    return { owner_kind: "track", slot_index: 0 };
+  }
+  if (id === "template.fx.list_track_fx_chain" || id === "template.fx.list_take_fx_chain") {
+    return { include_preset: true };
+  }
+  if (id === "template.fx.list_fx_parameters") {
+    return { limit: 16 };
+  }
+  if (id === "template.fx.read_fx_parameter") {
+    return { param_index: 0 };
+  }
+  if (id === "template.fx.add_track_fx" || id === "template.fx.add_take_fx") {
+    return { plugin_name: "ReaEQ (Cockos)" };
+  }
+  if (id === "template.fx.set_fx_bypass") {
+    return { enabled: false };
+  }
+  if (id === "template.fx.set_fx_parameter_normalized") {
+    return { param_index: 0, normalized_value: 0.5, tolerance: 0.001 };
+  }
+  if (id === "template.fx.set_fx_preset_by_name") {
+    return { preset_name: "Default" };
+  }
+  if (id === "template.fx.set_fx_preset_by_index") {
+    return { preset_index: 0 };
+  }
+  if (id === "template.fx.reorder_fx") {
+    return { target_index: 0 };
+  }
+  return {};
+}
+
+function fxB1RouteRefs(id) {
+  const trackRef = createObjectRef("track", { scheme: "guid", value: "{E2-FX-TRACK}" }, {
+    ref: "track:guid:{E2-FX-TRACK}",
+  });
+  const takeRef = createObjectRef("take", { scheme: "guid", value: "{E2-FX-TAKE}" }, {
+    ref: "take:guid:{E2-FX-TAKE}",
+  });
+  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
+    ref: "fx:track:0",
+  });
+  const videoFxRef = createObjectRef("fx", { scheme: "track", value: "video_processor:0" }, {
+    ref: "fx:track:video_processor:0",
+  });
+
+  if (id === "template.fx.resolve_fx_ref" || id === "template.fx.list_track_fx_chain" || id === "template.fx.add_track_fx") {
+    return { track_ref: trackRef };
+  }
+  if (id === "template.fx.list_take_fx_chain" || id === "template.fx.add_take_fx") {
+    return { take_ref: takeRef };
+  }
+  if (id === "template.fx.read_video_processor_code") {
+    return { fx_ref: videoFxRef };
+  }
+  return { fx_ref: fxRef };
+}
+
+function fxB1IdempotencyKey(id) {
+  return [
+    "template.fx.set_fx_bypass",
+    "template.fx.set_fx_parameter_normalized",
+    "template.fx.set_fx_preset_by_name",
+    "template.fx.set_fx_preset_by_index",
+    "template.fx.reorder_fx",
+  ].includes(id) ? `e2-fx-b1:${id}` : undefined;
+}
+
+function runFxB1RouteSmoke(args, env = {}) {
+  const output = execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs", ...args], {
+    cwd: new URL("../..", import.meta.url),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+      OPENREAPER_E2_FX_B1_LIVE_SMOKE: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      ...env,
+    },
+  }).trim();
+  return JSON.parse(output);
+}
+
+function runFxB1RouteSmokeExpectingFailure(args, env = {}) {
+  try {
+    return runFxB1RouteSmoke(args, env);
+  } catch (error) {
+    assert.equal(error.status, 2);
+    const report = JSON.parse(String(error.stdout));
+    assert.equal(report.ok, false);
+    return report;
+  }
 }
 
 function mediaRouteInput(id) {

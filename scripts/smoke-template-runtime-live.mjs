@@ -5,6 +5,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
@@ -47,6 +48,7 @@ const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const SAFE_WRITE_A_FLAG = "--safe-write-a";
+const E2_FX_B1_ROUTE_FLAG = "--fx-b1";
 const E3_MEDIA_ROUTE_FLAG = "--media-route";
 const E4_ITEM_ROUTE_FLAG = "--item-route";
 const PHASE_FLAG = "--phase";
@@ -74,6 +76,7 @@ const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
   "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
 const READ_B_BATCH = "read-b-live-handlers";
 const SAFE_WRITE_A_BATCH = "Safe-Write-A";
+const E2_FX_B1_ROUTE_BATCH = "E2 FX-B1 Route";
 const E3_MEDIA_ROUTE_BATCH = "E3 Media Route";
 const E4_ITEM_ROUTE_BATCH = "E4 Item Route";
 const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
@@ -94,6 +97,18 @@ const READ_B_MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
 const READ_B_AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
 const READ_B_MEDIA_PATH_ENV = "OPENREAPER_LIVE_SMOKE_MEDIA_PATH";
 const E3_MEDIA_ROUTE_OPT_IN_ENV = "OPENREAPER_E3_MEDIA_ROUTE_LIVE_SMOKE";
+const E2_FX_B1_ROUTE_OPT_IN_ENV = "OPENREAPER_E2_FX_B1_LIVE_SMOKE";
+const E2_FX_B1_TRACK_REF_ENV = "OPENREAPER_E2_FX_TRACK_REF";
+const E2_FX_B1_TAKE_REF_ENV = "OPENREAPER_E2_FX_TAKE_REF";
+const E2_FX_B1_FX_REF_ENV = "OPENREAPER_E2_FX_REF";
+const E2_FX_B1_PLUGIN_NAME_ENV = "OPENREAPER_E2_FX_PLUGIN_NAME";
+const E2_FX_B1_SECOND_PLUGIN_NAME_ENV = "OPENREAPER_E2_FX_SECOND_PLUGIN_NAME";
+const E2_FX_B1_PARAM_INDEX_ENV = "OPENREAPER_E2_FX_PARAM_INDEX";
+const E2_FX_B1_PARAM_VALUE_ENV = "OPENREAPER_E2_FX_PARAM_VALUE";
+const E2_FX_B1_PRESET_NAME_ENV = "OPENREAPER_E2_FX_PRESET_NAME";
+const E2_FX_B1_PRESET_INDEX_ENV = "OPENREAPER_E2_FX_PRESET_INDEX";
+const E2_FX_B1_VIDEO_FX_REF_ENV = "OPENREAPER_E2_FX_VIDEO_REF";
+const E2_FX_B1_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
 const E3_MEDIA_FOLDER_ROOT_ENV = "OPENREAPER_E3_MEDIA_FOLDER_ROOT";
 const E3_MEDIA_SOURCE_PATH_ENV = "OPENREAPER_E3_MEDIA_SOURCE_PATH";
 const E3_MEDIA_RELINK_PATH_ENV = "OPENREAPER_E3_MEDIA_RELINK_PATH";
@@ -199,6 +214,154 @@ const E4_ITEM_ROUTE_TEMPLATE_SPECS = Object.freeze([
 
 const E4_ITEM_ROUTE_SPEC_BY_CAPABILITY = new Map(
   E4_ITEM_ROUTE_TEMPLATE_SPECS.map((spec) => [spec.capability, spec]),
+);
+
+const E2_FX_B1_ROUTE_TEMPLATE_SPECS = Object.freeze([
+  Object.freeze({
+    id: "template.fx.resolve_fx_ref",
+    operation: "query_state:fx.resolve_ref",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.resolve_ref",
+    ref_group: "track_or_take",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.list_track_fx_chain",
+    operation: "query_state:fx.list_track_chain",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.list_track_chain",
+    ref_group: "track",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.list_take_fx_chain",
+    operation: "query_state:fx.list_take_chain",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.list_take_chain",
+    ref_group: "take",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.read_fx_summary",
+    operation: "query_state:fx.read_summary",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.read_summary",
+    ref_group: "fx",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.list_fx_parameters",
+    operation: "query_state:fx.list_parameters",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.list_parameters",
+    ref_group: "fx",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.read_fx_parameter",
+    operation: "query_state:fx.read_parameter",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.read_parameter",
+    ref_group: "fx",
+    phase: "primary_read",
+  }),
+  Object.freeze({
+    id: "template.fx.add_track_fx",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.add_track",
+    ref_group: "track_plugin",
+    phase: "primary_write",
+    idempotent: false,
+  }),
+  Object.freeze({
+    id: "template.fx.add_take_fx",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.add_take",
+    ref_group: "take_plugin",
+    phase: "primary_write",
+    idempotent: false,
+  }),
+  Object.freeze({
+    id: "template.fx.set_fx_bypass",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.set_bypass",
+    ref_group: "fx",
+    phase: "primary_write",
+    idempotent: true,
+  }),
+  Object.freeze({
+    id: "template.fx.set_fx_parameter_normalized",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.set_parameter_normalized",
+    ref_group: "fx",
+    phase: "primary_write",
+    idempotent: true,
+  }),
+  Object.freeze({
+    id: "template.fx.set_fx_preset_by_name",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.set_preset_by_name",
+    ref_group: "fx_preset_name",
+    phase: "conditional_preset",
+    idempotent: true,
+  }),
+  Object.freeze({
+    id: "template.fx.set_fx_preset_by_index",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.set_preset_by_index",
+    ref_group: "fx_preset_index",
+    phase: "conditional_preset",
+    idempotent: true,
+  }),
+  Object.freeze({
+    id: "template.fx.reorder_fx",
+    operation: "run_command:template.execute",
+    pack: "fx",
+    risk: "write",
+    capability: "fx.reorder",
+    ref_group: "fx_second_plugin",
+    phase: "primary_write",
+    idempotent: true,
+  }),
+  Object.freeze({
+    id: "template.fx.read_video_processor_code",
+    operation: "query_state:fx.read_video_processor_code",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.read_video_processor_code",
+    ref_group: "video_fx",
+    phase: "conditional_video",
+    artifact: true,
+  }),
+]);
+
+const E2_FX_B1_ROUTE_SPEC_BY_OPERATION = new Map(
+  E2_FX_B1_ROUTE_TEMPLATE_SPECS
+    .filter((spec) => spec.operation !== "run_command:template.execute")
+    .map((spec) => [spec.operation, spec]),
+);
+const E2_FX_B1_ROUTE_SPEC_BY_CAPABILITY = new Map(
+  E2_FX_B1_ROUTE_TEMPLATE_SPECS
+    .filter((spec) => spec.operation === "run_command:template.execute")
+    .map((spec) => [spec.capability, spec]),
 );
 const SUPPORTED_MEDIA_EXTENSIONS = Object.freeze([
   "wav",
@@ -355,6 +518,8 @@ const baseReport = {
 if (route.fake) {
   const blocker = route.name === "safe-write-a"
     ? null
+    : route.name === "e2-fx-b1-route"
+    ? null
     : route.name === "e3-media-route"
     ? null
     : route.name === "e4-item-route"
@@ -379,6 +544,8 @@ if (route.fake) {
     config: {
       contract: route.name === "safe-write-a"
         ? "safe_write_a.fake_executor.v1"
+        : route.name === "e2-fx-b1-route"
+        ? "e2_fx_b1_route.fake_executor.v1"
         : route.name === "e3-media-route"
         ? "e3_media_route.fake_executor.v1"
         : route.name === "e4-item-route"
@@ -394,6 +561,9 @@ if (route.fake) {
     async dispatch(request) {
       if (route.name === "safe-write-a") {
         return dispatchFakeSafeWriteA(request);
+      }
+      if (route.name === "e2-fx-b1-route") {
+        return dispatchFakeE2FxB1Route(request);
       }
       if (route.name === "e3-media-route") {
         return dispatchFakeE3MediaRoute(request);
@@ -419,6 +589,12 @@ if (route.fake) {
   const contextBase = liveContextBase();
   const fakeReport = route.name === "safe-write-a"
     ? await runSafeWriteASmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "e2-fx-b1-route"
+    ? await runE2FxB1RouteSmoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
         contextBase,
@@ -462,7 +638,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: ["safe-write-a", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e2-fx-b1-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -534,6 +710,12 @@ const routeReport = route.name === "first-real-a2-render"
       fixtureInputs,
       contextBase,
     })
+  : route.name === "e2-fx-b1-route"
+  ? await runE2FxB1RouteSmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
   : route.name === "e3-media-route"
   ? await runE3MediaRouteSmoke({
       liveRuntime,
@@ -566,7 +748,7 @@ console.log(JSON.stringify({
   skipped: false,
   live_executor: executorConfig.config,
   context: contextSummary(contextBase),
-  evidence: route.name === "safe-write-a" ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
+  evidence: ["safe-write-a", "e2-fx-b1-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
   live_pass_claimed: false,
 }));
 process.exit(routeReport.ok ? 0 : 2);
@@ -654,6 +836,34 @@ function selectRoute(argv, env) {
   }
 
   const e3MediaRouteSelected = argv.includes(E3_MEDIA_ROUTE_FLAG) || env[E3_MEDIA_ROUTE_OPT_IN_ENV] === "1";
+  const e2FxB1RouteSelected = argv.includes(E2_FX_B1_ROUTE_FLAG) || env[E2_FX_B1_ROUTE_OPT_IN_ENV] === "1";
+  if (e2FxB1RouteSelected) {
+    return {
+      name: "e2-fx-b1-route",
+      wave: E2_FX_B1_ROUTE_BATCH,
+      batch: E2_FX_B1_ROUTE_BATCH,
+      routeFlag: E2_FX_B1_ROUTE_FLAG,
+      optInEnv: E2_FX_B1_ROUTE_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+      operations: [
+        "query_state:fx.resolve_ref",
+        "query_state:fx.list_track_chain",
+        "query_state:fx.list_take_chain",
+        "query_state:fx.read_summary",
+        "query_state:fx.list_parameters",
+        "query_state:fx.read_parameter",
+        "query_state:fx.read_video_processor_code",
+        "run_command:template.execute",
+      ],
+      capabilities: E2_FX_B1_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: e2FxB1RouteFixtureInputs,
+      configuredBlocker: e2FxB1RouteConfiguredBlocker,
+      passReason: "e2_fx_b1_route_fake_static_readback_passed",
+      failReason: "e2_fx_b1_route_fake_static_readback_failed",
+    };
+  }
+
   if (e3MediaRouteSelected) {
     return {
       name: "e3-media-route",
@@ -1014,6 +1224,103 @@ async function runE4ItemRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsFo
       "invalid_playrate",
     ],
     loop_source_status: "held",
+    executions,
+  };
+}
+
+async function runE2FxB1RouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of E2_FX_B1_ROUTE_TEMPLATE_SPECS.entries()) {
+    const refs = e2FxB1RouteRefs(spec, fixtureInputsForRun);
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: spec.phase.startsWith("conditional_"),
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: spec.operation,
+        phase: spec.phase,
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: e2FxB1RouteInput(spec, fixtureInputsForRun),
+      refs: refs.value,
+      idempotency_key: spec.idempotent ? `e2-fx-b1:${spec.capability}` : undefined,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.phase = spec.phase;
+    execution.artifacts_allowed = spec.artifact === true;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: spec.idempotent ? "keyed_fx_readback" : "one_shot_fx_route",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && spec.id === "template.fx.resolve_fx_ref" && produced.fx) {
+      outputRefs.resolved_fx_ref = produced.fx.ref;
+    }
+    if (response?.ok && spec.id === "template.fx.add_track_fx" && produced.fx) {
+      outputRefs.added_track_fx_ref = produced.fx.ref;
+    }
+    if (response?.ok && spec.id === "template.fx.add_take_fx" && produced.fx) {
+      outputRefs.added_take_fx_ref = produced.fx.ref;
+    }
+    const artifact = producedArtifactRef(response);
+    if (response?.ok && spec.id === "template.fx.read_video_processor_code" && artifact) {
+      outputRefs.video_processor_code_artifact_ref = artifact;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "e2_fx_b1_route_fake_static_readback_passed" : firstBlocker(executions) ?? "e2_fx_b1_route_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+    expected_capabilities: E2_FX_B1_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    primary_template_ids: E2_FX_B1_ROUTE_TEMPLATE_SPECS
+      .filter((spec) => spec.phase === "primary_read" || spec.phase === "primary_write")
+      .map((spec) => spec.id),
+    conditional_template_ids: E2_FX_B1_ROUTE_TEMPLATE_SPECS
+      .filter((spec) => spec.phase.startsWith("conditional_"))
+      .map((spec) => spec.id),
+    preflight_blockers_covered: [
+      "fx_track_ref_missing",
+      "fx_take_ref_missing",
+      "fx_ref_missing",
+      "fx_plugin_name_missing",
+      "fx_parameter_invalid",
+      "fx_preset_fixture_missing",
+      "video_processor_fixture_missing",
+    ],
+    live_support_status: "not_claimed",
     executions,
   };
 }
@@ -2169,6 +2476,72 @@ async function e4ItemRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun
   return null;
 }
 
+async function e2FxB1RouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  for (const [label, configured, value, envName, normalizer] of [
+    ["fx_track_ref", fixtureInputsForRun.configured?.track_ref, fixtureInputsForRun.track_ref, E2_FX_B1_TRACK_REF_ENV, normalizeTrackFixtureRef],
+    ["fx_take_ref", fixtureInputsForRun.configured?.take_ref, fixtureInputsForRun.take_ref, E2_FX_B1_TAKE_REF_ENV, normalizeTakeFixtureRef],
+    ["fx_ref", fixtureInputsForRun.configured?.fx_ref, fixtureInputsForRun.fx_ref, E2_FX_B1_FX_REF_ENV, normalizeFxFixtureRef],
+  ]) {
+    if (!configured) {
+      return {
+        reason: `${label}_missing`,
+        blocker: `${label}_missing`,
+        message: `E2 FX-B1 live smoke requires an explicit ${label} fixture.`,
+        details: { [`${label}_env`]: envName },
+      };
+    }
+    if (!normalizer(value)) {
+      return {
+        reason: `${label}_invalid`,
+        blocker: `${label}_invalid`,
+        message: `E2 FX-B1 ${label} fixture is not a supported ref.`,
+        details: {
+          [`${label}_env`]: envName,
+          value: boundedString(value, 160),
+        },
+      };
+    }
+  }
+
+  if (!fixtureInputsForRun.configured?.plugin_name) {
+    return {
+      reason: "fx_plugin_name_missing",
+      blocker: "fx_plugin_name_missing",
+      message: "E2 FX-B1 live smoke requires an explicit stock FX plugin name.",
+      details: { plugin_name_env: E2_FX_B1_PLUGIN_NAME_ENV },
+    };
+  }
+  if (!fixtureInputsForRun.configured?.second_plugin_name) {
+    return {
+      reason: "fx_second_plugin_missing",
+      blocker: "fx_second_plugin_missing",
+      message: "E2 FX-B1 live smoke requires a second stock FX plugin name for reorder readback.",
+      details: { second_plugin_name_env: E2_FX_B1_SECOND_PLUGIN_NAME_ENV },
+    };
+  }
+  if (!Number.isInteger(fixtureInputsForRun.param_index) || fixtureInputsForRun.param_index < 0) {
+    return {
+      reason: "fx_parameter_invalid",
+      blocker: "fx_parameter_invalid",
+      message: "E2 FX-B1 parameter index must be a non-negative integer.",
+      details: { param_index_env: E2_FX_B1_PARAM_INDEX_ENV },
+    };
+  }
+  if (!Number.isFinite(fixtureInputsForRun.param_value) || fixtureInputsForRun.param_value < 0 || fixtureInputsForRun.param_value > 1) {
+    return {
+      reason: "fx_parameter_invalid",
+      blocker: "fx_parameter_invalid",
+      message: "E2 FX-B1 normalized parameter value must be between 0 and 1.",
+      details: { param_value_env: E2_FX_B1_PARAM_VALUE_ENV },
+    };
+  }
+
+  return null;
+}
+
 async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured, absent }) {
   if (!value) {
     return {
@@ -2488,6 +2861,106 @@ function e4ItemRouteRefs(spec, fixtureInputsForRun) {
   return { value: {} };
 }
 
+function e2FxB1RouteInput(spec, fixtureInputsForRun) {
+  const inputs = {
+    "template.fx.resolve_fx_ref": {
+      owner_kind: "track",
+      slot_index: 0,
+    },
+    "template.fx.list_track_fx_chain": {
+      include_preset: true,
+    },
+    "template.fx.list_take_fx_chain": {
+      include_preset: true,
+    },
+    "template.fx.read_fx_summary": {},
+    "template.fx.list_fx_parameters": {
+      limit: 16,
+    },
+    "template.fx.read_fx_parameter": {
+      param_index: fixtureInputsForRun.param_index,
+    },
+    "template.fx.add_track_fx": {
+      plugin_name: fixtureInputsForRun.plugin_name,
+    },
+    "template.fx.add_take_fx": {
+      plugin_name: fixtureInputsForRun.plugin_name,
+    },
+    "template.fx.set_fx_bypass": {
+      enabled: false,
+    },
+    "template.fx.set_fx_parameter_normalized": {
+      param_index: fixtureInputsForRun.param_index,
+      normalized_value: fixtureInputsForRun.param_value,
+      tolerance: 0.001,
+    },
+    "template.fx.set_fx_preset_by_name": {
+      preset_name: fixtureInputsForRun.preset_name,
+    },
+    "template.fx.set_fx_preset_by_index": {
+      preset_index: fixtureInputsForRun.preset_index,
+    },
+    "template.fx.reorder_fx": {
+      target_index: 0,
+    },
+    "template.fx.read_video_processor_code": {},
+  };
+  return inputs[spec.id] ?? {};
+}
+
+function e2FxB1RouteRefs(spec, fixtureInputsForRun) {
+  const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.track_ref);
+  const takeRef = takeObjectRefFromFixture(fixtureInputsForRun.take_ref);
+  const fxRef = fxObjectRefFromFixture(fixtureInputsForRun.fx_ref);
+  const videoFxRef = fxObjectRefFromFixture(fixtureInputsForRun.video_fx_ref);
+  if (spec.ref_group === "track_or_take") {
+    if (!trackRef) return { blocker: "fx_track_ref_missing" };
+    return { value: { track_ref: trackRef } };
+  }
+  if (spec.ref_group === "track") {
+    if (!trackRef) return { blocker: "fx_track_ref_missing" };
+    return { value: { track_ref: trackRef } };
+  }
+  if (spec.ref_group === "take") {
+    if (!takeRef) return { blocker: "fx_take_ref_missing" };
+    return { value: { take_ref: takeRef } };
+  }
+  if (spec.ref_group === "track_plugin") {
+    if (!trackRef) return { blocker: "fx_track_ref_missing" };
+    if (!fixtureInputsForRun.plugin_name) return { blocker: "fx_plugin_name_missing" };
+    return { value: { track_ref: trackRef } };
+  }
+  if (spec.ref_group === "take_plugin") {
+    if (!takeRef) return { blocker: "fx_take_ref_missing" };
+    if (!fixtureInputsForRun.plugin_name) return { blocker: "fx_plugin_name_missing" };
+    return { value: { take_ref: takeRef } };
+  }
+  if (spec.ref_group === "fx_second_plugin") {
+    if (!fxRef) return { blocker: "fx_ref_missing" };
+    if (!fixtureInputsForRun.second_plugin_name) return { blocker: "fx_second_plugin_missing" };
+    return { value: { fx_ref: fxRef } };
+  }
+  if (spec.ref_group === "fx_preset_name") {
+    if (!fxRef) return { blocker: "fx_ref_missing" };
+    if (!fixtureInputsForRun.preset_name) return { blocker: "fx_preset_fixture_missing" };
+    return { value: { fx_ref: fxRef } };
+  }
+  if (spec.ref_group === "fx_preset_index") {
+    if (!fxRef) return { blocker: "fx_ref_missing" };
+    if (!Number.isInteger(fixtureInputsForRun.preset_index)) return { blocker: "fx_preset_fixture_missing" };
+    return { value: { fx_ref: fxRef } };
+  }
+  if (spec.ref_group === "video_fx") {
+    if (!videoFxRef) return { blocker: "video_processor_fixture_missing" };
+    return { value: { fx_ref: videoFxRef } };
+  }
+  if (spec.ref_group === "fx") {
+    if (!fxRef) return { blocker: "fx_ref_missing" };
+    return { value: { fx_ref: fxRef } };
+  }
+  return { value: {} };
+}
+
 function safeWriteAInput(spec) {
   const inputs = {
     "template.project.set_metadata_field": {
@@ -2758,6 +3231,86 @@ function e4ItemRouteFixtureInputs(env) {
   };
 }
 
+function e2FxB1RouteFixtureInputs(env) {
+  const rawTrackRef = nonEmpty(env[E2_FX_B1_TRACK_REF_ENV]);
+  const rawTakeRef = nonEmpty(env[E2_FX_B1_TAKE_REF_ENV]);
+  const rawFxRef = nonEmpty(env[E2_FX_B1_FX_REF_ENV]);
+  const rawVideoFxRef = nonEmpty(env[E2_FX_B1_VIDEO_FX_REF_ENV]);
+  const rawPluginName = nonEmpty(env[E2_FX_B1_PLUGIN_NAME_ENV]);
+  const rawSecondPluginName = nonEmpty(env[E2_FX_B1_SECOND_PLUGIN_NAME_ENV]);
+  const rawPresetName = nonEmpty(env[E2_FX_B1_PRESET_NAME_ENV]);
+  const artifactRoot = nonEmpty(env[E2_FX_B1_ARTIFACT_ROOT_ENV]);
+  const trackRef = rawTrackRef ? normalizeTrackFixtureRef(rawTrackRef) ?? rawTrackRef : "track:index:0";
+  const takeRef = rawTakeRef ? normalizeTakeFixtureRef(rawTakeRef) ?? rawTakeRef : "take:index:0";
+  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:0";
+  const videoFxRef = rawVideoFxRef ? normalizeFxFixtureRef(rawVideoFxRef) ?? rawVideoFxRef : "fx:track:video_processor:0";
+  const pluginName = rawPluginName ?? "ReaEQ (Cockos)";
+  const secondPluginName = rawSecondPluginName ?? "ReaComp (Cockos)";
+  const paramIndex = nonNegativeInteger(env[E2_FX_B1_PARAM_INDEX_ENV], 0);
+  const paramValue = boundedUnitNumber(env[E2_FX_B1_PARAM_VALUE_ENV], 0.5);
+  const presetIndex = nonNegativeIntegerOrNull(env[E2_FX_B1_PRESET_INDEX_ENV]);
+  return {
+    track_ref: trackRef,
+    take_ref: takeRef,
+    fx_ref: fxRef,
+    video_fx_ref: videoFxRef,
+    plugin_name: pluginName,
+    second_plugin_name: secondPluginName,
+    param_index: paramIndex,
+    param_value: paramValue,
+    preset_name: rawPresetName,
+    preset_index: presetIndex,
+    artifact_root: artifactRoot,
+    configured: {
+      track_ref: Boolean(rawTrackRef),
+      take_ref: Boolean(rawTakeRef),
+      fx_ref: Boolean(rawFxRef),
+      plugin_name: Boolean(rawPluginName),
+      second_plugin_name: Boolean(rawSecondPluginName),
+      preset_name: Boolean(rawPresetName),
+      preset_index: presetIndex !== null,
+      video_fx_ref: Boolean(rawVideoFxRef),
+      artifact_root: Boolean(artifactRoot),
+    },
+    report: {
+      track_ref_env: E2_FX_B1_TRACK_REF_ENV,
+      take_ref_env: E2_FX_B1_TAKE_REF_ENV,
+      fx_ref_env: E2_FX_B1_FX_REF_ENV,
+      plugin_name_env: E2_FX_B1_PLUGIN_NAME_ENV,
+      second_plugin_name_env: E2_FX_B1_SECOND_PLUGIN_NAME_ENV,
+      param_index_env: E2_FX_B1_PARAM_INDEX_ENV,
+      param_value_env: E2_FX_B1_PARAM_VALUE_ENV,
+      preset_name_env: E2_FX_B1_PRESET_NAME_ENV,
+      preset_index_env: E2_FX_B1_PRESET_INDEX_ENV,
+      video_fx_ref_env: E2_FX_B1_VIDEO_FX_REF_ENV,
+      artifact_root_env: E2_FX_B1_ARTIFACT_ROOT_ENV,
+      track_ref: trackRef,
+      take_ref: takeRef,
+      fx_ref: fxRef,
+      video_fx_ref: videoFxRef,
+      plugin_name: pluginName,
+      second_plugin_name: secondPluginName,
+      param_index: paramIndex,
+      param_value: paramValue,
+      preset_name: rawPresetName,
+      preset_index: presetIndex,
+      artifact_root: boundedString(artifactRoot, 240),
+      configured: {
+        track_ref: Boolean(rawTrackRef),
+        take_ref: Boolean(rawTakeRef),
+        fx_ref: Boolean(rawFxRef),
+        plugin_name: Boolean(rawPluginName),
+        second_plugin_name: Boolean(rawSecondPluginName),
+        preset_name: Boolean(rawPresetName),
+        preset_index: presetIndex !== null,
+        video_fx_ref: Boolean(rawVideoFxRef),
+        artifact_root: Boolean(artifactRoot),
+      },
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
+    },
+  };
+}
+
 function liveSmokeFixtureInputs(env) {
   const trackRef = nonEmpty(env[TRACK_REF_ENV]);
   const itemRef = normalizeItemFixtureRef(nonEmpty(env[ITEM_REF_ENV])) ?? "selected:0";
@@ -2909,6 +3462,11 @@ function takeObjectRefFromFixture(takeRef) {
   return createObjectRef("take", parsed.identity, { ref: parsed.ref });
 }
 
+function fxObjectRefFromFixture(fxRef) {
+  const parsed = parseFxFixtureRef(fxRef) ?? parseFxFixtureRef("fx:track:0");
+  return createObjectRef("fx", parsed.identity, { ref: parsed.ref });
+}
+
 function projectObjectRefFromFixture(projectRef) {
   const normalized = normalizeProjectFixtureRef(projectRef);
   if (!normalized) return null;
@@ -2948,6 +3506,10 @@ function normalizeTrackFixtureRef(trackRef) {
 
 function normalizeTakeFixtureRef(takeRef) {
   return parseTakeFixtureRef(takeRef)?.input_ref ?? null;
+}
+
+function normalizeFxFixtureRef(fxRef) {
+  return parseFxFixtureRef(fxRef)?.input_ref ?? null;
 }
 
 function normalizeRegionFixtureRef(regionRef) {
@@ -3026,6 +3588,27 @@ function parseTakeFixtureRef(takeRef) {
       const value = token.slice(prefix.length);
       if (value) return { input_ref: token, identity: { scheme, value }, ref: `take:${scheme}:${value}` };
     }
+  }
+  return null;
+}
+
+function parseFxFixtureRef(fxRef) {
+  const token = String(fxRef ?? "").trim();
+  const typed = token.match(/^fx:(track|take):(.+)$/);
+  if (typed?.[1] && typed?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: typed[1], value: typed[2] },
+      ref: token,
+    };
+  }
+  const compact = token.match(/^(track|take):(.+)$/);
+  if (compact?.[1] && compact?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: compact[1], value: compact[2] },
+      ref: `fx:${compact[1]}:${compact[2]}`,
+    };
   }
   return null;
 }
@@ -3428,6 +4011,119 @@ function fakeE4ItemRouteRefs(request, spec) {
     return request.refs.filter((ref) => ref.kind === "item").slice(0, 1);
   }
   return [];
+}
+
+async function dispatchFakeE2FxB1Route(request) {
+  const key = `${request?.operation?.family}:${request?.operation?.name}`;
+  const spec = key === "run_command:template.execute"
+    ? E2_FX_B1_ROUTE_SPEC_BY_CAPABILITY.get(request?.pack?.capability)
+    : E2_FX_B1_ROUTE_SPEC_BY_OPERATION.get(key);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake E2 FX-B1 executor accepts only the approved FX-B1 route capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+      operation: boundedString(key, 160),
+    });
+  }
+  if (key !== spec.operation) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-B1 request operation does not match the route spec.", {
+      expected_operation: spec.operation,
+      operation: boundedString(key, 160),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== spec.risk) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-B1 pack/risk mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: spec.risk,
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  const expectedArtifactsAllow = spec.artifact === true;
+  if (request?.artifacts?.allow !== expectedArtifactsAllow) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-B1 artifact policy mismatch.", {
+      expected_artifacts_allow: expectedArtifactsAllow,
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (spec.risk === "write" && request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-B1 write rows require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+  if (spec.risk === "read" && request?.undo?.mode !== "none") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-B1 read rows require undo.mode none.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      phase: spec.phase,
+      readback_status: "passed",
+      typed_blockers: [
+        "fx_track_ref_missing",
+        "fx_take_ref_missing",
+        "fx_ref_missing",
+        "fx_plugin_name_missing",
+        "fx_parameter_invalid",
+        "fx_preset_fixture_missing",
+        "video_processor_fixture_missing",
+      ],
+      artifacts_allowed: expectedArtifactsAllow,
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: fakeE2FxB1RouteRefs(request, spec),
+    artifacts: fakeE2FxB1RouteArtifacts(request, spec),
+  });
+}
+
+function fakeE2FxB1RouteRefs(request, spec) {
+  if (spec.id === "template.fx.resolve_fx_ref") {
+    return [createObjectRef("fx", { scheme: "track", value: "0" }, { ref: "fx:track:0" })];
+  }
+  if (spec.id === "template.fx.list_track_fx_chain") {
+    return [
+      createObjectRef("fx", { scheme: "track", value: "0" }, { ref: "fx:track:0" }),
+      createObjectRef("fx", { scheme: "track", value: "1" }, { ref: "fx:track:1" }),
+    ];
+  }
+  if (spec.id === "template.fx.list_take_fx_chain") {
+    return [createObjectRef("fx", { scheme: "take", value: "0" }, { ref: "fx:take:0" })];
+  }
+  if (spec.id === "template.fx.add_track_fx") {
+    return [
+      createObjectRef("fx", { scheme: "track", value: "added" }, {
+        ref: "fx:track:added",
+        display: { name: request.params.plugin_name ?? "ReaEQ (Cockos)" },
+      }),
+    ];
+  }
+  if (spec.id === "template.fx.add_take_fx") {
+    return [
+      createObjectRef("fx", { scheme: "take", value: "added" }, {
+        ref: "fx:take:added",
+        display: { name: request.params.plugin_name ?? "ReaEQ (Cockos)" },
+      }),
+    ];
+  }
+  if (spec.id === "template.fx.read_video_processor_code") {
+    return request.refs.filter((ref) => ref.kind === "fx").slice(0, 1);
+  }
+  return request.refs.filter((ref) => ref.kind === "fx").slice(0, 1);
+}
+
+function fakeE2FxB1RouteArtifacts(request, spec) {
+  if (spec.id !== "template.fx.read_video_processor_code") return [];
+  const ref = formatArtifactRef({
+    owner_pack: "fx",
+    scope: "video_processor_code",
+    id: "art_20260704000000000_014_abc123",
+  });
+  return [artifactObjectRef(ref, "fx.video_processor_code.v1")];
 }
 
 async function dispatchFakeFirstRealA1(request, { artifactRoot }) {
@@ -4123,9 +4819,24 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(number) && number >= 0 ? number : fallback;
 }
 
+function nonNegativeInteger(value, fallback) {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number >= 0 ? number : fallback;
+}
+
+function nonNegativeIntegerOrNull(value) {
+  const number = Number.parseInt(value, 10);
+  return Number.isInteger(number) && number >= 0 ? number : null;
+}
+
 function finiteNumber(value, fallback) {
   const number = Number.parseFloat(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function boundedUnitNumber(value, fallback) {
+  const number = finiteNumber(value, fallback);
+  return Number.isFinite(number) && number >= 0 && number <= 1 ? number : fallback;
 }
 
 function boundedString(value, maxLength = 240) {

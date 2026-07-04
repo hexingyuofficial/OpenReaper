@@ -137,6 +137,23 @@ export const CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.items.set_take_playrate",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
+  "template.fx.resolve_fx_ref",
+  "template.fx.list_track_fx_chain",
+  "template.fx.list_take_fx_chain",
+  "template.fx.read_fx_summary",
+  "template.fx.list_fx_parameters",
+  "template.fx.read_fx_parameter",
+  "template.fx.add_track_fx",
+  "template.fx.add_take_fx",
+  "template.fx.set_fx_bypass",
+  "template.fx.set_fx_parameter_normalized",
+  "template.fx.set_fx_preset_by_name",
+  "template.fx.set_fx_preset_by_index",
+  "template.fx.reorder_fx",
+  "template.fx.read_video_processor_code",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -681,9 +698,12 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
-  const ids = [...new Set(value.filter((id) => allowed.has(id)))];
+  const uniqueIds = [...new Set(value)];
+  if (uniqueIds.some((id) => !allowed.has(id))) return deepFreeze([]);
+  const ids = uniqueIds.filter((id) => allowed.has(id));
   for (const group of allowedGroups) {
     if (ids.length === group.length && group.every((id, index) => id === ids[index])) {
       return group;
