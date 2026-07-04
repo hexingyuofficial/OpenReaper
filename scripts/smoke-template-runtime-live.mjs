@@ -5,6 +5,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -45,6 +46,7 @@ const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const SAFE_WRITE_A_FLAG = "--safe-write-a";
+const E3_MEDIA_ROUTE_FLAG = "--media-route";
 const PHASE_FLAG = "--phase";
 const FIRST_REAL_A2_PHASE = "A2-render-delivery";
 const FIRST_REAL_A3_PHASE = "A3-layer-report";
@@ -70,6 +72,7 @@ const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
   "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
 const READ_B_BATCH = "read-b-live-handlers";
 const SAFE_WRITE_A_BATCH = "Safe-Write-A";
+const E3_MEDIA_ROUTE_BATCH = "E3 Media Route";
 const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
 const SAFE_WRITE_A_PROJECT_REF_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_REF";
 const SAFE_WRITE_A_ANCHOR_TRACK_REF_ENV = "OPENREAPER_SAFE_WRITE_A_ANCHOR_TRACK_REF";
@@ -87,6 +90,12 @@ const READ_B_MARKER_ACTION_TEXT_ENV = "OPENREAPER_LIVE_SMOKE_MARKER_ACTION_TEXT"
 const READ_B_MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
 const READ_B_AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
 const READ_B_MEDIA_PATH_ENV = "OPENREAPER_LIVE_SMOKE_MEDIA_PATH";
+const E3_MEDIA_ROUTE_OPT_IN_ENV = "OPENREAPER_E3_MEDIA_ROUTE_LIVE_SMOKE";
+const E3_MEDIA_FOLDER_ROOT_ENV = "OPENREAPER_E3_MEDIA_FOLDER_ROOT";
+const E3_MEDIA_SOURCE_PATH_ENV = "OPENREAPER_E3_MEDIA_SOURCE_PATH";
+const E3_MEDIA_RELINK_PATH_ENV = "OPENREAPER_E3_MEDIA_RELINK_PATH";
+const E3_MEDIA_TARGET_TRACK_REF_ENV = "OPENREAPER_E3_MEDIA_TARGET_TRACK_REF";
+const E3_MEDIA_TAKE_REF_ENV = "OPENREAPER_E3_MEDIA_TAKE_REF";
 
 const READ_B_OPERATIONS = Object.freeze([
   "query_state:actions.resolve_named_command",
@@ -105,6 +114,74 @@ const READ_B_OPERATIONS = Object.freeze([
   "query_state:media.take_source.read",
   "query_state:media.project_files.read",
 ]);
+
+const E3_MEDIA_ROUTE_TEMPLATE_SPECS = Object.freeze([
+  Object.freeze({
+    id: "template.media.list_folder_media_files",
+    operation: "query_state:media.folder_media.list",
+    pack: "media",
+    risk: "read",
+    capability: "media.folder_media.list",
+    ref_group: "none",
+  }),
+  Object.freeze({
+    id: "template.media.import_file_to_track",
+    operation: "run_command:template.execute",
+    pack: "media",
+    risk: "write",
+    capability: "media.import_file_to_track",
+    ref_group: "source_track",
+  }),
+  Object.freeze({
+    id: "template.media.import_file_section_to_track",
+    operation: "run_command:template.execute",
+    pack: "media",
+    risk: "write",
+    capability: "media.import_file_section_to_track",
+    ref_group: "source_track",
+  }),
+  Object.freeze({
+    id: "template.media.relink_take_source",
+    operation: "run_command:template.execute",
+    pack: "media",
+    risk: "write",
+    capability: "media.relink_take_source",
+    ref_group: "take_relink",
+  }),
+]);
+
+const E3_MEDIA_ROUTE_SPEC_BY_ID = new Map(E3_MEDIA_ROUTE_TEMPLATE_SPECS.map((spec) => [spec.id, spec]));
+const E3_MEDIA_ROUTE_SPEC_BY_CAPABILITY = new Map(
+  E3_MEDIA_ROUTE_TEMPLATE_SPECS
+    .filter((spec) => spec.operation === "run_command:template.execute")
+    .map((spec) => [spec.capability, spec]),
+);
+const SUPPORTED_MEDIA_EXTENSIONS = Object.freeze([
+  "wav",
+  "wave",
+  "aif",
+  "aiff",
+  "flac",
+  "mp3",
+  "ogg",
+  "mid",
+  "midi",
+  "mov",
+  "mp4",
+]);
+const MEDIA_EXTENSION_KINDS = Object.freeze({
+  wav: "audio",
+  wave: "audio",
+  aif: "audio",
+  aiff: "audio",
+  flac: "audio",
+  mp3: "audio",
+  ogg: "audio",
+  mid: "midi",
+  midi: "midi",
+  mov: "video",
+  mp4: "video",
+});
 
 const FIRST_REAL_A1_TEMPLATE_SPECS = Object.freeze([
   Object.freeze({
@@ -234,6 +311,8 @@ const baseReport = {
 if (route.fake) {
   const blocker = route.name === "safe-write-a"
     ? null
+    : route.name === "e3-media-route"
+    ? null
     : route.name === "first-real-a3-layer-report"
     ? await firstRealA3FakeBlocker(fixtureInputs)
     : route.name === "first-real-a2-render"
@@ -254,6 +333,8 @@ if (route.fake) {
     config: {
       contract: route.name === "safe-write-a"
         ? "safe_write_a.fake_executor.v1"
+        : route.name === "e3-media-route"
+        ? "e3_media_route.fake_executor.v1"
         : route.name === "first-real-a3-layer-report"
         ? "first_real_fixture_a3.fake_executor.v1"
         : route.name === "first-real-a2-render"
@@ -265,6 +346,9 @@ if (route.fake) {
     async dispatch(request) {
       if (route.name === "safe-write-a") {
         return dispatchFakeSafeWriteA(request);
+      }
+      if (route.name === "e3-media-route") {
+        return dispatchFakeE3MediaRoute(request);
       }
       if (route.name === "first-real-a3-layer-report") {
         return dispatchFakeFirstRealA3(request, {
@@ -284,6 +368,12 @@ if (route.fake) {
   const contextBase = liveContextBase();
   const fakeReport = route.name === "safe-write-a"
     ? await runSafeWriteASmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "e3-media-route"
+    ? await runE3MediaRouteSmoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
         contextBase,
@@ -315,7 +405,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: route.name === "safe-write-a" ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e3-media-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -494,6 +584,28 @@ function selectRoute(argv, env) {
     };
   }
 
+  const e3MediaRouteSelected = argv.includes(E3_MEDIA_ROUTE_FLAG) || env[E3_MEDIA_ROUTE_OPT_IN_ENV] === "1";
+  if (e3MediaRouteSelected) {
+    return {
+      name: "e3-media-route",
+      wave: E3_MEDIA_ROUTE_BATCH,
+      batch: E3_MEDIA_ROUTE_BATCH,
+      routeFlag: E3_MEDIA_ROUTE_FLAG,
+      optInEnv: E3_MEDIA_ROUTE_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
+      operations: [
+        "query_state:media.folder_media.list",
+        "run_command:template.execute",
+      ],
+      capabilities: E3_MEDIA_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: e3MediaRouteFixtureInputs,
+      configuredBlocker: e3MediaRouteConfiguredBlocker,
+      passReason: "e3_media_route_fake_static_readback_passed",
+      failReason: "e3_media_route_fake_static_readback_failed",
+    };
+  }
+
   if (argv.includes(READ_B_FLAG)) {
     return {
       name: "read-b",
@@ -648,6 +760,87 @@ async function runSafeWriteASmoke({ liveRuntime, fixtureInputs: fixtureInputsFor
     expected_template_ids: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
     expected_capabilities: SAFE_WRITE_A_TEMPLATE_SPECS.map((spec) => spec.capability),
     output_refs: outputRefs,
+    executions,
+  };
+}
+
+async function runE3MediaRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of E3_MEDIA_ROUTE_TEMPLATE_SPECS.entries()) {
+    const refs = e3MediaRouteRefs(spec, fixtureInputsForRun);
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: false,
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: spec.operation,
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: e3MediaRouteInput(spec, fixtureInputsForRun),
+      refs: refs.value,
+      idempotency_key: spec.id === "template.media.relink_take_source" ? "e3-media-route:relink-take-source" : undefined,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: spec.id === "template.media.relink_take_source" ? "keyed_relink_readback" : "one_shot_media_route",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && spec.id === "template.media.import_file_to_track" && produced.item) {
+      outputRefs.imported_item_ref = produced.item.ref;
+    }
+    if (response?.ok && spec.id === "template.media.import_file_section_to_track" && produced.item) {
+      outputRefs.imported_section_item_ref = produced.item.ref;
+    }
+    if (response?.ok && spec.id === "template.media.relink_take_source" && produced.take) {
+      outputRefs.relinked_take_ref = produced.take.ref;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "e3_media_route_fake_static_readback_passed" : firstBlocker(executions) ?? "e3_media_route_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
+    expected_capabilities: E3_MEDIA_ROUTE_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    preflight_blockers_covered: [
+      "folder_root_absent",
+      "media_source_unsupported",
+      "media_source_absent",
+      "relink_target_type_mismatch",
+    ],
     executions,
   };
 }
@@ -1654,6 +1847,72 @@ async function safeWriteAConfiguredBlocker({ fixtureInputs: fixtureInputsForRun,
   return null;
 }
 
+async function e3MediaRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  const folderBlocker = await mediaDirectoryBlocker({
+    value: fixtureInputsForRun.folder_root,
+    envName: E3_MEDIA_FOLDER_ROOT_ENV,
+    label: "folder_root",
+    notConfigured: "folder_root_not_configured",
+    absent: "folder_root_absent",
+  });
+  if (folderBlocker) return folderBlocker;
+
+  const sourceBlocker = await mediaFileBlocker({
+    value: fixtureInputsForRun.source_path,
+    envName: E3_MEDIA_SOURCE_PATH_ENV,
+    label: "media_source",
+    notConfigured: "media_source_not_configured",
+    absent: "media_source_absent",
+  });
+  if (sourceBlocker) return sourceBlocker;
+
+  const relinkBlocker = await mediaFileBlocker({
+    value: fixtureInputsForRun.relink_path,
+    envName: E3_MEDIA_RELINK_PATH_ENV,
+    label: "relink_target",
+    notConfigured: "relink_target_not_configured",
+    absent: "relink_target_absent",
+  });
+  if (relinkBlocker) return relinkBlocker;
+
+  const sourceKind = mediaKindForPath(fixtureInputsForRun.source_path);
+  const relinkKind = mediaKindForPath(fixtureInputsForRun.relink_path);
+  if (sourceKind !== relinkKind) {
+    return {
+      reason: "relink_target_type_mismatch",
+      blocker: "relink_target_type_mismatch",
+      message: "E3 media route live smoke requires relink source and target media kinds to match.",
+      details: {
+        source_kind: sourceKind,
+        relink_kind: relinkKind,
+        source_path: boundedString(fixtureInputsForRun.source_path, 240),
+        relink_path: boundedString(fixtureInputsForRun.relink_path, 240),
+      },
+    };
+  }
+
+  for (const [label, value, envName] of [
+    ["target_track_ref", fixtureInputsForRun.target_track_ref, E3_MEDIA_TARGET_TRACK_REF_ENV],
+    ["take_ref", fixtureInputsForRun.take_ref, E3_MEDIA_TAKE_REF_ENV],
+  ]) {
+    if (!value || fixtureInputsForRun.configured?.[label] !== true) {
+      return {
+        reason: `${label}_not_configured`,
+        blocker: `${label}_not_configured`,
+        message: `E3 media route live smoke requires an explicit ${label} fixture.`,
+        details: {
+          [`${label}_env`]: envName,
+        },
+      };
+    }
+  }
+
+  return null;
+}
+
 async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured, absent }) {
   if (!value) {
     return {
@@ -1681,6 +1940,92 @@ async function safeWriteADirectoryBlocker({ value, envName, label, notConfigured
       reason: absent,
       blocker: absent,
       message: `Configured Safe-Write-A ${label} is absent.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  return null;
+}
+
+async function mediaDirectoryBlocker({ value, envName, label, notConfigured, absent }) {
+  if (!value) {
+    return {
+      reason: notConfigured,
+      blocker: notConfigured,
+      message: `E3 media route live smoke requires an explicit ${label}.`,
+      details: {
+        [`${label}_env`]: envName,
+      },
+    };
+  }
+  if (!path.isAbsolute(value) || value.startsWith("file://")) {
+    return {
+      reason: `${label}_invalid`,
+      blocker: `${label}_invalid`,
+      message: `Configured E3 media route ${label} must be an absolute filesystem directory.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  if (!(await isDirectory(value))) {
+    return {
+      reason: absent,
+      blocker: absent,
+      message: `Configured E3 media route ${label} is absent.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  return null;
+}
+
+async function mediaFileBlocker({ value, envName, label, notConfigured, absent }) {
+  if (!value) {
+    return {
+      reason: notConfigured,
+      blocker: notConfigured,
+      message: `E3 media route live smoke requires an explicit ${label}.`,
+      details: {
+        [`${label}_env`]: envName,
+      },
+    };
+  }
+  if (!path.isAbsolute(value) || value.startsWith("file://")) {
+    return {
+      reason: `${label}_invalid`,
+      blocker: `${label}_invalid`,
+      message: `Configured E3 media route ${label} must be an absolute filesystem file path.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+      },
+    };
+  }
+  const mediaKind = mediaKindForPath(value);
+  if (!mediaKind) {
+    return {
+      reason: `${label}_unsupported`,
+      blocker: `${label}_unsupported`,
+      message: `Configured E3 media route ${label} uses an unsupported media extension.`,
+      details: {
+        [`${label}_env`]: envName,
+        [label]: boundedString(value, 240),
+        extension: boundedString(path.extname(value).slice(1).toLowerCase(), 24),
+        supported_extensions: [...SUPPORTED_MEDIA_EXTENSIONS],
+      },
+    };
+  }
+  if (!(await isReadableFile(value))) {
+    return {
+      reason: absent,
+      blocker: absent,
+      message: `Configured E3 media route ${label} is absent or unreadable.`,
       details: {
         [`${label}_env`]: envName,
         [label]: boundedString(value, 240),
@@ -1811,6 +2156,50 @@ function readBRefs(fixtureInputsForRun) {
     "template.midi.read_take_grid": { take_ref: midiTakeRef },
     "template.media.read_take_source": { take_ref: audioTakeRef },
   };
+}
+
+function e3MediaRouteInput(spec, fixtureInputsForRun) {
+  const inputs = {
+    "template.media.list_folder_media_files": {
+      folder_ref: fixtureInputsForRun.folder_ref,
+      media_type: "audio",
+      extension_filter: ["wav", "aiff", "flac"],
+      limit: 8,
+      offset: 0,
+    },
+    "template.media.import_file_to_track": {
+      position_seconds: 0,
+      preserve_selection: true,
+    },
+    "template.media.import_file_section_to_track": {
+      position_seconds: 2,
+      start_percent: 0.25,
+      end_percent: 0.75,
+      preserve_selection: true,
+    },
+    "template.media.relink_take_source": {
+      verify_source_type: true,
+    },
+  };
+  return inputs[spec.id] ?? {};
+}
+
+function e3MediaRouteRefs(spec, fixtureInputsForRun) {
+  if (spec.ref_group === "source_track") {
+    const sourceFileRef = fileObjectRefFromPath(fixtureInputsForRun.source_path);
+    const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.target_track_ref);
+    if (!sourceFileRef) return { blocker: "media_source_ref_unavailable" };
+    if (!trackRef) return { blocker: "target_track_ref_unavailable" };
+    return { value: { source_file_ref: sourceFileRef, track_ref: trackRef } };
+  }
+  if (spec.ref_group === "take_relink") {
+    const relinkFileRef = fileObjectRefFromPath(fixtureInputsForRun.relink_path);
+    const takeRef = takeObjectRefFromFixture(fixtureInputsForRun.take_ref);
+    if (!relinkFileRef) return { blocker: "relink_target_ref_unavailable" };
+    if (!takeRef) return { blocker: "take_ref_unavailable" };
+    return { value: { take_ref: takeRef, source_file_ref: relinkFileRef } };
+  }
+  return { value: {} };
 }
 
 function safeWriteAInput(spec) {
@@ -1995,6 +2384,49 @@ function safeWriteAFixtureInputs(env) {
   };
 }
 
+function e3MediaRouteFixtureInputs(env) {
+  const folderRoot = nonEmpty(env[E3_MEDIA_FOLDER_ROOT_ENV]);
+  const sourcePath = nonEmpty(env[E3_MEDIA_SOURCE_PATH_ENV]) ?? "fixture-source.wav";
+  const relinkPath = nonEmpty(env[E3_MEDIA_RELINK_PATH_ENV]) ?? "fixture-relink.wav";
+  const rawTargetTrackRef = nonEmpty(env[E3_MEDIA_TARGET_TRACK_REF_ENV]);
+  const rawTakeRef = nonEmpty(env[E3_MEDIA_TAKE_REF_ENV]);
+  const targetTrackRef = normalizeTrackFixtureRef(rawTargetTrackRef) ?? "track:index:0";
+  const takeRef = normalizeTakeFixtureRef(rawTakeRef) ?? "take:index:0";
+  const folderRef = folderRoot ? `folder:path:${folderRoot}` : "folder:fixture-media";
+  return {
+    folder_root: folderRoot,
+    folder_ref: folderRef,
+    source_path: sourcePath,
+    relink_path: relinkPath,
+    target_track_ref: targetTrackRef,
+    take_ref: takeRef,
+    configured: {
+      target_track_ref: Boolean(normalizeTrackFixtureRef(rawTargetTrackRef)),
+      take_ref: Boolean(normalizeTakeFixtureRef(rawTakeRef)),
+    },
+    report: {
+      folder_root_env: E3_MEDIA_FOLDER_ROOT_ENV,
+      source_path_env: E3_MEDIA_SOURCE_PATH_ENV,
+      relink_path_env: E3_MEDIA_RELINK_PATH_ENV,
+      target_track_ref_env: E3_MEDIA_TARGET_TRACK_REF_ENV,
+      take_ref_env: E3_MEDIA_TAKE_REF_ENV,
+      folder_root: boundedString(folderRoot, 240),
+      folder_ref: boundedString(folderRef, 240),
+      source_path: boundedString(sourcePath, 240),
+      relink_path: boundedString(relinkPath, 240),
+      source_kind: mediaKindForPath(sourcePath),
+      relink_kind: mediaKindForPath(relinkPath),
+      target_track_ref: targetTrackRef,
+      take_ref: takeRef,
+      configured: {
+        target_track_ref: Boolean(normalizeTrackFixtureRef(rawTargetTrackRef)),
+        take_ref: Boolean(normalizeTakeFixtureRef(rawTakeRef)),
+      },
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
+    },
+  };
+}
+
 function liveSmokeFixtureInputs(env) {
   const trackRef = nonEmpty(env[TRACK_REF_ENV]);
   const itemRef = normalizeItemFixtureRef(nonEmpty(env[ITEM_REF_ENV])) ?? "selected:0";
@@ -2162,6 +2594,17 @@ function artifactObjectRef(ref, schema) {
       scope: parts.scope,
     },
   });
+}
+
+function fileObjectRefFromPath(filePath) {
+  const value = String(filePath ?? "").trim();
+  if (!value) return null;
+  return createObjectRef("file", { scheme: "path", value }, { ref: `file:path:${value}` });
+}
+
+function mediaKindForPath(filePath) {
+  const extension = path.extname(String(filePath ?? "")).slice(1).toLowerCase();
+  return MEDIA_EXTENSION_KINDS[extension] ?? null;
 }
 
 function normalizeItemFixtureRef(itemRef) {
@@ -2477,6 +2920,95 @@ function fakeSafeWriteARefs(request, spec) {
   }
   if (spec.ref_group === "created_midi_take") {
     return request.refs.filter((ref) => ref.kind === "take").slice(0, 1);
+  }
+  return [];
+}
+
+async function dispatchFakeE3MediaRoute(request) {
+  const spec = request?.operation?.family === "query_state"
+    ? E3_MEDIA_ROUTE_SPEC_BY_ID.get("template.media.list_folder_media_files")
+    : E3_MEDIA_ROUTE_SPEC_BY_CAPABILITY.get(request?.pack?.capability);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake E3 media route executor accepts only the approved media route capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+      operation: `${boundedString(request?.operation?.family, 80)}:${boundedString(request?.operation?.name, 120)}`,
+    });
+  }
+  if (`${request?.operation?.family}:${request?.operation?.name}` !== spec.operation) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E3 media route request operation does not match the route spec.", {
+      expected_operation: spec.operation,
+      family: boundedString(request?.operation?.family, 80),
+      name: boundedString(request?.operation?.name, 120),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== spec.risk) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E3 media route pack/risk mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: spec.risk,
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E3 media route forbids artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (spec.risk === "write" && request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E3 media route write rows require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+  if (spec.risk === "read" && request?.undo?.mode !== "none") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E3 media route read rows require undo.mode none.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      readback_status: "passed",
+      typed_blockers: [
+        "folder_root_absent",
+        "media_source_unsupported",
+        "media_source_absent",
+        "relink_target_type_mismatch",
+      ],
+      artifacts_allowed: false,
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: fakeE3MediaRouteRefs(request, spec),
+  });
+}
+
+function fakeE3MediaRouteRefs(request, spec) {
+  if (spec.id === "template.media.list_folder_media_files") {
+    return [
+      createObjectRef("file", { scheme: "path", value: "fixture-source.wav" }, { ref: "file:path:fixture-source.wav" }),
+      createObjectRef("file", { scheme: "path", value: "fixture-relink.wav" }, { ref: "file:path:fixture-relink.wav" }),
+    ];
+  }
+  if (spec.id === "template.media.import_file_to_track") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{E3-MEDIA-IMPORT-ITEM}" }, { ref: "item:guid:{E3-MEDIA-IMPORT-ITEM}" }),
+      ...request.refs.filter((ref) => ref.kind === "file").slice(0, 1),
+    ];
+  }
+  if (spec.id === "template.media.import_file_section_to_track") {
+    return [
+      createObjectRef("item", { scheme: "guid", value: "{E3-MEDIA-SECTION-ITEM}" }, { ref: "item:guid:{E3-MEDIA-SECTION-ITEM}" }),
+      ...request.refs.filter((ref) => ref.kind === "file").slice(0, 1),
+    ];
+  }
+  if (spec.id === "template.media.relink_take_source") {
+    return [
+      ...request.refs.filter((ref) => ref.kind === "take").slice(0, 1),
+      ...request.refs.filter((ref) => ref.kind === "file").slice(0, 1),
+    ];
   }
   return [];
 }
