@@ -123,6 +123,7 @@ const allowlists = {
     "packages/mcp-server/src/call-template-runtime-v1.mjs",
     "packages/mcp-server/src/live-bridge-executor-v1.mjs",
     "reaper/bridge/openreaper-live-bridge.lua",
+    "reaper/bridge/src/**",
     "tests/layer4d/**",
     "tests/layer4d1/**",
     "tests/layer4d2/**",

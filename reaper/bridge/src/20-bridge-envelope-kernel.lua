@@ -149,7 +149,7 @@ local function bridge_error_envelope(request, code, message, options)
   return finalize_json_with_budget(envelope)
 end
 
-local function bridge_ok_envelope(request, started_at, summary, artifacts)
+local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
   local completed_at = now_iso()
   local budget = safe_budget(request)
   local envelope = {
@@ -170,7 +170,7 @@ local function bridge_ok_envelope(request, started_at, summary, artifacts)
       summary = summary or {},
       refs = json_array({}),
       artifacts = artifacts or json_array({}),
-      jobs = json_array({}),
+      jobs = jobs or json_array({}),
       last_result = {
         updated = false,
         refs = json_array({}),
@@ -234,4 +234,3 @@ local WORKFLOW_SHAPED_IDS = {
   layer = true,
   music_sketch = true,
 }
-

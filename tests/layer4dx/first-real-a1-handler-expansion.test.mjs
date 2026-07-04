@@ -61,13 +61,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       live: {
         opted_in: true,
         executor: bridge,
-        allowed_template_ids: [
-          ...CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
-          "template.render.render_region_wav",
-          "template.render.create_delivery_report",
-          "template.items.create_layer_report",
-          "template.tracks.create_track",
-        ],
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
       },
     });
     assert.deepEqual(runtime.live_gate.allowed_template_ids, CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS);
@@ -250,7 +244,11 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       .map((match) => match[1])
       .sort();
     const uniqueRunJobKeys = [...new Set(runJobKeys)];
-    assert.deepEqual(uniqueRunJobKeys, [...A1_OPERATIONS].sort());
+    assert.deepEqual(uniqueRunJobKeys, [
+      ...A1_OPERATIONS,
+      "render.delivery_report.create",
+      "render.region_wav",
+    ].sort());
 
     assert.match(BRIDGE_SOURCE, /A1_ARTIFACT_OPERATIONS/);
     assert.match(BRIDGE_SOURCE, /A1_LOOP_CANDIDATES_INPUT/);
@@ -260,7 +258,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /parts\.owner_pack == expected\.owner_pack/);
     assert.match(BRIDGE_SOURCE, /parts\.scope == expected\.scope/);
     assert.match(BRIDGE_SOURCE, /expected schema\/ref\/owner\/scope/);
-    assert.match(BRIDGE_SOURCE, /Only First-Real-Fixture-A A1 artifact handlers may write artifacts/);
+    assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
     assert.match(BRIDGE_SOURCE, /artifact:<owner_pack>:<scope>:<id>/);
     assert.match(BRIDGE_SOURCE, /artifact\.state_store\.v1/);
     for (const schema of A1_SCHEMAS) {
@@ -270,7 +268,8 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       assert.match(BRIDGE_SOURCE, new RegExp(templateId.replaceAll(".", "\\.")));
     }
 
-    assert.doesNotMatch(BRIDGE_SOURCE, /render_region_wav|create_delivery_report|create_layer_report/);
+    assert.match(BRIDGE_SOURCE, /A2_ARTIFACT_OPERATIONS/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_report/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_command|run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /Read-B|LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(

@@ -6,6 +6,7 @@ local CONTRACT = "foundation.bridge.v1"
 local ARTIFACT_CONTRACT = "artifact.state_store.v1"
 local TRANSPORT_ENV = "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
 local ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT"
+local RENDER_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT"
 local OWNER_ENV = "OPENREAPER_LIVE_BRIDGE_OWNER"
 local GENERATION_ENV = "OPENREAPER_LIVE_BRIDGE_GENERATION"
 local DEFAULT_OWNER = "openreaper-live-smoke"
@@ -320,4 +321,4 @@ end
 local ACTIVE_OWNER = non_empty(os.getenv(OWNER_ENV)) or DEFAULT_OWNER
 local ACTIVE_GENERATION = parse_generation(os.getenv(GENERATION_ENV))
 local ARTIFACT_ROOT = non_empty(os.getenv(ARTIFACT_ROOT_ENV))
-
+local RENDER_ROOT = non_empty(os.getenv(RENDER_ROOT_ENV))

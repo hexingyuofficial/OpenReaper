@@ -213,6 +213,8 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         "analysis.detect_loop_candidates",
         "analysis.measure_loop_click_risk",
         "project.create_cleanup_report",
+        "render.delivery_report.create",
+        "render.region_wav",
       ].sort(),
     );
     assert.doesNotMatch(

@@ -27,11 +27,16 @@ local function validate_request(request)
     return false, "operation.family is outside foundation.bridge.v1."
   end
   local operation_key = request.operation.family .. ":" .. request.operation.name
-  local artifacts_allowed_for_operation = A1_ARTIFACT_OPERATIONS[operation_key] == true
+  local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
+  local a2_render_operation = operation_key == "run_job:render.region_wav"
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
-  if request.pack.risk ~= "read" then
+  if a2_render_operation then
+    if request.pack.id ~= "render" or request.pack.risk ~= "write" then
+      return false, "A2 render_region_wav must be the render-owned write-risk route."
+    end
+  elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
   end
   if not is_object(request.params) then
@@ -40,7 +45,14 @@ local function validate_request(request)
   if not is_json_array(request.refs) then
     return false, "refs must be a JSON array."
   end
-  if not is_object(request.undo) or request.undo.mode ~= "none" then
+  if not is_object(request.undo) then
+    return false, "undo policy is required."
+  end
+  if a2_render_operation then
+    if request.undo.mode ~= "required" then
+      return false, "A2 render_region_wav must use undo.mode required."
+    end
+  elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
   if not is_object(request.verification) or not is_string(request.verification.mode) then
@@ -54,10 +66,10 @@ local function validate_request(request)
   end
   if artifacts_allowed_for_operation then
     if request.artifacts.allow ~= true then
-      return false, "First-Real-Fixture-A A1 artifact handlers require artifacts.allow true."
+      return false, "Scoped First-Real-Fixture-A artifact handlers require artifacts.allow true."
     end
   elseif request.artifacts.allow ~= false then
-    return false, "Only First-Real-Fixture-A A1 artifact handlers may write artifacts."
+    return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
   end
   local budget = request.budget
   if not is_object(budget)
@@ -69,7 +81,11 @@ local function validate_request(request)
   if not (is_non_negative_integer(request.timeout_ms) and request.timeout_ms > 0) then
     return false, "timeout_ms must be a positive integer."
   end
-  if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
+  if a2_render_operation then
+    if not is_string(request.idempotency_key) then
+      return false, "A2 render_region_wav requires an idempotency_key."
+    end
+  elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
   end
   return true
@@ -1539,6 +1555,11 @@ local function source_filename(source)
   return bounded_string(ok and first_string(filename) or "", 240)
 end
 
+local function source_filename_raw(source)
+  local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
+  return ok and first_string(filename) or ""
+end
+
 local function metadata_keys_for_source(source, include_metadata_keys)
   local keys = json_array({})
   if include_metadata_keys ~= true then
@@ -1639,7 +1660,7 @@ local function read_project_media_files(request)
         if ok_take and take then
           local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
           if ok_source and source then
-            local filename = source_filename(source)
+            local filename = source_filename_raw(source)
             if filename ~= "" and not seen[filename] then
               seen[filename] = true
               local offline = not file_exists(filename)
@@ -1930,6 +1951,458 @@ local function create_cleanup_report(request)
   return summary, nil, json_array({ write.object_ref })
 end
 
+local function render_root_ready()
+  if not RENDER_ROOT then
+    return false, "render_root_not_configured", "First-Real-Fixture-A A2 render root is not configured."
+  end
+  if RENDER_ROOT:sub(1, 7) == "file://" or not is_absolute_path(RENDER_ROOT) then
+    return false, "render_root_invalid", "First-Real-Fixture-A A2 render root must be an absolute filesystem path."
+  end
+  return true
+end
+
+local function safe_filename_suffix(value)
+  local text = tostring(value or ""):gsub("^template:", ""):gsub("[^A-Za-z0-9_%-]", "_")
+  if text == "" then
+    text = "unknown"
+  end
+  if #text > 48 then
+    text = text:sub(1, 48)
+  end
+  return text
+end
+
+local function managed_render_output(request)
+  local suffix = safe_filename_suffix(request.idempotency_key or request.id)
+  local basename = "openreaper_a2_" .. suffix .. ".wav"
+  return {
+    basename = basename,
+    relative_path = basename,
+    path = path_join(RENDER_ROOT or "", basename),
+  }
+end
+
+local function file_size(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then
+    return nil
+  end
+  local size = handle:seek("end")
+  handle:close()
+  return size
+end
+
+local function wav_header_ok(path_value)
+  local handle = io.open(path_value, "rb")
+  if not handle then
+    return false
+  end
+  local header = handle:read(12) or ""
+  handle:close()
+  return header:sub(1, 4) == "RIFF" and header:sub(9, 12) == "WAVE"
+end
+
+local function parse_region_ref_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local index = token:match("^region:index:(%d+)$") or token:match("^index:(%d+)$")
+  if index then
+    return { scheme = "index", value = tonumber(index) }
+  end
+  local name = token:match("^region:name:(.+)$") or token:match("^name:(.+)$")
+  if name and name ~= "" then
+    return { scheme = "name", value = name }
+  end
+  local guid = token:match("^region:guid:(.+)$") or token:match("^guid:(.+)$")
+  if guid and guid ~= "" then
+    return { scheme = "guid", value = guid }
+  end
+  return nil
+end
+
+local function region_token_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "region" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "index" or identity.scheme == "name" or identity.scheme == "guid" then
+    return {
+      scheme = identity.scheme,
+      value = identity.scheme == "index" and tonumber(identity.value) or tostring(identity.value),
+    }
+  end
+  return parse_region_ref_token(ref.ref)
+end
+
+local function region_token_from_request(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local token = region_token_from_ref_object(request.refs[index])
+      if token then
+        return token
+      end
+    end
+  end
+  return nil
+end
+
+local function resolve_region_for_render(request)
+  local token = region_token_from_request(request)
+  if not token then
+    return nil, {
+      code = "REGION_NOT_FOUND",
+      message = "A2 render_region_wav requires a resolvable region ref.",
+      details = { blocker = "region_ref_missing" },
+    }
+  end
+  if token.scheme == "guid" then
+    return nil, {
+      code = "REF_INVALID",
+      message = "A2 render_region_wav currently supports region:index and region:name refs.",
+      details = {
+        blocker = "region_guid_ref_not_supported",
+      },
+    }
+  end
+
+  local project = current_project()
+  local ok_count, _, marker_count, region_count = call_reaper("CountProjectMarkers", project)
+  local total = (ok_count and first_number(marker_count) or 0) + (ok_count and first_number(region_count) or 0)
+  local match = nil
+  local matches = 0
+  local region_ordinal = 0
+  for enum_index = 0, math.max(total - 1, -1) do
+    local ok_enum, retval, is_region, pos, region_end, name, index_number = call_reaper("EnumProjectMarkers3", project, enum_index)
+    if ok_enum and retval and is_region == true then
+      local index_matches = token.scheme == "index"
+        and (token.value == region_ordinal or token.value == first_number(index_number))
+      local name_matches = token.scheme == "name" and tostring(name or "") == token.value
+      if index_matches or name_matches then
+        matches = matches + 1
+        match = {
+          region_ref = "region:index:" .. tostring(index_number or region_ordinal),
+          name = bounded_string(name or "", 160),
+          index = index_number or region_ordinal,
+          start_seconds = first_number(pos) or 0,
+          end_seconds = first_number(region_end) or 0,
+        }
+      end
+      region_ordinal = region_ordinal + 1
+    end
+  end
+  if matches > 1 then
+    return nil, {
+      code = "REF_INVALID",
+      message = "A2 render region name is ambiguous.",
+      details = { blocker = "region_ref_ambiguous" },
+    }
+  end
+  if not match then
+    return nil, {
+      code = "REGION_NOT_FOUND",
+      message = "A2 render region ref could not be resolved.",
+      details = { blocker = "region_ref_not_found" },
+    }
+  end
+  match.duration_seconds = match.end_seconds - match.start_seconds
+  if match.duration_seconds <= 0 or match.duration_seconds > 120 then
+    return nil, {
+      code = "REGION_NOT_FOUND",
+      message = "A2 render region bounds are empty or outside the bounded route limit.",
+      details = {
+        blocker = "region_bounds_invalid",
+        duration_seconds = match.duration_seconds,
+      },
+    }
+  end
+  return match
+end
+
+local function active_audio_take_for_region(region)
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local item_start = item_number(item, "D_POSITION")
+      local item_end = item_start + item_number(item, "D_LENGTH")
+      local overlaps = item_end > region.start_seconds and item_start < region.end_seconds
+      if overlaps then
+        local ok_take, take = call_reaper("GetActiveTake", item)
+        if ok_take and take and not take_is_midi(take) then
+          local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+          if ok_source and source then
+            local filename = source_filename_raw(source)
+            if filename ~= "" and file_exists(filename) then
+              local source_len = source_length(source)
+              local take_offset = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS"))) or 0
+              local playrate = first_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE"))) or 1
+              local overlap_start = math.max(region.start_seconds, item_start)
+              local overlap_end = math.min(region.end_seconds, item_end)
+              local source_start = take_offset + ((overlap_start - item_start) * playrate)
+              local source_end = take_offset + ((overlap_end - item_start) * playrate)
+              return {
+                item_ref = item_ref_string(item),
+                take_ref = take_ref_string(take),
+                source_filename = filename,
+                source_length_seconds = source_len,
+                source_start_seconds = source_start,
+                source_end_seconds = source_end,
+                playrate = playrate,
+              }
+            end
+          end
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function job_object_ref(job_id)
+  return {
+    kind = "job",
+    ref = "job:job_id:" .. job_id,
+    identity = {
+      scheme = "job_id",
+      value = job_id,
+    },
+    summary = {
+      template_id = "template.render.render_region_wav",
+      pack = "render",
+    },
+  }
+end
+
+local function render_region_wav(request)
+  local root_ok, blocker, root_message = render_root_ready()
+  if not root_ok then
+    return handler_error("FILE_NOT_FOUND", root_message, {
+      blocker = blocker,
+      render_root_env = RENDER_ROOT_ENV,
+    })
+  end
+  if request.params.output_policy ~= "openreaper_managed_render_root" then
+    return handler_error("PARAMS_INVALID", "A2 render_region_wav requires managed render root output policy.", {
+      field = "output_policy",
+    })
+  end
+  if request.params.collision_policy ~= "fail_if_exists" then
+    return handler_error("IDEMPOTENCY_CONFLICT", "A2 render_region_wav supports only first-pass fail_if_exists in this route.", {
+      blocker = "reuse_idempotent_match_not_enabled",
+      collision_policy = bounded_string(request.params.collision_policy, 80),
+    }, false)
+  end
+
+  local region, region_failure = resolve_region_for_render(request)
+  if not region then
+    return nil, region_failure
+  end
+  local source = active_audio_take_for_region(region)
+  if not source then
+    return handler_error("ITEM_NOT_FOUND", "A2 render_region_wav requires an online audio item overlapping the resolved region.", {
+      blocker = "fixture_audio_item_missing",
+      region_ref = region.region_ref,
+    })
+  end
+  if not source.source_length_seconds or source.source_length_seconds <= 0 then
+    return handler_error("FILE_NOT_FOUND", "A2 render_region_wav source length could not be measured.", {
+      blocker = "fixture_audio_source_invalid",
+    })
+  end
+
+  local output = managed_render_output(request)
+  if file_exists(output.path) then
+    return handler_error("IDEMPOTENCY_CONFLICT", "A2 managed render output already exists and fail_if_exists forbids overwrite.", {
+      blocker = "render_output_exists",
+      output_basename = output.basename,
+    }, false)
+  end
+
+  local start_percent = math.max(0, math.min(1, source.source_start_seconds / source.source_length_seconds))
+  local end_percent = math.max(0, math.min(1, source.source_end_seconds / source.source_length_seconds))
+  if end_percent <= start_percent then
+    return handler_error("REGION_NOT_FOUND", "A2 render region does not overlap a renderable source range.", {
+      blocker = "region_source_overlap_invalid",
+    })
+  end
+
+  local render_ok, render_success = call_reaper(
+    "RenderFileSection",
+    source.source_filename,
+    output.path,
+    start_percent,
+    end_percent,
+    source.playrate
+  )
+  if not render_ok or render_success == false then
+    return handler_error("COMMAND_FAILED", "A2 render_region_wav could not render the source section through REAPER.", {
+      blocker = "render_file_section_failed",
+    }, false)
+  end
+
+  local size = file_size(output.path) or 0
+  local wav_ok = wav_header_ok(output.path)
+  if size <= 0 or not wav_ok then
+    return handler_error("VERIFY_FAILED", "A2 render_region_wav output file failed WAV/non-empty verification.", {
+      blocker = "wav_output_invalid",
+      output_basename = output.basename,
+      file_size_bytes = size,
+      wav_header = wav_ok,
+    }, false)
+  end
+
+  local output_summary = {
+    output_basename = output.basename,
+    managed_relative_path = output.relative_path,
+    file_size_bytes = size,
+    wav_header = wav_ok,
+    file_count = 1,
+    reused_existing = false,
+    truncated = false,
+  }
+  local output_write, output_failure = write_a2_artifact(request, A2_ARTIFACT_SPECS.region_wav_output, output_summary, {
+    smoke_only = false,
+    output = output_summary,
+    region = region,
+    source = {
+      item_ref = source.item_ref,
+      take_ref = source.take_ref,
+      source_start_seconds = source.source_start_seconds,
+      source_end_seconds = source.source_end_seconds,
+    },
+  })
+  if not output_write then
+    return handler_error(output_failure.code, output_failure.message, output_failure.details, output_failure.recoverable)
+  end
+
+  local artifact_id = artifact_id_from_request(request)
+  local job_id = "render.region_wav." .. tostring(artifact_id or request.id)
+  local job_ref = job_object_ref(job_id)
+  local evidence_summary = {
+    job_ref = job_ref.ref,
+    output_artifact_ref = output_write.ref,
+    region_ref = region.region_ref,
+    collision_policy = request.params.collision_policy,
+    verification_status = "passed",
+    truncated = false,
+  }
+  local evidence_write, evidence_failure = write_a2_artifact(request, A2_ARTIFACT_SPECS.render_job_evidence, evidence_summary, {
+    smoke_only = false,
+    output_artifact_ref = output_write.ref,
+    region = region,
+    output = output_summary,
+    render_request = {
+      format = request.params.format,
+      output_policy = request.params.output_policy,
+      collision_policy = request.params.collision_policy,
+      sample_rate_hz = request.params.sample_rate_hz,
+      bit_depth = request.params.bit_depth,
+      channel_count = request.params.channel_count,
+    },
+  })
+  if not evidence_write then
+    return handler_error(evidence_failure.code, evidence_failure.message, evidence_failure.details, evidence_failure.recoverable)
+  end
+
+  local summary = {
+    job_ref = job_ref.ref,
+    output_artifact_ref = output_write.ref,
+    evidence_artifact_ref = evidence_write.ref,
+    format = "wav",
+    output_policy = request.params.output_policy,
+    collision_policy = request.params.collision_policy,
+    file_count = 1,
+    reused_existing = false,
+    output_basename = output.basename,
+    managed_relative_path = output.relative_path,
+    file_size_bytes = size,
+    truncated = false,
+  }
+  return summary, nil, json_array({ output_write.object_ref, evidence_write.object_ref }), json_array({ job_ref })
+end
+
+local function read_a2_artifact(ref, spec, expected_producer)
+  local envelope, failure = read_artifact_envelope(ref, spec)
+  if not envelope then
+    return nil, failure
+  end
+  if not is_object(envelope.producer)
+    or envelope.producer.kind ~= "template"
+    or envelope.producer.id ~= expected_producer
+    or envelope.producer.pack ~= "render" then
+    return nil, {
+      code = "ARTIFACT_INVALID",
+      message = "A2 input artifact envelope does not match the expected render producer.",
+      details = {
+        blocker = "render_evidence_producer_mismatch",
+        expected_producer = expected_producer,
+      },
+    }
+  end
+  return envelope
+end
+
+local function create_delivery_report(request)
+  local output_ref = artifact_ref_from_request_refs(request, A2_ARTIFACT_SPECS.region_wav_output)
+  local evidence_ref = artifact_ref_from_request_refs(request, A2_ARTIFACT_SPECS.render_job_evidence)
+  if not output_ref or not evidence_ref then
+    return handler_error("ARTIFACT_NOT_FOUND", "A2 delivery report requires render output and render job evidence artifact refs.", {
+      blocker = "render_evidence_refs_missing",
+    })
+  end
+
+  local output_envelope, output_failure = read_a2_artifact(output_ref, A2_ARTIFACT_SPECS.region_wav_output, "template.render.render_region_wav")
+  if not output_envelope then
+    return handler_error(output_failure.code, output_failure.message, output_failure.details)
+  end
+  local evidence_envelope, evidence_failure = read_a2_artifact(evidence_ref, A2_ARTIFACT_SPECS.render_job_evidence, "template.render.render_region_wav")
+  if not evidence_envelope then
+    return handler_error(evidence_failure.code, evidence_failure.message, evidence_failure.details)
+  end
+  local evidence_summary = is_object(evidence_envelope.summary) and evidence_envelope.summary or {}
+  local evidence_payload = is_object(evidence_envelope.payload) and evidence_envelope.payload or {}
+  local evidence_output_ref = evidence_summary.output_artifact_ref or evidence_payload.output_artifact_ref
+  if evidence_output_ref ~= output_ref then
+    return handler_error("ARTIFACT_INVALID", "A2 render job evidence does not reference the requested output artifact.", {
+      blocker = "render_evidence_output_mismatch",
+    })
+  end
+
+  local file_size_value = is_object(output_envelope.summary) and bounded_number(output_envelope.summary.file_size_bytes, 0) or 0
+  local nonempty_output_count = file_size_value > 0 and 1 or 0
+  local issue_count = nonempty_output_count == 1 and 0 or 1
+  local report_row_count = math.min(bounded_limit(request, request.params.max_report_rows, 1, 12), 1)
+  local summary = {
+    output_artifact_count = 1,
+    job_evidence_count = 1,
+    region_count = 1,
+    nonempty_output_count = nonempty_output_count,
+    report_row_count = report_row_count,
+    issue_count = issue_count,
+    truncated = false,
+  }
+  local payload = {
+    smoke_only = false,
+    consumed_artifact_refs = json_array({ output_ref, evidence_ref }),
+    rows = json_array({
+      {
+        row = 1,
+        output_basename = is_object(output_envelope.summary) and output_envelope.summary.output_basename or JSON_NULL,
+        file_size_bytes = file_size_value,
+        issue_count = issue_count,
+      },
+    }),
+  }
+  local write, failure = write_a2_artifact(request, A2_ARTIFACT_SPECS.delivery_report, summary, payload)
+  if not write then
+    return handler_error(failure.code, failure.message, failure.details, failure.recoverable)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end
+
 local ALLOWED_OPERATIONS = {
   ["query_state:project.read_summary"] = {
     pack = "project",
@@ -2063,6 +2536,14 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = create_cleanup_report,
   },
+  ["run_job:render.region_wav"] = {
+    pack = "render",
+    handler = render_region_wav,
+  },
+  ["run_job:render.delivery_report.create"] = {
+    pack = "render",
+    handler = create_delivery_report,
+  },
 }
 
 local function dispatch_request(request, fallback_id)
@@ -2120,7 +2601,7 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  local ok, summary, handler_failure, artifacts = pcall(operation.handler, request)
+  local ok, summary, handler_failure, artifacts, jobs = pcall(operation.handler, request)
   if not ok then
     return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,
@@ -2138,6 +2619,5 @@ local function dispatch_request(request, fallback_id)
       details = handler_failure.details or {},
     })
   end
-  return bridge_ok_envelope(request, started_at, summary, artifacts)
+  return bridge_ok_envelope(request, started_at, summary, artifacts, jobs)
 end
-
