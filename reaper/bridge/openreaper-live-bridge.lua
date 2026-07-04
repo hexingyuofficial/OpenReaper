@@ -334,6 +334,10 @@ local function path_join(base, child)
   return base .. separator .. child
 end
 
+local TRANSPORT_DIR = non_empty(os.getenv(TRANSPORT_ENV))
+local REQUESTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "requests") or nil
+local RESULTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "results") or nil
+
 local function dirname(path)
   if type(path) ~= "string" then
     return ""
@@ -412,7 +416,6 @@ local function is_absolute_path(value)
   end
   return value:sub(1, 1) == "/"
 end
-
 local function first_string(...)
   for index = 1, select("#", ...) do
     local value = select(index, ...)
@@ -1380,10 +1383,6 @@ local function read_runtime_environment(request)
     } or {},
   }
 end
-
-local TRANSPORT_DIR = non_empty(os.getenv(TRANSPORT_ENV))
-local REQUESTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "requests") or nil
-local RESULTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "results") or nil
 
 local function current_script_dir()
   if debug and type(debug.getinfo) == "function" then

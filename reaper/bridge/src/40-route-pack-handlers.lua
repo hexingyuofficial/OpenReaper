@@ -229,10 +229,6 @@ local function read_runtime_environment(request)
   }
 end
 
-local TRANSPORT_DIR = non_empty(os.getenv(TRANSPORT_ENV))
-local REQUESTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "requests") or nil
-local RESULTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "results") or nil
-
 local function current_script_dir()
   if debug and type(debug.getinfo) == "function" then
     local info = debug.getinfo(1, "S")
