@@ -293,7 +293,7 @@ function wrapSourceModule(file, source, handlerModules) {
     "    end",
     "  end",
     "end",
-    ...handlerModules.map(wrapHandlerModule),
+    ...handlerModules.map((module) => wrapHandlerModule(module, handlerExportNames)),
     routedSource,
     "return dispatch_request",
     "end)()",
@@ -301,10 +301,18 @@ function wrapSourceModule(file, source, handlerModules) {
   ].join("\n");
 }
 
-function wrapHandlerModule({ file, exports, source }) {
+function wrapHandlerModule({ file, exports, source }, handlerExportNames) {
   const sharedPreamble = sharedHandlerNames
     .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
     .map((name) => `local ${name} = OPENREAPER_HANDLER_SHARED.${name}`);
+  const exportedDependencyPreamble = handlerExportNames
+    .filter((name) => !exports.includes(name))
+    .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+function\\s+${escapeRegExp(name)}\\s*\\(`).test(source))
+    .map((name) => [
+      `local function ${name}(...)`,
+      `  return OPENREAPER_HANDLER_EXPORTS.${name}(...)`,
+      "end",
+    ].join("\n"));
   const sharedExports = sharedHandlerNames
     .filter((name) => new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
     .map((name) => `${name} = ${name}`);
@@ -312,6 +320,7 @@ function wrapHandlerModule({ file, exports, source }) {
     `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`,
     `__openreaper_register_handler_module(${JSON.stringify(file)}, function()`,
     ...sharedPreamble,
+    ...exportedDependencyPreamble,
     source.trimEnd(),
     "return {",
     `  exports = { ${exports.map((name) => `${name} = ${name}`).join(", ")} },`,

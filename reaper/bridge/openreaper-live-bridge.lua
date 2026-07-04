@@ -3725,6 +3725,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/detect_loop_candidates.lua
 __openreaper_register_handler_module("analysis/detect_loop_candidates.lua", function()
+local function read_item_summary(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_item_summary(...)
+end
 -- Extracted First-Real-Fixture-A A1 handler: template.analysis.detect_loop_candidates.
 
 local function detect_loop_candidates_error(code, message, details, recoverable)
@@ -3828,6 +3831,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/analysis/measure_loop_click_risk.lua
 __openreaper_register_handler_module("analysis/measure_loop_click_risk.lua", function()
+local function read_item_summary(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_item_summary(...)
+end
 -- Extracted First-Real-Fixture-A A1 handler: template.analysis.measure_loop_click_risk.
 
 local function measure_loop_click_risk_error(code, message, details, recoverable)
@@ -4046,6 +4052,18 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/create_cleanup_report.lua
 __openreaper_register_handler_module("project/create_cleanup_report.lua", function()
+local function list_markers_regions(...)
+  return OPENREAPER_HANDLER_EXPORTS.list_markers_regions(...)
+end
+local function read_project_metadata(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_project_metadata(...)
+end
+local function read_project_summary(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_project_summary(...)
+end
+local function read_tempo_map(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_tempo_map(...)
+end
 -- Extracted First-Real-Fixture-A A1 handler: template.project.create_cleanup_report.
 
 local function create_cleanup_report_error(code, message, details, recoverable)
@@ -4881,6 +4899,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/render/create_delivery_report.lua
 __openreaper_register_handler_module("render/create_delivery_report.lua", function()
+local function render_region_wav(...)
+  return OPENREAPER_HANDLER_EXPORTS.render_region_wav(...)
+end
 -- Extracted First-Real-Fixture-A A2 handler: template.render.create_delivery_report.
 
 local function create_delivery_report_error(code, message, details, recoverable)
@@ -7257,6 +7278,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_edit_cursor.lua
 __openreaper_register_handler_module("transport/set_edit_cursor.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.set_edit_cursor.
 
 local function handler_error(code, message, details, recoverable)
@@ -7318,6 +7342,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_time_selection.lua
 __openreaper_register_handler_module("transport/set_time_selection.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.set_time_selection.
 
 local function handler_error(code, message, details, recoverable)
@@ -7379,6 +7406,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_time_selection.lua
 __openreaper_register_handler_module("transport/clear_time_selection.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.clear_time_selection.
 
 local function handler_error(code, message, details, recoverable)
@@ -7432,6 +7462,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_loop_points.lua
 __openreaper_register_handler_module("transport/set_loop_points.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.set_loop_points.
 
 local function handler_error(code, message, details, recoverable)
@@ -7493,6 +7526,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/clear_loop_points.lua
 __openreaper_register_handler_module("transport/clear_loop_points.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.clear_loop_points.
 
 local function handler_error(code, message, details, recoverable)
@@ -7546,6 +7582,9 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/set_repeat.lua
 __openreaper_register_handler_module("transport/set_repeat.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
 -- Extracted Safe-Write-A handler: template.transport.set_repeat.
 
 local function handler_error(code, message, details, recoverable)
@@ -9103,6 +9142,9 @@ end)
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_notes_batch.lua
 __openreaper_register_handler_module("midi/insert_notes_batch.lua", function()
 local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local function read_take_event_counts(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
+end
 -- Extracted Safe-Write-A handler: template.midi.insert_notes_batch.
 
 local function handler_error(code, message, details, recoverable)
@@ -9244,6 +9286,9 @@ end)
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_cc_batch.lua
 __openreaper_register_handler_module("midi/insert_cc_batch.lua", function()
 local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local function read_take_event_counts(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
+end
 -- Extracted Safe-Write-A handler: template.midi.insert_cc_batch.
 
 local function handler_error(code, message, details, recoverable)
@@ -9382,6 +9427,9 @@ end)
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua
 __openreaper_register_handler_module("midi/insert_text_sysex_events.lua", function()
 local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local function read_take_event_counts(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
+end
 -- Extracted Safe-Write-A handler: template.midi.insert_text_sysex_events.
 
 local function handler_error(code, message, details, recoverable)

@@ -283,6 +283,10 @@ describe("Layer 4D.R bridge handler registry", () => {
       lastIndex = index;
     }
     assert.ok(BRIDGE_SOURCE.indexOf("local ALLOWED_OPERATIONS = {") > lastIndex);
+    assert.match(
+      BRIDGE_SOURCE,
+      /project\/create_cleanup_report\.lua[\s\S]*local function read_project_summary\(\.\.\.\)[\s\S]*OPENREAPER_HANDLER_EXPORTS\.read_project_summary\(\.\.\.\)/,
+    );
   });
 
   it("keeps extracted dispatch behavior bound to the same operations and exports", () => {
