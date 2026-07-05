@@ -12,6 +12,8 @@ export const WAVE2A_MIDI_TEMPLATE_IDS = Object.freeze([
   "template.midi.read_take_grid",
   "template.midi.insert_text_sysex_events",
   "template.midi.set_notes_batch",
+  "template.midi.quantize_notes",
+  "template.midi.quantize_selected_notes",
   "template.midi.set_cc_events_batch",
 ]);
 
@@ -481,6 +483,112 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
         input: {
           expected_take_hash: "hash_before_edit",
           notes: [{ index: 0, velocity: 100 }],
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.midi.quantize_notes",
+    title: "Quantize MIDI notes",
+    summary: "Quantize all MIDI note start positions in one take using bounded grid settings.",
+    entity_kind: "midi_note",
+    tags: ["midi", "note", "quantize", "grid"],
+    bridge: writeBridge({ capability: "midi.quantize_notes" }),
+    inputSchema: objectSchema({
+      grid_unit: { enum: ["take_grid", "ppq"] },
+      grid_ppq: { type: "number" },
+      strength: { type: "number" },
+      preserve_duration: { type: "boolean" },
+      expected_take_hash: { type: "string" },
+      sort_events: { type: "boolean" },
+    }, ["grid_unit", "strength", "preserve_duration", "expected_take_hash"]),
+    outputSchema: objectSchema({
+      take_ref: { type: "string" },
+      updated_count: { type: "integer" },
+      grid_ppq: { type: "number" },
+      take_hash: { type: "string" },
+    }, ["take_ref", "updated_count"]),
+    refs: midiTakeMutationRefs(),
+    expectedDelta: mutationDelta({
+      summary: "Updates MIDI note start positions in a resolved take.",
+      entities: [
+        {
+          entity_kind: "midi_note",
+          action: "update",
+          summary: "One or more MIDI note positions are quantized to the requested grid.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "midi_notes_quantized",
+      kind: "state_delta",
+      summary: "Guarded note rows read back on the requested grid within the bounded strength setting.",
+    }),
+    examples: [
+      {
+        name: "quantize_all_notes_to_take_grid",
+        summary: "Quantize all notes to the take grid after checking the take hash.",
+        input: {
+          grid_unit: "take_grid",
+          strength: 1,
+          preserve_duration: true,
+          expected_take_hash: "hash_before_edit",
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.midi.quantize_selected_notes",
+    title: "Quantize selected MIDI notes",
+    summary: "Quantize selected MIDI note start positions in one take using bounded grid settings.",
+    entity_kind: "midi_note",
+    tags: ["midi", "note", "quantize", "selection"],
+    bridge: writeBridge({ capability: "midi.quantize_selected_notes" }),
+    inputSchema: objectSchema({
+      grid_unit: { enum: ["take_grid", "ppq"] },
+      grid_ppq: { type: "number" },
+      strength: { type: "number" },
+      preserve_duration: { type: "boolean" },
+      expected_take_hash: { type: "string" },
+      require_selected_notes: { type: "boolean" },
+      sort_events: { type: "boolean" },
+    }, ["grid_unit", "strength", "preserve_duration", "expected_take_hash", "require_selected_notes"]),
+    outputSchema: objectSchema({
+      take_ref: { type: "string" },
+      selected_count: { type: "integer" },
+      updated_count: { type: "integer" },
+      grid_ppq: { type: "number" },
+      take_hash: { type: "string" },
+    }, ["take_ref", "selected_count", "updated_count"]),
+    refs: midiTakeMutationRefs(),
+    expectedDelta: mutationDelta({
+      summary: "Updates selected MIDI note start positions in a resolved take.",
+      entities: [
+        {
+          entity_kind: "midi_note",
+          action: "update",
+          summary: "Selected MIDI note positions are quantized to the requested grid.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "selected_midi_notes_quantized",
+      kind: "state_delta",
+      summary: "Selected guarded note rows read back on the requested grid while unselected rows remain bounded.",
+    }),
+    examples: [
+      {
+        name: "quantize_selected_notes_to_ppq_grid",
+        summary: "Quantize selected notes to a PPQ grid after checking the take hash.",
+        input: {
+          grid_unit: "ppq",
+          grid_ppq: 480,
+          strength: 1,
+          preserve_duration: true,
+          require_selected_notes: true,
+          expected_take_hash: "hash_before_edit",
         },
       },
     ],

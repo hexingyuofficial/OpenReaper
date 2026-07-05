@@ -237,7 +237,7 @@ Template dependencies are derived from `steps[*].call_template.id`.
 
 Layer 5's accepted template dependency set is the Layer 4D accepted official
 catalog, currently the Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 ids,
-193 templates total.
+206 templates total.
 Recipe validation rejects:
 
 ```text

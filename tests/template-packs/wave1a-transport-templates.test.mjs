@@ -33,12 +33,16 @@ const ALLOWLIST = Object.freeze([
   "template.transport.set_loop_points",
   "template.transport.clear_loop_points",
   "template.transport.set_repeat",
+  "template.transport.set_playback_rate",
+  "template.transport.start_recording",
+  "template.transport.stop_recording",
+  "template.transport.set_record_mode",
+  "template.transport.set_punch_record_range",
+  "template.transport.schedule_recording",
 ]);
 
 const BLOCKED_TRANSPORT_IDS = Object.freeze([
   "template.transport.read_record_posture",
-  "template.transport.start_recording",
-  "template.transport.stop_recording",
   "template.transport.seek_play_cursor",
   "template.transport.nudge_edit_cursor",
   "template.transport.play_time_selection",
@@ -81,13 +85,16 @@ describe("Wave 1A transport template descriptors", () => {
         assert.equal(descriptor.expectedDelta.kind, "read");
         assert.equal(descriptor.verification.mode, "none");
       } else {
-        assert.equal(descriptor.risk, "safe", descriptor.id);
+        assert.equal(["safe", "write"].includes(descriptor.risk), true, descriptor.id);
         assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);
         assert.equal(descriptor.bridge.operation_name, "template.execute", descriptor.id);
         assert.equal(descriptor.bridge.idempotency, "supported", descriptor.id);
         assert.equal(descriptor.expectedDelta.kind, "mutation", descriptor.id);
         assert.equal(descriptor.verification.mode, "required", descriptor.id);
         assert.equal(descriptor.verification.checks.length, 1, descriptor.id);
+        if (descriptor.id.includes("recording") && !descriptor.id.includes("set_record_mode") && !descriptor.id.includes("set_punch")) {
+          assert.equal(descriptor.risk, "write", descriptor.id);
+        }
       }
     }
   });
@@ -184,7 +191,7 @@ describe("Wave 1A transport template descriptors", () => {
       });
 
       assert.equal(request.pack.id, "transport", id);
-      assert.equal(request.pack.risk, "safe", id);
+      assert.equal(request.pack.risk, descriptor.risk, id);
       assert.equal(request.operation.family, "run_command", id);
       assert.equal(request.operation.name, "template.execute", id);
       assert.equal(request.undo.mode, "required", id);
@@ -251,7 +258,7 @@ describe("Wave 1A transport template descriptors", () => {
     assert.doesNotMatch(descriptorSource, /streetlight-reaper-mcp|legacy/i);
     assert.doesNotMatch(descriptorSource, /REAPER\.app|child_process|spawn\(|execFile|reaper\//);
     assert.doesNotMatch(descriptorSource, /\brecipe\b/i);
-    assert.doesNotMatch(descriptorSource, /read_record_posture|start_recording|stop_recording/);
+    assert.doesNotMatch(descriptorSource, /read_record_posture|run_transport_action/);
   });
 });
 
@@ -272,6 +279,36 @@ function sampleInput(id) {
     case "template.transport.set_repeat":
       return {
         enabled: true,
+      };
+    case "template.transport.set_playback_rate":
+      return {
+        playback_rate: 0.5,
+        preserve_pitch: true,
+      };
+    case "template.transport.start_recording":
+      return {
+        require_armed_track: true,
+        respect_punch_range: true,
+      };
+    case "template.transport.stop_recording":
+      return {
+        recorded_media_policy: "keep",
+      };
+    case "template.transport.set_record_mode":
+      return {
+        mode: "time_selection_auto_punch",
+      };
+    case "template.transport.set_punch_record_range":
+      return {
+        start_seconds: 12,
+        end_seconds: 20,
+      };
+    case "template.transport.schedule_recording":
+      return {
+        start_seconds: 12,
+        end_seconds: 20,
+        mode: "time_selection_auto_punch",
+        require_armed_track: true,
       };
     default:
       return {};

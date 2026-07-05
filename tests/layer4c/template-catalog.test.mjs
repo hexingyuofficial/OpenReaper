@@ -72,7 +72,6 @@ describe("Layer 4C template catalog and smoke gate", () => {
       "template.tracks.delete_empty_track",
       "template.tracks.ensure_named_track",
       "template.transport.read_record_posture",
-      "template.transport.start_recording",
       "template.analysis.summarize_selected_audio_items",
       "template.analysis.measure_item_audio_basics",
       "template.analysis.measure_item_lufs",

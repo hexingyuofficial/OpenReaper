@@ -11,6 +11,12 @@ export const WAVE1A_TRANSPORT_TEMPLATE_IDS = Object.freeze([
   "template.transport.set_loop_points",
   "template.transport.clear_loop_points",
   "template.transport.set_repeat",
+  "template.transport.set_playback_rate",
+  "template.transport.start_recording",
+  "template.transport.stop_recording",
+  "template.transport.set_record_mode",
+  "template.transport.set_punch_record_range",
+  "template.transport.schedule_recording",
 ]);
 
 export const WAVE1A_TRANSPORT_TEMPLATES = deepFreeze([
@@ -383,6 +389,252 @@ export const WAVE1A_TRANSPORT_TEMPLATES = deepFreeze([
       },
     ],
   }),
+  commandDescriptor({
+    id: "template.transport.set_playback_rate",
+    title: "Set playback rate",
+    summary: "Set the project transport playback rate to an explicit multiplier.",
+    entity_kind: "playback_rate",
+    tags: ["transport", "playback_rate", "rate"],
+    bridge: bridge({ capability: "transport.set_playback_rate" }),
+    inputSchema: objectSchema({
+      playback_rate: { type: "number" },
+      preserve_pitch: { type: "boolean" },
+    }),
+    outputSchema: objectSchema({
+      playback_rate: { type: "number" },
+      preserve_pitch: { type: "boolean" },
+    }, ["playback_rate", "preserve_pitch"]),
+    expectedDelta: mutationDelta({
+      summary: "Transport playback rate is set to the requested multiplier.",
+      entities: [
+        {
+          entity_kind: "playback_rate",
+          action: "update",
+          summary: "Playback rate state is updated.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "playback_rate_matches",
+      kind: "state_delta",
+      summary: "Playback rate readback matches the requested multiplier.",
+    }),
+    examples: [
+      {
+        name: "set_half_speed_playback",
+        summary: "Set playback rate to half speed while preserving pitch.",
+        input: {
+          playback_rate: 0.5,
+          preserve_pitch: true,
+        },
+      },
+    ],
+  }),
+  recordingDescriptor({
+    id: "template.transport.start_recording",
+    title: "Start recording",
+    summary: "Start recording through the current armed tracks and recording mode.",
+    entity_kind: "recording",
+    tags: ["transport", "recording", "start"],
+    bridge: bridge({ capability: "transport.start_recording" }),
+    inputSchema: objectSchema({
+      require_armed_track: { type: "boolean" },
+      respect_punch_range: { type: "boolean" },
+    }),
+    outputSchema: objectSchema({
+      record_state: { enum: ["recording"] },
+    }, ["record_state"]),
+    expectedDelta: recordingDelta({
+      summary: "Transport enters recording and may create recorded media on armed tracks.",
+      entities: [
+        {
+          entity_kind: "recording",
+          action: "create",
+          summary: "Recording is started for currently armed tracks.",
+        },
+      ],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "recording_started",
+      kind: "state_delta",
+      summary: "Transport reports recording after the command.",
+    }),
+    examples: [
+      {
+        name: "start_recording_with_guard",
+        summary: "Start recording only when at least one track is armed.",
+        input: {
+          require_armed_track: true,
+          respect_punch_range: true,
+        },
+      },
+    ],
+  }),
+  recordingDescriptor({
+    id: "template.transport.stop_recording",
+    title: "Stop recording",
+    summary: "Stop active recording with an explicit recorded-media handling policy.",
+    entity_kind: "recording",
+    tags: ["transport", "recording", "stop"],
+    bridge: bridge({ capability: "transport.stop_recording" }),
+    inputSchema: objectSchema({
+      recorded_media_policy: { enum: ["keep", "discard_prompt_required"] },
+    }),
+    outputSchema: objectSchema({
+      record_state: { enum: ["stopped"] },
+      recorded_media_policy: { enum: ["keep", "discard_prompt_required"] },
+    }, ["record_state", "recorded_media_policy"]),
+    expectedDelta: recordingDelta({
+      summary: "Active recording is stopped and recorded media is handled by the explicit policy.",
+      entities: [
+        {
+          entity_kind: "recording",
+          action: "update",
+          summary: "Recording state is finalized.",
+        },
+      ],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "recording_stopped",
+      kind: "state_delta",
+      summary: "Transport reports stopped or non-recording after the command.",
+    }),
+    examples: [
+      {
+        name: "stop_and_keep_media",
+        summary: "Stop recording and keep recorded media.",
+        input: {
+          recorded_media_policy: "keep",
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.transport.set_record_mode",
+    title: "Set record mode",
+    summary: "Set the transport recording mode explicitly before recording starts.",
+    entity_kind: "record_mode",
+    tags: ["transport", "recording", "mode"],
+    bridge: bridge({ capability: "transport.set_record_mode" }),
+    inputSchema: objectSchema({
+      mode: { enum: ["normal", "time_selection_auto_punch", "selected_items_auto_punch"] },
+    }),
+    outputSchema: objectSchema({
+      mode: { enum: ["normal", "time_selection_auto_punch", "selected_items_auto_punch"] },
+    }, ["mode"]),
+    expectedDelta: mutationDelta({
+      summary: "Recording mode is set to the requested posture.",
+      entities: [
+        {
+          entity_kind: "record_mode",
+          action: "update",
+          summary: "Record mode state is updated.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "record_mode_matches",
+      kind: "state_delta",
+      summary: "Record mode readback matches the requested mode.",
+    }),
+    examples: [
+      {
+        name: "set_time_selection_punch",
+        summary: "Use time selection auto-punch recording mode.",
+        input: {
+          mode: "time_selection_auto_punch",
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.transport.set_punch_record_range",
+    title: "Set punch record range",
+    summary: "Set the time range used by punch-style recording without starting transport.",
+    entity_kind: "recording.punch_range",
+    tags: ["transport", "recording", "punch", "range"],
+    bridge: bridge({ capability: "transport.set_punch_record_range" }),
+    inputSchema: objectSchema({
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+    }),
+    outputSchema: rangeOutputSchema("punch_range"),
+    expectedDelta: mutationDelta({
+      summary: "Punch recording range is set to the requested bounds.",
+      entities: [
+        {
+          entity_kind: "recording.punch_range",
+          action: "update",
+          summary: "Punch range bounds are updated.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "punch_range_matches",
+      kind: "state_delta",
+      summary: "Punch range readback matches the requested bounds.",
+    }),
+    examples: [
+      {
+        name: "set_punch_range",
+        summary: "Set punch recording from 12 to 20 seconds.",
+        input: {
+          start_seconds: 12,
+          end_seconds: 20,
+        },
+      },
+    ],
+  }),
+  recordingDescriptor({
+    id: "template.transport.schedule_recording",
+    title: "Schedule recording",
+    summary: "Prepare a bounded timed recording window without adding a public scheduler.",
+    entity_kind: "recording.schedule",
+    tags: ["transport", "recording", "schedule"],
+    bridge: bridge({ capability: "transport.schedule_recording" }),
+    inputSchema: objectSchema({
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+      mode: { enum: ["normal", "time_selection_auto_punch", "selected_items_auto_punch"] },
+      require_armed_track: { type: "boolean" },
+    }),
+    outputSchema: objectSchema({
+      scheduled_recording: { type: "object" },
+    }, ["scheduled_recording"]),
+    expectedDelta: recordingDelta({
+      summary: "A bounded recording schedule is prepared for an explicit project time range.",
+      entities: [
+        {
+          entity_kind: "recording.schedule",
+          action: "create",
+          summary: "Timed recording schedule is prepared.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "recording_schedule_matches",
+      kind: "state_delta",
+      summary: "Scheduled recording readback matches the requested range and mode.",
+    }),
+    examples: [
+      {
+        name: "schedule_time_selection_recording",
+        summary: "Schedule a guarded punch recording window.",
+        input: {
+          start_seconds: 12,
+          end_seconds: 20,
+          mode: "time_selection_auto_punch",
+          require_armed_track: true,
+        },
+      },
+    ],
+  }),
 ]);
 
 export function createWave1ATransportTemplates() {
@@ -413,6 +665,20 @@ function commandDescriptor(overrides = {}) {
       name: "transport_state_updated",
       kind: "state_delta",
       summary: "Transport state readback matches the requested mutation.",
+    }),
+    ...overrides,
+  });
+}
+
+function recordingDescriptor(overrides = {}) {
+  return descriptor({
+    risk: "write",
+    bridge: bridge(),
+    expectedDelta: recordingDelta(),
+    verification: requiredVerification({
+      name: "recording_state_updated",
+      kind: "state_delta",
+      summary: "Recording state readback matches the requested posture.",
     }),
     ...overrides,
   });
@@ -521,6 +787,22 @@ function mutationDelta(overrides = {}) {
         entity_kind: "transport",
         action: "update",
         summary: "Transport state is updated.",
+      },
+    ],
+    idempotent: true,
+    ...overrides,
+  };
+}
+
+function recordingDelta(overrides = {}) {
+  return {
+    kind: "mutation",
+    summary: "Updates one bounded recording state surface.",
+    entities: [
+      {
+        entity_kind: "recording",
+        action: "update",
+        summary: "Recording posture is updated.",
       },
     ],
     idempotent: true,

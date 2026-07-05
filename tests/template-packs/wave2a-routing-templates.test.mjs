@@ -38,7 +38,12 @@ const APPROVED_ROUTING_IDS = Object.freeze([
   "template.routing.set_send_mode",
   "template.routing.set_master_parent_send",
   "template.routing.set_track_channel_count",
+  "template.routing.list_track_hardware_outputs",
+  "template.routing.set_track_hardware_output",
+  "template.routing.remove_track_hardware_output",
+  "template.routing.track_mono_or_stereo_button",
   "template.routing.read_project_routing_graph",
+  "template.routing.list_available_audio_outputs",
   "template.routing.set_send_audio_channels",
   "template.routing.set_send_phase",
   "template.routing.set_send_mono",
@@ -56,7 +61,7 @@ const BLOCKED_ROUTING_IDS = Object.freeze([
   "template.routing.build_headphone_mix",
   "template.routing.create_bus_send_setup",
   "template.routing.set_midi_hardware_output",
-  "template.routing.list_available_audio_outputs",
+  "template.hardware.list_audio_outputs",
   "template.routing.set_track_mute",
   "template.routing.set_fx_parameter_for_sidechain",
 ]);
@@ -105,6 +110,14 @@ describe("Wave 2A routing template descriptors", () => {
     assert.equal(byId.get("template.routing.read_fx_pin_mapping").risk, "read");
     assert.equal(byId.get("template.routing.read_fx_pin_mapping").entity_kind, "pin_mapping");
     assert.equal(byId.get("template.routing.read_fx_pin_mapping").refs.input.some((entry) => entry.kind === "fx"), true);
+    assert.equal(byId.get("template.routing.list_track_hardware_outputs").risk, "read");
+    assert.equal(byId.get("template.routing.list_available_audio_outputs").risk, "read");
+    assert.equal(byId.get("template.routing.set_track_hardware_output").risk, "write");
+    assert.equal(byId.get("template.routing.remove_track_hardware_output").risk, "write");
+    assert.equal(byId.get("template.routing.track_mono_or_stereo_button").risk, "write");
+    assert.equal(byId.get("template.routing.set_track_hardware_output").entity_kind, "hardware_output");
+    assert.equal(byId.get("template.routing.remove_track_hardware_output").refs.input.some((entry) => entry.kind === "track"), true);
+    assert.equal(JSON.stringify(templates).includes("\"kind\":\"hardware_output\""), false);
 
     for (const descriptor of templates) {
       if (descriptor.risk === "read") {
@@ -122,10 +135,11 @@ describe("Wave 2A routing template descriptors", () => {
       }
     }
 
-    assert.doesNotMatch(source, /hardware_output|I_MIDIHWOUT|create_hardware|set_hardware/);
+    assert.doesNotMatch(source, /I_MIDIHWOUT|create_hardware|set_hardware_audio_output/);
     assert.doesNotMatch(source, /remove_send|delete|destructive|run_action|run_job|artifact_metadata/);
     assert.doesNotMatch(source, /streetlight-reaper-mcp|recipe|REAPER\.app|spawn\(|execFile/);
     assert.equal(byId.get("template.routing.set_send_midi_channels").summary.includes("hardware"), false);
+    assert.equal(byId.has("template.hardware.list_audio_outputs"), false);
   });
 
   it("loads in pack-local and shared fixture catalogs without duplicates", () => {
@@ -265,7 +279,7 @@ describe("Wave 2A routing template descriptors", () => {
     assert.doesNotMatch(source, /streetlight-reaper-mcp|legacy|recipes?\//i);
     assert.doesNotMatch(source, /REAPER\.app|child_process|spawn\(|execFile|reaper\//);
     assert.doesNotMatch(source, /RemoveTrackSend|TrackFX_SetPinMappings|I_MIDIHWOUT/);
-    assert.doesNotMatch(source, /create_hardware_audio_output|set_hardware_audio_output/);
+    assert.doesNotMatch(source, /create_hardware_audio_output|set_hardware_audio_output|template\.hardware\./);
   });
 });
 
@@ -332,10 +346,45 @@ function executionScenarios() {
       emittedRefs: [track],
     },
     {
+      id: "template.routing.list_track_hardware_outputs",
+      input: { include_disabled: true, max_outputs: 8 },
+      refs: { track_ref: track },
+      emittedRefs: [track],
+    },
+    {
+      id: "template.routing.set_track_hardware_output",
+      input: {
+        output_index: 0,
+        source_channel_offset: 0,
+        source_channel_count: 2,
+        mix_to_mono: false,
+      },
+      refs: { track_ref: track },
+      emittedRefs: [track],
+    },
+    {
+      id: "template.routing.remove_track_hardware_output",
+      input: { output_index: 0, missing_policy: "ok" },
+      refs: { track_ref: track },
+      emittedRefs: [track],
+    },
+    {
+      id: "template.routing.track_mono_or_stereo_button",
+      input: { mode: "mono" },
+      refs: { track_ref: track },
+      emittedRefs: [track],
+    },
+    {
       id: "template.routing.read_project_routing_graph",
       input: { max_tracks: 16, max_edges: 32, include_master_parent: true },
       refs: {},
       emittedRefs: [track, send],
+    },
+    {
+      id: "template.routing.list_available_audio_outputs",
+      input: { include_unavailable: false, max_outputs: 16 },
+      refs: {},
+      emittedRefs: [],
     },
     {
       id: "template.routing.set_send_audio_channels",

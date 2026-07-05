@@ -82,7 +82,7 @@ describe("Layer 4D call_template runtime binding", () => {
     const bridge = new FakeFoundationBridge();
     const runtime = createCallTemplateRuntime({
       executor: bridge,
-      evidenceLimit: 200,
+      evidenceLimit: catalog.size,
     });
 
     for (const [index, descriptor] of catalog.list().entries()) {

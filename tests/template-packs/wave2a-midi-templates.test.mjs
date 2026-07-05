@@ -43,6 +43,8 @@ const ALLOWLIST = Object.freeze([
   "template.midi.read_take_grid",
   "template.midi.insert_text_sysex_events",
   "template.midi.set_notes_batch",
+  "template.midi.quantize_notes",
+  "template.midi.quantize_selected_notes",
   "template.midi.set_cc_events_batch",
 ]);
 
@@ -135,6 +137,8 @@ describe("Wave 2A midi template descriptors", () => {
     const catalog = createTemplateCatalog({ templates: createWave2AMidiTemplates() });
     const createItem = catalog.require("template.midi.create_midi_item");
     const setNotes = catalog.require("template.midi.set_notes_batch");
+    const quantizeNotes = catalog.require("template.midi.quantize_notes");
+    const quantizeSelectedNotes = catalog.require("template.midi.quantize_selected_notes");
     const setCc = catalog.require("template.midi.set_cc_events_batch");
     const insertNotes = catalog.require("template.midi.insert_notes_batch");
     const grid = catalog.require("template.midi.read_take_grid");
@@ -145,6 +149,22 @@ describe("Wave 2A midi template descriptors", () => {
     assert.equal(createItem.summary.includes("empty MIDI item"), true);
 
     assert.deepEqual(setNotes.inputSchema.required, ["notes", "expected_take_hash"]);
+    assert.deepEqual(quantizeNotes.inputSchema.required, [
+      "grid_unit",
+      "strength",
+      "preserve_duration",
+      "expected_take_hash",
+    ]);
+    assert.deepEqual(quantizeSelectedNotes.inputSchema.required, [
+      "grid_unit",
+      "strength",
+      "preserve_duration",
+      "expected_take_hash",
+      "require_selected_notes",
+    ]);
+    assert.equal(quantizeNotes.inputSchema.properties.grid_unit.enum.includes("take_grid"), true);
+    assert.equal(quantizeSelectedNotes.inputSchema.properties.grid_unit.enum.includes("ppq"), true);
+    assert.equal(quantizeSelectedNotes.summary.includes("selected MIDI note"), true);
     assert.deepEqual(setCc.inputSchema.required, ["events", "expected_take_hash"]);
     assert.equal(insertNotes.inputSchema.properties.position_unit.enum.includes("ppq"), true);
     assert.equal(grid.risk, "read");
@@ -403,6 +423,22 @@ function sampleInput(id) {
       };
     case "template.midi.set_notes_batch":
       return { expected_take_hash: "hash_before_edit", notes: [{ index: 0, velocity: 100 }] };
+    case "template.midi.quantize_notes":
+      return {
+        grid_unit: "take_grid",
+        strength: 1,
+        preserve_duration: true,
+        expected_take_hash: "hash_before_edit",
+      };
+    case "template.midi.quantize_selected_notes":
+      return {
+        grid_unit: "ppq",
+        grid_ppq: 480,
+        strength: 1,
+        preserve_duration: true,
+        require_selected_notes: true,
+        expected_take_hash: "hash_before_edit",
+      };
     case "template.midi.set_cc_events_batch":
       return { expected_take_hash: "hash_before_edit", events: [{ index: 0, value: 96 }] };
     default:

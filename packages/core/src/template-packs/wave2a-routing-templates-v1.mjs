@@ -10,7 +10,12 @@ export const WAVE2A_ROUTING_TEMPLATE_IDS = Object.freeze([
   "template.routing.set_send_mode",
   "template.routing.set_master_parent_send",
   "template.routing.set_track_channel_count",
+  "template.routing.list_track_hardware_outputs",
+  "template.routing.set_track_hardware_output",
+  "template.routing.remove_track_hardware_output",
+  "template.routing.track_mono_or_stereo_button",
   "template.routing.read_project_routing_graph",
+  "template.routing.list_available_audio_outputs",
   "template.routing.set_send_audio_channels",
   "template.routing.set_send_phase",
   "template.routing.set_send_mono",
@@ -389,6 +394,235 @@ export const WAVE2A_ROUTING_TEMPLATES = deepFreeze([
   },
   {
     contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.routing.list_track_hardware_outputs",
+    title: "List track hardware outputs",
+    summary: "Read one track's hardware audio output assignments without changing routing.",
+    pack: "routing",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "hardware_output",
+    tags: ["routing", "hardware_output", "track", "read", "wave2a", "alpha2"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "routing.track_hardware_outputs.list",
+      capability: "routing.track_hardware_outputs.list",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      include_disabled: { type: "boolean" },
+      max_outputs: { type: "integer" },
+    }, []),
+    outputSchema: objectSchema({
+      track_ref: { type: "string" },
+      hardware_outputs: { type: "array" },
+      truncated: { type: "boolean" },
+    }, ["track_ref"]),
+    refs: refs({
+      input: [ref("track_ref", "track", true, "Track ref whose hardware output assignments will be read.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads bounded track hardware output assignment metadata without mutation.",
+      entities: [
+        {
+          entity_kind: "hardware_output",
+          action: "read",
+          summary: "Track hardware output assignments are summarized.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "list_track_outputs",
+        summary: "List hardware output assignments for a resolved cue track.",
+        input: { include_disabled: true, max_outputs: 16 },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.routing.set_track_hardware_output",
+    title: "Set track hardware output",
+    summary: "Set one typed hardware audio output assignment for an existing track.",
+    pack: "routing",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: "hardware_output",
+    tags: ["routing", "hardware_output", "track", "write", "wave2a", "alpha2"],
+    bridge: bridge({
+      capability: "routing.track_hardware_output.set",
+      idempotency: "supported",
+    }),
+    inputSchema: objectSchema({
+      output_index: { type: "integer" },
+      source_channel_offset: { type: "integer" },
+      source_channel_count: { enum: [1, 2, 4, 6, 8, 16] },
+      mix_to_mono: { type: "boolean" },
+    }, ["output_index", "source_channel_offset", "source_channel_count", "mix_to_mono"]),
+    outputSchema: objectSchema({
+      track_ref: { type: "string" },
+      hardware_output_ref: { type: "string" },
+      output_index: { type: "integer" },
+      source_channel_offset: { type: "integer" },
+      source_channel_count: { type: "integer" },
+      mix_to_mono: { type: "boolean" },
+    }, ["track_ref", "hardware_output_ref", "output_index"]),
+    refs: refs({
+      input: [ref("track_ref", "track", true, "Track ref whose hardware output assignment will be set.")],
+      output: [ref("track_ref", "track", true, "Same track ref after hardware output assignment update.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "mutation",
+      summary: "Creates or updates one track hardware output assignment.",
+      entities: [
+        {
+          entity_kind: "hardware_output",
+          action: "update",
+          summary: "A track hardware output assignment is set.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({
+      checks: [
+        {
+          name: "track_hardware_output_matches",
+          kind: "state_delta",
+          summary: "The resolved track hardware output assignment matches the typed input fields.",
+        },
+      ],
+    }),
+    examples: [
+      {
+        name: "assign_cue_output",
+        summary: "Assign the resolved cue track to a typed stereo hardware output.",
+        input: {
+          output_index: 0,
+          source_channel_offset: 0,
+          source_channel_count: 2,
+          mix_to_mono: false,
+        },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.routing.remove_track_hardware_output",
+    title: "Remove track hardware output",
+    summary: "Remove one existing track hardware audio output assignment by track and output index.",
+    pack: "routing",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: "hardware_output",
+    tags: ["routing", "hardware_output", "track", "remove", "wave2a", "alpha2"],
+    bridge: bridge({
+      capability: "routing.track_hardware_output.remove",
+      idempotency: "supported",
+    }),
+    inputSchema: objectSchema({
+      output_index: { type: "integer" },
+      missing_policy: { enum: ["ok", "error"] },
+    }, ["output_index"]),
+    outputSchema: objectSchema({
+      track_ref: { type: "string" },
+      output_index: { type: "integer" },
+      removed: { type: "boolean" },
+    }, ["track_ref", "output_index", "removed"]),
+    refs: refs({
+      input: [ref("track_ref", "track", true, "Track ref owning the hardware output assignment to remove.")],
+      output: [ref("track_ref", "track", true, "Same track ref after hardware output assignment removal.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "mutation",
+      summary: "Removes one existing track hardware output assignment without deleting tracks.",
+      entities: [
+        {
+          entity_kind: "hardware_output",
+          action: "update",
+          summary: "A track hardware output assignment is removed.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({
+      checks: [
+        {
+          name: "track_hardware_output_removed",
+          kind: "state_delta",
+          summary: "The resolved hardware output assignment is absent after removal.",
+        },
+      ],
+    }),
+    examples: [
+      {
+        name: "remove_cue_output",
+        summary: "Remove a resolved cue-track hardware output assignment.",
+        input: { output_index: 0, missing_policy: "ok" },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.routing.track_mono_or_stereo_button",
+    title: "Set track mono/stereo button",
+    summary: "Set one track's mixer mono-or-stereo routing button state.",
+    pack: "routing",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: "channel",
+    tags: ["routing", "track", "mono", "stereo", "wave2a", "alpha2"],
+    bridge: bridge({
+      capability: "routing.track_mono_stereo.set",
+      idempotency: "supported",
+    }),
+    inputSchema: objectSchema({
+      mode: { enum: ["mono", "stereo"] },
+    }, ["mode"]),
+    outputSchema: objectSchema({
+      track_ref: { type: "string" },
+      mode: { enum: ["mono", "stereo"] },
+    }, ["track_ref", "mode"]),
+    refs: refs({
+      input: [ref("track_ref", "track", true, "Track ref whose mono/stereo routing button state will be set.")],
+      output: [ref("track_ref", "track", true, "Same track ref after mono/stereo routing update.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "mutation",
+      summary: "Updates one track mono/stereo routing button state.",
+      entities: [
+        {
+          entity_kind: "channel",
+          action: "update",
+          summary: "The track mono/stereo routing button state is updated.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({
+      checks: [
+        {
+          name: "track_mono_stereo_matches",
+          kind: "state_delta",
+          summary: "The resolved track mono/stereo routing button state matches input.mode.",
+        },
+      ],
+    }),
+    examples: [
+      {
+        name: "set_track_mono",
+        summary: "Set the resolved track's routing button to mono.",
+        input: { mode: "mono" },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
     id: "template.routing.read_project_routing_graph",
     title: "Read project routing graph",
     summary: "Read a bounded graph of ordinary sends, receives, and master-parent edges.",
@@ -441,6 +675,53 @@ export const WAVE2A_ROUTING_TEMPLATES = deepFreeze([
         name: "read_small_routing_graph",
         summary: "Read a bounded routing graph for the current project.",
         input: { max_tracks: 64, max_edges: 128, include_master_parent: true },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.routing.list_available_audio_outputs",
+    title: "List available audio outputs",
+    summary: "Read bounded audio output endpoint metadata for routing assignment planning.",
+    pack: "routing",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "hardware_output",
+    tags: ["routing", "hardware_output", "audio_output", "read", "wave2a", "alpha2"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "routing.audio_outputs.list",
+      capability: "routing.audio_outputs.list",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      include_unavailable: { type: "boolean" },
+      max_outputs: { type: "integer" },
+    }, []),
+    outputSchema: objectSchema({
+      audio_outputs: { type: "array" },
+      truncated: { type: "boolean" },
+    }, ["audio_outputs"]),
+    refs: refs(),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads bounded audio output endpoint metadata without mutating project or device state.",
+      entities: [
+        {
+          entity_kind: "hardware_output",
+          action: "read",
+          summary: "Available audio output endpoints are summarized.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "list_audio_outputs",
+        summary: "List bounded audio output endpoints for routing assignment planning.",
+        input: { include_unavailable: false, max_outputs: 32 },
       },
     ],
   },
