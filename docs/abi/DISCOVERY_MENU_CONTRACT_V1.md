@@ -104,11 +104,41 @@ Template menu calls may explicitly request these compact derived menu fields:
 capability_group
 task_intents
 support
+capability_truth
 ```
 
 These fields are derived from compact metadata only. They do not expose full
-schemas, refs, bridge operations, examples, expected deltas, live evidence, or
-new support claims.
+schemas, full refs, bridge operation payloads, full examples, expected deltas,
+live matrix rows, or new support claims.
+
+`capability_truth` is the A2-F0.1 compact truth projection:
+
+```text
+id
+kind
+domain
+route_group
+exists_in_catalog
+live_runnable_now
+evidence_level
+support_state
+known_blocker
+requires_refs
+required_ref_kinds
+allowed_live_group
+example_call_shape
+output_summary_shape
+```
+
+A2-F0 runtime-facing template discovery includes `capability_truth` in the
+default agent menu and in exact template id expansion, even when `fields` omits
+it. The compact menu projection reports truth/status fields only; exact
+expansion may also include runnable call shape, required ref kinds, context
+shape, output summary shape, and known live blockers without requesting full
+schemas. `live_runnable_now` is true only when the current runtime has an
+explicit live executor configured and the id is in that configured allowed live
+group. Candidate, draft, unsupported, and not-currently-live entries must
+remain visible but must not be presented as live-runnable.
 
 Template detail fields are:
 
@@ -145,10 +175,13 @@ Recipe menu calls may explicitly request the same compact derived menu fields:
 capability_group
 task_intents
 support
+capability_truth
 ```
 
 These fields are derived from compact metadata only. They do not expose steps,
 assertions, recovery branches, a recipe executor, or new support claims.
+For recipes, `capability_truth` must clearly report that public `call_recipe`
+is not available unless that future decision is explicitly reopened.
 
 Recipe detail fields are:
 

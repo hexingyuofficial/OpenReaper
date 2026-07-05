@@ -28,6 +28,7 @@ import {
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
@@ -280,14 +281,30 @@ describe("Layer 4D call_template runtime binding", () => {
 
     const menuPayload = JSON.stringify(runtimeMenu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      if (["refs", "artifacts"].includes(field)) continue;
       assert.doesNotMatch(menuPayload, new RegExp(field));
     }
+    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
+    assert.equal(runtimeMenu.items.every((item) => Object.hasOwn(item, "capability_truth")), true);
+    assert.equal(runtimeMenu.items.every((item) => item.capability_truth.live_runnable_now === false), true);
+    assert.equal(
+      runtimeMenu.items.some((item) => item.capability_truth.allowed_live_group === "wave0"),
+      true,
+    );
+    assert.equal(runtimeMenu.items[0].capability_truth.exists_in_catalog, true);
+    assert.equal(runtimeMenu.items[0].capability_truth.live_runnable_now, false);
+    assert.equal(
+      runtimeMenu.items[0].capability_truth.known_blocker,
+      "live_executor_not_configured_or_not_in_allowed_group",
+    );
 
     const exact = runtime.list_templates({
       ids: ["template.tracks.create_track"],
       fields: ["summary", "inputSchema", "expectedDelta"],
     });
     assert.deepEqual(Object.keys(exact.items[0]).sort(), [
+      "capability_truth",
       "expectedDelta",
       "id",
       "inputSchema",
@@ -296,6 +313,29 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal("bridge" in exact.items[0], false);
     assert.equal("refs" in exact.items[0], false);
     assert.equal("artifacts" in exact.items[0], false);
+    assert.equal(exact.items[0].capability_truth.example_call_shape.tool, "call_template");
+    assert.equal(exact.items[0].capability_truth.requires_refs, false);
+
+    const liveRuntime = createCallTemplateRuntime({
+      executor: new FakeFoundationBridge(),
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const liveExact = liveRuntime.list_templates({
+      ids: ["template.project.read_summary", "template.tracks.create_track"],
+      fields: ["summary"],
+    });
+    assert.equal(liveExact.items[0].capability_truth.live_runnable_now, true);
+    assert.equal(liveExact.items[0].capability_truth.allowed_live_group, "wave0");
+    assert.equal(liveExact.items[0].capability_truth.known_blocker, null);
+    assert.equal(liveExact.items[1].capability_truth.live_runnable_now, false);
+    assert.equal(
+      liveExact.items[1].capability_truth.known_blocker,
+      "live_executor_not_configured_or_not_in_allowed_group",
+    );
 
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",

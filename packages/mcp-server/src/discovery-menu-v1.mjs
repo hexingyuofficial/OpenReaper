@@ -42,6 +42,7 @@ export const DISCOVERY_DERIVED_MENU_FIELDS = Object.freeze([
   "capability_group",
   "task_intents",
   "support",
+  "capability_truth",
 ]);
 
 export const DISCOVERY_MENU_CALL_RULES = Object.freeze({
@@ -112,7 +113,7 @@ function listDiscoveryItems(type, request, catalog) {
     contract: DISCOVERY_MENU_CONTRACT,
     kind: definition.responseKind,
     mode: "menu",
-    items: pageItems.map((item) => projectItem(item, fieldsForProjection)),
+    items: pageItems.map((item) => projectItem(item, fieldsForProjection, { exact: false })),
     page: {
       limit: normalized.limit,
       cursor: normalized.cursor,
@@ -136,7 +137,7 @@ function exactItemsResponse(definition, normalized, catalog, fieldsForProjection
   for (const id of normalized.ids) {
     const item = byId.get(id);
     if (item) {
-      items.push(projectItem(item, fieldsForProjection));
+      items.push(projectItem(item, fieldsForProjection, { exact: true }));
     } else {
       missingIds.push(id);
     }
@@ -168,8 +169,9 @@ function normalizeRequest(request, definition) {
   }
 
   const ids = normalizeStringArray(request.ids, "ids");
+  const defaultFields = request.fields === undefined;
   const fields =
-    request.fields === undefined
+    defaultFields
       ? [...definition.summaryFields]
       : normalizeFields(request.fields, definition);
   const filters = normalizeFilters(request);
@@ -198,6 +200,7 @@ function normalizeRequest(request, definition) {
   return {
     ids,
     fields,
+    defaultFields,
     filters,
     limit: normalizeLimit(request.limit),
     cursor,
@@ -328,13 +331,13 @@ function hasAllTags(item, tags) {
   return tags.every((tag) => itemTags.has(tag));
 }
 
-function projectItem(item, fields) {
+function projectItem(item, fields, options = {}) {
   const projected = {};
   for (const field of fields) {
     if (Object.hasOwn(item, field)) {
       projected[field] = item[field];
     } else if (DISCOVERY_DERIVED_MENU_FIELDS.includes(field)) {
-      projected[field] = discoveryDerivedField(item, field);
+      projected[field] = discoveryDerivedField(item, field, options);
     }
   }
   return projected;
@@ -355,24 +358,35 @@ function canonicalFieldName(field) {
       capability_group: "capability_group",
       taskIntents: "task_intents",
       task_intents: "task_intents",
+      capabilityTruth: "capability_truth",
+      capability_truth: "capability_truth",
     }[field] ?? field
   );
 }
 
-function discoveryDerivedField(item, field) {
+function discoveryDerivedField(item, field, options = {}) {
   if (field === "capability_group") return capabilityGroup(item);
   if (field === "task_intents") return taskIntents(item);
   if (field === "support") return supportPosture(item);
+  if (field === "capability_truth") return capabilityTruth(item, options);
   return undefined;
 }
 
 function discoveryDerivedSearchText(item) {
   const support = supportPosture(item);
+  const truth = capabilityTruth(item);
   return [
     capabilityGroup(item),
     ...taskIntents(item),
     support.status,
     support.evidence,
+    truth.kind,
+    truth.domain,
+    truth.route_group,
+    truth.evidence_level,
+    truth.support_state,
+    truth.known_blocker,
+    truth.allowed_live_group,
   ];
 }
 
@@ -409,10 +423,180 @@ function supportPosture(item) {
   };
 }
 
+function capabilityTruth(item, options = {}) {
+  const lifecycle = stringValue(item.lifecycle) || "unknown";
+  const kind = capabilityKind(item);
+  const existsInCatalog = item.exists_in_catalog ?? true;
+  const requiresRefs = requiredRefDeclarations(item).length > 0;
+  const support = supportState(item, lifecycle, existsInCatalog);
+  const liveRunnableNow = Boolean(item.live_runnable_now === true && support !== "blocked" && support !== "candidate");
+
+  const truth = {
+    id: stringValue(item.id) || null,
+    kind,
+    domain: stringValue(item.pack) || stringValue(item.domain) || "unknown",
+    route_group: routeGroup(item),
+    exists_in_catalog: Boolean(existsInCatalog),
+    live_runnable_now: liveRunnableNow,
+    evidence_level: evidenceLevel(item, lifecycle),
+    support_state: support,
+    known_blocker: knownBlocker(item, support, liveRunnableNow),
+    requires_refs: requiresRefs,
+    required_ref_kinds: unique(requiredRefDeclarations(item).map((ref) => ref.kind).filter(Boolean)),
+    allowed_live_group: item.allowed_live_group ?? null,
+  };
+
+  if (options.exact === true) {
+    truth.example_call_shape = exampleCallShape(item, kind);
+    truth.output_summary_shape = outputSummaryShape(item, kind);
+  }
+
+  return pruneUndefined(truth);
+}
+
+function capabilityKind(item) {
+  if (typeof item.kind === "string") return item.kind;
+  if (typeof item.id === "string" && item.id.startsWith("recipe.")) return "recipe";
+  if (typeof item.id === "string" && item.id.startsWith("template.")) return "template";
+  return "unknown";
+}
+
+function routeGroup(item) {
+  if (typeof item.route_group === "string") return item.route_group;
+  const bridge = isPlainObject(item.bridge) ? item.bridge : {};
+  if (typeof bridge.operation_family === "string" && typeof bridge.operation_name === "string") {
+    return `${bridge.operation_family}:${bridge.operation_name}`;
+  }
+  return capabilityGroup(item);
+}
+
+function supportState(item, lifecycle, existsInCatalog) {
+  if (!existsInCatalog) return "blocked";
+  if (typeof item.support_state === "string") return item.support_state;
+  if (lifecycle === "deprecated") return "blocked";
+  if (["draft", "experimental", "community"].includes(lifecycle)) return "candidate";
+  if (["stable", "official", "validated", "fake_smoked", "live_smoked"].includes(lifecycle)) {
+    return "supported";
+  }
+  return "candidate";
+}
+
+function evidenceLevel(item, lifecycle) {
+  if (typeof item.evidence_level === "string") return item.evidence_level;
+  if (lifecycle === "live_smoked") return "live_smoked";
+  if (["official", "stable", "validated", "fake_smoked"].includes(lifecycle)) return "fake_smoked";
+  if (lifecycle === "experimental") return "runtime_bound_static";
+  if (lifecycle === "draft" || lifecycle === "community") return "contract_only";
+  if (lifecycle === "deprecated") return "deprecated";
+  return "unknown";
+}
+
+function knownBlocker(item, support, liveRunnableNow) {
+  if (typeof item.known_blocker === "string") return item.known_blocker;
+  if (support === "blocked") return "not_supported";
+  if (capabilityKind(item) === "recipe") return "no_public_call_recipe_executor";
+  if (!liveRunnableNow) return "live_executor_not_configured_or_not_in_allowed_group";
+  return null;
+}
+
+function exampleCallShape(item, kind) {
+  if (isPlainObject(item.example_call_shape)) return item.example_call_shape;
+  if (kind === "recipe") {
+    return {
+      executor: "agent_runs_declared_procedure_with_call_template_and_get_state",
+      call_recipe: "not_available",
+    };
+  }
+
+  return pruneUndefined({
+    tool: "call_template",
+    request: {
+      id: stringValue(item.id) || null,
+      input: firstExampleInput(item),
+      refs: exampleRefs(item),
+      context: {
+        expected_owner: "openreaper",
+        expected_generation: "current",
+        request_sequence: 1,
+      },
+    },
+  });
+}
+
+function outputSummaryShape(item, kind) {
+  if (isPlainObject(item.output_summary_shape)) return item.output_summary_shape;
+  if (kind === "recipe") {
+    return {
+      agent_summary: "procedure progress, checkpoints, template request ids, refs, artifacts, blockers",
+    };
+  }
+
+  const resultShape = {
+    summary: "compact result summary",
+    refs: outputRefDeclarations(item).map((ref) => ({
+      name: ref.name,
+      kind: ref.kind,
+    })),
+    artifacts: outputArtifactDeclarations(item).map((artifact) => ({
+      name: artifact.name,
+      schema: artifact.schema,
+    })),
+    jobs: outputRefDeclarations(item)
+      .filter((ref) => ref.kind === "job")
+      .map((ref) => ({ name: ref.name, kind: ref.kind })),
+    last_result: "bounded last_result update when applicable",
+  };
+
+  return pruneUndefined(resultShape);
+}
+
+function firstExampleInput(item) {
+  const example = Array.isArray(item.examples) ? item.examples[0] : null;
+  return isPlainObject(example?.input) ? example.input : {};
+}
+
+function exampleRefs(item) {
+  return requiredRefDeclarations(item).map((ref) => ({
+    name: ref.name,
+    kind: ref.kind,
+    required: true,
+    shape: `${ref.kind}:...`,
+  }));
+}
+
+function requiredRefDeclarations(item) {
+  return inputRefDeclarations(item).filter((ref) => ref.required === true);
+}
+
+function inputRefDeclarations(item) {
+  return Array.isArray(item.refs?.input) ? item.refs.input.filter(isPlainObject) : [];
+}
+
+function outputRefDeclarations(item) {
+  return Array.isArray(item.refs?.output) ? item.refs.output.filter(isPlainObject) : [];
+}
+
+function outputArtifactDeclarations(item) {
+  return Array.isArray(item.artifacts?.output) ? item.artifacts.output.filter(isPlainObject) : [];
+}
+
 function stringValue(value) {
   return typeof value === "string" ? value : "";
 }
 
 function unique(values) {
   return [...new Set(values)];
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function pruneUndefined(value) {
+  if (!isPlainObject(value)) return value;
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined) output[key] = entry;
+  }
+  return output;
 }

@@ -7,7 +7,6 @@ import {
 } from "../../core/src/template-descriptor-v1.mjs";
 import {
   createTemplateCatalog,
-  createTemplateCatalogDiscovery,
 } from "../../core/src/template-catalog-v1.mjs";
 import {
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
@@ -23,7 +22,10 @@ import {
   createTemplateCatalogWave3bTemplates,
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../core/src/template-execution-harness-v1.mjs";
-import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
+import {
+  TEMPLATE_SUMMARY_FIELDS,
+  createDiscoveryCatalog,
+} from "./discovery-menu-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -207,6 +209,26 @@ export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
 ]);
 
+const LIVE_TEMPLATE_GROUPS = Object.freeze([
+  ["wave0", CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS],
+  ["wave1a", CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS],
+  ["read_b", CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS],
+  ["first_real_a1", CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS],
+  ["first_real_a2", CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS],
+  ["first_real_a3", CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS],
+  ["safe_write_a", CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS],
+  ["e3_media_route", CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS],
+  ["e4_item_route", CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS],
+  ["e5_r1_routing_read", CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS],
+  ["e2_fx_l1_read", CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS],
+  ["e2_fx_b1_route", CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS],
+  ["e5_routing_automation", CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS],
+]);
+
+const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
+  LIVE_TEMPLATE_GROUPS.flatMap(([, ids]) => ids),
+);
+
 export const CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS = deepFreeze(
   Object.values(TEMPLATE_CATALOG_SEED_TEMPLATE_IDS).filter((id) => !ACCEPTED_TEMPLATE_ID_SET.has(id)),
 );
@@ -305,16 +327,22 @@ export function createAcceptedOfficialTemplateCatalog() {
 }
 
 export function createAcceptedOfficialTemplateDiscovery() {
-  return createTemplateCatalogDiscovery(createAcceptedOfficialTemplateCatalog(), createDiscoveryCatalog);
+  const catalog = createAcceptedOfficialTemplateCatalog();
+  const discovery = createDiscoveryCatalog({
+    templates: runtimeDiscoveryTemplates(catalog, normalizeLiveRuntimeOptions()),
+  });
+  return runtimeTemplateDiscoveryFacade(discovery);
 }
 
 export function createCallTemplateRuntime(options = {}) {
   const catalog = createAcceptedOfficialTemplateCatalog();
-  const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
   const retainedEvidence = [];
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const live = normalizeLiveRuntimeOptions(options.live);
+  const discovery = createDiscoveryCatalog({
+    templates: runtimeDiscoveryTemplates(catalog, live),
+  });
 
   async function call_template(request = {}) {
     let id = null;
@@ -350,9 +378,7 @@ export function createCallTemplateRuntime(options = {}) {
     contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
     accepted_catalog: acceptedCatalogSummary(catalog),
     live_gate: live.summary,
-    list_templates(request = {}) {
-      return discovery.list_templates(request);
-    },
+    list_templates: runtimeTemplateDiscoveryFacade(discovery).list_templates,
     async call_template(request = {}) {
       return call_template(request);
     },
@@ -675,6 +701,66 @@ function acceptedCatalogSummary(catalog) {
     ...CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
     size: catalog.size,
   });
+}
+
+function runtimeDiscoveryTemplates(catalog, live) {
+  return catalog.list().map((descriptor) => {
+    const allowedGroup = liveAllowedGroupForTemplateId(descriptor.id);
+    const liveRunnableNow =
+      Boolean(live.opted_in && live.enabled && live.allowedTemplateIdSet.has(descriptor.id));
+    return deepFreeze({
+      ...descriptor,
+      kind: "template",
+      exists_in_catalog: true,
+      live_runnable_now: liveRunnableNow,
+      evidence_level: acceptedTemplateEvidenceLevel(descriptor.id),
+      support_state: "supported",
+      known_blocker: liveRunnableNow ? null : "live_executor_not_configured_or_not_in_allowed_group",
+      allowed_live_group: allowedGroup,
+    });
+  });
+}
+
+function runtimeTemplateDiscoveryFacade(discovery) {
+  return Object.freeze({
+    list_templates(request = {}) {
+      return discovery.list_templates(runtimeCapabilityTruthRequest(request));
+    },
+  });
+}
+
+function runtimeCapabilityTruthRequest(request) {
+  if (!isPlainObject(request)) return request;
+  const fields = Array.isArray(request.fields) ? request.fields : null;
+  const ids = Array.isArray(request.ids) ? request.ids : [];
+
+  if (fields === null) {
+    return {
+      ...request,
+      fields: [...TEMPLATE_SUMMARY_FIELDS, "capability_truth"],
+    };
+  }
+
+  if (ids.length > 0 && !fields.includes("capability_truth") && !fields.includes("capabilityTruth")) {
+    return {
+      ...request,
+      fields: [...fields, "capability_truth"],
+    };
+  }
+
+  return request;
+}
+
+function acceptedTemplateEvidenceLevel(id) {
+  if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(id)) return "live_smoked";
+  return "runtime_bound_static_fake";
+}
+
+function liveAllowedGroupForTemplateId(id) {
+  for (const [group, ids] of LIVE_TEMPLATE_GROUPS) {
+    if (ids.includes(id)) return group;
+  }
+  return null;
 }
 
 function looksLikeRawExecutionId(id) {

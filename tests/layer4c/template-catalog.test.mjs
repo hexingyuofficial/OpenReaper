@@ -197,8 +197,11 @@ describe("Layer 4C template catalog and smoke gate", () => {
     assert.equal("total" in menu.page, false);
     const payload = JSON.stringify(menu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      if (["refs", "artifacts"].includes(field)) continue;
       assert.doesNotMatch(payload, new RegExp(field));
     }
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
   });
 
   it("loads the Wave 3B core and system descriptors through the shared fixture", () => {
@@ -232,8 +235,11 @@ describe("Layer 4C template catalog and smoke gate", () => {
     assert.deepEqual(new Set(menu.items.map((item) => item.pack)), new Set(["core", "system"]));
     const payload = JSON.stringify(menu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      if (["refs", "artifacts"].includes(field)) continue;
       assert.doesNotMatch(payload, new RegExp(field));
     }
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
   });
 
   it("loads the official Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 catalog without duplicate ids", () => {
@@ -415,8 +421,11 @@ describe("Layer 4C template catalog and smoke gate", () => {
 
     const payload = JSON.stringify(responseA);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      if (["refs", "artifacts"].includes(field)) continue;
       assert.doesNotMatch(payload, new RegExp(field));
     }
+    assert.equal(responseA.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(responseA.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
   });
 
   it("expands exact ids with Layer 1.5 field selection only", () => {

@@ -223,9 +223,56 @@ describe("Layer 1.5 discovery/menu contract", () => {
       evidence: "lifecycle:draft",
     });
 
-    const payload = JSON.stringify({ templateMenu, recipeMenu });
+    const truthMenu = listTemplates(
+      {
+        fields: ["title", "capabilityTruth"],
+      },
+      [
+        template({
+          id: "template.render.freeze",
+          title: "Freeze render",
+          summary: "Prepare a bounded render operation.",
+          pack: "render",
+          lifecycle: "experimental",
+          risk: "write",
+          entity_kind: "project",
+          tags: ["render", "delivery", "artifact"],
+        }),
+      ],
+    );
+
+    assert.deepEqual(Object.keys(truthMenu.items[0]), [
+      "id",
+      "title",
+      "capability_truth",
+    ]);
+    assert.deepEqual(
+      Object.keys(truthMenu.items[0].capability_truth),
+      [
+        "id",
+        "kind",
+        "domain",
+        "route_group",
+        "exists_in_catalog",
+        "live_runnable_now",
+        "evidence_level",
+        "support_state",
+        "known_blocker",
+        "requires_refs",
+        "required_ref_kinds",
+        "allowed_live_group",
+      ],
+    );
+    assert.equal(truthMenu.items[0].capability_truth.live_runnable_now, false);
+    assert.equal(
+      truthMenu.items[0].capability_truth.known_blocker,
+      "live_executor_not_configured_or_not_in_allowed_group",
+    );
+
+    const payload = JSON.stringify({ templateMenu, recipeMenu, truthMenu });
     assert.doesNotMatch(payload, /inputSchema|outputSchema|examples|expectedDelta/);
     assert.doesNotMatch(payload, /steps|assertions|recovery/);
+    assert.doesNotMatch(payload, /"refs"/);
   });
 
   it("uses a stable cursor pagination envelope", () => {
