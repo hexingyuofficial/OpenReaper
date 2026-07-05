@@ -5,13 +5,14 @@ local function read_take_event_counts(request)
   if not take then
     return nil, failure
   end
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local count_ok = ok_count and count_retval ~= false
   local take_ref = READ_B_MIDI.take_ref_string(take)
   return {
     take_ref = take_ref,
-    note_count = ok_count and first_number(note_count) or 0,
-    cc_count = ok_count and first_number(cc_count) or 0,
-    text_sysex_count = ok_count and first_number(text_sysex_count) or 0,
+    note_count = count_ok and first_number(note_count) or 0,
+    cc_count = count_ok and first_number(cc_count) or 0,
+    text_sysex_count = count_ok and first_number(text_sysex_count) or 0,
     take_hash = take_ref .. ":" .. tostring(note_count or 0) .. ":" .. tostring(cc_count or 0) .. ":" .. tostring(text_sysex_count or 0),
   }
 end

@@ -5,8 +5,8 @@ local function list_take_cc_events(request)
   if not take then
     return nil, failure
   end
-  local ok_count, _, cc_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(cc_count) or 0
+  local ok_count, count_retval, _, cc_count = call_reaper("MIDI_CountEvts", take)
+  local total = (ok_count and count_retval ~= false) and first_number(cc_count) or 0
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local controller = READ_B_MIDI.integer_value(request.params.controller)
   local events = json_array({})

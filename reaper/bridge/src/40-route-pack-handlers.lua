@@ -630,7 +630,8 @@ end
 
 local function midi_take_summary(take)
   local item = take_item(take)
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local count_ok = ok_count and count_retval ~= false
   local start_ppq = 0
   local end_ppq = 0
   if item then
@@ -644,7 +645,7 @@ local function midi_take_summary(take)
   return {
     take_ref = take_ref_string(take),
     item_ref = item and item_ref_string(item) or JSON_NULL,
-    event_count = ok_count and ((note_count or 0) + (cc_count or 0) + (text_sysex_count or 0)) or 0,
+    event_count = count_ok and ((first_number(note_count) or 0) + (first_number(cc_count) or 0) + (first_number(text_sysex_count) or 0)) or 0,
     ppq_start = start_ppq,
     ppq_end = end_ppq,
   }

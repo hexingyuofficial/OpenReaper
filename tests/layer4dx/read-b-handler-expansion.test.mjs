@@ -266,6 +266,11 @@ describe("Read-B live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /MIDI_GetNote/);
     assert.match(BRIDGE_SOURCE, /MIDI_GetCC/);
     assert.match(BRIDGE_SOURCE, /MIDI_GetTextSysexEvt/);
+    assert.match(BRIDGE_SOURCE, /local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper\("MIDI_CountEvts", take\)/);
+    assert.match(BRIDGE_SOURCE, /local ok_count, count_retval, note_count = call_reaper\("MIDI_CountEvts", take\)/);
+    assert.match(BRIDGE_SOURCE, /local ok_count, count_retval, _, cc_count = call_reaper\("MIDI_CountEvts", take\)/);
+    assert.match(BRIDGE_SOURCE, /local ok_count, count_retval, _, _, text_sysex_count = call_reaper\("MIDI_CountEvts", take\)/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /local ok_count, note_count(?:,|\\s*=) call_reaper\("MIDI_CountEvts"/);
     assert.match(BRIDGE_SOURCE, /PCM_Source_CreateFromFile/);
     assert.match(BRIDGE_SOURCE, /GetMediaItemTake_Source/);
     assert.match(BRIDGE_SOURCE, /read_project_media_files/);

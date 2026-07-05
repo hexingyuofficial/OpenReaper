@@ -18,8 +18,8 @@ local function list_take_text_sysex_events(request)
   if not take then
     return nil, failure
   end
-  local ok_count, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(text_sysex_count) or 0
+  local ok_count, count_retval, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local total = (ok_count and count_retval ~= false) and first_number(text_sysex_count) or 0
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local requested_kind = is_string(request.params.event_kind) and request.params.event_kind or "any"
   local events = json_array({})

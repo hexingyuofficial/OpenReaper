@@ -3705,7 +3705,8 @@ end
 
 function READ_B_MIDI.midi_take_summary(take)
   local item = READ_B_MIDI.take_item(take)
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local count_ok = ok_count and count_retval ~= false
   local start_ppq = 0
   local end_ppq = 0
   if item then
@@ -3719,7 +3720,7 @@ function READ_B_MIDI.midi_take_summary(take)
   return {
     take_ref = READ_B_MIDI.take_ref_string(take),
     item_ref = item and READ_B_MIDI.item_ref_string(item) or JSON_NULL,
-    event_count = ok_count and ((note_count or 0) + (cc_count or 0) + (text_sysex_count or 0)) or 0,
+    event_count = count_ok and ((first_number(note_count) or 0) + (first_number(cc_count) or 0) + (first_number(text_sysex_count) or 0)) or 0,
     ppq_start = start_ppq,
     ppq_end = end_ppq,
   }
@@ -3748,13 +3749,14 @@ local function read_take_event_counts(request)
   if not take then
     return nil, failure
   end
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local count_ok = ok_count and count_retval ~= false
   local take_ref = READ_B_MIDI.take_ref_string(take)
   return {
     take_ref = take_ref,
-    note_count = ok_count and first_number(note_count) or 0,
-    cc_count = ok_count and first_number(cc_count) or 0,
-    text_sysex_count = ok_count and first_number(text_sysex_count) or 0,
+    note_count = count_ok and first_number(note_count) or 0,
+    cc_count = count_ok and first_number(cc_count) or 0,
+    text_sysex_count = count_ok and first_number(text_sysex_count) or 0,
     take_hash = take_ref .. ":" .. tostring(note_count or 0) .. ":" .. tostring(cc_count or 0) .. ":" .. tostring(text_sysex_count or 0),
   }
 end
@@ -3774,8 +3776,8 @@ local function list_take_notes(request)
   if not take then
     return nil, failure
   end
-  local ok_count, note_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(note_count) or 0
+  local ok_count, count_retval, note_count = call_reaper("MIDI_CountEvts", take)
+  local total = (ok_count and count_retval ~= false) and first_number(note_count) or 0
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local notes = json_array({})
   for index = 0, math.max(total - 1, -1) do
@@ -3827,8 +3829,8 @@ local function list_take_cc_events(request)
   if not take then
     return nil, failure
   end
-  local ok_count, _, cc_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(cc_count) or 0
+  local ok_count, count_retval, _, cc_count = call_reaper("MIDI_CountEvts", take)
+  local total = (ok_count and count_retval ~= false) and first_number(cc_count) or 0
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local controller = READ_B_MIDI.integer_value(request.params.controller)
   local events = json_array({})
@@ -3891,8 +3893,8 @@ local function list_take_text_sysex_events(request)
   if not take then
     return nil, failure
   end
-  local ok_count, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
-  local total = ok_count and first_number(text_sysex_count) or 0
+  local ok_count, count_retval, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local total = (ok_count and count_retval ~= false) and first_number(text_sysex_count) or 0
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local requested_kind = is_string(request.params.event_kind) and request.params.event_kind or "any"
   local events = json_array({})
@@ -13574,7 +13576,8 @@ end
 
 local function midi_take_summary(take)
   local item = take_item(take)
-  local ok_count, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local count_ok = ok_count and count_retval ~= false
   local start_ppq = 0
   local end_ppq = 0
   if item then
@@ -13588,7 +13591,7 @@ local function midi_take_summary(take)
   return {
     take_ref = take_ref_string(take),
     item_ref = item and item_ref_string(item) or JSON_NULL,
-    event_count = ok_count and ((note_count or 0) + (cc_count or 0) + (text_sysex_count or 0)) or 0,
+    event_count = count_ok and ((first_number(note_count) or 0) + (first_number(cc_count) or 0) + (first_number(text_sysex_count) or 0)) or 0,
     ppq_start = start_ppq,
     ppq_end = end_ppq,
   }
