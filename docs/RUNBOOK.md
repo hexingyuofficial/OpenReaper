@@ -5,6 +5,9 @@ path. It is intentionally conservative. If a setup does not match the declared
 support row, stop and record a typed blocker instead of improvising a raw
 bridge, Lua, action, or shell workaround.
 
+This runbook does not cover Alpha2 static/fake-only closures unless a later
+live evidence window promotes them.
+
 ## Supported V1 Live Path
 
 Current supported recipe-level path:

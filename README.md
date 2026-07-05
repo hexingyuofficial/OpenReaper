@@ -37,6 +37,13 @@ This proves local clean-source portability for the R1 cleanup report path. It
 does not prove remote-clone/new-machine portability, and it does not promote
 the other draft recipes to live-supported status.
 
+## Alpha2 Static Closure
+
+Alpha2 expanded the accepted static catalog and closed the practical-alpha
+missing-capability table, but those static/fake closures are not live support
+promotions. Current live support remains evidence-bound to the rows declared in
+the support matrix.
+
 ## Tool Surface
 
 OpenReaper exposes exactly five agent-facing MCP tools:

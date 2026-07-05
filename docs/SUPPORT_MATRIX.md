@@ -26,8 +26,8 @@ it yet.
 |---|---|---|---|
 | MCP tool surface | supported | Exactly `ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`. | Tool ABI v1. |
 | Discovery | supported | Compact menu discovery with exact-id expansion for details. | Discovery/Menu Contract v1. |
-| Template catalog | supported | 126 accepted runtime/recipe template ids. | Catalog and runtime checks. |
-| Live bridge structure | supported | Manual, non-spawning file-transport bridge with 60 registered handler rows. | Bridge handler registry/split at `57540d4`. |
+| Template catalog | supported | V1 baseline: 126 accepted runtime/recipe template ids. Current Alpha2 static catalog: 213 accepted official template ids; only reviewed rows have live evidence. | Catalog and runtime checks. |
+| Live bridge structure | supported | V1 baseline: manual, non-spawning file-transport bridge with 60 registered handler rows. Current runtime registry check reports 76 registered handler rows; live support remains evidence-bound. | Bridge handler registry/split at `57540d4`; current runtime registry check. |
 | Template live evidence | supported for reviewed rows only | Wave 0, Wave 1A read rows, Read-B, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A rows. | Old live matrix. |
 | Artifact readback | supported | Canonical artifact refs and bounded `get_state(scope:"artifact")` summary/payload reads. | Artifact State Store and R1 evidence. |
 | Recipe-level live portability | supported for R1 only | `recipe.project.cleanup_fingerprint_report` on local macOS manual bridge. | `/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001`. |
@@ -54,6 +54,11 @@ it yet.
 | `recipe.items.layer_report_from_evidence` | draft | candidate | Fixture-backed only; does not prove live role classification. |
 | `recipe.midi.track_phrase_seed` | draft | candidate | Fake-smoked only; write-risk MIDI path needs disposable-project live evidence. |
 
+Alpha2 expanded the official draft recipe packet to twelve first-atoms recipes.
+Only `recipe.project.cleanup_fingerprint_report` has the V1 recipe-level
+live/local portability claim; the others remain draft/static or fake-smoked
+unless later evidence promotes them.
+
 ## Unsupported Or Deferred In V1
 
 | Area | Status | Reason |
@@ -69,8 +74,8 @@ it yet.
 | Hardware/control-surface automation | not_v1 | No V1 evidence row. |
 | Destructive cleanup/apply/delete workflows | not_v1 | Cleanup report is read-only and not apply/delete authority. |
 | Arbitrary projects or media | unsupported_v1 | Support is bound to declared fixtures and typed blockers. |
-| All 126 templates live-tested | unsupported_v1 | 126 are accepted runtime/catalog ids; only reviewed rows have live evidence. |
-| All six Layer 7 atoms live-supported | unsupported_v1 | Only R1 has recipe-level live/local portability evidence. |
+| All accepted templates live-tested | unsupported_v1 | V1 baseline had 126 accepted runtime/catalog ids and Alpha2 has 213 accepted official template ids; only reviewed rows have live evidence. |
+| All draft recipes live-supported | unsupported_v1 | Only R1 has recipe-level live/local portability evidence. |
 
 ## Typed Blocker Vocabulary
 

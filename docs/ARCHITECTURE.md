@@ -67,8 +67,11 @@ commands, arbitrary bridge requests, or new template descriptors.
 ### Template Catalog
 
 Templates are concrete reviewed capabilities. The accepted V1 runtime/recipe
-catalog contains 126 template ids. A scoped set of 60 bridge rows has reviewed
-live evidence and registered handler modules.
+catalog baseline contained 126 template ids. Alpha2 expanded the static
+accepted official catalog to 213 template ids; that static expansion does not
+promote every id to live support. A scoped V1 set of 60 bridge rows had reviewed
+live evidence and registered handler modules; current runtime registry checks
+report 76 registered handler rows, still under evidence-bound live support.
 
 Template expansion is maintainer/reviewed developer-mode work. Community
 workflow extension starts at recipes.
@@ -161,10 +164,10 @@ Template expansion is a separate reviewed maintainer path:
 |---|---|
 | Five MCP tools are frozen. | Tool ABI v1. |
 | Discovery is compact menu-style. | Discovery/Menu Contract v1. |
-| Accepted runtime/recipe catalog has 126 template ids. | OpenReaper layer progress and catalog checks. |
-| 60 registered bridge rows have handler modules. | Bridge handler registry/split closeout at `57540d4`. |
+| V1 accepted runtime/recipe catalog baseline had 126 template ids; Alpha2 static catalog has 213 accepted official ids. | OpenReaper layer progress, Alpha2 closure records, and catalog checks. |
+| V1 bridge baseline had 60 registered bridge rows; current runtime registry checks report 76 registered handler rows. | Bridge handler registry/split closeout at `57540d4` and current runtime registry checks. |
 | Artifact summary/payload readback is supported. | Artifact State Store v1 and R1 evidence. |
-| Six Layer 7 atoms exist as draft/fake-smoked recipe candidates. | Official recipe checks. |
+| V1 had six Layer 7 draft/fake-smoked recipe candidates; Alpha2 has twelve first-atoms draft recipes. | Official recipe checks and Alpha2 closure records. |
 | `recipe.project.cleanup_fingerprint_report` has accepted recipe-level live and local clean-source portability evidence. | R1 evidence root `/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001`. |
 
 See [Support Matrix](SUPPORT_MATRIX.md) for support wording and unsupported
