@@ -105,7 +105,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("keeps the approved Wave 0, Wave 1A, and Read-B query operations exact", () => {
+  it("keeps the approved Wave 0, Wave 1A, Read-B, and E3 media query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
@@ -121,6 +121,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "items.resolve_item_ref",
       "last_result.read",
       "media.file.probe",
+      "media.folder_media.list",
       "media.project_files.read",
       "media.take_source.read",
       "midi.list_take_cc_events",

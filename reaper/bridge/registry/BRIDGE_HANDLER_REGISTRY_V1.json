@@ -472,6 +472,73 @@
       ]
     },
     {
+      "template_id": "template.media.list_folder_media_files",
+      "operation": {
+        "family": "query_state",
+        "name": "media.folder_media.list"
+      },
+      "pack": "media",
+      "risk": "read",
+      "route": "e3-media-live-handlers",
+      "handler_file": "media/e3_media_route.lua",
+      "handler_export": "list_folder_media_files",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e3-media-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.import_file_to_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "media.import_file_to_track",
+      "pack": "media",
+      "risk": "write",
+      "route": "e3-media-live-handlers",
+      "handler_file": "media/e3_media_route.lua",
+      "handler_export": "import_file_to_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e3-media-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.import_file_section_to_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "media.import_file_section_to_track",
+      "pack": "media",
+      "risk": "write",
+      "route": "e3-media-live-handlers",
+      "handler_file": "media/e3_media_route.lua",
+      "handler_export": "import_file_section_to_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e3-media-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.media.relink_take_source",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "media.relink_take_source",
+      "pack": "media",
+      "risk": "write",
+      "route": "e3-media-live-handlers",
+      "handler_file": "media/e3_media_route.lua",
+      "handler_export": "relink_take_source",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e3-media-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

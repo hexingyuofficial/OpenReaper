@@ -276,7 +276,7 @@ describe("Read-B live handler expansion", () => {
       ["template.execute"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /import_file_to_track|relink_take_source/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /relink_project_source_path|import_folder_as_items|render_source_section/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,

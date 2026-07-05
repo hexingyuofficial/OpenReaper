@@ -794,19 +794,29 @@ local SAFE_WRITE_A_HANDLERS = {
   ["midi.insert_text_sysex_events"] = safe_write_insert_text_sysex_events,
 }
 
-local function dispatch_safe_write_a(request)
+local E3_MEDIA_ROUTE_HANDLERS = {
+  ["media.import_file_to_track"] = import_file_to_track,
+  ["media.import_file_section_to_track"] = import_file_section_to_track,
+  ["media.relink_take_source"] = relink_take_source,
+}
+
+local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
-  if not handler then
-    return handler_error("OPERATION_NOT_FOUND", "Safe-Write-A supports only the approved 24 capabilities.", {
+  if handler then
+    return handler(request)
+  end
+  handler = E3_MEDIA_ROUTE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
     })
-  end
-  return handler(request)
 end
 
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
-    handler = dispatch_safe_write_a,
+    handler = dispatch_template_execute,
   },
   ["query_state:project.read_summary"] = {
     pack = "project",
@@ -923,6 +933,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:media.project_files.read"] = {
     pack = "media",
     handler = read_project_media_files,
+  },
+  ["query_state:media.folder_media.list"] = {
+    pack = "media",
+    handler = list_folder_media_files,
   },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
