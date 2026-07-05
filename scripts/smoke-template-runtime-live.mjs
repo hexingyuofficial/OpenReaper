@@ -5,6 +5,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
@@ -50,6 +51,7 @@ const FIRST_REAL_A1_FLAG = "--first-real-a1";
 const FIRST_REAL_A2_FLAG = "--first-real-a2-render";
 const FIRST_REAL_A3_FLAG = "--first-real-a3-layer-report";
 const SAFE_WRITE_A_FLAG = "--safe-write-a";
+const E2_FX_L1_READ_ROUTE_FLAG = "--fx-read";
 const E2_FX_B1_ROUTE_FLAG = "--fx-b1";
 const E5_R1_ROUTING_READ_ROUTE_FLAG = "--routing-read";
 const E5_ROUTING_AUTOMATION_ROUTE_FLAG = "--routing-automation";
@@ -80,6 +82,7 @@ const FIRST_REAL_A3_DEFAULT_LAYER_EVIDENCE_REF =
   "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
 const READ_B_BATCH = "read-b-live-handlers";
 const SAFE_WRITE_A_BATCH = "Safe-Write-A";
+const E2_FX_L1_READ_ROUTE_BATCH = "E2 FX-L1 Read Route";
 const E2_FX_B1_ROUTE_BATCH = "E2 FX-B1 Route";
 const E5_R1_ROUTING_READ_ROUTE_BATCH = "E5-R1 Routing Read Route";
 const E5_ROUTING_AUTOMATION_ROUTE_BATCH = "E5 Routing/Automation Route";
@@ -103,6 +106,7 @@ const READ_B_MIDI_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_MIDI_TAKE_REF";
 const READ_B_AUDIO_TAKE_REF_ENV = "OPENREAPER_LIVE_SMOKE_AUDIO_TAKE_REF";
 const READ_B_MEDIA_PATH_ENV = "OPENREAPER_LIVE_SMOKE_MEDIA_PATH";
 const E3_MEDIA_ROUTE_OPT_IN_ENV = "OPENREAPER_E3_MEDIA_ROUTE_LIVE_SMOKE";
+const E2_FX_L1_READ_ROUTE_OPT_IN_ENV = "OPENREAPER_E2_FX_L1_READ_LIVE_SMOKE";
 const E2_FX_B1_ROUTE_OPT_IN_ENV = "OPENREAPER_E2_FX_B1_LIVE_SMOKE";
 const E2_FX_B1_TRACK_REF_ENV = "OPENREAPER_E2_FX_TRACK_REF";
 const E2_FX_B1_TAKE_REF_ENV = "OPENREAPER_E2_FX_TAKE_REF";
@@ -380,6 +384,12 @@ const E2_FX_B1_ROUTE_SPEC_BY_CAPABILITY = new Map(
     .filter((spec) => spec.operation === "run_command:template.execute")
     .map((spec) => [spec.capability, spec]),
 );
+const E2_FX_L1_READ_TEMPLATE_SPECS = Object.freeze(
+  E2_FX_B1_ROUTE_TEMPLATE_SPECS.filter((spec) => CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS.includes(spec.id)),
+);
+const E2_FX_L1_READ_SPEC_BY_OPERATION = new Map(
+  E2_FX_L1_READ_TEMPLATE_SPECS.map((spec) => [spec.operation, spec]),
+);
 
 const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.routing.read_track_routing", "query_state:routing.track.read", "routing", "read", "routing.track.read", "track", "routing_read"),
@@ -589,6 +599,8 @@ const baseReport = {
 if (route.fake) {
   const blocker = route.name === "safe-write-a"
     ? null
+    : route.name === "e2-fx-l1-read-route"
+    ? null
     : route.name === "e2-fx-b1-route"
     ? null
     : route.name === "e5-r1-routing-read-route"
@@ -619,6 +631,8 @@ if (route.fake) {
     config: {
       contract: route.name === "safe-write-a"
         ? "safe_write_a.fake_executor.v1"
+        : route.name === "e2-fx-l1-read-route"
+        ? "e2_fx_l1_read_route.fake_executor.v1"
         : route.name === "e2-fx-b1-route"
         ? "e2_fx_b1_route.fake_executor.v1"
         : route.name === "e5-r1-routing-read-route"
@@ -643,6 +657,9 @@ if (route.fake) {
       }
       if (route.name === "e2-fx-b1-route") {
         return dispatchFakeE2FxB1Route(request);
+      }
+      if (route.name === "e2-fx-l1-read-route") {
+        return dispatchFakeE2FxL1ReadRoute(request);
       }
       if (route.name === "e5-r1-routing-read-route") {
         return dispatchFakeE5RoutingReadRoute(request);
@@ -674,6 +691,12 @@ if (route.fake) {
   const contextBase = liveContextBase();
   const fakeReport = route.name === "safe-write-a"
     ? await runSafeWriteASmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
+    : route.name === "e2-fx-l1-read-route"
+    ? await runE2FxL1ReadRouteSmoke({
         liveRuntime: fakeRuntime,
         fixtureInputs,
         contextBase,
@@ -735,7 +758,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: ["safe-write-a", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -807,6 +830,12 @@ const routeReport = route.name === "first-real-a2-render"
       fixtureInputs,
       contextBase,
     })
+  : route.name === "e2-fx-l1-read-route"
+  ? await runE2FxL1ReadRouteSmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
   : route.name === "e2-fx-b1-route"
   ? await runE2FxB1RouteSmoke({
       liveRuntime,
@@ -857,7 +886,7 @@ console.log(JSON.stringify({
   skipped: false,
   live_executor: executorConfig.config,
   context: contextSummary(contextBase),
-  evidence: ["safe-write-a", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
+  evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
   live_pass_claimed: false,
 }));
 process.exit(routeReport.ok ? 0 : 2);
@@ -945,11 +974,31 @@ function selectRoute(argv, env) {
   }
 
   const e3MediaRouteSelected = argv.includes(E3_MEDIA_ROUTE_FLAG) || env[E3_MEDIA_ROUTE_OPT_IN_ENV] === "1";
+  const e2FxL1ReadRouteSelected =
+    argv.includes(E2_FX_L1_READ_ROUTE_FLAG) || env[E2_FX_L1_READ_ROUTE_OPT_IN_ENV] === "1";
   const e2FxB1RouteSelected = argv.includes(E2_FX_B1_ROUTE_FLAG) || env[E2_FX_B1_ROUTE_OPT_IN_ENV] === "1";
   const e5R1RoutingReadRouteSelected =
     argv.includes(E5_R1_ROUTING_READ_ROUTE_FLAG) || env[E5_R1_ROUTING_READ_OPT_IN_ENV] === "1";
   const e5RoutingAutomationRouteSelected =
     argv.includes(E5_ROUTING_AUTOMATION_ROUTE_FLAG) || env[E5_ROUTING_AUTOMATION_OPT_IN_ENV] === "1";
+  if (e2FxL1ReadRouteSelected) {
+    return {
+      name: "e2-fx-l1-read-route",
+      wave: E2_FX_L1_READ_ROUTE_BATCH,
+      batch: E2_FX_L1_READ_ROUTE_BATCH,
+      routeFlag: E2_FX_L1_READ_ROUTE_FLAG,
+      optInEnv: E2_FX_L1_READ_ROUTE_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+      operations: E2_FX_L1_READ_TEMPLATE_SPECS.map((spec) => spec.operation),
+      capabilities: E2_FX_L1_READ_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: e2FxB1RouteFixtureInputs,
+      configuredBlocker: e2FxL1ReadRouteConfiguredBlocker,
+      passReason: "e2_fx_l1_read_fake_static_readback_passed",
+      failReason: "e2_fx_l1_read_fake_static_readback_failed",
+    };
+  }
+
   if (e2FxB1RouteSelected) {
     return {
       name: "e2-fx-b1-route",
@@ -1482,6 +1531,81 @@ async function runE2FxB1RouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsFo
       "fx_preset_fixture_missing",
       "video_processor_fixture_missing",
     ],
+    live_support_status: "not_claimed",
+    executions,
+  };
+}
+
+async function runE2FxL1ReadRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of E2_FX_L1_READ_TEMPLATE_SPECS.entries()) {
+    const refs = e2FxB1RouteRefs(spec, fixtureInputsForRun);
+    if (refs.blocker) {
+      executions.push({
+        id: spec.id,
+        ok: false,
+        skipped: true,
+        reason: refs.blocker,
+        capability: spec.capability,
+        operation: spec.operation,
+        phase: spec.phase,
+      });
+      continue;
+    }
+
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: e2FxB1RouteInput(spec, fixtureInputsForRun),
+      refs: refs.value,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.phase = spec.phase;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && spec.id === "template.fx.resolve_fx_ref" && produced.fx) {
+      outputRefs.resolved_fx_ref = produced.fx.ref;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "e2_fx_l1_read_fake_static_readback_passed" : firstBlocker(executions) ?? "e2_fx_l1_read_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+    expected_capabilities: E2_FX_L1_READ_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    preflight_blockers_covered: [
+      "fx_track_ref_missing",
+      "fx_take_ref_missing",
+      "fx_ref_missing",
+      "fx_parameter_invalid",
+    ],
+    write_fx_status: "held",
+    preset_status: "held",
+    video_processor_status: "held",
     live_support_status: "not_claimed",
     executions,
   };
@@ -2865,6 +2989,48 @@ async function e2FxB1RouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun
       blocker: "fx_parameter_invalid",
       message: "E2 FX-B1 normalized parameter value must be between 0 and 1.",
       details: { param_value_env: E2_FX_B1_PARAM_VALUE_ENV },
+    };
+  }
+
+  return null;
+}
+
+async function e2FxL1ReadRouteConfiguredBlocker({ fixtureInputs: fixtureInputsForRun, executorConfig }) {
+  const transportBlocker = await readOnlyConfiguredBlocker({ executorConfig });
+  if (transportBlocker) return transportBlocker;
+
+  for (const [label, configured, value, envName, normalizer] of [
+    ["fx_track_ref", fixtureInputsForRun.configured?.track_ref, fixtureInputsForRun.track_ref, E2_FX_B1_TRACK_REF_ENV, normalizeTrackFixtureRef],
+    ["fx_take_ref", fixtureInputsForRun.configured?.take_ref, fixtureInputsForRun.take_ref, E2_FX_B1_TAKE_REF_ENV, normalizeTakeFixtureRef],
+    ["fx_ref", fixtureInputsForRun.configured?.fx_ref, fixtureInputsForRun.fx_ref, E2_FX_B1_FX_REF_ENV, normalizeFxFixtureRef],
+  ]) {
+    if (!configured) {
+      return {
+        reason: `${label}_missing`,
+        blocker: `${label}_missing`,
+        message: `E2 FX-L1 read live smoke requires an explicit ${label} fixture.`,
+        details: { [`${label}_env`]: envName },
+      };
+    }
+    if (!normalizer(value)) {
+      return {
+        reason: `${label}_invalid`,
+        blocker: `${label}_invalid`,
+        message: `E2 FX-L1 read ${label} fixture is not a supported ref.`,
+        details: {
+          [`${label}_env`]: envName,
+          value: boundedString(value, 160),
+        },
+      };
+    }
+  }
+
+  if (!Number.isInteger(fixtureInputsForRun.param_index) || fixtureInputsForRun.param_index < 0) {
+    return {
+      reason: "fx_parameter_invalid",
+      blocker: "fx_parameter_invalid",
+      message: "E2 FX-L1 read parameter index must be a non-negative integer.",
+      details: { param_index_env: E2_FX_B1_PARAM_INDEX_ENV },
     };
   }
 
@@ -4805,6 +4971,57 @@ async function dispatchFakeE2FxB1Route(request) {
     },
     refs: fakeE2FxB1RouteRefs(request, spec),
     artifacts: fakeE2FxB1RouteArtifacts(request, spec),
+  });
+}
+
+async function dispatchFakeE2FxL1ReadRoute(request) {
+  const key = `${request?.operation?.family}:${request?.operation?.name}`;
+  const spec = E2_FX_L1_READ_SPEC_BY_OPERATION.get(key);
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake E2 FX-L1 read executor accepts only the approved FX read route operations.", {
+      operation: boundedString(key, 160),
+    });
+  }
+  if (request?.pack?.id !== spec.pack || request?.pack?.risk !== "read") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-L1 read pack/risk mismatch.", {
+      expected_pack: spec.pack,
+      expected_risk: "read",
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-L1 read route forbids artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  if (request?.undo?.mode !== "none") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "E2 FX-L1 read rows require undo.mode none.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: "read",
+      phase: spec.phase,
+      readback_status: "passed",
+      typed_blockers: [
+        "fx_track_ref_missing",
+        "fx_take_ref_missing",
+        "fx_ref_missing",
+        "fx_parameter_invalid",
+      ],
+      artifacts_allowed: false,
+      write_fx_status: "held",
+      preset_status: "held",
+      video_processor_status: "held",
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: fakeE2FxB1RouteRefs(request, spec),
   });
 }
 

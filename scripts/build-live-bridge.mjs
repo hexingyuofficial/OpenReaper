@@ -12,6 +12,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
@@ -82,6 +83,10 @@ export const registryRoutes = Object.freeze({
   "e5-r1-routing-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"]),
+  }),
+  "e2-fx-l1-read-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"]),
   }),
   "first-real-a1": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,

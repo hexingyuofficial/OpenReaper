@@ -960,6 +960,30 @@ local ALLOWED_OPERATIONS = {
     pack = "routing",
     handler = read_project_routing_graph,
   },
+  ["query_state:fx.resolve_ref"] = {
+    pack = "fx",
+    handler = resolve_fx_ref,
+  },
+  ["query_state:fx.list_track_chain"] = {
+    pack = "fx",
+    handler = list_track_fx_chain,
+  },
+  ["query_state:fx.list_take_chain"] = {
+    pack = "fx",
+    handler = list_take_fx_chain,
+  },
+  ["query_state:fx.read_summary"] = {
+    pack = "fx",
+    handler = read_fx_summary,
+  },
+  ["query_state:fx.list_parameters"] = {
+    pack = "fx",
+    handler = list_fx_parameters,
+  },
+  ["query_state:fx.read_parameter"] = {
+    pack = "fx",
+    handler = read_fx_parameter,
+  },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
     handler = detect_loop_candidates,

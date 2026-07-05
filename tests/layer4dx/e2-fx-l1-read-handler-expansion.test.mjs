@@ -1,0 +1,290 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { mkdir, mkdtemp, readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+import {
+  FakeFoundationBridge,
+  createObjectRef,
+} from "../../packages/core/src/foundation-bridge-v1.mjs";
+import {
+  CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+  createCallTemplateRuntime,
+} from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  LIVE_BRIDGE_EXECUTOR_ENV,
+} from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
+
+const ROOT = new URL("../..", import.meta.url);
+const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
+const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const E2_FX_L1_FLAG = "--fx-read";
+const E2_FX_L1_OPT_IN_ENV = "OPENREAPER_E2_FX_L1_READ_LIVE_SMOKE";
+const E2_FX_TRACK_REF_ENV = "OPENREAPER_E2_FX_TRACK_REF";
+const E2_FX_TAKE_REF_ENV = "OPENREAPER_E2_FX_TAKE_REF";
+const E2_FX_REF_ENV = "OPENREAPER_E2_FX_REF";
+const E2_FX_PARAM_INDEX_ENV = "OPENREAPER_E2_FX_PARAM_INDEX";
+const E2_FX_L1_OPERATION_KEYS = Object.freeze([
+  "query_state:fx.resolve_ref",
+  "query_state:fx.list_track_chain",
+  "query_state:fx.list_take_chain",
+  "query_state:fx.read_summary",
+  "query_state:fx.list_parameters",
+  "query_state:fx.read_parameter",
+]);
+
+describe("E2-FX-L1 FX read live handler expansion", () => {
+  it("adds a separate runtime allowlist for exactly the six E2-FX-L1 read template ids", async () => {
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS, [
+      "template.fx.resolve_fx_ref",
+      "template.fx.list_track_fx_chain",
+      "template.fx.list_take_fx_chain",
+      "template.fx.read_fx_summary",
+      "template.fx.list_fx_parameters",
+      "template.fx.read_fx_parameter",
+    ]);
+
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+        opt_in_env: E2_FX_L1_OPT_IN_ENV,
+        opt_in_flag: "--live",
+      },
+      evidenceLimit: 12,
+    });
+
+    for (const [index, id] of CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS.entries()) {
+      const response = await runtime.call_template({
+        id,
+        input: e2FxL1Input(id),
+        refs: e2FxL1Refs(id),
+        context: context({ request_sequence: index + 1 }),
+      });
+      assert.equal(response.ok, true, id);
+    }
+
+    assert.deepEqual(
+      bridge.seen.map((request) => `${request.operation.family}:${request.operation.name}`),
+      E2_FX_L1_OPERATION_KEYS,
+    );
+    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
+      "fx.resolve_ref",
+      "fx.list_track_chain",
+      "fx.list_take_chain",
+      "fx.read_summary",
+      "fx.list_parameters",
+      "fx.read_parameter",
+    ]);
+    for (const request of bridge.seen) {
+      assert.equal(request.pack.id, "fx");
+      assert.equal(request.pack.risk, "read");
+      assert.equal(request.undo.mode, "none");
+      assert.equal(request.artifacts.allow, false);
+      assert.equal("lua" in request, false);
+      assert.equal("action" in request, false);
+      assert.equal("shell" in request, false);
+      assert.equal("process" in request, false);
+    }
+
+    const mixed = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: [
+          ...CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+          "template.fx.search_installed_fx",
+        ],
+      },
+    });
+    assert.deepEqual(mixed.live_gate.allowed_template_ids, []);
+  });
+
+  it("keeps the E2-FX-L1 runner default-skipped and typed for missing transport blockers", () => {
+    const skipped = runSmoke([E2_FX_L1_FLAG], {
+      [E2_FX_L1_OPT_IN_ENV]: "",
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+      [E2_FX_TRACK_REF_ENV]: "",
+      [E2_FX_TAKE_REF_ENV]: "",
+      [E2_FX_REF_ENV]: "",
+    });
+    assert.equal(skipped.ok, true);
+    assert.equal(skipped.skipped, true);
+    assert.equal(skipped.reason, "explicit_opt_in_required");
+    assert.equal(skipped.wave, "E2 FX-L1 Read Route");
+    assert.equal(skipped.spawned_reaper, false);
+    assert.deepEqual(skipped.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS);
+    assert.deepEqual(skipped.allowed_bridge_operations, E2_FX_L1_OPERATION_KEYS);
+
+    const noExecutor = runSmokeExpectingFailure([E2_FX_L1_FLAG, "--live"], {
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+    });
+    assert.equal(noExecutor.reason, "live_bridge_executor_not_configured");
+    assert.equal(noExecutor.blocker, "live_bridge_executor_not_configured");
+    assert.equal("attempted_template_ids" in noExecutor, false);
+  });
+
+  it("writes the exact E2-FX-L1 read requests to transport without starting REAPER", async () => {
+    const transportDir = await createTransportDir("openreaper-e2-fx-l1-timeout-");
+    const report = runSmokeExpectingFailure([E2_FX_L1_FLAG, "--live"], {
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
+      [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "1",
+      [E2_FX_TRACK_REF_ENV]: "track:guid:{E2-FX-L1-TRACK}",
+      [E2_FX_TAKE_REF_ENV]: "take:guid:{E2-FX-L1-TAKE}",
+      [E2_FX_REF_ENV]: "fx:track:0",
+      [E2_FX_PARAM_INDEX_ENV]: "0",
+    });
+
+    assert.equal(report.reason, "live_bridge_handshake_failed");
+    assert.equal(report.spawned_reaper, false);
+    assert.equal(report.live_pass_claimed, false);
+    assert.deepEqual(report.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS);
+    assert.deepEqual(report.allowed_bridge_operations, E2_FX_L1_OPERATION_KEYS);
+    assert.deepEqual(report.attempted_template_ids, CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS);
+
+    const requests = await readTransportRequests(transportDir);
+    assert.equal(requests.length, 6);
+    assert.deepEqual(
+      requests.map((request) => `${request.operation.family}:${request.operation.name}`),
+      E2_FX_L1_OPERATION_KEYS,
+    );
+
+    for (const request of requests) {
+      assert.equal(request.pack.id, "fx");
+      assert.equal(request.pack.risk, "read");
+      assert.equal(request.undo.mode, "none");
+      assert.equal(request.artifacts.allow, false);
+      assert.equal("lua" in request, false);
+      assert.equal("action" in request, false);
+      assert.equal("shell" in request, false);
+      assert.equal("process" in request, false);
+    }
+    assert.equal(requests[0].refs.find((ref) => ref.kind === "track").ref, "track:guid:{E2-FX-L1-TRACK}");
+    assert.equal(requests[2].refs.find((ref) => ref.kind === "take").ref, "take:guid:{E2-FX-L1-TAKE}");
+    assert.equal(requests[5].refs.find((ref) => ref.kind === "fx").ref, "fx:track:0");
+    assert.equal(requests[5].params.param_index, 0);
+  });
+
+  it("keeps the Lua bridge E2-FX-L1 read surface exact and read-only", () => {
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.resolve_ref"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.resolve_fx_ref/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_track_chain"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_track_fx_chain/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_take_chain"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_take_fx_chain/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_summary"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_summary/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_parameters"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_fx_parameters/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_parameter"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_parameter/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_GetCount/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_GetFXName/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_GetParam/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_GetCount/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_GetFXName/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_GetParam/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(fx\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
+      [
+        "fx.resolve_ref",
+        "fx.list_track_chain",
+        "fx.list_take_chain",
+        "fx.read_summary",
+        "fx.list_parameters",
+        "fx.read_parameter",
+      ],
+    );
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code|fx\.add_track|fx\.add_take|fx\.set_|fx\.reorder|fx\.search_installed/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
+  });
+});
+
+function e2FxL1Input(id) {
+  if (id === "template.fx.resolve_fx_ref") {
+    return { owner_kind: "track", slot_index: 0 };
+  }
+  if (id === "template.fx.list_track_fx_chain" || id === "template.fx.list_take_fx_chain") {
+    return { include_preset: true };
+  }
+  if (id === "template.fx.list_fx_parameters") {
+    return { limit: 16 };
+  }
+  if (id === "template.fx.read_fx_parameter") {
+    return { param_index: 0 };
+  }
+  return {};
+}
+
+function e2FxL1Refs(id) {
+  const trackRef = createObjectRef("track", { scheme: "guid", value: "{E2-FX-L1-TRACK}" }, {
+    ref: "track:guid:{E2-FX-L1-TRACK}",
+  });
+  const takeRef = createObjectRef("take", { scheme: "guid", value: "{E2-FX-L1-TAKE}" }, {
+    ref: "take:guid:{E2-FX-L1-TAKE}",
+  });
+  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
+    ref: "fx:track:0",
+  });
+  if (id === "template.fx.resolve_fx_ref" || id === "template.fx.list_track_fx_chain") {
+    return { track_ref: trackRef };
+  }
+  if (id === "template.fx.list_take_fx_chain") {
+    return { take_ref: takeRef };
+  }
+  return { fx_ref: fxRef };
+}
+
+async function createTransportDir(prefix) {
+  const transportDir = await mkdtemp(join(tmpdir(), prefix));
+  await mkdir(join(transportDir, "requests"));
+  await mkdir(join(transportDir, "results"));
+  return transportDir;
+}
+
+async function readTransportRequests(transportDir) {
+  const requestDir = join(transportDir, "requests");
+  const names = await readdir(requestDir);
+  return names
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => JSON.parse(readFileSync(join(requestDir, name), "utf8")));
+}
+
+function context(extra = {}) {
+  return {
+    session_id: "test-session",
+    request_id: "test-request",
+    expected_owner: "owner-test",
+    expected_generation: 1,
+    ...extra,
+  };
+}
+
+function runSmoke(args, env) {
+  return JSON.parse(
+    execFileSync(process.execPath, [SMOKE_SCRIPT, ...args], {
+      cwd: ROOT,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENREAPER_TEMPLATE_RUNTIME_LIVE_SMOKE: "",
+        [E2_FX_L1_OPT_IN_ENV]: "",
+        [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: "",
+        ...env,
+      },
+    }).trim(),
+  );
+}
+
+function runSmokeExpectingFailure(args, env) {
+  try {
+    return runSmoke(args, env);
+  } catch (error) {
+    assert.equal(error.status, 2);
+    const report = JSON.parse(String(error.stdout));
+    assert.equal(report.ok, false);
+    return report;
+  }
+  assert.fail("Expected E2-FX-L1 read live smoke script to exit with status 2.");
+}

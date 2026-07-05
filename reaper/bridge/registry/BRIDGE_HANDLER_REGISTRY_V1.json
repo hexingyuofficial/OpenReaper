@@ -638,6 +638,102 @@
       ]
     },
     {
+      "template_id": "template.fx.resolve_fx_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.resolve_ref"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "resolve_fx_ref",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.list_track_fx_chain",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.list_track_chain"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "list_track_fx_chain",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.list_take_fx_chain",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.list_take_chain"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "list_take_fx_chain",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.read_fx_summary",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.read_summary"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "read_fx_summary",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.list_fx_parameters",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.list_parameters"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "list_fx_parameters",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.read_fx_parameter",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.read_parameter"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "read_fx_parameter",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

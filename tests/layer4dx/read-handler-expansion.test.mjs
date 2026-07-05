@@ -41,6 +41,12 @@ const WAVE1A_OPERATION_NAMES = Object.freeze([
 const EXPECTED_LUA_OPERATIONS = Object.freeze([
   "items.read_item_summary",
   "items.resolve_item_ref",
+  "fx.list_parameters",
+  "fx.list_take_chain",
+  "fx.list_track_chain",
+  "fx.read_parameter",
+  "fx.read_summary",
+  "fx.resolve_ref",
   "last_result.read",
   "openreaper.read_status",
       "project.list_markers_regions",
@@ -203,7 +209,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /accepted_runtime_template_count = template_count/);
     assert.match(BRIDGE_SOURCE, /live_supported_template_count = live_supported_template_count/);
     assert.match(BRIDGE_SOURCE, /catalog_count_semantics = "template_count is the accepted runtime catalog count; live_supported_template_count is the current bridge handler row count\."/);
-    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 67/);
+    assert.match(BRIDGE_SOURCE, /READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = \{[\s\S]*?template_count = 73/);
     assert.match(BRIDGE_SOURCE, /live_supported_by_pack = pack and read_template_catalog_summary_count_for_key/);
 
     for (const code of [

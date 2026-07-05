@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 70,
+    "entryCount": 76,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 70,
-    "handlerModuleCount": 63,
-    "routeCount": 10,
-    "operationCount": 41
+    "extractedHandlerCount": 76,
+    "handlerModuleCount": 64,
+    "routeCount": 11,
+    "operationCount": 47
   },
   "routes": [
     {
@@ -179,6 +179,32 @@
         "template.routing.read_track_routing",
         "template.routing.resolve_send_ref",
         "template.routing.read_project_routing_graph"
+      ]
+    },
+    {
+      "route": "e2-fx-l1-read-handlers",
+      "template_count": 6,
+      "handler_module_count": 1,
+      "operation_count": 6,
+      "packs": [
+        "fx"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.fx.resolve_fx_ref",
+        "template.fx.list_track_fx_chain",
+        "template.fx.list_take_fx_chain",
+        "template.fx.read_fx_summary",
+        "template.fx.list_fx_parameters",
+        "template.fx.read_fx_parameter"
       ]
     },
     {
