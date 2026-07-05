@@ -590,6 +590,54 @@
       ]
     },
     {
+      "template_id": "template.routing.read_track_routing",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.track.read"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-r1-routing-read-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_track_routing",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.resolve_send_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.send.resolve_ref"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-r1-routing-read-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "resolve_send_ref",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.read_project_routing_graph",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.project_graph.read"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-r1-routing-read-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_project_routing_graph",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

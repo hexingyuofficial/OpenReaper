@@ -948,6 +948,18 @@ local ALLOWED_OPERATIONS = {
     pack = "media",
     handler = list_folder_media_files,
   },
+  ["query_state:routing.track.read"] = {
+    pack = "routing",
+    handler = read_track_routing,
+  },
+  ["query_state:routing.send.resolve_ref"] = {
+    pack = "routing",
+    handler = resolve_send_ref,
+  },
+  ["query_state:routing.project_graph.read"] = {
+    pack = "routing",
+    handler = read_project_routing_graph,
+  },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
     handler = detect_loop_candidates,

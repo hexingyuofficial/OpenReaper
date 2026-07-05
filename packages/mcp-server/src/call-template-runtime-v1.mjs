@@ -137,6 +137,12 @@ export const CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.items.set_take_playrate",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS = deepFreeze([
+  "template.routing.read_track_routing",
+  "template.routing.resolve_send_ref",
+  "template.routing.read_project_routing_graph",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.fx.resolve_fx_ref",
   "template.fx.list_track_fx_chain",
@@ -731,6 +737,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
   ];
