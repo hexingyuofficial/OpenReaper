@@ -160,15 +160,15 @@ describe("E5-R1 routing read live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.track\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_track_routing/);
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.send\.resolve_ref"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.resolve_send_ref/);
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.project_graph\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_project_routing_graph/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:routing\.fx_pin_mapping\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_pin_mapping/);
     assert.match(BRIDGE_SOURCE, /GetTrackNumSends/);
     assert.match(BRIDGE_SOURCE, /GetTrackSendInfo_Value/);
     assert.match(BRIDGE_SOURCE, /E5-R1 read_track_routing requires a resolvable track ref/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(routing\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["routing.track.read", "routing.send.resolve_ref", "routing.project_graph.read"],
+      ["routing.track.read", "routing.send.resolve_ref", "routing.project_graph.read", "routing.fx_pin_mapping.read"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /routing\.send\.create|routing\.send\.set_|routing\.master_parent\.set|routing\.track_channels\.set|routing\.fx_pin_mapping\.read/);
     assert.doesNotMatch(BRIDGE_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

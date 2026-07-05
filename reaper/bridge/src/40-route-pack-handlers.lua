@@ -820,6 +820,17 @@ local E5_ROUTING_WRITE_HANDLERS = {
   ["routing.send.midi_channels.set"] = set_send_midi_channels,
 }
 
+local E5_AUTOMATION_WRITE_HANDLERS = {
+  ["automation.set_envelope_lane_state"] = set_envelope_lane_state,
+  ["automation.insert_envelope_point"] = insert_envelope_point,
+  ["automation.set_track_automation_mode"] = set_track_automation_mode,
+  ["automation.set_envelope_point"] = set_envelope_point,
+  ["automation.insert_envelope_points_batch"] = insert_envelope_points_batch,
+  ["automation.set_send_automation_mode"] = set_send_automation_mode,
+  ["automation.create_automation_item"] = create_automation_item,
+  ["automation.set_automation_item_bounds"] = set_automation_item_bounds,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -834,6 +845,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
@@ -977,6 +992,38 @@ local ALLOWED_OPERATIONS = {
   ["query_state:routing.project_graph.read"] = {
     pack = "routing",
     handler = read_project_routing_graph,
+  },
+  ["query_state:routing.fx_pin_mapping.read"] = {
+    pack = "routing",
+    handler = read_fx_pin_mapping,
+  },
+  ["query_state:automation.resolve_envelope_ref"] = {
+    pack = "automation",
+    handler = resolve_envelope_ref,
+  },
+  ["query_state:automation.read_envelope_summary"] = {
+    pack = "automation",
+    handler = read_envelope_summary,
+  },
+  ["query_state:automation.read_envelope_points"] = {
+    pack = "automation",
+    handler = read_envelope_points,
+  },
+  ["query_state:automation.evaluate_envelope_at_time"] = {
+    pack = "automation",
+    handler = evaluate_envelope_at_time,
+  },
+  ["query_state:automation.read_track_automation_mode"] = {
+    pack = "automation",
+    handler = read_track_automation_mode,
+  },
+  ["query_state:automation.read_automation_items"] = {
+    pack = "automation",
+    handler = read_automation_items,
+  },
+  ["query_state:automation.resolve_send_envelope"] = {
+    pack = "automation",
+    handler = resolve_send_envelope,
   },
   ["query_state:fx.resolve_ref"] = {
     pack = "fx",

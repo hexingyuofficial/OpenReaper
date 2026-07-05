@@ -105,7 +105,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("keeps the approved Wave 0, Wave 1A, Read-B, E3 media, E5-R1 routing read, and E2-FX-L1 read query operations exact", () => {
+  it("keeps the approved Wave 0, Wave 1A, Read-B, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
@@ -117,6 +117,13 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "actions.read_action_toggle_state",
       "actions.resolve_named_command",
       "actions.search_action_commands",
+      "automation.evaluate_envelope_at_time",
+      "automation.read_automation_items",
+      "automation.read_envelope_points",
+      "automation.read_envelope_summary",
+      "automation.read_track_automation_mode",
+      "automation.resolve_envelope_ref",
+      "automation.resolve_send_envelope",
       "fx.list_parameters",
       "fx.list_take_chain",
       "fx.list_track_chain",
@@ -141,6 +148,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "project.read_metadata",
       "project.read_summary",
       "project.read_tempo_map",
+      "routing.fx_pin_mapping.read",
       "routing.project_graph.read",
       "routing.send.resolve_ref",
       "routing.track.read",

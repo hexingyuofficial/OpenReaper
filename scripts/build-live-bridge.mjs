@@ -70,6 +70,25 @@ export const E5_ROUTING_WRITE_TEMPLATE_IDS = Object.freeze([
   "template.routing.set_send_midi_channels",
 ]);
 
+export const E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS = Object.freeze([
+  "template.routing.read_fx_pin_mapping",
+  "template.automation.resolve_envelope_ref",
+  "template.automation.read_envelope_summary",
+  "template.automation.read_envelope_points",
+  "template.automation.evaluate_envelope_at_time",
+  "template.automation.set_envelope_lane_state",
+  "template.automation.insert_envelope_point",
+  "template.automation.set_track_automation_mode",
+  "template.automation.read_track_automation_mode",
+  "template.automation.read_automation_items",
+  "template.automation.set_envelope_point",
+  "template.automation.insert_envelope_points_batch",
+  "template.automation.set_send_automation_mode",
+  "template.automation.create_automation_item",
+  "template.automation.set_automation_item_bounds",
+  "template.automation.resolve_send_envelope",
+]);
+
 export const registryRoutes = Object.freeze({
   wave0: Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
@@ -101,6 +120,10 @@ export const registryRoutes = Object.freeze({
   "e5-routing-write-handlers": Object.freeze({
     ids: E5_ROUTING_WRITE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"]),
+  }),
+  "e5-routing-automation-extra-handlers": Object.freeze({
+    ids: E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"]),
   }),
   "e2-fx-l1-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,

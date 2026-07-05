@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 87,
+    "entryCount": 103,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 87,
+    "extractedHandlerCount": 103,
     "handlerModuleCount": 64,
-    "routeCount": 12,
-    "operationCount": 47
+    "routeCount": 13,
+    "operationCount": 55
   },
   "routes": [
     {
@@ -210,6 +210,44 @@
         "template.routing.set_send_phase",
         "template.routing.set_send_mono",
         "template.routing.set_send_midi_channels"
+      ]
+    },
+    {
+      "route": "e5-routing-automation-extra-handlers",
+      "template_count": 16,
+      "handler_module_count": 1,
+      "operation_count": 16,
+      "packs": [
+        "automation",
+        "routing"
+      ],
+      "risks": [
+        "read",
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.routing.read_fx_pin_mapping",
+        "template.automation.resolve_envelope_ref",
+        "template.automation.read_envelope_summary",
+        "template.automation.read_envelope_points",
+        "template.automation.evaluate_envelope_at_time",
+        "template.automation.set_envelope_lane_state",
+        "template.automation.insert_envelope_point",
+        "template.automation.set_track_automation_mode",
+        "template.automation.read_track_automation_mode",
+        "template.automation.read_automation_items",
+        "template.automation.set_envelope_point",
+        "template.automation.insert_envelope_points_batch",
+        "template.automation.set_send_automation_mode",
+        "template.automation.create_automation_item",
+        "template.automation.set_automation_item_bounds",
+        "template.automation.resolve_send_envelope"
       ]
     },
     {

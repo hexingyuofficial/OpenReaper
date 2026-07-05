@@ -825,6 +825,270 @@
       ]
     },
     {
+      "template_id": "template.routing.read_fx_pin_mapping",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.fx_pin_mapping.read"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_fx_pin_mapping",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.resolve_envelope_ref",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.resolve_envelope_ref"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "resolve_envelope_ref",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.read_envelope_summary",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.read_envelope_summary"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_envelope_summary",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.read_envelope_points",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.read_envelope_points"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_envelope_points",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.evaluate_envelope_at_time",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.evaluate_envelope_at_time"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "evaluate_envelope_at_time",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.set_envelope_lane_state",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.set_envelope_lane_state",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_envelope_lane_state",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.insert_envelope_point",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.insert_envelope_point",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "insert_envelope_point",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.set_track_automation_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.set_track_automation_mode",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_track_automation_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.read_track_automation_mode",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.read_track_automation_mode"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_track_automation_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.read_automation_items",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.read_automation_items"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "read_automation_items",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.set_envelope_point",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.set_envelope_point",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_envelope_point",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.insert_envelope_points_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.insert_envelope_points_batch",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "insert_envelope_points_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.set_send_automation_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.set_send_automation_mode",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_automation_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.create_automation_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.create_automation_item",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "create_automation_item",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.set_automation_item_bounds",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.set_automation_item_bounds",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_automation_item_bounds",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.resolve_send_envelope",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.resolve_send_envelope"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "resolve_send_envelope",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.fx.resolve_fx_ref",
       "operation": {
         "family": "query_state",

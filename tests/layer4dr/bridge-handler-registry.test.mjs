@@ -97,6 +97,24 @@ const EXTRACTED_E5_ROUTING_WRITE_HANDLERS = Object.freeze(new Map([
   ["template.routing.set_send_mono", ["routing/e5_r1_routing_read_route.lua", "set_send_mono"]],
   ["template.routing.set_send_midi_channels", ["routing/e5_r1_routing_read_route.lua", "set_send_midi_channels"]],
 ]));
+const EXTRACTED_E5_ROUTING_AUTOMATION_EXTRA_HANDLERS = Object.freeze(new Map([
+  ["template.routing.read_fx_pin_mapping", ["routing/e5_r1_routing_read_route.lua", "read_fx_pin_mapping"]],
+  ["template.automation.resolve_envelope_ref", ["routing/e5_r1_routing_read_route.lua", "resolve_envelope_ref"]],
+  ["template.automation.read_envelope_summary", ["routing/e5_r1_routing_read_route.lua", "read_envelope_summary"]],
+  ["template.automation.read_envelope_points", ["routing/e5_r1_routing_read_route.lua", "read_envelope_points"]],
+  ["template.automation.evaluate_envelope_at_time", ["routing/e5_r1_routing_read_route.lua", "evaluate_envelope_at_time"]],
+  ["template.automation.set_envelope_lane_state", ["routing/e5_r1_routing_read_route.lua", "set_envelope_lane_state"]],
+  ["template.automation.insert_envelope_point", ["routing/e5_r1_routing_read_route.lua", "insert_envelope_point"]],
+  ["template.automation.set_track_automation_mode", ["routing/e5_r1_routing_read_route.lua", "set_track_automation_mode"]],
+  ["template.automation.read_track_automation_mode", ["routing/e5_r1_routing_read_route.lua", "read_track_automation_mode"]],
+  ["template.automation.read_automation_items", ["routing/e5_r1_routing_read_route.lua", "read_automation_items"]],
+  ["template.automation.set_envelope_point", ["routing/e5_r1_routing_read_route.lua", "set_envelope_point"]],
+  ["template.automation.insert_envelope_points_batch", ["routing/e5_r1_routing_read_route.lua", "insert_envelope_points_batch"]],
+  ["template.automation.set_send_automation_mode", ["routing/e5_r1_routing_read_route.lua", "set_send_automation_mode"]],
+  ["template.automation.create_automation_item", ["routing/e5_r1_routing_read_route.lua", "create_automation_item"]],
+  ["template.automation.set_automation_item_bounds", ["routing/e5_r1_routing_read_route.lua", "set_automation_item_bounds"]],
+  ["template.automation.resolve_send_envelope", ["routing/e5_r1_routing_read_route.lua", "resolve_send_envelope"]],
+]));
 const EXTRACTED_E2_FX_L1_READ_HANDLERS = Object.freeze(new Map([
   ["template.fx.resolve_fx_ref", ["fx/e2_fx_l1_read_route.lua", "resolve_fx_ref"]],
   ["template.fx.list_track_fx_chain", ["fx/e2_fx_l1_read_route.lua", "list_track_fx_chain"]],
@@ -148,6 +166,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_E4_ITEM_HANDLERS,
   ...EXTRACTED_E5_R1_ROUTING_READ_HANDLERS,
   ...EXTRACTED_E5_ROUTING_WRITE_HANDLERS,
+  ...EXTRACTED_E5_ROUTING_AUTOMATION_EXTRA_HANDLERS,
   ...EXTRACTED_E2_FX_L1_READ_HANDLERS,
   ...EXTRACTED_FIRST_REAL_A_HANDLERS,
   ...EXTRACTED_SAFE_WRITE_A_HANDLERS,
@@ -156,7 +175,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 87);
+    assert.equal(REGISTRY.entries.length, 103);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -188,12 +207,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 87,
+      entryCount: 103,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 87,
+      extractedHandlerCount: 103,
       handlerModuleCount: 64,
-      routeCount: 12,
-      operationCount: 47,
+      routeCount: 13,
+      operationCount: 55,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -219,7 +238,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0, Wave 1A, Read-B, E3 media, E4 item, E5 routing, E2-FX-L1 read, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A batches into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0, Wave 1A, Read-B, E3 media, E4 item, E5 routing/automation, E2-FX-L1 read, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
     assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
@@ -268,6 +287,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => entry.route === "e5-routing-write-handlers" && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_E5_ROUTING_WRITE_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "e5-routing-automation-extra-handlers" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_E5_ROUTING_AUTOMATION_EXTRA_HANDLERS.keys()],
     );
     assert.deepEqual(
       REGISTRY.entries
@@ -322,6 +347,14 @@ describe("Layer 4D.R bridge handler registry", () => {
         "routing.send.set_phase",
         "routing.send.set_mono",
         "routing.send.midi_channels.set",
+        "automation.set_envelope_lane_state",
+        "automation.insert_envelope_point",
+        "automation.set_track_automation_mode",
+        "automation.set_envelope_point",
+        "automation.insert_envelope_points_batch",
+        "automation.set_send_automation_mode",
+        "automation.create_automation_item",
+        "automation.set_automation_item_bounds",
         "project.set_metadata_field",
         "project.create_marker",
         "project.create_region",
@@ -359,7 +392,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(87 registered template handler row\(s\); 0 legacy_monolith row\(s\); 87 extracted handler row\(s\); 64 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(103 registered template handler row\(s\); 0 legacy_monolith row\(s\); 103 extracted handler row\(s\); 64 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

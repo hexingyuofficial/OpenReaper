@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (87 registered template handler row(s); 0 legacy_monolith row(s); 87 extracted handler row(s); 64 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (103 registered template handler row(s); 0 legacy_monolith row(s); 103 extracted handler row(s); 64 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1364,6 +1364,17 @@ local E5_ROUTING_WRITE_CAPABILITIES = {
   ["routing.send.midi_channels.set"] = { pack = "routing", risk = "write" },
 }
 
+local E5_AUTOMATION_WRITE_CAPABILITIES = {
+  ["automation.set_envelope_lane_state"] = { pack = "automation", risk = "write" },
+  ["automation.insert_envelope_point"] = { pack = "automation", risk = "write" },
+  ["automation.set_track_automation_mode"] = { pack = "automation", risk = "write" },
+  ["automation.set_envelope_point"] = { pack = "automation", risk = "write" },
+  ["automation.insert_envelope_points_batch"] = { pack = "automation", risk = "write" },
+  ["automation.set_send_automation_mode"] = { pack = "automation", risk = "write" },
+  ["automation.create_automation_item"] = { pack = "automation", risk = "write" },
+  ["automation.set_automation_item_bounds"] = { pack = "automation", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1404,11 +1415,22 @@ local function e5_routing_write_capability(request, operation_key)
   return E5_ROUTING_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function e5_automation_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return E5_AUTOMATION_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
   return safe_write_a_capability(request, operation_key)
     or e3_media_route_capability(request, operation_key)
     or e4_item_route_capability(request, operation_key)
     or e5_routing_write_capability(request, operation_key)
+    or e5_automation_write_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1479,6 +1501,7 @@ local function validate_request(request)
   local e3_media_route_operation = e3_media_route_capability(request, operation_key)
   local e4_item_route_operation = e4_item_route_capability(request, operation_key)
   local e5_routing_write_operation = e5_routing_write_capability(request, operation_key)
+  local e5_automation_write_operation = e5_automation_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1501,6 +1524,10 @@ local function validate_request(request)
   elseif e5_routing_write_operation then
     if request.pack.id ~= e5_routing_write_operation.pack or request.pack.risk ~= e5_routing_write_operation.risk then
       return false, "E5 routing write request pack/capability/risk mismatch."
+    end
+  elseif e5_automation_write_operation then
+    if request.pack.id ~= e5_automation_write_operation.pack or request.pack.risk ~= e5_automation_write_operation.risk then
+      return false, "E5 automation write request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1534,6 +1561,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E5 routing write requests must use undo.mode required."
     end
+  elseif e5_automation_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "E5 automation write requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1565,6 +1596,10 @@ local function validate_request(request)
   elseif e5_routing_write_operation then
     if request.artifacts.allow ~= false then
       return false, "E5 routing write requests must use artifacts.allow false."
+    end
+  elseif e5_automation_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "E5 automation write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -1598,6 +1633,10 @@ local function validate_request(request)
   elseif e5_routing_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E5 routing write idempotency_key must be a string when present."
+    end
+  elseif e5_automation_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "E5 automation write idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -5015,6 +5054,29 @@ local function e5_routing_track_object_ref(track)
   }
 end
 
+local function e5_routing_envelope_object_ref(envelope, ref)
+  return {
+    kind = "envelope",
+    ref = ref,
+    identity = {
+      scheme = "synthetic",
+      value = ref,
+    },
+  }
+end
+
+local function e5_routing_fx_object_ref(track, slot_index)
+  local ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index)
+  return {
+    kind = "fx",
+    ref = ref,
+    identity = {
+      scheme = "track_fx",
+      value = e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
+    },
+  }
+end
+
 local function e5_routing_find_track_by_guid(guid)
   local ok_count, count = call_reaper("CountTracks", 0)
   local total = ok_count and first_number(count) or 0
@@ -5046,6 +5108,43 @@ local function e5_routing_resolve_track_token(token)
     return e5_routing_find_track_by_guid(guid)
   end
   return nil
+end
+
+local function e5_routing_fx_from_ref(fx_ref)
+  if not is_string(fx_ref) then
+    return nil, nil
+  end
+  local track_ref, slot_text = fx_ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if not track_ref then
+    slot_text = fx_ref:match("^fx:track:(%d+)$")
+    if slot_text then
+      track_ref = "track:index:0"
+    end
+  end
+  if not track_ref or not slot_text then
+    return nil, nil
+  end
+  local track = e5_routing_resolve_track_token(track_ref)
+  local slot_index = tonumber(slot_text)
+  if not track or not slot_index then
+    return nil, nil
+  end
+  return track, math.floor(slot_index)
+end
+
+local function e5_routing_fx_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local ref = request.refs[index]
+      if is_object(ref) and ref.kind == "fx" then
+        local track, slot_index = e5_routing_fx_from_ref(ref.ref)
+        if track then
+          return track, slot_index
+        end
+      end
+    end
+  end
+  return nil, nil
 end
 
 local function e5_routing_resolve_track_from_ref_object(ref)
@@ -5159,6 +5258,19 @@ local function e5_routing_send_summary(source_track, send_index, category)
     pan = e5_routing_read_send_value(source_track, category, send_index, "D_PAN", 0),
     muted = e5_routing_read_send_value(source_track, category, send_index, "B_MUTE", 0) ~= 0,
     mode = e5_routing_send_mode_label(e5_routing_read_send_value(source_track, category, send_index, "I_SENDMODE", 0)),
+  }
+end
+
+local function e5_routing_compact_send_summary(source_track, send_index)
+  local summary = e5_routing_send_summary(source_track, send_index, 0)
+  if not summary then
+    return nil
+  end
+  return {
+    send_ref = summary.send_ref,
+    source_track_ref = summary.source_track_ref,
+    destination_track_ref = summary.destination_track_ref,
+    index = summary.index,
   }
 end
 
@@ -5494,8 +5606,8 @@ end
 local function read_project_routing_graph(request)
   local ok_count, count = call_reaper("CountTracks", 0)
   local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
-  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 64, 256)
-  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 128, 512)
+  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 8)
+  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 24)
   local tracks = json_array({})
   local edges = json_array({})
   local refs = json_array({})
@@ -5507,8 +5619,8 @@ local function read_project_routing_graph(request)
       tracks[#tracks + 1] = {
         track_ref = track_ref,
         index = index,
-        channel_count = e5_routing_channel_count(track),
-        master_parent_enabled = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
+        channels = e5_routing_channel_count(track),
+        master = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
       }
       refs[#refs + 1] = e5_routing_track_object_ref(track)
       local send_count = e5_routing_send_count(track, 0)
@@ -5517,7 +5629,7 @@ local function read_project_routing_graph(request)
           truncated = true
           break
         end
-        local summary = e5_routing_send_summary(track, send_index, 0)
+        local summary = e5_routing_compact_send_summary(track, send_index)
         if summary then
           edges[#edges + 1] = summary
           refs[#refs + 1] = e5_routing_send_object_ref(track, send_index)
@@ -5529,15 +5641,644 @@ local function read_project_routing_graph(request)
     end
   end
   return e5_routing_summary(request, {
-    track_count = #tracks,
+    track_count = total,
+    returned_track_count = #tracks,
     edge_count = #edges,
     tracks = tracks,
     edges = edges,
     truncated = truncated,
   }), nil, nil, nil, refs
 end
+
+local function read_fx_pin_mapping(request)
+  local track, slot_index = e5_routing_fx_from_request_refs(request)
+  if not track then
+    return e5_routing_error("FX_REF_NOT_FOUND", "E5 routing read_fx_pin_mapping requires a resolvable track FX ref.", {})
+  end
+  local ok_count, count = call_reaper("TrackFX_GetCount", track)
+  local fx_count = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  if slot_index < 0 or slot_index >= fx_count then
+    return e5_routing_error("FX_SLOT_NOT_FOUND", "E5 routing read_fx_pin_mapping slot index is outside the track FX chain.", {
+      slot_index = slot_index,
+      fx_count = fx_count,
+    })
+  end
+  local direction = request.params.direction == "output" and "output" or "input"
+  local is_output = direction == "output" and 1 or 0
+  local pin_index = math.max(0, math.floor(tonumber(request.params.pin_index) or 0))
+  local ok, low32, high32 = call_reaper("TrackFX_GetPinMappings", track, slot_index, is_output, pin_index)
+  if not ok then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected TrackFX_GetPinMappings.", {
+      slot_index = slot_index,
+      direction = direction,
+      pin_index = pin_index,
+    })
+  end
+  low32 = first_number(low32) or 0
+  high32 = first_number(high32) or 0
+  return e5_routing_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    fx_ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
+    slot_index = slot_index,
+    direction = direction,
+    pin_index = pin_index,
+    low32 = low32,
+    high32 = high32,
+    truncated = false,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_track_object_ref(track),
+    e5_routing_fx_object_ref(track, slot_index)
+  )
+end
+
+local function e5_automation_envelope_key(value)
+  local raw = is_string(value) and value or "Volume"
+  local lowered = raw:lower()
+  if lowered == "volume" or lowered == "vol" or lowered == "<volenv" then
+    return "volume", "Volume", "<VOLENV", 0
+  elseif lowered == "pan" or lowered == "<panenv" then
+    return "pan", "Pan", "<PANENV", 1
+  elseif lowered == "mute" or lowered == "<muteenv" then
+    return "mute", "Mute", "<MUTEENV", 2
+  end
+  return "volume", "Volume", "<VOLENV", 0
+end
+
+local function e5_automation_track_envelope(track, name_or_key)
+  local key, display_name, chunk_name = e5_automation_envelope_key(name_or_key)
+  local ok_named, envelope = call_reaper("GetTrackEnvelopeByName", track, display_name)
+  if ok_named and envelope then
+    return envelope, "envelope:track:" .. e5_routing_track_ref_string(track) .. ":" .. key, "track", key, display_name
+  end
+  local ok_chunk, chunk_envelope = call_reaper("GetTrackEnvelopeByChunkName", track, chunk_name)
+  if ok_chunk and chunk_envelope then
+    return chunk_envelope, "envelope:track:" .. e5_routing_track_ref_string(track) .. ":" .. key, "track", key, display_name
+  end
+  local ok_media, media_envelope = call_reaper("GetMediaTrackInfo_Value", track, "P_ENV:" .. chunk_name)
+  if ok_media and media_envelope then
+    return media_envelope, "envelope:track:" .. e5_routing_track_ref_string(track) .. ":" .. key, "track", key, display_name
+  end
+  return nil, "envelope:track:" .. e5_routing_track_ref_string(track) .. ":" .. key, "track", key, display_name
+end
+
+local function e5_automation_send_envelope(source_track, send_index, name_or_key)
+  local key, display_name, chunk_name, envelope_type = e5_automation_envelope_key(name_or_key)
+  local send_ref = e5_routing_send_ref(source_track, send_index)
+  local ok_br, br_env = call_reaper("BR_GetMediaTrackSendInfo_Envelope", source_track, 0, send_index, envelope_type)
+  if ok_br and br_env then
+    return br_env, "envelope:" .. send_ref .. ":" .. key, "send", key, display_name
+  end
+  local ok_send, envelope = call_reaper("GetTrackSendInfo_Value", source_track, 0, send_index, "P_ENV:" .. chunk_name)
+  if ok_send and envelope then
+    return envelope, "envelope:" .. send_ref .. ":" .. key, "send", key, display_name
+  end
+  return nil, "envelope:" .. send_ref .. ":" .. key, "send", key, display_name
+end
+
+local function e5_automation_envelope_from_ref_string(ref)
+  if not is_string(ref) then
+    return nil
+  end
+  local key = ref:match("^envelope:track:(%a+)$")
+  if key then
+    local track = e5_routing_resolve_track_token("track:index:0")
+    if not track then
+      return nil
+    end
+    return e5_automation_track_envelope(track, key)
+  end
+  local track_ref, track_key = ref:match("^envelope:track:(track:[^:]+:.+):(%a+)$")
+  if track_ref and track_key then
+    local track = e5_routing_resolve_track_token(track_ref)
+    if not track then
+      return nil
+    end
+    return e5_automation_track_envelope(track, track_key)
+  end
+  local send_ref, send_key = ref:match("^envelope:(send:track:.+:%d+):(%a+)$")
+  if send_ref and send_key then
+    local source_track, send_index = e5_routing_send_index_from_ref(send_ref)
+    if not source_track then
+      return nil
+    end
+    return e5_automation_send_envelope(source_track, send_index, send_key)
+  end
+  return nil
+end
+
+local function e5_automation_envelope_from_request(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local ref = request.refs[index]
+      if is_object(ref) and ref.kind == "envelope" then
+        local envelope, envelope_ref, parent_kind, key, name = e5_automation_envelope_from_ref_string(ref.ref)
+        if envelope then
+          return envelope, envelope_ref, parent_kind, key, name
+        end
+      end
+    end
+  end
+  local parent_kind = request.params.parent_kind
+  if parent_kind == "track" or parent_kind == nil or parent_kind == JSON_NULL then
+    local track = e5_routing_track_from_request_refs(request) or e5_routing_resolve_track_token("track:index:0")
+    if track then
+      return e5_automation_track_envelope(track, request.params.envelope_name or "Volume")
+    end
+  end
+  return nil
+end
+
+local function e5_automation_envelope_name(envelope, fallback)
+  local ok, _, name = call_reaper("GetEnvelopeName", envelope, "")
+  if ok then
+    return first_string(name) or fallback or "Envelope"
+  end
+  return fallback or "Envelope"
+end
+
+local function e5_automation_envelope_scaling(envelope)
+  local ok, mode = call_reaper("GetEnvelopeScalingMode", envelope)
+  return ok and math.floor(first_number(mode) or 0) or 0
+end
+
+local function e5_automation_envelope_point_count(envelope)
+  local ok, count = call_reaper("CountEnvelopePoints", envelope)
+  return ok and math.max(0, math.floor(first_number(count) or 0)) or 0
+end
+
+local function e5_automation_item_count(envelope)
+  local ok, count = call_reaper("CountAutomationItems", envelope)
+  return ok and math.max(0, math.floor(first_number(count) or 0)) or 0
+end
+
+local function e5_automation_br_properties(envelope)
+  local ok_alloc, br_env = call_reaper("BR_EnvAlloc", envelope, false)
+  if not ok_alloc or not br_env then
+    return {
+      active = true,
+      visible = false,
+      armed = false,
+      show_lane = false,
+      lane_height = 0,
+      default_shape = 0,
+      fader_scaling = false,
+      br_available = false,
+    }
+  end
+  local ok_props, active, visible, armed, in_lane, lane_height, default_shape, min_value, max_value, center_value, env_type, fader_scaling, automation_options =
+    call_reaper("BR_EnvGetProperties", br_env)
+  call_reaper("BR_EnvFree", br_env, false)
+  if not ok_props then
+    return {
+      active = true,
+      visible = false,
+      armed = false,
+      show_lane = false,
+      lane_height = 0,
+      default_shape = 0,
+      fader_scaling = false,
+      br_available = false,
+    }
+  end
+  return {
+    active = active == true,
+    visible = visible == true,
+    armed = armed == true,
+    show_lane = in_lane == true,
+    lane_height = math.floor(first_number(lane_height) or 0),
+    default_shape = math.floor(first_number(default_shape) or 0),
+    min_value = first_number(min_value) or 0,
+    max_value = first_number(max_value) or 1,
+    center_value = first_number(center_value) or 0,
+    envelope_type = math.floor(first_number(env_type) or 0),
+    fader_scaling = fader_scaling == true,
+    automation_items_options = math.floor(first_number(automation_options) or -1),
+    br_available = true,
+  }
+end
+
+local function e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, extra)
+  local props = e5_automation_br_properties(envelope)
+  local summary = {
+    envelope_ref = envelope_ref,
+    parent_kind = parent_kind or "track",
+    envelope_type = key or "volume",
+    name = e5_automation_envelope_name(envelope, display_name),
+    scaling_mode = e5_automation_envelope_scaling(envelope),
+    active = props.active,
+    armed = props.armed,
+    visible = props.visible,
+    show_lane = props.show_lane,
+    point_count = e5_automation_envelope_point_count(envelope),
+    automation_item_count = e5_automation_item_count(envelope),
+    br_available = props.br_available,
+  }
+  if is_object(extra) then
+    for k, v in pairs(extra) do
+      summary[k] = v
+    end
+  end
+  return e5_routing_summary(request, summary)
+end
+
+local function e5_automation_resolve_or_error(request, message)
+  local envelope, envelope_ref, parent_kind, key, display_name = e5_automation_envelope_from_request(request)
+  if not envelope then
+    local _, err = e5_routing_error("ENVELOPE_NOT_FOUND", message or "E5 automation requires a resolvable envelope ref.", {})
+    return nil, nil, nil, nil, nil, err
+  end
+  return envelope, envelope_ref, parent_kind, key, display_name
+end
+
+local function resolve_envelope_ref(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request, "E5 automation resolve_envelope_ref requires a resolvable envelope parent/ref.")
+  if not envelope then
+    return nil, err
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_envelope_object_ref(envelope, envelope_ref)
+  )
+end
+
+local function read_envelope_summary(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_envelope_object_ref(envelope, envelope_ref)
+  )
+end
+
+local function e5_automation_point_row(envelope, index)
+  local ok, time, value, shape, tension, selected = call_reaper("GetEnvelopePoint", envelope, index)
+  if not ok then
+    return nil
+  end
+  return {
+    point_index = index,
+    time_seconds = first_number(time) or 0,
+    value = first_number(value) or 0,
+    shape = math.floor(first_number(shape) or 0),
+    tension = first_number(tension) or 0,
+    selected = selected == true,
+  }
+end
+
+local function read_envelope_points(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local total = e5_automation_envelope_point_count(envelope)
+  local limit = READ_B_MEDIA.bounded_limit(request, request.params.limit, 16, 64)
+  local points = json_array({})
+  for index = 0, math.min(total, limit) - 1 do
+    local row = e5_automation_point_row(envelope, index)
+    if row then
+      points[#points + 1] = row
+    end
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    points = points,
+    returned_count = #points,
+    total_count = total,
+    next_cursor = total > limit and tostring(limit) or JSON_NULL,
+    truncated = total > limit,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function evaluate_envelope_at_time(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local time_seconds = e5_routing_finite_number(request.params.time_seconds, 0)
+  local sample_rate = e5_routing_finite_number(request.params.sample_rate, 48000)
+  local samples_requested = math.max(0, math.floor(tonumber(request.params.samples_requested) or 0))
+  local ok, valid_samples, value, dvds, ddvds, dddvds = call_reaper("Envelope_Evaluate", envelope, time_seconds, sample_rate, samples_requested)
+  if not ok then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected Envelope_Evaluate.", {
+      envelope_ref = envelope_ref,
+      time_seconds = time_seconds,
+    })
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    time_seconds = time_seconds,
+    value = first_number(value) or 0,
+    valid_samples = math.floor(first_number(valid_samples) or 0),
+    dVdS = first_number(dvds) or 0,
+    ddVdS = first_number(ddvds) or 0,
+    dddVdS = first_number(dddvds) or 0,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function set_envelope_lane_state(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local ok_alloc, br_env = call_reaper("BR_EnvAlloc", envelope, false)
+  if ok_alloc and br_env then
+    local props = e5_automation_br_properties(envelope)
+    local active = request.params.active
+    if type(active) ~= "boolean" then active = props.active end
+    local visible = request.params.visible
+    if type(visible) ~= "boolean" then visible = props.visible end
+    local armed = request.params.armed
+    if type(armed) ~= "boolean" then armed = props.armed end
+    local show_lane = request.params.show_lane
+    if type(show_lane) ~= "boolean" then show_lane = props.show_lane end
+    call_reaper("BR_EnvSetProperties", br_env, active, visible, armed, show_lane, props.lane_height or 0, props.default_shape or 0, props.fader_scaling == true, props.automation_items_options or -1)
+    call_reaper("BR_EnvFree", br_env, true)
+    call_reaper("UpdateArrange")
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_envelope_object_ref(envelope, envelope_ref)
+  )
+end
+
+local function insert_envelope_point(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local time_seconds = e5_routing_finite_number(request.params.time_seconds, 0)
+  local value = e5_routing_clamp_number(request.params.value, 0, 4, 1)
+  local shape = math.max(0, math.floor(tonumber(request.params.shape) or 0))
+  local tension = e5_routing_finite_number(request.params.tension, 0)
+  local selected = request.params.selected == true
+  local before = e5_automation_envelope_point_count(envelope)
+  local ok = call_reaper("InsertEnvelopePoint", envelope, time_seconds, value, shape, tension, selected, false)
+  call_reaper("Envelope_SortPoints", envelope)
+  if not ok then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePoint.", {
+      envelope_ref = envelope_ref,
+    })
+  end
+  local after = e5_automation_envelope_point_count(envelope)
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    point_index = math.max(0, after - 1),
+    time_seconds = time_seconds,
+    value = value,
+    inserted_count = math.max(0, after - before),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function e5_automation_mode_value(mode)
+  if mode == "read" then
+    return 1
+  elseif mode == "touch" then
+    return 2
+  elseif mode == "write" then
+    return 3
+  elseif mode == "latch" then
+    return 4
+  elseif mode == "latch_preview" then
+    return 5
+  end
+  return 0
+end
+
+local function e5_automation_send_mode_value(mode)
+  if mode == "use_track" then
+    return -1
+  end
+  return e5_automation_mode_value(mode)
+end
+
+local function e5_automation_mode_label(value)
+  value = math.floor(tonumber(value) or 0)
+  if value == -1 then return "use_track" end
+  if value == 1 then return "read" end
+  if value == 2 then return "touch" end
+  if value == 3 then return "write" end
+  if value == 4 then return "latch" end
+  if value == 5 then return "latch_preview" end
+  return "trim_off"
+end
+
+local function read_track_automation_mode(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 automation read_track_automation_mode requires a resolvable track ref.", {})
+  end
+  local ok, mode = call_reaper("GetTrackAutomationMode", track)
+  mode = ok and first_number(mode) or 0
+  return e5_routing_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    mode = e5_automation_mode_label(mode),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+end
+
+local function set_track_automation_mode(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 automation set_track_automation_mode requires a resolvable track ref.", {})
+  end
+  local mode = e5_automation_mode_value(request.params.mode)
+  local ok = call_reaper("SetTrackAutomationMode", track, mode)
+  if not ok then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected SetTrackAutomationMode.", {})
+  end
+  return read_track_automation_mode(request)
+end
+
+local function read_automation_items(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local total = e5_automation_item_count(envelope)
+  local limit = READ_B_MEDIA.bounded_limit(request, request.params.limit, 16, 64)
+  local items = json_array({})
+  for index = 0, math.min(total, limit) - 1 do
+    local position = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_POSITION", 0, false))
+    local length = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_LENGTH", 0, false))
+    local pool_id = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_POOL_ID", 0, false))
+    items[#items + 1] = {
+      automation_item_index = index,
+      position_seconds = first_number(position) or 0,
+      length_seconds = first_number(length) or 0,
+      pool_id = math.floor(first_number(pool_id) or -1),
+    }
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    items = items,
+    returned_count = #items,
+    total_count = total,
+    next_cursor = total > limit and tostring(limit) or JSON_NULL,
+    truncated = total > limit,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function set_envelope_point(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local point_index = math.max(0, math.floor(tonumber(request.params.point_index) or 0))
+  if point_index >= e5_automation_envelope_point_count(envelope) then
+    local inserted = insert_envelope_point(request)
+    return inserted
+  end
+  local current = e5_automation_point_row(envelope, point_index) or {}
+  local time_seconds = e5_routing_finite_number(request.params.time_seconds, current.time_seconds or 0)
+  local value = e5_routing_clamp_number(request.params.value, 0, 4, current.value or 1)
+  local shape = math.max(0, math.floor(tonumber(request.params.shape) or current.shape or 0))
+  local tension = e5_routing_finite_number(request.params.tension, current.tension or 0)
+  local selected = request.params.selected == true
+  local ok = call_reaper("SetEnvelopePoint", envelope, point_index, time_seconds, value, shape, tension, selected, false)
+  call_reaper("Envelope_SortPoints", envelope)
+  if not ok then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected SetEnvelopePoint.", {
+      envelope_ref = envelope_ref,
+      point_index = point_index,
+    })
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    point_index = point_index,
+    time_seconds = time_seconds,
+    value = value,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function insert_envelope_points_batch(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  if not is_json_array(request.params.points) then
+    return e5_routing_error("REQUEST_INVALID", "E5 automation insert_envelope_points_batch requires points array.", {})
+  end
+  local limit = math.min(#request.params.points, 32)
+  local first_time = nil
+  local last_time = nil
+  for index = 1, limit do
+    local point = is_object(request.params.points[index]) and request.params.points[index] or {}
+    local time_seconds = e5_routing_finite_number(point.time_seconds, index - 1)
+    local value = e5_routing_clamp_number(point.value, 0, 4, 1)
+    local shape = math.max(0, math.floor(tonumber(point.shape) or 0))
+    local tension = e5_routing_finite_number(point.tension, 0)
+    call_reaper("InsertEnvelopePoint", envelope, time_seconds, value, shape, tension, point.selected == true, true)
+    first_time = first_time or time_seconds
+    last_time = time_seconds
+  end
+  call_reaper("Envelope_SortPoints", envelope)
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    inserted_count = limit,
+    first_time_seconds = first_time or 0,
+    last_time_seconds = last_time or 0,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function set_send_automation_mode(request)
+  local source_track, send_index = e5_routing_send_from_request_refs(request)
+  if not source_track then
+    return e5_routing_error("SEND_NOT_FOUND", "E5 automation set_send_automation_mode requires a resolvable send ref.", {})
+  end
+  local mode = e5_automation_send_mode_value(request.params.mode)
+  if not e5_routing_set_send_value(source_track, send_index, "I_AUTOMODE", mode) then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected send automation mode update.", {})
+  end
+  local readback = e5_routing_read_send_value(source_track, 0, send_index, "I_AUTOMODE", mode)
+  return e5_routing_write_summary(request, {
+    send_ref = e5_routing_send_ref(source_track, send_index),
+    mode = e5_automation_mode_label(readback),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_send_object_ref(source_track, send_index))
+end
+
+local function create_automation_item(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local position = e5_routing_finite_number(request.params.position_seconds, 0)
+  local length = math.max(0.001, e5_routing_finite_number(request.params.length_seconds, 1))
+  local pool_id = -1
+  if request.params.pool_mode == "reuse_pool" then
+    pool_id = math.floor(tonumber(request.params.pool_id) or 0)
+  end
+  local ok, item_index = call_reaper("InsertAutomationItem", envelope, pool_id, position, length)
+  item_index = ok and math.floor(first_number(item_index) or -1) or -1
+  if item_index < 0 then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertAutomationItem.", {
+      envelope_ref = envelope_ref,
+    })
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    automation_item_index = item_index,
+    pool_id = pool_id,
+    position_seconds = position,
+    length_seconds = length,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function set_automation_item_bounds(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local item_index = math.max(0, math.floor(tonumber(request.params.automation_item_index) or 0))
+  if item_index >= e5_automation_item_count(envelope) then
+    local created = create_automation_item({
+      params = {
+        position_seconds = request.params.position_seconds or 0,
+        length_seconds = request.params.length_seconds or 1,
+        pool_mode = "new_empty",
+      },
+      refs = request.refs,
+      pack = request.pack,
+    })
+    if is_object(created) and created.code then
+      return created
+    end
+  end
+  if request.params.position_seconds ~= nil then
+    call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_POSITION", e5_routing_finite_number(request.params.position_seconds, 0), true)
+  end
+  if request.params.length_seconds ~= nil then
+    call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_LENGTH", math.max(0.001, e5_routing_finite_number(request.params.length_seconds, 1)), true)
+  end
+  if request.params.start_offset_seconds ~= nil then
+    call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_STARTOFFS", e5_routing_finite_number(request.params.start_offset_seconds, 0), true)
+  end
+  if request.params.playrate ~= nil then
+    call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_PLAYRATE", math.max(0.001, e5_routing_finite_number(request.params.playrate, 1)), true)
+  end
+  local position = select(2, call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_POSITION", 0, false))
+  local length = select(2, call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_LENGTH", 0, false))
+  local start_offset = select(2, call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_STARTOFFS", 0, false))
+  local playrate = select(2, call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_PLAYRATE", 0, false))
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    automation_item_index = item_index,
+    position_seconds = first_number(position) or 0,
+    length_seconds = first_number(length) or 0,
+    start_offset_seconds = first_number(start_offset) or 0,
+    playrate = first_number(playrate) or 1,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function resolve_send_envelope(request)
+  local source_track, send_index = e5_routing_send_from_request_refs(request)
+  if not source_track then
+    return e5_routing_error("SEND_NOT_FOUND", "E5 automation resolve_send_envelope requires a resolvable send ref.", {})
+  end
+  local envelope, envelope_ref, parent_kind, key, display_name = e5_automation_send_envelope(source_track, send_index, request.params.envelope_type or "volume")
+  if not envelope then
+    return e5_routing_error("ENVELOPE_NOT_FOUND", "E5 automation resolve_send_envelope could not resolve the send envelope.", {
+      send_ref = e5_routing_send_ref(source_track, send_index),
+    })
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    send_ref = e5_routing_send_ref(source_track, send_index),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_send_object_ref(source_track, send_index),
+    e5_routing_envelope_object_ref(envelope, envelope_ref)
+  )
+end
 return {
-  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, read_project_routing_graph = read_project_routing_graph, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels },
+  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, read_project_routing_graph = read_project_routing_graph, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels, read_fx_pin_mapping = read_fx_pin_mapping, resolve_envelope_ref = resolve_envelope_ref, read_envelope_summary = read_envelope_summary, read_envelope_points = read_envelope_points, evaluate_envelope_at_time = evaluate_envelope_at_time, set_envelope_lane_state = set_envelope_lane_state, insert_envelope_point = insert_envelope_point, set_track_automation_mode = set_track_automation_mode, read_track_automation_mode = read_track_automation_mode, read_automation_items = read_automation_items, set_envelope_point = set_envelope_point, insert_envelope_points_batch = insert_envelope_points_batch, set_send_automation_mode = set_send_automation_mode, create_automation_item = create_automation_item, set_automation_item_bounds = set_automation_item_bounds, resolve_send_envelope = resolve_send_envelope },
   shared = {  },
 }
 end)
@@ -12777,6 +13518,17 @@ local E5_ROUTING_WRITE_HANDLERS = {
   ["routing.send.midi_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_send_midi_channels,
 }
 
+local E5_AUTOMATION_WRITE_HANDLERS = {
+  ["automation.set_envelope_lane_state"] = OPENREAPER_HANDLER_EXPORTS.set_envelope_lane_state,
+  ["automation.insert_envelope_point"] = OPENREAPER_HANDLER_EXPORTS.insert_envelope_point,
+  ["automation.set_track_automation_mode"] = OPENREAPER_HANDLER_EXPORTS.set_track_automation_mode,
+  ["automation.set_envelope_point"] = OPENREAPER_HANDLER_EXPORTS.set_envelope_point,
+  ["automation.insert_envelope_points_batch"] = OPENREAPER_HANDLER_EXPORTS.insert_envelope_points_batch,
+  ["automation.set_send_automation_mode"] = OPENREAPER_HANDLER_EXPORTS.set_send_automation_mode,
+  ["automation.create_automation_item"] = OPENREAPER_HANDLER_EXPORTS.create_automation_item,
+  ["automation.set_automation_item_bounds"] = OPENREAPER_HANDLER_EXPORTS.set_automation_item_bounds,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -12791,6 +13543,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
@@ -12934,6 +13690,38 @@ local ALLOWED_OPERATIONS = {
   ["query_state:routing.project_graph.read"] = {
     pack = "routing",
     handler = OPENREAPER_HANDLER_EXPORTS.read_project_routing_graph,
+  },
+  ["query_state:routing.fx_pin_mapping.read"] = {
+    pack = "routing",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_fx_pin_mapping,
+  },
+  ["query_state:automation.resolve_envelope_ref"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_envelope_ref,
+  },
+  ["query_state:automation.read_envelope_summary"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_envelope_summary,
+  },
+  ["query_state:automation.read_envelope_points"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_envelope_points,
+  },
+  ["query_state:automation.evaluate_envelope_at_time"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.evaluate_envelope_at_time,
+  },
+  ["query_state:automation.read_track_automation_mode"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_track_automation_mode,
+  },
+  ["query_state:automation.read_automation_items"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_automation_items,
+  },
+  ["query_state:automation.resolve_send_envelope"] = {
+    pack = "automation",
+    handler = OPENREAPER_HANDLER_EXPORTS.resolve_send_envelope,
   },
   ["query_state:fx.resolve_ref"] = {
     pack = "fx",
