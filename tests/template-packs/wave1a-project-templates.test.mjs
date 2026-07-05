@@ -42,6 +42,10 @@ const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.rename_marker",
   "template.project.rename_region",
   "template.project.read_track_item_overview",
+  "template.project.create_subproject",
+  "template.project.create_project_tab",
+  "template.project.insert_subproject_item",
+  "template.project.render_or_update_subproject",
 ]);
 
 const BLOCKED_PROJECT_IDS = Object.freeze([
@@ -137,6 +141,38 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(renameRegion.risk, "write");
     assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item"]);
     assert.equal(overview.bridge.operation_name, "project.read_track_item_overview");
+  });
+
+  it("keeps subproject and project-tab descriptors project-owned and ref-oriented", () => {
+    const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
+    const createSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createSubproject);
+    const createProjectTab = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createProjectTab);
+    const insertSubprojectItem = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.insertSubprojectItem);
+    const renderOrUpdateSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.renderOrUpdateSubproject);
+
+    assert.deepEqual(
+      [createSubproject, createProjectTab, insertSubprojectItem, renderOrUpdateSubproject].map(
+        (descriptor) => descriptor.pack,
+      ),
+      ["project", "project", "project", "project"],
+    );
+    assert.deepEqual(
+      [createSubproject, createProjectTab, insertSubprojectItem, renderOrUpdateSubproject].map(
+        (descriptor) => descriptor.risk,
+      ),
+      ["write", "write", "write", "write"],
+    );
+    assert.deepEqual(createSubproject.refs.output.map(({ kind }) => kind), ["project", "project"]);
+    assert.deepEqual(createProjectTab.refs.output.map(({ kind }) => kind), ["project"]);
+    assert.deepEqual(insertSubprojectItem.refs.input.map(({ kind }) => kind), ["project", "track"]);
+    assert.deepEqual(insertSubprojectItem.refs.output.map(({ kind }) => kind), ["item", "project"]);
+    assert.deepEqual(renderOrUpdateSubproject.refs.input.map(({ kind }) => kind), ["project", "item"]);
+    assert.deepEqual(renderOrUpdateSubproject.refs.output.map(({ kind }) => kind), ["project"]);
+    assert.equal(Object.hasOwn(renderOrUpdateSubproject.outputSchema.properties, "job_ref"), true);
+    assert.equal(renderOrUpdateSubproject.bridge.operation_family, "run_job");
+    assert.equal(renderOrUpdateSubproject.bridge.capability, "project.render_or_update_subproject");
+    assert.equal(Object.hasOwn(createSubproject.inputSchema.properties, "raw_action"), false);
+    assert.equal(Object.hasOwn(createProjectTab.inputSchema.properties, "project_file_path"), false);
   });
 
   it("keeps tempo, BPM, grid, and snap setters as project-owned static atoms", () => {
@@ -376,6 +412,21 @@ describe("Wave 1A project template descriptors", () => {
       { scheme: "current", value: "current" },
       { ref: "project:current" },
     );
+    const projectTab = createObjectRef(
+      "project",
+      { scheme: "guid", value: "{TAB-A}" },
+      { display: { name: "sound design" } },
+    );
+    const subproject = createObjectRef(
+      "project",
+      { scheme: "guid", value: "{SUBPROJECT-A}" },
+      { display: { name: "dialog edit" } },
+    );
+    const subprojectItem = createObjectRef(
+      "item",
+      { scheme: "guid", value: "{SUBPROJECT-ITEM-A}" },
+      { display: { name: "dialog edit.rpp-prox" } },
+    );
     const marker = markerRef("{MARKER-MUTATE}", "cue");
     const region = regionRef("{REGION-MUTATE}", "bridge");
 
@@ -446,6 +497,31 @@ describe("Wave 1A project template descriptors", () => {
         refs: { region_ref: region },
         emitted: [region],
       },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.createSubproject,
+        input: { name: "dialog edit", activate: true },
+        refs: {},
+        emitted: [subproject, projectTab],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.createProjectTab,
+        input: { name: "sound design", activate: true },
+        refs: {},
+        emitted: [projectTab, project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.insertSubprojectItem,
+        input: { position_seconds: 12 },
+        refs: { subproject_project_ref: subproject },
+        emitted: [subprojectItem, subproject],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.renderOrUpdateSubproject,
+        input: { mode: "render_or_update", wait_for_completion: false },
+        refs: { subproject_project_ref: subproject },
+        emitted: [subproject],
+        family: "run_job",
+      },
     ];
 
     for (const [index, entry] of closureCases.entries()) {
@@ -461,7 +537,7 @@ describe("Wave 1A project template descriptors", () => {
 
       assert.equal(response.ok, true, entry.id);
       assert.equal(response.template.pack, "project", entry.id);
-      assert.equal(response.template.operation.family, "run_command", entry.id);
+      assert.equal(response.template.operation.family, entry.family ?? "run_command", entry.id);
       assert.equal(response.undo.mode, "required", entry.id);
       assert.equal(response.verification.status, "passed", entry.id);
       assert.deepEqual(response.result.refs, entry.emitted, entry.id);

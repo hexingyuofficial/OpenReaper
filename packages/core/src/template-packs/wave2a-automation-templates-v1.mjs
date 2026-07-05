@@ -16,6 +16,8 @@ export const WAVE2A_AUTOMATION_TEMPLATE_IDS = Object.freeze([
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
   "template.automation.resolve_send_envelope",
+  "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_sine_wave_points",
 ]);
 
 export const WAVE2A_AUTOMATION_TEMPLATES = deepFreeze([
@@ -540,6 +542,113 @@ export const WAVE2A_AUTOMATION_TEMPLATES = deepFreeze([
         name: "resolve_send_volume_envelope",
         summary: "Resolve the volume envelope for an existing send.",
         input: { envelope_type: "volume" },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.automation.insert_fx_parameter_envelope_points",
+    title: "Insert FX parameter envelope points",
+    summary: "Insert bounded points into an already resolved FX-parameter envelope mapping.",
+    entity_kind: "automation_point",
+    tags: ["automation", "fx", "parameter", "point", "wave2a", "alpha2"],
+    capability: "automation.insert_fx_parameter_envelope_points",
+    inputSchema: objectSchema({
+      param_index: { type: "integer" },
+      param_ident: { type: "string" },
+      points: { type: "array" },
+    }, ["param_index", "points"]),
+    outputSchema: objectSchema({
+      fx_ref: { type: "string" },
+      envelope_ref: { type: "string" },
+      param_index: { type: "integer" },
+      inserted_count: { type: "integer" },
+      first_time_seconds: { type: "number" },
+      last_time_seconds: { type: "number" },
+    }, ["fx_ref", "envelope_ref", "param_index", "inserted_count"]),
+    refs: refs({
+      input: [
+        ref("fx_ref", "fx", true, "FX ref whose parameter envelope mapping is being edited."),
+        ref("envelope_ref", "envelope", true, "Resolved parameter envelope ref to receive points."),
+      ],
+      output: [
+        ref("fx_ref", "fx", true, "Same FX ref after point insertion."),
+        ref("envelope_ref", "envelope", true, "Same parameter envelope ref after point insertion."),
+      ],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Creates bounded automation points in an existing FX parameter envelope.",
+      entities: [entity("automation_point", "create", "FX parameter automation points are inserted.")],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "fx_parameter_points_sample_match",
+      kind: "state_delta",
+      summary: "Mapped envelope point count and first/last sampled points match the requested batch.",
+    }),
+    examples: [
+      {
+        name: "insert_fx_filter_sweep",
+        summary: "Insert two normalized points into a resolved FX parameter envelope.",
+        input: {
+          param_index: 0,
+          points: [
+            { time_seconds: 0, value: 0.2, shape: 0, tension: 0 },
+            { time_seconds: 2, value: 0.8, shape: 0, tension: 0 },
+          ],
+        },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.automation.insert_sine_wave_points",
+    title: "Insert sine wave points",
+    summary: "Generate and insert a bounded sine/LFO-shaped point batch on one resolved envelope.",
+    entity_kind: "automation_point",
+    tags: ["automation", "point", "sine", "lfo", "wave2a", "alpha2"],
+    capability: "automation.insert_sine_wave_points",
+    inputSchema: objectSchema({
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+      center_value: { type: "number" },
+      amplitude: { type: "number" },
+      cycles: { type: "number" },
+      point_count: { type: "integer" },
+      shape: { type: "integer" },
+      tension: { type: "number" },
+    }, ["start_seconds", "end_seconds", "center_value", "amplitude", "cycles", "point_count"]),
+    outputSchema: objectSchema({
+      envelope_ref: { type: "string" },
+      inserted_count: { type: "integer" },
+      start_seconds: { type: "number" },
+      end_seconds: { type: "number" },
+      min_value: { type: "number" },
+      max_value: { type: "number" },
+    }, ["envelope_ref", "inserted_count", "start_seconds", "end_seconds"]),
+    refs: envelopeRefs(),
+    expectedDelta: mutationDelta({
+      summary: "Creates a bounded sine-shaped automation point batch on one envelope.",
+      entities: [entity("automation_point", "create", "Sine wave automation points are inserted.")],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "sine_wave_points_sample_match",
+      kind: "state_delta",
+      summary: "Inserted point count and sampled min/max points match the generated sine shape.",
+    }),
+    examples: [
+      {
+        name: "draw_two_bar_sine",
+        summary: "Draw one cycle of sine automation over two seconds.",
+        input: {
+          start_seconds: 0,
+          end_seconds: 2,
+          center_value: 0.5,
+          amplitude: 0.25,
+          cycles: 1,
+          point_count: 33,
+          shape: 0,
+          tension: 0,
+        },
       },
     ],
   }),

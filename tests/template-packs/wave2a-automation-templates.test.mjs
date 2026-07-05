@@ -43,6 +43,8 @@ const ALLOWLIST = Object.freeze([
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
   "template.automation.resolve_send_envelope",
+  "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_sine_wave_points",
 ]);
 
 const BLOCKED = Object.freeze([
@@ -138,12 +140,19 @@ describe("Wave 2A automation template descriptors", () => {
     const source = JSON.stringify(templates);
     assert.doesNotMatch(source, /"risk":"destructive"/);
     assert.doesNotMatch(source, /"operation_family":"run_action"/);
-    assert.doesNotMatch(source, /"kind":"fx"/);
     assert.doesNotMatch(source, /"kind":"file"/);
     assert.doesNotMatch(source, /hardware/i);
     assert.equal(byId.get("template.automation.create_automation_item").expectedDelta.entities[0].action, "create");
     assert.equal(byId.get("template.automation.set_envelope_point").expectedDelta.entities[0].action, "update");
     assert.equal(byId.get("template.automation.resolve_send_envelope").refs.input[0].kind, "send");
+    assert.deepEqual(
+      byId.get("template.automation.insert_fx_parameter_envelope_points").refs.input.map((entry) => entry.kind),
+      ["fx", "envelope"],
+    );
+    assert.equal(
+      byId.get("template.automation.insert_sine_wave_points").inputSchema.required.includes("point_count"),
+      true,
+    );
   });
 
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery compact", () => {
@@ -302,6 +311,25 @@ function sampleInput(id) {
           { time_seconds: 0, value: 0.25, shape: 0, tension: 0 },
           { time_seconds: 1, value: 1, shape: 0, tension: 0 },
         ],
+      };
+    case "template.automation.insert_fx_parameter_envelope_points":
+      return {
+        param_index: 0,
+        points: [
+          { time_seconds: 0, value: 0.2, shape: 0, tension: 0 },
+          { time_seconds: 2, value: 0.8, shape: 0, tension: 0 },
+        ],
+      };
+    case "template.automation.insert_sine_wave_points":
+      return {
+        start_seconds: 0,
+        end_seconds: 2,
+        center_value: 0.5,
+        amplitude: 0.25,
+        cycles: 1,
+        point_count: 33,
+        shape: 0,
+        tension: 0,
       };
     case "template.automation.set_send_automation_mode":
       return { mode: "use_track" };

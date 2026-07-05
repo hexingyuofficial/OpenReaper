@@ -20,6 +20,10 @@ export const WAVE1A_PROJECT_TEMPLATE_IDS = Object.freeze({
   renameMarker: "template.project.rename_marker",
   renameRegion: "template.project.rename_region",
   readTrackItemOverview: "template.project.read_track_item_overview",
+  createSubproject: "template.project.create_subproject",
+  createProjectTab: "template.project.create_project_tab",
+  insertSubprojectItem: "template.project.insert_subproject_item",
+  renderOrUpdateSubproject: "template.project.render_or_update_subproject",
 });
 
 export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
@@ -874,6 +878,129 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       },
     ],
   },
+  subprojectMutationDescriptor({
+    id: WAVE1A_PROJECT_TEMPLATE_IDS.createSubproject,
+    title: "Create subproject",
+    summary: "Create one bounded subproject container and return frozen project handles for readback.",
+    capability: "project.create_subproject",
+    entityKind: "subproject",
+    tag: "create",
+    properties: {
+      name: { type: "string" },
+      activate: { type: "boolean" },
+      inherit_time_selection: { type: "boolean" },
+    },
+    required: ["name"],
+    outputRefs: [
+      ref("subproject_project_ref", "project", true, "Project ref for the created subproject container."),
+      ref("parent_project_ref", "project", true, "Project ref that owns the created subproject container."),
+    ],
+    outputs: {
+      created: { type: "boolean" },
+    },
+    action: "create",
+    verificationName: "subproject_ref_returned",
+    verificationSummary: "Frozen project refs identify the created subproject container and owning project.",
+    example: {
+      name: "create_empty_subproject_container",
+      summary: "Create a named empty subproject container.",
+      input: { name: "dialog edit", activate: true },
+    },
+  }),
+  subprojectMutationDescriptor({
+    id: WAVE1A_PROJECT_TEMPLATE_IDS.createProjectTab,
+    title: "Create project tab",
+    summary: "Create one named project tab and return its frozen project ref.",
+    capability: "project.create_project_tab",
+    entityKind: "project_tab",
+    tag: "tab",
+    properties: {
+      name: { type: "string" },
+      activate: { type: "boolean" },
+      copy_active_project_settings: { type: "boolean" },
+    },
+    required: ["name"],
+    outputRefs: [
+      ref("project_ref", "project", true, "Project ref for the created tab."),
+    ],
+    outputs: {
+      created: { type: "boolean" },
+    },
+    action: "create",
+    verificationName: "project_tab_ref_returned",
+    verificationSummary: "A frozen project ref is returned for the created project tab.",
+    example: {
+      name: "create_reference_project_tab",
+      summary: "Create a named project tab and make it active.",
+      input: { name: "sound design", activate: true },
+    },
+  }),
+  subprojectMutationDescriptor({
+    id: WAVE1A_PROJECT_TEMPLATE_IDS.insertSubprojectItem,
+    title: "Insert subproject item",
+    summary: "Insert one subproject item into the active project from a subproject project ref.",
+    capability: "project.insert_subproject_item",
+    entityKind: "subproject_item",
+    tag: "insert",
+    inputRefs: [
+      ref("subproject_project_ref", "project", true, "Subproject project ref to insert as an item."),
+      ref("track_ref", "track", false, "Optional target track ref for insertion."),
+    ],
+    properties: {
+      position_seconds: { type: "number" },
+      name: { type: "string" },
+    },
+    required: ["position_seconds"],
+    outputRefs: [
+      ref("item_ref", "item", true, "Inserted subproject item ref."),
+      ref("subproject_project_ref", "project", true, "Source subproject project ref."),
+    ],
+    outputs: {
+      inserted: { type: "boolean" },
+    },
+    action: "create",
+    verificationName: "subproject_item_ref_returned",
+    verificationSummary: "The inserted item ref reads back as a subproject item.",
+    example: {
+      name: "insert_subproject_at_cursor",
+      summary: "Insert a subproject item at an explicit timeline position.",
+      input: { position_seconds: 12 },
+    },
+  }),
+  subprojectMutationDescriptor({
+    id: WAVE1A_PROJECT_TEMPLATE_IDS.renderOrUpdateSubproject,
+    title: "Render or update subproject",
+    summary: "Request a bounded render/update job for an existing subproject project or item.",
+    capability: "project.render_or_update_subproject",
+    entityKind: "subproject",
+    tag: "render",
+    operationFamily: "run_job",
+    inputRefs: [
+      ref("subproject_project_ref", "project", true, "Subproject project ref to render or update."),
+      ref("item_ref", "item", false, "Optional inserted subproject item ref to update."),
+    ],
+    properties: {
+      mode: { enum: ["render", "update", "render_or_update"] },
+      wait_for_completion: { type: "boolean" },
+    },
+    required: ["mode"],
+    outputRefs: [
+      ref("subproject_project_ref", "project", true, "Subproject project ref that was rendered or updated."),
+    ],
+    outputs: {
+      job_ref: { type: "string" },
+      queued: { type: "boolean" },
+    },
+    action: "update",
+    idempotent: false,
+    verificationName: "subproject_render_job_returned",
+    verificationSummary: "A bounded render/update job ref is returned for follow-up readback.",
+    example: {
+      name: "update_subproject_render",
+      summary: "Queue an update job for an existing subproject.",
+      input: { mode: "render_or_update", wait_for_completion: false },
+    },
+  }),
 ]);
 
 export function createWave1aProjectTemplates() {
@@ -939,6 +1066,77 @@ function markerMutationDescriptor({
           name: `${capability.replaceAll(".", "_")}_readback`,
           kind: "state_delta",
           summary: `${title} is verified by marker/region list readback.`,
+        },
+      ],
+    }),
+    examples: [example],
+  };
+}
+
+function subprojectMutationDescriptor({
+  id,
+  title,
+  summary,
+  capability,
+  entityKind,
+  tag,
+  inputRefs = [],
+  outputRefs,
+  properties = {},
+  required = [],
+  outputs = {},
+  action,
+  operationFamily = "run_command",
+  idempotent = false,
+  verificationName,
+  verificationSummary,
+  example,
+}) {
+  return {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id,
+    title,
+    summary,
+    pack: "project",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: entityKind,
+    tags: ["project", "subproject", tag],
+    bridge: bridge({
+      operation_family: operationFamily,
+      operation_name: "template.execute",
+      capability,
+      idempotency: "supported",
+      timeout_ms: operationFamily === "run_job" ? 30_000 : 5_000,
+    }),
+    inputSchema: objectSchema(properties, required),
+    outputSchema: objectSchema({
+      ...Object.fromEntries(outputRefs.map((outputRef) => [outputRef.name, { type: "string" }])),
+      ...outputs,
+    }, [...new Set([...outputRefs.map((outputRef) => outputRef.name), ...Object.keys(outputs)])]),
+    refs: refs({
+      input: inputRefs,
+      output: outputRefs,
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "mutation",
+      summary,
+      entities: [
+        {
+          entity_kind: entityKind,
+          action,
+          summary: `${title} changes one project ${entityKind}.`,
+        },
+      ],
+      idempotent,
+    }),
+    verification: verification({
+      checks: [
+        {
+          name: verificationName,
+          kind: "state_delta",
+          summary: verificationSummary,
         },
       ],
     }),

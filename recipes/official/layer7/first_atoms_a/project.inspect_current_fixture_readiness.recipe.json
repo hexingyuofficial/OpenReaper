@@ -1,0 +1,321 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.project.inspect_current_fixture_readiness",
+  "title": "Inspect current fixture readiness",
+  "summary": "Draft read-only workflow that gathers compact project, track, item, and mixer state before a fixture run.",
+  "pack": "project",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "fixture_readiness",
+  "tags": [
+    "project",
+    "inspection",
+    "fixture",
+    "snapshot",
+    "workflow"
+  ],
+  "workflow_card": {
+    "intent": "Inspect whether the current project has enough bounded state for a safe Alpha2 fixture run.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Run before mutation when fixture readiness is unclear."
+    ],
+    "supported_steps": [
+      "Read compact project overview.",
+      "List tracks and selected items.",
+      "Read bounded mixer controls for visible target confirmation."
+    ],
+    "candidate_steps": [
+      "Future live fixture lanes may add richer readiness scoring after evidence."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask before mutation if selected track or selected item counts do not match the intended fixture."
+    ],
+    "template_atoms": [
+      "template.project.read_track_item_overview",
+      "template.tracks.list_tracks",
+      "template.items.list_selected_items",
+      "template.tracks.read_mixer_controls"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; this recipe only reads bounded state.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "read_track_item_overview",
+      "title": "Read track item overview",
+      "summary": "Read a compact active-project track and item overview.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.project.read_track_item_overview",
+        "input": {
+          "max_tracks": 32,
+          "max_items_per_track": 8,
+          "include_selected_items": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_track_item_overview",
+      "evidence": "evidence_read_track_item_overview",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "list_tracks",
+      "title": "List tracks",
+      "summary": "List compact canonical track refs and selection state.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.list_tracks",
+        "input": {
+          "limit": 64,
+          "include_selection": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_list_tracks",
+      "evidence": "evidence_list_tracks",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "list_selected_items",
+      "title": "List selected items",
+      "summary": "List bounded selected item refs and owning track refs.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.list_selected_items",
+        "input": {
+          "limit": 16,
+          "include_track_refs": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_list_selected_items",
+      "evidence": "evidence_list_selected_items",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_mixer_controls",
+      "title": "Read mixer controls",
+      "summary": "Read bounded selected-track mixer controls for visible target confirmation.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.read_mixer_controls",
+        "input": {
+          "include_selected": true,
+          "limit": 16
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_mixer_controls",
+      "evidence": "evidence_read_mixer_controls",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_fixture_readiness_refs",
+      "kind": "expected_output",
+      "summary": "The workflow must retain compact project, track, item, and mixer refs for agent readiness review.",
+      "required": true,
+      "evidence": [
+        "evidence_read_track_item_overview",
+        "evidence_list_tracks",
+        "evidence_list_selected_items",
+        "evidence_read_mixer_controls"
+      ],
+      "outputs": {
+        "refs": [
+          "project_ref",
+          "track_ref",
+          "item_ref"
+        ],
+        "artifacts": [],
+        "jobs": [],
+        "state": [
+          "fixture_readiness_snapshot"
+        ]
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_track_item_overview",
+        "after_step": "read_track_item_overview",
+        "required_evidence": [
+          "evidence_read_track_item_overview"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Compact track/item overview evidence is retained."
+      },
+      {
+        "id": "checkpoint_list_tracks",
+        "after_step": "list_tracks",
+        "required_evidence": [
+          "evidence_list_tracks"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Track list evidence is retained."
+      },
+      {
+        "id": "checkpoint_list_selected_items",
+        "after_step": "list_selected_items",
+        "required_evidence": [
+          "evidence_list_selected_items"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Selected-item evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_mixer_controls",
+        "after_step": "read_mixer_controls",
+        "required_evidence": [
+          "evidence_read_mixer_controls"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Mixer control evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_read_track_item_overview",
+        "step": "read_track_item_overview",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.project.read_track_item_overview",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_list_tracks",
+        "step": "list_tracks",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.list_tracks",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_list_selected_items",
+        "step": "list_selected_items",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.list_selected_items",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_mixer_controls",
+        "step": "read_mixer_controls",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.read_mixer_controls",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_request_user",
+        "trigger": "template_error",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Request user clarification when fixture targets or project state are ambiguous."
+      }
+    ],
+    "risk_gates": []
+  }
+}

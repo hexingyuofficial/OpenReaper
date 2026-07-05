@@ -34,10 +34,14 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.items.layer_report_from_evidence",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
+  "recipe.project.cleanup_trial_created_objects",
   "recipe.project.cleanup_fingerprint_report",
+  "recipe.project.inspect_current_fixture_readiness",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
+  "recipe.tracks.adjust_selected_track_basic_balance",
+  "recipe.tracks.cleanup_created_track_set",
 ]);
 
 const EXPECTED_DEPENDENCIES = Object.freeze({
@@ -48,6 +52,19 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   ]),
   "recipe.project.cleanup_fingerprint_report": Object.freeze([
     "template.project.create_cleanup_report",
+  ]),
+  "recipe.project.cleanup_trial_created_objects": Object.freeze([
+    "template.project.read_track_item_overview",
+    "template.items.delete_items",
+    "template.tracks.delete_tracks",
+    "template.project.delete_marker",
+    "template.project.delete_region",
+  ]),
+  "recipe.project.inspect_current_fixture_readiness": Object.freeze([
+    "template.project.read_track_item_overview",
+    "template.tracks.list_tracks",
+    "template.items.list_selected_items",
+    "template.tracks.read_mixer_controls",
   ]),
   "recipe.render.region_wav_render": Object.freeze([
     "template.render.render_region_wav",
@@ -82,6 +99,16 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
     "template.automation.set_envelope_lane_state",
     "template.automation.insert_envelope_point",
   ]),
+  "recipe.tracks.adjust_selected_track_basic_balance": Object.freeze([
+    "template.tracks.read_mixer_controls",
+    "template.tracks.set_volume",
+    "template.tracks.set_pan",
+    "template.tracks.set_width",
+  ]),
+  "recipe.tracks.cleanup_created_track_set": Object.freeze([
+    "template.project.read_track_item_overview",
+    "template.tracks.delete_tracks",
+  ]),
 });
 
 const ACCEPTED_TEMPLATE_SET = new Set(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS);
@@ -96,7 +123,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the eight first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the twelve first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -121,9 +148,13 @@ describe("Layer 7 official draft recipe packet", () => {
       "media.item_prep_from_folder.recipe.json",
       "midi.track_phrase_seed.recipe.json",
       "project.cleanup_fingerprint_report.recipe.json",
+      "project.cleanup_trial_created_objects.recipe.json",
+      "project.inspect_current_fixture_readiness.recipe.json",
       "render.region_delivery_report.recipe.json",
       "render.region_wav_render.recipe.json",
       "routing.send_fx_automation_setup.recipe.json",
+      "tracks.adjust_selected_track_basic_balance.recipe.json",
+      "tracks.cleanup_created_track_set.recipe.json",
     ]);
   });
 
@@ -322,6 +353,31 @@ describe("Layer 7 official draft recipe packet", () => {
       ],
     );
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("adds cleanup, balance, and fixture-readiness workflow atoms without creating an executor", () => {
+    const byId = recipesById();
+    const cleanupTracks = byId.get("recipe.tracks.cleanup_created_track_set");
+    const cleanupProject = byId.get("recipe.project.cleanup_trial_created_objects");
+    const balance = byId.get("recipe.tracks.adjust_selected_track_basic_balance");
+    const readiness = byId.get("recipe.project.inspect_current_fixture_readiness");
+
+    assert.equal(cleanupTracks.risk, "destructive");
+    assert.equal(cleanupProject.risk, "destructive");
+    assert.equal(balance.risk, "write");
+    assert.equal(readiness.risk, "read");
+    assert.equal(cleanupTracks.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.equal(cleanupProject.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.equal(cleanupTracks.recovery.risk_gates[0].blocks_auto_resume, true);
+    assert.equal(cleanupProject.recovery.risk_gates[0].blocks_auto_resume, true);
+    assert.deepEqual(recipeTemplateDependencies(cleanupTracks), EXPECTED_DEPENDENCIES[cleanupTracks.id]);
+    assert.deepEqual(recipeTemplateDependencies(cleanupProject), EXPECTED_DEPENDENCIES[cleanupProject.id]);
+    assert.deepEqual(recipeTemplateDependencies(balance), EXPECTED_DEPENDENCIES[balance.id]);
+    assert.deepEqual(recipeTemplateDependencies(readiness), EXPECTED_DEPENDENCIES[readiness.id]);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(cleanupTracks)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(cleanupProject)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(balance)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(readiness)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
   it("discovers the E6 routing/FX/automation family through compact recipe-menu intent fields", () => {

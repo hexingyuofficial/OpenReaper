@@ -45,6 +45,7 @@ const ALLOWLIST = Object.freeze([
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
   "template.fx.read_video_processor_code",
+  "template.fx.parameter_to_envelope_mapping",
 ]);
 
 const BLOCKED = Object.freeze([
@@ -88,7 +89,10 @@ describe("Wave 2A fx template descriptors", () => {
   it("keeps ownership and risk boundaries narrow", () => {
     const templates = createWave2AFxTemplates();
     const byId = new Map(templates.map((descriptor) => [descriptor.id, descriptor]));
-    const readIds = ALLOWLIST.slice(0, 6).concat(["template.fx.read_video_processor_code"]);
+    const readIds = ALLOWLIST.slice(0, 6).concat([
+      "template.fx.read_video_processor_code",
+      "template.fx.parameter_to_envelope_mapping",
+    ]);
 
     for (const id of readIds) {
       const descriptor = byId.get(id);
@@ -113,8 +117,11 @@ describe("Wave 2A fx template descriptors", () => {
     assert.equal(byId.get("template.fx.read_video_processor_code").risk, "read");
     assert.equal(byId.get("template.fx.read_video_processor_code").expectedDelta.kind, "artifact");
     assert.equal(byId.get("template.fx.set_fx_parameter_normalized").refs.input[0].kind, "fx");
+    assert.deepEqual(
+      byId.get("template.fx.parameter_to_envelope_mapping").refs.output.map((entry) => entry.kind),
+      ["fx", "envelope"],
+    );
     assert.equal(JSON.stringify(templates).includes('"kind":"send"'), false);
-    assert.equal(JSON.stringify(templates).includes('"kind":"envelope"'), false);
     assert.equal(JSON.stringify(templates).includes('"kind":"device"'), false);
   });
 
@@ -284,7 +291,7 @@ describe("Wave 2A fx template descriptors", () => {
     assert.doesNotMatch(source, /streetlight-reaper-mcp/);
     assert.doesNotMatch(source, /REAPER\.app|child_process|spawn\(|execFile|reaper\//);
     assert.doesNotMatch(source, /run_action|ACTION_NOT_ALLOWED|command_id/);
-    assert.doesNotMatch(source, /set_video_processor_code|delete_fx|set_fx_pin_mapping/);
+    assert.doesNotMatch(source, /set_video_processor_code|delete_fx|set_fx_pin_mapping|write_fx_parameter_envelope/);
   });
 });
 
@@ -400,6 +407,13 @@ function executionScenarios() {
       refs: { fx_ref: fxRef("track", 2) },
       emittedRefs: [],
       artifacts: [videoArtifact],
+    },
+    {
+      id: "template.fx.parameter_to_envelope_mapping",
+      input: { param_index: 0 },
+      refs: { fx_ref: fxRef("track", 3) },
+      emittedRefs: [fxRef("track", 3), createObjectRef("envelope", { scheme: "guid", value: "{FX-ENV-0}" })],
+      artifacts: [],
     },
   ];
 }

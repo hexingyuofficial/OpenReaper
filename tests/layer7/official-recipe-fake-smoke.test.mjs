@@ -32,10 +32,14 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.items.layer_report_from_evidence",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
+  "recipe.project.cleanup_trial_created_objects",
   "recipe.project.cleanup_fingerprint_report",
+  "recipe.project.inspect_current_fixture_readiness",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
+  "recipe.tracks.adjust_selected_track_basic_balance",
+  "recipe.tracks.cleanup_created_track_set",
 ]);
 
 const WRITE_ATOMS = new Set([
@@ -43,6 +47,9 @@ const WRITE_ATOMS = new Set([
   "recipe.render.region_wav_render",
   "recipe.media.item_prep_from_folder",
   "recipe.routing.send_fx_automation_setup",
+  "recipe.project.cleanup_trial_created_objects",
+  "recipe.tracks.adjust_selected_track_basic_balance",
+  "recipe.tracks.cleanup_created_track_set",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -58,7 +65,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the eight draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the twelve draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -195,14 +202,14 @@ describe("Layer 7 official draft recipe fake smoke", () => {
         continue;
       }
 
-      assert.equal(recipe.risk, "write", recipe.id);
+      assert.equal(["write", "destructive"].includes(recipe.risk), true, recipe.id);
       assert.equal(run.risk_pauses.length > 0, true, recipe.id);
       assert.equal(run.risk_pauses.every((pause) => pause.acknowledged), true, recipe.id);
       assert.equal(run.risk_pauses.every((pause) => pause.blocks_auto_resume), true, recipe.id);
 
       const firstWriteStep = recipe.steps.find((step) => {
         if (step.uses !== "call_template") return false;
-        return ACCEPTED_TEMPLATE_CATALOG.require(step.call_template.id).risk === "write";
+        return ACCEPTED_TEMPLATE_CATALOG.require(step.call_template.id).risk !== "read";
       });
       assert.ok(firstWriteStep, recipe.id);
       assert.equal(
@@ -277,6 +284,68 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.equal(run.expected.refs.has("send_ref"), true);
     assert.equal(run.expected.refs.has("fx_ref"), true);
     assert.equal(run.expected.refs.has("envelope_ref"), true);
+  });
+
+  it("fake-smokes cleanup, balance, and fixture-readiness atoms as recipe-only compositions", () => {
+    const byId = new Map(loadDraftRecipes().map((recipe) => [recipe.id, recipe]));
+    const cleanupTracks = fakeSmokeRecipe(byId.get("recipe.tracks.cleanup_created_track_set"));
+    const cleanupProject = fakeSmokeRecipe(byId.get("recipe.project.cleanup_trial_created_objects"));
+    const balance = fakeSmokeRecipe(byId.get("recipe.tracks.adjust_selected_track_basic_balance"));
+    const readiness = fakeSmokeRecipe(byId.get("recipe.project.inspect_current_fixture_readiness"));
+
+    assert.equal(cleanupTracks.status, "succeeded");
+    assert.deepEqual(
+      cleanupTracks.template_calls.map((call) => call.template_id),
+      [
+        "template.project.read_track_item_overview",
+        "template.tracks.delete_tracks",
+        "template.project.read_track_item_overview",
+      ],
+    );
+    assert.equal(cleanupTracks.risk_pauses.length, 1);
+    assert.equal(cleanupTracks.risk_pauses[0].policy, "user_confirmation");
+
+    assert.equal(cleanupProject.status, "succeeded");
+    assert.deepEqual(
+      cleanupProject.template_calls.map((call) => call.template_id),
+      [
+        "template.project.read_track_item_overview",
+        "template.items.delete_items",
+        "template.tracks.delete_tracks",
+        "template.project.delete_marker",
+        "template.project.delete_region",
+        "template.project.read_track_item_overview",
+      ],
+    );
+    assert.equal(cleanupProject.risk_pauses.length, 1);
+    assert.equal(cleanupProject.risk_pauses[0].policy, "user_confirmation");
+
+    assert.equal(balance.status, "succeeded");
+    assert.deepEqual(
+      balance.template_calls.map((call) => call.template_id),
+      [
+        "template.tracks.read_mixer_controls",
+        "template.tracks.set_volume",
+        "template.tracks.set_pan",
+        "template.tracks.set_width",
+        "template.tracks.read_mixer_controls",
+      ],
+    );
+    assert.equal(balance.risk_pauses.length, 1);
+    assert.equal(balance.expected.refs.has("track_ref"), true);
+
+    assert.equal(readiness.status, "succeeded");
+    assert.deepEqual(
+      readiness.template_calls.map((call) => call.template_id),
+      [
+        "template.project.read_track_item_overview",
+        "template.tracks.list_tracks",
+        "template.items.list_selected_items",
+        "template.tracks.read_mixer_controls",
+      ],
+    );
+    assert.equal(readiness.risk_pauses.length, 0);
+    assert.equal(readiness.expected.refs.has("project_ref"), true);
   });
 
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {
@@ -809,7 +878,7 @@ function assertWriteRiskGates(recipe, run) {
 
   const firstWriteStep = recipe.steps.find((step) => {
     if (step.uses !== "call_template") return false;
-    return ACCEPTED_TEMPLATE_CATALOG.require(step.call_template.id).risk === "write";
+    return ACCEPTED_TEMPLATE_CATALOG.require(step.call_template.id).risk !== "read";
   });
   assert.ok(firstWriteStep, recipe.id);
   assert.equal(

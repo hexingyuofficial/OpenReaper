@@ -15,6 +15,7 @@ export const WAVE2A_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.set_fx_preset_by_index",
   "template.fx.reorder_fx",
   "template.fx.read_video_processor_code",
+  "template.fx.parameter_to_envelope_mapping",
 ]);
 
 export const WAVE2A_FX_TEMPLATES = deepFreeze([
@@ -459,6 +460,43 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
         name: "read_video_processor_code",
         summary: "Read bounded code facts for a resolved video processor FX.",
         input: {},
+      },
+    ],
+  }),
+  readDescriptor({
+    id: "template.fx.parameter_to_envelope_mapping",
+    title: "Map FX parameter to envelope",
+    summary: "Read the existing automation envelope mapping for one FX parameter without creating it.",
+    entity_kind: "fx_param.envelope_mapping",
+    tags: ["fx", "parameter", "envelope", "mapping", "read", "wave2a", "alpha2"],
+    operation_name: "fx.parameter_to_envelope_mapping",
+    capability: "fx.parameter_to_envelope_mapping",
+    inputProperties: parameterSelectorProperties(),
+    requiredInput: ["param_index"],
+    outputProperties: {
+      fx_ref: { type: "string" },
+      param_index: { type: "integer" },
+      param_ident: { type: "string" },
+      envelope_ref: { type: "string" },
+      envelope_name: { type: "string" },
+      envelope_exists: { type: "boolean" },
+      normalized_min: { type: "number" },
+      normalized_max: { type: "number" },
+    },
+    refs: refs({
+      input: [ref("fx_ref", "fx", true, "FX ref whose parameter mapping is read.")],
+      output: [
+        ref("fx_ref", "fx", true, "Same FX ref returned with mapping metadata."),
+        ref("envelope_ref", "envelope", false, "Existing parameter envelope ref when present."),
+      ],
+    }),
+    expectedSummary: "Reads an existing FX parameter envelope mapping without inserting points.",
+    expectedEntitySummary: "FX parameter to envelope mapping is read.",
+    examples: [
+      {
+        name: "map_fx_param_envelope",
+        summary: "Read the envelope mapping for parameter zero.",
+        input: { param_index: 0 },
       },
     ],
   }),
