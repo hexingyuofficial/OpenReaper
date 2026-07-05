@@ -454,22 +454,23 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const safeWriteMenu = safeWriteRuntime.list_templates({ limit: 100 });
-    assert.equal(safeWriteMenu.items.some((item) => item.id === "template.midi.create_midi_item"), false);
+    assert.equal(safeWriteMenu.items.some((item) => item.id === "template.midi.create_midi_item"), true);
     assert.equal(safeWriteMenu.items.some((item) => item.action_name === "set_track_color"), true);
     assert.equal(safeWriteMenu.items.find((item) => item.id === "template.tracks.set_color").current_status, "needs_ref");
+    assert.equal(
+      safeWriteMenu.items.find((item) => item.id === "template.midi.create_midi_item").current_status,
+      "needs_ref",
+    );
     assert.equal(
       safeWriteMenu.items.find((item) => item.id === "template.project.create_marker").current_status,
       "needs_confirmation",
     );
-    const midiBug = safeWriteRuntime.list_templates({
+    const midiCreate = safeWriteRuntime.list_templates({
       ids: ["template.midi.create_midi_item"],
       fields: ["summary"],
     });
-    assert.equal(midiBug.items[0].current_status, "bug_known");
-    assert.equal(
-      midiBug.items[0].capability_truth.known_blocker,
-      "known_bug:midi_create_item_active_take_ref_missing",
-    );
+    assert.equal(midiCreate.items[0].current_status, "needs_ref");
+    assert.equal(midiCreate.items[0].capability_truth.known_blocker, null);
 
     const bpmExact = runtime.list_templates({
       ids: ["template.project.set_bpm"],

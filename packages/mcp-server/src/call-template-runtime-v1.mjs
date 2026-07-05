@@ -232,7 +232,6 @@ const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
 const RUNTIME_DISCOVERY_DEFAULT_SURFACES = Object.freeze(["catalog", "executable"]);
 
 const RUNTIME_KNOWN_TEMPLATE_BLOCKERS = Object.freeze({
-  "template.midi.create_midi_item": "known_bug:midi_create_item_active_take_ref_missing",
   "template.project.set_tempo": "live_handler_missing:tempo_write",
   "template.project.set_bpm": "live_handler_missing:tempo_write",
   "template.project.set_tempo_marker": "live_handler_missing:tempo_marker_write",
