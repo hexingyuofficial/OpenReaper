@@ -831,6 +831,12 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_automation_item_bounds"] = set_automation_item_bounds,
 }
 
+local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
+  ["project.set_tempo"] = d6_project_set_tempo,
+  ["project.set_bpm"] = d6_project_set_bpm,
+  ["project.set_tempo_marker"] = d6_project_set_tempo_marker,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -849,6 +855,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D6_PROJECT_TEMPO_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

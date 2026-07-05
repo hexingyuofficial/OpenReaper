@@ -21,6 +21,7 @@ import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
@@ -477,9 +478,40 @@ describe("Layer 4D call_template runtime binding", () => {
       fields: ["summary"],
     });
     assert.equal(bpmExact.items[0].current_status, "blocked");
-    assert.equal(bpmExact.items[0].capability_truth.evidence_level, "blocked_typed");
-    assert.equal(bpmExact.items[0].capability_truth.known_blocker, "live_handler_missing:tempo_write");
-    assert.match(bpmExact.items[0].user_message, /Tempo\/BPM writes/);
+    assert.equal(bpmExact.items[0].capability_truth.evidence_level, "live_smoked");
+    assert.equal(
+      bpmExact.items[0].capability_truth.known_blocker,
+      "live_executor_not_configured_or_not_in_allowed_group",
+    );
+    assert.equal(bpmExact.items[0].capability_truth.allowed_live_group, "d6_project_tempo");
+
+    const tempoRuntime = createCallTemplateRuntime({
+      executor: new FakeFoundationBridge(),
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+      },
+    });
+    const tempoMenu = tempoRuntime.list_templates({ limit: 10 });
+    assert.deepEqual(
+      tempoMenu.items.map((item) => item.id),
+      CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+    );
+    assert.equal(
+      tempoMenu.items.every((item) => item.capability_truth.live_runnable_now === true),
+      true,
+    );
+    assert.equal(
+      tempoMenu.items.every((item) => item.current_status === "needs_confirmation"),
+      true,
+    );
+    const tempoExact = tempoRuntime.list_templates({
+      ids: ["template.project.set_bpm"],
+      fields: ["summary"],
+    });
+    assert.equal(tempoExact.items[0].capability_truth.known_blocker, null);
+    assert.equal(tempoExact.items[0].current_status, "needs_confirmation");
 
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",

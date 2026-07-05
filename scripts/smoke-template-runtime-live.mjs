@@ -2,6 +2,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
@@ -55,6 +56,7 @@ const E2_FX_L1_READ_ROUTE_FLAG = "--fx-read";
 const E2_FX_B1_ROUTE_FLAG = "--fx-b1";
 const E5_R1_ROUTING_READ_ROUTE_FLAG = "--routing-read";
 const E5_ROUTING_AUTOMATION_ROUTE_FLAG = "--routing-automation";
+const D6_PROJECT_TEMPO_ROUTE_FLAG = "--project-tempo";
 const E3_MEDIA_ROUTE_FLAG = "--media-route";
 const E4_ITEM_ROUTE_FLAG = "--item-route";
 const PHASE_FLAG = "--phase";
@@ -86,6 +88,7 @@ const E2_FX_L1_READ_ROUTE_BATCH = "E2 FX-L1 Read Route";
 const E2_FX_B1_ROUTE_BATCH = "E2 FX-B1 Route";
 const E5_R1_ROUTING_READ_ROUTE_BATCH = "E5-R1 Routing Read Route";
 const E5_ROUTING_AUTOMATION_ROUTE_BATCH = "E5 Routing/Automation Route";
+const D6_PROJECT_TEMPO_ROUTE_BATCH = "D6 Project Tempo Route";
 const E3_MEDIA_ROUTE_BATCH = "E3 Media Route";
 const E4_ITEM_ROUTE_BATCH = "E4 Item Route";
 const SAFE_WRITE_A_PROJECT_ROOT_ENV = "OPENREAPER_SAFE_WRITE_A_PROJECT_ROOT";
@@ -130,6 +133,11 @@ const E5_TAKE_REF_ENV = "OPENREAPER_E5_TAKE_REF";
 const E5_SEND_VOLUME_ENV = "OPENREAPER_E5_SEND_VOLUME";
 const E5_SEND_PAN_ENV = "OPENREAPER_E5_SEND_PAN";
 const E5_POINT_VALUE_ENV = "OPENREAPER_E5_POINT_VALUE";
+const D6_PROJECT_TEMPO_OPT_IN_ENV = "OPENREAPER_D6_PROJECT_TEMPO_LIVE_SMOKE";
+const D6_PROJECT_TEMPO_BPM_ENV = "OPENREAPER_D6_PROJECT_TEMPO_BPM";
+const D6_PROJECT_BPM_ALIAS_ENV = "OPENREAPER_D6_PROJECT_BPM_ALIAS";
+const D6_PROJECT_TEMPO_MARKER_BPM_ENV = "OPENREAPER_D6_PROJECT_TEMPO_MARKER_BPM";
+const D6_PROJECT_TEMPO_MARKER_POSITION_ENV = "OPENREAPER_D6_PROJECT_TEMPO_MARKER_POSITION";
 const E3_MEDIA_FOLDER_ROOT_ENV = "OPENREAPER_E3_MEDIA_FOLDER_ROOT";
 const E3_MEDIA_SOURCE_PATH_ENV = "OPENREAPER_E3_MEDIA_SOURCE_PATH";
 const E3_MEDIA_RELINK_PATH_ENV = "OPENREAPER_E3_MEDIA_RELINK_PATH";
@@ -441,6 +449,16 @@ const E5_ROUTING_AUTOMATION_ROUTE_SPEC_BY_CAPABILITY = new Map(
     .map((spec) => [spec.capability, spec]),
 );
 
+const D6_PROJECT_TEMPO_TEMPLATE_SPECS = Object.freeze([
+  routeSpec("template.project.set_tempo", "run_command:template.execute", "project", "write", "project.set_tempo", "none", "tempo_write", true),
+  routeSpec("template.project.set_bpm", "run_command:template.execute", "project", "write", "project.set_bpm", "none", "tempo_write", true),
+  routeSpec("template.project.set_tempo_marker", "run_command:template.execute", "project", "write", "project.set_tempo_marker", "none", "tempo_marker_write", true),
+]);
+
+const D6_PROJECT_TEMPO_SPEC_BY_CAPABILITY = new Map(
+  D6_PROJECT_TEMPO_TEMPLATE_SPECS.map((spec) => [spec.capability, spec]),
+);
+
 function routeSpec(id, operation, pack, risk, capability, refGroup, phase, idempotent = false) {
   return Object.freeze({ id, operation, pack, risk, capability, ref_group: refGroup, phase, idempotent });
 }
@@ -607,6 +625,8 @@ if (route.fake) {
     ? null
     : route.name === "e5-routing-automation-route"
     ? null
+    : route.name === "d6-project-tempo-route"
+    ? null
     : route.name === "e3-media-route"
     ? null
     : route.name === "e4-item-route"
@@ -639,6 +659,8 @@ if (route.fake) {
         ? "e5_r1_routing_read_route.fake_executor.v1"
         : route.name === "e5-routing-automation-route"
         ? "e5_routing_automation_route.fake_executor.v1"
+        : route.name === "d6-project-tempo-route"
+        ? "d6_project_tempo_route.fake_executor.v1"
         : route.name === "e3-media-route"
         ? "e3_media_route.fake_executor.v1"
         : route.name === "e4-item-route"
@@ -666,6 +688,9 @@ if (route.fake) {
       }
       if (route.name === "e5-routing-automation-route") {
         return dispatchFakeE5RoutingAutomationRoute(request);
+      }
+      if (route.name === "d6-project-tempo-route") {
+        return dispatchFakeD6ProjectTempoRoute(request);
       }
       if (route.name === "e3-media-route") {
         return dispatchFakeE3MediaRoute(request);
@@ -719,6 +744,12 @@ if (route.fake) {
         fixtureInputs,
         contextBase,
       })
+    : route.name === "d6-project-tempo-route"
+    ? await runD6ProjectTempoRouteSmoke({
+        liveRuntime: fakeRuntime,
+        fixtureInputs,
+        contextBase,
+      })
     : route.name === "e3-media-route"
     ? await runE3MediaRouteSmoke({
         liveRuntime: fakeRuntime,
@@ -758,7 +789,7 @@ if (route.fake) {
     skipped: false,
     live_executor: fakeExecutor.config,
     context: contextSummary(contextBase),
-    evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
+    evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route", "d6-project-tempo-route", "e3-media-route", "e4-item-route"].includes(route.name) ? compactRuntimeEvidence(fakeRuntime.evidence()) : fakeRuntime.evidence(),
     live_pass_claimed: false,
   }));
   process.exit(fakeReport.ok ? 0 : 2);
@@ -854,6 +885,12 @@ const routeReport = route.name === "first-real-a2-render"
       fixtureInputs,
       contextBase,
     })
+  : route.name === "d6-project-tempo-route"
+  ? await runD6ProjectTempoRouteSmoke({
+      liveRuntime,
+      fixtureInputs,
+      contextBase,
+    })
   : route.name === "e3-media-route"
   ? await runE3MediaRouteSmoke({
       liveRuntime,
@@ -886,7 +923,7 @@ console.log(JSON.stringify({
   skipped: false,
   live_executor: executorConfig.config,
   context: contextSummary(contextBase),
-  evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
+  evidence: ["safe-write-a", "e2-fx-l1-read-route", "e2-fx-b1-route", "e5-r1-routing-read-route", "e5-routing-automation-route", "d6-project-tempo-route"].includes(route.name) ? compactRuntimeEvidence(liveRuntime.evidence()) : liveRuntime.evidence(),
   live_pass_claimed: false,
 }));
 process.exit(routeReport.ok ? 0 : 2);
@@ -981,6 +1018,8 @@ function selectRoute(argv, env) {
     argv.includes(E5_R1_ROUTING_READ_ROUTE_FLAG) || env[E5_R1_ROUTING_READ_OPT_IN_ENV] === "1";
   const e5RoutingAutomationRouteSelected =
     argv.includes(E5_ROUTING_AUTOMATION_ROUTE_FLAG) || env[E5_ROUTING_AUTOMATION_OPT_IN_ENV] === "1";
+  const d6ProjectTempoRouteSelected =
+    argv.includes(D6_PROJECT_TEMPO_ROUTE_FLAG) || env[D6_PROJECT_TEMPO_OPT_IN_ENV] === "1";
   if (e2FxL1ReadRouteSelected) {
     return {
       name: "e2-fx-l1-read-route",
@@ -1072,6 +1111,24 @@ function selectRoute(argv, env) {
       configuredBlocker: e5RoutingAutomationRouteConfiguredBlocker,
       passReason: "e5_routing_automation_route_fake_static_readback_passed",
       failReason: "e5_routing_automation_route_fake_static_readback_failed",
+    };
+  }
+
+  if (d6ProjectTempoRouteSelected) {
+    return {
+      name: "d6-project-tempo-route",
+      wave: D6_PROJECT_TEMPO_ROUTE_BATCH,
+      batch: D6_PROJECT_TEMPO_ROUTE_BATCH,
+      routeFlag: D6_PROJECT_TEMPO_ROUTE_FLAG,
+      optInEnv: D6_PROJECT_TEMPO_OPT_IN_ENV,
+      fake: argv.includes(FAKE_FLAG),
+      templateIds: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+      operations: ["run_command:template.execute"],
+      capabilities: D6_PROJECT_TEMPO_TEMPLATE_SPECS.map((spec) => spec.capability),
+      fixtureInputs: d6ProjectTempoRouteFixtureInputs,
+      configuredBlocker: null,
+      passReason: "d6_project_tempo_route_fake_static_readback_passed",
+      failReason: "d6_project_tempo_route_fake_static_readback_failed",
     };
   }
 
@@ -1698,6 +1755,68 @@ async function runE5RoutingAutomationRouteSmoke({ liveRuntime, fixtureInputs: fi
       "e5_envelope_ref_missing",
       "e5_send_value_invalid",
       "e5_automation_point_value_invalid",
+    ],
+    live_support_status: "not_claimed",
+    executions,
+  };
+}
+
+async function runD6ProjectTempoRouteSmoke({ liveRuntime, fixtureInputs: fixtureInputsForRun, contextBase }) {
+  const executions = [];
+  const attempted = [];
+  const outputRefs = {};
+
+  for (const [index, spec] of D6_PROJECT_TEMPO_TEMPLATE_SPECS.entries()) {
+    attempted.push(spec.id);
+    const response = await liveRuntime.call_template({
+      id: spec.id,
+      input: d6ProjectTempoRouteInput(spec, fixtureInputsForRun),
+      refs: {},
+      idempotency_key: `d6-project-tempo:${spec.capability}`,
+      context: {
+        ...contextBase,
+        created_at: new Date().toISOString(),
+        request_sequence: index + 1,
+      },
+    });
+
+    const execution = summarizeExecution(response);
+    execution.operation = spec.operation;
+    execution.capability = spec.capability;
+    execution.risk = spec.risk;
+    execution.phase = spec.phase;
+    execution.artifacts_allowed = false;
+    execution.undo = {
+      mode: response?.undo?.mode ?? null,
+      opened: Boolean(response?.undo?.opened),
+      closed: Boolean(response?.undo?.closed),
+      label: response?.undo?.label ?? null,
+    };
+    execution.verification_status = response?.verification?.status ?? null;
+    execution.idempotency = {
+      key_present: typeof response?.idempotency?.key === "string",
+      replayed: Boolean(response?.idempotency?.replayed),
+      expected: "keyed_project_tempo_readback",
+    };
+
+    const produced = producedRefsByKind(response);
+    if (response?.ok && produced.project && !outputRefs.project_ref) {
+      outputRefs.project_ref = produced.project.ref;
+    }
+    executions.push(execution);
+  }
+
+  const ok = executions.every((execution) => execution.ok);
+  return {
+    ok,
+    reason: ok ? "d6_project_tempo_route_fake_static_readback_passed" : firstBlocker(executions) ?? "d6_project_tempo_route_fake_static_readback_failed",
+    attempted_template_ids: attempted,
+    expected_template_ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+    expected_capabilities: D6_PROJECT_TEMPO_TEMPLATE_SPECS.map((spec) => spec.capability),
+    output_refs: outputRefs,
+    preflight_blockers_covered: [
+      "d6_bpm_invalid",
+      "d6_tempo_marker_position_invalid",
     ],
     live_support_status: "not_claimed",
     executions,
@@ -3664,6 +3783,26 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
   return inputs[spec.id] ?? {};
 }
 
+function d6ProjectTempoRouteInput(spec, fixtureInputsForRun) {
+  const inputs = {
+    "template.project.set_tempo": {
+      bpm: fixtureInputsForRun.tempo_bpm,
+      preserve_tempo_markers: true,
+    },
+    "template.project.set_bpm": {
+      bpm: fixtureInputsForRun.bpm_alias,
+      preserve_tempo_markers: true,
+    },
+    "template.project.set_tempo_marker": {
+      position_seconds: fixtureInputsForRun.marker_position_seconds,
+      bpm: fixtureInputsForRun.marker_bpm,
+      time_signature_numerator: 4,
+      time_signature_denominator: 4,
+    },
+  };
+  return inputs[spec.id] ?? {};
+}
+
 function e5RoutingAutomationRouteRefs(spec, fixtureInputsForRun) {
   const trackRef = trackObjectRefFromFixture(fixtureInputsForRun.track_ref);
   const destinationTrackRef = trackObjectRefFromFixture(fixtureInputsForRun.destination_track_ref);
@@ -4140,6 +4279,30 @@ function e5R1RoutingReadRouteFixtureInputs(env) {
         send_ref: fixtureInputs.configured.send_ref,
       },
       applies_to_template_ids: CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
+    },
+  };
+}
+
+function d6ProjectTempoRouteFixtureInputs(env) {
+  const tempoBpm = finiteNumber(env[D6_PROJECT_TEMPO_BPM_ENV], 123);
+  const bpmAlias = finiteNumber(env[D6_PROJECT_BPM_ALIAS_ENV], 124);
+  const markerBpm = finiteNumber(env[D6_PROJECT_TEMPO_MARKER_BPM_ENV], 125);
+  const markerPosition = finiteNumber(env[D6_PROJECT_TEMPO_MARKER_POSITION_ENV], 1);
+  return {
+    tempo_bpm: tempoBpm,
+    bpm_alias: bpmAlias,
+    marker_bpm: markerBpm,
+    marker_position_seconds: markerPosition,
+    report: {
+      tempo_bpm_env: D6_PROJECT_TEMPO_BPM_ENV,
+      bpm_alias_env: D6_PROJECT_BPM_ALIAS_ENV,
+      marker_bpm_env: D6_PROJECT_TEMPO_MARKER_BPM_ENV,
+      marker_position_env: D6_PROJECT_TEMPO_MARKER_POSITION_ENV,
+      tempo_bpm: tempoBpm,
+      bpm_alias: bpmAlias,
+      marker_bpm: markerBpm,
+      marker_position_seconds: markerPosition,
+      applies_to_template_ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
     },
   };
 }
@@ -5213,6 +5376,52 @@ function fakeE5RoutingAutomationRouteRefs(request, spec) {
     return request.refs.filter((ref) => ref.kind === "send").slice(0, 1);
   }
   return request.refs.filter((ref) => ref.kind === "envelope").slice(0, 1);
+}
+
+async function dispatchFakeD6ProjectTempoRoute(request) {
+  const key = `${request?.operation?.family}:${request?.operation?.name}`;
+  const spec = key === "run_command:template.execute"
+    ? D6_PROJECT_TEMPO_SPEC_BY_CAPABILITY.get(request?.pack?.capability)
+    : null;
+  if (!spec) {
+    return bridgeErrorEnvelope(request, "OPERATION_NOT_FOUND", "Fake D6 project tempo executor accepts only the approved tempo write capabilities.", {
+      capability: boundedString(request?.pack?.capability, 120),
+      operation: boundedString(key, 160),
+    });
+  }
+  if (request?.pack?.id !== "project" || request?.pack?.risk !== "write") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "D6 project tempo pack/risk mismatch.", {
+      actual_pack: request?.pack?.id,
+      actual_risk: request?.pack?.risk,
+    });
+  }
+  if (request?.undo?.mode !== "required") {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "D6 project tempo writes require undo.mode required.", {
+      undo_mode: request?.undo?.mode,
+    });
+  }
+  if (request?.artifacts?.allow !== false) {
+    return bridgeErrorEnvelope(request, "REQUEST_INVALID", "D6 project tempo writes forbid artifact writes; artifacts.allow must be false.", {
+      artifacts_allow: request?.artifacts?.allow,
+    });
+  }
+  return bridgeOkEnvelope(request, {
+    summary: {
+      capability: spec.capability,
+      pack: spec.pack,
+      risk: spec.risk,
+      phase: spec.phase,
+      project_ref: "project:current",
+      bpm: request?.params?.bpm ?? 120,
+      position_seconds: request?.params?.position_seconds ?? null,
+      updated: true,
+      readback_status: "passed",
+      artifacts_allowed: false,
+      bounded: true,
+      smoke_only: true,
+    },
+    refs: [createObjectRef("project", { scheme: "current", value: "current" }, { ref: "project:current" })],
+  });
 }
 
 async function dispatchFakeFirstRealA1(request, { artifactRoot }) {

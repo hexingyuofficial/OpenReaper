@@ -12,6 +12,7 @@ import {
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS,
@@ -100,6 +101,10 @@ export const registryRoutes = Object.freeze({
   "wave1a-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/read-handler-expansion.test.mjs"]),
+  }),
+  "d6-project-tempo-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"]),
   }),
   "read-b": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,

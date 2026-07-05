@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (103 registered template handler row(s); 0 legacy_monolith row(s); 103 extracted handler row(s); 64 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (106 registered template handler row(s); 0 legacy_monolith row(s); 106 extracted handler row(s); 65 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1375,6 +1375,12 @@ local E5_AUTOMATION_WRITE_CAPABILITIES = {
   ["automation.set_automation_item_bounds"] = { pack = "automation", risk = "write" },
 }
 
+local D6_PROJECT_TEMPO_WRITE_CAPABILITIES = {
+  ["project.set_tempo"] = { pack = "project", risk = "write" },
+  ["project.set_bpm"] = { pack = "project", risk = "write" },
+  ["project.set_tempo_marker"] = { pack = "project", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1425,12 +1431,23 @@ local function e5_automation_write_capability(request, operation_key)
   return E5_AUTOMATION_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function d6_project_tempo_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D6_PROJECT_TEMPO_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
   return safe_write_a_capability(request, operation_key)
     or e3_media_route_capability(request, operation_key)
     or e4_item_route_capability(request, operation_key)
     or e5_routing_write_capability(request, operation_key)
     or e5_automation_write_capability(request, operation_key)
+    or d6_project_tempo_write_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1502,6 +1519,7 @@ local function validate_request(request)
   local e4_item_route_operation = e4_item_route_capability(request, operation_key)
   local e5_routing_write_operation = e5_routing_write_capability(request, operation_key)
   local e5_automation_write_operation = e5_automation_write_capability(request, operation_key)
+  local d6_project_tempo_write_operation = d6_project_tempo_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1528,6 +1546,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.pack.id ~= e5_automation_write_operation.pack or request.pack.risk ~= e5_automation_write_operation.risk then
       return false, "E5 automation write request pack/capability/risk mismatch."
+    end
+  elseif d6_project_tempo_write_operation then
+    if request.pack.id ~= d6_project_tempo_write_operation.pack or request.pack.risk ~= d6_project_tempo_write_operation.risk then
+      return false, "D6 project tempo write request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1565,6 +1587,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E5 automation write requests must use undo.mode required."
     end
+  elseif d6_project_tempo_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D6 project tempo write requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1600,6 +1626,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.artifacts.allow ~= false then
       return false, "E5 automation write requests must use artifacts.allow false."
+    end
+  elseif d6_project_tempo_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D6 project tempo write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -1637,6 +1667,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E5 automation write idempotency_key must be a string when present."
+    end
+  elseif d6_project_tempo_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D6 project tempo write idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -2893,6 +2927,218 @@ local function read_item_summary(request)
 end
 return {
   exports = { read_item_summary = read_item_summary },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/tempo_write.lua
+__openreaper_register_handler_module("project/tempo_write.lua", function()
+-- Extracted D6 handler: project tempo/BPM writes.
+
+local function d6_tempo_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function d6_tempo_current_project()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function d6_tempo_project_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function d6_tempo_bounded_bpm(value)
+  if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+    return nil
+  end
+  if value < 20 or value > 400 then
+    return nil
+  end
+  return value
+end
+
+local function d6_tempo_time_sig_num(value)
+  local number = math.floor(tonumber(value) or 4)
+  if number < 1 then
+    return 4
+  end
+  if number > 32 then
+    return 32
+  end
+  return number
+end
+
+local function d6_tempo_time_sig_denom(value)
+  local number = math.floor(tonumber(value) or 4)
+  if number == 1 or number == 2 or number == 4 or number == 8 or number == 16 or number == 32 then
+    return number
+  end
+  return 4
+end
+
+local function d6_tempo_effective_at(project, position_seconds)
+  local ok, timesig_num, timesig_denom, bpm = call_reaper("TimeMap_GetTimeSigAtTime", project, position_seconds)
+  return {
+    bpm = ok and first_number(bpm) or 0,
+    time_sig_num = ok and math.floor(first_number(timesig_num) or 0) or 0,
+    time_sig_denom = ok and math.floor(first_number(timesig_denom) or 0) or 0,
+  }
+end
+
+local function d6_tempo_current_bpm(project)
+  local ok, bpm = call_reaper("Master_GetTempo")
+  if ok and type(bpm) == "number" then
+    return bpm
+  end
+  return d6_tempo_effective_at(project, 0).bpm
+end
+
+local function d6_tempo_summary(request, fields)
+  fields = fields or {}
+  fields.capability = request.pack.capability
+  fields.pack = request.pack.id
+  fields.risk = request.pack.risk
+  fields.readback_status = "passed"
+  fields.undo_evidence = "required"
+  fields.artifacts_allowed = false
+  fields.project_ref = "project:current"
+  fields.truncated = false
+  return fields
+end
+
+local function d6_tempo_refs()
+  return json_array({ d6_tempo_project_ref() })
+end
+
+local function d6_tempo_set_base(request)
+  local project = d6_tempo_current_project()
+  local bpm = d6_tempo_bounded_bpm(request.params.bpm)
+  if not bpm then
+    return d6_tempo_error("BPM_INVALID", "Project tempo writes require bpm between 20 and 400.", {
+      bpm = request.params.bpm,
+    })
+  end
+  local ok = call_reaper("SetCurrentBPM", project, bpm, false)
+  if not ok then
+    return d6_tempo_error("COMMAND_FAILED", "REAPER rejected SetCurrentBPM.", {
+      bpm = bpm,
+    }, false)
+  end
+  call_reaper("UpdateTimeline")
+  local readback_bpm = d6_tempo_current_bpm(project)
+  local updated = math.abs(readback_bpm - bpm) < 0.01
+  if not updated then
+    return d6_tempo_error("READBACK_MISMATCH", "Project tempo write did not read back the requested BPM.", {
+      requested_bpm = bpm,
+      readback_bpm = readback_bpm,
+    }, false)
+  end
+  return d6_tempo_summary(request, {
+    bpm = readback_bpm,
+    requested_bpm = bpm,
+    updated = updated,
+    preserve_tempo_markers = request.params.preserve_tempo_markers == true,
+  }), nil, json_array({}), json_array({}), d6_tempo_refs()
+end
+
+local function d6_tempo_marker_index_at(project, position_seconds)
+  local ok_count, count = call_reaper("CountTempoTimeSigMarkers", project)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  for index = 0, total - 1 do
+    local ok_marker, retval, timepos = call_reaper("GetTempoTimeSigMarker", project, index)
+    if ok_marker and retval and math.abs((first_number(timepos) or 0) - position_seconds) < 0.000001 then
+      return index
+    end
+  end
+  return -1
+end
+
+local function d6_tempo_set_marker(request)
+  local project = d6_tempo_current_project()
+  local bpm = d6_tempo_bounded_bpm(request.params.bpm)
+  if not bpm then
+    return d6_tempo_error("BPM_INVALID", "Tempo marker writes require bpm between 20 and 400.", {
+      bpm = request.params.bpm,
+    })
+  end
+  local position_seconds = tonumber(request.params.position_seconds) or 0
+  if position_seconds < 0 then
+    return d6_tempo_error("POSITION_INVALID", "Tempo marker position_seconds must be non-negative.", {
+      position_seconds = request.params.position_seconds,
+    })
+  end
+  local numerator = d6_tempo_time_sig_num(request.params.time_signature_numerator)
+  local denominator = d6_tempo_time_sig_denom(request.params.time_signature_denominator)
+  local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  local ok = call_reaper(
+    "SetTempoTimeSigMarker",
+    project,
+    marker_index,
+    position_seconds,
+    -1,
+    -1,
+    bpm,
+    numerator,
+    denominator,
+    request.params.linear_tempo == true
+  )
+  if not ok then
+    return d6_tempo_error("COMMAND_FAILED", "REAPER rejected SetTempoTimeSigMarker.", {
+      position_seconds = position_seconds,
+      bpm = bpm,
+    }, false)
+  end
+  call_reaper("UpdateTimeline")
+  local effective = d6_tempo_effective_at(project, position_seconds)
+  local updated = math.abs(effective.bpm - bpm) < 0.01
+  if not updated then
+    return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
+      position_seconds = position_seconds,
+      requested_bpm = bpm,
+      readback_bpm = effective.bpm,
+      time_sig_num = effective.time_sig_num,
+      time_sig_denom = effective.time_sig_denom,
+    }, false)
+  end
+  return d6_tempo_summary(request, {
+    position_seconds = position_seconds,
+    bpm = effective.bpm,
+    requested_bpm = bpm,
+    time_sig_num = effective.time_sig_num,
+    time_sig_denom = effective.time_sig_denom,
+    updated = updated,
+  }), nil, json_array({}), json_array({}), d6_tempo_refs()
+end
+
+local function d6_project_set_tempo(request)
+  return d6_tempo_set_base(request)
+end
+
+local function d6_project_set_bpm(request)
+  return d6_tempo_set_base(request)
+end
+
+local function d6_project_set_tempo_marker(request)
+  return d6_tempo_set_marker(request)
+end
+return {
+  exports = { d6_project_set_tempo = d6_project_set_tempo, d6_project_set_bpm = d6_project_set_bpm, d6_project_set_tempo_marker = d6_project_set_tempo_marker },
   shared = {  },
 }
 end)
@@ -13529,6 +13775,12 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_automation_item_bounds"] = OPENREAPER_HANDLER_EXPORTS.set_automation_item_bounds,
 }
 
+local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
+  ["project.set_tempo"] = OPENREAPER_HANDLER_EXPORTS.d6_project_set_tempo,
+  ["project.set_bpm"] = OPENREAPER_HANDLER_EXPORTS.d6_project_set_bpm,
+  ["project.set_tempo_marker"] = OPENREAPER_HANDLER_EXPORTS.d6_project_set_tempo_marker,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -13547,6 +13799,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D6_PROJECT_TEMPO_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

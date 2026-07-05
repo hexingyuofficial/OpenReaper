@@ -232,6 +232,57 @@
       ]
     },
     {
+      "template_id": "template.project.set_tempo",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.set_tempo",
+      "pack": "project",
+      "risk": "write",
+      "route": "d6-project-tempo-handlers",
+      "handler_file": "project/tempo_write.lua",
+      "handler_export": "d6_project_set_tempo",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.set_bpm",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.set_bpm",
+      "pack": "project",
+      "risk": "write",
+      "route": "d6-project-tempo-handlers",
+      "handler_file": "project/tempo_write.lua",
+      "handler_export": "d6_project_set_bpm",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.set_tempo_marker",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.set_tempo_marker",
+      "pack": "project",
+      "risk": "write",
+      "route": "d6-project-tempo-handlers",
+      "handler_file": "project/tempo_write.lua",
+      "handler_export": "d6_project_set_tempo_marker",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

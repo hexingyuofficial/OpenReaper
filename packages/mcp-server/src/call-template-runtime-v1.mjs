@@ -204,6 +204,12 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.automation.resolve_send_envelope",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS = deepFreeze([
+  "template.project.set_tempo",
+  "template.project.set_bpm",
+  "template.project.set_tempo_marker",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -223,6 +229,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["e2_fx_l1_read", CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS],
   ["e2_fx_b1_route", CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS],
   ["e5_routing_automation", CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS],
+  ["d6_project_tempo", CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -231,11 +238,7 @@ const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
 
 const RUNTIME_DISCOVERY_DEFAULT_SURFACES = Object.freeze(["catalog", "executable"]);
 
-const RUNTIME_KNOWN_TEMPLATE_BLOCKERS = Object.freeze({
-  "template.project.set_tempo": "live_handler_missing:tempo_write",
-  "template.project.set_bpm": "live_handler_missing:tempo_write",
-  "template.project.set_tempo_marker": "live_handler_missing:tempo_marker_write",
-});
+const RUNTIME_KNOWN_TEMPLATE_BLOCKERS = Object.freeze({});
 
 const RUNTIME_HELD_PACK_BLOCKERS = Object.freeze({
   automation: "live_promotion_held:automation",
@@ -1083,6 +1086,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];
