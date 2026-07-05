@@ -295,6 +295,30 @@ describe("Wave 1A items template descriptors", () => {
     assert.equal(summary.result.refs[0].kind, "item");
   });
 
+  it("normalizes canonical refs from structured item summary ref fields", async () => {
+    const catalog = createTemplateCatalog({ templates: createWave1AItemsTemplates() });
+    const item = itemRef("{ITEM-SUMMARY}");
+    const track = trackRef("{TRACK-SUMMARY}");
+    const executor = fakeSummaryExecutor({
+      item_ref: item.ref,
+      track_ref: track.ref,
+      position_seconds: 0,
+      length_seconds: 1.5,
+    });
+
+    const resolved = await executeTemplate({
+      descriptor: catalog.require("template.items.resolve_item_ref"),
+      input: { ref: "selected:0" },
+      context: context({ request_sequence: 3 }),
+      executor,
+    });
+
+    assert.equal(resolved.ok, true);
+    assert.deepEqual(resolved.result.summary.item_ref, item.ref);
+    assert.deepEqual(resolved.result.refs.map((ref) => ref.ref), [item.ref, track.ref]);
+    assert.deepEqual(resolved.result.refs.map((ref) => ref.kind), ["item", "track"]);
+  });
+
   it("builds legal 4B bridge requests and fake-smokes every write item atom", async () => {
     const catalog = createTemplateCatalog({ templates: createWave1AItemsTemplates() });
     const item = itemRef("{ITEM-WRITE}");
@@ -485,8 +509,29 @@ function itemRef(value) {
   return createObjectRef("item", { scheme: "guid", value });
 }
 
+function trackRef(value) {
+  return createObjectRef("track", { scheme: "guid", value });
+}
+
 function fileRef(value) {
   return createObjectRef("file", { scheme: "path", value });
+}
+
+function fakeSummaryExecutor(summary) {
+  const bridge = new FakeFoundationBridge();
+  const executor = (request) =>
+    bridge.okEnvelope(request, "2026-07-02T00:00:00.000Z", {
+      summary,
+      refs: [],
+      artifacts: [],
+      jobs: [],
+      last_result: {
+        updated: false,
+        refs: [],
+        truncated: false,
+      },
+    });
+  return executor;
 }
 
 function fakeRefsExecutor(refs) {

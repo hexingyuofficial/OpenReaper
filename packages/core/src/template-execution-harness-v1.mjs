@@ -4,6 +4,7 @@ import {
   FOUNDATION_BRIDGE_DEFAULT_BUDGET,
   FOUNDATION_BRIDGE_ERROR_CODES,
   FOUNDATION_BRIDGE_REF_KINDS,
+  createObjectRef,
   normalizeFoundationBridgeRequest,
   validateFoundationBridgeResult,
 } from "./foundation-bridge-v1.mjs";
@@ -574,12 +575,20 @@ function mapBridgeResult(prepared, bridgeResult) {
     });
   }
 
+  const summary = cloneJson(bridgeResult.result.summary ?? {});
+  const readback = cloneJson(bridgeResult.result.readback ?? null);
+  const refs = normalizeResultRefs({
+    refs: bridgeResult.result.refs ?? [],
+    summary,
+    readback,
+  });
+
   const result = {
-    summary: cloneJson(bridgeResult.result.summary ?? {}),
-    refs: cloneJson(bridgeResult.result.refs ?? []),
+    summary,
+    refs,
     artifacts: cloneJson(bridgeResult.result.artifacts ?? []),
     jobs: cloneJson(bridgeResult.result.jobs ?? []),
-    readback: cloneJson(bridgeResult.result.readback ?? null),
+    readback,
     session_ledger: cloneJson(bridgeResult.result.session_ledger ?? null),
     last_result: cloneJson(
       bridgeResult.result.last_result ?? {
@@ -610,6 +619,85 @@ function mapBridgeResult(prepared, bridgeResult) {
     ok: true,
     result,
   });
+}
+
+function normalizeResultRefs({ refs, summary, readback }) {
+  const normalized = cloneJson(refs);
+  const seen = new Set(normalized.map((ref) => ref.ref));
+  for (const value of structuredRefStrings(summary)) {
+    const ref = objectRefFromCanonicalString(value);
+    if (!ref || seen.has(ref.ref)) continue;
+    normalized.push(ref);
+    seen.add(ref.ref);
+  }
+  for (const value of structuredRefStrings(readback)) {
+    const ref = objectRefFromCanonicalString(value);
+    if (!ref || seen.has(ref.ref)) continue;
+    normalized.push(ref);
+    seen.add(ref.ref);
+  }
+  return normalized;
+}
+
+function structuredRefStrings(value, key = null, output = []) {
+  if (typeof value === "string") {
+    if (isStructuredRefField(key)) output.push(value);
+    return output;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      if (typeof entry === "string" && isStructuredRefsField(key)) {
+        output.push(entry);
+      } else if (entry && typeof entry === "object") {
+        structuredRefStrings(entry, null, output);
+      }
+    }
+    return output;
+  }
+  if (!isPlainObject(value)) return output;
+  for (const [entryKey, entry] of Object.entries(value)) {
+    structuredRefStrings(entry, entryKey, output);
+  }
+  return output;
+}
+
+function isStructuredRefField(key) {
+  return typeof key === "string" && key.endsWith("_ref");
+}
+
+function isStructuredRefsField(key) {
+  return typeof key === "string" && key.endsWith("_refs");
+}
+
+function objectRefFromCanonicalString(value) {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  const firstSeparator = value.indexOf(":");
+  if (firstSeparator < 1) return null;
+  const kind = value.slice(0, firstSeparator);
+  if (!REF_KIND_SET.has(kind)) return null;
+  if (kind === "artifact" || kind === "job") return null;
+
+  const remainder = value.slice(firstSeparator + 1);
+  const secondSeparator = remainder.indexOf(":");
+  if (secondSeparator < 0) {
+    if (kind === "project" && remainder === "current") {
+      return safeObjectRef(kind, { scheme: "alias", value: remainder }, { ref: value });
+    }
+    return null;
+  }
+
+  const scheme = remainder.slice(0, secondSeparator);
+  const identityValue = remainder.slice(secondSeparator + 1);
+  if (scheme.trim() === "" || identityValue.trim() === "") return null;
+  return safeObjectRef(kind, { scheme, value: identityValue }, { ref: value });
+}
+
+function safeObjectRef(kind, identity, options) {
+  try {
+    return createObjectRef(kind, identity, options);
+  } catch {
+    return null;
+  }
 }
 
 function templateErrorEnvelope({ prepared, descriptor, context, budget, error }) {
