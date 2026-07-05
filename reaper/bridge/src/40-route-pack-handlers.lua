@@ -806,6 +806,20 @@ local E4_ITEM_ROUTE_HANDLERS = {
   ["items.set_take_playrate"] = set_take_playrate,
 }
 
+local E5_ROUTING_WRITE_HANDLERS = {
+  ["routing.send.create"] = create_track_send,
+  ["routing.send.set_volume"] = set_send_volume,
+  ["routing.send.set_pan"] = set_send_pan,
+  ["routing.send.set_mute"] = set_send_mute,
+  ["routing.send.set_mode"] = set_send_mode,
+  ["routing.master_parent.set"] = set_master_parent_send,
+  ["routing.track_channels.set"] = set_track_channel_count,
+  ["routing.send.audio_channels.set"] = set_send_audio_channels,
+  ["routing.send.set_phase"] = set_send_phase,
+  ["routing.send.set_mono"] = set_send_mono,
+  ["routing.send.midi_channels.set"] = set_send_midi_channels,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -816,6 +830,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

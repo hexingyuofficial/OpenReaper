@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 76,
+    "entryCount": 87,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 76,
+    "extractedHandlerCount": 87,
     "handlerModuleCount": 64,
-    "routeCount": 11,
+    "routeCount": 12,
     "operationCount": 47
   },
   "routes": [
@@ -179,6 +179,37 @@
         "template.routing.read_track_routing",
         "template.routing.resolve_send_ref",
         "template.routing.read_project_routing_graph"
+      ]
+    },
+    {
+      "route": "e5-routing-write-handlers",
+      "template_count": 11,
+      "handler_module_count": 1,
+      "operation_count": 11,
+      "packs": [
+        "routing"
+      ],
+      "risks": [
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.routing.create_track_send",
+        "template.routing.set_send_volume",
+        "template.routing.set_send_pan",
+        "template.routing.set_send_mute",
+        "template.routing.set_send_mode",
+        "template.routing.set_master_parent_send",
+        "template.routing.set_track_channel_count",
+        "template.routing.set_send_audio_channels",
+        "template.routing.set_send_phase",
+        "template.routing.set_send_mono",
+        "template.routing.set_send_midi_channels"
       ]
     },
     {

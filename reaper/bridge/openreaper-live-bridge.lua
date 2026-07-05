@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (76 registered template handler row(s); 0 legacy_monolith row(s); 76 extracted handler row(s); 64 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (87 registered template handler row(s); 0 legacy_monolith row(s); 87 extracted handler row(s); 64 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1350,6 +1350,20 @@ local E4_ITEM_ROUTE_CAPABILITIES = {
   ["items.set_take_playrate"] = { pack = "items", risk = "write" },
 }
 
+local E5_ROUTING_WRITE_CAPABILITIES = {
+  ["routing.send.create"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_volume"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_pan"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_mute"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_mode"] = { pack = "routing", risk = "write" },
+  ["routing.master_parent.set"] = { pack = "routing", risk = "write" },
+  ["routing.track_channels.set"] = { pack = "routing", risk = "write" },
+  ["routing.send.audio_channels.set"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_phase"] = { pack = "routing", risk = "write" },
+  ["routing.send.set_mono"] = { pack = "routing", risk = "write" },
+  ["routing.send.midi_channels.set"] = { pack = "routing", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1380,8 +1394,21 @@ local function e4_item_route_capability(request, operation_key)
   return E4_ITEM_ROUTE_CAPABILITIES[request.pack.capability]
 end
 
+local function e5_routing_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return E5_ROUTING_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
-  return safe_write_a_capability(request, operation_key) or e3_media_route_capability(request, operation_key) or e4_item_route_capability(request, operation_key)
+  return safe_write_a_capability(request, operation_key)
+    or e3_media_route_capability(request, operation_key)
+    or e4_item_route_capability(request, operation_key)
+    or e5_routing_write_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1451,6 +1478,7 @@ local function validate_request(request)
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
   local e3_media_route_operation = e3_media_route_capability(request, operation_key)
   local e4_item_route_operation = e4_item_route_capability(request, operation_key)
+  local e5_routing_write_operation = e5_routing_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1469,6 +1497,10 @@ local function validate_request(request)
   elseif e4_item_route_operation then
     if request.pack.id ~= e4_item_route_operation.pack or request.pack.risk ~= e4_item_route_operation.risk then
       return false, "E4 item route request pack/capability/risk mismatch."
+    end
+  elseif e5_routing_write_operation then
+    if request.pack.id ~= e5_routing_write_operation.pack or request.pack.risk ~= e5_routing_write_operation.risk then
+      return false, "E5 routing write request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1498,6 +1530,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E4 item route write requests must use undo.mode required."
     end
+  elseif e5_routing_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "E5 routing write requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1525,6 +1561,10 @@ local function validate_request(request)
   elseif e4_item_route_operation then
     if request.artifacts.allow ~= false then
       return false, "E4 item route write requests must use artifacts.allow false."
+    end
+  elseif e5_routing_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "E5 routing write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -5123,6 +5163,112 @@ local function e5_routing_send_count(track, category)
   return ok and math.max(0, math.floor(first_number(count) or 0)) or 0
 end
 
+local function e5_routing_track_refs_from_request(request)
+  local tracks = {}
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track = e5_routing_resolve_track_from_ref_object(request.refs[index])
+      if track then
+        tracks[#tracks + 1] = track
+      end
+    end
+  end
+  return tracks
+end
+
+local function e5_routing_send_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local ref = request.refs[index]
+      if is_object(ref) and ref.kind == "send" then
+        local source_track, send_index = e5_routing_send_index_from_ref(ref.ref)
+        if source_track then
+          return source_track, send_index
+        end
+      end
+    end
+  end
+  return nil, nil
+end
+
+local function e5_routing_send_index_for_destination(source_track, destination_track)
+  local count = e5_routing_send_count(source_track, 0)
+  local destination_ref = e5_routing_track_ref_string(destination_track)
+  for send_index = 0, count - 1 do
+    local summary = e5_routing_send_summary(source_track, send_index, 0)
+    if summary and summary.destination_track_ref == destination_ref then
+      return send_index
+    end
+  end
+  return nil
+end
+
+local function e5_routing_write_summary(request, readback)
+  readback = e5_routing_summary(request, readback)
+  readback.undo_evidence = "required"
+  return readback
+end
+
+local function e5_routing_set_media_track_value(track, key, value)
+  local ok = call_reaper("SetMediaTrackInfo_Value", track, key, value)
+  return ok == true
+end
+
+local function e5_routing_set_send_value(source_track, send_index, key, value)
+  local ok = call_reaper("SetTrackSendInfo_Value", source_track, 0, send_index, key, value)
+  return ok == true
+end
+
+local function e5_routing_clamp_number(value, min_value, max_value, fallback)
+  local number = tonumber(value)
+  if not number or number ~= number or number == math.huge or number == -math.huge then
+    number = fallback
+  end
+  if number < min_value then
+    number = min_value
+  elseif number > max_value then
+    number = max_value
+  end
+  return number
+end
+
+local function e5_routing_send_mode_value(mode)
+  if mode == "pre_fx" then
+    return 1
+  elseif mode == "post_fx" then
+    return 3
+  end
+  return 0
+end
+
+local function e5_routing_audio_channel_value(request)
+  local source_offset = math.max(0, math.floor(tonumber(request.params.source_channel_offset) or 0))
+  local source_count = math.floor(tonumber(request.params.source_channel_count) or 2)
+  local destination_offset = math.max(0, math.floor(tonumber(request.params.destination_channel_offset) or 0))
+  local source_value = source_offset
+  if source_count == 1 or request.params.mix_to_mono == true then
+    source_value = source_value + 1024
+  end
+  return source_value, destination_offset
+end
+
+local function e5_routing_midi_channel_number(value, fallback)
+  if value == "all" or value == "original" or value == nil or value == JSON_NULL then
+    return fallback or 0
+  end
+  local number = math.floor(tonumber(value) or 0)
+  if number < 1 or number > 16 then
+    return fallback or 0
+  end
+  return number
+end
+
+local function e5_routing_midi_flags(request)
+  local source = e5_routing_midi_channel_number(request.params.source_channel, 0)
+  local destination = e5_routing_midi_channel_number(request.params.destination_channel, 0)
+  return source + destination * 32
+end
+
 local function e5_routing_read_sends(track, category, limit)
   local rows = json_array({})
   local refs = json_array({})
@@ -5167,6 +5313,159 @@ local function read_track_routing(request)
     receives = receives,
     truncated = sends_truncated or receives_truncated,
   }), nil, nil, nil, refs
+end
+
+local function create_track_send(request)
+  local tracks = e5_routing_track_refs_from_request(request)
+  local source_track = tracks[1]
+  local destination_track = tracks[2]
+  if not source_track or not destination_track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing create_track_send requires source and destination track refs.", {})
+  end
+  local existing = e5_routing_send_index_for_destination(source_track, destination_track)
+  if existing ~= nil and request.params.duplicate_policy == "reject_existing" then
+    return e5_routing_error("SEND_NOT_FOUND", "E5 routing create_track_send rejected an existing duplicate send.", {
+      send_ref = e5_routing_send_ref(source_track, existing),
+    })
+  end
+  local send_index = existing
+  if send_index == nil then
+    local ok, created_index = call_reaper("CreateTrackSend", source_track, destination_track)
+    send_index = ok and first_number(created_index) or nil
+  end
+  if send_index == nil or send_index < 0 then
+    return e5_routing_error("COMMAND_FAILED", "REAPER did not create a track send.", {})
+  end
+  send_index = math.floor(send_index)
+  local summary = e5_routing_send_summary(source_track, send_index, 0)
+  if not summary then
+    return e5_routing_error("SEND_NOT_FOUND", "Created send could not be read back.", {
+      send_index = send_index,
+    })
+  end
+  summary.created = existing == nil
+  return e5_routing_write_summary(request, summary), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_send_object_ref(source_track, send_index),
+    e5_routing_track_object_ref(source_track),
+    e5_routing_track_object_ref(destination_track)
+  )
+end
+
+local function e5_routing_update_send(request, setter)
+  local source_track, send_index = e5_routing_send_from_request_refs(request)
+  if not source_track then
+    return e5_routing_error("SEND_NOT_FOUND", "E5 routing send update requires a resolvable send ref.", {})
+  end
+  if not setter(source_track, send_index) then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the send update.", {
+      send_ref = e5_routing_send_ref(source_track, send_index),
+    })
+  end
+  local summary = e5_routing_send_summary(source_track, send_index, 0)
+  if not summary then
+    return e5_routing_error("SEND_NOT_FOUND", "Updated send could not be read back.", {
+      send_ref = e5_routing_send_ref(source_track, send_index),
+    })
+  end
+  return e5_routing_write_summary(request, summary), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_routing_send_object_ref(source_track, send_index),
+    e5_routing_track_object_ref(source_track)
+  )
+end
+
+local function set_send_volume(request)
+  local volume = e5_routing_clamp_number(request.params.volume, 0, 4, 1)
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "D_VOL", volume)
+  end)
+end
+
+local function set_send_pan(request)
+  local pan = e5_routing_clamp_number(request.params.pan, -1, 1, 0)
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "D_PAN", pan)
+  end)
+end
+
+local function set_send_mute(request)
+  local muted = request.params.muted == true and 1 or 0
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "B_MUTE", muted)
+  end)
+end
+
+local function set_send_mode(request)
+  local mode = e5_routing_send_mode_value(request.params.mode)
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "I_SENDMODE", mode)
+  end)
+end
+
+local function set_send_audio_channels(request)
+  local source_value, destination_value = e5_routing_audio_channel_value(request)
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "I_SRCCHAN", source_value)
+      and e5_routing_set_send_value(source_track, send_index, "I_DSTCHAN", destination_value)
+  end)
+end
+
+local function set_send_phase(request)
+  local phase = request.params.phase_inverted == true and 1 or 0
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "B_PHASE", phase)
+  end)
+end
+
+local function set_send_mono(request)
+  local mono = request.params.mono == true and 1 or 0
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "B_MONO", mono)
+  end)
+end
+
+local function set_send_midi_channels(request)
+  local flags = e5_routing_midi_flags(request)
+  return e5_routing_update_send(request, function(source_track, send_index)
+    return e5_routing_set_send_value(source_track, send_index, "I_MIDIFLAGS", flags)
+  end)
+end
+
+local function set_master_parent_send(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing set_master_parent_send requires a resolvable track ref.", {})
+  end
+  if not e5_routing_set_media_track_value(track, "B_MAINSEND", request.params.enabled == true and 1 or 0) then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the master-parent send update.", {})
+  end
+  return e5_routing_write_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    master_parent_enabled = e5_routing_master_parent_enabled(track),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+end
+
+local function set_track_channel_count(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing set_track_channel_count requires a resolvable track ref.", {})
+  end
+  local channels = math.floor(tonumber(request.params.channel_count) or 2)
+  if channels < 2 then
+    channels = 2
+  end
+  if channels % 2 == 1 then
+    channels = channels + 1
+  end
+  if channels > 64 then
+    channels = 64
+  end
+  if not e5_routing_set_media_track_value(track, "I_NCHAN", channels) then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the track channel-count update.", {})
+  end
+  return e5_routing_write_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    channel_count = e5_routing_channel_count(track),
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
 end
 
 local function resolve_send_ref(request)
@@ -5234,7 +5533,7 @@ local function read_project_routing_graph(request)
   }), nil, nil, nil, refs
 end
 return {
-  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, read_project_routing_graph = read_project_routing_graph },
+  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, read_project_routing_graph = read_project_routing_graph, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels },
   shared = {  },
 }
 end)
@@ -12460,6 +12759,20 @@ local E4_ITEM_ROUTE_HANDLERS = {
   ["items.set_take_playrate"] = OPENREAPER_HANDLER_EXPORTS.set_take_playrate,
 }
 
+local E5_ROUTING_WRITE_HANDLERS = {
+  ["routing.send.create"] = OPENREAPER_HANDLER_EXPORTS.create_track_send,
+  ["routing.send.set_volume"] = OPENREAPER_HANDLER_EXPORTS.set_send_volume,
+  ["routing.send.set_pan"] = OPENREAPER_HANDLER_EXPORTS.set_send_pan,
+  ["routing.send.set_mute"] = OPENREAPER_HANDLER_EXPORTS.set_send_mute,
+  ["routing.send.set_mode"] = OPENREAPER_HANDLER_EXPORTS.set_send_mode,
+  ["routing.master_parent.set"] = OPENREAPER_HANDLER_EXPORTS.set_master_parent_send,
+  ["routing.track_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_track_channel_count,
+  ["routing.send.audio_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_send_audio_channels,
+  ["routing.send.set_phase"] = OPENREAPER_HANDLER_EXPORTS.set_send_phase,
+  ["routing.send.set_mono"] = OPENREAPER_HANDLER_EXPORTS.set_send_mono,
+  ["routing.send.midi_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_send_midi_channels,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -12470,6 +12783,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E5_ROUTING_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

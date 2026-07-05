@@ -56,6 +56,20 @@ export const registryFile = "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.j
 export const routeMetadataFile = "reaper/bridge/registry/BRIDGE_ROUTE_METADATA_V1.json";
 export const handlerSourceRoot = "reaper/bridge/src/handlers";
 
+export const E5_ROUTING_WRITE_TEMPLATE_IDS = Object.freeze([
+  "template.routing.create_track_send",
+  "template.routing.set_send_volume",
+  "template.routing.set_send_pan",
+  "template.routing.set_send_mute",
+  "template.routing.set_send_mode",
+  "template.routing.set_master_parent_send",
+  "template.routing.set_track_channel_count",
+  "template.routing.set_send_audio_channels",
+  "template.routing.set_send_phase",
+  "template.routing.set_send_mono",
+  "template.routing.set_send_midi_channels",
+]);
+
 export const registryRoutes = Object.freeze({
   wave0: Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
@@ -83,6 +97,10 @@ export const registryRoutes = Object.freeze({
   "e5-r1-routing-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"]),
+  }),
+  "e5-routing-write-handlers": Object.freeze({
+    ids: E5_ROUTING_WRITE_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"]),
   }),
   "e2-fx-l1-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,

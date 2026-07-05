@@ -301,7 +301,6 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_plan|apply_layer_plan|assign_item_roles|move_items_to_layer_tracks/);
     assert.doesNotMatch(BRIDGE_SOURCE, /role_assignment_plan|target_track_plan|official recipe|call_recipe|list_recipes|recipes\//i);
-    assert.doesNotMatch(BRIDGE_SOURCE, /create_track_send|set_send/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,

@@ -638,6 +638,193 @@
       ]
     },
     {
+      "template_id": "template.routing.create_track_send",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.create",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "create_track_send",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_volume",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_volume",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_volume",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_pan",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_pan",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_pan",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_mute",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_mute",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_mute",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_mode",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_master_parent_send",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.master_parent.set",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_master_parent_send",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_track_channel_count",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.track_channels.set",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_track_channel_count",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_audio_channels",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.audio_channels.set",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_audio_channels",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_phase",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_phase",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_phase",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_mono",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.set_mono",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_mono",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_send_midi_channels",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.send.midi_channels.set",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_send_midi_channels",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.fx.resolve_fx_ref",
       "operation": {
         "family": "query_state",
