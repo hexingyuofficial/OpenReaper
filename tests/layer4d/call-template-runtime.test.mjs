@@ -28,6 +28,7 @@ import {
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -340,51 +341,76 @@ describe("Layer 4D call_template runtime binding", () => {
     const directDiscovery = createAcceptedOfficialTemplateDiscovery();
 
     const runtimeMenu = runtime.list_templates();
-    assert.deepEqual(runtimeMenu, directDiscovery.list_templates());
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 25);
-    assert.equal(runtimeMenu.page.has_more, true);
+    assert.equal(runtimeMenu.items.length, 0);
+    assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
+    assert.equal(runtimeMenu.applied.surface, "executable");
 
-    const menuPayload = JSON.stringify(runtimeMenu);
+    const catalogMenu = runtime.list_templates({ surface: "catalog" });
+    assert.deepEqual(catalogMenu, directDiscovery.list_templates());
+    assert.equal(catalogMenu.items.length, 25);
+    assert.equal(catalogMenu.page.has_more, true);
+    assert.equal(catalogMenu.applied.surface, "catalog");
+
+    const menuPayload = JSON.stringify(catalogMenu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
       if (["refs", "artifacts", "verification"].includes(field)) continue;
       assert.doesNotMatch(menuPayload, new RegExp(field));
     }
-    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "refs")), true);
-    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
-    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "verification")), true);
-    assert.equal(runtimeMenu.items.every((item) => Object.hasOwn(item, "capability_truth")), true);
-    assert.equal(runtimeMenu.items.every((item) => item.capability_truth.live_runnable_now === false), true);
+    assert.equal(catalogMenu.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(catalogMenu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
+    assert.equal(catalogMenu.items.every((item) => !Object.hasOwn(item, "verification")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "capability_truth")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "action_name")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "template_id")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "current_status")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "user_message")), true);
+    assert.equal(catalogMenu.items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(
-      runtimeMenu.items.some((item) => item.capability_truth.allowed_live_group === "wave0"),
+      catalogMenu.items.some((item) => item.capability_truth.allowed_live_group === "wave0"),
       true,
     );
-    assert.equal(runtimeMenu.items[0].capability_truth.exists_in_catalog, true);
-    assert.equal(runtimeMenu.items[0].capability_truth.live_runnable_now, false);
+    assert.equal(catalogMenu.items[0].capability_truth.exists_in_catalog, true);
+    assert.equal(catalogMenu.items[0].capability_truth.live_runnable_now, false);
     assert.equal(
-      runtimeMenu.items[0].capability_truth.known_blocker,
+      catalogMenu.items[0].capability_truth.known_blocker,
       "live_executor_not_configured_or_not_in_allowed_group",
     );
+    assert.equal(catalogMenu.items[0].current_status, "blocked");
+    assert.equal(catalogMenu.items[0].action_name, "read_project_summary");
 
     const exact = runtime.list_templates({
       ids: ["template.tracks.create_track"],
       fields: ["summary", "inputSchema", "expectedDelta"],
     });
     assert.deepEqual(Object.keys(exact.items[0]).sort(), [
+      "action_name",
       "capability_truth",
+      "current_status",
+      "example_input",
       "expectedDelta",
+      "fixture_requirements",
       "id",
       "inputSchema",
+      "needs_confirmation",
+      "output_refs",
+      "required_input",
+      "required_refs",
       "summary",
+      "template_id",
+      "user_message",
     ]);
     assert.equal("bridge" in exact.items[0], false);
     assert.equal("refs" in exact.items[0], false);
     assert.equal("artifacts" in exact.items[0], false);
     assert.equal(exact.items[0].capability_truth.example_call_shape.tool, "call_template");
     assert.equal(exact.items[0].capability_truth.requires_refs, false);
+    assert.equal(exact.items[0].action_name, "create_track");
+    assert.deepEqual(exact.items[0].required_input, ["name"]);
+    assert.equal(exact.items[0].current_status, "blocked");
 
     const liveRuntime = createCallTemplateRuntime({
       executor: new FakeFoundationBridge(),
@@ -394,6 +420,16 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
       },
     });
+    const liveMenu = liveRuntime.list_templates();
+    assert.deepEqual(
+      liveMenu.items.map((item) => item.id),
+      CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
+    );
+    assert.equal(liveMenu.applied.surface, "executable");
+    assert.equal(liveMenu.items.every((item) => item.capability_truth.live_runnable_now === true), true);
+    assert.equal(liveMenu.items.every((item) => item.current_status === "available_now"), true);
+    assert.equal(liveMenu.items[0].action_name, "read_project_summary");
+
     const liveExact = liveRuntime.list_templates({
       ids: ["template.project.read_summary", "template.tracks.create_track"],
       fields: ["summary"],
@@ -401,11 +437,48 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(liveExact.items[0].capability_truth.live_runnable_now, true);
     assert.equal(liveExact.items[0].capability_truth.allowed_live_group, "wave0");
     assert.equal(liveExact.items[0].capability_truth.known_blocker, null);
+    assert.equal(liveExact.items[0].current_status, "available_now");
     assert.equal(liveExact.items[1].capability_truth.live_runnable_now, false);
+    assert.equal(liveExact.items[1].current_status, "blocked");
     assert.equal(
       liveExact.items[1].capability_truth.known_blocker,
       "live_executor_not_configured_or_not_in_allowed_group",
     );
+
+    const safeWriteRuntime = createCallTemplateRuntime({
+      executor: new FakeFoundationBridge(),
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const safeWriteMenu = safeWriteRuntime.list_templates({ limit: 100 });
+    assert.equal(safeWriteMenu.items.some((item) => item.id === "template.midi.create_midi_item"), false);
+    assert.equal(safeWriteMenu.items.some((item) => item.action_name === "set_track_color"), true);
+    assert.equal(safeWriteMenu.items.find((item) => item.id === "template.tracks.set_color").current_status, "needs_ref");
+    assert.equal(
+      safeWriteMenu.items.find((item) => item.id === "template.project.create_marker").current_status,
+      "needs_confirmation",
+    );
+    const midiBug = safeWriteRuntime.list_templates({
+      ids: ["template.midi.create_midi_item"],
+      fields: ["summary"],
+    });
+    assert.equal(midiBug.items[0].current_status, "bug_known");
+    assert.equal(
+      midiBug.items[0].capability_truth.known_blocker,
+      "known_bug:midi_create_item_active_take_ref_missing",
+    );
+
+    const bpmExact = runtime.list_templates({
+      ids: ["template.project.set_bpm"],
+      fields: ["summary"],
+    });
+    assert.equal(bpmExact.items[0].current_status, "blocked");
+    assert.equal(bpmExact.items[0].capability_truth.evidence_level, "blocked_typed");
+    assert.equal(bpmExact.items[0].capability_truth.known_blocker, "live_handler_missing:tempo_write");
+    assert.match(bpmExact.items[0].user_message, /Tempo\/BPM writes/);
 
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",

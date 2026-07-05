@@ -229,6 +229,21 @@ const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
   LIVE_TEMPLATE_GROUPS.flatMap(([, ids]) => ids),
 );
 
+const RUNTIME_DISCOVERY_DEFAULT_SURFACES = Object.freeze(["catalog", "executable"]);
+
+const RUNTIME_KNOWN_TEMPLATE_BLOCKERS = Object.freeze({
+  "template.midi.create_midi_item": "known_bug:midi_create_item_active_take_ref_missing",
+  "template.project.set_tempo": "live_handler_missing:tempo_write",
+  "template.project.set_bpm": "live_handler_missing:tempo_write",
+  "template.project.set_tempo_marker": "live_handler_missing:tempo_marker_write",
+});
+
+const RUNTIME_HELD_PACK_BLOCKERS = Object.freeze({
+  automation: "live_promotion_held:automation",
+  fx: "live_promotion_held:fx",
+  routing: "live_promotion_held:routing",
+});
+
 export const CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS = deepFreeze(
   Object.values(TEMPLATE_CATALOG_SEED_TEMPLATE_IDS).filter((id) => !ACCEPTED_TEMPLATE_ID_SET.has(id)),
 );
@@ -328,10 +343,11 @@ export function createAcceptedOfficialTemplateCatalog() {
 
 export function createAcceptedOfficialTemplateDiscovery() {
   const catalog = createAcceptedOfficialTemplateCatalog();
-  const discovery = createDiscoveryCatalog({
-    templates: runtimeDiscoveryTemplates(catalog, normalizeLiveRuntimeOptions()),
+  const templates = runtimeDiscoveryTemplates(catalog, normalizeLiveRuntimeOptions());
+  return runtimeTemplateDiscoveryFacade({
+    templates,
+    defaultSurface: "catalog",
   });
-  return runtimeTemplateDiscoveryFacade(discovery);
 }
 
 export function createCallTemplateRuntime(options = {}) {
@@ -340,9 +356,7 @@ export function createCallTemplateRuntime(options = {}) {
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const live = normalizeLiveRuntimeOptions(options.live);
-  const discovery = createDiscoveryCatalog({
-    templates: runtimeDiscoveryTemplates(catalog, live),
-  });
+  const discoveryTemplates = runtimeDiscoveryTemplates(catalog, live);
 
   async function call_template(request = {}) {
     let id = null;
@@ -378,7 +392,10 @@ export function createCallTemplateRuntime(options = {}) {
     contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
     accepted_catalog: acceptedCatalogSummary(catalog),
     live_gate: live.summary,
-    list_templates: runtimeTemplateDiscoveryFacade(discovery).list_templates,
+    list_templates: runtimeTemplateDiscoveryFacade({
+      templates: discoveryTemplates,
+      defaultSurface: "executable",
+    }).list_templates,
     async call_template(request = {}) {
       return call_template(request);
     },
@@ -706,25 +723,99 @@ function acceptedCatalogSummary(catalog) {
 function runtimeDiscoveryTemplates(catalog, live) {
   return catalog.list().map((descriptor) => {
     const allowedGroup = liveAllowedGroupForTemplateId(descriptor.id);
+    const knownBlocker = runtimeKnownBlocker(descriptor);
     const liveRunnableNow =
-      Boolean(live.opted_in && live.enabled && live.allowedTemplateIdSet.has(descriptor.id));
+      Boolean(
+        knownBlocker === null
+        && live.opted_in
+        && live.enabled
+        && live.allowedTemplateIdSet.has(descriptor.id),
+      );
     return deepFreeze({
       ...descriptor,
       kind: "template",
       exists_in_catalog: true,
       live_runnable_now: liveRunnableNow,
       evidence_level: acceptedTemplateEvidenceLevel(descriptor.id),
-      support_state: "supported",
-      known_blocker: liveRunnableNow ? null : "live_executor_not_configured_or_not_in_allowed_group",
+      support_state: knownBlocker === null ? "supported" : "blocked",
+      known_blocker: liveRunnableNow
+        ? null
+        : knownBlocker ?? "live_executor_not_configured_or_not_in_allowed_group",
       allowed_live_group: allowedGroup,
     });
   });
 }
 
-function runtimeTemplateDiscoveryFacade(discovery) {
+function runtimeTemplateDiscoveryFacade({ templates, defaultSurface }) {
+  const templatesById = new Map(templates.map((template) => [template.id, template]));
+  const allDiscovery = createDiscoveryCatalog({ templates });
+  const executableDiscovery = createDiscoveryCatalog({
+    templates: templates.filter((template) => runtimeActionStatus(template) !== "blocked"
+      && runtimeActionStatus(template) !== "bug_known"),
+  });
+
   return Object.freeze({
     list_templates(request = {}) {
-      return discovery.list_templates(runtimeCapabilityTruthRequest(request));
+      const normalized = normalizeRuntimeDiscoveryRequest(request, defaultSurface);
+      const discovery =
+        normalized.surface === "executable" && !runtimeDiscoveryRequestHasIds(normalized.request)
+          ? executableDiscovery
+          : allDiscovery;
+      return runtimeActionDiscoveryResponse(
+        discovery.list_templates(runtimeCapabilityTruthRequest(normalized.request)),
+        normalized.surface,
+        templatesById,
+      );
+    },
+  });
+}
+
+function normalizeRuntimeDiscoveryRequest(request, defaultSurface) {
+  if (!isPlainObject(request)) {
+    return {
+      request,
+      surface: defaultSurface,
+    };
+  }
+
+  const surface = request.surface === undefined ? defaultSurface : request.surface;
+  if (!RUNTIME_DISCOVERY_DEFAULT_SURFACES.includes(surface)) {
+    throw new CallTemplateRuntimeError(
+      "CALL_TEMPLATE_REQUEST_INVALID",
+      "list_templates surface must be either catalog or executable.",
+      {
+        recoverable: true,
+        details: { allowed_surfaces: RUNTIME_DISCOVERY_DEFAULT_SURFACES },
+      },
+    );
+  }
+
+  const { surface: _surface, ...withoutSurface } = request;
+  return {
+    request: withoutSurface,
+    surface,
+  };
+}
+
+function runtimeDiscoveryRequestHasIds(request) {
+  if (!isPlainObject(request)) return false;
+  if (Array.isArray(request.ids)) return request.ids.length > 0;
+  return typeof request.ids === "string" && request.ids.trim() !== "";
+}
+
+function runtimeActionDiscoveryResponse(response, surface, templatesById) {
+  return deepFreeze({
+    ...response,
+    items: response.items.map((item) => {
+      const descriptor = templatesById.get(item.id) ?? item;
+      return {
+        ...item,
+        ...runtimeActionMetadata(descriptor),
+      };
+    }),
+    applied: {
+      ...response.applied,
+      surface,
     },
   });
 }
@@ -752,6 +843,9 @@ function runtimeCapabilityTruthRequest(request) {
 }
 
 function acceptedTemplateEvidenceLevel(id) {
+  if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, id)) return "blocked_typed";
+  const pack = templatePackFromId(id);
+  if (Object.hasOwn(RUNTIME_HELD_PACK_BLOCKERS, pack)) return "route_defined_pending_live_promotion";
   if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(id)) return "live_smoked";
   return "runtime_bound_static_fake";
 }
@@ -761,6 +855,160 @@ function liveAllowedGroupForTemplateId(id) {
     if (ids.includes(id)) return group;
   }
   return null;
+}
+
+function runtimeKnownBlocker(descriptor) {
+  if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, descriptor.id)) {
+    return RUNTIME_KNOWN_TEMPLATE_BLOCKERS[descriptor.id];
+  }
+  if (Object.hasOwn(RUNTIME_HELD_PACK_BLOCKERS, descriptor.pack)) {
+    return RUNTIME_HELD_PACK_BLOCKERS[descriptor.pack];
+  }
+  return null;
+}
+
+function runtimeActionMetadata(item) {
+  const currentStatus = runtimeActionStatus(item);
+  return pruneUndefined({
+    template_id: item.id,
+    action_name: runtimeActionName(item),
+    current_status: currentStatus,
+    user_message: runtimeActionUserMessage(item, currentStatus),
+    required_input: requiredInputFields(item),
+    required_refs: compactRefDeclarations(inputRefDeclarations(item).filter((ref) => ref.required === true)),
+    output_refs: compactRefDeclarations(outputRefDeclarations(item)),
+    needs_confirmation: runtimeActionNeedsConfirmation(item),
+    fixture_requirements: runtimeFixtureRequirements(item, currentStatus),
+    example_input: firstExampleInput(item),
+  });
+}
+
+function runtimeActionStatus(item) {
+  const blocker = typeof item.known_blocker === "string" ? item.known_blocker : null;
+  if (blocker?.startsWith("known_bug:")) return "bug_known";
+  if (item.live_runnable_now !== true) return "blocked";
+  if (inputRefDeclarations(item).some((ref) => ref.required === true)) return "needs_ref";
+  if (runtimeActionNeedsConfirmation(item)) return "needs_confirmation";
+  return "available_now";
+}
+
+function runtimeActionUserMessage(item, currentStatus) {
+  if (currentStatus === "available_now") {
+    return "Ready to run in the current bounded live runtime.";
+  }
+  if (currentStatus === "needs_ref") {
+    return "Resolve the required canonical ref first, then call this template.";
+  }
+  if (currentStatus === "needs_confirmation") {
+    return "Requires explicit user confirmation, undo coverage, and readback verification before running.";
+  }
+  if (currentStatus === "bug_known") {
+    return "Hidden from the default executable surface until the known runtime bug is fixed.";
+  }
+  const blocker = typeof item.known_blocker === "string"
+    ? item.known_blocker
+    : "live_executor_not_configured_or_not_in_allowed_group";
+  if (blocker.startsWith("live_handler_missing:tempo")) {
+    return "Tempo/BPM writes are still catalog/planned capabilities; the live handler is not landed yet.";
+  }
+  if (blocker.startsWith("live_promotion_held:")) {
+    return "This route is held from the default executable surface until a bounded live/design window accepts it.";
+  }
+  return "Not available in the current bounded live runtime; keep it in the internal landing backlog.";
+}
+
+function runtimeActionName(item) {
+  const id = typeof item.id === "string" ? item.id : "";
+  const [, pack = "", rawName = id] = id.match(/^template\.([^.]+)\.(.+)$/) ?? [];
+  const name = rawName.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  const prefix = runtimeActionNamePrefix(pack);
+  if (prefix === "" || name.startsWith(`${prefix}_`) || name.endsWith(`_${prefix}`)) return name;
+  if (name.startsWith("set_")) return `set_${prefix}_${name.slice("set_".length)}`;
+  if (name.startsWith("read_")) return `read_${prefix}_${name.slice("read_".length)}`;
+  if (name.startsWith("resolve_")) return `resolve_${prefix}_${name.slice("resolve_".length)}`;
+  if (name.startsWith("select_")) return `select_${prefix}_${name.slice("select_".length)}`;
+  if (name.startsWith("rename_")) return `rename_${prefix}_${name.slice("rename_".length)}`;
+  if (name.startsWith("delete_")) return `delete_${prefix}_${name.slice("delete_".length)}`;
+  return `${prefix}_${name}`;
+}
+
+function runtimeActionNamePrefix(pack) {
+  return ({
+    actions: "action",
+    automation: "automation",
+    core: "core",
+    fx: "fx",
+    items: "item",
+    media: "media",
+    midi: "midi",
+    project: "project",
+    render: "render",
+    routing: "routing",
+    system: "system",
+    tracks: "track",
+    transport: "transport",
+  })[pack] ?? pack;
+}
+
+function runtimeActionNeedsConfirmation(item) {
+  return item.risk === "write"
+    || item.risk === "destructive"
+    || item.expectedDelta?.kind === "mutation"
+    || item.bridge?.operation_family === "run_command"
+    || item.bridge?.operation_family === "run_job";
+}
+
+function runtimeFixtureRequirements(item, currentStatus) {
+  if (currentStatus === "bug_known") {
+    return ["known_bug_fix_required"];
+  }
+  if (currentStatus === "blocked") {
+    const blocker = typeof item.known_blocker === "string"
+      ? item.known_blocker
+      : "live_executor_or_allowed_group_required";
+    return [blocker];
+  }
+  const requirements = [];
+  for (const ref of inputRefDeclarations(item).filter((entry) => entry.required === true)) {
+    requirements.push(`${ref.kind}_ref_required`);
+  }
+  if (runtimeActionNeedsConfirmation(item)) {
+    requirements.push("explicit_confirmation_required");
+    requirements.push("undo_and_readback_required");
+  }
+  return requirements;
+}
+
+function requiredInputFields(item) {
+  const required = Array.isArray(item.inputSchema?.required) ? item.inputSchema.required : [];
+  return required.filter((entry) => typeof entry === "string");
+}
+
+function compactRefDeclarations(refs) {
+  return refs.map((ref) => pruneUndefined({
+    name: ref.name,
+    kind: ref.kind,
+    required: ref.required,
+    summary: ref.summary,
+  }));
+}
+
+function inputRefDeclarations(item) {
+  return Array.isArray(item.refs?.input) ? item.refs.input.filter(isPlainObject) : [];
+}
+
+function outputRefDeclarations(item) {
+  return Array.isArray(item.refs?.output) ? item.refs.output.filter(isPlainObject) : [];
+}
+
+function firstExampleInput(item) {
+  const example = Array.isArray(item.examples) ? item.examples[0] : null;
+  return isPlainObject(example?.input) ? cloneJson(example.input) : {};
+}
+
+function templatePackFromId(id) {
+  const match = typeof id === "string" ? id.match(/^template\.([^.]+)\./) : null;
+  return match?.[1] ?? "";
 }
 
 function looksLikeRawExecutionId(id) {
