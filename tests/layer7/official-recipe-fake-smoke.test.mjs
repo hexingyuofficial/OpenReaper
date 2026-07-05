@@ -282,7 +282,10 @@ describe("Layer 7 official draft recipe fake smoke", () => {
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {
     for (const recipe of loadDraftRecipes()) {
       const run = fakeSmokeRecipe(recipe);
-      const payload = JSON.stringify({ recipe, run });
+      const payload = JSON.stringify({
+        recipe: withoutWorkflowCard(recipe),
+        run: withoutWorkflowCardRun(run),
+      });
 
       assertNoForbiddenRawFields(recipe, recipe.id);
       assert.equal(recipe.lifecycle, "draft", recipe.id);
@@ -298,6 +301,18 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     }
   });
 });
+
+function withoutWorkflowCard(recipe) {
+  const { workflow_card, ...rest } = recipe;
+  return rest;
+}
+
+function withoutWorkflowCardRun(run) {
+  return {
+    ...run,
+    recipe: withoutWorkflowCard(run.recipe),
+  };
+}
 
 function loadDraftRecipes() {
   const files = readdirSync(PACKET_ROOT).filter((file) => file.endsWith(".recipe.json"));

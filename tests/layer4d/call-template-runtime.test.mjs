@@ -40,7 +40,7 @@ describe("Layer 4D call_template runtime binding", () => {
   it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
-    assert.equal(catalog.size, 129);
+    assert.equal(catalog.size, 133);
     assert.deepEqual(catalog.ids, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE.waves, [
       "wave1a",
@@ -264,6 +264,75 @@ describe("Layer 4D call_template runtime binding", () => {
     });
     assert.equal(oversized.error.source, "harness");
     assert.equal(oversized.error.code, "RESPONSE_TOO_LARGE");
+  });
+
+  it("returns canonical refs, readback, and session ledger for static chained calls", async () => {
+    const runtime = createCallTemplateRuntime({ executor: new FakeFoundationBridge() });
+
+    const resolvedItem = await runtime.call_template({
+      id: "template.items.resolve_item_ref",
+      input: { ref: "selected:0" },
+      context: context({ request_sequence: 1 }),
+    });
+    assert.equal(resolvedItem.ok, true);
+    assert.equal(resolvedItem.result.refs[0].kind, "item");
+    assert.equal(resolvedItem.result.refs[0].identity.scheme, "guid");
+    assert.equal(resolvedItem.result.refs[0].index, 0);
+    assert.equal(resolvedItem.result.refs[0].display_number, 1);
+    assert.equal(resolvedItem.result.refs[0].selected, true);
+    assert.equal(resolvedItem.result.readback.raw_name, "");
+    assert.equal(resolvedItem.result.readback.display_name, "Item 1");
+    assert.equal(resolvedItem.result.readback.fallback_name_used, true);
+
+    const itemSummary = await runtime.call_template({
+      id: "template.items.read_item_summary",
+      input: { include_take_summary: true },
+      refs: { item_ref: resolvedItem.result.refs[0] },
+      context: context({ request_sequence: 2 }),
+    });
+    assert.equal(itemSummary.ok, true);
+    assert.equal(itemSummary.result.refs[0].ref, resolvedItem.result.refs[0].ref);
+    assert.equal(itemSummary.result.readback.status, "read");
+
+    const resolvedTrack = await runtime.call_template({
+      id: "template.tracks.resolve_track_ref",
+      input: { track_ref: "track:index:0" },
+      context: context({ request_sequence: 3 }),
+    });
+    assert.equal(resolvedTrack.ok, true);
+    assert.equal(resolvedTrack.result.refs[0].kind, "track");
+    assert.equal(resolvedTrack.result.refs[0].identity.scheme, "guid");
+    assert.equal(resolvedTrack.result.refs[0].display_number, 1);
+
+    const mute = await runtime.call_template({
+      id: "template.tracks.set_mute",
+      input: { muted: true },
+      refs: { track_ref: resolvedTrack.result.refs[0] },
+      idempotency_key: "static-set-mute",
+      context: context({ request_sequence: 4 }),
+    });
+    assert.equal(mute.ok, true);
+    assert.equal(mute.result.refs[0].ref, resolvedTrack.result.refs[0].ref);
+    assert.equal(mute.result.session_ledger.contract, "session.ledger.v1");
+    assert.equal(mute.result.session_ledger.request_id, mute.request.id);
+    assert.equal(mute.result.session_ledger.operation_id, "run_command:template.execute");
+    assert.equal(mute.result.session_ledger.undo_label, "OpenReaper: track.set_mute");
+    assert.equal(mute.result.session_ledger.readback_status, "available");
+    assert.deepEqual(mute.result.session_ledger.refs.created, []);
+    assert.equal(mute.result.session_ledger.refs.modified[0].ref, resolvedTrack.result.refs[0].ref);
+
+    const createdTrack = await runtime.call_template({
+      id: "template.tracks.create_track",
+      input: { name: "", index: 0 },
+      idempotency_key: "static-create-track",
+      context: context({ request_sequence: 5 }),
+    });
+    assert.equal(createdTrack.ok, true);
+    assert.equal(createdTrack.result.refs[0].raw.name, "");
+    assert.equal(createdTrack.result.refs[0].display.name, "Track 1");
+    assert.equal(createdTrack.result.refs[0].selected, false);
+    assert.equal(createdTrack.result.session_ledger.cleanup_method, "returned_ref");
+    assert.equal(createdTrack.result.session_ledger.refs.created[0].ref, createdTrack.result.refs[0].ref);
   });
 
   it("keeps discovery compact and does not add a sixth MCP tool", () => {

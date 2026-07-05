@@ -30,6 +30,7 @@ export const RECIPE_SUMMARY_FIELDS = Object.freeze([
   "risk",
   "entity_kind",
   "tags",
+  "workflow_card",
 ]);
 
 export const RECIPE_DETAIL_FIELDS = Object.freeze([
@@ -358,6 +359,8 @@ function canonicalFieldName(field) {
       capability_group: "capability_group",
       taskIntents: "task_intents",
       task_intents: "task_intents",
+      workflowCard: "workflow_card",
+      workflow_card: "workflow_card",
       capabilityTruth: "capability_truth",
       capability_truth: "capability_truth",
     }[field] ?? field

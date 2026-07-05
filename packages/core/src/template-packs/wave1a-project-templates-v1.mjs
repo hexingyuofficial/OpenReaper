@@ -8,6 +8,7 @@ export const WAVE1A_PROJECT_TEMPLATE_IDS = Object.freeze({
   createMarker: "template.project.create_marker",
   createRegion: "template.project.create_region",
   readTempoMap: "template.project.read_tempo_map",
+  readTrackItemOverview: "template.project.read_track_item_overview",
 });
 
 export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
@@ -393,6 +394,74 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
         name: "read_tempo_map",
         summary: "Read the project's tempo map.",
         input: { limit: 32 },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: WAVE1A_PROJECT_TEMPLATE_IDS.readTrackItemOverview,
+    title: "Read track item overview",
+    summary: "Read a compact project object-map snapshot with track and item counts plus selected objects.",
+    pack: "project",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "project",
+    tags: ["project", "tracks", "items", "snapshot", "read"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "project.read_track_item_overview",
+      capability: "project.read_track_item_overview",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      max_tracks: { type: "integer" },
+      max_items_per_track: { type: "integer" },
+      include_selected_items: { type: "boolean" },
+    }, []),
+    outputSchema: objectSchema({
+      project_ref: { type: "string" },
+      tracks: { type: "array" },
+      selected_items: { type: "array" },
+      track_count: { type: "integer" },
+      item_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["project_ref", "tracks", "selected_items", "track_count", "item_count", "truncated"]),
+    refs: refs({
+      output: [
+        ref("project_ref", "project", true, "Active project ref."),
+        ref("track_ref", "track", false, "Canonical track refs included in the compact snapshot."),
+        ref("item_ref", "item", false, "Canonical item refs included in the compact snapshot."),
+      ],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads a compact track/item object-map snapshot without mutation.",
+      entities: [
+        {
+          entity_kind: "project",
+          action: "read",
+          summary: "Project track/item overview is read.",
+        },
+        {
+          entity_kind: "track",
+          action: "read",
+          summary: "Track refs and display facts are read.",
+        },
+        {
+          entity_kind: "item",
+          action: "read",
+          summary: "Selected or bounded item refs are read.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "read_compact_track_item_overview",
+        summary: "Read a compact project object map before mutation.",
+        input: { max_tracks: 32, max_items_per_track: 8, include_selected_items: true },
       },
     ],
   },

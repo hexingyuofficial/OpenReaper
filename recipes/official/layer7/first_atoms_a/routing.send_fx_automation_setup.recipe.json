@@ -7,7 +7,60 @@
   "lifecycle": "draft",
   "risk": "write",
   "entity_kind": "send_fx_automation_setup",
-  "tags": ["routing", "send", "fx", "automation", "envelope", "setup", "e6_family"],
+  "tags": [
+    "routing",
+    "send",
+    "fx",
+    "automation",
+    "envelope",
+    "setup",
+    "e6_family"
+  ],
+  "workflow_card": {
+    "intent": "Send FX automation setup as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Read bounded state and resolve refs before mutation."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Perform one readback or evidence check after mutation.",
+      "Retain compact template runtime evidence with request ids."
+    ],
+    "candidate_steps": [
+      "A2-C may add cleanup or delete parity where accepted atoms exist."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when target object, destination, or mutation scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.routing.create_track_send",
+      "template.routing.set_send_volume",
+      "template.fx.add_track_fx",
+      "template.fx.list_fx_parameters",
+      "template.automation.resolve_send_envelope",
+      "template.automation.set_envelope_lane_state",
+      "template.automation.insert_envelope_point"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "Use returned refs for cleanup when delete atoms exist; otherwise stop with a typed blocker.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "read_project_state",
@@ -257,10 +310,16 @@
         "evidence_insert_envelope_point"
       ],
       "outputs": {
-        "refs": ["send_ref", "fx_ref", "envelope_ref"],
+        "refs": [
+          "send_ref",
+          "fx_ref",
+          "envelope_ref"
+        ],
         "artifacts": [],
         "jobs": [],
-        "state": ["send_fx_automation_setup_graph"]
+        "state": [
+          "send_fx_automation_setup_graph"
+        ]
       }
     },
     {
@@ -268,7 +327,9 @@
       "kind": "checkpoint",
       "summary": "The family is draft/fake only and does not claim live routing, FX, or automation support.",
       "required": true,
-      "evidence": ["evidence_insert_envelope_point"],
+      "evidence": [
+        "evidence_insert_envelope_point"
+      ],
       "outputs": {
         "refs": [],
         "artifacts": [],
@@ -281,8 +342,19 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
@@ -295,49 +367,63 @@
       {
         "id": "checkpoint_create_track_send",
         "after_step": "create_track_send",
-        "required_evidence": ["evidence_create_track_send"],
+        "required_evidence": [
+          "evidence_create_track_send"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Created send evidence is retained."
       },
       {
         "id": "checkpoint_set_send_volume",
         "after_step": "set_send_volume",
-        "required_evidence": ["evidence_set_send_volume"],
+        "required_evidence": [
+          "evidence_set_send_volume"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Send volume mutation evidence is retained."
       },
       {
         "id": "checkpoint_add_destination_fx",
         "after_step": "add_destination_fx",
-        "required_evidence": ["evidence_add_destination_fx"],
+        "required_evidence": [
+          "evidence_add_destination_fx"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Added FX evidence is retained."
       },
       {
         "id": "checkpoint_list_fx_parameters",
         "after_step": "list_fx_parameters",
-        "required_evidence": ["evidence_list_fx_parameters"],
+        "required_evidence": [
+          "evidence_list_fx_parameters"
+        ],
         "on_resume": "continue_next_step",
         "summary": "FX parameter read evidence is retained."
       },
       {
         "id": "checkpoint_resolve_send_envelope",
         "after_step": "resolve_send_envelope",
-        "required_evidence": ["evidence_resolve_send_envelope"],
+        "required_evidence": [
+          "evidence_resolve_send_envelope"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Send envelope resolution evidence is retained."
       },
       {
         "id": "checkpoint_set_envelope_lane_state",
         "after_step": "set_envelope_lane_state",
-        "required_evidence": ["evidence_set_envelope_lane_state"],
+        "required_evidence": [
+          "evidence_set_envelope_lane_state"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Envelope lane state evidence is retained."
       },
       {
         "id": "checkpoint_insert_envelope_point",
         "after_step": "insert_envelope_point",
-        "required_evidence": ["evidence_insert_envelope_point"],
+        "required_evidence": [
+          "evidence_insert_envelope_point"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Envelope point insertion evidence is retained."
       }
@@ -494,7 +580,9 @@
     "risk_gates": [
       {
         "id": "gate_fresh_state",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "create_track_send",
         "policy": "fresh_state",
         "blocks_auto_resume": true,
@@ -502,7 +590,9 @@
       },
       {
         "id": "gate_manual_approval",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "create_track_send",
         "policy": "manual_approval",
         "blocks_auto_resume": true,

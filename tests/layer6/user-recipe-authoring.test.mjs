@@ -56,7 +56,9 @@ describe("Layer 6 Narrow User Recipe Authoring v1", () => {
       "risk",
       "entity_kind",
       "tags",
+      "workflow_card",
     ]);
+    assert.equal(menu.items[0].workflow_card.token_budget.same_typed_blocker_stop_after, 2);
     assert.equal("steps" in menu.items[0], false);
     assert.equal("assertions" in menu.items[0], false);
     assert.equal("recovery" in menu.items[0], false);
@@ -370,6 +372,10 @@ function makeRecipe(overrides = {}) {
     risk: "write",
     entity_kind: "track",
     tags: ["track", "setup"],
+    workflow_card: workflowCard({
+      intent: "Prepare dialog track through accepted atoms and compact evidence.",
+      template_atoms: ["template.tracks.create_track"],
+    }),
     steps: [
       readProjectStep(),
       createTrackStep(),
@@ -395,6 +401,43 @@ function makeRecipe(overrides = {}) {
   };
 
   return mergeRecipe(recipe, overrides);
+}
+
+function workflowCard(overrides = {}) {
+  return {
+    intent: "Run a lightweight agent procedure over declared recipe atoms.",
+    entry_conditions: [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Resolve refs before any mutation.",
+    ],
+    supported_steps: [
+      "Call declared template atoms only.",
+      "Perform one readback or evidence check after mutation.",
+    ],
+    candidate_steps: [
+      "A2-C may add cleanup or delete parity when accepted atoms exist.",
+    ],
+    blocked_steps: [
+      "Do not use public call_recipe or a hidden recipe executor.",
+    ],
+    required_questions: [
+      "Ask when the target object or mutation scope is ambiguous.",
+    ],
+    template_atoms: [],
+    evidence_required: [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output",
+    ],
+    cleanup_plan: "Use returned refs for cleanup when delete atoms exist; otherwise report a typed blocker.",
+    typed_blockers: ["no_public_call_recipe_executor"],
+    token_budget: {
+      menu_max_bytes: 4096,
+      exact_max_bytes: 32768,
+      compact_chat_max_items: 5,
+      same_typed_blocker_stop_after: 2,
+    },
+    ...overrides,
+  };
 }
 
 function makeReadTrackRoutingRecipe(overrides = {}) {

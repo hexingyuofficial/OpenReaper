@@ -7,7 +7,52 @@
   "lifecycle": "draft",
   "risk": "read",
   "entity_kind": "delivery_report",
-  "tags": ["render", "delivery", "report", "artifact", "first_atoms_a"],
+  "tags": [
+    "render",
+    "delivery",
+    "report",
+    "artifact",
+    "first_atoms_a"
+  ],
+  "workflow_card": {
+    "intent": "Region delivery report as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Resolve refs before reading or reporting project facts."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Keep read/report output compact and evidence-backed.",
+      "Read declared artifact summary or payload labels only."
+    ],
+    "candidate_steps": [
+      "A2-C may add richer follow-up cards after accepted live evidence."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when the read target or report scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.render.create_delivery_report"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; keep artifact labels bounded and reusable.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "create_delivery_report",
@@ -83,7 +128,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.summary",
-        "refs": ["delivery_report"]
+        "refs": [
+          "delivery_report"
+        ]
       },
       "checkpoint": "checkpoint_read_delivery_summary",
       "evidence": null,
@@ -102,7 +149,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.payload",
-        "refs": ["delivery_report"]
+        "refs": [
+          "delivery_report"
+        ]
       },
       "checkpoint": "checkpoint_read_delivery_payload",
       "evidence": null,
@@ -120,12 +169,23 @@
       "kind": "expected_output",
       "summary": "The atom must retain one render delivery report artifact ref.",
       "required": true,
-      "evidence": ["evidence_create_delivery_report"],
+      "evidence": [
+        "evidence_create_delivery_report"
+      ],
       "outputs": {
-        "refs": ["region_ref", "job_ref"],
-        "artifacts": ["region_wav_output", "render_job_evidence", "delivery_report"],
+        "refs": [
+          "region_ref",
+          "job_ref"
+        ],
+        "artifacts": [
+          "region_wav_output",
+          "render_job_evidence",
+          "delivery_report"
+        ],
         "jobs": [],
-        "state": ["artifact_provenance"]
+        "state": [
+          "artifact_provenance"
+        ]
       }
     },
     {
@@ -133,7 +193,9 @@
       "kind": "checkpoint",
       "summary": "The report summarizes retained facts only and performs no copy, upload, or publish work.",
       "required": true,
-      "evidence": ["evidence_create_delivery_report"],
+      "evidence": [
+        "evidence_create_delivery_report"
+      ],
       "outputs": {
         "refs": [],
         "artifacts": [],
@@ -146,14 +208,27 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
         "id": "checkpoint_create_delivery_report",
         "after_step": "create_delivery_report",
-        "required_evidence": ["evidence_create_delivery_report"],
+        "required_evidence": [
+          "evidence_create_delivery_report"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Delivery report artifact evidence is retained."
       },

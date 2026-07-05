@@ -7,7 +7,53 @@
   "lifecycle": "draft",
   "risk": "read",
   "entity_kind": "item_layer_report",
-  "tags": ["items", "layer", "report", "artifact", "fixture", "first_atoms_a"],
+  "tags": [
+    "items",
+    "layer",
+    "report",
+    "artifact",
+    "fixture",
+    "first_atoms_a"
+  ],
+  "workflow_card": {
+    "intent": "Layer report from evidence as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Resolve refs before reading or reporting project facts."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Keep read/report output compact and evidence-backed.",
+      "Read declared artifact summary or payload labels only."
+    ],
+    "candidate_steps": [
+      "A2-C may add richer follow-up cards after accepted live evidence."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when the read target or report scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.items.create_layer_report"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; keep artifact labels bounded and reusable.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "create_layer_report",
@@ -55,7 +101,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.summary",
-        "refs": ["layer_report"]
+        "refs": [
+          "layer_report"
+        ]
       },
       "checkpoint": "checkpoint_read_layer_report_summary",
       "evidence": null,
@@ -74,7 +122,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.payload",
-        "refs": ["layer_report"]
+        "refs": [
+          "layer_report"
+        ]
       },
       "checkpoint": "checkpoint_read_layer_report_payload",
       "evidence": null,
@@ -92,12 +142,19 @@
       "kind": "expected_output",
       "summary": "The atom must retain the fixture evidence label and one layer report artifact ref.",
       "required": true,
-      "evidence": ["evidence_create_layer_report"],
+      "evidence": [
+        "evidence_create_layer_report"
+      ],
       "outputs": {
         "refs": [],
-        "artifacts": ["layer_evidence", "layer_report"],
+        "artifacts": [
+          "layer_evidence",
+          "layer_report"
+        ],
         "jobs": [],
-        "state": ["typed_fixture_artifact"]
+        "state": [
+          "typed_fixture_artifact"
+        ]
       }
     },
     {
@@ -105,7 +162,9 @@
       "kind": "checkpoint",
       "summary": "A3 is fixture-backed report evidence only, not live role classification or arrangement.",
       "required": true,
-      "evidence": ["evidence_create_layer_report"],
+      "evidence": [
+        "evidence_create_layer_report"
+      ],
       "outputs": {
         "refs": [],
         "artifacts": [],
@@ -118,14 +177,27 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
         "id": "checkpoint_create_layer_report",
         "after_step": "create_layer_report",
-        "required_evidence": ["evidence_create_layer_report"],
+        "required_evidence": [
+          "evidence_create_layer_report"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Layer report artifact evidence is retained from a typed fixture input."
       },

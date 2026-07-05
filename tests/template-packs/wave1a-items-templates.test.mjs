@@ -30,6 +30,8 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 const ALLOWLIST = Object.freeze([
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
+  "template.items.list_selected_items",
+  "template.items.list_items_on_track",
   "template.items.move_item",
   "template.items.trim_item",
   "template.items.set_item_fades",
@@ -61,6 +63,8 @@ const BLOCKED_ITEMS_IDS = Object.freeze([
 const READ_IDS = new Set([
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
+  "template.items.list_selected_items",
+  "template.items.list_items_on_track",
 ]);
 
 describe("Wave 1A items template descriptors", () => {
@@ -116,6 +120,8 @@ describe("Wave 1A items template descriptors", () => {
     const pitch = catalog.require("template.items.set_take_pitch");
     const playrate = catalog.require("template.items.set_take_playrate");
     const snap = catalog.require("template.items.set_item_snap_offset");
+    const selected = catalog.require("template.items.list_selected_items");
+    const onTrack = catalog.require("template.items.list_items_on_track");
 
     assert.deepEqual(Object.keys(move.inputSchema.properties), ["position_seconds"]);
     assert.equal(move.refs.input.some((entry) => entry.kind === "track"), false);
@@ -126,6 +132,9 @@ describe("Wave 1A items template descriptors", () => {
     assert.equal(pitch.entity_kind, "take");
     assert.equal(playrate.inputSchema.properties.preserve_pitch.type, "boolean");
     assert.deepEqual(Object.keys(snap.inputSchema.properties), ["snap_offset_seconds"]);
+    assert.deepEqual(selected.refs.output.map((entry) => entry.kind), ["item", "track"]);
+    assert.deepEqual(onTrack.refs.input.map((entry) => entry.kind), ["track"]);
+    assert.deepEqual(onTrack.refs.output.map((entry) => entry.kind), ["track", "item"]);
   });
 
   it("loads a pack-local catalog, rejects duplicates, and keeps default discovery bounded", () => {

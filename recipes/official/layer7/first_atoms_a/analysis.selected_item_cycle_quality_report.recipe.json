@@ -7,7 +7,54 @@
   "lifecycle": "draft",
   "risk": "read",
   "entity_kind": "loop_qa_report",
-  "tags": ["analysis", "loop", "report", "artifact", "first_atoms_a"],
+  "tags": [
+    "analysis",
+    "loop",
+    "report",
+    "artifact",
+    "first_atoms_a"
+  ],
+  "workflow_card": {
+    "intent": "Selected item cycle quality report as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Resolve refs before reading or reporting project facts."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Keep read/report output compact and evidence-backed.",
+      "Read declared artifact summary or payload labels only."
+    ],
+    "candidate_steps": [
+      "A2-C may add richer follow-up cards after accepted live evidence."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when the read target or report scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.analysis.detect_loop_candidates",
+      "template.analysis.measure_loop_click_risk",
+      "template.analysis.create_loop_qa_report"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; keep artifact labels bounded and reusable.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "detect_loop_candidates",
@@ -115,7 +162,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.summary",
-        "refs": ["loop_qa_report"]
+        "refs": [
+          "loop_qa_report"
+        ]
       },
       "checkpoint": "checkpoint_read_loop_qa_summary",
       "evidence": null,
@@ -134,7 +183,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.payload",
-        "refs": ["loop_qa_report"]
+        "refs": [
+          "loop_qa_report"
+        ]
       },
       "checkpoint": "checkpoint_read_loop_qa_payload",
       "evidence": null,
@@ -159,7 +210,11 @@
       ],
       "outputs": {
         "refs": [],
-        "artifacts": ["loop_candidates", "loop_click_risk", "loop_qa_report"],
+        "artifacts": [
+          "loop_candidates",
+          "loop_click_risk",
+          "loop_qa_report"
+        ],
         "jobs": [],
         "state": []
       }
@@ -169,12 +224,18 @@
       "kind": "state",
       "summary": "The selected item input must be caller-bounded and non-ambiguous before analysis.",
       "required": true,
-      "evidence": ["evidence_detect_loop_candidates"],
+      "evidence": [
+        "evidence_detect_loop_candidates"
+      ],
       "outputs": {
-        "refs": ["item_ref"],
+        "refs": [
+          "item_ref"
+        ],
         "artifacts": [],
         "jobs": [],
-        "state": ["selected_item"]
+        "state": [
+          "selected_item"
+        ]
       }
     },
     {
@@ -199,28 +260,45 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
         "id": "checkpoint_detect_loop_candidates",
         "after_step": "detect_loop_candidates",
-        "required_evidence": ["evidence_detect_loop_candidates"],
+        "required_evidence": [
+          "evidence_detect_loop_candidates"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Loop candidate artifact evidence is retained."
       },
       {
         "id": "checkpoint_measure_click_risk",
         "after_step": "measure_click_risk",
-        "required_evidence": ["evidence_measure_click_risk"],
+        "required_evidence": [
+          "evidence_measure_click_risk"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Click-risk artifact evidence is retained."
       },
       {
         "id": "checkpoint_create_loop_qa_report",
         "after_step": "create_loop_qa_report",
-        "required_evidence": ["evidence_create_loop_qa_report"],
+        "required_evidence": [
+          "evidence_create_loop_qa_report"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Loop QA report artifact evidence is retained."
       },

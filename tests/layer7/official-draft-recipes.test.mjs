@@ -131,9 +131,27 @@ describe("Layer 7 official draft recipe packet", () => {
     for (const recipe of recipes()) {
       const dependencies = recipeTemplateDependencies(recipe);
       assert.deepEqual(dependencies, EXPECTED_DEPENDENCIES[recipe.id], recipe.id);
+      assert.deepEqual(recipe.workflow_card.template_atoms, dependencies, recipe.id);
       for (const templateId of dependencies) {
         assert.equal(ACCEPTED_TEMPLATE_SET.has(templateId), true, `${recipe.id} uses ${templateId}`);
       }
+    }
+  });
+
+  it("surfaces lightweight workflow cards without recipe execution authority", () => {
+    const menu = listUserRecipes({ limit: EXPECTED_PACKET_IDS.length }, { repoRoot: REPO_ROOT });
+
+    assert.equal(menu.items.length, EXPECTED_PACKET_IDS.length);
+    for (const item of menu.items) {
+      assert.equal(typeof item.workflow_card.intent, "string", item.id);
+      assert.equal(item.workflow_card.blocked_steps.some((step) => /call_recipe/.test(step)), true, item.id);
+      assert.equal(item.workflow_card.token_budget.same_typed_blocker_stop_after, 2, item.id);
+      assert.deepEqual(
+        item.workflow_card.template_atoms,
+        EXPECTED_DEPENDENCIES[item.id],
+        item.id,
+      );
+      assert.doesNotMatch(JSON.stringify(item.workflow_card), /executor.*available|live recipe support is available/i, item.id);
     }
   });
 
@@ -256,7 +274,7 @@ describe("Layer 7 official draft recipe packet", () => {
       true,
     );
     assert.equal(recipe.assertions.some((assertion) => assertion.id === "assert_no_loop_source_authority"), true);
-    assert.doesNotMatch(JSON.stringify(recipe), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(recipe), /template\.media\.relink_take_source|B_LOOPSRC|set_item_loop_source/i);
   });
 
@@ -303,7 +321,7 @@ describe("Layer 7 official draft recipe packet", () => {
         "template.automation.insert_envelope_point",
       ],
     );
-    assert.doesNotMatch(JSON.stringify(recipe), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
   it("discovers the E6 routing/FX/automation family through compact recipe-menu intent fields", () => {
@@ -344,6 +362,11 @@ function recipes() {
 
 function recipesById() {
   return new Map(recipes().map((recipe) => [recipe.id, recipe]));
+}
+
+function withoutWorkflowCard(recipe) {
+  const { workflow_card, ...rest } = recipe;
+  return rest;
 }
 
 function validateRecipeRefs(recipe) {

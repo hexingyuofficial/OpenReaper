@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -167,7 +168,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(configuredMissing.reason, "live_bridge_transport_absent");
     assert.equal(configuredMissing.attempted_template_ids.length, 9);
     assert.deepEqual(configuredMissing.attempted_template_ids, CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS);
-    assert.equal(configuredMissing.accepted_catalog.size, 129);
+    assert.equal(configuredMissing.accepted_catalog.size, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length);
     assert.equal(configuredMissing.executions.length, 9);
     assert.equal(configuredMissing.spawned_reaper, false);
   });

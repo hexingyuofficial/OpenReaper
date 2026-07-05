@@ -66,6 +66,7 @@ assertFieldSet("recipe summary fields", RECIPE_SUMMARY_FIELDS, [
   "risk",
   "entity_kind",
   "tags",
+  "workflow_card",
 ]);
 assertFieldSet("recipe detail fields", RECIPE_DETAIL_FIELDS, [
   "steps",

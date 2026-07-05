@@ -55,6 +55,7 @@ lifecycle
 risk
 entity_kind
 tags
+workflow_card
 ```
 
 Recipe details remain on-demand only through exact `ids` expansion and exactly:
@@ -67,7 +68,9 @@ recovery
 
 Full recipe run rules are carried inside those three detail fields. Layer 5
 does not add discovery fields such as `expectedOutputs`, `templateDependencies`,
-`checkpoints`, or `riskGates`.
+`checkpoints`, or `riskGates`. `workflow_card` is compact A2-F0.3 procedure
+metadata for agents; it does not add a public `call_recipe` surface, hidden
+recipe executor, or sixth MCP tool.
 
 ## Recipe Metadata
 
@@ -83,6 +86,7 @@ lifecycle
 risk
 entity_kind
 tags
+workflow_card
 steps
 assertions
 recovery
@@ -233,7 +237,7 @@ Template dependencies are derived from `steps[*].call_template.id`.
 
 Layer 5's accepted template dependency set is the Layer 4D accepted official
 catalog, currently the Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 ids,
-129 templates total.
+133 templates total.
 Recipe validation rejects:
 
 ```text
@@ -545,13 +549,15 @@ title_max_chars: 80
 summary_max_chars: 240
 tag_max_count: 12
 tag_max_chars: 32
+workflow_card_text_max_chars: 240
+workflow_card_list_max_count: 16
 steps_max_count: 32
 assertions_max_count: 16
 checkpoints_max_count: 32
 evidence_requirements_max_count: 32
 recovery_branches_max_count: 16
 risk_gates_max_count: 8
-discovery_summary_max_bytes: 1024
+discovery_summary_max_bytes: 4096
 recipe_max_bytes: 32768
 ```
 

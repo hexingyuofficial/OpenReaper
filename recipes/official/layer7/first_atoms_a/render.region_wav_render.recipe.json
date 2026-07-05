@@ -7,7 +7,52 @@
   "lifecycle": "draft",
   "risk": "write",
   "entity_kind": "render_job",
-  "tags": ["render", "region", "wav", "artifact", "first_atoms_a"],
+  "tags": [
+    "render",
+    "region",
+    "wav",
+    "artifact",
+    "first_atoms_a"
+  ],
+  "workflow_card": {
+    "intent": "Region WAV render as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Read bounded state and resolve refs before mutation."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Perform one readback or evidence check after mutation.",
+      "Read declared artifact summary or payload labels only."
+    ],
+    "candidate_steps": [
+      "A2-C may add cleanup or delete parity where accepted atoms exist."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when target object, destination, or mutation scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.render.render_region_wav"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "Use returned refs for cleanup when delete atoms exist; otherwise stop with a typed blocker.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "read_project_state",
@@ -73,7 +118,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.summary",
-        "refs": ["region_wav_output"]
+        "refs": [
+          "region_wav_output"
+        ]
       },
       "checkpoint": "checkpoint_read_render_output_summary",
       "evidence": null,
@@ -92,7 +139,9 @@
       "call_template": null,
       "get_state": {
         "projection": "artifact.summary",
-        "refs": ["render_job_evidence"]
+        "refs": [
+          "render_job_evidence"
+        ]
       },
       "checkpoint": "checkpoint_read_render_evidence_summary",
       "evidence": null,
@@ -110,12 +159,23 @@
       "kind": "expected_output",
       "summary": "The atom must retain render job and managed WAV artifact evidence refs.",
       "required": true,
-      "evidence": ["evidence_render_region_wav"],
+      "evidence": [
+        "evidence_render_region_wav"
+      ],
       "outputs": {
-        "refs": ["region_ref"],
-        "artifacts": ["region_wav_output", "render_job_evidence"],
-        "jobs": ["job_ref"],
-        "state": ["managed_wav_metadata"]
+        "refs": [
+          "region_ref"
+        ],
+        "artifacts": [
+          "region_wav_output",
+          "render_job_evidence"
+        ],
+        "jobs": [
+          "job_ref"
+        ],
+        "state": [
+          "managed_wav_metadata"
+        ]
       }
     },
     {
@@ -123,12 +183,16 @@
       "kind": "checkpoint",
       "summary": "The render must use the managed render root and declared collision policy.",
       "required": true,
-      "evidence": ["evidence_render_region_wav"],
+      "evidence": [
+        "evidence_render_region_wav"
+      ],
       "outputs": {
         "refs": [],
         "artifacts": [],
         "jobs": [],
-        "state": ["collision_policy"]
+        "state": [
+          "collision_policy"
+        ]
       }
     }
   ],
@@ -136,8 +200,19 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
@@ -150,7 +225,9 @@
       {
         "id": "checkpoint_render_region_wav",
         "after_step": "render_region_wav",
-        "required_evidence": ["evidence_render_region_wav"],
+        "required_evidence": [
+          "evidence_render_region_wav"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Render job and output artifact evidence are retained."
       },
@@ -217,7 +294,9 @@
     "risk_gates": [
       {
         "id": "gate_fresh_state",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "render_region_wav",
         "policy": "fresh_state",
         "blocks_auto_resume": true,
@@ -225,7 +304,9 @@
       },
       {
         "id": "gate_artifact_path_review",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "render_region_wav",
         "policy": "artifact_path_review",
         "blocks_auto_resume": true,
@@ -233,7 +314,9 @@
       },
       {
         "id": "gate_manual_approval",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "render_region_wav",
         "policy": "manual_approval",
         "blocks_auto_resume": true,

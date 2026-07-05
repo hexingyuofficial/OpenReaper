@@ -579,6 +579,8 @@ function mapBridgeResult(prepared, bridgeResult) {
     refs: cloneJson(bridgeResult.result.refs ?? []),
     artifacts: cloneJson(bridgeResult.result.artifacts ?? []),
     jobs: cloneJson(bridgeResult.result.jobs ?? []),
+    readback: cloneJson(bridgeResult.result.readback ?? null),
+    session_ledger: cloneJson(bridgeResult.result.session_ledger ?? null),
     last_result: cloneJson(
       bridgeResult.result.last_result ?? {
         updated: false,

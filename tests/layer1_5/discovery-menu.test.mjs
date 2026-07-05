@@ -51,6 +51,35 @@ describe("Layer 1.5 discovery/menu contract", () => {
     assert.doesNotMatch(payload, /large hidden recipe body/);
   });
 
+  it("surfaces compact workflow cards in recipe menus without exposing recipe steps", () => {
+    const response = listRecipes(
+      {
+        fields: ["title", "workflowCard"],
+      },
+      [
+        recipe({
+          id: "recipe.project.cleanup_fingerprint_report",
+          title: "Cleanup fingerprint report",
+          workflow_card: {
+            intent: "Create a compact cleanup report from accepted static atoms.",
+            token_budget: {
+              target_prompt_tokens: 900,
+              max_chat_summary_tokens: 180,
+              same_typed_blocker_stop_after: 2,
+            },
+          },
+        }),
+      ],
+    );
+
+    assert.deepEqual(Object.keys(response.items[0]), ["id", "title", "workflow_card"]);
+    assert.equal(response.items[0].workflow_card.token_budget.same_typed_blocker_stop_after, 2);
+    const payload = JSON.stringify(response);
+    assert.doesNotMatch(payload, /steps/);
+    assert.doesNotMatch(payload, /assertions/);
+    assert.doesNotMatch(payload, /recovery/);
+  });
+
   it("expands exact template ids with selected detail fields only", () => {
     const response = listTemplates(
       {

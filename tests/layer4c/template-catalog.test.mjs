@@ -85,7 +85,7 @@ describe("Layer 4C template catalog and smoke gate", () => {
 
     assert.deepEqual(validation.errors, []);
     assert.equal(validation.ok, true);
-    assert.equal(catalog.size, 43);
+    assert.equal(catalog.size, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length);
     assert.deepEqual(catalog.ids, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
     assert.equal(new Set(catalog.ids).size, catalog.ids.length);
 
@@ -131,7 +131,10 @@ describe("Layer 4C template catalog and smoke gate", () => {
 
     assert.deepEqual(validation.errors, []);
     assert.equal(validation.ok, true);
-    assert.equal(catalog.size, 43 + TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS.length);
+    assert.equal(
+      catalog.size,
+      TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length + TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS.length,
+    );
     assert.deepEqual(catalog.ids.slice(0, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
     assert.deepEqual(catalog.ids.slice(TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE2A_FX_TEMPLATE_IDS);
     assert.equal(new Set(catalog.ids).size, catalog.ids.length);

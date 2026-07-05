@@ -23,6 +23,7 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 
 const ALLOWLIST = Object.freeze([
   "template.tracks.resolve_track_ref",
+  "template.tracks.list_tracks",
   "template.tracks.create_track",
   "template.tracks.rename_track",
   "template.tracks.set_color",
@@ -81,6 +82,9 @@ describe("Wave 1A tracks template descriptors", () => {
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.resolveTrackRef).bridge.idempotency, "none");
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.resolveTrackRef).expectedDelta.kind, "read");
     assert.deepEqual(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.resolveTrackRef).refs.input, []);
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).risk, "read");
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).bridge.operation_name, "tracks.list_tracks");
+    assert.deepEqual(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).refs.output.map((entry) => entry.kind), ["track"]);
 
     for (const descriptor of templates.filter((entry) => entry.risk === "write")) {
       assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);

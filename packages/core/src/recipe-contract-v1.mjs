@@ -54,6 +54,7 @@ export const RECIPE_DISCOVERY_SUMMARY_FIELDS = Object.freeze([
   "risk",
   "entity_kind",
   "tags",
+  "workflow_card",
 ]);
 
 export const RECIPE_DETAIL_FIELDS = Object.freeze([
@@ -66,6 +67,24 @@ export const RECIPE_FULL_FIELDS = Object.freeze([
   "contract",
   ...RECIPE_DISCOVERY_SUMMARY_FIELDS,
   ...RECIPE_DETAIL_FIELDS,
+]);
+
+export const RECIPE_REQUIRED_FIELDS = Object.freeze(
+  RECIPE_FULL_FIELDS.filter((field) => field !== "workflow_card"),
+);
+
+export const RECIPE_WORKFLOW_CARD_FIELDS = Object.freeze([
+  "intent",
+  "entry_conditions",
+  "supported_steps",
+  "candidate_steps",
+  "blocked_steps",
+  "required_questions",
+  "template_atoms",
+  "evidence_required",
+  "cleanup_plan",
+  "typed_blockers",
+  "token_budget",
 ]);
 
 export const RECIPE_STEP_USES = Object.freeze([
@@ -154,13 +173,15 @@ export const RECIPE_BUDGETS = Object.freeze({
   summary_max_chars: 240,
   tag_max_count: 12,
   tag_max_chars: 32,
+  workflow_card_text_max_chars: 240,
+  workflow_card_list_max_count: 16,
   steps_max_count: 32,
   assertions_max_count: 16,
   checkpoints_max_count: 32,
   evidence_requirements_max_count: 32,
   recovery_branches_max_count: 16,
   risk_gates_max_count: 8,
-  discovery_summary_max_bytes: 1_024,
+  discovery_summary_max_bytes: 4_096,
   recipe_max_bytes: 32_768,
 });
 
@@ -385,9 +406,81 @@ export function createRecipeCatalogDiscovery(catalog, createDiscoveryCatalog) {
       "createRecipeCatalogDiscovery requires the Layer 1.5 createDiscoveryCatalog function.",
     );
   }
-  return createDiscoveryCatalog({
+  const discovery = createDiscoveryCatalog({
     recipes: catalog.discoveryRecipes(),
   });
+  const recipesById = new Map(catalog.discoveryRecipes().map((recipe) => [recipe.id, recipe]));
+
+  return Object.freeze({
+    list_recipes(request = {}) {
+      return listRecipesWithWorkflowCards(discovery, recipesById, request);
+    },
+  });
+}
+
+function listRecipesWithWorkflowCards(discovery, recipesById, request) {
+  const { request: forwardedRequest, includeWorkflowCard, appliedFields } =
+    normalizeWorkflowCardDiscoveryRequest(request);
+  const response = discovery.list_recipes(forwardedRequest);
+  if (!includeWorkflowCard) return response;
+
+  const items = response.items.map((item) => {
+    const recipe = recipesById.get(item.id);
+    if (!isPlainObject(recipe?.workflow_card)) return item;
+    return {
+      ...item,
+      workflow_card: recipe.workflow_card,
+    };
+  });
+
+  return {
+    ...response,
+    items,
+    applied: {
+      ...response.applied,
+      fields: appliedFields,
+    },
+  };
+}
+
+function normalizeWorkflowCardDiscoveryRequest(request) {
+  if (request === null || typeof request !== "object" || Array.isArray(request)) {
+    return {
+      request,
+      includeWorkflowCard: false,
+      appliedFields: [],
+    };
+  }
+
+  if (request.fields === undefined) {
+    return {
+      request,
+      includeWorkflowCard: true,
+      appliedFields: [...RECIPE_DISCOVERY_SUMMARY_FIELDS],
+    };
+  }
+
+  const rawFields = Array.isArray(request.fields) ? request.fields : [request.fields];
+  const normalizedFields = rawFields.map((field) =>
+    field === "workflowCard" ? "workflow_card" : field,
+  );
+  const includeWorkflowCard = normalizedFields.includes("workflow_card");
+  if (!includeWorkflowCard) {
+    return {
+      request,
+      includeWorkflowCard: false,
+      appliedFields: normalizedFields,
+    };
+  }
+
+  return {
+    request: {
+      ...request,
+      fields: normalizedFields.filter((field) => field !== "workflow_card"),
+    },
+    includeWorkflowCard: true,
+    appliedFields: unique(normalizedFields),
+  };
 }
 
 function validateRecipeShape(input, errors) {
@@ -398,7 +491,7 @@ function validateRecipeShape(input, errors) {
 
   rejectRawExecutionFields(input, errors);
   requireKnownTopLevelFields(input, errors);
-  requireFields(input, RECIPE_FULL_FIELDS, errors);
+  requireFields(input, RECIPE_REQUIRED_FIELDS, errors);
   assertBudget("recipe", input, RECIPE_BUDGETS.recipe_max_bytes, errors);
   assertBudget(
     "recipe discovery summary",
@@ -424,6 +517,7 @@ function validateRecipeShape(input, errors) {
   }
   validateEntityKind(input.entity_kind, "entity_kind", errors);
   validateTags(input.tags, errors);
+  validateWorkflowCard(input.workflow_card, input, errors);
 
   const stepIndex = validateSteps(input.steps, errors);
   const recoveryIndex = validateRecovery(input.recovery, stepIndex, errors);
@@ -1175,6 +1269,113 @@ function validateTags(tags, errors) {
   }
 }
 
+function validateWorkflowCard(card, recipe, errors) {
+  if (card === undefined) return;
+  if (!isPlainObject(card)) {
+    errors.push("workflow_card must be an object when present.");
+    return;
+  }
+  requireExactObjectFields(card, RECIPE_WORKFLOW_CARD_FIELDS, "workflow_card", errors);
+
+  validateBoundedString(
+    card.intent,
+    "workflow_card.intent",
+    1,
+    RECIPE_BUDGETS.workflow_card_text_max_chars,
+    errors,
+  );
+  validateWorkflowCardTextArray(card.entry_conditions, "workflow_card.entry_conditions", errors);
+  validateWorkflowCardTextArray(card.supported_steps, "workflow_card.supported_steps", errors);
+  validateWorkflowCardTextArray(card.candidate_steps, "workflow_card.candidate_steps", errors, { allowEmpty: true });
+  validateWorkflowCardTextArray(card.blocked_steps, "workflow_card.blocked_steps", errors, { allowEmpty: true });
+  validateWorkflowCardTextArray(card.required_questions, "workflow_card.required_questions", errors, { allowEmpty: true });
+  validateWorkflowCardTextArray(card.evidence_required, "workflow_card.evidence_required", errors);
+  validateBoundedString(
+    card.cleanup_plan,
+    "workflow_card.cleanup_plan",
+    1,
+    RECIPE_BUDGETS.workflow_card_text_max_chars,
+    errors,
+  );
+  validateStringArray(card.typed_blockers, "workflow_card.typed_blockers", errors, { allowEmpty: true });
+  validateWorkflowCardTemplateAtoms(card.template_atoms, recipe, errors);
+  validateWorkflowCardTokenBudget(card.token_budget, errors);
+}
+
+function validateWorkflowCardTemplateAtoms(templateAtoms, recipe, errors) {
+  if (!Array.isArray(templateAtoms)) {
+    errors.push("workflow_card.template_atoms must be an array.");
+    return;
+  }
+  if (templateAtoms.length === 0) errors.push("workflow_card.template_atoms must not be empty.");
+  if (templateAtoms.length > RECIPE_BUDGETS.workflow_card_list_max_count) {
+    errors.push(`workflow_card.template_atoms may contain at most ${RECIPE_BUDGETS.workflow_card_list_max_count} entries.`);
+  }
+
+  const declared = new Set(
+    Array.isArray(recipe.steps)
+      ? recipe.steps
+        .filter((step) => isPlainObject(step) && step.uses === "call_template" && isPlainObject(step.call_template))
+        .map((step) => step.call_template.id)
+      : [],
+  );
+  const seen = new Set();
+  for (const [index, atom] of templateAtoms.entries()) {
+    const field = `workflow_card.template_atoms[${index}]`;
+    validateTemplateDependencyId(atom, field, errors);
+    if (typeof atom !== "string") continue;
+    if (seen.has(atom)) errors.push(`workflow_card.template_atoms contains duplicate value: ${atom}.`);
+    seen.add(atom);
+    if (!declared.has(atom)) {
+      errors.push(`${field} must be one of the recipe's declared call_template steps.`);
+    }
+  }
+}
+
+function validateWorkflowCardTokenBudget(tokenBudget, errors) {
+  if (!isPlainObject(tokenBudget)) {
+    errors.push("workflow_card.token_budget must be an object.");
+    return;
+  }
+  requireExactObjectFields(
+    tokenBudget,
+    [
+      "menu_max_bytes",
+      "exact_max_bytes",
+      "compact_chat_max_items",
+      "same_typed_blocker_stop_after",
+    ],
+    "workflow_card.token_budget",
+    errors,
+  );
+  for (const key of ["menu_max_bytes", "exact_max_bytes", "compact_chat_max_items"]) {
+    if (!Number.isInteger(tokenBudget[key]) || tokenBudget[key] < 1) {
+      errors.push(`workflow_card.token_budget.${key} must be a positive integer.`);
+    }
+  }
+  if (tokenBudget.same_typed_blocker_stop_after !== 2) {
+    errors.push("workflow_card.token_budget.same_typed_blocker_stop_after must be 2.");
+  }
+}
+
+function validateWorkflowCardTextArray(values, field, errors, options = {}) {
+  if (!Array.isArray(values)) {
+    errors.push(`${field} must be an array.`);
+    return 0;
+  }
+  if (!options.allowEmpty && values.length === 0) errors.push(`${field} must not be empty.`);
+  if (values.length > RECIPE_BUDGETS.workflow_card_list_max_count) {
+    errors.push(`${field} may contain at most ${RECIPE_BUDGETS.workflow_card_list_max_count} entries.`);
+  }
+  const seen = new Set();
+  for (const value of values) {
+    validateBoundedString(value, field, 1, RECIPE_BUDGETS.workflow_card_text_max_chars, errors);
+    if (seen.has(value)) errors.push(`${field} contains duplicate value: ${value}.`);
+    seen.add(value);
+  }
+  return values.length;
+}
+
 function validateEntityKind(value, field, errors) {
   validateBoundedString(value, field, 1, 80, errors);
   if (typeof value === "string" && !TEMPLATE_DESCRIPTOR_ENTITY_KIND_PATTERN.test(value)) {
@@ -1264,7 +1465,9 @@ function byteLength(value) {
 
 function projectFields(object, fields) {
   const projected = {};
-  for (const field of fields) projected[field] = object?.[field];
+  for (const field of fields) {
+    if (Object.hasOwn(object ?? {}, field)) projected[field] = object[field];
+  }
   return projected;
 }
 

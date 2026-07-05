@@ -93,10 +93,15 @@ lifecycle
 risk
 entity_kind
 tags
+workflow_card
 ```
 
+`workflow_card` is compact A2-F0.3 procedure metadata. It is not a recipe
+executor, a public `call_recipe` surface, or a sixth MCP tool.
+
 The default template menu must not include full `inputSchema`, `outputSchema`,
-`examples`, or `expectedDelta`.
+`examples`, or `expectedDelta`. The default recipe menu must not include full
+`steps`, `assertions`, or `recovery`.
 
 Template menu calls may explicitly request these compact derived menu fields:
 

@@ -130,6 +130,10 @@ export function createObjectRef(kind, identity, options = {}) {
       identity: { scheme: identity.scheme, value: identity.value },
       project_ref: options.project_ref,
       display: options.display,
+      raw: options.raw,
+      index: options.index,
+      display_number: options.display_number,
+      selected: options.selected,
       summary: options.summary,
     }),
   );
@@ -242,6 +246,7 @@ export function validateFoundationBridgeResult(result) {
     normalizeRefs(result.result.refs ?? []);
     normalizeRefs(result.result.artifacts ?? []);
     normalizeRefs(result.result.jobs ?? []);
+    normalizeSessionLedger(result.result.session_ledger);
   } else if (result.ok === false) {
     normalizeObject(result.error, "error");
     if (!ERROR_CODE_SET.has(result.error.code)) {
@@ -450,10 +455,18 @@ export class FakeFoundationBridge {
       summary: {
         operation: request.operation.name,
         pack: request.pack.id,
+        readback: emitted.readback,
       },
       refs: emitted.refs,
       artifacts: emitted.artifacts,
       jobs: emitted.jobs,
+      readback: emitted.readback,
+      session_ledger: createSessionLedger(request, emitted, {
+        request_id: request.id,
+        operation_id: `${request.operation.family}:${request.operation.name}`,
+        undo_label: request.undo?.label ?? null,
+        readback_status: emitted.readback ? "available" : "not_requested",
+      }),
       last_result: mutates
         ? {
             updated: true,
@@ -491,6 +504,8 @@ export class FakeFoundationBridge {
         refs: result.refs ?? [],
         artifacts: result.artifacts ?? [],
         jobs: result.jobs ?? [],
+        readback: result.readback,
+        session_ledger: result.session_ledger,
         last_result: result.last_result ?? boundedLastResult(this.lastResult, request.budget.max_items),
       },
       undo: undoResult(request),
@@ -616,6 +631,10 @@ function normalizeRefs(refs) {
       },
       project_ref: ref.project_ref,
       display: ref.display,
+      raw: ref.raw,
+      index: ref.index,
+      display_number: ref.display_number,
+      selected: ref.selected,
       summary: ref.summary,
     });
   });
@@ -719,12 +738,188 @@ function normalizeStringArray(value, label) {
 
 function normalizeEmitted(request) {
   const emits = request.params?.emits ?? {};
+  const derived = deriveCanonicalEmits(request);
   return {
-    refs: normalizeRefs(emits.refs ?? []),
+    refs: normalizeRefs(emits.refs ?? derived.refs),
     artifacts: normalizeRefs(emits.artifacts ?? []),
     jobs: normalizeRefs(emits.jobs ?? []),
+    readback: emits.readback ?? derived.readback,
     inline_payload: emits.inline_payload,
   };
+}
+
+function deriveCanonicalEmits(request) {
+  const capability = request.pack.capability;
+  if (capability === "track.resolve_ref") {
+    const ref = canonicalTrackRef(request.params.track_ref ?? "track:index:0", {
+      name: "Track 1",
+      selected: true,
+    });
+    return {
+      refs: [ref],
+      readback: objectReadback(ref, { raw_name: ref.raw.name, display_name: ref.display.name }),
+    };
+  }
+
+  if (capability === "track.create") {
+    const index = Number.isInteger(request.params.index) ? request.params.index : 0;
+    const name = request.params.name ?? "";
+    const ref = canonicalTrackRef(`track:index:${index}`, {
+      name,
+      index,
+      selected: false,
+    });
+    return {
+      refs: [ref],
+      readback: objectReadback(ref, { raw_name: name, display_name: ref.display.name }),
+    };
+  }
+
+  if (capability?.startsWith("track.") && request.refs.some((ref) => ref.kind === "track")) {
+    const ref = request.refs.find((entry) => entry.kind === "track");
+    return {
+      refs: [ref],
+      readback: objectReadback(ref, { status: "modified" }),
+    };
+  }
+
+  if (capability === "items.resolve_item_ref") {
+    const ref = canonicalItemRef(request.params.ref ?? "selected:0", {
+      index: 0,
+      selected: true,
+    });
+    return {
+      refs: [ref],
+      readback: objectReadback(ref, { raw_name: "", display_name: ref.display.name }),
+    };
+  }
+
+  if (capability === "items.read_item_summary" && request.refs.some((ref) => ref.kind === "item")) {
+    const ref = request.refs.find((entry) => entry.kind === "item");
+    return {
+      refs: [ref],
+      readback: objectReadback(ref, { status: "read" }),
+    };
+  }
+
+  return { refs: [], readback: undefined };
+}
+
+function canonicalTrackRef(source, options = {}) {
+  const index = Number.isInteger(options.index) ? options.index : indexFromSource(source);
+  const guid = guidFromSource(source, "TRACK", index);
+  const rawName = options.name ?? "";
+  return createObjectRef(
+    "track",
+    { scheme: "guid", value: guid },
+    {
+      ref: `track:guid:${guid}`,
+      raw: { name: rawName },
+      index,
+      display_number: index + 1,
+      selected: options.selected,
+      display: {
+        name: displayName(rawName, "Track", index),
+        number: index + 1,
+      },
+      summary: {
+        index,
+        display_number: index + 1,
+        selected: Boolean(options.selected),
+      },
+    },
+  );
+}
+
+function canonicalItemRef(source, options = {}) {
+  const index = Number.isInteger(options.index) ? options.index : indexFromSource(source);
+  const guid = guidFromSource(source, "ITEM", index);
+  const rawName = options.name ?? "";
+  return createObjectRef(
+    "item",
+    { scheme: "guid", value: guid },
+    {
+      ref: `item:guid:${guid}`,
+      raw: { name: rawName },
+      index,
+      display_number: index + 1,
+      selected: options.selected,
+      display: {
+        name: displayName(rawName, "Item", index),
+        number: index + 1,
+      },
+      summary: {
+        index,
+        display_number: index + 1,
+        selected: Boolean(options.selected),
+      },
+    },
+  );
+}
+
+function objectReadback(ref, fields = {}) {
+  return pruneUndefined({
+    status: fields.status ?? "available",
+    ref: ref.ref,
+    kind: ref.kind,
+    raw_name: fields.raw_name,
+    display_name: fields.display_name ?? ref.display?.name,
+    fallback_name_used: fields.raw_name === "",
+    index: ref.index,
+    display_number: ref.display_number,
+    selected: ref.selected,
+  });
+}
+
+function createSessionLedger(request, emitted, fields) {
+  const mutates = MUTATING_FAMILIES.has(request.operation.family);
+  const refs = emitted.refs ?? [];
+  const creates = mutates && request.pack.capability.includes(".create");
+  return {
+    contract: "session.ledger.v1",
+    request_id: fields.request_id,
+    operation_id: fields.operation_id,
+    undo_label: fields.undo_label,
+    cleanup_method: mutates ? "returned_ref" : "not_applicable",
+    readback_status: fields.readback_status,
+    refs: {
+      created: creates ? refs : [],
+      modified: mutates && !creates ? (refs.length > 0 ? refs : request.refs) : [],
+      artifacts: emitted.artifacts ?? [],
+    },
+    blockers: [],
+  };
+}
+
+function normalizeSessionLedger(ledger) {
+  if (ledger === undefined) return;
+  normalizeObject(ledger, "result.session_ledger");
+  assertString(ledger.contract, "result.session_ledger.contract");
+  assertString(ledger.request_id, "result.session_ledger.request_id");
+  assertString(ledger.operation_id, "result.session_ledger.operation_id");
+  normalizeObject(ledger.refs, "result.session_ledger.refs");
+  normalizeRefs(ledger.refs.created ?? []);
+  normalizeRefs(ledger.refs.modified ?? []);
+  normalizeRefs(ledger.refs.artifacts ?? []);
+  if (!Array.isArray(ledger.blockers)) {
+    throw new FoundationBridgeContractError("result.session_ledger.blockers must be an array.");
+  }
+}
+
+function indexFromSource(source) {
+  const match = String(source).match(/(?:index|selected):(\d+)/);
+  return match ? Number(match[1]) : 0;
+}
+
+function guidFromSource(source, prefix, index) {
+  const guid = String(source).match(/\{[^}]+\}/)?.[0];
+  return guid ?? `{${prefix}-${String(index).padStart(4, "0")}}`;
+}
+
+function displayName(rawName, fallback, index) {
+  return typeof rawName === "string" && rawName.trim() !== ""
+    ? rawName
+    : `${fallback} ${index + 1}`;
 }
 
 function undoResult(request) {

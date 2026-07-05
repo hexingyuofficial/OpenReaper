@@ -3,6 +3,8 @@ import { TEMPLATE_DESCRIPTOR_CONTRACT } from "../template-descriptor-v1.mjs";
 export const WAVE1A_ITEMS_TEMPLATE_IDS = Object.freeze([
   "template.items.resolve_item_ref",
   "template.items.read_item_summary",
+  "template.items.list_selected_items",
+  "template.items.list_items_on_track",
   "template.items.move_item",
   "template.items.trim_item",
   "template.items.set_item_fades",
@@ -105,6 +107,103 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
         name: "read_resolved_item",
         summary: "Read one resolved item's compact summary.",
         input: { include_take_summary: true },
+      },
+    ],
+  }),
+  readDescriptor({
+    id: "template.items.list_selected_items",
+    title: "List selected items",
+    summary: "List selected media items with canonical identities, indexes, display numbers, and selection state.",
+    entity_kind: "item",
+    tags: ["items", "item", "selection", "snapshot", "read"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "items.list_selected_items",
+      capability: "items.list_selected_items",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      limit: { type: "integer" },
+      include_track_refs: { type: "boolean" },
+    }, []),
+    outputSchema: objectSchema({
+      items: { type: "array" },
+      selected_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["items", "selected_count", "truncated"]),
+    refs: refs({
+      output: [
+        ref("item_ref", "item", false, "Canonical selected item refs."),
+        ref("track_ref", "track", false, "Owning track refs when include_track_refs is true."),
+      ],
+    }),
+    expectedDelta: readDelta({
+      summary: "Reads selected item refs without mutating item state.",
+      entities: [
+        {
+          entity_kind: "item",
+          action: "read",
+          summary: "Selected item refs and display facts are read.",
+        },
+      ],
+    }),
+    examples: [
+      {
+        name: "list_selected_items",
+        summary: "List selected items before reading or editing one.",
+        input: { limit: 50, include_track_refs: true },
+      },
+    ],
+  }),
+  readDescriptor({
+    id: "template.items.list_items_on_track",
+    title: "List items on track",
+    summary: "List compact item identities on one resolved track with timeline and selection facts.",
+    entity_kind: "item",
+    tags: ["items", "track", "snapshot", "read"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "items.list_items_on_track",
+      capability: "items.list_items_on_track",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      limit: { type: "integer" },
+      include_take_summary: { type: "boolean" },
+    }, []),
+    outputSchema: objectSchema({
+      track_ref: { type: "string" },
+      items: { type: "array" },
+      item_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["track_ref", "items", "item_count", "truncated"]),
+    refs: refs({
+      input: [ref("track_ref", "track", true, "Track ref whose items are listed.")],
+      output: [
+        ref("track_ref", "track", true, "Same track ref returned with the list."),
+        ref("item_ref", "item", false, "Canonical item refs on the track."),
+      ],
+    }),
+    expectedDelta: readDelta({
+      summary: "Reads item refs on one track without mutating item state.",
+      entities: [
+        {
+          entity_kind: "track",
+          action: "read",
+          summary: "The owning track is read.",
+        },
+        {
+          entity_kind: "item",
+          action: "read",
+          summary: "Track item refs and timeline facts are read.",
+        },
+      ],
+    }),
+    examples: [
+      {
+        name: "list_track_items",
+        summary: "List compact item refs on a resolved track.",
+        input: { limit: 50, include_take_summary: false },
       },
     ],
   }),

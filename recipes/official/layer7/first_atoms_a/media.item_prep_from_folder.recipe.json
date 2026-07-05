@@ -7,7 +7,59 @@
   "lifecycle": "draft",
   "risk": "write",
   "entity_kind": "media_item_prep",
-  "tags": ["media", "items", "folder", "import", "split", "playrate", "copy", "e6_family"],
+  "tags": [
+    "media",
+    "items",
+    "folder",
+    "import",
+    "split",
+    "playrate",
+    "copy",
+    "e6_family"
+  ],
+  "workflow_card": {
+    "intent": "Media item prep from folder as a lightweight agent procedure over accepted static atoms.",
+    "entry_conditions": [
+      "Use screenshot-first target disambiguation when a screenshot exists.",
+      "Read bounded state and resolve refs before mutation."
+    ],
+    "supported_steps": [
+      "Follow declared recipe step order with call_template and get_state only.",
+      "Perform one readback or evidence check after mutation.",
+      "Retain compact template runtime evidence with request ids."
+    ],
+    "candidate_steps": [
+      "A2-C may add cleanup or delete parity where accepted atoms exist."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim live recipe support beyond accepted evidence."
+    ],
+    "required_questions": [
+      "Ask when target object, destination, or mutation scope is ambiguous."
+    ],
+    "template_atoms": [
+      "template.media.list_folder_media_files",
+      "template.media.import_file_section_to_track",
+      "template.items.set_take_playrate",
+      "template.items.split_item_at_time",
+      "template.items.copy_item_to_track"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "compact file evidence before long chat output"
+    ],
+    "cleanup_plan": "Use returned refs for cleanup when delete atoms exist; otherwise stop with a typed blocker.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
   "steps": [
     {
       "id": "read_project_state",
@@ -38,7 +90,12 @@
         "input": {
           "folder_ref": "approved_fixture:media_folder",
           "media_type": "audio",
-          "extension_filter": ["wav", "aif", "aiff", "mp3"],
+          "extension_filter": [
+            "wav",
+            "aif",
+            "aiff",
+            "mp3"
+          ],
           "limit": 8,
           "offset": 0
         },
@@ -208,7 +265,10 @@
         ],
         "artifacts": [],
         "jobs": [],
-        "state": ["media_folder_candidates", "media_item_prep_graph"]
+        "state": [
+          "media_folder_candidates",
+          "media_item_prep_graph"
+        ]
       }
     },
     {
@@ -216,7 +276,9 @@
       "kind": "checkpoint",
       "summary": "The family does not enable loop-source edits, media relink, FX insertion, routing, automation, or raw actions.",
       "required": true,
-      "evidence": ["evidence_copy_right_item"],
+      "evidence": [
+        "evidence_copy_right_item"
+      ],
       "outputs": {
         "refs": [],
         "artifacts": [],
@@ -229,8 +291,19 @@
     "run_state": {
       "contract": "recipe.run_state.v1",
       "initial": "not_started",
-      "states": ["not_started", "running", "paused", "succeeded", "failed", "blocked"],
-      "terminal": ["succeeded", "failed", "blocked"]
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
     },
     "checkpoints": [
       {
@@ -243,35 +316,45 @@
       {
         "id": "checkpoint_list_folder_media",
         "after_step": "list_folder_media",
-        "required_evidence": ["evidence_list_folder_media"],
+        "required_evidence": [
+          "evidence_list_folder_media"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Folder media candidate evidence is retained."
       },
       {
         "id": "checkpoint_import_media_section",
         "after_step": "import_media_section",
-        "required_evidence": ["evidence_import_media_section"],
+        "required_evidence": [
+          "evidence_import_media_section"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Imported media section evidence is retained."
       },
       {
         "id": "checkpoint_set_take_playrate",
         "after_step": "set_take_playrate",
-        "required_evidence": ["evidence_set_take_playrate"],
+        "required_evidence": [
+          "evidence_set_take_playrate"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Playrate mutation evidence is retained."
       },
       {
         "id": "checkpoint_split_prepped_item",
         "after_step": "split_prepped_item",
-        "required_evidence": ["evidence_split_prepped_item"],
+        "required_evidence": [
+          "evidence_split_prepped_item"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Split item evidence is retained."
       },
       {
         "id": "checkpoint_copy_right_item",
         "after_step": "copy_right_item",
-        "required_evidence": ["evidence_copy_right_item"],
+        "required_evidence": [
+          "evidence_copy_right_item"
+        ],
         "on_resume": "continue_next_step",
         "summary": "Copied item evidence is retained."
       }
@@ -391,7 +474,9 @@
     "risk_gates": [
       {
         "id": "gate_fresh_state",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "import_media_section",
         "policy": "fresh_state",
         "blocks_auto_resume": true,
@@ -399,7 +484,9 @@
       },
       {
         "id": "gate_manual_approval",
-        "applies_to": ["write"],
+        "applies_to": [
+          "write"
+        ],
         "required_before_step": "import_media_section",
         "policy": "manual_approval",
         "blocks_auto_resume": true,

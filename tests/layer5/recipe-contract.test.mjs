@@ -11,6 +11,7 @@ import {
   RECIPE_RUN_STATES,
   RECIPE_TEMPLATE_EVIDENCE_CONTRACT,
   RECIPE_TERMINAL_RUN_STATES,
+  RECIPE_WORKFLOW_CARD_FIELDS,
   RecipeContractValidationError,
   createRecipeCatalog,
   createRecipeCatalogDiscovery,
@@ -62,12 +63,13 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.equal(typeof catalog.run, "undefined");
   });
 
-  it("fits the frozen Layer 1.5 recipe menu fields without expanding discovery", () => {
+  it("fits the frozen Layer 1.5 recipe menu fields with compact workflow cards", () => {
     assert.deepEqual(RECIPE_DISCOVERY_SUMMARY_FIELDS, RECIPE_SUMMARY_FIELDS);
     assert.deepEqual(RECIPE_DETAIL_FIELDS, DISCOVERY_RECIPE_DETAIL_FIELDS);
 
     const summary = recipeContractDiscoverySummary(makeRecipe());
     assert.deepEqual(Object.keys(summary), RECIPE_DISCOVERY_SUMMARY_FIELDS);
+    assert.deepEqual(Object.keys(summary.workflow_card), RECIPE_WORKFLOW_CARD_FIELDS);
     assert.equal("steps" in summary, false);
     assert.equal("assertions" in summary, false);
     assert.equal("recovery" in summary, false);
@@ -93,7 +95,13 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.equal(menu.items.length, 25);
     assert.equal(menu.page.has_more, true);
     assert.equal("total" in menu.page, false);
-    assert.doesNotMatch(JSON.stringify(menu), /steps|assertions|recovery|create_dialog_track|evidence_create_dialog_track/);
+    assert.equal(menu.items[0].workflow_card.intent.includes("Prepare dialog track"), true);
+    assert.equal(menu.items[0].workflow_card.token_budget.same_typed_blocker_stop_after, 2);
+    assert.deepEqual(menu.applied.fields, RECIPE_DISCOVERY_SUMMARY_FIELDS);
+    assert.equal("steps" in menu.items[0], false);
+    assert.equal("assertions" in menu.items[0], false);
+    assert.equal("recovery" in menu.items[0], false);
+    assert.doesNotMatch(JSON.stringify(menu), /create_dialog_track|evidence_create_dialog_track/);
 
     const exact = discovery.list_recipes({
       ids: ["recipe.tracks.prepare_dialog_track_0003"],
@@ -106,13 +114,41 @@ describe("Layer 5 Recipe Contract v1", () => {
       () => discovery.list_recipes({ fields: ["steps"] }),
       DiscoveryMenuRequestError,
     );
+
+    const exactCard = discovery.list_recipes({
+      ids: ["recipe.tracks.prepare_dialog_track_0003"],
+      fields: ["workflow_card"],
+    });
+    assert.deepEqual(Object.keys(exactCard.items[0]).sort(), ["id", "workflow_card"]);
+  });
+
+  it("validates lightweight workflow cards without adding recipe execution authority", () => {
+    const recipe = makeRecipe();
+    assert.equal(validateRecipeContract(recipe).ok, true);
+    assert.deepEqual(recipe.workflow_card.template_atoms, ["template.tracks.create_track"]);
+    assert.match(recipe.workflow_card.blocked_steps.join("\n"), /call_recipe/);
+    assert.equal(recipe.workflow_card.token_budget.same_typed_blocker_stop_after, 2);
+
+    const undeclaredAtom = makeRecipe();
+    undeclaredAtom.workflow_card.template_atoms = ["template.project.read_summary"];
+    assert.match(
+      validateRecipeContract(undeclaredAtom).errors.join("\n"),
+      /must be one of the recipe's declared call_template steps/,
+    );
+
+    const badBlockerBudget = makeRecipe();
+    badBlockerBudget.workflow_card.token_budget.same_typed_blocker_stop_after = 3;
+    assert.match(
+      validateRecipeContract(badBlockerBudget).errors.join("\n"),
+      /same_typed_blocker_stop_after must be 2/,
+    );
   });
 
   it("limits recipe steps to Layer 4D accepted official template ids", () => {
     assert.deepEqual(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(RECIPE_CONTRACT_SEED_ONLY_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS);
     assert.deepEqual(RECIPE_CONTRACT_HELD_TEMPLATE_IDS, CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS);
-    assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length, 129);
+    assert.equal(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length);
 
     assertRejectsTemplateId("template.tracks.not_in_catalog", /unknown or non-accepted template id/);
     assertRejectsTemplateId("template.core.read_health", /seed-only template id/);
@@ -270,6 +306,40 @@ function makeRecipe(overrides = {}) {
     risk: "write",
     entity_kind: "track",
     tags: ["track", "setup", "cleanup"],
+    workflow_card: {
+      intent: "Prepare dialog track with compact state, one accepted atom, and readback evidence.",
+      entry_conditions: [
+        "Use screenshot-first target disambiguation when a screenshot exists.",
+        "Read bounded project state before mutating tracks.",
+      ],
+      supported_steps: [
+        "Resolve refs before mutation.",
+        "Call declared template atoms only.",
+        "Perform one readback or evidence check after mutation.",
+      ],
+      candidate_steps: [
+        "A2-C may add cleanup or delete parity when accepted atoms exist.",
+      ],
+      blocked_steps: [
+        "Do not use public call_recipe or a hidden recipe executor.",
+      ],
+      required_questions: [
+        "Ask when the target track or mutation scope is ambiguous.",
+      ],
+      template_atoms: ["template.tracks.create_track"],
+      evidence_required: [
+        "template.runtime.evidence.v1 with request id",
+        "compact file evidence before long chat output",
+      ],
+      cleanup_plan: "Use returned refs for cleanup when delete atoms exist; otherwise report a typed blocker.",
+      typed_blockers: ["no_public_call_recipe_executor"],
+      token_budget: {
+        menu_max_bytes: 4096,
+        exact_max_bytes: 32768,
+        compact_chat_max_items: 5,
+        same_typed_blocker_stop_after: 2,
+      },
+    },
     steps: [
       {
         id: "read_project",

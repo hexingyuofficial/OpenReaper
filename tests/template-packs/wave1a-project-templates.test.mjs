@@ -30,6 +30,7 @@ const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.create_marker",
   "template.project.create_region",
   "template.project.read_tempo_map",
+  "template.project.read_track_item_overview",
 ]);
 
 const BLOCKED_PROJECT_IDS = Object.freeze([
@@ -78,6 +79,7 @@ describe("Wave 1A project template descriptors", () => {
     const list = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.listMarkersRegions);
     const createMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createMarker);
     const createRegion = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createRegion);
+    const overview = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.readTrackItemOverview);
 
     assert.deepEqual(list.refs.output.map(({ kind }) => kind), ["marker", "region"]);
     assert.match(list.refs.output[0].summary, /GUID/);
@@ -100,6 +102,8 @@ describe("Wave 1A project template descriptors", () => {
     ]);
     assert.equal(Object.hasOwn(createRegion.inputSchema.properties, "item_ref"), false);
     assert.match(createMarker.summary, /rejects SWS marker-action/);
+    assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item"]);
+    assert.equal(overview.bridge.operation_name, "project.read_track_item_overview");
   });
 
   it("loads a pack-local catalog, rejects duplicates, and keeps default discovery bounded", () => {

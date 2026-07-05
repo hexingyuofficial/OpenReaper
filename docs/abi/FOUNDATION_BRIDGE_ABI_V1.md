@@ -173,6 +173,8 @@ Bridge results use this fixed envelope:
     "refs": [],
     "artifacts": [],
     "jobs": [],
+    "readback": null,
+    "session_ledger": null,
     "last_result": {
       "updated": false,
       "refs": [],
@@ -251,6 +253,109 @@ Error results use the same envelope with `ok: false` and `error`:
 Ordinary results must stay compact. Large JSON, analysis payloads, render
 metadata, binary data, file contents, long logs, or dense per-object dumps must
 be written as artifacts and represented by artifact refs and metadata.
+
+### Canonical Result Refs
+
+Resolver and write operations return machine-usable refs in `result.refs`.
+Agents must not reconstruct refs by parsing prose summaries. A returned ref may
+include compact optional fields that help disambiguate duplicate or unnamed
+objects:
+
+```json
+{
+  "kind": "track",
+  "ref": "track:guid:{TRACK-0000}",
+  "identity": {
+    "scheme": "guid",
+    "value": "{TRACK-0000}"
+  },
+  "raw": {
+    "name": ""
+  },
+  "display": {
+    "name": "Track 1",
+    "number": 1
+  },
+  "index": 0,
+  "display_number": 1,
+  "selected": false
+}
+```
+
+`raw.name` is the DAW/object name as read from the source. `display.name` is the
+agent-safe display or fallback name. `index` is 0-based. `display_number` is the
+1-based number normally shown to users. `selected` is included when available.
+GUID identity is preferred when REAPER exposes it; index or name identities are
+temporary resolver inputs, not preferred write targets.
+
+### Readback
+
+Templates that resolve, read, or mutate a target may return
+`result.readback`:
+
+```json
+{
+  "status": "available",
+  "ref": "item:guid:{ITEM-0000}",
+  "kind": "item",
+  "raw_name": "",
+  "display_name": "Item 1",
+  "fallback_name_used": true,
+  "index": 0,
+  "display_number": 1,
+  "selected": true
+}
+```
+
+Readback distinguishes raw names from display or fallback names so duplicate or
+unnamed tracks/items remain machine-usable. `status` may be `available`,
+`read`, `modified`, `not_requested`, or a typed blocker-specific status.
+
+### Session Ledger
+
+Successful operations may return a compact `result.session_ledger`:
+
+```json
+{
+  "contract": "session.ledger.v1",
+  "request_id": "cmd_20260702000000000_001_abcdef",
+  "operation_id": "run_command:template.execute",
+  "undo_label": "OpenReaper: track.create",
+  "cleanup_method": "returned_ref",
+  "readback_status": "available",
+  "refs": {
+    "created": [],
+    "modified": [],
+    "artifacts": []
+  },
+  "blockers": []
+}
+```
+
+`refs.created` contains refs for newly created objects. `refs.modified`
+contains refs for existing objects modified by the operation. `refs.artifacts`
+contains artifact refs. `cleanup_method` is `returned_ref` when later cleanup
+can target returned refs, `not_applicable` for reads, or a typed blocker value
+when cleanup cannot be safely described. `blockers` is an array of typed
+blockers with stable ids, affected contract or template id, reason, and
+smallest proposed follow-up when known.
+
+### Compact Snapshot Reads
+
+Compact snapshot templates/projections use the same result envelope and must
+return bounded object maps, not large project dumps. Alpha2 static/fake base
+coverage includes read-only projections for:
+
+```text
+template.tracks.list_tracks
+template.items.list_selected_items
+template.items.list_items_on_track
+template.project.read_track_item_overview
+```
+
+These are project-state snapshots for target selection and safe readback. They
+do not add a new MCP tool, live matrix claim, bridge operation family, or raw
+execution surface.
 
 ## Object Refs
 

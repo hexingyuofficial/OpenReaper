@@ -2,6 +2,7 @@ import { TEMPLATE_DESCRIPTOR_CONTRACT } from "../template-descriptor-v1.mjs";
 
 export const WAVE1A_TRACKS_TEMPLATE_IDS = Object.freeze({
   resolveTrackRef: "template.tracks.resolve_track_ref",
+  listTracks: "template.tracks.list_tracks",
   createTrack: "template.tracks.create_track",
   renameTrack: "template.tracks.rename_track",
   setColor: "template.tracks.set_color",
@@ -68,6 +69,57 @@ export const WAVE1A_TRACKS_TEMPLATES = deepFreeze([
         name: "resolve_named_track",
         summary: "Resolve a named track; duplicate names must fail as ambiguous.",
         input: { track_ref: "track:Dialog" },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.listTracks,
+    title: "List tracks",
+    summary: "List compact canonical track identities with raw/display names, indexes, display numbers, and selection state.",
+    pack: "tracks",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "track",
+    tags: ["track", "list", "snapshot", "read", "wave1a"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "tracks.list_tracks",
+      capability: "tracks.list_tracks",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      limit: { type: "integer" },
+      include_selection: { type: "boolean" },
+    }, []),
+    outputSchema: objectSchema({
+      tracks: { type: "array" },
+      track_count: { type: "integer" },
+      selected_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["tracks", "track_count", "selected_count", "truncated"]),
+    refs: refs({
+      output: [ref("track_ref", "track", false, "Canonical track refs for listed tracks.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads a compact track list without mutating the project.",
+      entities: [
+        {
+          entity_kind: "track",
+          action: "read",
+          summary: "Track refs, indexes, names, and selection states are read.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "list_project_tracks",
+        summary: "List compact track refs before choosing a target.",
+        input: { limit: 50, include_selection: true },
       },
     ],
   },
