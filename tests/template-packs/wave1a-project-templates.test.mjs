@@ -30,6 +30,17 @@ const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.create_marker",
   "template.project.create_region",
   "template.project.read_tempo_map",
+  "template.project.set_tempo",
+  "template.project.set_bpm",
+  "template.project.set_tempo_marker",
+  "template.project.set_grid",
+  "template.project.set_snap",
+  "template.project.delete_marker",
+  "template.project.delete_region",
+  "template.project.remove_marker",
+  "template.project.remove_region",
+  "template.project.rename_marker",
+  "template.project.rename_region",
   "template.project.read_track_item_overview",
 ]);
 
@@ -79,6 +90,12 @@ describe("Wave 1A project template descriptors", () => {
     const list = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.listMarkersRegions);
     const createMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createMarker);
     const createRegion = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createRegion);
+    const deleteMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.deleteMarker);
+    const deleteRegion = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.deleteRegion);
+    const removeMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.removeMarker);
+    const removeRegion = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.removeRegion);
+    const renameMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.renameMarker);
+    const renameRegion = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.renameRegion);
     const overview = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.readTrackItemOverview);
 
     assert.deepEqual(list.refs.output.map(({ kind }) => kind), ["marker", "region"]);
@@ -102,8 +119,58 @@ describe("Wave 1A project template descriptors", () => {
     ]);
     assert.equal(Object.hasOwn(createRegion.inputSchema.properties, "item_ref"), false);
     assert.match(createMarker.summary, /rejects SWS marker-action/);
+    for (const descriptor of [deleteMarker, removeMarker, renameMarker]) {
+      assert.deepEqual(descriptor.refs.input.map(({ kind }) => kind), ["marker"]);
+      assert.deepEqual(descriptor.refs.output.map(({ kind }) => kind), ["marker"]);
+      assert.equal(descriptor.bridge.operation_name, "template.execute");
+      assert.equal(descriptor.bridge.capability.startsWith("project."), true);
+    }
+    for (const descriptor of [deleteRegion, removeRegion, renameRegion]) {
+      assert.deepEqual(descriptor.refs.input.map(({ kind }) => kind), ["region"]);
+      assert.deepEqual(descriptor.refs.output.map(({ kind }) => kind), ["region"]);
+      assert.equal(descriptor.bridge.operation_name, "template.execute");
+      assert.equal(descriptor.bridge.capability.startsWith("project."), true);
+    }
+    assert.equal(deleteMarker.risk, "destructive");
+    assert.equal(deleteRegion.risk, "destructive");
+    assert.equal(renameMarker.risk, "write");
+    assert.equal(renameRegion.risk, "write");
     assert.deepEqual(overview.refs.output.map(({ kind }) => kind), ["project", "track", "item"]);
     assert.equal(overview.bridge.operation_name, "project.read_track_item_overview");
+  });
+
+  it("keeps tempo, BPM, grid, and snap setters as project-owned static atoms", () => {
+    const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
+    const setTempo = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.setTempo);
+    const setBpm = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.setBpm);
+    const setTempoMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.setTempoMarker);
+    const setGrid = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.setGrid);
+    const setSnap = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.setSnap);
+
+    assert.deepEqual(
+      [setTempo, setBpm, setTempoMarker].map((descriptor) => descriptor.entity_kind),
+      ["tempo_map", "tempo_map", "tempo_map"],
+    );
+    assert.deepEqual(
+      [setGrid, setSnap].map((descriptor) => descriptor.entity_kind),
+      ["grid", "grid"],
+    );
+    assert.deepEqual(
+      [setTempo, setBpm, setTempoMarker, setGrid, setSnap].map((descriptor) => descriptor.risk),
+      ["write", "write", "write", "write", "write"],
+    );
+    assert.deepEqual(
+      [setTempo, setBpm, setTempoMarker, setGrid, setSnap].map((descriptor) => descriptor.bridge.capability),
+      [
+        "project.set_tempo",
+        "project.set_bpm",
+        "project.set_tempo_marker",
+        "project.set_grid",
+        "project.set_snap",
+      ],
+    );
+    assert.equal(Object.hasOwn(setTempo.inputSchema.properties, "raw_action"), false);
+    assert.equal(Object.hasOwn(setGrid.inputSchema.properties, "action_id"), false);
   });
 
   it("loads a pack-local catalog, rejects duplicates, and keeps default discovery bounded", () => {
@@ -300,6 +367,107 @@ describe("Wave 1A project template descriptors", () => {
     });
     assert.equal(markerActionTextField.ok, false);
     assert.equal(markerActionTextField.error.code, "TEMPLATE_INPUT_INVALID");
+  });
+
+  it("runs Layer 4B fake harness smoke for project tempo, grid, and marker closure descriptors", async () => {
+    const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
+    const project = createObjectRef(
+      "project",
+      { scheme: "current", value: "current" },
+      { ref: "project:current" },
+    );
+    const marker = markerRef("{MARKER-MUTATE}", "cue");
+    const region = regionRef("{REGION-MUTATE}", "bridge");
+
+    const closureCases = [
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.setTempo,
+        input: { bpm: 60 },
+        refs: {},
+        emitted: [project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.setBpm,
+        input: { bpm: 60 },
+        refs: {},
+        emitted: [project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.setTempoMarker,
+        input: { position_seconds: 0, bpm: 60 },
+        refs: {},
+        emitted: [project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.setGrid,
+        input: { division: "1/8" },
+        refs: {},
+        emitted: [project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.setSnap,
+        input: { enabled: true },
+        refs: {},
+        emitted: [project],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.deleteMarker,
+        input: {},
+        refs: { marker_ref: marker },
+        emitted: [marker],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.deleteRegion,
+        input: {},
+        refs: { region_ref: region },
+        emitted: [region],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.removeMarker,
+        input: {},
+        refs: { marker_ref: marker },
+        emitted: [marker],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.removeRegion,
+        input: {},
+        refs: { region_ref: region },
+        emitted: [region],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.renameMarker,
+        input: { name: "verse" },
+        refs: { marker_ref: marker },
+        emitted: [marker],
+      },
+      {
+        id: WAVE1A_PROJECT_TEMPLATE_IDS.renameRegion,
+        input: { name: "chorus" },
+        refs: { region_ref: region },
+        emitted: [region],
+      },
+    ];
+
+    for (const [index, entry] of closureCases.entries()) {
+      const executor = fakeRefsExecutor(entry.emitted);
+      const response = await executeTemplate({
+        descriptor: catalog.require(entry.id),
+        input: entry.input,
+        refs: entry.refs,
+        idempotency_key: `closure-${index}`,
+        context: context({ request_sequence: 20 + index }),
+        executor,
+      });
+
+      assert.equal(response.ok, true, entry.id);
+      assert.equal(response.template.pack, "project", entry.id);
+      assert.equal(response.template.operation.family, "run_command", entry.id);
+      assert.equal(response.undo.mode, "required", entry.id);
+      assert.equal(response.verification.status, "passed", entry.id);
+      assert.deepEqual(response.result.refs, entry.emitted, entry.id);
+      assert.equal(executor.requests[0].operation.name, "template.execute", entry.id);
+      assert.equal(executor.requests[0].pack.capability.startsWith("project."), true, entry.id);
+    }
   });
 });
 

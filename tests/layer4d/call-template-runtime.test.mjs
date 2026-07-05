@@ -40,7 +40,7 @@ describe("Layer 4D call_template runtime binding", () => {
   it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
-    assert.equal(catalog.size, 133);
+    assert.equal(catalog.size, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length);
     assert.deepEqual(catalog.ids, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE.waves, [
       "wave1a",
@@ -350,11 +350,12 @@ describe("Layer 4D call_template runtime binding", () => {
 
     const menuPayload = JSON.stringify(runtimeMenu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
-      if (["refs", "artifacts"].includes(field)) continue;
+      if (["refs", "artifacts", "verification"].includes(field)) continue;
       assert.doesNotMatch(menuPayload, new RegExp(field));
     }
     assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "refs")), true);
     assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
+    assert.equal(runtimeMenu.items.every((item) => !Object.hasOwn(item, "verification")), true);
     assert.equal(runtimeMenu.items.every((item) => Object.hasOwn(item, "capability_truth")), true);
     assert.equal(runtimeMenu.items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(

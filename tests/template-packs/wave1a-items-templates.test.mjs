@@ -34,6 +34,25 @@ const ALLOWLIST = Object.freeze([
   "template.items.list_items_on_track",
   "template.items.move_item",
   "template.items.trim_item",
+  "template.items.delete_item",
+  "template.items.delete_items",
+  "template.items.set_item_volume",
+  "template.items.set_item_pan",
+  "template.items.set_take_volume",
+  "template.items.set_take_pan",
+  "template.items.rename_take",
+  "template.items.set_loop_source",
+  "template.items.set_mute",
+  "template.items.set_lock",
+  "template.items.set_no_autofades",
+  "template.items.set_play_all_takes",
+  "template.items.set_take_start_in_source",
+  "template.items.set_channel_mode",
+  "template.items.set_invert_phase",
+  "template.items.set_reverse",
+  "template.items.set_pitch_shift_mode",
+  "template.items.set_stretch_marker_fade_size",
+  "template.items.choose_new_source_file",
   "template.items.set_item_fades",
   "template.items.split_item_at_time",
   "template.items.set_take_pitch",
@@ -43,7 +62,6 @@ const ALLOWLIST = Object.freeze([
 
 const BLOCKED_ITEMS_IDS = Object.freeze([
   "template.items.copy_item_to_track",
-  "template.items.delete_item",
   "template.items.snap_item_start_to_grid",
   "template.items.select_take",
   "template.items.set_item_loop_source",
@@ -65,6 +83,11 @@ const READ_IDS = new Set([
   "template.items.read_item_summary",
   "template.items.list_selected_items",
   "template.items.list_items_on_track",
+]);
+
+const DESTRUCTIVE_IDS = new Set([
+  "template.items.delete_item",
+  "template.items.delete_items",
 ]);
 
 describe("Wave 1A items template descriptors", () => {
@@ -99,10 +122,10 @@ describe("Wave 1A items template descriptors", () => {
         assert.equal(descriptor.expectedDelta.kind, "read", descriptor.id);
         assert.equal(descriptor.verification.mode, "none", descriptor.id);
       } else {
-        assert.equal(descriptor.risk, "write", descriptor.id);
+        assert.equal(descriptor.risk, DESTRUCTIVE_IDS.has(descriptor.id) ? "destructive" : "write", descriptor.id);
         assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);
         assert.equal(descriptor.bridge.operation_name, "template.execute", descriptor.id);
-        assert.equal(descriptor.bridge.idempotency, "supported", descriptor.id);
+        assert.equal(descriptor.bridge.idempotency, DESTRUCTIVE_IDS.has(descriptor.id) ? "none" : "supported", descriptor.id);
         assert.equal(descriptor.expectedDelta.kind, "mutation", descriptor.id);
         assert.equal(descriptor.verification.mode, "required", descriptor.id);
         assert.equal(descriptor.verification.checks.length, 1, descriptor.id);
@@ -116,6 +139,25 @@ describe("Wave 1A items template descriptors", () => {
     const move = catalog.require("template.items.move_item");
     const split = catalog.require("template.items.split_item_at_time");
     const trim = catalog.require("template.items.trim_item");
+    const deleteOne = catalog.require("template.items.delete_item");
+    const deleteMany = catalog.require("template.items.delete_items");
+    const itemVolume = catalog.require("template.items.set_item_volume");
+    const itemPan = catalog.require("template.items.set_item_pan");
+    const takeVolume = catalog.require("template.items.set_take_volume");
+    const takePan = catalog.require("template.items.set_take_pan");
+    const renameTake = catalog.require("template.items.rename_take");
+    const loopSource = catalog.require("template.items.set_loop_source");
+    const mute = catalog.require("template.items.set_mute");
+    const lock = catalog.require("template.items.set_lock");
+    const noAutofades = catalog.require("template.items.set_no_autofades");
+    const playAllTakes = catalog.require("template.items.set_play_all_takes");
+    const takeStart = catalog.require("template.items.set_take_start_in_source");
+    const channelMode = catalog.require("template.items.set_channel_mode");
+    const invertPhase = catalog.require("template.items.set_invert_phase");
+    const reverse = catalog.require("template.items.set_reverse");
+    const pitchMode = catalog.require("template.items.set_pitch_shift_mode");
+    const stretchFade = catalog.require("template.items.set_stretch_marker_fade_size");
+    const sourceFile = catalog.require("template.items.choose_new_source_file");
     const fades = catalog.require("template.items.set_item_fades");
     const pitch = catalog.require("template.items.set_take_pitch");
     const playrate = catalog.require("template.items.set_take_playrate");
@@ -128,6 +170,26 @@ describe("Wave 1A items template descriptors", () => {
     assert.equal(move.summary.includes("without changing its track"), true);
     assert.deepEqual(split.refs.output.map((entry) => entry.name), ["left_item_ref", "right_item_ref"]);
     assert.deepEqual(trim.expectedDelta.entities.map((entry) => entry.entity_kind), ["item", "take"]);
+    assert.equal(deleteOne.risk, "destructive");
+    assert.equal(deleteMany.risk, "destructive");
+    assert.equal(deleteMany.refs.input[0].name, "item_ref");
+    assert.deepEqual(Object.keys(itemVolume.inputSchema.properties), ["volume_db"]);
+    assert.deepEqual(Object.keys(itemPan.inputSchema.properties), ["pan"]);
+    assert.equal(takeVolume.entity_kind, "take");
+    assert.equal(takePan.entity_kind, "take");
+    assert.deepEqual(Object.keys(renameTake.inputSchema.properties), ["name"]);
+    assert.deepEqual(Object.keys(loopSource.inputSchema.properties), ["loop_source"]);
+    assert.deepEqual(Object.keys(mute.inputSchema.properties), ["muted"]);
+    assert.deepEqual(Object.keys(lock.inputSchema.properties), ["locked"]);
+    assert.deepEqual(Object.keys(noAutofades.inputSchema.properties), ["no_autofades"]);
+    assert.deepEqual(Object.keys(playAllTakes.inputSchema.properties), ["play_all_takes"]);
+    assert.deepEqual(Object.keys(takeStart.inputSchema.properties), ["start_offset_seconds"]);
+    assert.deepEqual(channelMode.inputSchema.properties.channel_mode.enum, ["normal", "mono_left", "mono_right", "reverse_stereo"]);
+    assert.deepEqual(Object.keys(invertPhase.inputSchema.properties), ["invert_phase"]);
+    assert.deepEqual(Object.keys(reverse.inputSchema.properties), ["reverse"]);
+    assert.deepEqual(Object.keys(pitchMode.inputSchema.properties), ["mode"]);
+    assert.deepEqual(Object.keys(stretchFade.inputSchema.properties), ["fade_size_ms"]);
+    assert.deepEqual(sourceFile.refs.input.map((entry) => entry.kind), ["item", "file"]);
     assert.deepEqual(fades.inputSchema.required, ["fade_in_seconds", "fade_out_seconds"]);
     assert.equal(pitch.entity_kind, "take");
     assert.equal(playrate.inputSchema.properties.preserve_pitch.type, "boolean");
@@ -159,8 +221,8 @@ describe("Wave 1A items template descriptors", () => {
     assert.equal(response.contract, "discovery.menu.v1");
     assert.equal(response.kind, "template_menu");
     assert.equal(response.mode, "menu");
-    assert.equal(response.items.length, ALLOWLIST.length);
-    assert.equal(response.page.has_more, false);
+    assert.equal(response.items.length, 25);
+    assert.equal(response.page.has_more, true);
     assert.equal(response.page.limit, 25);
     assert.equal("total" in response.page, false);
 
@@ -236,36 +298,40 @@ describe("Wave 1A items template descriptors", () => {
   it("builds legal 4B bridge requests and fake-smokes every write item atom", async () => {
     const catalog = createTemplateCatalog({ templates: createWave1AItemsTemplates() });
     const item = itemRef("{ITEM-WRITE}");
+    const file = fileRef("{FILE-WRITE}");
     const left = itemRef("{ITEM-LEFT}");
     const right = itemRef("{ITEM-RIGHT}");
 
     for (const [index, id] of ALLOWLIST.filter((entry) => !READ_IDS.has(entry)).entries()) {
       const descriptor = catalog.require(id);
       const input = sampleInput(id);
-      const outputRefs = id === "template.items.split_item_at_time" ? [left, right] : [item];
+      const refs = id === "template.items.choose_new_source_file"
+        ? { item_ref: item, file_ref: file }
+        : { item_ref: item };
+      const outputRefs = outputRefsFor(id, { item, file, left, right });
       const executor = fakeRefsExecutor(outputRefs);
       const request = buildTemplateBridgeRequest({
         descriptor,
         input,
-        refs: { item_ref: item },
+        refs,
         context: context({ request_sequence: index + 3 }),
       });
 
       assert.equal(request.pack.id, "items", id);
-      assert.equal(request.pack.risk, "write", id);
+      assert.equal(request.pack.risk, DESTRUCTIVE_IDS.has(id) ? "destructive" : "write", id);
       assert.equal(request.operation.family, "run_command", id);
       assert.equal(request.operation.name, "template.execute", id);
       assert.equal(request.undo.mode, "required", id);
       assert.equal(request.undo.label, `OpenReaper: ${descriptor.bridge.capability}`, id);
       assert.deepEqual(request.undo.flags, expectedUndoFlags(descriptor), id);
       assert.equal(request.verification.mode, "required", id);
-      assert.deepEqual(request.refs, [item], id);
+      assert.deepEqual(request.refs, Object.values(refs).flat(), id);
       assert.equal("idempotency_key" in request, false, id);
 
       const result = await executeTemplate({
         descriptor,
         input,
-        refs: { item_ref: item },
+        refs,
         context: context({ request_sequence: index + 3 }),
         executor,
       });
@@ -359,6 +425,41 @@ function sampleInput(id) {
       return { position_seconds: 4 };
     case "template.items.trim_item":
       return { length_seconds: 1.25, start_offset_seconds: 0.1 };
+    case "template.items.delete_item":
+    case "template.items.delete_items":
+      return { require_selected: false };
+    case "template.items.set_item_volume":
+    case "template.items.set_take_volume":
+      return { volume_db: -3 };
+    case "template.items.set_item_pan":
+    case "template.items.set_take_pan":
+      return { pan: -0.25 };
+    case "template.items.rename_take":
+      return { name: "Lead vocal comp" };
+    case "template.items.set_loop_source":
+      return { loop_source: true };
+    case "template.items.set_mute":
+      return { muted: true };
+    case "template.items.set_lock":
+      return { locked: true };
+    case "template.items.set_no_autofades":
+      return { no_autofades: true };
+    case "template.items.set_play_all_takes":
+      return { play_all_takes: true };
+    case "template.items.set_take_start_in_source":
+      return { start_offset_seconds: 0.2 };
+    case "template.items.set_channel_mode":
+      return { channel_mode: "mono_left" };
+    case "template.items.set_invert_phase":
+      return { invert_phase: true };
+    case "template.items.set_reverse":
+      return { reverse: true };
+    case "template.items.set_pitch_shift_mode":
+      return { mode: "elastique_pro" };
+    case "template.items.set_stretch_marker_fade_size":
+      return { fade_size_ms: 2.5 };
+    case "template.items.choose_new_source_file":
+      return { preserve_timing: true };
     case "template.items.set_item_fades":
       return { fade_in_seconds: 0.02, fade_out_seconds: null };
     case "template.items.split_item_at_time":
@@ -374,8 +475,18 @@ function sampleInput(id) {
   }
 }
 
+function outputRefsFor(id, refs) {
+  if (id === "template.items.split_item_at_time") return [refs.left, refs.right];
+  if (id === "template.items.choose_new_source_file") return [refs.item, refs.file];
+  return [refs.item];
+}
+
 function itemRef(value) {
   return createObjectRef("item", { scheme: "guid", value });
+}
+
+function fileRef(value) {
+  return createObjectRef("file", { scheme: "path", value });
 }
 
 function fakeRefsExecutor(refs) {

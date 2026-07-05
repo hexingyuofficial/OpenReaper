@@ -34,9 +34,7 @@ import {
 } from "../../packages/core/src/template-packs/critical-render-templates-v1.mjs";
 import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
-const ALLOWLIST = Object.freeze([
-  "template.render.render_region_wav",
-]);
+const ALLOWLIST = CRITICAL_RENDER_TEMPLATE_IDS;
 
 const BLOCKED_RENDER_IDS = Object.freeze([
   "template.render.render_region_job",
@@ -48,7 +46,7 @@ const BLOCKED_RENDER_IDS = Object.freeze([
 ]);
 
 describe("Critical render template descriptors", () => {
-  it("exports exactly the R1 render fill allowlist", () => {
+  it("exports exactly the critical render and Alpha2 render/export closure allowlist", () => {
     const templates = createCriticalRenderTemplates();
     const ids = templates.map((descriptor) => descriptor.id);
 
@@ -61,14 +59,22 @@ describe("Critical render template descriptors", () => {
   });
 
   it("validates the descriptor through the frozen 4A descriptor ABI", () => {
-    const [descriptor] = createCriticalRenderTemplates();
-    const validation = validateTemplateDescriptor(descriptor);
+    for (const descriptor of createCriticalRenderTemplates()) {
+      const validation = validateTemplateDescriptor(descriptor);
 
-    assert.deepEqual(validation.errors, []);
-    assert.equal(validation.ok, true);
-    assert.equal(descriptor.pack, "render");
+      assert.deepEqual(validation.errors, [], descriptor.id);
+      assert.equal(validation.ok, true, descriptor.id);
+      assert.equal(descriptor.pack, "render", descriptor.id);
+      assert.equal(descriptor.lifecycle, "experimental", descriptor.id);
+      assert.equal(
+        Buffer.byteLength(JSON.stringify(descriptor), "utf8") <= TEMPLATE_DESCRIPTOR_BUDGETS.descriptor_max_bytes,
+        true,
+        descriptor.id,
+      );
+    }
+
+    const descriptor = createCriticalRenderTemplates()[0];
     assert.equal(descriptor.risk, "write");
-    assert.equal(descriptor.lifecycle, "experimental");
     assert.equal(descriptor.bridge.operation_family, "run_job");
     assert.equal(descriptor.bridge.operation_name, "render.region_wav");
     assert.equal(descriptor.bridge.capability, "render.region_wav");
@@ -77,10 +83,62 @@ describe("Critical render template descriptors", () => {
     assert.equal(descriptor.expectedDelta.idempotent, true);
     assert.equal(descriptor.verification.mode, "required");
     assert.equal(descriptor.artifacts.mode, "produces");
-    assert.equal(
-      Buffer.byteLength(JSON.stringify(descriptor), "utf8") <= TEMPLATE_DESCRIPTOR_BUDGETS.descriptor_max_bytes,
-      true,
-    );
+  });
+
+  it("covers Alpha2 render scopes, formats, settings, and output path metadata as static descriptors", () => {
+    const catalog = createTemplateCatalog({ templates: createCriticalRenderTemplates() });
+    const renderJobs = [
+      "template.render.render_item",
+      "template.render.render_selected_item",
+      "template.render.render_track_item",
+      "template.render.render_selected_tracks",
+      "template.render.render_ogg",
+      "template.render.render_mp3",
+      "template.render.render_flac",
+      "template.render.render_aiff",
+      "template.render.render_m4a",
+      "template.render.render_opus",
+      "template.render.render_region_with_track_filter",
+    ].map((id) => catalog.require(id));
+    const settingIds = [
+      "template.render.set_render_format",
+      "template.render.set_render_sample_rate",
+      "template.render.set_ogg_quality_or_compression",
+      "template.render.set_mp3_bitrate_or_quality",
+      "template.render.set_flac_compression",
+      "template.render.set_aiff_bit_depth",
+    ];
+
+    assert.equal(renderJobs.every((descriptor) => descriptor.bridge.operation_family === "run_job"), true);
+    assert.equal(renderJobs.every((descriptor) => descriptor.bridge.idempotency === "required"), true);
+    assert.equal(renderJobs.every((descriptor) => descriptor.artifacts.mode === "produces"), true);
+    assert.equal(renderJobs.every((descriptor) => descriptor.inputSchema.properties.output_policy.enum[0] === "openreaper_managed_render_root"), true);
+    assert.deepEqual(catalog.require("template.render.render_item").refs.input.map((entry) => entry.kind), ["item"]);
+    assert.deepEqual(catalog.require("template.render.render_track_item").refs.input.map((entry) => entry.kind), ["track", "item"]);
+    assert.deepEqual(catalog.require("template.render.render_region_with_track_filter").refs.input.map((entry) => entry.kind), ["region", "track"]);
+    assert.equal(catalog.require("template.render.render_selected_item").inputSchema.properties.selection_policy.const, "exactly_one_selected_item");
+    assert.equal(catalog.require("template.render.render_selected_tracks").inputSchema.properties.selection_policy.const, "one_or_more_selected_tracks");
+    assert.deepEqual(catalog.require("template.render.render_ogg").inputSchema.properties.format, { const: "ogg" });
+    assert.deepEqual(catalog.require("template.render.render_mp3").inputSchema.properties.mp3_bitrate_kbps.enum, [128, 192, 256, 320]);
+    assert.deepEqual(catalog.require("template.render.render_flac").inputSchema.properties.flac_compression.enum, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(catalog.require("template.render.render_aiff").inputSchema.properties.aiff_bit_depth.enum, [16, 24, 32]);
+
+    for (const id of settingIds) {
+      const descriptor = catalog.require(id);
+      assert.equal(descriptor.bridge.operation_family, "run_command", id);
+      assert.equal(descriptor.bridge.idempotency, "supported", id);
+      assert.equal(descriptor.expectedDelta.kind, "mutation", id);
+      assert.equal(descriptor.expectedDelta.entities[0].action, "update", id);
+      assert.equal(descriptor.verification.mode, "required", id);
+      assert.equal(descriptor.artifacts.mode, "none", id);
+    }
+
+    const path = catalog.require("template.render.output_absolute_path");
+    assert.equal(path.bridge.operation_family, "artifact_metadata");
+    assert.equal(path.risk, "read");
+    assert.equal(path.refs.input[0].kind, "artifact");
+    assert.equal(path.outputSchema.properties.absolute_path.type, "string");
+    assert.equal(path.artifacts.mode, "metadata");
   });
 
   it("keeps render scope bounded to region WAV output with artifact refs", () => {
@@ -139,14 +197,13 @@ describe("Critical render template descriptors", () => {
     assert.equal(menu.mode, "menu");
     assert.equal(menu.items.length, ALLOWLIST.length);
     assert.equal(menu.page.has_more, false);
-    assert.equal(Buffer.byteLength(JSON.stringify(menu), "utf8") < 4096, true);
+    assert.equal(Buffer.byteLength(JSON.stringify(menu), "utf8") < 8192, true);
 
     for (const item of menu.items) {
       assert.deepEqual(Object.keys(item), [...TEMPLATE_DESCRIPTOR_DISCOVERY_SUMMARY_FIELDS]);
-    }
-    const payload = JSON.stringify(menu);
-    for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
-      assert.doesNotMatch(payload, new RegExp(field));
+      for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+        assert.equal(Object.hasOwn(item, field), false, `${item.id} ${field}`);
+      }
     }
   });
 
@@ -302,9 +359,9 @@ describe("Critical render template descriptors", () => {
     assert.doesNotMatch(source, /streetlight-reaper-mcp/);
     assert.doesNotMatch(source, /REAPER\.app|child_process|spawn\(|execFile|reaper\//);
     assert.doesNotMatch(source, /\brecipe\b/i);
-    assert.doesNotMatch(source, /run_action|run_command|template\.execute/);
+    assert.doesNotMatch(source, /run_action|template\.execute/);
     assert.doesNotMatch(source, /raw_lua|raw_action|shell|process\./);
-    assert.doesNotMatch(source, /output_path|output_directory|absolute_path|relative_path|file:\/\//);
+    assert.doesNotMatch(source, /output_directory|relative_path|file:\/\//);
     assert.doesNotMatch(source, /render_anything|render_full_project|render_region_video|render_stems/);
     assert.doesNotMatch(source, /template\.render\.render_region_job/);
   });

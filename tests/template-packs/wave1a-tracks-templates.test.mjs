@@ -31,11 +31,22 @@ const ALLOWLIST = Object.freeze([
   "template.tracks.set_mute",
   "template.tracks.set_solo",
   "template.tracks.set_record_arm",
+  "template.tracks.delete_track",
+  "template.tracks.delete_tracks",
+  "template.tracks.set_volume",
+  "template.tracks.set_pan",
+  "template.tracks.set_width",
+  "template.tracks.read_mixer_controls",
+  "template.tracks.create_folder_track",
+  "template.tracks.set_folder_depth",
+  "template.tracks.move_track",
+  "template.tracks.move_tracks",
+  "template.tracks.nest_tracks_in_folder",
+  "template.tracks.read_folder_structure",
 ]);
 
 const BLOCKED = Object.freeze([
   "template.tracks.delete_empty_track",
-  "template.tracks.delete_track",
   "template.tracks.ensure_named_track",
   "template.tracks.set_folder_depth_delta",
   "template.tracks.create_folder_from_tracks",
@@ -85,22 +96,43 @@ describe("Wave 1A tracks template descriptors", () => {
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).risk, "read");
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).bridge.operation_name, "tracks.list_tracks");
     assert.deepEqual(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.listTracks).refs.output.map((entry) => entry.kind), ["track"]);
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.readMixerControls).risk, "read");
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.readMixerControls).bridge.operation_family, "query_state");
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.readFolderStructure).risk, "read");
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.readFolderStructure).bridge.operation_family, "query_state");
 
     for (const descriptor of templates.filter((entry) => entry.risk === "write")) {
       assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);
       assert.equal(descriptor.bridge.operation_name, "template.execute", descriptor.id);
       assert.equal(descriptor.verification.mode, "required", descriptor.id);
       assert.equal(descriptor.expectedDelta.kind, "mutation", descriptor.id);
-      assert.equal(descriptor.refs.input.length > 0 || descriptor.id === WAVE1A_TRACKS_TEMPLATE_IDS.createTrack, true);
+      assert.equal(
+        descriptor.refs.input.length > 0 ||
+          descriptor.id === WAVE1A_TRACKS_TEMPLATE_IDS.createTrack ||
+          descriptor.id === WAVE1A_TRACKS_TEMPLATE_IDS.createFolderTrack,
+        true,
+        descriptor.id,
+      );
       assert.equal(JSON.stringify(descriptor).includes('"kind":"send"'), false, descriptor.id);
       assert.equal(JSON.stringify(descriptor).includes('"kind":"fx"'), false, descriptor.id);
       assert.equal(JSON.stringify(descriptor).includes('"kind":"envelope"'), false, descriptor.id);
       assert.equal(JSON.stringify(descriptor).includes('"kind":"item"'), false, descriptor.id);
     }
+    for (const descriptor of templates.filter((entry) => entry.risk === "destructive")) {
+      assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);
+      assert.equal(descriptor.verification.mode, "required", descriptor.id);
+      assert.equal(descriptor.expectedDelta.kind, "mutation", descriptor.id);
+      assert.equal(descriptor.expectedDelta.entities[0].action, "delete", descriptor.id);
+      assert.equal(descriptor.refs.input.length > 0, true, descriptor.id);
+    }
 
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.selectTrack).risk, "write");
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.createTrack).expectedDelta.idempotent, false);
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.createFolderTrack).expectedDelta.idempotent, false);
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.deleteTrack).risk, "destructive");
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.deleteTracks).risk, "destructive");
     assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.createTrack).inputSchema.properties.reuse_existing, undefined);
+    assert.equal(byId.get(WAVE1A_TRACKS_TEMPLATE_IDS.setRecordArm).risk, "write");
   });
 
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery bounded", () => {
@@ -139,8 +171,11 @@ describe("Wave 1A tracks template descriptors", () => {
 
     const payload = JSON.stringify(menu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
+      if (["refs", "artifacts"].includes(field)) continue;
       assert.doesNotMatch(payload, new RegExp(field));
     }
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "refs")), true);
+    assert.equal(menu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
   });
 
   it("supports exact id lookup with on-demand descriptor fields only", () => {
@@ -235,6 +270,21 @@ function executionScenarios() {
   const muted = trackRef("{TRACK-MUTE}");
   const soloed = trackRef("{TRACK-SOLO}");
   const armed = trackRef("{TRACK-ARM}");
+  const deleted = trackRef("{TRACK-DELETE}");
+  const deleteBatchA = trackRef("{TRACK-DELETE-A}");
+  const deleteBatchB = trackRef("{TRACK-DELETE-B}");
+  const volume = trackRef("{TRACK-VOLUME}");
+  const pan = trackRef("{TRACK-PAN}");
+  const width = trackRef("{TRACK-WIDTH}");
+  const mixer = trackRef("{TRACK-MIXER}");
+  const folder = trackRef("{TRACK-FOLDER}");
+  const folderDepth = trackRef("{TRACK-FOLDER-DEPTH}");
+  const moved = trackRef("{TRACK-MOVE}");
+  const moveBatchA = trackRef("{TRACK-MOVE-A}");
+  const moveBatchB = trackRef("{TRACK-MOVE-B}");
+  const folderParent = trackRef("{TRACK-FOLDER-PARENT}");
+  const nestedChild = trackRef("{TRACK-NESTED-CHILD}");
+  const folderRead = trackRef("{TRACK-FOLDER-READ}");
 
   return [
     {
@@ -284,6 +334,78 @@ function executionScenarios() {
       input: { armed: true },
       refs: { track_ref: armed },
       emittedRefs: [armed],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.deleteTrack,
+      input: {},
+      refs: { track_ref: deleted },
+      emittedRefs: [deleted],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.deleteTracks,
+      input: {},
+      refs: { track_ref: [deleteBatchA, deleteBatchB] },
+      emittedRefs: [deleteBatchA, deleteBatchB],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.setVolume,
+      input: { volume: 0.5 },
+      refs: { track_ref: volume },
+      emittedRefs: [volume],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.setPan,
+      input: { pan: -0.5 },
+      refs: { track_ref: pan },
+      emittedRefs: [pan],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.setWidth,
+      input: { width: 0.75 },
+      refs: { track_ref: width },
+      emittedRefs: [width],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.readMixerControls,
+      input: { include_selected: true, limit: 8 },
+      refs: { track_ref: mixer },
+      emittedRefs: [mixer],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.createFolderTrack,
+      input: { name: "Drums", index: 0 },
+      refs: {},
+      emittedRefs: [folder],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.setFolderDepth,
+      input: { folder_depth: 1 },
+      refs: { track_ref: folderDepth },
+      emittedRefs: [folderDepth],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.moveTrack,
+      input: { index: 0 },
+      refs: { track_ref: moved },
+      emittedRefs: [moved],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.moveTracks,
+      input: { index: 0 },
+      refs: { track_ref: [moveBatchA, moveBatchB] },
+      emittedRefs: [moveBatchA, moveBatchB],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.nestTracksInFolder,
+      input: {},
+      refs: { folder_ref: folderParent, track_ref: nestedChild },
+      emittedRefs: [folderParent, nestedChild],
+    },
+    {
+      id: WAVE1A_TRACKS_TEMPLATE_IDS.readFolderStructure,
+      input: { limit: 32 },
+      refs: {},
+      emittedRefs: [folderRead],
     },
   ];
 }

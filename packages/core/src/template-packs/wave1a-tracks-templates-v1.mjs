@@ -10,6 +10,18 @@ export const WAVE1A_TRACKS_TEMPLATE_IDS = Object.freeze({
   setMute: "template.tracks.set_mute",
   setSolo: "template.tracks.set_solo",
   setRecordArm: "template.tracks.set_record_arm",
+  deleteTrack: "template.tracks.delete_track",
+  deleteTracks: "template.tracks.delete_tracks",
+  setVolume: "template.tracks.set_volume",
+  setPan: "template.tracks.set_pan",
+  setWidth: "template.tracks.set_width",
+  readMixerControls: "template.tracks.read_mixer_controls",
+  createFolderTrack: "template.tracks.create_folder_track",
+  setFolderDepth: "template.tracks.set_folder_depth",
+  moveTrack: "template.tracks.move_track",
+  moveTracks: "template.tracks.move_tracks",
+  nestTracksInFolder: "template.tracks.nest_tracks_in_folder",
+  readFolderStructure: "template.tracks.read_folder_structure",
 });
 
 export const WAVE1A_TRACKS_TEMPLATES = deepFreeze([
@@ -560,6 +572,457 @@ export const WAVE1A_TRACKS_TEMPLATES = deepFreeze([
       },
     ],
   },
+  makeDestructiveTrackDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.deleteTrack,
+    title: "Delete track",
+    summary: "Delete one resolved track and return a compact deletion count for cleanup parity.",
+    capability: "track.delete",
+    inputProperties: {},
+    outputProperties: {
+      deleted_count: { type: "integer" },
+      deleted_refs: { type: "array" },
+    },
+    outputRequired: ["deleted_count", "deleted_refs"],
+    refsInput: [ref("track_ref", "track", true, "Track ref to delete.")],
+    expectedSummary: "Deletes exactly one resolved track and leaves unrelated project objects untouched.",
+    entityKind: "track",
+    action: "delete",
+    verificationChecks: [
+      {
+        name: "track_no_longer_resolves",
+        kind: "state_delta",
+        summary: "The deleted track ref no longer resolves after the operation.",
+      },
+      {
+        name: "deleted_count_matches",
+        kind: "state_delta",
+        summary: "The deletion summary reports exactly one deleted track.",
+      },
+    ],
+    examples: [
+      {
+        name: "delete_created_track",
+        summary: "Delete a track created during a trial.",
+        input: {},
+      },
+    ],
+  }),
+  makeDestructiveTrackDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.deleteTracks,
+    title: "Delete tracks",
+    summary: "Delete multiple resolved tracks in one cleanup operation and report deleted refs.",
+    capability: "tracks.delete",
+    inputProperties: {},
+    outputProperties: {
+      deleted_count: { type: "integer" },
+      deleted_refs: { type: "array" },
+    },
+    outputRequired: ["deleted_count", "deleted_refs"],
+    refsInput: [ref("track_ref", "track", true, "Track refs to delete.")],
+    expectedSummary: "Deletes the supplied resolved tracks as a bounded cleanup mutation.",
+    entityKind: "track",
+    action: "delete",
+    verificationChecks: [
+      {
+        name: "tracks_no_longer_resolve",
+        kind: "state_delta",
+        summary: "Every deleted track ref no longer resolves after the operation.",
+      },
+      {
+        name: "deleted_count_matches_refs",
+        kind: "state_delta",
+        summary: "The deletion summary count matches the number of supplied track refs.",
+      },
+    ],
+    examples: [
+      {
+        name: "delete_trial_tracks",
+        summary: "Delete several tracks created during a trial.",
+        input: {},
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.setVolume,
+    title: "Set track volume",
+    summary: "Set one track's mixer volume gain as a normalized scalar without changing sends.",
+    capability: "track.set_volume",
+    tags: ["track", "mixer", "volume", "wave1a"],
+    inputProperties: {
+      volume: { type: "number" },
+    },
+    inputRequired: ["volume"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      volume: { type: "number" },
+    },
+    outputRequired: ["track_ref", "volume"],
+    expectedSummary: "Updates one track mixer volume control only.",
+    verificationChecks: [
+      {
+        name: "track_volume_matches",
+        kind: "state_delta",
+        summary: "The resolved track volume matches input.volume.",
+      },
+    ],
+    examples: [
+      {
+        name: "lower_track_volume",
+        summary: "Set the resolved track to half scalar volume.",
+        input: { volume: 0.5 },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.setPan,
+    title: "Set track pan",
+    summary: "Set one track's mixer pan position from left to right without changing sends.",
+    capability: "track.set_pan",
+    tags: ["track", "mixer", "pan", "wave1a"],
+    inputProperties: {
+      pan: { type: "number" },
+    },
+    inputRequired: ["pan"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      pan: { type: "number" },
+    },
+    outputRequired: ["track_ref", "pan"],
+    expectedSummary: "Updates one track mixer pan control only.",
+    verificationChecks: [
+      {
+        name: "track_pan_matches",
+        kind: "state_delta",
+        summary: "The resolved track pan matches input.pan.",
+      },
+    ],
+    examples: [
+      {
+        name: "pan_track_left",
+        summary: "Set the resolved track pan to the left side.",
+        input: { pan: -0.5 },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.setWidth,
+    title: "Set track width",
+    summary: "Set one track's stereo width control without changing pan, volume, or sends.",
+    capability: "track.set_width",
+    tags: ["track", "mixer", "width", "wave1a"],
+    inputProperties: {
+      width: { type: "number" },
+    },
+    inputRequired: ["width"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      width: { type: "number" },
+    },
+    outputRequired: ["track_ref", "width"],
+    expectedSummary: "Updates one track stereo width control only.",
+    verificationChecks: [
+      {
+        name: "track_width_matches",
+        kind: "state_delta",
+        summary: "The resolved track stereo width matches input.width.",
+      },
+    ],
+    examples: [
+      {
+        name: "narrow_track_width",
+        summary: "Set the resolved track to narrower stereo width.",
+        input: { width: 0.75 },
+      },
+    ],
+  }),
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.readMixerControls,
+    title: "Read track mixer controls",
+    summary: "Read compact mixer controls for one or more tracks without mutating mixer state.",
+    pack: "tracks",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "track_mixer",
+    tags: ["track", "mixer", "read", "wave1a"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "tracks.read_mixer_controls",
+      capability: "tracks.read_mixer_controls",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      include_selected: { type: "boolean" },
+      limit: { type: "integer" },
+    }, []),
+    outputSchema: objectSchema({
+      tracks: { type: "array" },
+      track_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["tracks", "track_count", "truncated"]),
+    refs: refs({
+      input: [ref("track_ref", "track", false, "Optional track refs to inspect.")],
+      output: [ref("track_ref", "track", false, "Track refs included in the mixer control summary.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads compact volume, pan, width, mute, solo, and record-arm state.",
+      entities: [
+        {
+          entity_kind: "track_mixer",
+          action: "read",
+          summary: "Track mixer control state is read.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "read_selected_mixer_controls",
+        summary: "Read mixer controls for selected tracks.",
+        input: { include_selected: true, limit: 16 },
+      },
+    ],
+  },
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.createFolderTrack,
+    title: "Create folder track",
+    summary: "Create one folder parent track at an optional index and return its track ref.",
+    capability: "track.create_folder",
+    tags: ["track", "folder", "create", "wave1a"],
+    inputProperties: {
+      name: { type: "string" },
+      index: { type: "integer" },
+    },
+    inputRequired: ["name"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      index: { type: "integer" },
+      name: { type: "string" },
+      folder_depth: { type: "integer" },
+    },
+    outputRequired: ["track_ref", "name", "folder_depth"],
+    refsInput: [],
+    refsOutput: [ref("track_ref", "track", true, "Folder track ref created by this template.")],
+    expectedSummary: "Creates exactly one folder parent track without moving existing tracks.",
+    entityKind: "track_folder",
+    action: "create",
+    idempotent: false,
+    verificationChecks: [
+      {
+        name: "folder_track_created",
+        kind: "state_delta",
+        summary: "A new folder parent track exists after creation.",
+      },
+      {
+        name: "folder_name_matches",
+        kind: "state_delta",
+        summary: "The created folder track name matches input.name.",
+      },
+    ],
+    examples: [
+      {
+        name: "create_drums_folder",
+        summary: "Create a folder track named Drums.",
+        input: { name: "Drums" },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.setFolderDepth,
+    title: "Set track folder depth",
+    summary: "Set one track's folder depth integer for explicit REAPER folder organization.",
+    capability: "track.set_folder_depth",
+    tags: ["track", "folder", "organization", "wave1a"],
+    inputProperties: {
+      folder_depth: { type: "integer" },
+    },
+    inputRequired: ["folder_depth"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      folder_depth: { type: "integer" },
+    },
+    outputRequired: ["track_ref", "folder_depth"],
+    expectedSummary: "Updates one track folder depth without moving tracks.",
+    entityKind: "track_folder",
+    verificationChecks: [
+      {
+        name: "folder_depth_matches",
+        kind: "state_delta",
+        summary: "The resolved track folder depth matches input.folder_depth.",
+      },
+    ],
+    examples: [
+      {
+        name: "make_folder_parent",
+        summary: "Mark the resolved track as opening one folder level.",
+        input: { folder_depth: 1 },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.moveTrack,
+    title: "Move track",
+    summary: "Move one resolved track to a zero-based project index for organization workflows.",
+    capability: "track.move",
+    tags: ["track", "move", "organization", "wave1a"],
+    inputProperties: {
+      index: { type: "integer" },
+    },
+    inputRequired: ["index"],
+    outputProperties: {
+      track_ref: { type: "string" },
+      index: { type: "integer" },
+    },
+    outputRequired: ["track_ref", "index"],
+    expectedSummary: "Moves one track to the requested project index.",
+    entityKind: "track_order",
+    verificationChecks: [
+      {
+        name: "track_index_matches",
+        kind: "state_delta",
+        summary: "The resolved track index matches input.index after the move.",
+      },
+    ],
+    examples: [
+      {
+        name: "move_track_to_top",
+        summary: "Move the resolved track to the top of the project.",
+        input: { index: 0 },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.moveTracks,
+    title: "Move tracks",
+    summary: "Move multiple resolved tracks as an ordered block to a zero-based project index.",
+    capability: "tracks.move",
+    tags: ["track", "move", "organization", "wave1a"],
+    inputProperties: {
+      index: { type: "integer" },
+    },
+    inputRequired: ["index"],
+    outputProperties: {
+      track_refs: { type: "array" },
+      index: { type: "integer" },
+      moved_count: { type: "integer" },
+    },
+    outputRequired: ["track_refs", "index", "moved_count"],
+    expectedSummary: "Moves the supplied tracks as a bounded ordered block.",
+    entityKind: "track_order",
+    verificationChecks: [
+      {
+        name: "moved_count_matches_refs",
+        kind: "state_delta",
+        summary: "The moved count matches the number of supplied track refs.",
+      },
+      {
+        name: "track_block_starts_at_index",
+        kind: "state_delta",
+        summary: "The moved track block starts at input.index.",
+      },
+    ],
+    examples: [
+      {
+        name: "move_tracks_to_top",
+        summary: "Move resolved tracks to the top of the project.",
+        input: { index: 0 },
+      },
+    ],
+  }),
+  makeTrackUpdateDescriptor({
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.nestTracksInFolder,
+    title: "Nest tracks in folder",
+    summary: "Move resolved child tracks under a resolved folder track and set bounded folder depth.",
+    capability: "tracks.nest_in_folder",
+    tags: ["track", "folder", "organization", "wave1a"],
+    inputProperties: {},
+    inputRequired: [],
+    outputProperties: {
+      folder_ref: { type: "string" },
+      child_refs: { type: "array" },
+      nested_count: { type: "integer" },
+    },
+    outputRequired: ["folder_ref", "child_refs", "nested_count"],
+    refsInput: [
+      ref("folder_ref", "track", true, "Folder parent track ref."),
+      ref("track_ref", "track", true, "Child track refs to move under the folder."),
+    ],
+    refsOutput: [ref("track_ref", "track", false, "Folder and child track refs after nesting.")],
+    expectedSummary: "Moves child tracks under one folder track and updates folder depth markers.",
+    entityKind: "track_folder",
+    verificationChecks: [
+      {
+        name: "children_follow_folder",
+        kind: "state_delta",
+        summary: "Child tracks appear after the folder parent in project order.",
+      },
+      {
+        name: "folder_depths_are_balanced",
+        kind: "state_delta",
+        summary: "Folder depth values create one bounded folder span.",
+      },
+    ],
+    examples: [
+      {
+        name: "nest_drums_in_folder",
+        summary: "Nest selected drum tracks under a folder parent.",
+        input: {},
+      },
+    ],
+  }),
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: WAVE1A_TRACKS_TEMPLATE_IDS.readFolderStructure,
+    title: "Read track folder structure",
+    summary: "Read compact track folder depth and parent/child organization without mutating tracks.",
+    pack: "tracks",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "track_folder",
+    tags: ["track", "folder", "read", "organization", "wave1a"],
+    bridge: bridge({
+      operation_family: "query_state",
+      operation_name: "tracks.read_folder_structure",
+      capability: "tracks.read_folder_structure",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      limit: { type: "integer" },
+    }, []),
+    outputSchema: objectSchema({
+      folders: { type: "array" },
+      tracks: { type: "array" },
+      track_count: { type: "integer" },
+      truncated: { type: "boolean" },
+    }, ["folders", "tracks", "track_count", "truncated"]),
+    refs: refs({
+      output: [ref("track_ref", "track", false, "Track refs included in the folder structure.")],
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "read",
+      summary: "Reads folder organization and track order without mutating the project.",
+      entities: [
+        {
+          entity_kind: "track_folder",
+          action: "read",
+          summary: "Track folder structure is read.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: verification({ mode: "none", checks: [] }),
+    examples: [
+      {
+        name: "read_folder_tree",
+        summary: "Read compact folder structure before reorganizing tracks.",
+        input: { limit: 64 },
+      },
+    ],
+  },
 ]);
 
 export function createWave1ATracksTemplates() {
@@ -609,6 +1072,76 @@ function artifacts(overrides = {}) {
     input: [],
     output: [],
     ...overrides,
+  };
+}
+
+function makeTrackUpdateDescriptor({
+  id,
+  title,
+  summary,
+  capability,
+  tags,
+  inputProperties,
+  inputRequired,
+  outputProperties,
+  outputRequired,
+  refsInput = [ref("track_ref", "track", true, "Track ref to update.")],
+  refsOutput = [ref("track_ref", "track", true, "Same track ref after the update.")],
+  expectedSummary,
+  entityKind = "track",
+  action = "update",
+  idempotent = true,
+  verificationChecks,
+  examples,
+}) {
+  return {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id,
+    title,
+    summary,
+    pack: "tracks",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: entityKind,
+    tags,
+    bridge: bridge({
+      capability,
+      idempotency: "supported",
+    }),
+    inputSchema: objectSchema(inputProperties, inputRequired),
+    outputSchema: objectSchema(outputProperties, outputRequired),
+    refs: refs({
+      input: refsInput,
+      output: refsOutput,
+    }),
+    artifacts: artifacts(),
+    expectedDelta: expectedDelta({
+      kind: "mutation",
+      summary: expectedSummary,
+      entities: [
+        {
+          entity_kind: entityKind,
+          action,
+          summary: expectedSummary,
+        },
+      ],
+      idempotent,
+    }),
+    verification: verification({
+      checks: verificationChecks,
+    }),
+    examples,
+  };
+}
+
+function makeDestructiveTrackDescriptor(options) {
+  return {
+    ...makeTrackUpdateDescriptor({
+      ...options,
+      tags: ["track", "delete", "cleanup", "wave1a"],
+      idempotent: false,
+    }),
+    risk: "destructive",
   };
 }
 
