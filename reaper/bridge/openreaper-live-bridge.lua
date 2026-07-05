@@ -5278,6 +5278,18 @@ local function e2_fx_read_summary(request, readback)
   return readback
 end
 
+local function e2_fx_read_bounded_limit(request, requested, default_limit, hard_limit)
+  local value = tonumber(requested)
+  if not value or value < 1 then
+    value = default_limit
+  end
+  value = math.floor(value)
+  if value > hard_limit then
+    value = hard_limit
+  end
+  return value
+end
+
 local function e2_fx_read_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   return ok and first_string(guid) or nil
@@ -5656,7 +5668,7 @@ end
 
 local function e2_fx_read_chain(owner_kind, owner, request)
   local count = e2_fx_read_count(owner_kind, owner)
-  local limit = bounded_limit(request, request.params and request.params.limit, 16, 32)
+  local limit = e2_fx_read_bounded_limit(request, request.params and request.params.limit, 16, 32)
   local owner_ref = e2_fx_read_owner_ref(owner_kind, owner)
   local summaries = json_array({})
   local refs = json_array({})
@@ -5743,7 +5755,7 @@ local function list_fx_parameters(request)
     return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-L1 list_fx_parameters requires a resolvable FX ref.")
   end
   local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
-  local limit = bounded_limit(request, request.params and request.params.limit, 32, 64)
+  local limit = e2_fx_read_bounded_limit(request, request.params and request.params.limit, 32, 64)
   local parameters = json_array({})
   local max_index = math.min(count, limit)
   for param_index = 0, max_index - 1 do
