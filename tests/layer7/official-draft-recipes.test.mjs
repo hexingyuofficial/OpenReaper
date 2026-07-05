@@ -212,6 +212,7 @@ describe("Layer 7 official draft recipe packet", () => {
   it("adds an E6 media/item family over post-V1 atoms without creating an executor", () => {
     const recipe = recipesById().get("recipe.media.item_prep_from_folder");
     const dependencies = recipeTemplateDependencies(recipe);
+    const steps = new Map(recipe.steps.map((step) => [step.id, step]));
 
     assert.deepEqual(dependencies, EXPECTED_DEPENDENCIES[recipe.id]);
     assert.equal(recipe.lifecycle, "draft");
@@ -228,7 +229,35 @@ describe("Layer 7 official draft recipe packet", () => {
         "template.items.copy_item_to_track",
       ],
     );
+    assert.deepEqual(steps.get("import_media_section").call_template.input, {
+      position_seconds: 0,
+      start_percent: 0.25,
+      end_percent: 0.75,
+      preserve_selection: true,
+    });
+    assert.deepEqual(steps.get("import_media_section").call_template.refs.source_file_ref, {
+      "$from_step": "list_folder_media",
+      output: "file_refs",
+    });
+    assert.deepEqual(steps.get("set_take_playrate").call_template.refs.item_ref, {
+      "$from_step": "import_media_section",
+      output: "imported_item_refs",
+    });
+    assert.deepEqual(steps.get("split_prepped_item").call_template.refs.item_ref, {
+      "$from_step": "set_take_playrate",
+      output: "item_ref",
+    });
+    assert.deepEqual(steps.get("copy_right_item").call_template.refs.source_item_ref, {
+      "$from_step": "split_prepped_item",
+      output: "right_item_ref",
+    });
+    assert.equal(
+      recipe.recovery.risk_gates.every((gate) => gate.required_before_step === "import_media_section"),
+      true,
+    );
+    assert.equal(recipe.assertions.some((assertion) => assertion.id === "assert_no_loop_source_authority"), true);
     assert.doesNotMatch(JSON.stringify(recipe), /call_recipe|executor|raw_lua|raw_action|shell/i);
+    assert.doesNotMatch(JSON.stringify(recipe), /template\.media\.relink_take_source|B_LOOPSRC|set_item_loop_source/i);
   });
 
   it("discovers the E6 family through compact recipe-menu intent fields", () => {

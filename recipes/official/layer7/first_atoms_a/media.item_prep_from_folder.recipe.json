@@ -63,8 +63,8 @@
         "id": "template.media.import_file_section_to_track",
         "input": {
           "position_seconds": 0,
-          "start_percent": 0,
-          "end_percent": 50,
+          "start_percent": 0.25,
+          "end_percent": 0.75,
           "preserve_selection": true
         },
         "refs": {
