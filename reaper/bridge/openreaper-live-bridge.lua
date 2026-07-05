@@ -1595,6 +1595,10 @@ local function validate_request(request)
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E4 item route idempotency_key must be a string when present."
     end
+  elseif e5_routing_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "E5 routing write idempotency_key must be a string when present."
+    end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
   end
