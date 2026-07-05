@@ -86,14 +86,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 64,
+  template_count = 67,
   by_pack = {
     actions = 6,
     analysis = 3,
     automation = 0,
     core = 3,
     fx = 0,
-    items = 8,
+    items = 11,
     media = 7,
     midi = 10,
     project = 8,

@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (64 registered template handler row(s); 0 legacy_monolith row(s); 64 extracted handler row(s); 61 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (67 registered template handler row(s); 0 legacy_monolith row(s); 67 extracted handler row(s); 62 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1344,6 +1344,12 @@ local E3_MEDIA_ROUTE_CAPABILITIES = {
   ["media.relink_take_source"] = { pack = "media", risk = "write" },
 }
 
+local E4_ITEM_ROUTE_CAPABILITIES = {
+  ["item.copy_to_track"] = { pack = "items", risk = "write" },
+  ["items.split_item_at_time"] = { pack = "items", risk = "write" },
+  ["items.set_take_playrate"] = { pack = "items", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1364,8 +1370,18 @@ local function e3_media_route_capability(request, operation_key)
   return E3_MEDIA_ROUTE_CAPABILITIES[request.pack.capability]
 end
 
+local function e4_item_route_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return E4_ITEM_ROUTE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
-  return safe_write_a_capability(request, operation_key) or e3_media_route_capability(request, operation_key)
+  return safe_write_a_capability(request, operation_key) or e3_media_route_capability(request, operation_key) or e4_item_route_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1434,6 +1450,7 @@ local function validate_request(request)
   local a2_render_operation = operation_key == "run_job:render.region_wav"
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
   local e3_media_route_operation = e3_media_route_capability(request, operation_key)
+  local e4_item_route_operation = e4_item_route_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1448,6 +1465,10 @@ local function validate_request(request)
   elseif e3_media_route_operation then
     if request.pack.id ~= e3_media_route_operation.pack or request.pack.risk ~= e3_media_route_operation.risk then
       return false, "E3 media route request pack/capability/risk mismatch."
+    end
+  elseif e4_item_route_operation then
+    if request.pack.id ~= e4_item_route_operation.pack or request.pack.risk ~= e4_item_route_operation.risk then
+      return false, "E4 item route request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1473,6 +1494,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E3 media route write requests must use undo.mode required."
     end
+  elseif e4_item_route_operation then
+    if request.undo.mode ~= "required" then
+      return false, "E4 item route write requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1496,6 +1521,10 @@ local function validate_request(request)
   elseif e3_media_route_operation then
     if request.artifacts.allow ~= false then
       return false, "E3 media route write requests must use artifacts.allow false."
+    end
+  elseif e4_item_route_operation then
+    if request.artifacts.allow ~= false then
+      return false, "E4 item route write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -1521,6 +1550,10 @@ local function validate_request(request)
   elseif e3_media_route_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E3 media route idempotency_key must be a string when present."
+    end
+  elseif e4_item_route_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "E4 item route idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -1848,14 +1881,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 64,
+  template_count = 67,
   by_pack = {
     actions = 6,
     analysis = 3,
     automation = 0,
     core = 3,
     fx = 0,
-    items = 8,
+    items = 11,
     media = 7,
     midi = 10,
     project = 8,
@@ -4424,6 +4457,420 @@ local function relink_take_source(request)
 end
 return {
   exports = { list_folder_media_files = list_folder_media_files, import_file_to_track = import_file_to_track, import_file_section_to_track = import_file_section_to_track, relink_take_source = relink_take_source },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/e4_item_route.lua
+__openreaper_register_handler_module("items/e4_item_route.lua", function()
+-- Extracted E4 item route handlers.
+
+local function e4_item_handler_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function e4_item_refs(...)
+  local refs = json_array({})
+  for index = 1, select("#", ...) do
+    local ref = select(index, ...)
+    if ref then
+      refs[#refs + 1] = ref
+    end
+  end
+  return refs
+end
+
+local function e4_item_summary(request, readback)
+  readback = readback or {}
+  readback.capability = request.pack.capability
+  readback.pack = request.pack.id
+  readback.risk = request.pack.risk
+  readback.readback_status = "passed"
+  readback.undo_evidence = "required"
+  readback.artifacts_allowed = false
+  readback.loop_source_status = "held"
+  readback.truncated = false
+  return readback
+end
+
+local function e4_item_finite_number(value, fallback)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return fallback or 0
+end
+
+local function e4_item_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function e4_item_track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function e4_item_track_ref_string(track)
+  local guid = e4_item_track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(e4_item_track_index(track))
+end
+
+local function e4_item_find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and e4_item_track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function e4_item_resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return e4_item_find_track_by_guid(guid)
+  end
+  return nil
+end
+
+local function e4_item_resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return e4_item_resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return e4_item_resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return e4_item_resolve_track_token("guid:" .. tostring(identity.value))
+  end
+  return e4_item_resolve_track_token(ref.ref)
+end
+
+local function e4_item_track_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track = e4_item_resolve_track_from_ref_object(request.refs[index])
+      if track then
+        return track
+      end
+    end
+  end
+  return nil
+end
+
+local function e4_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function e4_item_ref_string(item)
+  local guid = e4_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function e4_item_find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and e4_item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function e4_item_resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return e4_item_find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function e4_item_resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return e4_item_resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return e4_item_resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return e4_item_resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return e4_item_resolve_item_token(ref.ref)
+end
+
+local function e4_item_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local item = e4_item_resolve_item_from_ref_object(request.refs[index])
+      if item then
+        return item
+      end
+    end
+  end
+  return nil
+end
+
+local function e4_item_object_ref(item)
+  local ref = e4_item_ref_string(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function e4_item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or 0
+end
+
+local function e4_item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function e4_item_summary_for_item(item)
+  local track = e4_item_track(item)
+  return {
+    item_ref = e4_item_ref_string(item),
+    track_ref = track and e4_item_track_ref_string(track) or JSON_NULL,
+    position_seconds = e4_item_number(item, "D_POSITION"),
+    length_seconds = e4_item_number(item, "D_LENGTH"),
+  }
+end
+
+local function e4_item_take(item)
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  return ok_take and take or nil
+end
+
+local function e4_item_read_source(take)
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  return ok_source and source or nil
+end
+
+local function e4_item_clone_active_take_footprint(source_item, target_item)
+  local source_take = e4_item_take(source_item)
+  if not source_take then
+    return nil, e4_item_handler_error("TAKE_NOT_FOUND", "E4 copy_item_to_track requires an active source take.", {})
+  end
+  local source = e4_item_read_source(source_take)
+  if not source then
+    return nil, e4_item_handler_error("SOURCE_NOT_FOUND", "E4 copy_item_to_track could not read the source take media source.", {})
+  end
+  local ok_duplicate, duplicate = call_reaper("PCM_Source_Duplicate", source)
+  if not ok_duplicate or not duplicate then
+    return nil, e4_item_handler_error("SOURCE_NOT_FOUND", "E4 copy_item_to_track could not duplicate the source media footprint.", {})
+  end
+  local ok_take, target_take = call_reaper("AddTakeToMediaItem", target_item)
+  if not ok_take or not target_take then
+    call_reaper("PCM_Source_Destroy", duplicate)
+    return nil, e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target take.", {}, false)
+  end
+  call_reaper("SetMediaItemTake_Source", target_take, duplicate)
+  local ok_start, start_offset = call_reaper("GetMediaItemTakeInfo_Value", source_take, "D_STARTOFFS")
+  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", source_take, "D_PLAYRATE")
+  local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", source_take, "D_PITCH")
+  local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", source_take, "B_PPITCH")
+  if ok_start then
+    call_reaper("SetMediaItemTakeInfo_Value", target_take, "D_STARTOFFS", first_number(start_offset) or 0)
+  end
+  if ok_playrate then
+    call_reaper("SetMediaItemTakeInfo_Value", target_take, "D_PLAYRATE", first_number(playrate) or 1)
+  end
+  if ok_pitch then
+    call_reaper("SetMediaItemTakeInfo_Value", target_take, "D_PITCH", first_number(pitch) or 0)
+  end
+  if ok_preserve then
+    call_reaper("SetMediaItemTakeInfo_Value", target_take, "B_PPITCH", first_number(preserve) or 0)
+  end
+  return target_take
+end
+
+local function copy_item_to_track(request)
+  local source_item = e4_item_from_request_refs(request)
+  if not source_item then
+    return e4_item_handler_error("ITEM_NOT_FOUND", "E4 copy_item_to_track requires a resolvable source item ref.", {})
+  end
+  local target_track = e4_item_track_from_request_refs(request)
+  if not target_track then
+    return e4_item_handler_error("TRACK_NOT_FOUND", "E4 copy_item_to_track requires a resolvable target track ref.", {})
+  end
+  local ok_item, new_item = call_reaper("AddMediaItemToTrack", target_track)
+  if not ok_item or not new_item then
+    return e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target item.", {}, false)
+  end
+  local position = e4_item_finite_number(request.params.position_seconds, 0)
+  local length = math.max(0, e4_item_number(source_item, "D_LENGTH"))
+  call_reaper("SetMediaItemInfo_Value", new_item, "D_POSITION", position)
+  call_reaper("SetMediaItemInfo_Value", new_item, "D_LENGTH", length)
+  local _, failure = e4_item_clone_active_take_footprint(source_item, new_item)
+  if failure then
+    call_reaper("DeleteTrackMediaItem", target_track, new_item)
+    return nil, failure
+  end
+  call_reaper("UpdateItemInProject", new_item)
+  local source_ref = e4_item_object_ref(source_item)
+  local new_ref = e4_item_object_ref(new_item)
+  return e4_item_summary(request, {
+    new_item_ref = new_ref.ref,
+    source_item_ref = source_ref.ref,
+    target_track_ref = e4_item_track_ref_string(target_track),
+    position_seconds = position,
+    copy_depth = "active_take_footprint",
+    source_item = e4_item_summary_for_item(source_item),
+    new_item = e4_item_summary_for_item(new_item),
+  }), nil, nil, nil, e4_item_refs(new_ref, source_ref, {
+    kind = "track",
+    ref = e4_item_track_ref_string(target_track),
+    identity = {
+      scheme = e4_item_track_ref_string(target_track):match("^track:([^:]+):") or "index",
+      value = e4_item_track_ref_string(target_track):match("^track:[^:]+:(.+)$") or "0",
+    },
+  })
+end
+
+local function split_item_at_time(request)
+  local item = e4_item_from_request_refs(request)
+  if not item then
+    return e4_item_handler_error("ITEM_NOT_FOUND", "E4 split_item_at_time requires a resolvable item ref.", {})
+  end
+  local position = e4_item_finite_number(request.params.position_seconds, 0)
+  local start_position = e4_item_number(item, "D_POSITION")
+  local length = e4_item_number(item, "D_LENGTH")
+  local end_position = start_position + length
+  if not (position > start_position and position < end_position) then
+    return e4_item_handler_error("SPLIT_OUTSIDE_ITEM_BOUNDS", "E4 split_item_at_time requires a position inside item bounds.", {
+      position_seconds = position,
+      item_start_seconds = start_position,
+      item_end_seconds = end_position,
+    })
+  end
+  local ok_right, right_item = call_reaper("SplitMediaItem", item, position)
+  if not ok_right or not right_item then
+    return e4_item_handler_error("COMMAND_FAILED", "E4 split_item_at_time could not split the item.", {}, false)
+  end
+  call_reaper("UpdateItemInProject", item)
+  call_reaper("UpdateItemInProject", right_item)
+  local left_ref = e4_item_object_ref(item)
+  local right_ref = e4_item_object_ref(right_item)
+  return e4_item_summary(request, {
+    left_item_ref = left_ref.ref,
+    right_item_ref = right_ref.ref,
+    split_position_seconds = position,
+    left_item = e4_item_summary_for_item(item),
+    right_item = e4_item_summary_for_item(right_item),
+  }), nil, nil, nil, e4_item_refs(left_ref, right_ref)
+end
+
+local function set_take_playrate(request)
+  local item = e4_item_from_request_refs(request)
+  if not item then
+    return e4_item_handler_error("ITEM_NOT_FOUND", "E4 set_take_playrate requires a resolvable item ref.", {})
+  end
+  local playrate = e4_item_finite_number(request.params.playrate, 1)
+  if playrate <= 0 then
+    return e4_item_handler_error("PARAMS_INVALID", "E4 set_take_playrate requires playrate > 0.", {
+      playrate = request.params.playrate,
+    })
+  end
+  local take = e4_item_take(item)
+  if not take then
+    return e4_item_handler_error("TAKE_NOT_FOUND", "E4 set_take_playrate requires an active take.", {})
+  end
+  call_reaper("SetMediaItemTakeInfo_Value", take, "D_PLAYRATE", playrate)
+  call_reaper("SetMediaItemTakeInfo_Value", take, "B_PPITCH", request.params.preserve_pitch == true and 1 or 0)
+  call_reaper("UpdateItemInProject", item)
+  local item_ref = e4_item_object_ref(item)
+  return e4_item_summary(request, {
+    item_ref = item_ref.ref,
+    playrate = playrate,
+    preserve_pitch = request.params.preserve_pitch == true,
+    item = e4_item_summary_for_item(item),
+  }), nil, nil, nil, e4_item_refs(item_ref)
+end
+return {
+  exports = { copy_item_to_track = copy_item_to_track, split_item_at_time = split_item_at_time, set_take_playrate = set_take_playrate },
   shared = {  },
 }
 end)
@@ -11070,12 +11517,22 @@ local E3_MEDIA_ROUTE_HANDLERS = {
   ["media.relink_take_source"] = OPENREAPER_HANDLER_EXPORTS.relink_take_source,
 }
 
+local E4_ITEM_ROUTE_HANDLERS = {
+  ["item.copy_to_track"] = OPENREAPER_HANDLER_EXPORTS.copy_item_to_track,
+  ["items.split_item_at_time"] = OPENREAPER_HANDLER_EXPORTS.split_item_at_time,
+  ["items.set_take_playrate"] = OPENREAPER_HANDLER_EXPORTS.set_take_playrate,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
   handler = E3_MEDIA_ROUTE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

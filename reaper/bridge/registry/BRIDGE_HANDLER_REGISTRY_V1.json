@@ -539,6 +539,57 @@
       ]
     },
     {
+      "template_id": "template.items.copy_item_to_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "item.copy_to_track",
+      "pack": "items",
+      "risk": "write",
+      "route": "e4-item-live-handlers",
+      "handler_file": "items/e4_item_route.lua",
+      "handler_export": "copy_item_to_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e4-item-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.split_item_at_time",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "items.split_item_at_time",
+      "pack": "items",
+      "risk": "write",
+      "route": "e4-item-live-handlers",
+      "handler_file": "items/e4_item_route.lua",
+      "handler_export": "split_item_at_time",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e4-item-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.set_take_playrate",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "items.set_take_playrate",
+      "pack": "items",
+      "risk": "write",
+      "route": "e4-item-live-handlers",
+      "handler_file": "items/e4_item_route.lua",
+      "handler_export": "set_take_playrate",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e4-item-live-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

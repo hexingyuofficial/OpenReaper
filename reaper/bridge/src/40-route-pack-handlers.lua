@@ -800,12 +800,22 @@ local E3_MEDIA_ROUTE_HANDLERS = {
   ["media.relink_take_source"] = relink_take_source,
 }
 
+local E4_ITEM_ROUTE_HANDLERS = {
+  ["item.copy_to_track"] = copy_item_to_track,
+  ["items.split_item_at_time"] = split_item_at_time,
+  ["items.set_take_playrate"] = set_take_playrate,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
   handler = E3_MEDIA_ROUTE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
