@@ -903,6 +903,13 @@ local D16_TRACKS_ORG_HANDLERS = {
   ["tracks.nest_in_folder"] = d16_tracks_nest_tracks_in_folder,
 }
 
+local D17_MIDI_EDIT_HANDLERS = {
+  ["midi.set_notes_batch"] = d17_midi_set_notes_batch,
+  ["midi.quantize_notes"] = d17_midi_quantize_notes,
+  ["midi.quantize_selected_notes"] = d17_midi_quantize_selected_notes,
+  ["midi.set_cc_events_batch"] = d17_midi_set_cc_events_batch,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -957,6 +964,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D16_TRACKS_ORG_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D17_MIDI_EDIT_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

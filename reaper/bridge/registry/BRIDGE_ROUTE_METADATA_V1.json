@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 155,
+    "entryCount": 159,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 155,
-    "handlerModuleCount": 73,
-    "routeCount": 23,
+    "extractedHandlerCount": 159,
+    "handlerModuleCount": 74,
+    "routeCount": 24,
     "operationCount": 63
   },
   "routes": [
@@ -303,6 +303,30 @@
         "template.tracks.move_track",
         "template.tracks.move_tracks",
         "template.tracks.nest_tracks_in_folder"
+      ]
+    },
+    {
+      "route": "d17-midi-edit-handlers",
+      "template_count": 4,
+      "handler_module_count": 1,
+      "operation_count": 4,
+      "packs": [
+        "midi"
+      ],
+      "risks": [
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.midi.set_notes_batch",
+        "template.midi.quantize_notes",
+        "template.midi.quantize_selected_notes",
+        "template.midi.set_cc_events_batch"
       ]
     },
     {

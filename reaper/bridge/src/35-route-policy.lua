@@ -125,6 +125,13 @@ local D16_TRACKS_ORG_CAPABILITIES = {
   ["tracks.nest_in_folder"] = { pack = "tracks", risk = "write" },
 }
 
+local D17_MIDI_EDIT_CAPABILITIES = {
+  ["midi.set_notes_batch"] = { pack = "midi", risk = "write" },
+  ["midi.quantize_notes"] = { pack = "midi", risk = "write" },
+  ["midi.quantize_selected_notes"] = { pack = "midi", risk = "write" },
+  ["midi.set_cc_events_batch"] = { pack = "midi", risk = "write" },
+}
+
 local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_track"] = { pack = "fx", risk = "write" },
   ["fx.add_take"] = { pack = "fx", risk = "write" },
@@ -263,6 +270,16 @@ local function d16_tracks_org_capability(request, operation_key)
   return D16_TRACKS_ORG_CAPABILITIES[request.pack.capability]
 end
 
+local function d17_midi_edit_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D17_MIDI_EDIT_CAPABILITIES[request.pack.capability]
+end
+
 local function e2_fx_b1_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -288,6 +305,7 @@ local function template_execute_write_capability(request, operation_key)
     or d14_items_delete_capability(request, operation_key)
     or d15_items_source_phase_capability(request, operation_key)
     or d16_tracks_org_capability(request, operation_key)
+    or d17_midi_edit_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -368,6 +386,7 @@ local function validate_request(request)
   local d14_items_delete_operation = d14_items_delete_capability(request, operation_key)
   local d15_items_source_phase_operation = d15_items_source_phase_capability(request, operation_key)
   local d16_tracks_org_operation = d16_tracks_org_capability(request, operation_key)
+  local d17_midi_edit_operation = d17_midi_edit_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -430,6 +449,10 @@ local function validate_request(request)
   elseif d16_tracks_org_operation then
     if request.pack.id ~= d16_tracks_org_operation.pack or request.pack.risk ~= d16_tracks_org_operation.risk then
       return false, "D16 tracks organization request pack/capability/risk mismatch."
+    end
+  elseif d17_midi_edit_operation then
+    if request.pack.id ~= d17_midi_edit_operation.pack or request.pack.risk ~= d17_midi_edit_operation.risk then
+      return false, "D17 MIDI edit request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -503,6 +526,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D16 tracks organization requests must use undo.mode required."
     end
+  elseif d17_midi_edit_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D17 MIDI edit requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -574,6 +601,10 @@ local function validate_request(request)
   elseif d16_tracks_org_operation then
     if request.artifacts.allow ~= false then
       return false, "D16 tracks organization requests must use artifacts.allow false."
+    end
+  elseif d17_midi_edit_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D17 MIDI edit requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -647,6 +678,10 @@ local function validate_request(request)
   elseif d16_tracks_org_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D16 tracks organization idempotency_key must be a string when present."
+    end
+  elseif d17_midi_edit_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D17 MIDI edit idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."

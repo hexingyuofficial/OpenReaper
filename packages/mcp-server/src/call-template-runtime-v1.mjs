@@ -278,6 +278,13 @@ export const CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS = deepFreeze([
   "template.tracks.nest_tracks_in_folder",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS = deepFreeze([
+  "template.midi.set_notes_batch",
+  "template.midi.quantize_notes",
+  "template.midi.quantize_selected_notes",
+  "template.midi.set_cc_events_batch",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -306,6 +313,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d14_items_delete", CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS],
   ["d15_items_source_phase", CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS],
   ["d16_tracks_org", CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS],
+  ["d17_midi_edit", CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1171,6 +1179,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

@@ -1023,6 +1023,74 @@
       "capability": "tracks.nest_in_folder"
     },
     {
+      "template_id": "template.midi.set_notes_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "d17-midi-edit-handlers",
+      "handler_file": "midi/d17_midi_edit_route.lua",
+      "handler_export": "d17_midi_set_notes_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"
+      ],
+      "capability": "midi.set_notes_batch"
+    },
+    {
+      "template_id": "template.midi.quantize_notes",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "d17-midi-edit-handlers",
+      "handler_file": "midi/d17_midi_edit_route.lua",
+      "handler_export": "d17_midi_quantize_notes",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"
+      ],
+      "capability": "midi.quantize_notes"
+    },
+    {
+      "template_id": "template.midi.quantize_selected_notes",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "d17-midi-edit-handlers",
+      "handler_file": "midi/d17_midi_edit_route.lua",
+      "handler_export": "d17_midi_quantize_selected_notes",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"
+      ],
+      "capability": "midi.quantize_selected_notes"
+    },
+    {
+      "template_id": "template.midi.set_cc_events_batch",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "midi",
+      "risk": "write",
+      "route": "d17-midi-edit-handlers",
+      "handler_file": "midi/d17_midi_edit_route.lua",
+      "handler_export": "d17_midi_set_cc_events_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"
+      ],
+      "capability": "midi.set_cc_events_batch"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

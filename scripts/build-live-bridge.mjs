@@ -20,6 +20,7 @@ import {
   CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
@@ -153,6 +154,10 @@ export const registryRoutes = Object.freeze({
   "d16-tracks-org-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"]),
+  }),
+  "d17-midi-edit-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/d17-midi-edit-handler-expansion.test.mjs"]),
   }),
   "read-b": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
