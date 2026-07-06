@@ -152,6 +152,7 @@ export const CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS = deepFreeze([
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
   "template.fx.read_fx_parameter",
+  "template.fx.parameter_to_envelope_mapping",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([

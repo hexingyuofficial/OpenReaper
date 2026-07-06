@@ -837,6 +837,8 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.add_take"] = add_take_fx,
   ["fx.set_bypass"] = set_fx_bypass,
   ["fx.set_parameter_normalized"] = set_fx_parameter_normalized,
+  ["fx.set_preset_by_name"] = set_fx_preset_by_name,
+  ["fx.set_preset_by_index"] = set_fx_preset_by_index,
   ["fx.reorder"] = reorder_fx,
 }
 
@@ -1199,6 +1201,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:fx.read_parameter"] = {
     pack = "fx",
     handler = read_fx_parameter,
+  },
+  ["query_state:fx.parameter_to_envelope_mapping"] = {
+    pack = "fx",
+    handler = parameter_to_envelope_mapping,
   },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",

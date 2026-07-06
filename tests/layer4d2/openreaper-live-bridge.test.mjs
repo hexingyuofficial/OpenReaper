@@ -131,6 +131,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "fx.list_parameters",
       "fx.list_take_chain",
       "fx.list_track_chain",
+      "fx.parameter_to_envelope_mapping",
       "fx.read_parameter",
       "fx.read_summary",
       "fx.resolve_ref",

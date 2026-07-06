@@ -193,12 +193,15 @@ const EXTRACTED_E2_FX_L1_READ_HANDLERS = Object.freeze(new Map([
   ["template.fx.read_fx_summary", ["fx/e2_fx_l1_read_route.lua", "read_fx_summary"]],
   ["template.fx.list_fx_parameters", ["fx/e2_fx_l1_read_route.lua", "list_fx_parameters"]],
   ["template.fx.read_fx_parameter", ["fx/e2_fx_l1_read_route.lua", "read_fx_parameter"]],
+  ["template.fx.parameter_to_envelope_mapping", ["fx/e2_fx_l1_read_route.lua", "parameter_to_envelope_mapping"]],
 ]));
 const EXTRACTED_E2_FX_B1_WRITE_HANDLERS = Object.freeze(new Map([
   ["template.fx.add_track_fx", ["fx/e2_fx_l1_read_route.lua", "add_track_fx"]],
   ["template.fx.add_take_fx", ["fx/e2_fx_l1_read_route.lua", "add_take_fx"]],
   ["template.fx.set_fx_bypass", ["fx/e2_fx_l1_read_route.lua", "set_fx_bypass"]],
   ["template.fx.set_fx_parameter_normalized", ["fx/e2_fx_l1_read_route.lua", "set_fx_parameter_normalized"]],
+  ["template.fx.set_fx_preset_by_name", ["fx/e2_fx_l1_read_route.lua", "set_fx_preset_by_name"]],
+  ["template.fx.set_fx_preset_by_index", ["fx/e2_fx_l1_read_route.lua", "set_fx_preset_by_index"]],
   ["template.fx.reorder_fx", ["fx/e2_fx_l1_read_route.lua", "reorder_fx"]],
 ]));
 const EXTRACTED_FIRST_REAL_A_HANDLERS = Object.freeze(new Map([
@@ -264,7 +267,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 159);
+    assert.equal(REGISTRY.entries.length, 162);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -296,12 +299,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 159,
+      entryCount: 162,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 159,
+      extractedHandlerCount: 162,
       handlerModuleCount: 74,
       routeCount: 24,
-      operationCount: 63,
+      operationCount: 64,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -557,6 +560,8 @@ describe("Layer 4D.R bridge handler registry", () => {
         "fx.add_take",
         "fx.set_bypass",
         "fx.set_parameter_normalized",
+        "fx.set_preset_by_name",
+        "fx.set_preset_by_index",
         "fx.reorder",
         "project.set_metadata_field",
         "project.create_marker",
@@ -595,7 +600,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(159 registered template handler row\(s\); 0 legacy_monolith row\(s\); 159 extracted handler row\(s\); 74 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(162 registered template handler row\(s\); 0 legacy_monolith row\(s\); 162 extracted handler row\(s\); 74 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

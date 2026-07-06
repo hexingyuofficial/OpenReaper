@@ -2044,6 +2044,22 @@
       ]
     },
     {
+      "template_id": "template.fx.parameter_to_envelope_mapping",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.parameter_to_envelope_mapping"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "e2-fx-l1-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "parameter_to_envelope_mapping",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.fx.add_track_fx",
       "operation": {
         "family": "run_command",
@@ -2106,6 +2122,40 @@
       "route": "e2-fx-b1-write-handlers",
       "handler_file": "fx/e2_fx_l1_read_route.lua",
       "handler_export": "set_fx_parameter_normalized",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_fx_preset_by_name",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_preset_by_name",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "set_fx_preset_by_name",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_fx_preset_by_index",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_preset_by_index",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "set_fx_preset_by_index",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"

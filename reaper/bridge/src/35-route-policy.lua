@@ -137,6 +137,8 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_take"] = { pack = "fx", risk = "write" },
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
+  ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },
 }
 

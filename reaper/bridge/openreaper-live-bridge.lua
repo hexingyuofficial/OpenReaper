@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (159 registered template handler row(s); 0 legacy_monolith row(s); 159 extracted handler row(s); 74 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (162 registered template handler row(s); 0 legacy_monolith row(s); 162 extracted handler row(s); 74 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1450,6 +1450,8 @@ local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_take"] = { pack = "fx", risk = "write" },
   ["fx.set_bypass"] = { pack = "fx", risk = "write" },
   ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.set_preset_by_name"] = { pack = "fx", risk = "write" },
+  ["fx.set_preset_by_index"] = { pack = "fx", risk = "write" },
   ["fx.reorder"] = { pack = "fx", risk = "write" },
 }
 
@@ -10613,6 +10615,79 @@ local function e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_i
   return call_reaper("TrackFX_SetParamNormalized", owner, slot_index, param_index, value) == true
 end
 
+local function e2_fx_get_preset(owner_kind, owner, slot_index)
+  local ok, _, name
+  if owner_kind == "take" then
+    ok, _, name = call_reaper("TakeFX_GetPreset", owner, slot_index, "")
+  else
+    ok, _, name = call_reaper("TrackFX_GetPreset", owner, slot_index, "")
+  end
+  if not ok then
+    return nil
+  end
+  return bounded_string(first_string(name) or "", 240)
+end
+
+local function e2_fx_set_preset(owner_kind, owner, slot_index, preset_name)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_SetPreset", owner, slot_index, preset_name) == true
+  end
+  return call_reaper("TrackFX_SetPreset", owner, slot_index, preset_name) == true
+end
+
+local function e2_fx_set_preset_by_index(owner_kind, owner, slot_index, preset_index)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_SetPresetByIndex", owner, slot_index, preset_index) == true
+  end
+  return call_reaper("TrackFX_SetPresetByIndex", owner, slot_index, preset_index) == true
+end
+
+local function e2_fx_get_preset_index(owner_kind, owner, slot_index)
+  local ok, preset_index, preset_count
+  if owner_kind == "take" then
+    ok, preset_index, preset_count = call_reaper("TakeFX_GetPresetIndex", owner, slot_index)
+  else
+    ok, preset_index, preset_count = call_reaper("TrackFX_GetPresetIndex", owner, slot_index)
+  end
+  if not ok then
+    return JSON_NULL, JSON_NULL
+  end
+  return math.floor(first_number(preset_index) or -1), math.floor(first_number(preset_count) or -1)
+end
+
+local function e2_fx_get_parameter_envelope(owner_kind, owner, slot_index, param_index)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_GetEnvelope", owner, slot_index, param_index, false)
+  end
+  return call_reaper("GetFXEnvelope", owner, slot_index, param_index, false)
+end
+
+local function e2_fx_envelope_name(envelope, fallback)
+  if not envelope then
+    return fallback
+  end
+  local ok, _, name = call_reaper("GetEnvelopeName", envelope, "")
+  return bounded_string(ok and first_string(name) or fallback or "", 200)
+end
+
+local function e2_fx_envelope_object_ref(owner_kind, owner_ref, slot_index, param_index, envelope_name)
+  local ref = "envelope:fx:" .. tostring(owner_kind) .. ":" .. tostring(slot_index) .. ":param:" .. tostring(param_index)
+  return {
+    kind = "envelope",
+    ref = ref,
+    identity = {
+      scheme = "fx_parameter",
+      value = tostring(owner_kind) .. ":" .. tostring(slot_index) .. ":" .. tostring(param_index),
+    },
+    display = {
+      name = bounded_string(envelope_name or "", 200),
+      owner_ref = owner_ref,
+      fx_slot_index = slot_index,
+      param_index = param_index,
+    },
+  }
+end
+
 local function e2_fx_copy_move(owner_kind, owner, slot_index, target_index)
   if owner_kind == "take" then
     return call_reaper("TakeFX_CopyToTake", owner, slot_index, owner, target_index, true) == true
@@ -10808,8 +10883,125 @@ local function reorder_fx(request)
   summary.updated = summary.slot_index == target_index
   return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
+
+local function set_fx_preset_by_name(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX preset write requires a resolvable FX ref.")
+  end
+  local preset_name = request.params and request.params.preset_name
+  if not is_string(preset_name) or preset_name:gsub("%s+", "") == "" then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX preset write requires a non-empty preset_name.")
+  end
+  preset_name = bounded_string(preset_name, 240)
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then
+    return e2_fx_read_error("FX_SLOT_NOT_FOUND", "E2 FX preset write slot index is outside the owner FX chain.", {
+      slot_index = slot_index,
+      fx_count = count,
+    })
+  end
+  local previous_preset = e2_fx_get_preset(owner_kind, owner, slot_index) or JSON_NULL
+  if not e2_fx_set_preset(owner_kind, owner, slot_index, preset_name) then
+    return e2_fx_read_error("PRESET_NOT_FOUND", "REAPER rejected the requested FX preset name.", {
+      preset_name = preset_name,
+    })
+  end
+  local readback_preset = e2_fx_get_preset(owner_kind, owner, slot_index)
+  if readback_preset ~= preset_name then
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX preset write did not read back the requested preset name.", {
+      requested_preset_name = preset_name,
+      readback_preset_name = readback_preset or JSON_NULL,
+    }, false)
+  end
+  local preset_index, preset_count = e2_fx_get_preset_index(owner_kind, owner, slot_index)
+  local summary, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  summary.previous_preset_name = previous_preset
+  summary.preset_name = readback_preset
+  summary.preset_index = preset_index
+  summary.preset_count = preset_count
+  summary.updated = true
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function set_fx_preset_by_index(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX preset write requires a resolvable FX ref.")
+  end
+  local preset_index = tonumber(request.params and request.params.preset_index)
+  if not preset_index or preset_index < 0 or preset_index ~= math.floor(preset_index) then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX preset write requires a non-negative integer preset_index.")
+  end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then
+    return e2_fx_read_error("FX_SLOT_NOT_FOUND", "E2 FX preset write slot index is outside the owner FX chain.", {
+      slot_index = slot_index,
+      fx_count = count,
+    })
+  end
+  local previous_preset = e2_fx_get_preset(owner_kind, owner, slot_index) or JSON_NULL
+  if not e2_fx_set_preset_by_index(owner_kind, owner, slot_index, preset_index) then
+    return e2_fx_read_error("PRESET_NOT_FOUND", "REAPER rejected the requested FX preset index.", {
+      preset_index = preset_index,
+    })
+  end
+  local readback_index, preset_count = e2_fx_get_preset_index(owner_kind, owner, slot_index)
+  if type(readback_index) == "number" and readback_index >= 0 and readback_index ~= preset_index then
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX preset write did not read back the requested preset index.", {
+      requested_preset_index = preset_index,
+      readback_preset_index = readback_index,
+    }, false)
+  end
+  local summary, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  summary.previous_preset_name = previous_preset
+  summary.preset_name = e2_fx_get_preset(owner_kind, owner, slot_index) or JSON_NULL
+  summary.preset_index = readback_index
+  summary.requested_preset_index = preset_index
+  summary.preset_count = preset_count
+  summary.updated = true
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function parameter_to_envelope_mapping(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX parameter envelope mapping requires a resolvable FX ref.")
+  end
+  local param_index = tonumber(request.params and request.params.param_index)
+  if not param_index or param_index < 0 or param_index ~= math.floor(param_index) then
+    return e2_fx_read_error("FX_PARAMETER_INVALID", "E2 FX parameter envelope mapping requires a non-negative integer param_index.")
+  end
+  local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+  if param_index >= count then
+    return e2_fx_read_error("FX_PARAMETER_NOT_FOUND", "E2 FX parameter envelope mapping index is outside the FX parameter count.", {
+      param_index = param_index,
+      parameter_count = count,
+    })
+  end
+  local ok, envelope = e2_fx_get_parameter_envelope(owner_kind, owner, slot_index, param_index)
+  local owner_ref = e2_fx_read_owner_ref(owner_kind, owner)
+  local param_name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index)
+  local envelope_available = ok and envelope ~= nil
+  local envelope_name = e2_fx_envelope_name(envelope_available and envelope or nil, param_name)
+  local envelope_ref = e2_fx_envelope_object_ref(owner_kind, owner_ref, slot_index, param_index, envelope_name)
+  local summary = e2_fx_read_summary(request, {
+    owner_kind = owner_kind,
+    owner_ref = owner_ref,
+    slot_index = slot_index,
+    param_index = param_index,
+    param_ident = request.params and request.params.param_ident or JSON_NULL,
+    parameter_count = count,
+    parameter_name = param_name,
+    envelope_available = envelope_available,
+    envelope_ref = envelope_available and envelope_ref.ref or JSON_NULL,
+    potential_envelope_ref = envelope_ref.ref,
+    envelope_name = envelope_name,
+  })
+  return summary, nil, json_array({}), json_array({}), envelope_available and e2_fx_read_refs(envelope_ref) or e2_fx_read_refs()
+end
 return {
-  exports = { resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, reorder_fx = reorder_fx },
+  exports = { resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, parameter_to_envelope_mapping = parameter_to_envelope_mapping, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, set_fx_preset_by_name = set_fx_preset_by_name, set_fx_preset_by_index = set_fx_preset_by_index, reorder_fx = reorder_fx },
   shared = {  },
 }
 end)
@@ -17493,6 +17685,8 @@ local E2_FX_B1_WRITE_HANDLERS = {
   ["fx.add_take"] = OPENREAPER_HANDLER_EXPORTS.add_take_fx,
   ["fx.set_bypass"] = OPENREAPER_HANDLER_EXPORTS.set_fx_bypass,
   ["fx.set_parameter_normalized"] = OPENREAPER_HANDLER_EXPORTS.set_fx_parameter_normalized,
+  ["fx.set_preset_by_name"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_name,
+  ["fx.set_preset_by_index"] = OPENREAPER_HANDLER_EXPORTS.set_fx_preset_by_index,
   ["fx.reorder"] = OPENREAPER_HANDLER_EXPORTS.reorder_fx,
 }
 
@@ -17855,6 +18049,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:fx.read_parameter"] = {
     pack = "fx",
     handler = OPENREAPER_HANDLER_EXPORTS.read_fx_parameter,
+  },
+  ["query_state:fx.parameter_to_envelope_mapping"] = {
+    pack = "fx",
+    handler = OPENREAPER_HANDLER_EXPORTS.parameter_to_envelope_mapping,
   },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
