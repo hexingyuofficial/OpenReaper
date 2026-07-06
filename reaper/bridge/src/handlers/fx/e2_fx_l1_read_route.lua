@@ -27,10 +27,10 @@ local function e2_fx_read_summary(request, readback)
   readback.risk = request.pack.risk
   readback.readback_status = "passed"
   readback.undo_evidence = "none"
-  readback.artifacts_allowed = false
-  readback.write_fx_status = "held"
-  readback.preset_status = "held"
-  readback.video_processor_status = "held"
+  readback.artifacts_allowed = readback.artifacts_allowed == true
+  readback.write_fx_status = readback.write_fx_status or "held"
+  readback.preset_status = readback.preset_status or "held"
+  readback.video_processor_status = readback.video_processor_status or "held"
   readback.truncated = readback.truncated == true
   return readback
 end
@@ -649,6 +649,69 @@ local function search_installed_fx(request)
     offset = offset,
     truncated = truncated,
   }), nil, json_array({}), json_array({}), e2_fx_read_refs()
+end
+
+local function read_video_processor_code(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX read_video_processor_code requires a resolvable FX ref.")
+  end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then
+    return e2_fx_read_error("FX_SLOT_NOT_FOUND", "E2 FX read_video_processor_code slot index is outside the owner FX chain.", {
+      slot_index = slot_index,
+      fx_count = count,
+    })
+  end
+  local name = e2_fx_read_name(owner_kind, owner, slot_index)
+  local is_video_processor = name:lower():find("video processor", 1, true) ~= nil
+  if not is_video_processor then
+    return e2_fx_read_error("VIDEO_PROCESSOR_NOT_FOUND", "FX slot is not a Video Processor FX.", {
+      slot_index = slot_index,
+      name = name,
+    })
+  end
+  local ok, _, code = call_reaper(
+    owner_kind == "take" and "TakeFX_GetNamedConfigParm" or "TrackFX_GetNamedConfigParm",
+    owner,
+    slot_index,
+    "VIDEO_CODE"
+  )
+  if not ok or type(code) ~= "string" then
+    return e2_fx_read_error("VIDEO_CODE_UNAVAILABLE", "REAPER did not expose VIDEO_CODE for this Video Processor FX.", {
+      slot_index = slot_index,
+      name = name,
+    })
+  end
+  local byte_limit = math.min(32768, tonumber(request.params and request.params.max_code_bytes) or 32768)
+  if byte_limit < 1 then
+    byte_limit = 1
+  end
+  local truncated = #code > byte_limit
+  local bounded_code = truncated and code:sub(1, byte_limit) or code
+  local summary = {
+    artifact_ref = "",
+    schema = FX_ARTIFACT_SPECS.video_processor_code.schema,
+    owner_kind = owner_kind,
+    owner_ref = e2_fx_read_owner_ref(owner_kind, owner),
+    slot_index = slot_index,
+    name = name,
+    code_bytes = #bounded_code,
+    original_code_bytes = #code,
+    truncated = truncated,
+  }
+  local write, failure = write_a1_artifact(request, FX_ARTIFACT_SPECS.video_processor_code, summary, {
+    fx = e2_fx_read_fx_summary(owner_kind, owner, slot_index),
+    code = bounded_code,
+  })
+  if not write then
+    return e2_fx_read_error(failure.code, failure.message, failure.details)
+  end
+  summary.artifact_ref = write.object_ref.ref
+  summary.bytes = write.bytes
+  summary.artifacts_allowed = true
+  summary.video_processor_status = "passed"
+  return e2_fx_read_summary(request, summary), nil, json_array({ write.object_ref }), json_array({}), e2_fx_read_refs(write.object_ref)
 end
 
 local function e2_fx_write_summary(request, readback)

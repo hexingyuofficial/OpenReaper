@@ -1371,6 +1371,90 @@
       ]
     },
     {
+      "template_id": "template.items.set_item_pan",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d28-small-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_item_pan",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "items.set_item_pan"
+    },
+    {
+      "template_id": "template.items.set_reverse",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d28-small-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_reverse",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "items.set_reverse"
+    },
+    {
+      "template_id": "template.project.set_snap",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d28-small-handlers",
+      "handler_file": "project/d20_project_grid_snap.lua",
+      "handler_export": "d20_project_set_snap",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.set_snap"
+    },
+    {
+      "template_id": "template.fx.read_video_processor_code",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.read_video_processor_code"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "d28-small-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "read_video_processor_code",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.track_mono_or_stereo_button",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "routing",
+      "risk": "write",
+      "route": "d28-small-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "track_mono_or_stereo_button",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "routing.track_mono_stereo.set"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

@@ -76,6 +76,18 @@ local function d20_project_grid_read(project)
   return nil
 end
 
+local function d20_project_snap_read(project)
+  local ok, enabled = call_reaper("GetToggleCommandStateEx", 0, 1157)
+  if ok and type(enabled) == "number" then
+    return enabled ~= 0
+  end
+  local ok_info, value = call_reaper("GetSetProjectInfo", project, "PROJECT_GRID_USE", 0, false)
+  if ok_info and type(value) == "number" then
+    return value ~= 0
+  end
+  return nil
+end
+
 local function d20_project_set_grid(request)
   local project = d20_project_grid_current_project()
   local division, division_label = d20_project_grid_division(request.params.division)
@@ -105,6 +117,34 @@ local function d20_project_set_grid(request)
     division = division_label,
     division_qn = readback,
     swing = request.params.swing,
+    updated = true,
+  }), nil, json_array({}), json_array({}), d20_project_grid_refs()
+end
+
+local function d20_project_set_snap(request)
+  local project = d20_project_grid_current_project()
+  local enabled = request.params.enabled == true
+  local ok = call_reaper("GetSetProjectInfo", project, "PROJECT_GRID_USE", enabled and 1 or 0, true)
+  if not ok then
+    return d20_project_grid_error("COMMAND_FAILED", "REAPER rejected project snap update.", {
+      enabled = enabled,
+    }, false)
+  end
+  call_reaper("UpdateTimeline")
+  local readback = d20_project_snap_read(project)
+  if readback == nil then
+    return d20_project_grid_error("READBACK_UNAVAILABLE", "Project snap state could not be read back.", {
+      enabled = enabled,
+    }, false)
+  end
+  if readback ~= enabled then
+    return d20_project_grid_error("READBACK_MISMATCH", "Project snap state did not read back the requested value.", {
+      requested_enabled = enabled,
+      readback_enabled = readback,
+    }, false)
+  end
+  return d20_project_grid_summary(request, {
+    enabled = readback,
     updated = true,
   }), nil, json_array({}), json_array({}), d20_project_grid_refs()
 end

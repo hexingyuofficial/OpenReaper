@@ -404,6 +404,7 @@ local function d13_items_item_summary(item, include_take_summary)
     position_seconds = d13_items_item_number(item, "D_POSITION"),
     length_seconds = d13_items_item_number(item, "D_LENGTH"),
     snap_offset_seconds = d13_items_item_number(item, "D_SNAPOFFSET"),
+    pan = d13_items_item_number(item, "D_PAN"),
     fade_in_seconds = d13_items_item_number(item, "D_FADEINLEN"),
     fade_out_seconds = d13_items_item_number(item, "D_FADEOUTLEN"),
     selected = ok_selected and first_number(selected) == 1 or false,
@@ -423,6 +424,7 @@ local function d13_items_item_summary(item, include_take_summary)
       summary.take_pan = d13_items_take_number(take, "D_PAN")
       summary.start_offset_seconds = d13_items_take_number(take, "D_STARTOFFS")
       summary.channel_mode = d13_items_channel_mode_label(d13_items_take_number(take, "I_CHANMODE"))
+      summary.reverse = d13_items_take_number(take, "B_REVERSE") == 1
       summary.pitch_shift_mode = d13_items_pitch_mode_label(d13_items_take_number(take, "I_PITCHMODE"))
       summary.stretch_marker_fade_size_ms = d13_items_take_number(take, "F_STRETCHFADESIZE") * 1000
     else
@@ -500,7 +502,13 @@ local function d13_items_write_summary(request, item)
   summary.undo_evidence = "required"
   summary.artifacts_allowed = false
   summary.truncated = false
-  if request.pack.capability == "items.set_pitch_shift_mode" then
+  if request.pack.capability == "items.set_item_pan" then
+    summary.pan = summary.pan
+  elseif request.pack.capability == "items.set_take_pan" then
+    summary.pan = summary.take_pan
+  elseif request.pack.capability == "items.set_reverse" then
+    summary.reverse = summary.reverse == true
+  elseif request.pack.capability == "items.set_pitch_shift_mode" then
     summary.mode = summary.pitch_shift_mode
   elseif request.pack.capability == "items.set_stretch_marker_fade_size" then
     summary.fade_size_ms = summary.stretch_marker_fade_size_ms
@@ -598,6 +606,16 @@ local function d13_items_set_take_pan(request)
   return d13_items_set_take_value(request, "D_PAN", pan)
 end
 
+local function d13_items_set_item_pan(request)
+  local pan = d13_items_bounded_pan(request.params.pan)
+  if pan == nil then
+    return d13_items_error("PARAMS_INVALID", "Item pan must be between -1 and 1.", {
+      pan = request.params.pan,
+    })
+  end
+  return d13_items_set_item_value(request, "D_PAN", pan)
+end
+
 local function d13_items_rename_take(request)
   local name = bounded_string(request.params.name, 160)
   if name == "" then
@@ -653,6 +671,10 @@ local function d13_items_set_channel_mode(request)
     })
   end
   return d13_items_set_take_value(request, "I_CHANMODE", mode)
+end
+
+local function d13_items_set_reverse(request)
+  return d13_items_set_take_value(request, "B_REVERSE", request.params.reverse == true and 1 or 0)
 end
 
 local function d13_items_set_pitch_shift_mode(request)

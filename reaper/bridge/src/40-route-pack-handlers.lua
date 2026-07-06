@@ -928,6 +928,13 @@ local D22_RENDER_SETTINGS_WRITE_HANDLERS = {
   ["render.sample_rate.set"] = set_render_sample_rate,
 }
 
+local D28_SMALL_WRITE_HANDLERS = {
+  ["items.set_item_pan"] = d13_items_set_item_pan,
+  ["items.set_reverse"] = d13_items_set_reverse,
+  ["project.set_snap"] = d20_project_set_snap,
+  ["routing.track_mono_stereo.set"] = track_mono_or_stereo_button,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -990,6 +997,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D22_RENDER_SETTINGS_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D28_SMALL_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
@@ -1241,6 +1252,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:fx.parameter_to_envelope_mapping"] = {
     pack = "fx",
     handler = parameter_to_envelope_mapping,
+  },
+  ["query_state:fx.read_video_processor_code"] = {
+    pack = "fx",
+    handler = read_video_processor_code,
   },
   ["query_state:render.settings.read"] = {
     pack = "render",

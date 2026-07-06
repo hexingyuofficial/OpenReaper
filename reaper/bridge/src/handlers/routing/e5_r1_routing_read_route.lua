@@ -694,6 +694,39 @@ local function set_track_channel_count(request)
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
 end
 
+local function track_mono_or_stereo_button(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing track_mono_or_stereo_button requires a resolvable track ref.", {})
+  end
+  local mode = request.params.mode
+  if mode ~= "mono" and mode ~= "stereo" then
+    return e5_routing_error("PARAMS_INVALID", "Track mono/stereo mode must be mono or stereo.", {
+      mode = request.params.mode,
+    })
+  end
+  local channels = mode == "mono" and 1 or 2
+  if not e5_routing_set_media_track_value(track, "I_NCHAN", channels) then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the track mono/stereo update.", {
+      mode = mode,
+    }, false)
+  end
+  local readback_channels = e5_routing_channel_count(track)
+  local readback_mode = readback_channels <= 1 and "mono" or "stereo"
+  if readback_mode ~= mode then
+    return e5_routing_error("READBACK_MISMATCH", "Track mono/stereo mode did not read back the requested value.", {
+      requested_mode = mode,
+      readback_mode = readback_mode,
+      readback_channel_count = readback_channels,
+    }, false)
+  end
+  return e5_routing_write_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    mode = readback_mode,
+    channel_count = readback_channels,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+end
+
 local function set_track_hardware_output(request)
   local track = e5_routing_track_from_request_refs(request)
   if not track then

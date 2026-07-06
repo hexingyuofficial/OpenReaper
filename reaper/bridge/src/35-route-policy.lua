@@ -148,6 +148,13 @@ local D22_RENDER_SETTINGS_WRITE_CAPABILITIES = {
   ["render.sample_rate.set"] = { pack = "render", risk = "write" },
 }
 
+local D28_SMALL_WRITE_CAPABILITIES = {
+  ["items.set_item_pan"] = { pack = "items", risk = "write" },
+  ["items.set_reverse"] = { pack = "items", risk = "write" },
+  ["project.set_snap"] = { pack = "project", risk = "write" },
+  ["routing.track_mono_stereo.set"] = { pack = "routing", risk = "write" },
+}
+
 local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_track"] = { pack = "fx", risk = "write" },
   ["fx.add_take"] = { pack = "fx", risk = "write" },
@@ -308,6 +315,16 @@ local function d22_render_settings_write_capability(request, operation_key)
   return D22_RENDER_SETTINGS_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function d28_small_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D28_SMALL_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function e2_fx_b1_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -335,6 +352,7 @@ local function template_execute_write_capability(request, operation_key)
     or d16_tracks_org_capability(request, operation_key)
     or d17_midi_edit_capability(request, operation_key)
     or d22_render_settings_write_capability(request, operation_key)
+    or d28_small_write_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -417,6 +435,7 @@ local function validate_request(request)
   local d16_tracks_org_operation = d16_tracks_org_capability(request, operation_key)
   local d17_midi_edit_operation = d17_midi_edit_capability(request, operation_key)
   local d22_render_settings_write_operation = d22_render_settings_write_capability(request, operation_key)
+  local d28_small_write_operation = d28_small_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -568,6 +587,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D22 render settings write requests must use undo.mode required."
     end
+  elseif d28_small_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D28 small write requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -647,6 +670,10 @@ local function validate_request(request)
   elseif d22_render_settings_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D22 render settings write requests must use artifacts.allow false."
+    end
+  elseif d28_small_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D28 small write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -728,6 +755,10 @@ local function validate_request(request)
   elseif d22_render_settings_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D22 render settings write idempotency_key must be a string when present."
+    end
+  elseif d28_small_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D28 small write idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."

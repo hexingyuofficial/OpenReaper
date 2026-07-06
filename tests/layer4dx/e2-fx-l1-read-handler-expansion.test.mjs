@@ -190,6 +190,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_parameters"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_fx_parameters/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_parameter"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_parameter/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.parameter_to_envelope_mapping"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.parameter_to_envelope_mapping/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_video_processor_code"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_video_processor_code/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.installed\.search"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.search_installed_fx/);
     assert.match(BRIDGE_SOURCE, /TrackFX_GetCount/);
     assert.match(BRIDGE_SOURCE, /TrackFX_GetFXName/);
@@ -213,6 +214,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(fx\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
       [
+        "fx.read_video_processor_code",
         "fx.installed.search",
         "fx.resolve_ref",
         "fx.list_track_chain",
@@ -232,7 +234,6 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       [...E2_FX_B1_WRITE_IDS],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 });

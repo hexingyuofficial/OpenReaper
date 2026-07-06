@@ -9,6 +9,10 @@ local A1_ARTIFACT_OPERATIONS = {
   ["run_job:project.create_cleanup_report"] = true,
 }
 
+local FX_ARTIFACT_OPERATIONS = {
+  ["query_state:fx.read_video_processor_code"] = true,
+}
+
 local A2_ARTIFACT_OPERATIONS = {
   ["run_job:render.region_wav"] = true,
   ["run_job:render.delivery_report.create"] = true,
@@ -20,6 +24,9 @@ local A3_ARTIFACT_OPERATIONS = {
 
 local ARTIFACT_PRODUCING_OPERATIONS = {}
 for key, value in pairs(A1_ARTIFACT_OPERATIONS) do
+  ARTIFACT_PRODUCING_OPERATIONS[key] = value
+end
+for key, value in pairs(FX_ARTIFACT_OPERATIONS) do
   ARTIFACT_PRODUCING_OPERATIONS[key] = value
 end
 for key, value in pairs(A2_ARTIFACT_OPERATIONS) do
@@ -98,6 +105,15 @@ local A2_ARTIFACT_SPECS = {
     owner_pack = "render",
     scope = "delivery_report",
     schema = "render.delivery_report.v1",
+  },
+}
+
+local FX_ARTIFACT_SPECS = {
+  video_processor_code = {
+    template_id = "template.fx.read_video_processor_code",
+    owner_pack = "fx",
+    scope = "video_processor_code",
+    schema = "fx.video_processor_code.v1",
   },
 }
 

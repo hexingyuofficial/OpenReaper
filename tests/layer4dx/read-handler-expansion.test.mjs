@@ -50,6 +50,7 @@ const EXPECTED_LUA_OPERATIONS = Object.freeze([
   "fx.parameter_to_envelope_mapping",
   "fx.read_parameter",
   "fx.read_summary",
+  "fx.read_video_processor_code",
   "fx.resolve_ref",
   "last_result.read",
   "openreaper.read_status",
@@ -204,8 +205,8 @@ describe("4D.x Wave 1A read-handler expansion", () => {
   });
 
   it("keeps the Lua bridge allowlist exact, typed, bounded, and non-spawning", () => {
-    const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
-      .map((match) => match[1])
+    const operationKeys = [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
+      .map((match) => match[1]))]
       .sort();
     assert.deepEqual(operationKeys, EXPECTED_LUA_OPERATIONS);
 
