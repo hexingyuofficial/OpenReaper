@@ -153,7 +153,12 @@ const EXTRACTED_D12_TRANSPORT_SAFE_HANDLERS = Object.freeze(new Map([
   ["template.transport.play", ["transport/d12_transport_safe_route.lua", "d12_transport_play"]],
   ["template.transport.pause", ["transport/d12_transport_safe_route.lua", "d12_transport_pause"]],
   ["template.transport.stop_playback", ["transport/d12_transport_safe_route.lua", "d12_transport_stop_playback"]],
+  ["template.transport.set_playback_rate", ["transport/d12_transport_safe_route.lua", "d12_transport_set_playback_rate"]],
+  ["template.transport.start_recording", ["transport/d12_transport_safe_route.lua", "d12_transport_start_recording"]],
+  ["template.transport.stop_recording", ["transport/d12_transport_safe_route.lua", "d12_transport_stop_recording"]],
+  ["template.transport.set_record_mode", ["transport/d12_transport_safe_route.lua", "d12_transport_set_record_mode"]],
   ["template.transport.set_punch_record_range", ["transport/d12_transport_safe_route.lua", "d12_transport_set_punch_record_range"]],
+  ["template.transport.schedule_recording", ["transport/d12_transport_safe_route.lua", "d12_transport_schedule_recording"]],
 ]));
 const EXTRACTED_D13_ITEMS_CORE_HANDLERS = Object.freeze(new Map([
   ["template.items.list_selected_items", ["items/d13_items_core_route.lua", "d13_items_list_selected_items"]],
@@ -291,7 +296,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 177);
+    assert.equal(REGISTRY.entries.length, 182);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -323,9 +328,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 177,
+      entryCount: 182,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 177,
+      extractedHandlerCount: 182,
       handlerModuleCount: 77,
       routeCount: 27,
       operationCount: 72,
@@ -547,7 +552,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         "transport.play",
         "transport.pause",
         "transport.stop_playback",
+        "transport.set_playback_rate",
+        "transport.start_recording",
+        "transport.stop_recording",
+        "transport.set_record_mode",
         "transport.set_punch_record_range",
+        "transport.schedule_recording",
         "items.set_item_volume",
         "items.set_take_volume",
         "items.set_take_pan",
@@ -649,7 +659,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(177 registered template handler row\(s\); 0 legacy_monolith row\(s\); 177 extracted handler row\(s\); 77 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(182 registered template handler row\(s\); 0 legacy_monolith row\(s\); 182 extracted handler row\(s\); 77 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

@@ -93,7 +93,12 @@ local D12_TRANSPORT_SAFE_CAPABILITIES = {
   ["transport.play"] = { pack = "transport", risk = "safe" },
   ["transport.pause"] = { pack = "transport", risk = "safe" },
   ["transport.stop_playback"] = { pack = "transport", risk = "safe" },
+  ["transport.set_playback_rate"] = { pack = "transport", risk = "safe" },
+  ["transport.start_recording"] = { pack = "transport", risk = "write" },
+  ["transport.stop_recording"] = { pack = "transport", risk = "write" },
+  ["transport.set_record_mode"] = { pack = "transport", risk = "safe" },
   ["transport.set_punch_record_range"] = { pack = "transport", risk = "safe" },
+  ["transport.schedule_recording"] = { pack = "transport", risk = "write" },
 }
 
 local D13_ITEMS_CORE_WRITE_CAPABILITIES = {

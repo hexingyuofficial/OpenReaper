@@ -23,8 +23,24 @@ const CAPABILITIES = Object.freeze([
   "transport.play",
   "transport.pause",
   "transport.stop_playback",
+  "transport.set_playback_rate",
+  "transport.start_recording",
+  "transport.stop_recording",
+  "transport.set_record_mode",
   "transport.set_punch_record_range",
+  "transport.schedule_recording",
 ]);
+const RISK_BY_CAPABILITY = Object.freeze({
+  "transport.play": "safe",
+  "transport.pause": "safe",
+  "transport.stop_playback": "safe",
+  "transport.set_playback_rate": "safe",
+  "transport.start_recording": "write",
+  "transport.stop_recording": "write",
+  "transport.set_record_mode": "safe",
+  "transport.set_punch_record_range": "safe",
+  "transport.schedule_recording": "write",
+});
 
 describe("D12 transport safe live handler expansion", () => {
   it("registers exactly the bounded transport safe batch", () => {
@@ -38,12 +54,17 @@ describe("D12 transport safe live handler expansion", () => {
     );
   });
 
-  it("adds a separate runtime allowlist for the four D12 template ids", async () => {
+  it("adds a separate runtime allowlist for the nine D12 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS, [
       "template.transport.play",
       "template.transport.pause",
       "template.transport.stop_playback",
+      "template.transport.set_playback_rate",
+      "template.transport.start_recording",
+      "template.transport.stop_recording",
+      "template.transport.set_record_mode",
       "template.transport.set_punch_record_range",
+      "template.transport.schedule_recording",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -73,7 +94,7 @@ describe("D12 transport safe live handler expansion", () => {
     assert.deepEqual(bridge.seen.map((request) => request.pack.capability), CAPABILITIES);
     for (const request of bridge.seen) {
       assert.equal(request.pack.id, "transport");
-      assert.equal(request.pack.risk, "safe");
+      assert.equal(request.pack.risk, RISK_BY_CAPABILITY[request.pack.capability]);
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
@@ -96,6 +117,10 @@ describe("D12 transport safe live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /OnPlayButton/);
     assert.match(HANDLER_SOURCE, /OnPauseButton/);
     assert.match(HANDLER_SOURCE, /OnStopButton/);
+    assert.match(HANDLER_SOURCE, /CSurf_OnRecord/);
+    assert.match(HANDLER_SOURCE, /CSurf_OnStop/);
+    assert.match(HANDLER_SOURCE, /SetPlayRate/);
+    assert.match(HANDLER_SOURCE, /GetSetProjectInfo/);
     assert.match(HANDLER_SOURCE, /GetSet_LoopTimeRange/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
@@ -104,8 +129,28 @@ describe("D12 transport safe live handler expansion", () => {
 });
 
 function d12Input(id) {
+  if (id === "template.transport.set_playback_rate") {
+    return { playback_rate: 1, preserve_pitch: true };
+  }
+  if (id === "template.transport.start_recording") {
+    return { require_armed_track: false, respect_punch_range: false };
+  }
+  if (id === "template.transport.stop_recording") {
+    return { recorded_media_policy: "keep" };
+  }
+  if (id === "template.transport.set_record_mode") {
+    return { mode: "normal" };
+  }
   if (id === "template.transport.set_punch_record_range") {
     return { start_seconds: 1, end_seconds: 2 };
+  }
+  if (id === "template.transport.schedule_recording") {
+    return {
+      start_seconds: 1,
+      end_seconds: 2,
+      mode: "time_selection_auto_punch",
+      require_armed_track: false,
+    };
   }
   return {};
 }
@@ -125,7 +170,12 @@ function handlerExport(capability) {
     "transport.play": "OPENREAPER_HANDLER_EXPORTS.d12_transport_play",
     "transport.pause": "OPENREAPER_HANDLER_EXPORTS.d12_transport_pause",
     "transport.stop_playback": "OPENREAPER_HANDLER_EXPORTS.d12_transport_stop_playback",
+    "transport.set_playback_rate": "OPENREAPER_HANDLER_EXPORTS.d12_transport_set_playback_rate",
+    "transport.start_recording": "OPENREAPER_HANDLER_EXPORTS.d12_transport_start_recording",
+    "transport.stop_recording": "OPENREAPER_HANDLER_EXPORTS.d12_transport_stop_recording",
+    "transport.set_record_mode": "OPENREAPER_HANDLER_EXPORTS.d12_transport_set_record_mode",
     "transport.set_punch_record_range": "OPENREAPER_HANDLER_EXPORTS.d12_transport_set_punch_record_range",
+    "transport.schedule_recording": "OPENREAPER_HANDLER_EXPORTS.d12_transport_schedule_recording",
   }[capability];
 }
 

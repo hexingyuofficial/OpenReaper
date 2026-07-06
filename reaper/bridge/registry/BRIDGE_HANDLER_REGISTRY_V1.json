@@ -681,6 +681,74 @@
       ]
     },
     {
+      "template_id": "template.transport.set_playback_rate",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.set_playback_rate",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_set_playback_rate",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.start_recording",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.start_recording",
+      "pack": "transport",
+      "risk": "write",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_start_recording",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.stop_recording",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.stop_recording",
+      "pack": "transport",
+      "risk": "write",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_stop_recording",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_record_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.set_record_mode",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_set_record_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.transport.set_punch_record_range",
       "operation": {
         "family": "run_command",
@@ -692,6 +760,23 @@
       "route": "d12-transport-safe-handlers",
       "handler_file": "transport/d12_transport_safe_route.lua",
       "handler_export": "d12_transport_set_punch_record_range",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.schedule_recording",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.schedule_recording",
+      "pack": "transport",
+      "risk": "write",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_schedule_recording",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"

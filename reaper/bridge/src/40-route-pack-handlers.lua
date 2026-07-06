@@ -873,7 +873,12 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
   ["transport.play"] = d12_transport_play,
   ["transport.pause"] = d12_transport_pause,
   ["transport.stop_playback"] = d12_transport_stop_playback,
+  ["transport.set_playback_rate"] = d12_transport_set_playback_rate,
+  ["transport.start_recording"] = d12_transport_start_recording,
+  ["transport.stop_recording"] = d12_transport_stop_recording,
+  ["transport.set_record_mode"] = d12_transport_set_record_mode,
   ["transport.set_punch_record_range"] = d12_transport_set_punch_record_range,
+  ["transport.schedule_recording"] = d12_transport_schedule_recording,
 }
 
 local D13_ITEMS_CORE_WRITE_HANDLERS = {

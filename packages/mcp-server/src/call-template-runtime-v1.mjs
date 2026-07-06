@@ -250,7 +250,12 @@ export const CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS = deepFreeze(
   "template.transport.play",
   "template.transport.pause",
   "template.transport.stop_playback",
+  "template.transport.set_playback_rate",
+  "template.transport.start_recording",
+  "template.transport.stop_recording",
+  "template.transport.set_record_mode",
   "template.transport.set_punch_record_range",
+  "template.transport.schedule_recording",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
