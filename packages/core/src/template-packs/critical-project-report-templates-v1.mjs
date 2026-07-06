@@ -3,6 +3,7 @@ import { TEMPLATE_DESCRIPTOR_CONTRACT } from "../template-descriptor-v1.mjs";
 export const CRITICAL_PROJECT_REPORT_TEMPLATE_IDS = Object.freeze([
   "template.project.create_cleanup_report",
   "template.project.create_project_map_snapshot",
+  "template.project.create_observation_bundle",
 ]);
 
 export const CRITICAL_PROJECT_REPORT_TEMPLATES = deepFreeze([
@@ -227,6 +228,115 @@ export const CRITICAL_PROJECT_REPORT_TEMPLATES = deepFreeze([
         input: {
           track_cursor: 16,
           previous_snapshot_ref: "artifact:project:project_map_snapshot:art_20260703000000000_031_ab12cd",
+        },
+      },
+    ],
+  },
+  {
+    contract: TEMPLATE_DESCRIPTOR_CONTRACT,
+    id: "template.project.create_observation_bundle",
+    title: "Create observation bundle",
+    summary: "Create one compact artifact-backed observation bundle for a fast project starting read.",
+    pack: "project",
+    lifecycle: "experimental",
+    risk: "read",
+    entity_kind: "project_observation",
+    tags: ["project", "observation", "snapshot", "artifact", "speed"],
+    bridge: {
+      operation_family: "run_job",
+      operation_name: "project.create_observation_bundle",
+      capability: "project.create_observation_bundle",
+      idempotency: "none",
+      timeout_ms: 120_000,
+    },
+    inputSchema: objectSchema({
+      max_tracks: { type: "integer" },
+      max_items_per_track: { type: "integer" },
+      max_selected_items: { type: "integer" },
+      track_cursor: { type: "integer" },
+      marker_region_limit: { type: "integer" },
+      tempo_marker_limit: { type: "integer" },
+      include_transport: { type: "boolean" },
+      include_track_items: { type: "boolean" },
+    }, []),
+    outputSchema: objectSchema({
+      artifact_ref: { type: "string" },
+      schema: { const: "project.observation_bundle.v1" },
+      project_ref: { type: "string" },
+      observed_family_count: { type: "integer" },
+      track_count: { type: "integer" },
+      item_count: { type: "integer" },
+      marker_count: { type: "integer" },
+      region_count: { type: "integer" },
+      tempo_marker_count: { type: "integer" },
+      selected_count: { type: "integer" },
+      track_cursor: { type: "integer" },
+      returned_track_count: { type: "integer" },
+      next_track_cursor: { type: "string" },
+      map_truncated: { type: "boolean" },
+      transport_play_state: { type: "string" },
+      suggested_next_step_count: { type: "integer" },
+      bytes: { type: "integer" },
+    }, ["artifact_ref", "schema", "project_ref", "observed_family_count", "track_count", "item_count", "marker_count", "region_count", "tempo_marker_count", "selected_count", "track_cursor", "returned_track_count", "map_truncated", "transport_play_state", "suggested_next_step_count"]),
+    refs: {
+      input: [
+        {
+          name: "project_ref",
+          kind: "project",
+          required: false,
+          summary: "Project ref to observe; defaults to the active project.",
+        },
+      ],
+      output: [
+        {
+          name: "artifact_ref",
+          kind: "artifact",
+          required: true,
+          summary: "Project-owned artifact ref for the combined observation bundle.",
+        },
+      ],
+    },
+    artifacts: {
+      mode: "produces",
+      input: [],
+      output: [
+        {
+          name: "observation_bundle",
+          schema: "project.observation_bundle.v1",
+          owner_pack: "project",
+          summary: "Artifact-backed startup observation bundle with compact project facts.",
+        },
+      ],
+    },
+    expectedDelta: {
+      kind: "artifact",
+      summary: "Emits a combined observation artifact without mutating project data.",
+      entities: [
+        {
+          entity_kind: "project_observation",
+          action: "emit",
+          summary: "Project observation artifact is produced.",
+        },
+      ],
+      idempotent: false,
+    },
+    verification: {
+      mode: "none",
+      checks: [],
+    },
+    examples: [
+      {
+        name: "create_fast_start_observation",
+        summary: "Create one bounded starting observation for a real-user project.",
+        input: {
+          max_tracks: 16,
+          max_items_per_track: 1,
+          max_selected_items: 8,
+          track_cursor: 0,
+          marker_region_limit: 32,
+          tempo_marker_limit: 16,
+          include_transport: true,
+          include_track_items: true,
         },
       },
     ],

@@ -41,6 +41,7 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 const ALLOWLIST = Object.freeze([
   "template.project.create_cleanup_report",
   "template.project.create_project_map_snapshot",
+  "template.project.create_observation_bundle",
 ]);
 
 const BLOCKED_PROJECT_REPORT_IDS = Object.freeze([
@@ -125,6 +126,23 @@ describe("Critical project report template descriptors", () => {
     assert.deepEqual(snapshot.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
       ["project_ref", "project", false],
       ["previous_snapshot_ref", "artifact", false],
+    ]);
+
+    const observation = templates[2];
+    assert.equal(observation.id, "template.project.create_observation_bundle");
+    assert.equal(observation.entity_kind, "project_observation");
+    assert.equal(observation.bridge.operation_name, "project.create_observation_bundle");
+    assert.equal(observation.bridge.capability, "project.create_observation_bundle");
+    assert.deepEqual(observation.artifacts.output, [
+      {
+        name: "observation_bundle",
+        schema: "project.observation_bundle.v1",
+        owner_pack: "project",
+        summary: "Artifact-backed startup observation bundle with compact project facts.",
+      },
+    ]);
+    assert.deepEqual(observation.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
+      ["project_ref", "project", false],
     ]);
   });
 
@@ -225,6 +243,62 @@ describe("Critical project report template descriptors", () => {
     assert.equal(JSON.stringify(descriptor).includes("raw_lua"), false);
   });
 
+  it("adds a fixed observation bundle macro without arbitrary execution authority", () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_observation_bundle");
+
+    assert.deepEqual(Object.keys(descriptor.inputSchema.properties), [
+      "max_tracks",
+      "max_items_per_track",
+      "max_selected_items",
+      "track_cursor",
+      "marker_region_limit",
+      "tempo_marker_limit",
+      "include_transport",
+      "include_track_items",
+    ]);
+    assert.deepEqual(descriptor.inputSchema.required, []);
+    assert.deepEqual(Object.keys(descriptor.outputSchema.properties), [
+      "artifact_ref",
+      "schema",
+      "project_ref",
+      "observed_family_count",
+      "track_count",
+      "item_count",
+      "marker_count",
+      "region_count",
+      "tempo_marker_count",
+      "selected_count",
+      "track_cursor",
+      "returned_track_count",
+      "next_track_cursor",
+      "map_truncated",
+      "transport_play_state",
+      "suggested_next_step_count",
+      "bytes",
+    ]);
+    assert.deepEqual(descriptor.outputSchema.required, [
+      "artifact_ref",
+      "schema",
+      "project_ref",
+      "observed_family_count",
+      "track_count",
+      "item_count",
+      "marker_count",
+      "region_count",
+      "tempo_marker_count",
+      "selected_count",
+      "track_cursor",
+      "returned_track_count",
+      "map_truncated",
+      "transport_play_state",
+      "suggested_next_step_count",
+    ]);
+    assert.equal(Object.hasOwn(descriptor.inputSchema.properties, "template_ids"), false);
+    assert.equal(Object.hasOwn(descriptor.inputSchema.properties, "steps"), false);
+    assert.equal(Object.hasOwn(descriptor.outputSchema.properties, "project_map"), false);
+  });
+
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery bounded", () => {
     const templates = createCriticalProjectReportTemplates();
     const validation = validateTemplateCatalog({ templates });
@@ -274,6 +348,7 @@ describe("Critical project report template descriptors", () => {
       ids: [
         "template.project.create_cleanup_report",
         "template.project.create_project_map_snapshot",
+        "template.project.create_observation_bundle",
         "template.project.create_cleanup_plan",
       ],
       fields: ["summary", "inputSchema", "outputSchema", "examples", "expectedDelta"],
@@ -428,6 +503,60 @@ describe("Critical project report template descriptors", () => {
     assert.doesNotMatch(JSON.stringify(result.result.summary), /"tracks"|"selected_items"|"payload"/);
   });
 
+  it("runs 4B fake smoke for an observation bundle artifact with concise summary", async () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_observation_bundle");
+    const artifact = observationBundleArtifact();
+    const bridge = new FakeFoundationBridge();
+    const result = await executeTemplate({
+      descriptor,
+      input: observationBundleInput(),
+      refs: { project_ref: projectRef() },
+      context: context(),
+      executor: (request) =>
+        bridge.okEnvelope(request, "2026-07-03T00:00:00.000Z", {
+          summary: {
+            artifact_ref: artifact.ref,
+            schema: "project.observation_bundle.v1",
+            project_ref: "project:current",
+            observed_family_count: 5,
+            track_count: 48,
+            item_count: 320,
+            marker_count: 3,
+            region_count: 2,
+            tempo_marker_count: 1,
+            selected_count: 2,
+            track_cursor: 0,
+            returned_track_count: 16,
+            next_track_cursor: "16",
+            map_truncated: true,
+            transport_play_state: "stopped",
+            suggested_next_step_count: 3,
+          },
+          refs: [],
+          artifacts: [artifact],
+          jobs: [],
+          last_result: {
+            updated: false,
+            refs: [],
+            truncated: false,
+          },
+        }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.template.id, "template.project.create_observation_bundle");
+    assert.deepEqual(result.result.refs.map((ref) => ref.ref), ["project:current"]);
+    assert.equal(result.result.artifacts.length, 1);
+    assert.equal(result.result.artifacts[0].kind, "artifact");
+    assert.equal(result.result.artifacts[0].ref, "artifact:project:observation_bundle:art_20260703000000000_033_cd34ab");
+    assert.equal(result.result.artifacts[0].summary.schema, "project.observation_bundle.v1");
+    assert.equal(result.result.summary.observed_family_count, 5);
+    assert.equal(result.result.summary.suggested_next_step_count, 3);
+    assert.equal(Buffer.byteLength(JSON.stringify(result.result.summary), "utf8") < 768, true);
+    assert.doesNotMatch(JSON.stringify(result.result.summary), /"project_map"|"markers_regions"|"tempo"|"payload"/);
+  });
+
   it("rejects destructive cleanup and recipe-plan-shaped inputs before fake dispatch", async () => {
     const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
       .require("template.project.create_cleanup_report");
@@ -483,6 +612,8 @@ describe("Critical project report template descriptors", () => {
     assert.equal(sharedDescriptorIds.includes("template.project.create_cleanup_report"), true);
     assert.equal(sharedIds.includes("template.project.create_project_map_snapshot"), true);
     assert.equal(sharedDescriptorIds.includes("template.project.create_project_map_snapshot"), true);
+    assert.equal(sharedIds.includes("template.project.create_observation_bundle"), true);
+    assert.equal(sharedDescriptorIds.includes("template.project.create_observation_bundle"), true);
   });
 
   it("keeps pack-local source free of cleanup execution, recipes, raw execution, paths, and shared wiring", () => {
@@ -536,6 +667,22 @@ function projectMapSnapshotArtifact() {
   });
 }
 
+function observationBundleArtifact() {
+  return createArtifactRef({
+    owner_pack: "project",
+    scope: "observation_bundle",
+    id: "art_20260703000000000_033_cd34ab",
+    schema: "project.observation_bundle.v1",
+    summary: {
+      schema: "project.observation_bundle.v1",
+      template_id: "template.project.create_observation_bundle",
+      observed_family_count: 5,
+      track_count: 48,
+      item_count: 320,
+    },
+  });
+}
+
 function limitedReportInput(overrides = {}) {
   return {
     max_report_rows: 32,
@@ -557,6 +704,20 @@ function projectMapSnapshotInput(overrides = {}) {
     max_selected_items: 8,
     track_cursor: 0,
     include_selected_items: true,
+    include_track_items: true,
+    ...overrides,
+  };
+}
+
+function observationBundleInput(overrides = {}) {
+  return {
+    max_tracks: 16,
+    max_items_per_track: 1,
+    max_selected_items: 8,
+    track_cursor: 0,
+    marker_region_limit: 32,
+    tempo_marker_limit: 16,
+    include_transport: true,
     include_track_items: true,
     ...overrides,
   };

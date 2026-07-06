@@ -236,6 +236,7 @@ const EXTRACTED_FIRST_REAL_A_HANDLERS = Object.freeze(new Map([
   ["template.analysis.create_loop_qa_report", ["analysis/create_loop_qa_report.lua", "create_loop_qa_report"]],
   ["template.project.create_cleanup_report", ["project/create_cleanup_report.lua", "create_cleanup_report"]],
   ["template.project.create_project_map_snapshot", ["project/create_cleanup_report.lua", "create_project_map_snapshot"]],
+  ["template.project.create_observation_bundle", ["project/create_cleanup_report.lua", "create_observation_bundle"]],
   ["template.render.render_region_wav", ["render/render_region_wav.lua", "render_region_wav"]],
   ["template.render.create_delivery_report", ["render/create_delivery_report.lua", "create_delivery_report"]],
   ["template.items.create_layer_report", ["items/create_layer_report.lua", "create_layer_report"]],
@@ -340,7 +341,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 214);
+    assert.equal(REGISTRY.entries.length, 215);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -372,12 +373,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 214,
+      entryCount: 215,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 214,
+      extractedHandlerCount: 215,
       handlerModuleCount: 80,
       routeCount: 31,
-      operationCount: 97,
+      operationCount: 98,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -740,7 +741,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(214 registered template handler row\(s\); 0 legacy_monolith row\(s\); 214 extracted handler row\(s\); 80 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(215 registered template handler row\(s\); 0 legacy_monolith row\(s\); 215 extracted handler row\(s\); 80 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

@@ -543,6 +543,13 @@ const FIRST_REAL_A1_TEMPLATE_SPECS = Object.freeze([
     scope: "project_map_snapshot",
     schema: "project.project_map_snapshot.v1",
   }),
+  Object.freeze({
+    id: "template.project.create_observation_bundle",
+    operation: "run_job:project.create_observation_bundle",
+    owner_pack: "project",
+    scope: "observation_bundle",
+    schema: "project.observation_bundle.v1",
+  }),
 ]);
 
 const FIRST_REAL_A1_SPEC_BY_ID = new Map(FIRST_REAL_A1_TEMPLATE_SPECS.map((spec) => [spec.id, spec]));
@@ -2214,6 +2221,18 @@ function firstRealA1Input(spec) {
       max_selected_items: 8,
       track_cursor: 0,
       include_selected_items: true,
+      include_track_items: true,
+    };
+  }
+  if (spec.id === "template.project.create_observation_bundle") {
+    return {
+      max_tracks: 16,
+      max_items_per_track: 1,
+      max_selected_items: 8,
+      track_cursor: 0,
+      marker_region_limit: 32,
+      tempo_marker_limit: 16,
+      include_transport: true,
       include_track_items: true,
     };
   }
@@ -5941,6 +5960,25 @@ function fakeA1Summary(spec, artifactRef, request) {
       diff_compared: false,
       diff_changed_count: 0,
       truncated: false,
+    };
+  }
+  if (spec.schema === "project.observation_bundle.v1") {
+    return {
+      artifact_ref: artifactRef,
+      schema: spec.schema,
+      project_ref: "project:current",
+      observed_family_count: 5,
+      track_count: 8,
+      item_count: 24,
+      marker_count: 1,
+      region_count: 1,
+      tempo_marker_count: 1,
+      selected_count: 1,
+      track_cursor: 0,
+      returned_track_count: 8,
+      map_truncated: false,
+      transport_play_state: "stopped",
+      suggested_next_step_count: 3,
     };
   }
   return {

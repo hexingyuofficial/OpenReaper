@@ -3095,6 +3095,22 @@
       ]
     },
     {
+      "template_id": "template.project.create_observation_bundle",
+      "operation": {
+        "family": "run_job",
+        "name": "project.create_observation_bundle"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "project/create_cleanup_report.lua",
+      "handler_export": "create_observation_bundle",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.render.render_region_wav",
       "operation": {
         "family": "run_job",

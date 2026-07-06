@@ -1363,6 +1363,10 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = create_project_map_snapshot,
   },
+  ["run_job:project.create_observation_bundle"] = {
+    pack = "project",
+    handler = create_observation_bundle,
+  },
   ["run_job:render.region_wav"] = {
     pack = "render",
     handler = render_region_wav,

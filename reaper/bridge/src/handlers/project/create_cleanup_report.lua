@@ -214,3 +214,113 @@ local function create_project_map_snapshot(request)
   summary.bytes = write.bytes
   return summary, nil, json_array({ write.object_ref })
 end
+
+local function create_observation_bundle_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function create_observation_bundle(request)
+  local spec = A1_ARTIFACT_SPECS["run_job:project.create_observation_bundle"]
+  local metadata = OPENREAPER_HANDLER_EXPORTS.read_project_metadata({
+    params = { fields = json_array({ "title", "author", "notes" }) },
+    budget = request.budget,
+  })
+  local markers = OPENREAPER_HANDLER_EXPORTS.list_markers_regions({
+    params = {
+      include_markers = true,
+      include_regions = true,
+      limit = request.params.marker_region_limit,
+    },
+    budget = request.budget,
+  })
+  local tempo = OPENREAPER_HANDLER_EXPORTS.read_tempo_map({
+    params = {
+      limit = request.params.tempo_marker_limit,
+      effective_at_seconds = json_array({ 0 }),
+    },
+    budget = request.budget,
+  })
+  local overview, overview_failure = OPENREAPER_HANDLER_EXPORTS.read_track_item_overview({
+    params = {
+      max_tracks = request.params.max_tracks,
+      max_items_per_track = request.params.max_items_per_track,
+      max_selected_items = request.params.max_selected_items,
+      track_cursor = request.params.track_cursor,
+      include_selected_items = true,
+      include_track_items = request.params.include_track_items,
+    },
+    budget = request.budget,
+  })
+  if not overview then
+    return create_observation_bundle_error(overview_failure.code, overview_failure.message, overview_failure.details)
+  end
+
+  local transport = nil
+  if request.params.include_transport ~= false then
+    transport = OPENREAPER_HANDLER_EXPORTS.read_transport_state({})
+  end
+  local selected_count = overview.selected_items and #overview.selected_items or 0
+  local suggested_next_steps = json_array({
+    {
+      id = "hydrate_target",
+      summary = "Choose a track or item ref from the bundle before a write.",
+    },
+    {
+      id = "read_payload_if_needed",
+      summary = "Use get_state payload view only when the compact summary is not enough.",
+    },
+    {
+      id = "page_next_tracks",
+      summary = "Use next_track_cursor when map_truncated is true.",
+    },
+  })
+  local summary = {
+    project_ref = overview.project_ref or "project:current",
+    observed_family_count = transport and 5 or 4,
+    track_count = overview.track_count or 0,
+    item_count = overview.item_count or 0,
+    marker_count = markers.marker_count or 0,
+    region_count = markers.region_count or 0,
+    tempo_marker_count = tempo and #tempo.tempo_markers or 0,
+    selected_count = selected_count,
+    track_cursor = overview.track_cursor or 0,
+    returned_track_count = overview.returned_track_count or 0,
+    map_truncated = overview.truncated == true,
+    transport_play_state = transport and transport.play_state or "not_requested",
+    suggested_next_step_count = #suggested_next_steps,
+  }
+  if overview.next_track_cursor then
+    summary.next_track_cursor = overview.next_track_cursor
+  end
+  local payload = {
+    project_ref = summary.project_ref,
+    metadata = metadata,
+    markers_regions = markers,
+    tempo = tempo,
+    transport = transport or JSON_NULL,
+    project_map = overview,
+    coverage = {
+      metadata = "bounded",
+      markers_regions = "bounded",
+      tempo = "bounded",
+      transport = transport and "read" or "not_requested",
+      project_map = overview.truncated == true and "paged_partial" or "complete_page",
+      fx = "not_hydrated",
+      envelopes = "not_hydrated",
+      routing = "not_hydrated",
+      media_sources = "not_hydrated",
+    },
+    suggested_next_steps = suggested_next_steps,
+  }
+  local write, failure = write_a1_artifact(request, spec, summary, payload)
+  if not write then
+    return create_observation_bundle_error(failure.code, failure.message, failure.details)
+  end
+  summary.bytes = write.bytes
+  return summary, nil, json_array({ write.object_ref })
+end

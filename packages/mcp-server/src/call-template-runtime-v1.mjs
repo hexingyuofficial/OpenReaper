@@ -230,6 +230,7 @@ export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS = deepFreeze(
   "template.analysis.create_loop_qa_report",
   "template.project.create_cleanup_report",
   "template.project.create_project_map_snapshot",
+  "template.project.create_observation_bundle",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS = deepFreeze([
@@ -541,10 +542,15 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
 ]);
 
+const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
+  "template.project.create_project_map_snapshot",
+  "template.project.create_observation_bundle",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.filter((id) =>
     LIVE_TEMPLATE_GROUPS.some(([, ids]) => ids.includes(id)) &&
-    id !== "template.project.create_project_map_snapshot",
+    !CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS.has(id),
   ),
 );
 

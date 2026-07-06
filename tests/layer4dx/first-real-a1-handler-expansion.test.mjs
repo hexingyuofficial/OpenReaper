@@ -37,6 +37,7 @@ const A1_OPERATIONS = Object.freeze([
   "analysis.create_loop_qa_report",
   "project.create_cleanup_report",
   "project.create_project_map_snapshot",
+  "project.create_observation_bundle",
 ]);
 const D29_RENDER_JOB_OPERATIONS = Object.freeze([
   "render.aiff",
@@ -67,16 +68,18 @@ const A1_SCHEMAS = Object.freeze([
   "analysis.loop_qa_report.v1",
   "project.cleanup_report.v1",
   "project.project_map_snapshot.v1",
+  "project.observation_bundle.v1",
 ]);
 
 describe("First-Real-Fixture-A A1 live handler expansion", () => {
-  it("adds a separate runtime allowlist for exactly the five A1 template ids", async () => {
+  it("adds a separate runtime allowlist for exactly the six A1 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS, [
       "template.analysis.detect_loop_candidates",
       "template.analysis.measure_loop_click_risk",
       "template.analysis.create_loop_qa_report",
       "template.project.create_cleanup_report",
       "template.project.create_project_map_snapshot",
+      "template.project.create_observation_bundle",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -198,6 +201,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       "template.analysis.detect_loop_candidates",
       "template.project.create_cleanup_report",
       "template.project.create_project_map_snapshot",
+      "template.project.create_observation_bundle",
     ]);
 
     const requests = await readTransportRequests(transportDir);
@@ -205,6 +209,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       "run_job:analysis.detect_loop_candidates",
       "run_job:project.create_cleanup_report",
       "run_job:project.create_project_map_snapshot",
+      "run_job:project.create_observation_bundle",
     ].sort());
     for (const request of requests) {
       assert.equal(request.artifacts.allow, true);
@@ -233,7 +238,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.equal(report.live_pass_claimed, false);
     assert.deepEqual(report.expected_template_ids, CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS);
     assert.deepEqual(Object.keys(report.artifact_refs).sort(), [...A1_SCHEMAS].sort());
-    assert.equal(report.executions.length, 5);
+    assert.equal(report.executions.length, 6);
 
     for (const execution of report.executions) {
       assert.equal(execution.ok, true, execution.id);
@@ -339,6 +344,18 @@ function a1Input(id) {
       include_track_items: true,
     };
   }
+  if (id === "template.project.create_observation_bundle") {
+    return {
+      max_tracks: 16,
+      max_items_per_track: 1,
+      max_selected_items: 8,
+      track_cursor: 0,
+      marker_region_limit: 32,
+      tempo_marker_limit: 16,
+      include_transport: true,
+      include_track_items: true,
+    };
+  }
   return {
     max_report_rows: 32,
     marker_region_limit: 64,
@@ -377,6 +394,7 @@ function a1RefsById() {
     },
     "template.project.create_cleanup_report": {},
     "template.project.create_project_map_snapshot": {},
+    "template.project.create_observation_bundle": {},
   };
 }
 

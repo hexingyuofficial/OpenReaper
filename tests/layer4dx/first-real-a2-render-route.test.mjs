@@ -284,6 +284,7 @@ describe("First-Real-Fixture-A A2 render route", () => {
       "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
       "run_job:project.create_project_map_snapshot",
+      "run_job:project.create_observation_bundle",
       ...D29_RENDER_JOB_OPERATION_KEYS,
       ...A2_OPERATION_KEYS,
     ].sort());
