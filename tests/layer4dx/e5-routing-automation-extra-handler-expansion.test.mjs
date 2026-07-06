@@ -56,6 +56,7 @@ describe("E5 routing/automation extra live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /TrackFX_GetPinMappings/);
     assert.match(HANDLER_SOURCE, /GetTrackEnvelopeByName/);
     assert.match(HANDLER_SOURCE, /InsertEnvelopePoint/);
+    assert.match(HANDLER_SOURCE, /GetFXEnvelope", track, slot_index, param_index, true/);
     assert.match(HANDLER_SOURCE, /SetTrackAutomationMode/);
     assert.match(HANDLER_SOURCE, /InsertAutomationItem/);
     assert.match(HANDLER_SOURCE, /BR_GetMediaTrackSendInfo_Envelope|P_ENV:<VOLENV/);

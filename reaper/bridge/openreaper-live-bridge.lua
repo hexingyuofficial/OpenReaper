@@ -10825,11 +10825,11 @@ local function e5_automation_fx_parameter_envelope_from_request(request)
       },
     }
   end
-  local ok_env, envelope = call_reaper("GetFXEnvelope", track, slot_index, param_index, false)
+  local ok_env, envelope = call_reaper("GetFXEnvelope", track, slot_index, param_index, true)
   if not ok_env or not envelope then
     return nil, nil, {
       code = "ENVELOPE_NOT_FOUND",
-      message = "FX parameter envelope is not available; resolve/create the envelope before inserting points.",
+      message = "FX parameter envelope is not available for point insertion.",
       details = {
         fx_ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
         param_index = param_index,
