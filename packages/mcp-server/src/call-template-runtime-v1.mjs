@@ -116,6 +116,61 @@ export const CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM = deepFreeze({
   ],
 });
 
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT = deepFreeze([
+  {
+    id: "manual_session_visible",
+    check: "Confirm REAPER is open and the manual session path, owner, and generation are known.",
+    pass_signal: "The session announces the expected transport directory, owner, and generation.",
+    on_fail: "Ask the user to start or paste the session line; do not run live actions.",
+  },
+  {
+    id: "runtime_surface_visible",
+    check: "Call list_templates with surface executable and confirm product_surface is present.",
+    pass_signal: "product_surface.contract is alpha2.product_action_surface.v1.",
+    on_fail: "Stop and report runtime surface mismatch before attempting call_template.",
+  },
+  {
+    id: "project_observed",
+    check: "Use the readiness recipe steps to read compact project, track, item, and mixer state.",
+    pass_signal: "Observation returns canonical refs or typed blockers.",
+    on_fail: "Keep the session read-only and explain the fixture blocker.",
+  },
+  {
+    id: "write_target_confirmed",
+    check: "Before mutation, confirm one exact target, one action, and expected readback.",
+    pass_signal: "User has approved the single action and target refs are canonical.",
+    on_fail: "Ask one clarifying question or stop; do not guess.",
+  },
+]);
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE = deepFreeze([
+  {
+    blocker: "live_executor_not_configured_or_not_in_allowed_group",
+    user_message: "This action is known in the catalog but is not enabled in the current executable surface.",
+    next_step: "Use catalog/backlog wording or configure the bounded graduated runtime before running it.",
+  },
+  {
+    blocker: "required_ref_missing",
+    user_message: "The action needs a canonical object ref first.",
+    next_step: "Run the matching resolver/list/readiness step, then pass the returned ref in refs.",
+  },
+  {
+    blocker: "same_typed_blocker_repeated",
+    user_message: "The same blocker repeated twice.",
+    next_step: "Stop the workflow and report the blocker instead of retrying blindly.",
+  },
+  {
+    blocker: "raw_execution_rejected",
+    user_message: "Raw Lua/action/shell execution is outside the product surface.",
+    next_step: "Use an accepted template or explain that the request is unsupported.",
+  },
+  {
+    blocker: "write_requires_confirmation",
+    user_message: "This action changes the REAPER project.",
+    next_step: "Ask for explicit approval, then run one template call with undo/readback evidence.",
+  },
+]);
+
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE = Object.freeze({
   kind: "accepted_official_template_catalog",
   waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1"]),
@@ -1093,6 +1148,8 @@ function runtimeProductSurfaceMetadata(surface) {
       category_values: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
     },
     workflow_rhythm: CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
+    startup_preflight: CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT,
+    blocker_guidance: CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
   };
 }
 

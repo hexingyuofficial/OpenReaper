@@ -24,6 +24,8 @@ product_surface.contract
 product_surface.surface
 product_surface.item_schema
 product_surface.workflow_rhythm
+product_surface.startup_preflight
+product_surface.blocker_guidance
 ```
 
 `surface` is either `executable` or `catalog`.
@@ -104,10 +106,42 @@ recipe.project.inspect_current_fixture_readiness
 Agents must run this as step-by-step `call_template` work. There is no public
 recipe executor.
 
+## Startup Preflight
+
+`startup_preflight` is a compact ordered checklist for agents before real work:
+
+```text
+manual_session_visible
+runtime_surface_visible
+project_observed
+write_target_confirmed
+```
+
+The first three steps are required before product-like control. The final step
+is required before any write, destructive, render, or ambiguous action.
+
+If a preflight step fails, the agent must stay read-only, ask for the missing
+setup detail, or report the typed blocker. It must not guess target refs or fall
+back to raw execution.
+
+## Blocker Guidance
+
+`blocker_guidance` maps common blocker classes to beginner-facing explanations.
+It is not an override mechanism and does not make blocked actions runnable.
+
+Required guidance classes:
+
+```text
+live_executor_not_configured_or_not_in_allowed_group
+required_ref_missing
+same_typed_blocker_repeated
+raw_execution_rejected
+write_requires_confirmation
+```
+
 ## Stop Rules
 
 - Stop after the same typed blocker repeats twice.
 - Stop before raw Lua, raw action execution, shell, public `call_recipe`, or
   hidden recipe execution.
 - Stop before broad support claims outside the current evidence-bound setup.
-

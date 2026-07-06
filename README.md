@@ -80,6 +80,13 @@ The product action menu is versioned by
 and default `discover -> observe -> target -> confirm -> execute_one -> readback`
 workflow rhythm.
 
+For the next real-user pass, use `docs/ALPHA2_REAL_USER_TEST_RUNBOOK.md`. To
+preview the product surface without REAPER or bridge mutation, run:
+
+```text
+node scripts/preview-alpha2-product-surface.mjs --limit=25
+```
+
 ## Tool Surface
 
 OpenReaper exposes exactly five agent-facing MCP tools:

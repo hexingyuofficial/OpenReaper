@@ -103,6 +103,61 @@ Before asking for real work, verify:
    as step-by-step template calls, not public call_recipe.
 ```
 
+You can preview the product surface without REAPER:
+
+```text
+node scripts/preview-alpha2-product-surface.mjs --limit=25
+```
+
+This command uses the Alpha2 graduated allowlist with a fake executor. It does
+not send bridge requests and does not mutate a project.
+
+## Copy-Paste Agent Prompt
+
+Use this in another assistant window when you want a beginner-style product
+trial:
+
+```text
+You are helping me use OpenReaper as a real beginner user. Start from the
+current project and do not modify code or support docs.
+
+First call list_templates with surface executable and read product_surface.
+Summarize what you can do now by beginner_label and user_action_category. Then
+use recipe.project.inspect_current_fixture_readiness as step-by-step
+call_template work to observe the project before any mutation.
+
+For any write/render/destructive/ambiguous action, confirm exactly one target
+and one action before calling call_template. After running one action, report
+request_id, refs, undo/readback evidence, and any typed blocker, then stop.
+
+Do not use public call_recipe, hidden recipe execution, raw Lua, raw REAPER
+action execution, shell, UI/window control, master-track ordinary refs, or broad
+support claims outside the current evidence-bound setup.
+```
+
+## Pass/Watch/Fail Signals
+
+Pass:
+
+- Starts from `product_surface.contract`.
+- Uses the discover -> observe -> target -> confirm -> execute_one -> readback
+  rhythm.
+- Explains blockers in beginner language without hiding typed error codes.
+- Runs at most one mutation before readback.
+
+Watch:
+
+- Dumps long schemas instead of summarizing actions.
+- Treats `Ready after input` as already runnable without filling input.
+- Loses canonical refs between observation and action.
+
+Fail:
+
+- Uses raw Lua/action/shell.
+- Claims public `call_recipe` exists.
+- Mutates without confirmation or without readback.
+- Makes broad support claims beyond the current evidence-bound setup.
+
 ## Boundaries
 
 - No public `call_recipe`.

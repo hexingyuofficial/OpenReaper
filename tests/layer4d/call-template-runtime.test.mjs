@@ -31,7 +31,9 @@ import {
   CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
   CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
   CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT,
   CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
   CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
@@ -372,6 +374,8 @@ describe("Layer 4D call_template runtime binding", () => {
       CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
     );
     assert.deepEqual(runtimeMenu.product_surface.workflow_rhythm, CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM);
+    assert.deepEqual(runtimeMenu.product_surface.startup_preflight, CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT);
+    assert.deepEqual(runtimeMenu.product_surface.blocker_guidance, CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE);
     assert.deepEqual(
       runtimeMenu.product_surface.workflow_rhythm.steps.map((step) => step.id),
       ["discover", "observe", "target", "confirm", "execute_one", "readback"],
@@ -383,6 +387,14 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.match(
       runtimeMenu.product_surface.workflow_rhythm.stop_rules.join("\n"),
       /public call_recipe|hidden recipe execution|raw Lua/,
+    );
+    assert.deepEqual(
+      runtimeMenu.product_surface.startup_preflight.map((entry) => entry.id),
+      ["manual_session_visible", "runtime_surface_visible", "project_observed", "write_target_confirmed"],
+    );
+    assert.equal(
+      runtimeMenu.product_surface.blocker_guidance.some((entry) => /Raw Lua/.test(entry.user_message)),
+      true,
     );
 
     const catalogMenu = runtime.list_templates({ surface: "catalog" });
@@ -1280,6 +1292,18 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(report.skipped, true);
     assert.equal(report.reason, "explicit_opt_in_required");
     assert.equal(report.spawned_reaper, false);
+
+    const previewOutput = execFileSync(process.execPath, ["scripts/preview-alpha2-product-surface.mjs", "--limit=5"], {
+      cwd: new URL("../..", import.meta.url),
+      encoding: "utf8",
+    }).trim();
+    const preview = JSON.parse(previewOutput);
+    assert.equal(preview.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
+    assert.equal(preview.allowed_template_count, 213);
+    assert.deepEqual(preview.workflow_rhythm.steps, ["discover", "observe", "target", "confirm", "execute_one", "readback"]);
+    assert.equal(preview.startup_preflight[0].id, "manual_session_visible");
+    assert.equal(preview.first_actions.length, 5);
+    assert.equal(preview.first_actions.every((item) => typeof item.next_step === "string"), true);
   });
 });
 
