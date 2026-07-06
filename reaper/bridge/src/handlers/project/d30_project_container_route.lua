@@ -247,12 +247,3 @@ local function render_or_update_subproject(request)
     mode = mode,
   }), nil, json_array({ subproject_object_ref }), json_array({ job_ref }), json_array({ subproject_object_ref })
 end
-
-return {
-  exports = {
-    create_subproject = create_subproject,
-    create_project_tab = create_project_tab,
-    insert_subproject_item = insert_subproject_item,
-    render_or_update_subproject = render_or_update_subproject,
-  },
-}

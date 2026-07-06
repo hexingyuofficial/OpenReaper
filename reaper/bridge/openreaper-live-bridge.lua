@@ -11707,29 +11707,6 @@ end
 local function render_opus(request)
   return d29_render_managed_job(request, "template.render.render_opus", "opus", "item")
 end
-
-return {
-  exports = {
-    render_item = render_item,
-    render_selected_item = render_selected_item,
-    render_track_item = render_track_item,
-    render_selected_tracks = render_selected_tracks,
-    render_ogg = render_ogg,
-    render_mp3 = render_mp3,
-    render_flac = render_flac,
-    render_aiff = render_aiff,
-    render_m4a = render_m4a,
-    render_opus = render_opus,
-    set_render_format = set_render_format,
-    set_ogg_quality_or_compression = set_ogg_quality_or_compression,
-    set_mp3_bitrate_or_quality = set_mp3_bitrate_or_quality,
-    set_flac_compression = set_flac_compression,
-    set_aiff_bit_depth = set_aiff_bit_depth,
-    render_region_with_track_filter = render_region_with_track_filter,
-    output_absolute_path = output_absolute_path,
-    output_file_metadata = output_file_metadata,
-  },
-}
 return {
   exports = { output_absolute_path = output_absolute_path, output_file_metadata = output_file_metadata, render_aiff = render_aiff, render_flac = render_flac, render_item = render_item, render_m4a = render_m4a, render_mp3 = render_mp3, render_ogg = render_ogg, render_opus = render_opus, render_region_with_track_filter = render_region_with_track_filter, render_selected_item = render_selected_item, render_selected_tracks = render_selected_tracks, render_track_item = render_track_item, set_aiff_bit_depth = set_aiff_bit_depth, set_flac_compression = set_flac_compression, set_mp3_bitrate_or_quality = set_mp3_bitrate_or_quality, set_ogg_quality_or_compression = set_ogg_quality_or_compression, set_render_format = set_render_format },
   shared = {  },
@@ -11987,15 +11964,6 @@ local function render_or_update_subproject(request)
     mode = mode,
   }), nil, json_array({ subproject_object_ref }), json_array({ job_ref }), json_array({ subproject_object_ref })
 end
-
-return {
-  exports = {
-    create_subproject = create_subproject,
-    create_project_tab = create_project_tab,
-    insert_subproject_item = insert_subproject_item,
-    render_or_update_subproject = render_or_update_subproject,
-  },
-}
 return {
   exports = { create_project_tab = create_project_tab, create_subproject = create_subproject, insert_subproject_item = insert_subproject_item, render_or_update_subproject = render_or_update_subproject },
   shared = {  },

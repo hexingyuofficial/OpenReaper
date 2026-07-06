@@ -752,26 +752,3 @@ end
 local function render_opus(request)
   return d29_render_managed_job(request, "template.render.render_opus", "opus", "item")
 end
-
-return {
-  exports = {
-    render_item = render_item,
-    render_selected_item = render_selected_item,
-    render_track_item = render_track_item,
-    render_selected_tracks = render_selected_tracks,
-    render_ogg = render_ogg,
-    render_mp3 = render_mp3,
-    render_flac = render_flac,
-    render_aiff = render_aiff,
-    render_m4a = render_m4a,
-    render_opus = render_opus,
-    set_render_format = set_render_format,
-    set_ogg_quality_or_compression = set_ogg_quality_or_compression,
-    set_mp3_bitrate_or_quality = set_mp3_bitrate_or_quality,
-    set_flac_compression = set_flac_compression,
-    set_aiff_bit_depth = set_aiff_bit_depth,
-    render_region_with_track_filter = render_region_with_track_filter,
-    output_absolute_path = output_absolute_path,
-    output_file_metadata = output_file_metadata,
-  },
-}

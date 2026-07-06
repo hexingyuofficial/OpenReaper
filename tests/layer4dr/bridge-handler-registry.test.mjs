@@ -757,6 +757,17 @@ describe("Layer 4D.R bridge handler registry", () => {
     );
   });
 
+  it("keeps extracted handler source modules free of wrapper-level return tables", () => {
+    for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
+      const source = readFileSync(new URL(`../../${handlerSourceRoot}/${file}`, import.meta.url), "utf8");
+      assert.doesNotMatch(
+        source,
+        /^return\s+\{/m,
+        `${file} must let build-live-bridge wrap exports so generated Lua has only one module return`,
+      );
+    }
+  });
+
   it("keeps generated route metadata deterministic, compact, and registry-derived", () => {
     const rebuilt = buildBridgeRouteMetadata({ cwd: ROOT.pathname });
     assert.deepEqual(ROUTE_METADATA, rebuilt);
