@@ -1270,6 +1270,22 @@ local ALLOWED_OPERATIONS = {
     pack = "analysis",
     handler = create_loop_qa_report,
   },
+  ["run_job:analysis.measure_item_rms"] = {
+    pack = "analysis",
+    handler = measure_item_rms,
+  },
+  ["run_job:analysis.measure_item_peaks"] = {
+    pack = "analysis",
+    handler = measure_item_peaks,
+  },
+  ["run_job:analysis.detect_item_silence"] = {
+    pack = "analysis",
+    handler = detect_item_silence,
+  },
+  ["run_job:analysis.detect_item_transients"] = {
+    pack = "analysis",
+    handler = detect_item_transients,
+  },
   ["run_job:project.create_cleanup_report"] = {
     pack = "project",
     handler = create_cleanup_report,

@@ -2,6 +2,10 @@ local A1_ARTIFACT_OPERATIONS = {
   ["run_job:analysis.detect_loop_candidates"] = true,
   ["run_job:analysis.measure_loop_click_risk"] = true,
   ["run_job:analysis.create_loop_qa_report"] = true,
+  ["run_job:analysis.measure_item_rms"] = true,
+  ["run_job:analysis.measure_item_peaks"] = true,
+  ["run_job:analysis.detect_item_silence"] = true,
+  ["run_job:analysis.detect_item_transients"] = true,
   ["run_job:project.create_cleanup_report"] = true,
 }
 
@@ -49,6 +53,30 @@ local A1_ARTIFACT_SPECS = {
     owner_pack = "project",
     scope = "cleanup_report",
     schema = "project.cleanup_report.v1",
+  },
+  ["run_job:analysis.measure_item_rms"] = {
+    template_id = "template.analysis.measure_item_rms",
+    owner_pack = "analysis",
+    scope = "item_rms_report",
+    schema = "analysis.item_rms.v1",
+  },
+  ["run_job:analysis.measure_item_peaks"] = {
+    template_id = "template.analysis.measure_item_peaks",
+    owner_pack = "analysis",
+    scope = "item_peaks_report",
+    schema = "analysis.item_peaks.v1",
+  },
+  ["run_job:analysis.detect_item_silence"] = {
+    template_id = "template.analysis.detect_item_silence",
+    owner_pack = "analysis",
+    scope = "item_silence_report",
+    schema = "analysis.item_silence.v1",
+  },
+  ["run_job:analysis.detect_item_transients"] = {
+    template_id = "template.analysis.detect_item_transients",
+    owner_pack = "analysis",
+    scope = "item_transients_report",
+    schema = "analysis.item_transients.v1",
   },
 }
 

@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 182,
+    "entryCount": 186,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 182,
-    "handlerModuleCount": 77,
-    "routeCount": 27,
-    "operationCount": 72
+    "extractedHandlerCount": 186,
+    "handlerModuleCount": 78,
+    "routeCount": 28,
+    "operationCount": 76
   },
   "routes": [
     {
@@ -381,6 +381,30 @@
       ],
       "template_ids": [
         "template.render.set_render_sample_rate"
+      ]
+    },
+    {
+      "route": "d27-analysis-audio-handlers",
+      "template_count": 4,
+      "handler_module_count": 1,
+      "operation_count": 4,
+      "packs": [
+        "analysis"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "write"
+      ],
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "template_ids": [
+        "template.analysis.measure_item_rms",
+        "template.analysis.measure_item_peaks",
+        "template.analysis.detect_item_silence",
+        "template.analysis.detect_item_transients"
       ]
     },
     {

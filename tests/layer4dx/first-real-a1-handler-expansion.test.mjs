@@ -39,6 +39,12 @@ const A1_OPERATIONS = Object.freeze([
 ]);
 
 const A1_OPERATION_KEYS = Object.freeze(A1_OPERATIONS.map((operation) => `run_job:${operation}`));
+const D27_ANALYSIS_AUDIO_OPERATIONS = Object.freeze([
+  "analysis.measure_item_rms",
+  "analysis.measure_item_peaks",
+  "analysis.detect_item_silence",
+  "analysis.detect_item_transients",
+]);
 
 const A1_SCHEMAS = Object.freeze([
   "analysis.loop_candidates.v1",
@@ -246,6 +252,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     const uniqueRunJobKeys = [...new Set(runJobKeys)];
     assert.deepEqual(uniqueRunJobKeys, [
       ...A1_OPERATIONS,
+      ...D27_ANALYSIS_AUDIO_OPERATIONS,
       "items.create_layer_report",
       "render.delivery_report.create",
       "render.region_wav",

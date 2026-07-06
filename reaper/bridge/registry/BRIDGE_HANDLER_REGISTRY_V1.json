@@ -1307,6 +1307,70 @@
       ]
     },
     {
+      "template_id": "template.analysis.measure_item_rms",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.measure_item_rms"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "d27-analysis-audio-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "measure_item_rms",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.measure_item_peaks",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.measure_item_peaks"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "d27-analysis-audio-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "measure_item_peaks",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.detect_item_silence",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.detect_item_silence"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "d27-analysis-audio-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "detect_item_silence",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.analysis.detect_item_transients",
+      "operation": {
+        "family": "run_job",
+        "name": "analysis.detect_item_transients"
+      },
+      "pack": "analysis",
+      "risk": "read",
+      "route": "d27-analysis-audio-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "detect_item_transients",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

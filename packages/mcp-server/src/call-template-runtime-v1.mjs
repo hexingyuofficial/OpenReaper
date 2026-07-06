@@ -318,6 +318,13 @@ export const CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS = deepFree
   "template.fx.search_installed_fx",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS = deepFreeze([
+  "template.analysis.measure_item_rms",
+  "template.analysis.measure_item_peaks",
+  "template.analysis.detect_item_silence",
+  "template.analysis.detect_item_transients",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -350,6 +357,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d21_render_read", CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS],
   ["d22_render_settings_write", CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS],
   ["d23_fx_discovery_read", CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS],
+  ["d27_analysis_audio", CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1219,6 +1227,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

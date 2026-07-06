@@ -262,6 +262,10 @@ describe("First-Real-Fixture-A A2 render route", () => {
     assert.deepEqual(runJobKeys, [
       "run_job:analysis.create_loop_qa_report",
       "run_job:analysis.detect_loop_candidates",
+      "run_job:analysis.detect_item_silence",
+      "run_job:analysis.detect_item_transients",
+      "run_job:analysis.measure_item_peaks",
+      "run_job:analysis.measure_item_rms",
       "run_job:analysis.measure_loop_click_risk",
       "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
