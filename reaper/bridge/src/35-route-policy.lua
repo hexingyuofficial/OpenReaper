@@ -569,6 +569,10 @@ local function validate_request(request)
     if request.pack.id ~= d22_render_settings_write_operation.pack or request.pack.risk ~= d22_render_settings_write_operation.risk then
       return false, "D22 render settings write request pack/capability/risk mismatch."
     end
+  elseif d28_small_write_operation then
+    if request.pack.id ~= d28_small_write_operation.pack or request.pack.risk ~= d28_small_write_operation.risk then
+      return false, "D28 small write request pack/capability/risk mismatch."
+    end
   elseif d29_render_settings_write_operation then
     if request.pack.id ~= d29_render_settings_write_operation.pack or request.pack.risk ~= d29_render_settings_write_operation.risk then
       return false, "D29 render settings write request pack/capability/risk mismatch."

@@ -467,6 +467,17 @@ function wrapSourceModule(file, source, handlerModules) {
     "local dispatch_request = (function()",
     "local OPENREAPER_HANDLER_EXPORTS = {}",
     "local OPENREAPER_HANDLER_SHARED = {}",
+    "local function __openreaper_shared_table(name)",
+    "  return setmetatable({}, {",
+    "    __index = function(_, key)",
+    "      local table_value = OPENREAPER_HANDLER_SHARED[name]",
+    "      if type(table_value) ~= \"table\" then",
+    "        error(\"OpenReaper bridge shared handler table is not registered: \" .. tostring(name))",
+    "      end",
+    "      return table_value[key]",
+    "    end,",
+    "  })",
+    "end",
     "local function __openreaper_register_handler_module(module_name, loader)",
     "  local module = loader()",
     "  if type(module) ~= \"table\" then",
@@ -494,7 +505,7 @@ function wrapSourceModule(file, source, handlerModules) {
 function wrapHandlerModule({ file, exports, source }, handlerExportNames) {
   const sharedPreamble = sharedHandlerNames
     .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
-    .map((name) => `local ${name} = OPENREAPER_HANDLER_SHARED.${name}`);
+    .map((name) => `local ${name} = __openreaper_shared_table(${JSON.stringify(name)})`);
   const exportedDependencyPreamble = handlerExportNames
     .filter((name) => !exports.includes(name))
     .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+function\\s+${escapeRegExp(name)}\\s*\\(`).test(source))

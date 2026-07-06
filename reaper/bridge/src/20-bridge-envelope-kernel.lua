@@ -113,10 +113,25 @@ local function finalize_json_with_budget(envelope)
   return json.encode(envelope)
 end
 
+local function normalize_bridge_error_code(code)
+  if code == "READBACK_MISMATCH" then
+    return "VERIFY_FAILED", code
+  end
+  if code == "SOURCE_TYPE_MISMATCH" then
+    return "PARAMS_INVALID", code
+  end
+  return code, nil
+end
+
 local function bridge_error_envelope(request, code, message, options)
   options = options or {}
+  local normalized_code, bridge_code = normalize_bridge_error_code(code)
   local completed_at = now_iso()
   local budget = safe_budget(request)
+  local details = options.details or {}
+  if bridge_code and is_object(details) and details.bridge_code == nil then
+    details.bridge_code = bridge_code
+  end
   local envelope = {
     contract = CONTRACT,
     id = envelope_id(request, options.fallback_id),
@@ -132,10 +147,10 @@ local function bridge_error_envelope(request, code, message, options)
       completed_at = completed_at,
     },
     error = {
-      code = code,
+      code = normalized_code,
       message = message,
       recoverable = options.recoverable ~= false,
-      details = options.details or {},
+      details = details,
     },
     undo = undo_result(request),
     verification = verification_result(request, options.verification_status or "skipped"),

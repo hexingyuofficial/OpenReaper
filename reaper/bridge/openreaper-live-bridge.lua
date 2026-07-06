@@ -534,10 +534,25 @@ local function finalize_json_with_budget(envelope)
   return json.encode(envelope)
 end
 
+local function normalize_bridge_error_code(code)
+  if code == "READBACK_MISMATCH" then
+    return "VERIFY_FAILED", code
+  end
+  if code == "SOURCE_TYPE_MISMATCH" then
+    return "PARAMS_INVALID", code
+  end
+  return code, nil
+end
+
 local function bridge_error_envelope(request, code, message, options)
   options = options or {}
+  local normalized_code, bridge_code = normalize_bridge_error_code(code)
   local completed_at = now_iso()
   local budget = safe_budget(request)
+  local details = options.details or {}
+  if bridge_code and is_object(details) and details.bridge_code == nil then
+    details.bridge_code = bridge_code
+  end
   local envelope = {
     contract = CONTRACT,
     id = envelope_id(request, options.fallback_id),
@@ -553,10 +568,10 @@ local function bridge_error_envelope(request, code, message, options)
       completed_at = completed_at,
     },
     error = {
-      code = code,
+      code = normalized_code,
       message = message,
       recoverable = options.recoverable ~= false,
-      details = options.details or {},
+      details = details,
     },
     undo = undo_result(request),
     verification = verification_result(request, options.verification_status or "skipped"),
@@ -1937,6 +1952,10 @@ local function validate_request(request)
     if request.pack.id ~= d22_render_settings_write_operation.pack or request.pack.risk ~= d22_render_settings_write_operation.risk then
       return false, "D22 render settings write request pack/capability/risk mismatch."
     end
+  elseif d28_small_write_operation then
+    if request.pack.id ~= d28_small_write_operation.pack or request.pack.risk ~= d28_small_write_operation.risk then
+      return false, "D28 small write request pack/capability/risk mismatch."
+    end
   elseif d29_render_settings_write_operation then
     if request.pack.id ~= d29_render_settings_write_operation.pack or request.pack.risk ~= d29_render_settings_write_operation.risk then
       return false, "D29 render settings write request pack/capability/risk mismatch."
@@ -2243,6 +2262,17 @@ end
 local dispatch_request = (function()
 local OPENREAPER_HANDLER_EXPORTS = {}
 local OPENREAPER_HANDLER_SHARED = {}
+local function __openreaper_shared_table(name)
+  return setmetatable({}, {
+    __index = function(_, key)
+      local table_value = OPENREAPER_HANDLER_SHARED[name]
+      if type(table_value) ~= "table" then
+        error("OpenReaper bridge shared handler table is not registered: " .. tostring(name))
+      end
+      return table_value[key]
+    end,
+  })
+end
 local function __openreaper_register_handler_module(module_name, loader)
   local module = loader()
   if type(module) ~= "table" then
@@ -3876,6 +3906,19 @@ local function d21_render_error(code, message, details, recoverable)
   }
 end
 
+local function bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
 local function d21_render_current_project()
   local ok, project = call_reaper("EnumProjects", -1, "")
   if ok then
@@ -4844,7 +4887,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_metadata.lua
 __openreaper_register_handler_module("actions/read_action_metadata.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+local READ_B_ACTIONS = __openreaper_shared_table("READ_B_ACTIONS")
 -- Extracted read-only handler: template.actions.read_action_metadata.
 
 local function read_action_metadata(request)
@@ -7298,7 +7341,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/d17_midi_edit_route.lua
 __openreaper_register_handler_module("midi/d17_midi_edit_route.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 local function read_take_event_counts(...)
   return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
 end
@@ -9275,7 +9318,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/routing/e5_r1_routing_read_route.lua
 __openreaper_register_handler_module("routing/e5_r1_routing_read_route.lua", function()
-local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 -- Extracted E5-R1 routing read handlers.
 
 local function e5_routing_error(code, message, details, recoverable)
@@ -12074,7 +12117,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_toggle_state.lua
 __openreaper_register_handler_module("actions/read_action_toggle_state.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+local READ_B_ACTIONS = __openreaper_shared_table("READ_B_ACTIONS")
 -- Extracted read-only handler: template.actions.read_action_toggle_state.
 
 local function read_action_toggle_state(request)
@@ -12107,7 +12150,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_shortcuts.lua
 __openreaper_register_handler_module("actions/read_action_shortcuts.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+local READ_B_ACTIONS = __openreaper_shared_table("READ_B_ACTIONS")
 -- Extracted read-only handler: template.actions.read_action_shortcuts.
 
 local function read_action_shortcuts(request)
@@ -12144,7 +12187,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/parse_marker_action_text.lua
 __openreaper_register_handler_module("actions/parse_marker_action_text.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+local READ_B_ACTIONS = __openreaper_shared_table("READ_B_ACTIONS")
 -- Extracted read-only handler: template.actions.parse_marker_action_text.
 
 local function parse_marker_action_text(request)
@@ -12199,7 +12242,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/search_action_commands.lua
 __openreaper_register_handler_module("actions/search_action_commands.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+local READ_B_ACTIONS = __openreaper_shared_table("READ_B_ACTIONS")
 -- Extracted read-only handler: template.actions.search_action_commands.
 
 local ACTION_SEARCH_DEFAULT_LIMIT = 6
@@ -12542,7 +12585,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_event_counts.lua
 __openreaper_register_handler_module("midi/read_take_event_counts.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.read_take_event_counts.
 
 local function read_take_event_counts(request)
@@ -12569,7 +12612,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_notes.lua
 __openreaper_register_handler_module("midi/list_take_notes.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.list_take_notes.
 
 local function list_take_notes(request)
@@ -12622,7 +12665,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_cc_events.lua
 __openreaper_register_handler_module("midi/list_take_cc_events.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.list_take_cc_events.
 
 local function list_take_cc_events(request)
@@ -12673,7 +12716,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/list_take_text_sysex_events.lua
 __openreaper_register_handler_module("midi/list_take_text_sysex_events.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.list_take_text_sysex_events.
 
 local function read_b_midi_text_sysex_kind(type_value)
@@ -12735,7 +12778,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/read_take_grid.lua
 __openreaper_register_handler_module("midi/read_take_grid.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.read_take_grid.
 
 local function read_take_grid(request)
@@ -13038,7 +13081,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_take_source.lua
 __openreaper_register_handler_module("media/read_take_source.lua", function()
-local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 -- Extracted read-only handler: template.media.read_take_source.
 
 local function read_take_source(request)
@@ -13078,7 +13121,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/read_project_media_files.lua
 __openreaper_register_handler_module("media/read_project_media_files.lua", function()
-local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 -- Extracted read-only handler: template.media.read_project_media_files.
 
 local function read_project_media_files(request)
@@ -13138,7 +13181,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/e3_media_route.lua
 __openreaper_register_handler_module("media/e3_media_route.lua", function()
-local READ_B_MEDIA = OPENREAPER_HANDLER_SHARED.READ_B_MEDIA
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 -- Extracted E3 media route handlers.
 
 local function e3_media_handler_error(code, message, details, recoverable)
@@ -19191,7 +19234,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/create_midi_item.lua
 __openreaper_register_handler_module("midi/create_midi_item.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted Safe-Write-A handler: template.midi.create_midi_item.
 
 local function handler_error(code, message, details, recoverable)
@@ -19425,7 +19468,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_notes_batch.lua
 __openreaper_register_handler_module("midi/insert_notes_batch.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 local function read_take_event_counts(...)
   return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
 end
@@ -19569,7 +19612,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_cc_batch.lua
 __openreaper_register_handler_module("midi/insert_cc_batch.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 local function read_take_event_counts(...)
   return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
 end
@@ -19710,7 +19753,7 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua
 __openreaper_register_handler_module("midi/insert_text_sysex_events.lua", function()
-local READ_B_MIDI = OPENREAPER_HANDLER_SHARED.READ_B_MIDI
+local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 local function read_take_event_counts(...)
   return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
 end

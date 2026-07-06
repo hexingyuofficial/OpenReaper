@@ -9,6 +9,19 @@ local function d21_render_error(code, message, details, recoverable)
   }
 end
 
+local function bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
 local function d21_render_current_project()
   local ok, project = call_reaper("EnumProjects", -1, "")
   if ok then

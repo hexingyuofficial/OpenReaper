@@ -739,6 +739,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_SHARED = \{\}/);
+    assert.match(BRIDGE_SOURCE, /local function __openreaper_shared_table\(name\)/);
     assert.match(BRIDGE_SOURCE, /local function __openreaper_register_handler_module\(module_name, loader\)/);
     for (const file of handlerModuleFilesFromRegistry(REGISTRY)) {
       const marker = `-- OpenReaper bridge handler module: ${handlerSourceRoot}/${file}`;
@@ -766,6 +767,23 @@ describe("Layer 4D.R bridge handler registry", () => {
         `${file} must let build-live-bridge wrap exports so generated Lua has only one module return`,
       );
     }
+  });
+
+  it("binds late-registered shared handler helpers through a runtime proxy", () => {
+    const source = buildLiveBridgeBundle({ cwd: ROOT.pathname });
+    assert.match(source, /local READ_B_ACTIONS = __openreaper_shared_table\("READ_B_ACTIONS"\)/);
+    assert.match(source, /local READ_B_MIDI = __openreaper_shared_table\("READ_B_MIDI"\)/);
+    assert.match(source, /local READ_B_MEDIA = __openreaper_shared_table\("READ_B_MEDIA"\)/);
+  });
+
+  it("maps handler-local mismatch codes to the frozen foundation error set", () => {
+    assert.match(BRIDGE_SOURCE, /local function normalize_bridge_error_code\(code\)/);
+    assert.match(BRIDGE_SOURCE, /if code == "READBACK_MISMATCH" then\s+return "VERIFY_FAILED", code/);
+    assert.match(BRIDGE_SOURCE, /if code == "SOURCE_TYPE_MISMATCH" then\s+return "PARAMS_INVALID", code/);
+  });
+
+  it("allows D28 small write operations through the pack-risk gate", () => {
+    assert.match(BRIDGE_SOURCE, /elseif d28_small_write_operation then\s+if request\.pack\.id ~= d28_small_write_operation\.pack or request\.pack\.risk ~= d28_small_write_operation\.risk then\s+return false, "D28 small write request pack\/capability\/risk mismatch\."/);
   });
 
   it("keeps generated route metadata deterministic, compact, and registry-derived", () => {
