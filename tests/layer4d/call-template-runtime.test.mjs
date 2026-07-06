@@ -18,6 +18,7 @@ import {
 import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
+  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
@@ -367,8 +368,13 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "capability_truth")), true);
     assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "action_name")), true);
     assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "template_id")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "beginner_label")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "user_action_category")), true);
     assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "current_status")), true);
     assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "user_message")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "next_step")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "safety_note")), true);
+    assert.equal(catalogMenu.items.every((item) => Object.hasOwn(item, "common_phrases")), true);
     assert.equal(catalogMenu.items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(
       catalogMenu.items.some((item) => item.capability_truth.allowed_live_group === "wave0"),
@@ -389,7 +395,9 @@ describe("Layer 4D call_template runtime binding", () => {
     });
     assert.deepEqual(Object.keys(exact.items[0]).sort(), [
       "action_name",
+      "beginner_label",
       "capability_truth",
+      "common_phrases",
       "current_status",
       "example_input",
       "expectedDelta",
@@ -397,11 +405,14 @@ describe("Layer 4D call_template runtime binding", () => {
       "id",
       "inputSchema",
       "needs_confirmation",
+      "next_step",
       "output_refs",
       "required_input",
       "required_refs",
+      "safety_note",
       "summary",
       "template_id",
+      "user_action_category",
       "user_message",
     ]);
     assert.equal("bridge" in exact.items[0], false);
@@ -412,6 +423,10 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(exact.items[0].action_name, "create_track");
     assert.deepEqual(exact.items[0].required_input, ["name"]);
     assert.equal(exact.items[0].current_status, "blocked");
+    assert.equal(exact.items[0].beginner_label, "Not available in this runtime");
+    assert.equal(exact.items[0].user_action_category, "write");
+    assert.match(exact.items[0].next_step, /bounded live executor/);
+    assert.equal(exact.items[0].common_phrases.includes("create track"), true);
 
     const liveRuntime = createCallTemplateRuntime({
       executor: new FakeFoundationBridge(),
@@ -429,6 +444,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(liveMenu.applied.surface, "executable");
     assert.equal(liveMenu.items.every((item) => item.capability_truth.live_runnable_now === true), true);
     assert.equal(liveMenu.items.every((item) => item.current_status === "available_now"), true);
+    assert.equal(liveMenu.items.every((item) => item.beginner_label === "Ready now"), true);
     assert.equal(liveMenu.items[0].action_name, "read_project_summary");
 
     const liveExact = liveRuntime.list_templates({
@@ -444,6 +460,31 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(
       liveExact.items[1].capability_truth.known_blocker,
       "live_executor_not_configured_or_not_in_allowed_group",
+    );
+
+    const graduatedRuntime = createCallTemplateRuntime({
+      executor: new FakeFoundationBridge(),
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+      },
+    });
+    const graduatedMenu = graduatedRuntime.list_templates({ limit: 100 });
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
+    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
+    assert.equal(graduatedMenu.items.length, 100);
+    assert.equal(graduatedMenu.page.has_more, true);
+    assert.equal(
+      graduatedRuntime.list_templates({
+        ids: [
+          "template.fx.add_track_fx",
+          "template.routing.create_track_send",
+          "template.automation.insert_envelope_point",
+        ],
+        fields: ["summary"],
+      }).items.every((item) => item.capability_truth.known_blocker === null),
+      true,
     );
 
     const safeWriteRuntime = createCallTemplateRuntime({

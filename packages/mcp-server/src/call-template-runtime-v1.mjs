@@ -399,6 +399,12 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
+  CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.filter((id) =>
+    LIVE_TEMPLATE_GROUPS.some(([, ids]) => ids.includes(id)),
+  ),
+);
+
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
   LIVE_TEMPLATE_GROUPS.flatMap(([, ids]) => ids),
 );
@@ -1013,9 +1019,9 @@ function runtimeCapabilityTruthRequest(request) {
 
 function acceptedTemplateEvidenceLevel(id) {
   if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, id)) return "blocked_typed";
+  if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(id)) return "live_smoked";
   const pack = templatePackFromId(id);
   if (Object.hasOwn(RUNTIME_HELD_PACK_BLOCKERS, pack)) return "route_defined_pending_live_promotion";
-  if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(id)) return "live_smoked";
   return "runtime_bound_static_fake";
 }
 
@@ -1030,6 +1036,9 @@ function runtimeKnownBlocker(descriptor) {
   if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, descriptor.id)) {
     return RUNTIME_KNOWN_TEMPLATE_BLOCKERS[descriptor.id];
   }
+  if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(descriptor.id)) {
+    return null;
+  }
   if (Object.hasOwn(RUNTIME_HELD_PACK_BLOCKERS, descriptor.pack)) {
     return RUNTIME_HELD_PACK_BLOCKERS[descriptor.pack];
   }
@@ -1041,8 +1050,13 @@ function runtimeActionMetadata(item) {
   return pruneUndefined({
     template_id: item.id,
     action_name: runtimeActionName(item),
+    beginner_label: runtimeBeginnerLabel(item, currentStatus),
+    user_action_category: runtimeUserActionCategory(item),
     current_status: currentStatus,
     user_message: runtimeActionUserMessage(item, currentStatus),
+    next_step: runtimeNextStep(item, currentStatus),
+    safety_note: runtimeSafetyNote(item),
+    common_phrases: runtimeCommonPhrases(item),
     required_input: requiredInputFields(item),
     required_refs: compactRefDeclarations(inputRefDeclarations(item).filter((ref) => ref.required === true)),
     output_refs: compactRefDeclarations(outputRefDeclarations(item)),
@@ -1084,6 +1098,63 @@ function runtimeActionUserMessage(item, currentStatus) {
     return "This route is held from the default executable surface until a bounded live/design window accepts it.";
   }
   return "Not available in the current bounded live runtime; keep it in the internal landing backlog.";
+}
+
+function runtimeBeginnerLabel(item, currentStatus) {
+  if (currentStatus === "available_now" && requiredInputFields(item).length > 0) return "Ready after input";
+  return ({
+    available_now: "Ready now",
+    needs_ref: "Select or resolve an object first",
+    needs_confirmation: "Ask before changing the project",
+    bug_known: "Known bug",
+    blocked: "Not available in this runtime",
+  })[currentStatus] ?? "Check status";
+}
+
+function runtimeUserActionCategory(item) {
+  if (item.risk === "destructive") return "destructive";
+  if (item.bridge?.operation_family === "run_job") return "render_or_job";
+  if (item.risk === "write") return "write";
+  if (item.risk === "safe") return "safe_write";
+  return "read";
+}
+
+function runtimeNextStep(item, currentStatus) {
+  if (currentStatus === "blocked") {
+    return "Keep this in catalog/backlog view or configure a bounded live executor allowlist that includes this template.";
+  }
+  if (currentStatus === "bug_known") {
+    return "Do not run this action until the known bug fix is accepted and smoke-tested.";
+  }
+  if (currentStatus === "needs_ref") {
+    return "Run a resolver or list action first, then pass the returned canonical ref in refs.";
+  }
+  if (currentStatus === "needs_confirmation") {
+    return "Confirm the exact target and change, then call the template with undo/readback verification.";
+  }
+  if (requiredInputFields(item).length > 0) {
+    return "Fill required_input using the example_input shape, then call_template.";
+  }
+  return "Call this template directly through call_template.";
+}
+
+function runtimeSafetyNote(item) {
+  if (item.risk === "destructive") return "Destructive action: use only in a disposable or explicitly approved project.";
+  if (item.risk === "write") return "Changes the REAPER project: require user approval, undo evidence, and readback.";
+  if (item.risk === "safe") return "Safe write: still verify the target and readback after running.";
+  if (item.bridge?.operation_family === "run_job") return "Job/output action: use bounded output roots and retain evidence.";
+  return "Read-only action: safe for inspection before making changes.";
+}
+
+function runtimeCommonPhrases(item) {
+  const actionWords = runtimeActionName(item).replaceAll("_", " ");
+  const title = typeof item.title === "string" ? item.title.trim().toLocaleLowerCase() : "";
+  const pack = typeof item.pack === "string" ? item.pack.trim() : "";
+  return [...new Set([
+    title,
+    actionWords,
+    pack && actionWords ? `${pack} ${actionWords}` : "",
+  ].filter(Boolean))].slice(0, 4);
 }
 
 function runtimeActionName(item) {
@@ -1270,6 +1341,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

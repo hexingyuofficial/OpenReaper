@@ -40,9 +40,39 @@ the other draft recipes to live-supported status.
 ## Alpha2 Static Closure
 
 Alpha2 expanded the accepted static catalog and closed the practical-alpha
-missing-capability table, but those static/fake closures are not live support
-promotions. Current live support remains evidence-bound to the rows declared in
-the support matrix.
+missing-capability table. The follow-up Alpha2 graduation sweep then live-smoked
+all 213 accepted template ids on the declared local manual-bridge fixture:
+
+```text
+/Users/Shared/openreaper-alpha2-213-live/alpha2-213-live-final-20260706-184656/reports/alpha2-213-live-graduation-aggregate.json
+```
+
+That evidence makes the 213-template Alpha2 control surface usable for the
+matching bounded runtime and bridge policy. Public support wording remains
+evidence-bound to the declared setup, fixture, REAPER state, and typed blockers.
+
+## Product Surface
+
+Agents should start with `list_templates` and `list_recipes`, not raw ids. In a
+configured live session, `list_templates({ surface: "executable" })` returns
+only actions that are visible for the current bounded runtime. Each action
+includes beginner-facing status fields such as:
+
+```text
+beginner_label
+current_status
+user_action_category
+required_input
+required_refs
+next_step
+safety_note
+example_input
+```
+
+For a first real-user pass, run the recipe card
+`recipe.project.inspect_current_fixture_readiness` as a step-by-step workflow:
+it reads a compact project snapshot, selected items, track refs, and mixer
+controls without adding a public `call_recipe` tool.
 
 ## Tool Surface
 

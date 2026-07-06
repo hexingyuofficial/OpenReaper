@@ -1,8 +1,8 @@
 {
   "contract": "recipe.contract.v1",
   "id": "recipe.project.inspect_current_fixture_readiness",
-  "title": "Inspect current fixture readiness",
-  "summary": "Draft read-only workflow that gathers compact project, track, item, and mixer state before a fixture run.",
+  "title": "Read project snapshot and readiness",
+  "summary": "Draft read-only workflow that gathers a compact project snapshot for real-user preflight.",
   "pack": "project",
   "lifecycle": "draft",
   "risk": "read",
@@ -12,18 +12,20 @@
     "inspection",
     "fixture",
     "snapshot",
+    "preflight",
+    "product_surface",
     "workflow"
   ],
   "workflow_card": {
-    "intent": "Inspect whether the current project has enough bounded state for a safe Alpha2 fixture run.",
+    "intent": "Read a compact project snapshot before a real-user workflow or mutation.",
     "entry_conditions": [
       "Use screenshot-first target disambiguation when a screenshot exists.",
-      "Run before mutation when fixture readiness is unclear."
+      "Run before mutation when project state, selection, or fixture readiness is unclear."
     ],
     "supported_steps": [
-      "Read compact project overview.",
-      "List tracks and selected items.",
-      "Read bounded mixer controls for visible target confirmation."
+      "Read compact project track/item overview.",
+      "List tracks and selected items as canonical refs.",
+      "Read bounded mixer controls for target confirmation."
     ],
     "candidate_steps": [
       "Future live fixture lanes may add richer readiness scoring after evidence."
