@@ -44,6 +44,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.routing.send_fx_automation_setup",
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
+  "recipe.tracks.prepare_recording_track",
 ]);
 
 const EXPECTED_DEPENDENCIES = Object.freeze({
@@ -117,6 +118,12 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
     "template.project.read_track_item_overview",
     "template.tracks.delete_tracks",
   ]),
+  "recipe.tracks.prepare_recording_track": Object.freeze([
+    "template.tracks.create_track",
+    "template.tracks.select_track",
+    "template.tracks.set_record_arm",
+    "template.tracks.list_tracks",
+  ]),
 });
 
 const ACCEPTED_TEMPLATE_SET = new Set(RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS);
@@ -131,7 +138,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the fourteen first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the fifteen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -165,6 +172,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "routing.send_fx_automation_setup.recipe.json",
       "tracks.adjust_selected_track_basic_balance.recipe.json",
       "tracks.cleanup_created_track_set.recipe.json",
+      "tracks.prepare_recording_track.recipe.json",
     ]);
   });
 
@@ -406,6 +414,42 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(readiness)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
+  it("adds an Alpha3 recording-track starter workflow without starting transport", () => {
+    const recipe = recipesById().get("recipe.tracks.prepare_recording_track");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("starter_recipe"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.tracks.create_track",
+        "template.tracks.select_track",
+        "template.tracks.set_record_arm",
+        "template.tracks.list_tracks",
+      ],
+    );
+    assert.deepEqual(recipe.steps[0].call_template.input, {
+      name: "REC VOX - take 01",
+    });
+    assert.deepEqual(recipe.steps[1].call_template.refs.track_ref, {
+      "$from_step": "create_recording_track",
+      output: "track_ref",
+    });
+    assert.deepEqual(recipe.steps[2].call_template.refs.track_ref, {
+      "$from_step": "select_recording_track",
+      output: "track_ref",
+    });
+    assert.equal(
+      recipe.workflow_card.blocked_steps.some((step) => /start recording/i.test(step)),
+      true,
+    );
+    assert.equal(recipe.recovery.risk_gates[0].required_before_step, "create_recording_track");
+    assert.equal(recipe.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
   it("adds an Alpha3 fast observation workflow over the fixed observation bundle atom", () => {
     const recipe = recipesById().get("recipe.project.fast_observation_bundle");
 
@@ -513,6 +557,22 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.status, "candidate");
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("snapshot"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 recording-track workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "recording",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.tracks.prepare_recording_track");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "tracks.recording_track_setup");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("recording"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });

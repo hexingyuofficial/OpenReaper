@@ -42,6 +42,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.routing.send_fx_automation_setup",
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
+  "recipe.tracks.prepare_recording_track",
 ]);
 
 const WRITE_ATOMS = new Set([
@@ -52,6 +53,7 @@ const WRITE_ATOMS = new Set([
   "recipe.project.cleanup_trial_created_objects",
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
+  "recipe.tracks.prepare_recording_track",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -67,7 +69,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the fourteen draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the fifteen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -348,6 +350,27 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     );
     assert.equal(readiness.risk_pauses.length, 0);
     assert.equal(readiness.expected.refs.has("project_ref"), true);
+  });
+
+  it("fake-smokes the Alpha3 recording-track starter as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.tracks.prepare_recording_track");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.tracks.create_track",
+        "template.tracks.select_track",
+        "template.tracks.set_record_arm",
+        "template.tracks.list_tracks",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 1);
+    assert.equal(run.risk_pauses[0].before_step, "create_recording_track");
+    assert.equal(run.risk_pauses[0].policy, "user_confirmation");
+    assert.equal(run.expected.refs.has("track_ref"), true);
+    assert.equal(run.expected.state.has("recording_track_ready"), true);
   });
 
   it("fake-smokes the Alpha3 fast observation bundle as a recipe-only composition", () => {

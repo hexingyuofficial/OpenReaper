@@ -50,6 +50,7 @@ it yet.
 | `recipe.project.cleanup_fingerprint_report` | draft | supported recipe-level live/local portability claim | Supported path uses `template.project.create_cleanup_report` plus artifact summary/payload readback. |
 | `recipe.project.fast_observation_bundle` | draft | candidate | Alpha3 speed workflow over `template.project.create_observation_bundle`; needs recipe-level transcript/live evidence before support claim. |
 | `recipe.project.map_snapshot_page` | draft | candidate | Alpha3 large-project workflow over `template.project.create_project_map_snapshot`; needs recipe-level transcript/live evidence before support claim. |
+| `recipe.tracks.prepare_recording_track` | draft | candidate | Alpha3 starter recording workflow over create/select/record-arm/list track atoms; does not start transport recording. |
 | `recipe.analysis.selected_item_cycle_quality_report` | draft | candidate | Fake-smoked only; needs a narrow transcript driver and live evidence before support claim. |
 | `recipe.render.region_wav_render` | draft | candidate | Fake-smoked only; render/write risk needs managed render root and live evidence. |
 | `recipe.render.region_delivery_report` | draft | candidate | Fake-smoked only; consumes render artifacts and needs paired/preseeded evidence. |
@@ -58,8 +59,9 @@ it yet.
 
 Alpha2 expanded the official draft recipe packet to twelve first-atoms recipes.
 Alpha3 adds `recipe.project.fast_observation_bundle` and
-`recipe.project.map_snapshot_page`, bringing the packet to fourteen draft
-recipes. Only `recipe.project.cleanup_fingerprint_report` has the V1
+`recipe.project.map_snapshot_page`, plus `recipe.tracks.prepare_recording_track`,
+bringing the packet to fifteen draft recipes. Only
+`recipe.project.cleanup_fingerprint_report` has the V1
 recipe-level live/local portability claim; the others remain draft/static or
 fake-smoked unless later evidence promotes them.
 

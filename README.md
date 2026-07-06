@@ -84,6 +84,10 @@ For large projects, use `recipe.project.map_snapshot_page` to create one
 artifact-backed project map page with counts, cursor, coverage, and optional
 payload hydration before asking for more detail.
 
+For a basic recording setup, use `recipe.tracks.prepare_recording_track`: it
+creates one recording track, selects it, record-arms it, and reads back the
+compact track list without starting transport recording.
+
 The product action menu is versioned by
 `alpha2.product_action_surface.v1`; see
 `docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md` for the schema, status values,

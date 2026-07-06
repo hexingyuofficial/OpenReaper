@@ -1,0 +1,363 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.tracks.prepare_recording_track",
+  "title": "Prepare recording track",
+  "summary": "Draft write-risk Alpha3 workflow that creates, selects, and record-arms one new recording track.",
+  "pack": "tracks",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "recording_track_setup",
+  "tags": [
+    "tracks",
+    "recording",
+    "record_arm",
+    "selection",
+    "starter_recipe",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Prepare one new track for recording without starting transport recording.",
+    "entry_conditions": [
+      "Use when the user asks to create a recording track or get ready to record.",
+      "Ask for a track name only when the default recording name is not acceptable."
+    ],
+    "supported_steps": [
+      "Create one named recording track.",
+      "Make it the only selected track.",
+      "Record-arm it and read back the compact track list."
+    ],
+    "candidate_steps": [
+      "Future recipes may add input monitoring, record mode, and transport start after explicit policy."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not start recording from this setup recipe.",
+      "Do not choose hardware inputs or outputs without a bounded hardware policy."
+    ],
+    "required_questions": [
+      "Ask before starting transport recording or changing audio device/input routing."
+    ],
+    "template_atoms": [
+      "template.tracks.create_track",
+      "template.tracks.select_track",
+      "template.tracks.set_record_arm",
+      "template.tracks.list_tracks"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "track list readback after arm"
+    ],
+    "cleanup_plan": "If the setup was accidental, use the created track ref with a confirmed cleanup recipe.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "hardware_input_policy_required",
+      "transport_recording_requires_explicit_confirmation"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "create_recording_track",
+      "title": "Create recording track",
+      "summary": "Create one named recording track at the end of the project.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.create_track",
+        "input": {
+          "name": "REC VOX - take 01"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_recording_track",
+      "evidence": "evidence_create_recording_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_setup"
+    },
+    {
+      "id": "select_recording_track",
+      "title": "Select recording track",
+      "summary": "Make the created recording track the only selected track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.select_track",
+        "input": {
+          "mode": "replace"
+        },
+        "refs": {
+          "track_ref": {
+            "$from_step": "create_recording_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_select_recording_track",
+      "evidence": "evidence_select_recording_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_setup"
+    },
+    {
+      "id": "arm_recording_track",
+      "title": "Arm recording track",
+      "summary": "Record-arm the created track without starting transport recording.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.set_record_arm",
+        "input": {
+          "armed": true
+        },
+        "refs": {
+          "track_ref": {
+            "$from_step": "select_recording_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_arm_recording_track",
+      "evidence": "evidence_arm_recording_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_setup"
+    },
+    {
+      "id": "read_recording_track_list",
+      "title": "Read recording track list",
+      "summary": "Read compact track selection and arm state after setup.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.list_tracks",
+        "input": {
+          "limit": 16,
+          "include_selection": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_recording_track_list",
+      "evidence": "evidence_read_recording_track_list",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_recording_track_ready",
+      "kind": "expected_output",
+      "summary": "The workflow must retain the created track ref and post-arm track readback evidence.",
+      "required": true,
+      "evidence": [
+        "evidence_create_recording_track",
+        "evidence_select_recording_track",
+        "evidence_arm_recording_track",
+        "evidence_read_recording_track_list"
+      ],
+      "outputs": {
+        "refs": [
+          "track_ref"
+        ],
+        "artifacts": [],
+        "jobs": [],
+        "state": [
+          "recording_track_ready"
+        ]
+      }
+    },
+    {
+      "id": "assert_transport_not_started",
+      "kind": "checkpoint",
+      "summary": "The setup recipe does not start transport recording.",
+      "required": true,
+      "evidence": [
+        "evidence_arm_recording_track"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_recording_track",
+        "after_step": "create_recording_track",
+        "required_evidence": [
+          "evidence_create_recording_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Recording track creation evidence is retained."
+      },
+      {
+        "id": "checkpoint_select_recording_track",
+        "after_step": "select_recording_track",
+        "required_evidence": [
+          "evidence_select_recording_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Recording track selection evidence is retained."
+      },
+      {
+        "id": "checkpoint_arm_recording_track",
+        "after_step": "arm_recording_track",
+        "required_evidence": [
+          "evidence_arm_recording_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Recording track arm evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_recording_track_list",
+        "after_step": "read_recording_track_list",
+        "required_evidence": [
+          "evidence_read_recording_track_list"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Post-setup track list evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_recording_track",
+        "step": "create_recording_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.create_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_select_recording_track",
+        "step": "select_recording_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.select_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_arm_recording_track",
+        "step": "arm_recording_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.set_record_arm",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_recording_track_list",
+        "step": "read_recording_track_list",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.list_tracks",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_setup",
+        "trigger": "template_error",
+        "step": "create_recording_track",
+        "strategy": "retry_step",
+        "summary": "Retry the current setup step when project identity remains stable."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "risk_gate_blocked",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if recording setup requires hardware input or transport recording decisions."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_confirm_recording_track_setup",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "create_recording_track",
+        "policy": "user_confirmation",
+        "blocks_auto_resume": true,
+        "summary": "Confirm before creating and arming a new recording track."
+      }
+    ]
+  }
+}
