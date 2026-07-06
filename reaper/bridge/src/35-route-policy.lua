@@ -362,6 +362,17 @@ local function d29_render_job_operation(request, operation_key)
   return operation
 end
 
+local function d29_render_output_metadata_operation(request, operation_key)
+  if operation_key ~= "artifact_metadata:render.output.absolute_path"
+    and operation_key ~= "artifact_metadata:render.output_file.metadata" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return { pack = "render", risk = "read" }
+end
+
 local function d30_project_container_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" and operation_key ~= "run_job:template.execute" then
     return nil
@@ -496,6 +507,7 @@ local function validate_request(request)
   local d22_render_settings_write_operation = d22_render_settings_write_capability(request, operation_key)
   local d28_small_write_operation = d28_small_write_capability(request, operation_key)
   local d29_render_settings_write_operation = d29_render_settings_write_capability(request, operation_key)
+  local d29_render_output_metadata = d29_render_output_metadata_operation(request, operation_key)
   local d29_render_job = d29_render_job_operation(request, operation_key)
   local d30_project_container_operation = d30_project_container_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
@@ -576,6 +588,10 @@ local function validate_request(request)
   elseif d29_render_settings_write_operation then
     if request.pack.id ~= d29_render_settings_write_operation.pack or request.pack.risk ~= d29_render_settings_write_operation.risk then
       return false, "D29 render settings write request pack/capability/risk mismatch."
+    end
+  elseif d29_render_output_metadata then
+    if request.pack.id ~= d29_render_output_metadata.pack or request.pack.risk ~= d29_render_output_metadata.risk then
+      return false, "D29 render output metadata request pack/risk mismatch."
     end
   elseif d29_render_job then
     if request.pack.id ~= d29_render_job.pack or request.pack.risk ~= d29_render_job.risk then
@@ -768,6 +784,10 @@ local function validate_request(request)
   elseif d29_render_settings_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D29 render settings write requests must use artifacts.allow false."
+    end
+  elseif d29_render_output_metadata then
+    if request.artifacts.allow ~= true then
+      return false, "D29 render output metadata requests must use artifacts.allow true."
     end
   elseif d30_project_container_operation then
     if request.artifacts.allow ~= false then

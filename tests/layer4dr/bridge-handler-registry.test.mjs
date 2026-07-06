@@ -780,10 +780,19 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.match(BRIDGE_SOURCE, /local function normalize_bridge_error_code\(code\)/);
     assert.match(BRIDGE_SOURCE, /if code == "READBACK_MISMATCH" then\s+return "VERIFY_FAILED", code/);
     assert.match(BRIDGE_SOURCE, /if code == "SOURCE_TYPE_MISMATCH" then\s+return "PARAMS_INVALID", code/);
+    assert.match(BRIDGE_SOURCE, /if code == "STALE_TAKE_HASH" then\s+return "REF_INVALID", code/);
+    assert.match(BRIDGE_SOURCE, /if code == "CC_NOT_FOUND" or code == "NOTE_NOT_FOUND" then\s+return "TAKE_NOT_FOUND", code/);
+    assert.match(BRIDGE_SOURCE, /if code == "VIDEO_PROCESSOR_NOT_FOUND" then\s+return "FX_NOT_FOUND", code/);
   });
 
   it("allows D28 small write operations through the pack-risk gate", () => {
     assert.match(BRIDGE_SOURCE, /elseif d28_small_write_operation then\s+if request\.pack\.id ~= d28_small_write_operation\.pack or request\.pack\.risk ~= d28_small_write_operation\.risk then\s+return false, "D28 small write request pack\/capability\/risk mismatch\."/);
+  });
+
+  it("allows D29 render output artifact metadata reads without treating them as artifact writes", () => {
+    assert.match(BRIDGE_SOURCE, /local function d29_render_output_metadata_operation\(request, operation_key\)/);
+    assert.match(BRIDGE_SOURCE, /artifact_metadata:render\.output\.absolute_path/);
+    assert.match(BRIDGE_SOURCE, /D29 render output metadata requests must use artifacts\.allow true\./);
   });
 
   it("keeps generated route metadata deterministic, compact, and registry-derived", () => {

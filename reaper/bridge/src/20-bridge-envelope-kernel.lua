@@ -120,6 +120,15 @@ local function normalize_bridge_error_code(code)
   if code == "SOURCE_TYPE_MISMATCH" then
     return "PARAMS_INVALID", code
   end
+  if code == "STALE_TAKE_HASH" then
+    return "REF_INVALID", code
+  end
+  if code == "CC_NOT_FOUND" or code == "NOTE_NOT_FOUND" then
+    return "TAKE_NOT_FOUND", code
+  end
+  if code == "VIDEO_PROCESSOR_NOT_FOUND" then
+    return "FX_NOT_FOUND", code
+  end
   return code, nil
 end
 
