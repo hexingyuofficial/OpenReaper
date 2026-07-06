@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (127 registered template handler row(s); 0 legacy_monolith row(s); 127 extracted handler row(s); 68 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (131 registered template handler row(s); 0 legacy_monolith row(s); 131 extracted handler row(s); 69 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1397,6 +1397,13 @@ local D11_PROJECT_MARKER_REGION_CAPABILITIES = {
   ["project.rename_region"] = { pack = "project", risk = "write" },
 }
 
+local D12_TRANSPORT_SAFE_CAPABILITIES = {
+  ["transport.play"] = { pack = "transport", risk = "safe" },
+  ["transport.pause"] = { pack = "transport", risk = "safe" },
+  ["transport.stop_playback"] = { pack = "transport", risk = "safe" },
+  ["transport.set_punch_record_range"] = { pack = "transport", risk = "safe" },
+}
+
 local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_track"] = { pack = "fx", risk = "write" },
   ["fx.add_take"] = { pack = "fx", risk = "write" },
@@ -1485,6 +1492,16 @@ local function d11_project_marker_region_capability(request, operation_key)
   return D11_PROJECT_MARKER_REGION_CAPABILITIES[request.pack.capability]
 end
 
+local function d12_transport_safe_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D12_TRANSPORT_SAFE_CAPABILITIES[request.pack.capability]
+end
+
 local function e2_fx_b1_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1505,6 +1522,7 @@ local function template_execute_write_capability(request, operation_key)
     or d6_project_tempo_write_capability(request, operation_key)
     or d9_tracks_mixer_write_capability(request, operation_key)
     or d11_project_marker_region_capability(request, operation_key)
+    or d12_transport_safe_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1580,6 +1598,7 @@ local function validate_request(request)
   local d6_project_tempo_write_operation = d6_project_tempo_write_capability(request, operation_key)
   local d9_tracks_mixer_write_operation = d9_tracks_mixer_write_capability(request, operation_key)
   local d11_project_marker_region_operation = d11_project_marker_region_capability(request, operation_key)
+  local d12_transport_safe_operation = d12_transport_safe_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1622,6 +1641,10 @@ local function validate_request(request)
   elseif d11_project_marker_region_operation then
     if request.pack.id ~= d11_project_marker_region_operation.pack or request.pack.risk ~= d11_project_marker_region_operation.risk then
       return false, "D11 project marker/region request pack/capability/risk mismatch."
+    end
+  elseif d12_transport_safe_operation then
+    if request.pack.id ~= d12_transport_safe_operation.pack or request.pack.risk ~= d12_transport_safe_operation.risk then
+      return false, "D12 transport safe request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1675,6 +1698,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D11 project marker/region requests must use undo.mode required."
     end
+  elseif d12_transport_safe_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D12 transport safe requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1726,6 +1753,10 @@ local function validate_request(request)
   elseif d11_project_marker_region_operation then
     if request.artifacts.allow ~= false then
       return false, "D11 project marker/region requests must use artifacts.allow false."
+    end
+  elseif d12_transport_safe_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D12 transport safe requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -1779,6 +1810,10 @@ local function validate_request(request)
   elseif d11_project_marker_region_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D11 project marker/region idempotency_key must be a string when present."
+    end
+  elseif d12_transport_safe_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D12 transport safe idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -4192,6 +4227,163 @@ local function d11_project_remove_region(request)
 end
 return {
   exports = { d11_project_delete_marker = d11_project_delete_marker, d11_project_delete_region = d11_project_delete_region, d11_project_remove_marker = d11_project_remove_marker, d11_project_remove_region = d11_project_remove_region, d11_project_rename_marker = d11_project_rename_marker, d11_project_rename_region = d11_project_rename_region },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/transport/d12_transport_safe_route.lua
+__openreaper_register_handler_module("transport/d12_transport_safe_route.lua", function()
+local function read_transport_state(...)
+  return OPENREAPER_HANDLER_EXPORTS.read_transport_state(...)
+end
+-- Extracted D12 handler: transport safe controls.
+
+local function d12_transport_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function d12_transport_refs()
+  return json_array({})
+end
+
+local function d12_transport_has_flag(value, flag)
+  if type(value) ~= "number" then
+    return false
+  end
+  return value % (flag * 2) >= flag
+end
+
+local function d12_transport_play_state_value()
+  local ok_play_state, play_state = call_reaper("GetPlayState")
+  return ok_play_state and first_number(play_state) or 0
+end
+
+local function d12_transport_is_recording()
+  return d12_transport_has_flag(d12_transport_play_state_value(), 4)
+end
+
+local function d12_transport_summary(request, fields)
+  fields = fields or {}
+  fields.capability = request.pack.capability
+  fields.pack = request.pack.id
+  fields.risk = request.pack.risk
+  fields.readback_status = "passed"
+  fields.undo_evidence = "required"
+  fields.artifacts_allowed = false
+  fields.truncated = false
+  return fields
+end
+
+local function d12_transport_state_summary(request)
+  return d12_transport_summary(request, OPENREAPER_HANDLER_EXPORTS.read_transport_state({}))
+end
+
+local function d12_transport_recording_guard(request)
+  if d12_transport_is_recording() then
+    return d12_transport_error("RECORDING_ACTIVE", "Transport playback controls do not stop or modify active recording.", {
+      capability = request.pack.capability,
+    })
+  end
+  return nil
+end
+
+local function d12_transport_verify_state(request, expected_state)
+  local state = d12_transport_state_summary(request)
+  if state.play_state ~= expected_state then
+    return d12_transport_error("READBACK_MISMATCH", "Transport state did not read back the expected value.", {
+      expected_play_state = expected_state,
+      actual_play_state = state.play_state,
+    }, false)
+  end
+  return state, nil, json_array({}), json_array({}), d12_transport_refs()
+end
+
+local function d12_transport_play(request)
+  local _, guard = d12_transport_recording_guard(request)
+  if guard then
+    return nil, guard
+  end
+  local ok = call_reaper("OnPlayButton")
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPlayButton.", {}, false)
+  end
+  return d12_transport_verify_state(request, "playing")
+end
+
+local function d12_transport_pause(request)
+  local _, guard = d12_transport_recording_guard(request)
+  if guard then
+    return nil, guard
+  end
+  local ok = call_reaper("OnPauseButton")
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPauseButton.", {}, false)
+  end
+  return d12_transport_verify_state(request, "paused")
+end
+
+local function d12_transport_stop_playback(request)
+  local _, guard = d12_transport_recording_guard(request)
+  if guard then
+    return nil, guard
+  end
+  local ok = call_reaper("OnStopButton")
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnStopButton.", {}, false)
+  end
+  return d12_transport_verify_state(request, "stopped")
+end
+
+local function d12_transport_bounded_number(value)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return nil
+end
+
+local function d12_transport_set_punch_record_range(request)
+  local start_seconds = d12_transport_bounded_number(request.params.start_seconds)
+  local end_seconds = d12_transport_bounded_number(request.params.end_seconds)
+  if not start_seconds or not end_seconds or start_seconds < 0 or end_seconds < start_seconds then
+    return d12_transport_error("PARAMS_INVALID", "Punch range requires non-negative start_seconds and end_seconds >= start_seconds.", {
+      start_seconds = request.params.start_seconds,
+      end_seconds = request.params.end_seconds,
+    })
+  end
+  local ok = call_reaper("GetSet_LoopTimeRange", true, false, start_seconds, end_seconds, false)
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected punch range update.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    }, false)
+  end
+  local state = d12_transport_state_summary(request)
+  local range = state.time_selection or {}
+  local matches = type(range.start_seconds) == "number"
+    and type(range.end_seconds) == "number"
+    and math.abs(range.start_seconds - start_seconds) < 0.000001
+    and math.abs(range.end_seconds - end_seconds) < 0.000001
+  if not matches then
+    return d12_transport_error("READBACK_MISMATCH", "Punch range did not read back the requested bounds.", {
+      requested_start_seconds = start_seconds,
+      requested_end_seconds = end_seconds,
+      readback = range,
+    }, false)
+  end
+  state.punch_range = {
+    start_seconds = range.start_seconds,
+    end_seconds = range.end_seconds,
+    active = range.active == true,
+  }
+  return state, nil, json_array({}), json_array({}), d12_transport_refs()
+end
+return {
+  exports = { d12_transport_play = d12_transport_play, d12_transport_pause = d12_transport_pause, d12_transport_stop_playback = d12_transport_stop_playback, d12_transport_set_punch_record_range = d12_transport_set_punch_record_range },
   shared = {  },
 }
 end)
@@ -15090,6 +15282,13 @@ local D11_PROJECT_MARKER_REGION_HANDLERS = {
   ["project.rename_region"] = OPENREAPER_HANDLER_EXPORTS.d11_project_rename_region,
 }
 
+local D12_TRANSPORT_SAFE_HANDLERS = {
+  ["transport.play"] = OPENREAPER_HANDLER_EXPORTS.d12_transport_play,
+  ["transport.pause"] = OPENREAPER_HANDLER_EXPORTS.d12_transport_pause,
+  ["transport.stop_playback"] = OPENREAPER_HANDLER_EXPORTS.d12_transport_stop_playback,
+  ["transport.set_punch_record_range"] = OPENREAPER_HANDLER_EXPORTS.d12_transport_set_punch_record_range,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -15124,6 +15323,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D11_PROJECT_MARKER_REGION_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D12_TRANSPORT_SAFE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

@@ -862,6 +862,13 @@ local D11_PROJECT_MARKER_REGION_HANDLERS = {
   ["project.rename_region"] = d11_project_rename_region,
 }
 
+local D12_TRANSPORT_SAFE_HANDLERS = {
+  ["transport.play"] = d12_transport_play,
+  ["transport.pause"] = d12_transport_pause,
+  ["transport.stop_playback"] = d12_transport_stop_playback,
+  ["transport.set_punch_record_range"] = d12_transport_set_punch_record_range,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -896,6 +903,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D11_PROJECT_MARKER_REGION_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D12_TRANSPORT_SAFE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

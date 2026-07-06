@@ -549,6 +549,74 @@
       ]
     },
     {
+      "template_id": "template.transport.play",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.play",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_play",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.pause",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.pause",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_pause",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.stop_playback",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.stop_playback",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_stop_playback",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.transport.set_punch_record_range",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "transport.set_punch_record_range",
+      "pack": "transport",
+      "risk": "safe",
+      "route": "d12-transport-safe-handlers",
+      "handler_file": "transport/d12_transport_safe_route.lua",
+      "handler_export": "d12_transport_set_punch_record_range",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

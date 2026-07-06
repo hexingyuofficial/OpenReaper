@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 127,
+    "entryCount": 131,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 127,
-    "handlerModuleCount": 68,
-    "routeCount": 18,
+    "extractedHandlerCount": 131,
+    "handlerModuleCount": 69,
+    "routeCount": 19,
     "operationCount": 61
   },
   "routes": [
@@ -173,6 +173,30 @@
         "template.project.remove_region",
         "template.project.rename_marker",
         "template.project.rename_region"
+      ]
+    },
+    {
+      "route": "d12-transport-safe-handlers",
+      "template_count": 4,
+      "handler_module_count": 1,
+      "operation_count": 4,
+      "packs": [
+        "transport"
+      ],
+      "risks": [
+        "safe"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d12-transport-safe-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.transport.play",
+        "template.transport.pause",
+        "template.transport.stop_playback",
+        "template.transport.set_punch_record_range"
       ]
     },
     {
