@@ -13387,6 +13387,49 @@ local function e3_media_take_item(take)
   return ok and item or nil
 end
 
+local function e3_media_selected_items()
+  local selected = json_array({})
+  local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    if ok_item and item then
+      selected[#selected + 1] = item
+    end
+  end
+  return selected
+end
+
+local function e3_media_select_only_item(target_item)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item then
+      call_reaper("SetMediaItemSelected", item, item == target_item)
+    end
+  end
+  call_reaper("UpdateArrange")
+end
+
+local function e3_media_restore_selected_items(selected)
+  local selected_lookup = {}
+  if is_json_array(selected) then
+    for index = 1, #selected do
+      selected_lookup[selected[index]] = true
+    end
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item then
+      call_reaper("SetMediaItemSelected", item, selected_lookup[item] == true)
+    end
+  end
+  call_reaper("UpdateArrange")
+end
+
 local function e3_media_file_path_from_ref(ref)
   if not is_object(ref) or ref.kind ~= "file" then
     return nil
@@ -13572,6 +13615,8 @@ local function e3_media_import_to_track(request, section)
   if not path_value then
     return e3_media_handler_error("FILE_NOT_FOUND", "E3 media import requires a source file ref.", {})
   end
+  local preserve_selection = request.params.preserve_selection == true
+  local previous_selection = preserve_selection and e3_media_selected_items() or nil
   local item, failure = e3_media_set_item_source(
     track,
     path_value,
@@ -13582,6 +13627,11 @@ local function e3_media_import_to_track(request, section)
   if not item then
     return nil, failure
   end
+  if preserve_selection then
+    e3_media_restore_selected_items(previous_selection)
+  else
+    e3_media_select_only_item(item)
+  end
   local item_ref = e3_media_item_object_ref(item)
   local readback = {
     imported_item_refs = json_array({ item_ref.ref }),
@@ -13589,7 +13639,7 @@ local function e3_media_import_to_track(request, section)
     source_file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
     track_ref = e3_media_track_ref_string(track),
     position_seconds = e3_media_finite_number(request.params.position_seconds, 0),
-    selection_restored = request.params.preserve_selection == true,
+    selection_restored = preserve_selection,
   }
   if section then
     readback.start_percent = e3_media_finite_number(request.params.start_percent, 0)

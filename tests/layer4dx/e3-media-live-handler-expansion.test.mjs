@@ -205,6 +205,10 @@ describe("E3 media live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /AddMediaItemToTrack/);
     assert.match(BRIDGE_SOURCE, /AddTakeToMediaItem/);
     assert.match(BRIDGE_SOURCE, /SetMediaItemTake_Source/);
+    assert.match(BRIDGE_SOURCE, /CountSelectedMediaItems/);
+    assert.match(BRIDGE_SOURCE, /SetMediaItemSelected/);
+    assert.match(BRIDGE_SOURCE, /UpdateArrange/);
+    assert.match(BRIDGE_SOURCE, /selection_restored = preserve_selection/);
     assert.match(BRIDGE_SOURCE, /PCM_Source_CreateFromFile/);
     assert.match(BRIDGE_SOURCE, /E3 media route write requests must use undo\.mode required/);
     assert.match(BRIDGE_SOURCE, /E3 media route write requests must use artifacts\.allow false/);
