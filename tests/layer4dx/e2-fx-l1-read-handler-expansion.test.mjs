@@ -10,6 +10,7 @@ import {
   createObjectRef,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -33,6 +34,13 @@ const E2_FX_L1_OPERATION_KEYS = Object.freeze([
   "query_state:fx.read_summary",
   "query_state:fx.list_parameters",
   "query_state:fx.read_parameter",
+]);
+const E2_FX_B1_WRITE_IDS = Object.freeze([
+  "template.fx.add_track_fx",
+  "template.fx.add_take_fx",
+  "template.fx.set_fx_bypass",
+  "template.fx.set_fx_parameter_normalized",
+  "template.fx.reorder_fx",
 ]);
 
 describe("E2-FX-L1 FX read live handler expansion", () => {
@@ -169,7 +177,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.equal(requests[5].params.param_index, 0);
   });
 
-  it("keeps the Lua bridge E2-FX-L1 read surface exact and read-only", () => {
+  it("keeps the Lua bridge E2-FX-L1 read surface exact while adding only bounded E2-FX-B1 writes", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.resolve_ref"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.resolve_fx_ref/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_track_chain"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_track_fx_chain/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_take_chain"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_take_fx_chain/);
@@ -182,6 +190,19 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /TakeFX_GetCount/);
     assert.match(BRIDGE_SOURCE, /TakeFX_GetFXName/);
     assert.match(BRIDGE_SOURCE, /TakeFX_GetParam/);
+    assert.match(BRIDGE_SOURCE, /\["fx\.add_track"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.add_track_fx/);
+    assert.match(BRIDGE_SOURCE, /\["fx\.add_take"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.add_take_fx/);
+    assert.match(BRIDGE_SOURCE, /\["fx\.set_bypass"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.set_fx_bypass/);
+    assert.match(BRIDGE_SOURCE, /\["fx\.set_parameter_normalized"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.set_fx_parameter_normalized/);
+    assert.match(BRIDGE_SOURCE, /\["fx\.reorder"\]\s*=\s*OPENREAPER_HANDLER_EXPORTS\.reorder_fx/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_AddByName/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_AddByName/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_SetEnabled/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_SetEnabled/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_SetParamNormalized/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_SetParamNormalized/);
+    assert.match(BRIDGE_SOURCE, /TrackFX_CopyToTrack/);
+    assert.match(BRIDGE_SOURCE, /TakeFX_CopyToTake/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(fx\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
       [
@@ -193,8 +214,16 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
         "fx.read_parameter",
       ],
     );
+    assert.deepEqual(
+      CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS.filter((id) => !CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS.includes(id) && ![
+        "template.fx.set_fx_preset_by_name",
+        "template.fx.set_fx_preset_by_index",
+        "template.fx.read_video_processor_code",
+      ].includes(id)),
+      [...E2_FX_B1_WRITE_IDS],
+    );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code|fx\.add_track|fx\.add_take|fx\.set_|fx\.reorder|fx\.search_installed/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code|fx\.set_preset|fx\.search_installed/);
     assert.doesNotMatch(BRIDGE_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

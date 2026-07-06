@@ -1236,6 +1236,91 @@
       ]
     },
     {
+      "template_id": "template.fx.add_track_fx",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.add_track",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "add_track_fx",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.add_take_fx",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.add_take",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "add_take_fx",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_fx_bypass",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_bypass",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "set_fx_bypass",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.set_fx_parameter_normalized",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.set_parameter_normalized",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "set_fx_parameter_normalized",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.fx.reorder_fx",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "fx.reorder",
+      "pack": "fx",
+      "risk": "write",
+      "route": "e2-fx-b1-write-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "reorder_fx",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

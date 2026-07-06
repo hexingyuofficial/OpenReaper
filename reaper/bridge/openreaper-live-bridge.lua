@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (106 registered template handler row(s); 0 legacy_monolith row(s); 106 extracted handler row(s); 65 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (111 registered template handler row(s); 0 legacy_monolith row(s); 111 extracted handler row(s); 65 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1381,6 +1381,14 @@ local D6_PROJECT_TEMPO_WRITE_CAPABILITIES = {
   ["project.set_tempo_marker"] = { pack = "project", risk = "write" },
 }
 
+local E2_FX_B1_WRITE_CAPABILITIES = {
+  ["fx.add_track"] = { pack = "fx", risk = "write" },
+  ["fx.add_take"] = { pack = "fx", risk = "write" },
+  ["fx.set_bypass"] = { pack = "fx", risk = "write" },
+  ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.reorder"] = { pack = "fx", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1441,12 +1449,23 @@ local function d6_project_tempo_write_capability(request, operation_key)
   return D6_PROJECT_TEMPO_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function e2_fx_b1_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return E2_FX_B1_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
   return safe_write_a_capability(request, operation_key)
     or e3_media_route_capability(request, operation_key)
     or e4_item_route_capability(request, operation_key)
     or e5_routing_write_capability(request, operation_key)
     or e5_automation_write_capability(request, operation_key)
+    or e2_fx_b1_write_capability(request, operation_key)
     or d6_project_tempo_write_capability(request, operation_key)
 end
 
@@ -1519,6 +1538,7 @@ local function validate_request(request)
   local e4_item_route_operation = e4_item_route_capability(request, operation_key)
   local e5_routing_write_operation = e5_routing_write_capability(request, operation_key)
   local e5_automation_write_operation = e5_automation_write_capability(request, operation_key)
+  local e2_fx_b1_write_operation = e2_fx_b1_write_capability(request, operation_key)
   local d6_project_tempo_write_operation = d6_project_tempo_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
@@ -1546,6 +1566,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.pack.id ~= e5_automation_write_operation.pack or request.pack.risk ~= e5_automation_write_operation.risk then
       return false, "E5 automation write request pack/capability/risk mismatch."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.pack.id ~= e2_fx_b1_write_operation.pack or request.pack.risk ~= e2_fx_b1_write_operation.risk then
+      return false, "E2 FX-B1 write request pack/capability/risk mismatch."
     end
   elseif d6_project_tempo_write_operation then
     if request.pack.id ~= d6_project_tempo_write_operation.pack or request.pack.risk ~= d6_project_tempo_write_operation.risk then
@@ -1587,6 +1611,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E5 automation write requests must use undo.mode required."
     end
+  elseif e2_fx_b1_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "E2 FX-B1 write requests must use undo.mode required."
+    end
   elseif d6_project_tempo_write_operation then
     if request.undo.mode ~= "required" then
       return false, "D6 project tempo write requests must use undo.mode required."
@@ -1626,6 +1654,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.artifacts.allow ~= false then
       return false, "E5 automation write requests must use artifacts.allow false."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "E2 FX-B1 write requests must use artifacts.allow false."
     end
   elseif d6_project_tempo_write_operation then
     if request.artifacts.allow ~= false then
@@ -1667,6 +1699,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E5 automation write idempotency_key must be a string when present."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "E2 FX-B1 write idempotency_key must be a string when present."
     end
   elseif d6_project_tempo_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
@@ -7098,8 +7134,263 @@ local function read_fx_parameter(request)
     normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
   }), nil, json_array({}), json_array({}), e2_fx_read_refs()
 end
+
+local function e2_fx_write_summary(request, readback)
+  local summary = e2_fx_read_summary(request, readback)
+  summary.undo_evidence = "required"
+  summary.write_fx_status = "passed"
+  return summary
+end
+
+local function e2_fx_plugin_name(request)
+  local name = request.params and request.params.plugin_name
+  if not is_string(name) or name:gsub("%s+", "") == "" then
+    return nil
+  end
+  return bounded_string(name, 240)
+end
+
+local function e2_fx_insert_index(request, count)
+  local raw = request.params and request.params.insert_at_index
+  if raw == nil or raw == JSON_NULL then
+    return count
+  end
+  local index = tonumber(raw)
+  if not index or index < 0 or index ~= math.floor(index) or index > count then
+    return nil
+  end
+  return index
+end
+
+local function e2_fx_track_add_by_name(track, plugin_name, insert_index)
+  local instantiate = -1000 - insert_index
+  local ok, slot_index = call_reaper("TrackFX_AddByName", track, plugin_name, false, instantiate)
+  if not ok then
+    return nil
+  end
+  return math.floor(first_number(slot_index) or -1)
+end
+
+local function e2_fx_take_add_by_name(take, plugin_name, insert_index)
+  local instantiate = -1000 - insert_index
+  local ok, slot_index = call_reaper("TakeFX_AddByName", take, plugin_name, instantiate)
+  if not ok then
+    return nil
+  end
+  return math.floor(first_number(slot_index) or -1)
+end
+
+local function e2_fx_set_enabled(owner_kind, owner, slot_index, enabled)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_SetEnabled", owner, slot_index, enabled) == true
+  end
+  return call_reaper("TrackFX_SetEnabled", owner, slot_index, enabled) == true
+end
+
+local function e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, value)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_SetParamNormalized", owner, slot_index, param_index, value) == true
+  end
+  return call_reaper("TrackFX_SetParamNormalized", owner, slot_index, param_index, value) == true
+end
+
+local function e2_fx_copy_move(owner_kind, owner, slot_index, target_index)
+  if owner_kind == "take" then
+    return call_reaper("TakeFX_CopyToTake", owner, slot_index, owner, target_index, true) == true
+  end
+  return call_reaper("TrackFX_CopyToTrack", owner, slot_index, owner, target_index, true) == true
+end
+
+local function add_track_fx(request)
+  local track = e2_fx_read_track_from_request_refs(request)
+  if not track then
+    return e2_fx_read_error("TRACK_NOT_FOUND", "E2 FX-B1 add_track_fx requires a resolvable track ref.")
+  end
+  local plugin_name = e2_fx_plugin_name(request)
+  if not plugin_name then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 add_track_fx requires a non-empty plugin_name.")
+  end
+  local before_count = e2_fx_read_count("track", track)
+  local insert_index = e2_fx_insert_index(request, before_count)
+  if not insert_index then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 add_track_fx insert_at_index is outside the track FX chain.", {
+      fx_count = before_count,
+      insert_at_index = request.params and request.params.insert_at_index,
+    })
+  end
+  local slot_index = e2_fx_track_add_by_name(track, plugin_name, insert_index)
+  if not slot_index or slot_index < 0 then
+    return e2_fx_read_error("FX_NOT_FOUND", "E2 FX-B1 add_track_fx could not instantiate the requested FX.", {
+      plugin_name = plugin_name,
+    })
+  end
+  local after_count = e2_fx_read_count("track", track)
+  if after_count <= before_count then
+    return e2_fx_read_error("COMMAND_FAILED", "E2 FX-B1 add_track_fx did not increase the track FX count.", {
+      before_count = before_count,
+      after_count = after_count,
+    }, false)
+  end
+  local summary, ref = e2_fx_read_fx_summary("track", track, slot_index)
+  summary.plugin_name = plugin_name
+  summary.fx_count_before = before_count
+  summary.fx_count_after = after_count
+  summary.created = true
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function add_take_fx(request)
+  local take = e2_fx_read_take_from_request_refs(request)
+  if not take then
+    return e2_fx_read_error("TAKE_NOT_FOUND", "E2 FX-B1 add_take_fx requires a resolvable take ref.")
+  end
+  local plugin_name = e2_fx_plugin_name(request)
+  if not plugin_name then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 add_take_fx requires a non-empty plugin_name.")
+  end
+  local before_count = e2_fx_read_count("take", take)
+  local insert_index = e2_fx_insert_index(request, before_count)
+  if not insert_index then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 add_take_fx insert_at_index is outside the take FX chain.", {
+      fx_count = before_count,
+      insert_at_index = request.params and request.params.insert_at_index,
+    })
+  end
+  local slot_index = e2_fx_take_add_by_name(take, plugin_name, insert_index)
+  if not slot_index or slot_index < 0 then
+    return e2_fx_read_error("FX_NOT_FOUND", "E2 FX-B1 add_take_fx could not instantiate the requested FX.", {
+      plugin_name = plugin_name,
+    })
+  end
+  local after_count = e2_fx_read_count("take", take)
+  if after_count <= before_count then
+    return e2_fx_read_error("COMMAND_FAILED", "E2 FX-B1 add_take_fx did not increase the take FX count.", {
+      before_count = before_count,
+      after_count = after_count,
+    }, false)
+  end
+  local summary, ref = e2_fx_read_fx_summary("take", take, slot_index)
+  summary.plugin_name = plugin_name
+  summary.fx_count_before = before_count
+  summary.fx_count_after = after_count
+  summary.created = true
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function set_fx_bypass(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-B1 set_fx_bypass requires a resolvable FX ref.")
+  end
+  if type(request.params and request.params.enabled) ~= "boolean" then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 set_fx_bypass requires boolean enabled.")
+  end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count then
+    return e2_fx_read_error("FX_SLOT_NOT_FOUND", "E2 FX-B1 set_fx_bypass slot index is outside the owner FX chain.", {
+      slot_index = slot_index,
+      fx_count = count,
+    })
+  end
+  local enabled = request.params.enabled == true
+  if not e2_fx_set_enabled(owner_kind, owner, slot_index, enabled) then
+    return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX enabled-state update.", {}, false)
+  end
+  local summary, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  summary.requested_enabled = enabled
+  summary.updated = summary.enabled == enabled
+  if not summary.updated then
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_bypass did not read back the requested enabled state.", {
+      requested_enabled = enabled,
+      readback_enabled = summary.enabled,
+    }, false)
+  end
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function set_fx_parameter_normalized(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-B1 set_fx_parameter_normalized requires a resolvable FX ref.")
+  end
+  local param_index = tonumber(request.params and request.params.param_index)
+  if not param_index or param_index < 0 or param_index ~= math.floor(param_index) then
+    return e2_fx_read_error("FX_PARAMETER_INVALID", "E2 FX-B1 set_fx_parameter_normalized requires a non-negative integer param_index.")
+  end
+  local normalized_value = tonumber(request.params and request.params.normalized_value)
+  if not normalized_value or normalized_value < 0 or normalized_value > 1 then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 normalized_value must be between 0 and 1.", {
+      normalized_value = request.params and request.params.normalized_value,
+    })
+  end
+  local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
+  if param_index >= count then
+    return e2_fx_read_error("FX_PARAMETER_NOT_FOUND", "E2 FX-B1 set_fx_parameter_normalized index is outside the FX parameter count.", {
+      param_index = param_index,
+      parameter_count = count,
+    })
+  end
+  if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value) then
+    return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX parameter update.", {}, false)
+  end
+  local tolerance = tonumber(request.params and request.params.tolerance) or 0.001
+  if tolerance < 0 then
+    tolerance = 0.001
+  end
+  local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local readback_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
+  local updated = type(readback_normalized) == "number" and math.abs(readback_normalized - normalized_value) <= tolerance
+  if not updated then
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back within tolerance.", {
+      requested_normalized_value = normalized_value,
+      readback_normalized_value = readback_normalized,
+      tolerance = tolerance,
+    }, false)
+  end
+  local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
+  return e2_fx_write_summary(request, {
+    owner_kind = owner_kind,
+    slot_index = slot_index,
+    param_index = param_index,
+    name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
+    value = values.value,
+    min_value = values.min_value,
+    max_value = values.max_value,
+    normalized_value = readback_normalized,
+    requested_normalized_value = normalized_value,
+    tolerance = tolerance,
+    updated = updated,
+  }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
+
+local function reorder_fx(request)
+  local owner_kind, owner, slot_index = e2_fx_read_fx_from_request_refs(request)
+  if not owner then
+    return e2_fx_read_error("FX_REF_NOT_FOUND", "E2 FX-B1 reorder_fx requires a resolvable FX ref.")
+  end
+  local target_index = tonumber(request.params and request.params.target_index)
+  if not target_index or target_index < 0 or target_index ~= math.floor(target_index) then
+    return e2_fx_read_error("PARAMS_INVALID", "E2 FX-B1 reorder_fx requires a non-negative integer target_index.")
+  end
+  local count = e2_fx_read_count(owner_kind, owner)
+  if slot_index < 0 or slot_index >= count or target_index >= count then
+    return e2_fx_read_error("FX_SLOT_NOT_FOUND", "E2 FX-B1 reorder_fx slot index is outside the owner FX chain.", {
+      slot_index = slot_index,
+      target_index = target_index,
+      fx_count = count,
+    })
+  end
+  if target_index ~= slot_index and not e2_fx_copy_move(owner_kind, owner, slot_index, target_index) then
+    return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX reorder operation.", {}, false)
+  end
+  local summary, ref = e2_fx_read_fx_summary(owner_kind, owner, target_index)
+  summary.previous_slot_index = slot_index
+  summary.target_index = target_index
+  summary.updated = summary.slot_index == target_index
+  return e2_fx_write_summary(request, summary), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
+end
 return {
-  exports = { resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter },
+  exports = { resolve_fx_ref = resolve_fx_ref, list_track_fx_chain = list_track_fx_chain, list_take_fx_chain = list_take_fx_chain, read_fx_summary = read_fx_summary, list_fx_parameters = list_fx_parameters, read_fx_parameter = read_fx_parameter, add_track_fx = add_track_fx, add_take_fx = add_take_fx, set_fx_bypass = set_fx_bypass, set_fx_parameter_normalized = set_fx_parameter_normalized, reorder_fx = reorder_fx },
   shared = {  },
 }
 end)
@@ -13778,6 +14069,14 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_automation_item_bounds"] = OPENREAPER_HANDLER_EXPORTS.set_automation_item_bounds,
 }
 
+local E2_FX_B1_WRITE_HANDLERS = {
+  ["fx.add_track"] = OPENREAPER_HANDLER_EXPORTS.add_track_fx,
+  ["fx.add_take"] = OPENREAPER_HANDLER_EXPORTS.add_take_fx,
+  ["fx.set_bypass"] = OPENREAPER_HANDLER_EXPORTS.set_fx_bypass,
+  ["fx.set_parameter_normalized"] = OPENREAPER_HANDLER_EXPORTS.set_fx_parameter_normalized,
+  ["fx.reorder"] = OPENREAPER_HANDLER_EXPORTS.reorder_fx,
+}
+
 local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
   ["project.set_tempo"] = OPENREAPER_HANDLER_EXPORTS.d6_project_set_tempo,
   ["project.set_bpm"] = OPENREAPER_HANDLER_EXPORTS.d6_project_set_bpm,
@@ -13802,6 +14101,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E2_FX_B1_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

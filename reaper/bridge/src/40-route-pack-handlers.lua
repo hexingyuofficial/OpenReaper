@@ -832,6 +832,14 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_automation_item_bounds"] = set_automation_item_bounds,
 }
 
+local E2_FX_B1_WRITE_HANDLERS = {
+  ["fx.add_track"] = add_track_fx,
+  ["fx.add_take"] = add_take_fx,
+  ["fx.set_bypass"] = set_fx_bypass,
+  ["fx.set_parameter_normalized"] = set_fx_parameter_normalized,
+  ["fx.reorder"] = reorder_fx,
+}
+
 local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
   ["project.set_tempo"] = d6_project_set_tempo,
   ["project.set_bpm"] = d6_project_set_bpm,
@@ -856,6 +864,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = E5_AUTOMATION_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = E2_FX_B1_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

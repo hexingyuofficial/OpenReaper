@@ -68,6 +68,14 @@ local D6_PROJECT_TEMPO_WRITE_CAPABILITIES = {
   ["project.set_tempo_marker"] = { pack = "project", risk = "write" },
 }
 
+local E2_FX_B1_WRITE_CAPABILITIES = {
+  ["fx.add_track"] = { pack = "fx", risk = "write" },
+  ["fx.add_take"] = { pack = "fx", risk = "write" },
+  ["fx.set_bypass"] = { pack = "fx", risk = "write" },
+  ["fx.set_parameter_normalized"] = { pack = "fx", risk = "write" },
+  ["fx.reorder"] = { pack = "fx", risk = "write" },
+}
+
 local function safe_write_a_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -128,12 +136,23 @@ local function d6_project_tempo_write_capability(request, operation_key)
   return D6_PROJECT_TEMPO_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function e2_fx_b1_write_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return E2_FX_B1_WRITE_CAPABILITIES[request.pack.capability]
+end
+
 local function template_execute_write_capability(request, operation_key)
   return safe_write_a_capability(request, operation_key)
     or e3_media_route_capability(request, operation_key)
     or e4_item_route_capability(request, operation_key)
     or e5_routing_write_capability(request, operation_key)
     or e5_automation_write_capability(request, operation_key)
+    or e2_fx_b1_write_capability(request, operation_key)
     or d6_project_tempo_write_capability(request, operation_key)
 end
 
@@ -206,6 +225,7 @@ local function validate_request(request)
   local e4_item_route_operation = e4_item_route_capability(request, operation_key)
   local e5_routing_write_operation = e5_routing_write_capability(request, operation_key)
   local e5_automation_write_operation = e5_automation_write_capability(request, operation_key)
+  local e2_fx_b1_write_operation = e2_fx_b1_write_capability(request, operation_key)
   local d6_project_tempo_write_operation = d6_project_tempo_write_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
@@ -233,6 +253,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.pack.id ~= e5_automation_write_operation.pack or request.pack.risk ~= e5_automation_write_operation.risk then
       return false, "E5 automation write request pack/capability/risk mismatch."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.pack.id ~= e2_fx_b1_write_operation.pack or request.pack.risk ~= e2_fx_b1_write_operation.risk then
+      return false, "E2 FX-B1 write request pack/capability/risk mismatch."
     end
   elseif d6_project_tempo_write_operation then
     if request.pack.id ~= d6_project_tempo_write_operation.pack or request.pack.risk ~= d6_project_tempo_write_operation.risk then
@@ -274,6 +298,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "E5 automation write requests must use undo.mode required."
     end
+  elseif e2_fx_b1_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "E2 FX-B1 write requests must use undo.mode required."
+    end
   elseif d6_project_tempo_write_operation then
     if request.undo.mode ~= "required" then
       return false, "D6 project tempo write requests must use undo.mode required."
@@ -313,6 +341,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.artifacts.allow ~= false then
       return false, "E5 automation write requests must use artifacts.allow false."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "E2 FX-B1 write requests must use artifacts.allow false."
     end
   elseif d6_project_tempo_write_operation then
     if request.artifacts.allow ~= false then
@@ -354,6 +386,10 @@ local function validate_request(request)
   elseif e5_automation_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "E5 automation write idempotency_key must be a string when present."
+    end
+  elseif e2_fx_b1_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "E2 FX-B1 write idempotency_key must be a string when present."
     end
   elseif d6_project_tempo_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then

@@ -90,6 +90,14 @@ export const E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS = Object.freeze([
   "template.automation.resolve_send_envelope",
 ]);
 
+export const E2_FX_B1_WRITE_TEMPLATE_IDS = Object.freeze([
+  "template.fx.add_track_fx",
+  "template.fx.add_take_fx",
+  "template.fx.set_fx_bypass",
+  "template.fx.set_fx_parameter_normalized",
+  "template.fx.reorder_fx",
+]);
+
 export const registryRoutes = Object.freeze({
   wave0: Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
@@ -132,6 +140,10 @@ export const registryRoutes = Object.freeze({
   }),
   "e2-fx-l1-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"]),
+  }),
+  "e2-fx-b1-write-handlers": Object.freeze({
+    ids: E2_FX_B1_WRITE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"]),
   }),
   "first-real-a1": Object.freeze({
