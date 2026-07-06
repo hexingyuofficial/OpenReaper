@@ -3721,6 +3721,26 @@ local function d6_tempo_marker_readback(project, position_seconds, marker_index)
   return d6_tempo_marker_readback_by_index(project, readback_index)
 end
 
+local function d6_tempo_marker_readback_by_values(project, position_seconds, bpm, numerator, denominator)
+  local total = d6_tempo_marker_count(project)
+  local best = nil
+  local best_distance = nil
+  for index = 0, total - 1 do
+    local marker = d6_tempo_marker_readback_by_index(project, index)
+    if marker
+      and math.abs(marker.bpm - bpm) < 0.01
+      and marker.time_sig_num == numerator
+      and marker.time_sig_denom == denominator then
+      local distance = math.abs((marker.position_seconds or position_seconds) - position_seconds)
+      if best == nil or distance < best_distance then
+        best = marker
+        best_distance = distance
+      end
+    end
+  end
+  return best
+end
+
 local function d6_tempo_set_marker(request)
   local project = d6_tempo_current_project()
   local bpm = d6_tempo_bounded_bpm(request.params.bpm)
@@ -3780,6 +3800,9 @@ local function d6_tempo_set_marker(request)
     end
   end
   local readback = d6_tempo_marker_readback(project, position_seconds, marker_index)
+  if not readback then
+    readback = d6_tempo_marker_readback_by_values(project, position_seconds, bpm, numerator, denominator)
+  end
   local updated = readback and math.abs(readback.bpm - bpm) < 0.01
   if not updated then
     return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
