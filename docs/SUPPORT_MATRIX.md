@@ -51,6 +51,8 @@ it yet.
 | `recipe.project.fast_observation_bundle` | draft | candidate | Alpha3 speed workflow over `template.project.create_observation_bundle`; needs recipe-level transcript/live evidence before support claim. |
 | `recipe.project.map_snapshot_page` | draft | candidate | Alpha3 large-project workflow over `template.project.create_project_map_snapshot`; needs recipe-level transcript/live evidence before support claim. |
 | `recipe.tracks.prepare_recording_track` | draft | candidate | Alpha3 starter recording workflow over create/select/record-arm/list track atoms; does not start transport recording. |
+| `recipe.tracks.add_stock_vocal_cleanup_chain` | draft | candidate | Alpha3 stock Rea plugin starter over selected-track FX chain/add/readback atoms; parameter presets remain future work. |
+| `recipe.items.reverse_riser_from_selected_item` | draft | candidate | Alpha3 creative starter over selected item copy/reverse/pitch/playrate/fade/readback atoms; destination placement remains user/agent supplied. |
 | `recipe.analysis.selected_item_cycle_quality_report` | draft | candidate | Fake-smoked only; needs a narrow transcript driver and live evidence before support claim. |
 | `recipe.render.region_wav_render` | draft | candidate | Fake-smoked only; render/write risk needs managed render root and live evidence. |
 | `recipe.render.region_delivery_report` | draft | candidate | Fake-smoked only; consumes render artifacts and needs paired/preseeded evidence. |
@@ -60,7 +62,9 @@ it yet.
 Alpha2 expanded the official draft recipe packet to twelve first-atoms recipes.
 Alpha3 adds `recipe.project.fast_observation_bundle` and
 `recipe.project.map_snapshot_page`, plus `recipe.tracks.prepare_recording_track`,
-bringing the packet to fifteen draft recipes. Only
+`recipe.tracks.add_stock_vocal_cleanup_chain`, and
+`recipe.items.reverse_riser_from_selected_item`, bringing the packet to
+seventeen draft recipes. Only
 `recipe.project.cleanup_fingerprint_report` has the V1
 recipe-level live/local portability claim; the others remain draft/static or
 fake-smoked unless later evidence promotes them.

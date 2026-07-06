@@ -30,6 +30,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
   "recipe.items.layer_report_from_evidence",
+  "recipe.items.reverse_riser_from_selected_item",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
@@ -40,6 +41,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
+  "recipe.tracks.add_stock_vocal_cleanup_chain",
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
   "recipe.tracks.prepare_recording_track",
@@ -54,6 +56,8 @@ const WRITE_ATOMS = new Set([
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
   "recipe.tracks.prepare_recording_track",
+  "recipe.tracks.add_stock_vocal_cleanup_chain",
+  "recipe.items.reverse_riser_from_selected_item",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -69,7 +73,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the fifteen draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the seventeen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -371,6 +375,53 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.equal(run.risk_pauses[0].policy, "user_confirmation");
     assert.equal(run.expected.refs.has("track_ref"), true);
     assert.equal(run.expected.state.has("recording_track_ready"), true);
+  });
+
+  it("fake-smokes the Alpha3 reverse-riser starter as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.items.reverse_riser_from_selected_item");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.items.copy_item_to_track",
+        "template.items.set_reverse",
+        "template.items.set_take_pitch",
+        "template.items.set_take_playrate",
+        "template.items.set_item_fades",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 1);
+    assert.equal(run.risk_pauses[0].before_step, "copy_item_for_riser");
+    assert.equal(run.risk_pauses[0].policy, "user_confirmation");
+    assert.equal(run.expected.refs.has("new_item_ref"), true);
+    assert.equal(run.expected.state.has("reverse_riser_ready"), true);
+  });
+
+  it("fake-smokes the Alpha3 stock vocal cleanup-chain starter as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.tracks.add_stock_vocal_cleanup_chain");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.fx.list_track_fx_chain",
+        "template.fx.add_track_fx",
+        "template.fx.add_track_fx",
+        "template.fx.add_track_fx",
+        "template.fx.list_track_fx_chain",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 1);
+    assert.equal(run.risk_pauses[0].before_step, "add_reagate");
+    assert.equal(run.risk_pauses[0].policy, "user_confirmation");
+    assert.equal(run.expected.refs.has("fx_ref"), true);
+    assert.equal(run.expected.state.has("stock_vocal_cleanup_chain"), true);
   });
 
   it("fake-smokes the Alpha3 fast observation bundle as a recipe-only composition", () => {

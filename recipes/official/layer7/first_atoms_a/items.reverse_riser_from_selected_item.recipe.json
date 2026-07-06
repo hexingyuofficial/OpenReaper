@@ -1,0 +1,591 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.items.reverse_riser_from_selected_item",
+  "title": "Reverse riser from selected item",
+  "summary": "Draft write-risk Alpha3 starter workflow that copies one selected item and shapes it into a reverse riser.",
+  "pack": "items",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "reverse_riser",
+  "tags": [
+    "items",
+    "media",
+    "reverse",
+    "riser",
+    "pitch",
+    "playrate",
+    "fade",
+    "starter_recipe",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Turn one selected item into a copied reverse-riser layer with compact readback.",
+    "entry_conditions": [
+      "Use when the user asks for a reverse riser from the selected audio.",
+      "Require one selected item and one selected target track before mutation."
+    ],
+    "supported_steps": [
+      "Resolve and read the selected source item.",
+      "Copy the source item to the selected target track.",
+      "Reverse, pitch, stretch, fade, and read back the copied item."
+    ],
+    "candidate_steps": [
+      "Future versions may place the riser before a detected drop point."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not trim or delete the source item from this starter workflow."
+    ],
+    "required_questions": [
+      "Ask for destination time when the riser should land somewhere other than 0 seconds."
+    ],
+    "template_atoms": [
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.items.copy_item_to_track",
+      "template.items.set_reverse",
+      "template.items.set_take_pitch",
+      "template.items.set_take_playrate",
+      "template.items.set_item_fades"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "copied item readback after the final fade"
+    ],
+    "cleanup_plan": "If the riser is unwanted, delete only the copied new_item_ref after user confirmation.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "selected_item_required",
+      "selected_target_track_required"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "resolve_source_item",
+      "title": "Resolve source item",
+      "summary": "Resolve the first selected item as the reverse-riser source.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.resolve_item_ref",
+        "input": {
+          "ref": "selected:0"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_resolve_source_item",
+      "evidence": "evidence_resolve_source_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_source_item",
+      "title": "Read source item",
+      "summary": "Read compact source item and active-take facts before copying.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "resolve_source_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_source_item",
+      "evidence": "evidence_read_source_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "copy_item_for_riser",
+      "title": "Copy item for riser",
+      "summary": "Copy the selected source item to the selected target track at the default start time.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.copy_item_to_track",
+        "input": {
+          "position_seconds": 0
+        },
+        "refs": {
+          "source_item_ref": {
+            "$from_step": "read_source_item",
+            "output": "item_ref"
+          },
+          "target_track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_copy_item_for_riser",
+      "evidence": "evidence_copy_item_for_riser",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_riser"
+    },
+    {
+      "id": "reverse_riser_item",
+      "title": "Reverse riser item",
+      "summary": "Enable reverse playback on the copied riser item.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.set_reverse",
+        "input": {
+          "reverse": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "copy_item_for_riser",
+            "output": "new_item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_reverse_riser_item",
+      "evidence": "evidence_reverse_riser_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_riser"
+    },
+    {
+      "id": "pitch_riser_item",
+      "title": "Pitch riser item",
+      "summary": "Pitch the copied riser item down one octave.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.set_take_pitch",
+        "input": {
+          "semitones": -12
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "reverse_riser_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_pitch_riser_item",
+      "evidence": "evidence_pitch_riser_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_riser"
+    },
+    {
+      "id": "stretch_riser_item",
+      "title": "Stretch riser item",
+      "summary": "Slow the copied riser item with pitch following the rate.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.set_take_playrate",
+        "input": {
+          "playrate": 0.5,
+          "preserve_pitch": false
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "pitch_riser_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_stretch_riser_item",
+      "evidence": "evidence_stretch_riser_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_riser"
+    },
+    {
+      "id": "fade_riser_item",
+      "title": "Fade riser item",
+      "summary": "Apply a short fade-in and a longer fade-out to the copied riser item.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.set_item_fades",
+        "input": {
+          "fade_in_seconds": 0.02,
+          "fade_out_seconds": 0.35
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "stretch_riser_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_fade_riser_item",
+      "evidence": "evidence_fade_riser_item",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_riser"
+    },
+    {
+      "id": "read_riser_item",
+      "title": "Read riser item",
+      "summary": "Read compact copied-riser item facts after shaping.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "fade_riser_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_riser_item",
+      "evidence": "evidence_read_riser_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_reverse_riser_ref",
+      "kind": "expected_output",
+      "summary": "The workflow must retain the copied riser item ref and final item readback evidence.",
+      "required": true,
+      "evidence": [
+        "evidence_copy_item_for_riser",
+        "evidence_reverse_riser_item",
+        "evidence_pitch_riser_item",
+        "evidence_stretch_riser_item",
+        "evidence_fade_riser_item",
+        "evidence_read_riser_item"
+      ],
+      "outputs": {
+        "refs": [
+          "new_item_ref",
+          "item_ref",
+          "target_track_ref"
+        ],
+        "artifacts": [],
+        "jobs": [],
+        "state": [
+          "reverse_riser_ready"
+        ]
+      }
+    },
+    {
+      "id": "assert_source_item_preserved",
+      "kind": "checkpoint",
+      "summary": "The starter workflow edits the copied item and does not delete or trim the source item.",
+      "required": true,
+      "evidence": [
+        "evidence_read_source_item",
+        "evidence_copy_item_for_riser"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_resolve_source_item",
+        "after_step": "resolve_source_item",
+        "required_evidence": [
+          "evidence_resolve_source_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Source item resolution evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_source_item",
+        "after_step": "read_source_item",
+        "required_evidence": [
+          "evidence_read_source_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Source item readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_copy_item_for_riser",
+        "after_step": "copy_item_for_riser",
+        "required_evidence": [
+          "evidence_copy_item_for_riser"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Copied riser item evidence is retained."
+      },
+      {
+        "id": "checkpoint_reverse_riser_item",
+        "after_step": "reverse_riser_item",
+        "required_evidence": [
+          "evidence_reverse_riser_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Reverse readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_pitch_riser_item",
+        "after_step": "pitch_riser_item",
+        "required_evidence": [
+          "evidence_pitch_riser_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Pitch readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_stretch_riser_item",
+        "after_step": "stretch_riser_item",
+        "required_evidence": [
+          "evidence_stretch_riser_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Playrate readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_fade_riser_item",
+        "after_step": "fade_riser_item",
+        "required_evidence": [
+          "evidence_fade_riser_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Fade readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_riser_item",
+        "after_step": "read_riser_item",
+        "required_evidence": [
+          "evidence_read_riser_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Final riser item readback evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_resolve_source_item",
+        "step": "resolve_source_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.resolve_item_ref",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_source_item",
+        "step": "read_source_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_copy_item_for_riser",
+        "step": "copy_item_for_riser",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.copy_item_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_reverse_riser_item",
+        "step": "reverse_riser_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.set_reverse",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_pitch_riser_item",
+        "step": "pitch_riser_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.set_take_pitch",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_stretch_riser_item",
+        "step": "stretch_riser_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.set_take_playrate",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_fade_riser_item",
+        "step": "fade_riser_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.set_item_fades",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_riser_item",
+        "step": "read_riser_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_riser",
+        "trigger": "template_error",
+        "step": "copy_item_for_riser",
+        "strategy": "retry_step",
+        "summary": "Retry the current riser step when selected refs remain stable."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if selected item or selected target track is ambiguous."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_confirm_reverse_riser_copy",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "copy_item_for_riser",
+        "policy": "user_confirmation",
+        "blocks_auto_resume": true,
+        "summary": "Confirm before copying and shaping a new reverse-riser item."
+      }
+    ]
+  }
+}

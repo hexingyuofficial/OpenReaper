@@ -1,0 +1,450 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.tracks.add_stock_vocal_cleanup_chain",
+  "title": "Add stock vocal cleanup chain",
+  "summary": "Draft write-risk Alpha3 starter workflow that adds ReaGate, ReaEQ, and ReaComp to one selected vocal track.",
+  "pack": "tracks",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "stock_vocal_cleanup_chain",
+  "tags": [
+    "tracks",
+    "fx",
+    "vocal",
+    "reagate",
+    "reaeq",
+    "reacomp",
+    "stock_plugin",
+    "starter_recipe",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Add a conservative REAPER stock cleanup chain to one selected vocal track.",
+    "entry_conditions": [
+      "Use when the user asks for a basic vocal cleanup chain.",
+      "Require exactly one selected target track before adding FX."
+    ],
+    "supported_steps": [
+      "Read the selected track FX chain before mutation.",
+      "Add ReaGate, ReaEQ, and ReaComp in order.",
+      "Read the selected track FX chain after insertion."
+    ],
+    "candidate_steps": [
+      "Future stock-plugin fluency will add semantic parameter presets and human readback."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not write raw parameter indexes from this starter workflow."
+    ],
+    "required_questions": [
+      "Ask before adding third-party plugins or writing plugin parameters."
+    ],
+    "template_atoms": [
+      "template.fx.list_track_fx_chain",
+      "template.fx.add_track_fx"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "track FX chain readback after insertion"
+    ],
+    "cleanup_plan": "If the chain is unwanted, remove or bypass the inserted FX only after a separate confirmed cleanup step.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "selected_track_required",
+      "blocked_stock_plugin_missing"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "read_initial_fx_chain",
+      "title": "Read initial FX chain",
+      "summary": "Read the selected track FX chain before adding stock vocal cleanup FX.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.fx.list_track_fx_chain",
+        "input": {
+          "include_preset": true
+        },
+        "refs": {
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_initial_fx_chain",
+      "evidence": "evidence_read_initial_fx_chain",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "add_reagate",
+      "title": "Add ReaGate",
+      "summary": "Add the stock ReaGate plugin to the selected vocal track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.fx.add_track_fx",
+        "input": {
+          "plugin_name": "VST: ReaGate (Cockos)",
+          "insert_at_index": 0
+        },
+        "refs": {
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_add_reagate",
+      "evidence": "evidence_add_reagate",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_stock_chain"
+    },
+    {
+      "id": "add_reaeq",
+      "title": "Add ReaEQ",
+      "summary": "Add the stock ReaEQ plugin after ReaGate.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.fx.add_track_fx",
+        "input": {
+          "plugin_name": "VST: ReaEQ (Cockos)",
+          "insert_at_index": 1
+        },
+        "refs": {
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_add_reaeq",
+      "evidence": "evidence_add_reaeq",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_stock_chain"
+    },
+    {
+      "id": "add_reacomp",
+      "title": "Add ReaComp",
+      "summary": "Add the stock ReaComp plugin after ReaEQ.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.fx.add_track_fx",
+        "input": {
+          "plugin_name": "VST: ReaComp (Cockos)",
+          "insert_at_index": 2
+        },
+        "refs": {
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_add_reacomp",
+      "evidence": "evidence_add_reacomp",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_stock_chain"
+    },
+    {
+      "id": "read_final_fx_chain",
+      "title": "Read final FX chain",
+      "summary": "Read the selected track FX chain after adding the stock cleanup chain.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.fx.list_track_fx_chain",
+        "input": {
+          "include_preset": true
+        },
+        "refs": {
+          "track_ref": {
+            "kind": "track",
+            "ref": "track:selection:single_bounded",
+            "identity": {
+              "scheme": "selection",
+              "value": "single_bounded"
+            }
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_final_fx_chain",
+      "evidence": "evidence_read_final_fx_chain",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_stock_vocal_chain_refs",
+      "kind": "expected_output",
+      "summary": "The workflow must retain inserted FX refs and final chain readback evidence.",
+      "required": true,
+      "evidence": [
+        "evidence_add_reagate",
+        "evidence_add_reaeq",
+        "evidence_add_reacomp",
+        "evidence_read_final_fx_chain"
+      ],
+      "outputs": {
+        "refs": [
+          "track_ref",
+          "fx_ref",
+          "fx_refs"
+        ],
+        "artifacts": [],
+        "jobs": [],
+        "state": [
+          "stock_vocal_cleanup_chain"
+        ]
+      }
+    },
+    {
+      "id": "assert_parameter_writes_deferred",
+      "kind": "checkpoint",
+      "summary": "This starter recipe adds stock FX but does not write plugin parameters.",
+      "required": true,
+      "evidence": [
+        "evidence_add_reagate",
+        "evidence_add_reaeq",
+        "evidence_add_reacomp"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_initial_fx_chain",
+        "after_step": "read_initial_fx_chain",
+        "required_evidence": [
+          "evidence_read_initial_fx_chain"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Initial FX chain evidence is retained."
+      },
+      {
+        "id": "checkpoint_add_reagate",
+        "after_step": "add_reagate",
+        "required_evidence": [
+          "evidence_add_reagate"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "ReaGate insertion evidence is retained."
+      },
+      {
+        "id": "checkpoint_add_reaeq",
+        "after_step": "add_reaeq",
+        "required_evidence": [
+          "evidence_add_reaeq"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "ReaEQ insertion evidence is retained."
+      },
+      {
+        "id": "checkpoint_add_reacomp",
+        "after_step": "add_reacomp",
+        "required_evidence": [
+          "evidence_add_reacomp"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "ReaComp insertion evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_final_fx_chain",
+        "after_step": "read_final_fx_chain",
+        "required_evidence": [
+          "evidence_read_final_fx_chain"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Final FX chain readback evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_read_initial_fx_chain",
+        "step": "read_initial_fx_chain",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.fx.list_track_fx_chain",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_add_reagate",
+        "step": "add_reagate",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.fx.add_track_fx",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_add_reaeq",
+        "step": "add_reaeq",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.fx.add_track_fx",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_add_reacomp",
+        "step": "add_reacomp",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.fx.add_track_fx",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_final_fx_chain",
+        "step": "read_final_fx_chain",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.fx.list_track_fx_chain",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_stock_chain",
+        "trigger": "template_error",
+        "step": "add_reagate",
+        "strategy": "retry_step",
+        "summary": "Retry the current stock FX insertion when the selected track remains stable."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if selected track or stock plugin availability is ambiguous."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_confirm_stock_vocal_cleanup_chain",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "add_reagate",
+        "policy": "user_confirmation",
+        "blocks_auto_resume": true,
+        "summary": "Confirm before adding the stock vocal cleanup FX chain."
+      }
+    ]
+  }
+}

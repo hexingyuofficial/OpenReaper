@@ -32,6 +32,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
   "recipe.items.layer_report_from_evidence",
+  "recipe.items.reverse_riser_from_selected_item",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
@@ -42,6 +43,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
+  "recipe.tracks.add_stock_vocal_cleanup_chain",
   "recipe.tracks.adjust_selected_track_basic_balance",
   "recipe.tracks.cleanup_created_track_set",
   "recipe.tracks.prepare_recording_track",
@@ -84,6 +86,15 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   "recipe.items.layer_report_from_evidence": Object.freeze([
     "template.items.create_layer_report",
   ]),
+  "recipe.items.reverse_riser_from_selected_item": Object.freeze([
+    "template.items.resolve_item_ref",
+    "template.items.read_item_summary",
+    "template.items.copy_item_to_track",
+    "template.items.set_reverse",
+    "template.items.set_take_pitch",
+    "template.items.set_take_playrate",
+    "template.items.set_item_fades",
+  ]),
   "recipe.media.item_prep_from_folder": Object.freeze([
     "template.media.list_folder_media_files",
     "template.media.import_file_section_to_track",
@@ -107,6 +118,10 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
     "template.automation.resolve_send_envelope",
     "template.automation.set_envelope_lane_state",
     "template.automation.insert_envelope_point",
+  ]),
+  "recipe.tracks.add_stock_vocal_cleanup_chain": Object.freeze([
+    "template.fx.list_track_fx_chain",
+    "template.fx.add_track_fx",
   ]),
   "recipe.tracks.adjust_selected_track_basic_balance": Object.freeze([
     "template.tracks.read_mixer_controls",
@@ -138,7 +153,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the fifteen first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the seventeen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -160,6 +175,7 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.deepEqual(files.map((file) => path.basename(file)).sort(), [
       "analysis.selected_item_cycle_quality_report.recipe.json",
       "items.layer_report_from_evidence.recipe.json",
+      "items.reverse_riser_from_selected_item.recipe.json",
       "media.item_prep_from_folder.recipe.json",
       "midi.track_phrase_seed.recipe.json",
       "project.cleanup_fingerprint_report.recipe.json",
@@ -170,6 +186,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "render.region_delivery_report.recipe.json",
       "render.region_wav_render.recipe.json",
       "routing.send_fx_automation_setup.recipe.json",
+      "tracks.add_stock_vocal_cleanup_chain.recipe.json",
       "tracks.adjust_selected_track_basic_balance.recipe.json",
       "tracks.cleanup_created_track_set.recipe.json",
       "tracks.prepare_recording_track.recipe.json",
@@ -450,6 +467,82 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
+  it("adds an Alpha3 reverse-riser starter workflow over existing item atoms", () => {
+    const recipe = recipesById().get("recipe.items.reverse_riser_from_selected_item");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("starter_recipe"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.items.copy_item_to_track",
+        "template.items.set_reverse",
+        "template.items.set_take_pitch",
+        "template.items.set_take_playrate",
+        "template.items.set_item_fades",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.deepEqual(recipe.steps[0].call_template.input, {
+      ref: "selected:0",
+    });
+    assert.deepEqual(recipe.steps[2].call_template.refs.source_item_ref, {
+      "$from_step": "read_source_item",
+      output: "item_ref",
+    });
+    assert.deepEqual(recipe.steps[3].call_template.refs.item_ref, {
+      "$from_step": "copy_item_for_riser",
+      output: "new_item_ref",
+    });
+    assert.equal(recipe.recovery.risk_gates[0].required_before_step, "copy_item_for_riser");
+    assert.equal(recipe.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.equal(
+      recipe.workflow_card.blocked_steps.some((step) => /source item/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("adds an Alpha3 stock vocal cleanup-chain starter over stock Rea FX atoms", () => {
+    const recipe = recipesById().get("recipe.tracks.add_stock_vocal_cleanup_chain");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("stock_plugin"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.fx.list_track_fx_chain",
+        "template.fx.add_track_fx",
+        "template.fx.add_track_fx",
+        "template.fx.add_track_fx",
+        "template.fx.list_track_fx_chain",
+      ],
+    );
+    assert.deepEqual(
+      recipe.steps
+        .filter((step) => step.call_template?.id === "template.fx.add_track_fx")
+        .map((step) => step.call_template.input.plugin_name),
+      [
+        "VST: ReaGate (Cockos)",
+        "VST: ReaEQ (Cockos)",
+        "VST: ReaComp (Cockos)",
+      ],
+    );
+    assert.equal(recipe.recovery.risk_gates[0].required_before_step, "add_reagate");
+    assert.equal(recipe.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.equal(
+      recipe.workflow_card.candidate_steps.some((step) => /semantic parameter presets/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
   it("adds an Alpha3 fast observation workflow over the fixed observation bundle atom", () => {
     const recipe = recipesById().get("recipe.project.fast_observation_bundle");
 
@@ -573,6 +666,40 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.status, "candidate");
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("recording"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 reverse-riser workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "reverse riser",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.items.reverse_riser_from_selected_item");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "items.reverse_riser");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("reverse"), true);
+    assert.equal(item.task_intents.includes("riser"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 stock vocal chain workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "vocal",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.tracks.add_stock_vocal_cleanup_chain");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "tracks.stock_vocal_cleanup_chain");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("vocal"), true);
+    assert.equal(item.task_intents.includes("reacomp"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });
