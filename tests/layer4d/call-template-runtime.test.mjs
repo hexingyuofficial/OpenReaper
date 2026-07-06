@@ -29,6 +29,12 @@ import {
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
   CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
@@ -350,12 +356,41 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
+    assert.equal(runtimeMenu.product_surface.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
+    assert.equal(runtimeMenu.product_surface.surface, "executable");
+    assert.deepEqual(runtimeMenu.product_surface.item_schema.fields, CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS);
+    assert.deepEqual(
+      runtimeMenu.product_surface.item_schema.status_values,
+      CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
+    );
+    assert.deepEqual(
+      runtimeMenu.product_surface.item_schema.beginner_label_values,
+      CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES,
+    );
+    assert.deepEqual(
+      runtimeMenu.product_surface.item_schema.category_values,
+      CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
+    );
+    assert.deepEqual(runtimeMenu.product_surface.workflow_rhythm, CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM);
+    assert.deepEqual(
+      runtimeMenu.product_surface.workflow_rhythm.steps.map((step) => step.id),
+      ["discover", "observe", "target", "confirm", "execute_one", "readback"],
+    );
+    assert.equal(
+      runtimeMenu.product_surface.workflow_rhythm.default_readiness_recipe,
+      "recipe.project.inspect_current_fixture_readiness",
+    );
+    assert.match(
+      runtimeMenu.product_surface.workflow_rhythm.stop_rules.join("\n"),
+      /public call_recipe|hidden recipe execution|raw Lua/,
+    );
 
     const catalogMenu = runtime.list_templates({ surface: "catalog" });
     assert.deepEqual(catalogMenu, directDiscovery.list_templates());
     assert.equal(catalogMenu.items.length, 25);
     assert.equal(catalogMenu.page.has_more, true);
     assert.equal(catalogMenu.applied.surface, "catalog");
+    assert.equal(catalogMenu.product_surface.surface, "catalog");
 
     const menuPayload = JSON.stringify(catalogMenu);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
@@ -475,6 +510,11 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
     assert.equal(graduatedMenu.items.length, 100);
     assert.equal(graduatedMenu.page.has_more, true);
+    assert.equal(graduatedMenu.product_surface.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
+    assert.equal(
+      graduatedMenu.product_surface.workflow_rhythm.steps.some((step) => step.tool === "call_template"),
+      true,
+    );
     assert.equal(
       graduatedRuntime.list_templates({
         ids: [

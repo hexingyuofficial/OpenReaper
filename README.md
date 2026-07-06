@@ -74,6 +74,12 @@ For a first real-user pass, run the recipe card
 it reads a compact project snapshot, selected items, track refs, and mixer
 controls without adding a public `call_recipe` tool.
 
+The product action menu is versioned by
+`alpha2.product_action_surface.v1`; see
+`docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md` for the schema, status values,
+and default `discover -> observe -> target -> confirm -> execute_one -> readback`
+workflow rhythm.
+
 ## Tool Surface
 
 OpenReaper exposes exactly five agent-facing MCP tools:

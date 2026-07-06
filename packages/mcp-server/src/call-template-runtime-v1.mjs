@@ -29,6 +29,92 @@ import {
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT = "alpha2.product_action_surface.v1";
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS = deepFreeze([
+  "template_id",
+  "action_name",
+  "beginner_label",
+  "user_action_category",
+  "current_status",
+  "user_message",
+  "next_step",
+  "safety_note",
+  "common_phrases",
+  "required_input",
+  "required_refs",
+  "output_refs",
+  "needs_confirmation",
+  "fixture_requirements",
+  "example_input",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES = deepFreeze([
+  "available_now",
+  "needs_ref",
+  "needs_confirmation",
+  "bug_known",
+  "blocked",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES = deepFreeze([
+  "Ready now",
+  "Ready after input",
+  "Select or resolve an object first",
+  "Ask before changing the project",
+  "Known bug",
+  "Not available in this runtime",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES = deepFreeze([
+  "read",
+  "safe_write",
+  "write",
+  "destructive",
+  "render_or_job",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM = deepFreeze({
+  id: "discover_observe_confirm_execute_readback_v1",
+  default_readiness_recipe: "recipe.project.inspect_current_fixture_readiness",
+  steps: [
+    {
+      id: "discover",
+      tool: "list_templates",
+      goal: "Show only actions visible in the current executable surface.",
+    },
+    {
+      id: "observe",
+      tool: "call_template",
+      goal: "Read project state and collect canonical refs before mutation.",
+    },
+    {
+      id: "target",
+      tool: "list_templates",
+      goal: "Choose one action and verify required_input and required_refs.",
+    },
+    {
+      id: "confirm",
+      tool: "user_confirmation",
+      goal: "Ask before write, destructive, render, or ambiguous actions.",
+    },
+    {
+      id: "execute_one",
+      tool: "call_template",
+      goal: "Run one template call only, never a hidden recipe executor.",
+    },
+    {
+      id: "readback",
+      tool: "call_template",
+      goal: "Report request id, refs, undo/readback evidence, and typed blockers.",
+    },
+  ],
+  stop_rules: [
+    "Stop after the same typed blocker repeats twice.",
+    "Stop before raw Lua, raw action execution, shell, public call_recipe, or hidden recipe execution.",
+    "Stop before broad support claims outside the current evidence-bound setup.",
+  ],
+});
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE = Object.freeze({
   kind: "accepted_official_template_catalog",
@@ -981,6 +1067,7 @@ function runtimeDiscoveryRequestHasIds(request) {
 function runtimeActionDiscoveryResponse(response, surface, templatesById) {
   return deepFreeze({
     ...response,
+    product_surface: runtimeProductSurfaceMetadata(surface),
     items: response.items.map((item) => {
       const descriptor = templatesById.get(item.id) ?? item;
       return {
@@ -993,6 +1080,20 @@ function runtimeActionDiscoveryResponse(response, surface, templatesById) {
       surface,
     },
   });
+}
+
+function runtimeProductSurfaceMetadata(surface) {
+  return {
+    contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
+    surface,
+    item_schema: {
+      fields: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
+      status_values: CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
+      beginner_label_values: CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES,
+      category_values: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_CATEGORY_VALUES,
+    },
+    workflow_rhythm: CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
+  };
 }
 
 function runtimeCapabilityTruthRequest(request) {

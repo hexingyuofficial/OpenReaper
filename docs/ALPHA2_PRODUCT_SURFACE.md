@@ -34,6 +34,26 @@ call_template
 5. For writes, confirm the exact target and change, then use one
    `call_template` at a time with undo/readback evidence.
 
+## Product Schema
+
+The runtime menu advertises this schema through
+`product_surface.contract = "alpha2.product_action_surface.v1"`.
+
+The frozen schema and workflow rhythm are documented in:
+
+```text
+docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md
+```
+
+Default rhythm:
+
+```text
+discover -> observe -> target -> confirm -> execute_one -> readback
+```
+
+The agent should treat `recipe.project.inspect_current_fixture_readiness` as the
+default observation flow before any meaningful mutation.
+
 ## Beginner Labels
 
 ```text
@@ -70,6 +90,19 @@ Use a real but disposable REAPER project.
    hidden recipe execution.
 ```
 
+## Startup Preflight
+
+Before asking for real work, verify:
+
+```text
+1. REAPER is open with the manual bridge running.
+2. Owner/generation match the current session.
+3. `list_templates({ "surface": "executable" })` returns product_surface.
+4. The first menu page groups actions by beginner_label and user_action_category.
+5. Project observation uses `recipe.project.inspect_current_fixture_readiness`
+   as step-by-step template calls, not public call_recipe.
+```
+
 ## Boundaries
 
 - No public `call_recipe`.
@@ -77,4 +110,3 @@ Use a real but disposable REAPER project.
 - No raw Lua/action/shell bypass.
 - No arbitrary support claims outside the evidence-bound setup.
 - No write without target clarity, undo/readback, and user approval.
-

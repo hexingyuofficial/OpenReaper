@@ -374,6 +374,22 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.deepEqual(recipeTemplateDependencies(cleanupProject), EXPECTED_DEPENDENCIES[cleanupProject.id]);
     assert.deepEqual(recipeTemplateDependencies(balance), EXPECTED_DEPENDENCIES[balance.id]);
     assert.deepEqual(recipeTemplateDependencies(readiness), EXPECTED_DEPENDENCIES[readiness.id]);
+    assert.equal(readiness.tags.includes("product_surface"), true);
+    assert.match(readiness.workflow_card.intent, /compact project snapshot/);
+    assert.deepEqual(readiness.workflow_card.supported_steps, [
+      "Read compact project track/item overview.",
+      "List tracks and selected items as canonical refs.",
+      "Read bounded mixer controls for target confirmation.",
+    ]);
+    assert.equal(
+      readiness.workflow_card.required_questions.some((question) => /before mutation/i.test(question)),
+      true,
+    );
+    assert.deepEqual(readiness.assertions[0].outputs.refs, [
+      "project_ref",
+      "track_ref",
+      "item_ref",
+    ]);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(cleanupTracks)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(cleanupProject)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(balance)), /call_recipe|executor|raw_lua|raw_action|shell/i);
