@@ -729,7 +729,11 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.routing.set_send_mode",
       "template.routing.set_master_parent_send",
       "template.routing.set_track_channel_count",
+      "template.routing.list_track_hardware_outputs",
+      "template.routing.set_track_hardware_output",
+      "template.routing.remove_track_hardware_output",
       "template.routing.read_project_routing_graph",
+      "template.routing.list_available_audio_outputs",
       "template.routing.set_send_audio_channels",
       "template.routing.set_send_phase",
       "template.routing.set_send_mono",
@@ -777,10 +781,10 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 32);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 11);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 21);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 15);
+    assert.equal(bridge.seen.length, 36);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 13);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 23);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 19);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 17);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
@@ -815,10 +819,10 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(fake.spawned_reaper, false);
     assert.equal(fake.live_pass_claimed, false);
     assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS);
-    assert.equal(fake.executions.length, 32);
+    assert.equal(fake.executions.length, 36);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
-    assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 11);
-    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 21);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 13);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 23);
     assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 0);
     assert.deepEqual(fake.preflight_blockers_covered, [
       "e5_track_ref_missing",
@@ -829,7 +833,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "e5_send_value_invalid",
       "e5_automation_point_value_invalid",
     ]);
-    assert.equal(fake.routing_template_ids.length, 15);
+    assert.equal(fake.routing_template_ids.length, 19);
     assert.equal(fake.automation_template_ids.length, 17);
 
     const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
@@ -1477,6 +1481,14 @@ function e5RouteInput(id) {
     "template.routing.set_send_mode": { mode: "post_fader" },
     "template.routing.set_master_parent_send": { enabled: true },
     "template.routing.set_track_channel_count": { channel_count: 4 },
+    "template.routing.list_track_hardware_outputs": { include_disabled: true, max_outputs: 16 },
+    "template.routing.set_track_hardware_output": {
+      output_index: 0,
+      source_channel_offset: 0,
+      source_channel_count: 2,
+      mix_to_mono: false,
+    },
+    "template.routing.remove_track_hardware_output": { output_index: 0, missing_policy: "ok" },
     "template.routing.read_project_routing_graph": { include_master_parent: true, max_tracks: 16, max_edges: 64 },
     "template.routing.set_send_audio_channels": {
       source_channel_offset: 0,
@@ -1488,6 +1500,7 @@ function e5RouteInput(id) {
     "template.routing.set_send_mono": { mono: false },
     "template.routing.set_send_midi_channels": { source_channel: "all", destination_channel: "original" },
     "template.routing.read_fx_pin_mapping": { direction: "input", pin_index: 0 },
+    "template.routing.list_available_audio_outputs": { include_unavailable: false, max_outputs: 32 },
     "template.automation.resolve_envelope_ref": { parent_kind: "track", envelope_name: "Volume" },
     "template.automation.read_envelope_points": { limit: 16 },
     "template.automation.evaluate_envelope_at_time": { time_seconds: 1 },
@@ -1545,6 +1558,9 @@ function e5RouteRefs(id) {
     return { source_track_ref: trackRef, destination_track_ref: destinationTrackRef };
   }
   if (id === "template.routing.read_track_routing"
+    || id === "template.routing.list_track_hardware_outputs"
+    || id === "template.routing.set_track_hardware_output"
+    || id === "template.routing.remove_track_hardware_output"
     || id === "template.routing.set_master_parent_send"
     || id === "template.routing.set_track_channel_count"
     || id === "template.automation.set_track_automation_mode"
@@ -1586,6 +1602,8 @@ function e5RouteIdempotencyKey(id) {
     "template.routing.set_send_mode",
     "template.routing.set_master_parent_send",
     "template.routing.set_track_channel_count",
+    "template.routing.set_track_hardware_output",
+    "template.routing.remove_track_hardware_output",
     "template.routing.set_send_audio_channels",
     "template.routing.set_send_phase",
     "template.routing.set_send_mono",

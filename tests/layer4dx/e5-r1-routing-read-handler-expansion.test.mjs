@@ -21,6 +21,7 @@ import {
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const E5_R1_HANDLER_SOURCE = readFileSync(new URL("../../reaper/bridge/src/handlers/routing/e5_r1_routing_read_route.lua", import.meta.url), "utf8");
 const E5_R1_FLAG = "--routing-read";
 const E5_R1_OPT_IN_ENV = "OPENREAPER_E5_R1_ROUTING_READ_LIVE_SMOKE";
 const E5_TRACK_REF_ENV = "OPENREAPER_E5_TRACK_REF";
@@ -28,15 +29,19 @@ const E5_SEND_REF_ENV = "OPENREAPER_E5_SEND_REF";
 const E5_R1_OPERATION_KEYS = Object.freeze([
   "query_state:routing.track.read",
   "query_state:routing.send.resolve_ref",
+  "query_state:routing.track_hardware_outputs.list",
   "query_state:routing.project_graph.read",
+  "query_state:routing.audio_outputs.list",
 ]);
 
 describe("E5-R1 routing read live handler expansion", () => {
-  it("adds a separate runtime allowlist for exactly the three E5-R1 routing read template ids", async () => {
+  it("adds a separate runtime allowlist for exactly the five E5-R1 routing read template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS, [
       "template.routing.read_track_routing",
       "template.routing.resolve_send_ref",
+      "template.routing.list_track_hardware_outputs",
       "template.routing.read_project_routing_graph",
+      "template.routing.list_available_audio_outputs",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -68,7 +73,9 @@ describe("E5-R1 routing read live handler expansion", () => {
     assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
       "routing.track.read",
       "routing.send.resolve_ref",
+      "routing.track_hardware_outputs.list",
       "routing.project_graph.read",
+      "routing.audio_outputs.list",
     ]);
     for (const request of bridge.seen) {
       assert.equal(request.pack.id, "routing");
@@ -134,7 +141,7 @@ describe("E5-R1 routing read live handler expansion", () => {
     assert.deepEqual(report.attempted_template_ids, CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS);
 
     const requests = await readTransportRequests(transportDir);
-    assert.equal(requests.length, 3);
+    assert.equal(requests.length, 5);
     assert.deepEqual(
       requests.map((request) => `${request.operation.family}:${request.operation.name}`),
       E5_R1_OPERATION_KEYS,
@@ -152,24 +159,35 @@ describe("E5-R1 routing read live handler expansion", () => {
     }
     assert.equal(requests[0].refs.find((ref) => ref.kind === "track").ref, "track:guid:{E5-R1-SOURCE-TRACK}");
     assert.equal(requests[1].params.send_ref, "send:track:0:0");
-    assert.equal(requests[2].params.max_tracks, 16);
-    assert.equal(requests[2].params.max_edges, 64);
+    assert.equal(requests[2].refs.find((ref) => ref.kind === "track").ref, "track:guid:{E5-R1-SOURCE-TRACK}");
+    assert.equal(requests[3].params.max_tracks, 16);
+    assert.equal(requests[3].params.max_edges, 64);
+    assert.equal(requests[4].params.max_outputs, 32);
   });
 
   it("keeps the Lua bridge E5-R1 routing read surface exact and read-only", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.track\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_track_routing/);
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.send\.resolve_ref"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.resolve_send_ref/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:routing\.track_hardware_outputs\.list"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_track_hardware_outputs/);
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.project_graph\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_project_routing_graph/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:routing\.audio_outputs\.list"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_available_audio_outputs/);
     assert.match(BRIDGE_SOURCE, /\["query_state:routing\.fx_pin_mapping\.read"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_pin_mapping/);
     assert.match(BRIDGE_SOURCE, /GetTrackNumSends/);
     assert.match(BRIDGE_SOURCE, /GetTrackSendInfo_Value/);
     assert.match(BRIDGE_SOURCE, /E5-R1 read_track_routing requires a resolvable track ref/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(routing\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["routing.track.read", "routing.send.resolve_ref", "routing.project_graph.read", "routing.fx_pin_mapping.read"],
+      [
+        "routing.track.read",
+        "routing.send.resolve_ref",
+        "routing.track_hardware_outputs.list",
+        "routing.project_graph.read",
+        "routing.audio_outputs.list",
+        "routing.fx_pin_mapping.read",
+      ],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 });
@@ -181,14 +199,20 @@ function e5R1Input(id) {
   if (id === "template.routing.resolve_send_ref") {
     return { send_ref: "send:track:0:0" };
   }
+  if (id === "template.routing.list_track_hardware_outputs") {
+    return { include_disabled: true, max_outputs: 16 };
+  }
   if (id === "template.routing.read_project_routing_graph") {
     return { include_master_parent: true, max_tracks: 16, max_edges: 64 };
+  }
+  if (id === "template.routing.list_available_audio_outputs") {
+    return { include_unavailable: false, max_outputs: 32 };
   }
   return {};
 }
 
 function e5R1Refs(id) {
-  if (id === "template.routing.read_track_routing") {
+  if (id === "template.routing.read_track_routing" || id === "template.routing.list_track_hardware_outputs") {
     return {
       track_ref: createObjectRef("track", { scheme: "guid", value: "{E5-R1-SOURCE-TRACK}" }, {
         ref: "track:guid:{E5-R1-SOURCE-TRACK}",

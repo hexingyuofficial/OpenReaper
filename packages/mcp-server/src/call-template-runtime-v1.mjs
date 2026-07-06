@@ -142,7 +142,9 @@ export const CALL_TEMPLATE_RUNTIME_E4_ITEM_ROUTE_TEMPLATE_IDS = deepFreeze([
 export const CALL_TEMPLATE_RUNTIME_E5_R1_ROUTING_READ_TEMPLATE_IDS = deepFreeze([
   "template.routing.read_track_routing",
   "template.routing.resolve_send_ref",
+  "template.routing.list_track_hardware_outputs",
   "template.routing.read_project_routing_graph",
+  "template.routing.list_available_audio_outputs",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS = deepFreeze([
@@ -183,7 +185,11 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.routing.set_send_mode",
   "template.routing.set_master_parent_send",
   "template.routing.set_track_channel_count",
+  "template.routing.list_track_hardware_outputs",
+  "template.routing.set_track_hardware_output",
+  "template.routing.remove_track_hardware_output",
   "template.routing.read_project_routing_graph",
+  "template.routing.list_available_audio_outputs",
   "template.routing.set_send_audio_channels",
   "template.routing.set_send_phase",
   "template.routing.set_send_mono",

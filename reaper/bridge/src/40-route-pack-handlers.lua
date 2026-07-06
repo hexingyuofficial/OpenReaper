@@ -815,6 +815,8 @@ local E5_ROUTING_WRITE_HANDLERS = {
   ["routing.send.set_mode"] = set_send_mode,
   ["routing.master_parent.set"] = set_master_parent_send,
   ["routing.track_channels.set"] = set_track_channel_count,
+  ["routing.track_hardware_output.set"] = set_track_hardware_output,
+  ["routing.track_hardware_output.remove"] = remove_track_hardware_output,
   ["routing.send.audio_channels.set"] = set_send_audio_channels,
   ["routing.send.set_phase"] = set_send_phase,
   ["routing.send.set_mono"] = set_send_mono,
@@ -1163,9 +1165,17 @@ local ALLOWED_OPERATIONS = {
     pack = "routing",
     handler = resolve_send_ref,
   },
+  ["query_state:routing.track_hardware_outputs.list"] = {
+    pack = "routing",
+    handler = list_track_hardware_outputs,
+  },
   ["query_state:routing.project_graph.read"] = {
     pack = "routing",
     handler = read_project_routing_graph,
+  },
+  ["query_state:routing.audio_outputs.list"] = {
+    pack = "routing",
+    handler = list_available_audio_outputs,
   },
   ["query_state:routing.fx_pin_mapping.read"] = {
     pack = "routing",

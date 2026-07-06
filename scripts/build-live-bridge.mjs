@@ -77,6 +77,8 @@ export const E5_ROUTING_WRITE_TEMPLATE_IDS = Object.freeze([
   "template.routing.set_send_mode",
   "template.routing.set_master_parent_send",
   "template.routing.set_track_channel_count",
+  "template.routing.set_track_hardware_output",
+  "template.routing.remove_track_hardware_output",
   "template.routing.set_send_audio_channels",
   "template.routing.set_send_phase",
   "template.routing.set_send_mono",

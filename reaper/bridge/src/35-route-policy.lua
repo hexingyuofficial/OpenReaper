@@ -45,6 +45,8 @@ local E5_ROUTING_WRITE_CAPABILITIES = {
   ["routing.send.set_mode"] = { pack = "routing", risk = "write" },
   ["routing.master_parent.set"] = { pack = "routing", risk = "write" },
   ["routing.track_channels.set"] = { pack = "routing", risk = "write" },
+  ["routing.track_hardware_output.set"] = { pack = "routing", risk = "write" },
+  ["routing.track_hardware_output.remove"] = { pack = "routing", risk = "write" },
   ["routing.send.audio_channels.set"] = { pack = "routing", risk = "write" },
   ["routing.send.set_phase"] = { pack = "routing", risk = "write" },
   ["routing.send.set_mono"] = { pack = "routing", risk = "write" },

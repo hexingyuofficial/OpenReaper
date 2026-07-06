@@ -35,6 +35,8 @@ describe("E5 routing write live handler expansion", () => {
       "routing.send.set_mode",
       "routing.master_parent.set",
       "routing.track_channels.set",
+      "routing.track_hardware_output.set",
+      "routing.track_hardware_output.remove",
       "routing.send.audio_channels.set",
       "routing.send.set_phase",
       "routing.send.set_mono",
@@ -43,6 +45,8 @@ describe("E5 routing write live handler expansion", () => {
       assert.match(ROUTE_SOURCE, new RegExp(`\\["${capability.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"\\]`));
     }
     assert.match(HANDLER_SOURCE, /CreateTrackSend/);
+    assert.match(HANDLER_SOURCE, /RemoveTrackSend/);
+    assert.match(HANDLER_SOURCE, /GetOutputChannelName/);
     assert.match(HANDLER_SOURCE, /SetTrackSendInfo_Value/);
     assert.match(HANDLER_SOURCE, /SetMediaTrackInfo_Value/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);

@@ -82,7 +82,9 @@ const EXTRACTED_E4_ITEM_HANDLERS = Object.freeze(new Map([
 const EXTRACTED_E5_R1_ROUTING_READ_HANDLERS = Object.freeze(new Map([
   ["template.routing.read_track_routing", ["routing/e5_r1_routing_read_route.lua", "read_track_routing"]],
   ["template.routing.resolve_send_ref", ["routing/e5_r1_routing_read_route.lua", "resolve_send_ref"]],
+  ["template.routing.list_track_hardware_outputs", ["routing/e5_r1_routing_read_route.lua", "list_track_hardware_outputs"]],
   ["template.routing.read_project_routing_graph", ["routing/e5_r1_routing_read_route.lua", "read_project_routing_graph"]],
+  ["template.routing.list_available_audio_outputs", ["routing/e5_r1_routing_read_route.lua", "list_available_audio_outputs"]],
 ]));
 const EXTRACTED_E5_ROUTING_WRITE_HANDLERS = Object.freeze(new Map([
   ["template.routing.create_track_send", ["routing/e5_r1_routing_read_route.lua", "create_track_send"]],
@@ -92,6 +94,8 @@ const EXTRACTED_E5_ROUTING_WRITE_HANDLERS = Object.freeze(new Map([
   ["template.routing.set_send_mode", ["routing/e5_r1_routing_read_route.lua", "set_send_mode"]],
   ["template.routing.set_master_parent_send", ["routing/e5_r1_routing_read_route.lua", "set_master_parent_send"]],
   ["template.routing.set_track_channel_count", ["routing/e5_r1_routing_read_route.lua", "set_track_channel_count"]],
+  ["template.routing.set_track_hardware_output", ["routing/e5_r1_routing_read_route.lua", "set_track_hardware_output"]],
+  ["template.routing.remove_track_hardware_output", ["routing/e5_r1_routing_read_route.lua", "remove_track_hardware_output"]],
   ["template.routing.set_send_audio_channels", ["routing/e5_r1_routing_read_route.lua", "set_send_audio_channels"]],
   ["template.routing.set_send_phase", ["routing/e5_r1_routing_read_route.lua", "set_send_phase"]],
   ["template.routing.set_send_mono", ["routing/e5_r1_routing_read_route.lua", "set_send_mono"]],
@@ -287,7 +291,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 173);
+    assert.equal(REGISTRY.entries.length, 177);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -319,12 +323,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 173,
+      entryCount: 177,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 173,
+      extractedHandlerCount: 177,
       handlerModuleCount: 77,
       routeCount: 27,
-      operationCount: 70,
+      operationCount: 72,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -585,6 +589,8 @@ describe("Layer 4D.R bridge handler registry", () => {
         "routing.send.set_mode",
         "routing.master_parent.set",
         "routing.track_channels.set",
+        "routing.track_hardware_output.set",
+        "routing.track_hardware_output.remove",
         "routing.send.audio_channels.set",
         "routing.send.set_phase",
         "routing.send.set_mono",
@@ -643,7 +649,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(173 registered template handler row\(s\); 0 legacy_monolith row\(s\); 173 extracted handler row\(s\); 77 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(177 registered template handler row\(s\); 0 legacy_monolith row\(s\); 177 extracted handler row\(s\); 77 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

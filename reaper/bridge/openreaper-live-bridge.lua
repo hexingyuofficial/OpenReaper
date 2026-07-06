@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (173 registered template handler row(s); 0 legacy_monolith row(s); 173 extracted handler row(s); 77 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (177 registered template handler row(s); 0 legacy_monolith row(s); 177 extracted handler row(s); 77 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1358,6 +1358,8 @@ local E5_ROUTING_WRITE_CAPABILITIES = {
   ["routing.send.set_mode"] = { pack = "routing", risk = "write" },
   ["routing.master_parent.set"] = { pack = "routing", risk = "write" },
   ["routing.track_channels.set"] = { pack = "routing", risk = "write" },
+  ["routing.track_hardware_output.set"] = { pack = "routing", risk = "write" },
+  ["routing.track_hardware_output.remove"] = { pack = "routing", risk = "write" },
   ["routing.send.audio_channels.set"] = { pack = "routing", risk = "write" },
   ["routing.send.set_phase"] = { pack = "routing", risk = "write" },
   ["routing.send.set_mono"] = { pack = "routing", risk = "write" },
@@ -9527,6 +9529,10 @@ local function e5_routing_send_object_ref(source_track, send_index)
   }
 end
 
+local function e5_routing_hardware_output_ref(track, output_index)
+  return "hardware_output:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(output_index)
+end
+
 local function e5_routing_send_index_from_ref(send_ref)
   if not is_string(send_ref) then
     return nil
@@ -9614,6 +9620,56 @@ end
 local function e5_routing_send_count(track, category)
   local ok, count = call_reaper("GetTrackNumSends", track, category)
   return ok and math.max(0, math.floor(first_number(count) or 0)) or 0
+end
+
+local function e5_routing_hardware_output_summary(track, hardware_index)
+  local output_index = e5_routing_read_send_value(track, 1, hardware_index, "I_DSTCHAN", 0)
+  local source_value = e5_routing_read_send_value(track, 1, hardware_index, "I_SRCCHAN", 0)
+  local source_channel_offset = source_value % 1024
+  local mix_to_mono = source_value >= 1024
+  local ok_name, output_name = call_reaper("GetOutputChannelName", output_index)
+  return {
+    hardware_output_ref = e5_routing_hardware_output_ref(track, output_index),
+    track_ref = e5_routing_track_ref_string(track),
+    hardware_index = hardware_index,
+    output_index = output_index,
+    output_name = bounded_string(ok_name and first_string(output_name) or "", 160),
+    source_channel_offset = source_channel_offset,
+    source_channel_count = mix_to_mono and 1 or 2,
+    mix_to_mono = mix_to_mono,
+    muted = e5_routing_read_send_value(track, 1, hardware_index, "B_MUTE", 0) ~= 0,
+  }
+end
+
+local function e5_routing_hardware_index_for_output(track, output_index)
+  local count = e5_routing_send_count(track, 1)
+  for hardware_index = 0, count - 1 do
+    local current = e5_routing_read_send_value(track, 1, hardware_index, "I_DSTCHAN", -1)
+    if current == output_index then
+      return hardware_index
+    end
+  end
+  return nil
+end
+
+local function e5_routing_hardware_source_value(request)
+  local source_offset = math.max(0, math.floor(tonumber(request.params.source_channel_offset) or 0))
+  local source_count = math.floor(tonumber(request.params.source_channel_count) or 2)
+  if source_count ~= 1 and source_count ~= 2 then
+    return nil
+  end
+  if request.params.mix_to_mono == true or source_count == 1 then
+    return source_offset + 1024
+  end
+  return source_offset
+end
+
+local function e5_routing_output_index(request)
+  local output_index = tonumber(request.params.output_index)
+  if not output_index or output_index ~= output_index or output_index < 0 then
+    return nil
+  end
+  return math.floor(output_index)
 end
 
 local function e5_routing_track_refs_from_request(request)
@@ -9766,6 +9822,25 @@ local function read_track_routing(request)
     receives = receives,
     truncated = sends_truncated or receives_truncated,
   }), nil, nil, nil, refs
+end
+
+local function list_track_hardware_outputs(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing list_track_hardware_outputs requires a resolvable track ref.", {})
+  end
+  local limit = READ_B_MEDIA.bounded_limit(request, request.params.max_outputs, 16, 64)
+  local count = e5_routing_send_count(track, 1)
+  local rows = json_array({})
+  for hardware_index = 0, math.min(count, limit) - 1 do
+    rows[#rows + 1] = e5_routing_hardware_output_summary(track, hardware_index)
+  end
+  return e5_routing_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    hardware_output_count = count,
+    hardware_outputs = rows,
+    truncated = count > limit,
+  }), nil, nil, nil, e5_routing_refs(e5_routing_track_object_ref(track))
 end
 
 local function create_track_send(request)
@@ -9921,6 +9996,76 @@ local function set_track_channel_count(request)
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
 end
 
+local function set_track_hardware_output(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing set_track_hardware_output requires a resolvable track ref.", {})
+  end
+  local output_index = e5_routing_output_index(request)
+  local source_value = e5_routing_hardware_source_value(request)
+  if output_index == nil or source_value == nil then
+    return e5_routing_error("PARAMS_INVALID", "Hardware output requires output_index >= 0 and source_channel_count of 1 or 2.", {
+      output_index = request.params.output_index,
+      source_channel_count = request.params.source_channel_count,
+    })
+  end
+  local hardware_index = e5_routing_hardware_index_for_output(track, output_index)
+  if hardware_index == nil then
+    local ok_create, created_index = call_reaper("CreateTrackSend", track, nil)
+    hardware_index = ok_create and first_number(created_index) or nil
+  end
+  if hardware_index == nil or hardware_index < 0 then
+    return e5_routing_error("COMMAND_FAILED", "REAPER did not create a hardware output send.", {}, false)
+  end
+  hardware_index = math.floor(hardware_index)
+  local ok_dst = call_reaper("SetTrackSendInfo_Value", track, 1, hardware_index, "I_DSTCHAN", output_index)
+  local ok_src = call_reaper("SetTrackSendInfo_Value", track, 1, hardware_index, "I_SRCCHAN", source_value)
+  if not ok_dst or not ok_src then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the hardware output update.", {
+      output_index = output_index,
+    }, false)
+  end
+  local summary = e5_routing_hardware_output_summary(track, hardware_index)
+  return e5_routing_write_summary(request, summary), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+end
+
+local function remove_track_hardware_output(request)
+  local track = e5_routing_track_from_request_refs(request)
+  if not track then
+    return e5_routing_error("TRACK_NOT_FOUND", "E5 routing remove_track_hardware_output requires a resolvable track ref.", {})
+  end
+  local output_index = e5_routing_output_index(request)
+  if output_index == nil then
+    return e5_routing_error("PARAMS_INVALID", "Hardware output removal requires output_index >= 0.", {
+      output_index = request.params.output_index,
+    })
+  end
+  local hardware_index = e5_routing_hardware_index_for_output(track, output_index)
+  if hardware_index == nil then
+    if request.params.missing_policy == "error" then
+      return e5_routing_error("HARDWARE_OUTPUT_NOT_FOUND", "Requested hardware output assignment was not found.", {
+        output_index = output_index,
+      })
+    end
+    return e5_routing_write_summary(request, {
+      track_ref = e5_routing_track_ref_string(track),
+      output_index = output_index,
+      removed = false,
+    }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+  end
+  local ok_remove = call_reaper("RemoveTrackSend", track, 1, hardware_index)
+  if not ok_remove then
+    return e5_routing_error("COMMAND_FAILED", "REAPER rejected the hardware output removal.", {
+      output_index = output_index,
+    }, false)
+  end
+  return e5_routing_write_summary(request, {
+    track_ref = e5_routing_track_ref_string(track),
+    output_index = output_index,
+    removed = e5_routing_hardware_index_for_output(track, output_index) == nil,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
+end
+
 local function resolve_send_ref(request)
   local source_track, send_index = e5_routing_send_index_from_ref(request.params.send_ref)
   if not source_track then
@@ -9938,6 +10083,33 @@ local function resolve_send_ref(request)
     e5_routing_send_object_ref(source_track, send_index),
     e5_routing_track_object_ref(source_track)
   )
+end
+
+local function list_available_audio_outputs(request)
+  local limit = READ_B_MEDIA.bounded_limit(request, request.params.max_outputs, 32, 128)
+  local outputs = json_array({})
+  local scanned = 0
+  for output_index = 0, 127 do
+    local ok, name = call_reaper("GetOutputChannelName", output_index)
+    scanned = scanned + 1
+    local label = ok and first_string(name) or ""
+    if label ~= "" or request.params.include_unavailable == true then
+      outputs[#outputs + 1] = {
+        output_index = output_index,
+        name = bounded_string(label, 160),
+        available = label ~= "",
+      }
+      if #outputs >= limit then
+        break
+      end
+    end
+  end
+  return e5_routing_summary(request, {
+    audio_outputs = outputs,
+    returned_output_count = #outputs,
+    scanned_output_count = scanned,
+    truncated = #outputs >= limit and scanned < 128,
+  }), nil, nil, nil, e5_routing_refs()
 end
 
 local function read_project_routing_graph(request)
@@ -10765,7 +10937,7 @@ local function resolve_send_envelope(request)
   )
 end
 return {
-  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, read_project_routing_graph = read_project_routing_graph, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels, read_fx_pin_mapping = read_fx_pin_mapping, resolve_envelope_ref = resolve_envelope_ref, read_envelope_summary = read_envelope_summary, read_envelope_points = read_envelope_points, evaluate_envelope_at_time = evaluate_envelope_at_time, set_envelope_lane_state = set_envelope_lane_state, insert_envelope_point = insert_envelope_point, set_track_automation_mode = set_track_automation_mode, read_track_automation_mode = read_track_automation_mode, read_automation_items = read_automation_items, set_envelope_point = set_envelope_point, insert_envelope_points_batch = insert_envelope_points_batch, set_send_automation_mode = set_send_automation_mode, create_automation_item = create_automation_item, set_automation_item_bounds = set_automation_item_bounds, resolve_send_envelope = resolve_send_envelope, insert_fx_parameter_envelope_points = insert_fx_parameter_envelope_points, insert_sine_wave_points = insert_sine_wave_points },
+  exports = { read_track_routing = read_track_routing, resolve_send_ref = resolve_send_ref, list_track_hardware_outputs = list_track_hardware_outputs, read_project_routing_graph = read_project_routing_graph, list_available_audio_outputs = list_available_audio_outputs, create_track_send = create_track_send, set_send_volume = set_send_volume, set_send_pan = set_send_pan, set_send_mute = set_send_mute, set_send_mode = set_send_mode, set_master_parent_send = set_master_parent_send, set_track_channel_count = set_track_channel_count, set_track_hardware_output = set_track_hardware_output, remove_track_hardware_output = remove_track_hardware_output, set_send_audio_channels = set_send_audio_channels, set_send_phase = set_send_phase, set_send_mono = set_send_mono, set_send_midi_channels = set_send_midi_channels, read_fx_pin_mapping = read_fx_pin_mapping, resolve_envelope_ref = resolve_envelope_ref, read_envelope_summary = read_envelope_summary, read_envelope_points = read_envelope_points, evaluate_envelope_at_time = evaluate_envelope_at_time, set_envelope_lane_state = set_envelope_lane_state, insert_envelope_point = insert_envelope_point, set_track_automation_mode = set_track_automation_mode, read_track_automation_mode = read_track_automation_mode, read_automation_items = read_automation_items, set_envelope_point = set_envelope_point, insert_envelope_points_batch = insert_envelope_points_batch, set_send_automation_mode = set_send_automation_mode, create_automation_item = create_automation_item, set_automation_item_bounds = set_automation_item_bounds, resolve_send_envelope = resolve_send_envelope, insert_fx_parameter_envelope_points = insert_fx_parameter_envelope_points, insert_sine_wave_points = insert_sine_wave_points },
   shared = {  },
 }
 end)
@@ -18532,6 +18704,8 @@ local E5_ROUTING_WRITE_HANDLERS = {
   ["routing.send.set_mode"] = OPENREAPER_HANDLER_EXPORTS.set_send_mode,
   ["routing.master_parent.set"] = OPENREAPER_HANDLER_EXPORTS.set_master_parent_send,
   ["routing.track_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_track_channel_count,
+  ["routing.track_hardware_output.set"] = OPENREAPER_HANDLER_EXPORTS.set_track_hardware_output,
+  ["routing.track_hardware_output.remove"] = OPENREAPER_HANDLER_EXPORTS.remove_track_hardware_output,
   ["routing.send.audio_channels.set"] = OPENREAPER_HANDLER_EXPORTS.set_send_audio_channels,
   ["routing.send.set_phase"] = OPENREAPER_HANDLER_EXPORTS.set_send_phase,
   ["routing.send.set_mono"] = OPENREAPER_HANDLER_EXPORTS.set_send_mono,
@@ -18880,9 +19054,17 @@ local ALLOWED_OPERATIONS = {
     pack = "routing",
     handler = OPENREAPER_HANDLER_EXPORTS.resolve_send_ref,
   },
+  ["query_state:routing.track_hardware_outputs.list"] = {
+    pack = "routing",
+    handler = OPENREAPER_HANDLER_EXPORTS.list_track_hardware_outputs,
+  },
   ["query_state:routing.project_graph.read"] = {
     pack = "routing",
     handler = OPENREAPER_HANDLER_EXPORTS.read_project_routing_graph,
+  },
+  ["query_state:routing.audio_outputs.list"] = {
+    pack = "routing",
+    handler = OPENREAPER_HANDLER_EXPORTS.list_available_audio_outputs,
   },
   ["query_state:routing.fx_pin_mapping.read"] = {
     pack = "routing",

@@ -418,7 +418,11 @@ const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.routing.set_send_mode", "run_command:template.execute", "routing", "write", "routing.send.set_mode", "send", "routing_write", true),
   routeSpec("template.routing.set_master_parent_send", "run_command:template.execute", "routing", "write", "routing.master_parent.set", "track", "routing_write", true),
   routeSpec("template.routing.set_track_channel_count", "run_command:template.execute", "routing", "write", "routing.track_channels.set", "track", "routing_write", true),
+  routeSpec("template.routing.list_track_hardware_outputs", "query_state:routing.track_hardware_outputs.list", "routing", "read", "routing.track_hardware_outputs.list", "track", "routing_read"),
+  routeSpec("template.routing.set_track_hardware_output", "run_command:template.execute", "routing", "write", "routing.track_hardware_output.set", "track", "routing_write", true),
+  routeSpec("template.routing.remove_track_hardware_output", "run_command:template.execute", "routing", "write", "routing.track_hardware_output.remove", "track", "routing_write", true),
   routeSpec("template.routing.read_project_routing_graph", "query_state:routing.project_graph.read", "routing", "read", "routing.project_graph.read", "none", "routing_read"),
+  routeSpec("template.routing.list_available_audio_outputs", "query_state:routing.audio_outputs.list", "routing", "read", "routing.audio_outputs.list", "none", "routing_read"),
   routeSpec("template.routing.set_send_audio_channels", "run_command:template.execute", "routing", "write", "routing.send.audio_channels.set", "send", "routing_write", true),
   routeSpec("template.routing.set_send_phase", "run_command:template.execute", "routing", "write", "routing.send.set_phase", "send", "routing_write", true),
   routeSpec("template.routing.set_send_mono", "run_command:template.execute", "routing", "write", "routing.send.set_mono", "send", "routing_write", true),
@@ -3714,6 +3718,20 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
     "template.routing.set_track_channel_count": {
       channel_count: 4,
     },
+    "template.routing.list_track_hardware_outputs": {
+      include_disabled: true,
+      max_outputs: 16,
+    },
+    "template.routing.set_track_hardware_output": {
+      output_index: 0,
+      source_channel_offset: 0,
+      source_channel_count: 2,
+      mix_to_mono: false,
+    },
+    "template.routing.remove_track_hardware_output": {
+      output_index: 0,
+      missing_policy: "ok",
+    },
     "template.routing.read_project_routing_graph": {
       include_master_parent: true,
       max_tracks: 16,
@@ -3738,6 +3756,10 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
     "template.routing.read_fx_pin_mapping": {
       direction: "input",
       pin_index: 0,
+    },
+    "template.routing.list_available_audio_outputs": {
+      include_unavailable: false,
+      max_outputs: 32,
     },
     "template.automation.resolve_envelope_ref": {
       parent_kind: "track",

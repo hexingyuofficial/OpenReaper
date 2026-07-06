@@ -1612,6 +1612,22 @@
       ]
     },
     {
+      "template_id": "template.routing.list_track_hardware_outputs",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.track_hardware_outputs.list"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-r1-routing-read-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "list_track_hardware_outputs",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.routing.read_project_routing_graph",
       "operation": {
         "family": "query_state",
@@ -1622,6 +1638,22 @@
       "route": "e5-r1-routing-read-handlers",
       "handler_file": "routing/e5_r1_routing_read_route.lua",
       "handler_export": "read_project_routing_graph",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.list_available_audio_outputs",
+      "operation": {
+        "family": "query_state",
+        "name": "routing.audio_outputs.list"
+      },
+      "pack": "routing",
+      "risk": "read",
+      "route": "e5-r1-routing-read-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "list_available_audio_outputs",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e5-r1-routing-read-handler-expansion.test.mjs"
@@ -1741,6 +1773,40 @@
       "route": "e5-routing-write-handlers",
       "handler_file": "routing/e5_r1_routing_read_route.lua",
       "handler_export": "set_track_channel_count",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.set_track_hardware_output",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.track_hardware_output.set",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "set_track_hardware_output",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.remove_track_hardware_output",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "routing.track_hardware_output.remove",
+      "pack": "routing",
+      "risk": "write",
+      "route": "e5-routing-write-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "remove_track_hardware_output",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e5-routing-write-handler-expansion.test.mjs"
