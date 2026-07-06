@@ -35,6 +35,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
+  "recipe.project.fast_observation_bundle",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.project.inspect_current_fixture_readiness",
   "recipe.render.region_delivery_report",
@@ -52,6 +53,9 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   ]),
   "recipe.project.cleanup_fingerprint_report": Object.freeze([
     "template.project.create_cleanup_report",
+  ]),
+  "recipe.project.fast_observation_bundle": Object.freeze([
+    "template.project.create_observation_bundle",
   ]),
   "recipe.project.cleanup_trial_created_objects": Object.freeze([
     "template.project.read_track_item_overview",
@@ -123,7 +127,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the twelve first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the thirteen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -149,6 +153,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "midi.track_phrase_seed.recipe.json",
       "project.cleanup_fingerprint_report.recipe.json",
       "project.cleanup_trial_created_objects.recipe.json",
+      "project.fast_observation_bundle.recipe.json",
       "project.inspect_current_fixture_readiness.recipe.json",
       "render.region_delivery_report.recipe.json",
       "render.region_wav_render.recipe.json",
@@ -394,6 +399,63 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(cleanupProject)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(balance)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(readiness)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("adds an Alpha3 fast observation workflow over the fixed observation bundle atom", () => {
+    const recipe = recipesById().get("recipe.project.fast_observation_bundle");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "read");
+    assert.equal(recipe.tags.includes("alpha3"), true);
+    assert.equal(recipe.tags.includes("speed"), true);
+    assert.deepEqual(
+      recipe.steps.map((step) => [step.id, step.uses]),
+      [
+        ["create_observation_bundle", "call_template"],
+        ["read_observation_summary", "get_state"],
+        ["read_observation_payload", "get_state"],
+      ],
+    );
+    assert.deepEqual(recipe.steps[0].call_template.input, {
+      max_tracks: 16,
+      max_items_per_track: 1,
+      max_selected_items: 8,
+      track_cursor: 0,
+      marker_region_limit: 32,
+      tempo_marker_limit: 16,
+      include_transport: true,
+      include_track_items: true,
+    });
+    assert.deepEqual(recipe.assertions[0].outputs.artifacts, ["observation_bundle"]);
+    assert.deepEqual(
+      recipe.steps
+        .filter((step) => step.uses === "get_state")
+        .map((step) => step.get_state.refs),
+      [["observation_bundle"], ["observation_bundle"]],
+    );
+    assert.match(recipe.workflow_card.intent, /compact observation bundle/);
+    assert.equal(
+      recipe.workflow_card.supported_steps.some((step) => /artifact summary/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
+  it("discovers the Alpha3 fast observation workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "observation",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.project.fast_observation_bundle");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "project.project_observation");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("observation"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
   });
 
   it("discovers the E6 routing/FX/automation family through compact recipe-menu intent fields", () => {

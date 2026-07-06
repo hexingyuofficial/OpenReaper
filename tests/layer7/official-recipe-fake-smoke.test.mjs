@@ -33,6 +33,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
+  "recipe.project.fast_observation_bundle",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.project.inspect_current_fixture_readiness",
   "recipe.render.region_delivery_report",
@@ -65,7 +66,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the twelve draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the thirteen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -346,6 +347,27 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     );
     assert.equal(readiness.risk_pauses.length, 0);
     assert.equal(readiness.expected.refs.has("project_ref"), true);
+  });
+
+  it("fake-smokes the Alpha3 fast observation bundle as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.project.fast_observation_bundle");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      ["template.project.create_observation_bundle"],
+    );
+    assert.equal(run.risk_pauses.length, 0);
+    assert.equal(run.state_reads.length, 2);
+    assert.deepEqual(
+      run.state_reads.map((read) => [read.projection, read.label, read.schema]),
+      [
+        ["artifact.summary", "observation_bundle", "project.observation_bundle.v1"],
+        ["artifact.payload", "observation_bundle", "project.observation_bundle.v1"],
+      ],
+    );
+    assert.equal(run.expected.artifacts.has("observation_bundle"), true);
   });
 
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {

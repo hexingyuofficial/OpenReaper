@@ -1,0 +1,259 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.project.fast_observation_bundle",
+  "title": "Fast project observation bundle",
+  "summary": "Draft read-only Alpha3 workflow that creates one artifact-backed project observation bundle for fast first reads.",
+  "pack": "project",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "project_observation",
+  "tags": [
+    "project",
+    "observation",
+    "snapshot",
+    "artifact",
+    "speed",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Create one compact observation bundle before a real-user project task.",
+    "entry_conditions": [
+      "Run before creative edits when project state, selected targets, or scale are unclear.",
+      "Use the artifact summary for chat and payload only when the agent needs more detail."
+    ],
+    "supported_steps": [
+      "Create one bounded project observation artifact.",
+      "Read the artifact summary for a concise user-facing project map.",
+      "Read the payload only for targeted follow-up planning."
+    ],
+    "candidate_steps": [
+      "Future Alpha3 passes may add changed-since queries and resident indexing."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not mutate project state from this read-only workflow."
+    ],
+    "required_questions": [
+      "Ask before mutation if the bundle does not identify a clear target or selected item."
+    ],
+    "template_atoms": [
+      "template.project.create_observation_bundle"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "artifact summary before long payload output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; retain the observation artifact for targeted follow-up.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "blocked_bridge_not_running",
+      "response_too_large_retry_with_smaller_page"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "create_observation_bundle",
+      "title": "Create observation bundle",
+      "summary": "Create one compact artifact-backed observation bundle for the active project.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.project.create_observation_bundle",
+        "input": {
+          "max_tracks": 16,
+          "max_items_per_track": 1,
+          "max_selected_items": 8,
+          "track_cursor": 0,
+          "marker_region_limit": 32,
+          "tempo_marker_limit": 16,
+          "include_transport": true,
+          "include_track_items": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_observation_bundle",
+      "evidence": "evidence_create_observation_bundle",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_observation"
+    },
+    {
+      "id": "read_observation_summary",
+      "title": "Read observation summary",
+      "summary": "Read the observation bundle summary by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": [
+          "observation_bundle"
+        ]
+      },
+      "checkpoint": "checkpoint_read_observation_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_observation_payload",
+      "title": "Read observation payload",
+      "summary": "Read the bounded observation payload by declared artifact label when more detail is needed.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": [
+          "observation_bundle"
+        ]
+      },
+      "checkpoint": "checkpoint_read_observation_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_observation_bundle_artifact",
+      "kind": "expected_output",
+      "summary": "The workflow must retain one project observation bundle artifact ref.",
+      "required": true,
+      "evidence": [
+        "evidence_create_observation_bundle"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [
+          "observation_bundle"
+        ],
+        "jobs": [],
+        "state": [
+          "project_observation"
+        ]
+      }
+    },
+    {
+      "id": "assert_read_only_observation",
+      "kind": "checkpoint",
+      "summary": "The workflow is read-only and does not apply project edits.",
+      "required": true,
+      "evidence": [
+        "evidence_create_observation_bundle"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_observation_bundle",
+        "after_step": "create_observation_bundle",
+        "required_evidence": [
+          "evidence_create_observation_bundle"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Observation bundle artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_observation_summary",
+        "after_step": "read_observation_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Observation bundle summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_observation_payload",
+        "after_step": "read_observation_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Observation bundle payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_observation_bundle",
+        "step": "create_observation_bundle",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.project.create_observation_bundle",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_observation",
+        "trigger": "template_error",
+        "step": "create_observation_bundle",
+        "strategy": "retry_step",
+        "summary": "Retry the compact observation bundle with the same bounded page when project identity remains stable."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if retained observation evidence conflicts with the current project target."
+      }
+    ],
+    "risk_gates": []
+  }
+}

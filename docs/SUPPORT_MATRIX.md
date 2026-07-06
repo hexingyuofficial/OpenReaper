@@ -48,6 +48,7 @@ it yet.
 | Recipe | Lifecycle | V1 Support | Notes |
 |---|---|---|---|
 | `recipe.project.cleanup_fingerprint_report` | draft | supported recipe-level live/local portability claim | Supported path uses `template.project.create_cleanup_report` plus artifact summary/payload readback. |
+| `recipe.project.fast_observation_bundle` | draft | candidate | Alpha3 speed workflow over `template.project.create_observation_bundle`; needs recipe-level transcript/live evidence before support claim. |
 | `recipe.analysis.selected_item_cycle_quality_report` | draft | candidate | Fake-smoked only; needs a narrow transcript driver and live evidence before support claim. |
 | `recipe.render.region_wav_render` | draft | candidate | Fake-smoked only; render/write risk needs managed render root and live evidence. |
 | `recipe.render.region_delivery_report` | draft | candidate | Fake-smoked only; consumes render artifacts and needs paired/preseeded evidence. |
@@ -55,9 +56,10 @@ it yet.
 | `recipe.midi.track_phrase_seed` | draft | candidate | Fake-smoked only; write-risk MIDI path needs disposable-project live evidence. |
 
 Alpha2 expanded the official draft recipe packet to twelve first-atoms recipes.
-Only `recipe.project.cleanup_fingerprint_report` has the V1 recipe-level
-live/local portability claim; the others remain draft/static or fake-smoked
-unless later evidence promotes them.
+Alpha3 adds `recipe.project.fast_observation_bundle`, bringing the packet to
+thirteen draft recipes. Only `recipe.project.cleanup_fingerprint_report` has
+the V1 recipe-level live/local portability claim; the others remain
+draft/static or fake-smoked unless later evidence promotes them.
 
 ## Unsupported Or Deferred In V1
 

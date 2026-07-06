@@ -74,6 +74,12 @@ For a first real-user pass, run the recipe card
 it reads a compact project snapshot, selected items, track refs, and mixer
 controls without adding a public `call_recipe` tool.
 
+For a faster Alpha3 project-start read, use
+`recipe.project.fast_observation_bundle`: it calls
+`template.project.create_observation_bundle` once, then reads the retained
+artifact summary or payload through `get_state`. This is a draft recipe card,
+not a public recipe executor.
+
 The product action menu is versioned by
 `alpha2.product_action_surface.v1`; see
 `docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md` for the schema, status values,
