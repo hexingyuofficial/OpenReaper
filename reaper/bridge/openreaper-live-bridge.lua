@@ -3678,9 +3678,13 @@ local function d6_tempo_set_base(request)
   }), nil, json_array({}), json_array({}), d6_tempo_refs()
 end
 
-local function d6_tempo_marker_index_at(project, position_seconds)
+local function d6_tempo_marker_count(project)
   local ok_count, count = call_reaper("CountTempoTimeSigMarkers", project)
-  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  return ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+end
+
+local function d6_tempo_marker_index_at(project, position_seconds)
+  local total = d6_tempo_marker_count(project)
   for index = 0, total - 1 do
     local ok_marker, retval, timepos = call_reaper("GetTempoTimeSigMarker", project, index)
     if ok_marker and retval and math.abs((first_number(timepos) or 0) - position_seconds) < 0.000001 then
@@ -3690,8 +3694,7 @@ local function d6_tempo_marker_index_at(project, position_seconds)
   return -1
 end
 
-local function d6_tempo_marker_readback(project, position_seconds)
-  local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+local function d6_tempo_marker_readback_by_index(project, marker_index)
   if marker_index < 0 then
     return nil
   end
@@ -3708,6 +3711,14 @@ local function d6_tempo_marker_readback(project, position_seconds)
     time_sig_denom = math.floor(first_number(timesig_denom) or 0),
     linear_tempo = lineartempo == true,
   }
+end
+
+local function d6_tempo_marker_readback(project, position_seconds, marker_index)
+  local readback_index = marker_index
+  if readback_index == nil or readback_index < 0 then
+    readback_index = d6_tempo_marker_index_at(project, position_seconds)
+  end
+  return d6_tempo_marker_readback_by_index(project, readback_index)
 end
 
 local function d6_tempo_set_marker(request)
@@ -3728,6 +3739,7 @@ local function d6_tempo_set_marker(request)
   local denominator = d6_tempo_time_sig_denom(request.params.time_signature_denominator)
   local linear_tempo = request.params.linear_tempo == true
   local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  local count_before = d6_tempo_marker_count(project)
   local ok, retval
   if marker_index < 0 then
     ok, retval = call_reaper(
@@ -3761,11 +3773,18 @@ local function d6_tempo_set_marker(request)
     }, false)
   end
   call_reaper("UpdateTimeline")
-  local readback = d6_tempo_marker_readback(project, position_seconds)
+  if marker_index < 0 then
+    local count_after = d6_tempo_marker_count(project)
+    if count_after > count_before then
+      marker_index = count_after - 1
+    end
+  end
+  local readback = d6_tempo_marker_readback(project, position_seconds, marker_index)
   local updated = readback and math.abs(readback.bpm - bpm) < 0.01
   if not updated then
     return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
       position_seconds = position_seconds,
+      marker_index = marker_index,
       requested_bpm = bpm,
       readback_bpm = readback and readback.bpm or JSON_NULL,
       time_sig_num = readback and readback.time_sig_num or JSON_NULL,
@@ -3773,7 +3792,8 @@ local function d6_tempo_set_marker(request)
     }, false)
   end
   return d6_tempo_summary(request, {
-    position_seconds = position_seconds,
+    requested_position_seconds = position_seconds,
+    position_seconds = readback.position_seconds,
     bpm = readback.bpm,
     requested_bpm = bpm,
     time_sig_num = readback.time_sig_num,
