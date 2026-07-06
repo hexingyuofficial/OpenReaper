@@ -180,7 +180,7 @@ describe("E4 item live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /E4 item route write requests must use artifacts\.allow false/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute"],
+      ["template.execute", "render.sample_rate.set"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /set_item_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);

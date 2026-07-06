@@ -278,7 +278,7 @@ describe("Read-B live handler expansion", () => {
 
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute"],
+      ["template.execute", "render.sample_rate.set"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /relink_project_source_path|import_folder_as_items|render_source_section/);

@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 169,
+    "entryCount": 170,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 169,
-    "handlerModuleCount": 76,
-    "routeCount": 25,
-    "operationCount": 68
+    "extractedHandlerCount": 170,
+    "handlerModuleCount": 77,
+    "routeCount": 26,
+    "operationCount": 69
   },
   "routes": [
     {
@@ -352,6 +352,27 @@
         "template.midi.quantize_notes",
         "template.midi.quantize_selected_notes",
         "template.midi.set_cc_events_batch"
+      ]
+    },
+    {
+      "route": "d22-render-settings-write-handlers",
+      "template_count": 1,
+      "handler_module_count": 1,
+      "operation_count": 1,
+      "packs": [
+        "render"
+      ],
+      "risks": [
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "template_ids": [
+        "template.render.set_render_sample_rate"
       ]
     },
     {

@@ -296,7 +296,7 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute"],
+      ["template.execute", "render.sample_rate.set"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_plan|apply_layer_plan|assign_item_roles|move_items_to_layer_tracks/);

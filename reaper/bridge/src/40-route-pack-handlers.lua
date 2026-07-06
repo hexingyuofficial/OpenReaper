@@ -915,6 +915,10 @@ local D17_MIDI_EDIT_HANDLERS = {
   ["midi.set_cc_events_batch"] = d17_midi_set_cc_events_batch,
 }
 
+local D22_RENDER_SETTINGS_WRITE_HANDLERS = {
+  ["render.sample_rate.set"] = set_render_sample_rate,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -976,6 +980,10 @@ local function dispatch_template_execute(request)
   if handler then
     return handler(request)
   end
+  handler = D22_RENDER_SETTINGS_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
     })
@@ -984,6 +992,10 @@ end
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
     handler = dispatch_template_execute,
+  },
+  ["run_command:render.sample_rate.set"] = {
+    pack = "render",
+    handler = set_render_sample_rate,
   },
   ["query_state:project.read_summary"] = {
     pack = "project",

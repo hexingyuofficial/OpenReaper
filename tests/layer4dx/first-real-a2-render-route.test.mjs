@@ -280,7 +280,7 @@ describe("First-Real-Fixture-A A2 render route", () => {
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute"],
+      ["template.execute", "render.sample_rate.set"],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
     assert.doesNotMatch(BRIDGE_SOURCE, /render_full_project|render_region_video|render_stems|upload|publish|LIVE_SMOKE_MATRIX|list_recipes|call_recipe/);

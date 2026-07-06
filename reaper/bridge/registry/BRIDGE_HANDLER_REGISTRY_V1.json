@@ -1172,6 +1172,22 @@
       "capability": "midi.set_cc_events_batch"
     },
     {
+      "template_id": "template.render.set_render_sample_rate",
+      "operation": {
+        "family": "run_command",
+        "name": "render.sample_rate.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d22-render-settings-write-handlers",
+      "handler_file": "render/d22_render_settings_write_route.lua",
+      "handler_export": "set_render_sample_rate",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",
