@@ -13,6 +13,14 @@ local function d12_transport_refs()
   return json_array({})
 end
 
+local function d12_transport_current_project()
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  if ok_project then
+    return project or 0
+  end
+  return 0
+end
+
 local function d12_transport_has_flag(value, flag)
   if type(value) ~= "number" then
     return false
@@ -142,7 +150,11 @@ local function d12_transport_play(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("CSurf_OnPlay")
+  local project = d12_transport_current_project()
+  local ok = call_reaper("OnPlayButtonEx", project)
+  if not ok then
+    ok = call_reaper("CSurf_OnPlay")
+  end
   if not ok then
     ok = call_reaper("OnPlayButton")
   end
@@ -157,7 +169,11 @@ local function d12_transport_pause(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("CSurf_OnPause")
+  local project = d12_transport_current_project()
+  local ok = call_reaper("OnPauseButtonEx", project)
+  if not ok then
+    ok = call_reaper("CSurf_OnPause")
+  end
   if not ok then
     ok = call_reaper("OnPauseButton")
   end
@@ -172,7 +188,11 @@ local function d12_transport_stop_playback(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("OnStopButton")
+  local project = d12_transport_current_project()
+  local ok = call_reaper("OnStopButtonEx", project)
+  if not ok then
+    ok = call_reaper("OnStopButton")
+  end
   if not ok then
     return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnStopButton.", {}, false)
   end
@@ -219,7 +239,7 @@ local function d12_transport_start_recording(request)
       return d12_transport_error("PUNCH_RANGE_REQUIRED", "Starting guarded punch recording requires an active time selection.", {})
     end
   end
-  local ok = call_reaper("CSurf_OnRecord", nil)
+  local ok = call_reaper("CSurf_OnRecord")
   if not ok then
     return d12_transport_error("COMMAND_FAILED", "REAPER rejected CSurf_OnRecord.", {}, false)
   end
@@ -241,7 +261,7 @@ local function d12_transport_stop_recording(request)
       recorded_media_policy = policy,
     })
   end
-  local ok = call_reaper("CSurf_OnStop", nil)
+  local ok = call_reaper("CSurf_OnStop")
   if not ok then
     ok = call_reaper("OnStopButton")
   end
