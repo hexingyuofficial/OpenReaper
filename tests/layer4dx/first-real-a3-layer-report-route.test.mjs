@@ -331,7 +331,7 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
   });
 

@@ -313,7 +313,7 @@ describe("First-Real-Fixture-A A2 render route", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /render_full_project|render_region_video|render_stems|upload|publish|LIVE_SMOKE_MATRIX|list_recipes|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
   });
 

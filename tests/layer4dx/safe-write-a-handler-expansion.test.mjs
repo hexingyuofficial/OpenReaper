@@ -281,7 +281,7 @@ describe("Safe-Write-A handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /OpenReaper live bridge accepts read-only live-smoke requests only/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

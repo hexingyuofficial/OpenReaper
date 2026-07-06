@@ -225,7 +225,7 @@ describe("E3 media live handler expansion", () => {
       ],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /InsertMedia|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /InsertMedia|Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 });

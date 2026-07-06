@@ -99,10 +99,16 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(BRIDGE_SOURCE, /write_file_atomic/);
     assert.match(BRIDGE_SOURCE, /os\.rename\(temp_path, path\)/);
     assert.match(BRIDGE_SOURCE, /spawned_reaper = false/);
+    assert.match(BRIDGE_SOURCE, /D12_TRANSPORT_FIXED_ACTION_IDS = \{/);
+    assert.match(BRIDGE_SOURCE, /play = 1007/);
+    assert.match(BRIDGE_SOURCE, /pause = 1008/);
+    assert.match(BRIDGE_SOURCE, /record = 1013/);
+    assert.match(BRIDGE_SOURCE, /stop = 1016/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
 
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });

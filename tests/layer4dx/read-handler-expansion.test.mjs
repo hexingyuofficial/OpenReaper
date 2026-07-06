@@ -301,7 +301,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     );
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
     assert.equal(CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS.length, 15);

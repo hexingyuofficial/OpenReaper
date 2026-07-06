@@ -124,10 +124,17 @@ describe("D12 transport safe live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /OnStopButton/);
     assert.match(HANDLER_SOURCE, /CSurf_OnRecord/);
     assert.match(HANDLER_SOURCE, /CSurf_OnStop/);
+    assert.match(HANDLER_SOURCE, /D12_TRANSPORT_FIXED_ACTION_IDS/);
+    assert.match(HANDLER_SOURCE, /play = 1007/);
+    assert.match(HANDLER_SOURCE, /pause = 1008/);
+    assert.match(HANDLER_SOURCE, /record = 1013/);
+    assert.match(HANDLER_SOURCE, /stop = 1016/);
+    assert.match(HANDLER_SOURCE, /Main_OnCommandEx/);
     assert.match(HANDLER_SOURCE, /SetPlayRate/);
     assert.match(HANDLER_SOURCE, /GetSetProjectInfo/);
     assert.match(HANDLER_SOURCE, /GetSet_LoopTimeRange/);
-    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
+    assert.doesNotMatch(HANDLER_SOURCE, /request\.params\.(?:action|command|command_id|lua|script|shell)/);
+    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

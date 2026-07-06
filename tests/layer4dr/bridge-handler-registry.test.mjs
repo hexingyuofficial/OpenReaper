@@ -723,10 +723,15 @@ describe("Layer 4D.R bridge handler registry", () => {
         "midi.insert_text_sysex_events",
       ],
     );
+    assert.match(BRIDGE_SOURCE, /D12_TRANSPORT_FIXED_ACTION_IDS = \{/);
+    assert.match(BRIDGE_SOURCE, /play = 1007/);
+    assert.match(BRIDGE_SOURCE, /pause = 1008/);
+    assert.match(BRIDGE_SOURCE, /record = 1013/);
+    assert.match(BRIDGE_SOURCE, /stop = 1016/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
-      /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
+      /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

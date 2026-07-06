@@ -49,6 +49,13 @@ local D12_TRANSPORT_RECORD_MODE_NAMES = {
   [2] = "selected_items_auto_punch",
 }
 
+local D12_TRANSPORT_FIXED_ACTION_IDS = {
+  play = 1007,
+  pause = 1008,
+  record = 1013,
+  stop = 1016,
+}
+
 local d12_transport_bounded_number
 
 local function d12_transport_summary(request, fields)
@@ -84,6 +91,13 @@ end
 
 local function d12_transport_record_mode_name()
   return D12_TRANSPORT_RECORD_MODE_NAMES[d12_transport_record_mode_value()] or "normal"
+end
+
+local function d12_transport_run_fixed_action(command_id)
+  if type(command_id) ~= "number" then
+    return false
+  end
+  return call_reaper("Main_OnCommandEx", command_id, 0, d12_transport_current_project())
 end
 
 local function d12_transport_set_record_mode_value(mode)
@@ -158,6 +172,10 @@ local function d12_transport_play(request)
   if not ok then
     ok = call_reaper("OnPlayButton")
   end
+  local state = d12_transport_state_summary(request)
+  if state.play_state ~= "playing" then
+    ok = d12_transport_run_fixed_action(D12_TRANSPORT_FIXED_ACTION_IDS.play)
+  end
   if not ok then
     return d12_transport_error("COMMAND_FAILED", "REAPER rejected play command.", {}, false)
   end
@@ -177,6 +195,10 @@ local function d12_transport_pause(request)
   if not ok then
     ok = call_reaper("OnPauseButton")
   end
+  local state = d12_transport_state_summary(request)
+  if state.play_state ~= "paused" then
+    ok = d12_transport_run_fixed_action(D12_TRANSPORT_FIXED_ACTION_IDS.pause)
+  end
   if not ok then
     return d12_transport_error("COMMAND_FAILED", "REAPER rejected pause command.", {}, false)
   end
@@ -192,6 +214,9 @@ local function d12_transport_stop_playback(request)
   local ok = call_reaper("OnStopButtonEx", project)
   if not ok then
     ok = call_reaper("OnStopButton")
+  end
+  if not ok then
+    ok = d12_transport_run_fixed_action(D12_TRANSPORT_FIXED_ACTION_IDS.stop)
   end
   if not ok then
     return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnStopButton.", {}, false)
@@ -240,10 +265,14 @@ local function d12_transport_start_recording(request)
     end
   end
   local ok = call_reaper("CSurf_OnRecord")
-  if not ok then
-    return d12_transport_error("COMMAND_FAILED", "REAPER rejected CSurf_OnRecord.", {}, false)
-  end
   local state = d12_transport_state_summary(request)
+  if state.play_state ~= "recording" then
+    ok = d12_transport_run_fixed_action(D12_TRANSPORT_FIXED_ACTION_IDS.record)
+  end
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected record command.", {}, false)
+  end
+  state = d12_transport_state_summary(request)
   if state.play_state ~= "recording" then
     return d12_transport_error("READBACK_MISMATCH", "Transport did not enter recording.", {
       actual_play_state = state.play_state,
