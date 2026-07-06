@@ -60,6 +60,8 @@ local E5_AUTOMATION_WRITE_CAPABILITIES = {
   ["automation.set_send_automation_mode"] = { pack = "automation", risk = "write" },
   ["automation.create_automation_item"] = { pack = "automation", risk = "write" },
   ["automation.set_automation_item_bounds"] = { pack = "automation", risk = "write" },
+  ["automation.insert_fx_parameter_envelope_points"] = { pack = "automation", risk = "write" },
+  ["automation.insert_sine_wave_points"] = { pack = "automation", risk = "write" },
 }
 
 local D6_PROJECT_TEMPO_WRITE_CAPABILITIES = {

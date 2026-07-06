@@ -114,6 +114,8 @@ const EXTRACTED_E5_ROUTING_AUTOMATION_EXTRA_HANDLERS = Object.freeze(new Map([
   ["template.automation.create_automation_item", ["routing/e5_r1_routing_read_route.lua", "create_automation_item"]],
   ["template.automation.set_automation_item_bounds", ["routing/e5_r1_routing_read_route.lua", "set_automation_item_bounds"]],
   ["template.automation.resolve_send_envelope", ["routing/e5_r1_routing_read_route.lua", "resolve_send_envelope"]],
+  ["template.automation.insert_fx_parameter_envelope_points", ["routing/e5_r1_routing_read_route.lua", "insert_fx_parameter_envelope_points"]],
+  ["template.automation.insert_sine_wave_points", ["routing/e5_r1_routing_read_route.lua", "insert_sine_wave_points"]],
 ]));
 const EXTRACTED_D6_PROJECT_TEMPO_HANDLERS = Object.freeze(new Map([
   ["template.project.set_tempo", ["project/tempo_write.lua", "d6_project_set_tempo"]],
@@ -267,7 +269,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 162);
+    assert.equal(REGISTRY.entries.length, 164);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -299,9 +301,9 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 162,
+      entryCount: 164,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 162,
+      extractedHandlerCount: 164,
       handlerModuleCount: 74,
       routeCount: 24,
       operationCount: 64,
@@ -556,6 +558,8 @@ describe("Layer 4D.R bridge handler registry", () => {
         "automation.set_send_automation_mode",
         "automation.create_automation_item",
         "automation.set_automation_item_bounds",
+        "automation.insert_fx_parameter_envelope_points",
+        "automation.insert_sine_wave_points",
         "fx.add_track",
         "fx.add_take",
         "fx.set_bypass",
@@ -600,7 +604,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(162 registered template handler row\(s\); 0 legacy_monolith row\(s\); 162 extracted handler row\(s\); 74 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(164 registered template handler row\(s\); 0 legacy_monolith row\(s\); 164 extracted handler row\(s\); 74 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

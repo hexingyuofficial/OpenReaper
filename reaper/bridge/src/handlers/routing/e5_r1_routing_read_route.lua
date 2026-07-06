@@ -1209,6 +1209,156 @@ local function insert_envelope_points_batch(request)
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
+local function e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, points)
+  if not is_json_array(points) then
+    return e5_routing_error("REQUEST_INVALID", "E5 automation point insertion requires a points array.", {})
+  end
+  local limit = math.min(#points, 128)
+  if limit < 1 then
+    return e5_routing_error("REQUEST_INVALID", "E5 automation point insertion requires at least one point.", {})
+  end
+  local before = e5_automation_envelope_point_count(envelope)
+  local first_time = nil
+  local last_time = nil
+  local min_value = nil
+  local max_value = nil
+  for index = 1, limit do
+    local point = is_object(points[index]) and points[index] or {}
+    local time_seconds = e5_routing_finite_number(point.time_seconds, index - 1)
+    local value = e5_routing_clamp_number(point.value, 0, 4, 1)
+    local shape = math.max(0, math.floor(tonumber(point.shape) or 0))
+    local tension = e5_routing_finite_number(point.tension, 0)
+    local ok = call_reaper("InsertEnvelopePoint", envelope, time_seconds, value, shape, tension, point.selected == true, true)
+    if not ok then
+      return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePoint in point batch.", {
+        envelope_ref = envelope_ref,
+        point_index = index - 1,
+      })
+    end
+    first_time = first_time or time_seconds
+    last_time = time_seconds
+    min_value = min_value and math.min(min_value, value) or value
+    max_value = max_value and math.max(max_value, value) or value
+  end
+  call_reaper("Envelope_SortPoints", envelope)
+  local after = e5_automation_envelope_point_count(envelope)
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    requested_count = #points,
+    inserted_count = math.max(0, after - before),
+    processed_count = limit,
+    first_time_seconds = first_time or 0,
+    last_time_seconds = last_time or 0,
+    min_value = min_value or 0,
+    max_value = max_value or 0,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function e5_automation_fx_parameter_envelope_from_request(request)
+  local track, slot_index = e5_routing_fx_from_request_refs(request)
+  local param_index = math.floor(tonumber(request.params and request.params.param_index) or -1)
+  if not track or param_index < 0 then
+    return nil, nil, nil
+  end
+  local ok_count, param_count = call_reaper("TrackFX_GetNumParams", track, slot_index)
+  param_count = ok_count and math.floor(first_number(param_count) or 0) or 0
+  if param_index >= param_count then
+    return nil, nil, {
+      code = "FX_PARAMETER_NOT_FOUND",
+      message = "FX parameter index is outside the FX parameter count.",
+      details = {
+        slot_index = slot_index,
+        param_index = param_index,
+        parameter_count = param_count,
+      },
+    }
+  end
+  local ok_env, envelope = call_reaper("GetFXEnvelope", track, slot_index, param_index, false)
+  if not ok_env or not envelope then
+    return nil, nil, {
+      code = "ENVELOPE_NOT_FOUND",
+      message = "FX parameter envelope is not available; resolve/create the envelope before inserting points.",
+      details = {
+        fx_ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
+        param_index = param_index,
+      },
+    }
+  end
+  local ok_name, _, name = call_reaper("TrackFX_GetParamName", track, slot_index, param_index, "")
+  local envelope_ref = "envelope:fx:track:" .. tostring(slot_index) .. ":param:" .. tostring(param_index)
+  return envelope, envelope_ref, {
+    track = track,
+    slot_index = slot_index,
+    param_index = param_index,
+    param_name = bounded_string(ok_name and first_string(name) or "", 160),
+  }
+end
+
+local function insert_fx_parameter_envelope_points(request)
+  local envelope, envelope_ref, info = e5_automation_fx_parameter_envelope_from_request(request)
+  if not envelope then
+    return e5_routing_error(info and info.code or "FX_REF_NOT_FOUND", info and info.message or "FX parameter envelope insertion requires a resolvable track FX ref.", info and info.details or {})
+  end
+  local summary, err, artifacts, jobs, refs = e5_automation_insert_points(request, envelope, envelope_ref, "fx", "fx_parameter", info.param_name, request.params.points)
+  if err then
+    return nil, err
+  end
+  summary.fx_ref = "fx:" .. e5_routing_track_ref_string(info.track) .. ":" .. tostring(info.slot_index)
+  summary.param_index = info.param_index
+  summary.param_ident = request.params.param_ident or JSON_NULL
+  summary.param_name = info.param_name
+  return summary, err, artifacts, jobs, refs
+end
+
+local function insert_sine_wave_points(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then
+    return nil, err
+  end
+  local start_seconds = e5_routing_finite_number(request.params.start_seconds, 0)
+  local end_seconds = e5_routing_finite_number(request.params.end_seconds, start_seconds)
+  if end_seconds <= start_seconds then
+    return e5_routing_error("REQUEST_INVALID", "Sine wave end_seconds must be greater than start_seconds.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    })
+  end
+  local point_count = math.floor(tonumber(request.params.point_count) or 0)
+  if point_count < 2 or point_count > 512 then
+    return e5_routing_error("REQUEST_INVALID", "Sine wave point_count must be between 2 and 512.", {
+      point_count = request.params.point_count,
+    })
+  end
+  local center_value = e5_routing_finite_number(request.params.center_value, 0.5)
+  local amplitude = math.max(0, e5_routing_finite_number(request.params.amplitude, 0))
+  local cycles = e5_routing_finite_number(request.params.cycles, 1)
+  local shape = math.max(0, math.floor(tonumber(request.params.shape) or 0))
+  local tension = e5_routing_finite_number(request.params.tension, 0)
+  local points = json_array({})
+  for index = 0, point_count - 1 do
+    local ratio = point_count == 1 and 0 or index / (point_count - 1)
+    local time_seconds = start_seconds + ((end_seconds - start_seconds) * ratio)
+    local radians = ratio * cycles * 2 * math.pi
+    local value = e5_routing_clamp_number(center_value + (math.sin(radians) * amplitude), 0, 4, center_value)
+    points[#points + 1] = {
+      time_seconds = time_seconds,
+      value = value,
+      shape = shape,
+      tension = tension,
+    }
+  end
+  local summary, failure, artifacts, jobs, refs = e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, points)
+  if failure then
+    return nil, failure
+  end
+  summary.start_seconds = start_seconds
+  summary.end_seconds = end_seconds
+  summary.center_value = center_value
+  summary.amplitude = amplitude
+  summary.cycles = cycles
+  summary.point_count = point_count
+  return summary, failure, artifacts, jobs, refs
+end
+
 local function set_send_automation_mode(request)
   local source_track, send_index = e5_routing_send_from_request_refs(request)
   if not source_track then

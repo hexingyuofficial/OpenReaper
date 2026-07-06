@@ -1948,6 +1948,40 @@
       ]
     },
     {
+      "template_id": "template.automation.insert_fx_parameter_envelope_points",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.insert_fx_parameter_envelope_points",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "insert_fx_parameter_envelope_points",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.insert_sine_wave_points",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.insert_sine_wave_points",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "insert_sine_wave_points",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.fx.resolve_fx_ref",
       "operation": {
         "family": "query_state",

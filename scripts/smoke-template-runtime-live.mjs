@@ -430,6 +430,8 @@ const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.automation.create_automation_item", "run_command:template.execute", "automation", "write", "automation.create_automation_item", "envelope", "automation_write"),
   routeSpec("template.automation.set_automation_item_bounds", "run_command:template.execute", "automation", "write", "automation.set_automation_item_bounds", "envelope", "automation_write", true),
   routeSpec("template.automation.resolve_send_envelope", "query_state:automation.resolve_send_envelope", "automation", "read", "automation.resolve_send_envelope", "send", "automation_read"),
+  routeSpec("template.automation.insert_fx_parameter_envelope_points", "run_command:template.execute", "automation", "write", "automation.insert_fx_parameter_envelope_points", "fx_envelope", "automation_write"),
+  routeSpec("template.automation.insert_sine_wave_points", "run_command:template.execute", "automation", "write", "automation.insert_sine_wave_points", "envelope", "automation_write"),
 ]);
 
 const E5_R1_ROUTING_READ_TEMPLATE_SPECS = Object.freeze(
@@ -3779,6 +3781,23 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
     "template.automation.resolve_send_envelope": {
       envelope_type: "volume",
     },
+    "template.automation.insert_fx_parameter_envelope_points": {
+      param_index: 0,
+      points: [
+        { time_seconds: 0, value: Math.max(0, fixtureInputsForRun.point_value - 0.1), shape: 0, tension: 0 },
+        { time_seconds: 1, value: fixtureInputsForRun.point_value, shape: 0, tension: 0 },
+      ],
+    },
+    "template.automation.insert_sine_wave_points": {
+      start_seconds: 0,
+      end_seconds: 2,
+      center_value: fixtureInputsForRun.point_value,
+      amplitude: 0.1,
+      cycles: 1,
+      point_count: 9,
+      shape: 0,
+      tension: 0,
+    },
   };
   return inputs[spec.id] ?? {};
 }
@@ -3839,6 +3858,11 @@ function e5RoutingAutomationRouteRefs(spec, fixtureInputsForRun) {
   if (spec.ref_group === "envelope") {
     if (!envelopeRef) return { blocker: "e5_envelope_ref_missing" };
     return { value: { envelope_ref: envelopeRef } };
+  }
+  if (spec.ref_group === "fx_envelope") {
+    if (!fxRef) return { blocker: "e5_fx_ref_missing" };
+    if (!envelopeRef) return { blocker: "e5_envelope_ref_missing" };
+    return { value: { fx_ref: fxRef, envelope_ref: envelopeRef } };
   }
   return { value: {} };
 }

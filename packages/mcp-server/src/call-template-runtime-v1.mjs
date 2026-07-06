@@ -203,6 +203,8 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
   "template.automation.resolve_send_envelope",
+  "template.automation.insert_fx_parameter_envelope_points",
+  "template.automation.insert_sine_wave_points",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS = deepFreeze([

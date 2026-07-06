@@ -746,6 +746,8 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.automation.create_automation_item",
       "template.automation.set_automation_item_bounds",
       "template.automation.resolve_send_envelope",
+      "template.automation.insert_fx_parameter_envelope_points",
+      "template.automation.insert_sine_wave_points",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -771,11 +773,11 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 30);
+    assert.equal(bridge.seen.length, 32);
     assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 11);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 19);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 21);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 15);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 15);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 17);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
@@ -809,10 +811,10 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(fake.spawned_reaper, false);
     assert.equal(fake.live_pass_claimed, false);
     assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS);
-    assert.equal(fake.executions.length, 30);
+    assert.equal(fake.executions.length, 32);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
     assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 11);
-    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 19);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 21);
     assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 0);
     assert.deepEqual(fake.preflight_blockers_covered, [
       "e5_track_ref_missing",
@@ -824,7 +826,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "e5_automation_point_value_invalid",
     ]);
     assert.equal(fake.routing_template_ids.length, 15);
-    assert.equal(fake.automation_template_ids.length, 15);
+    assert.equal(fake.automation_template_ids.length, 17);
 
     const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
     const transportDir = join(root, "transport");
@@ -1499,6 +1501,21 @@ function e5RouteInput(id) {
     "template.automation.create_automation_item": { position_seconds: 1, length_seconds: 2, pool_mode: "new_empty" },
     "template.automation.set_automation_item_bounds": { automation_item_index: 0, position_seconds: 1, length_seconds: 2 },
     "template.automation.resolve_send_envelope": { envelope_type: "volume" },
+    "template.automation.insert_fx_parameter_envelope_points": {
+      param_index: 0,
+      points: [
+        { time_seconds: 0, value: 0.2, shape: 0, tension: 0 },
+        { time_seconds: 1, value: 0.8, shape: 0, tension: 0 },
+      ],
+    },
+    "template.automation.insert_sine_wave_points": {
+      start_seconds: 0,
+      end_seconds: 2,
+      center_value: 0.5,
+      amplitude: 0.25,
+      cycles: 1,
+      point_count: 9,
+    },
   };
   return inputs[id] ?? {};
 }
@@ -1533,6 +1550,9 @@ function e5RouteRefs(id) {
   }
   if (id === "template.routing.read_fx_pin_mapping") {
     return { track_ref: trackRef, fx_ref: fxRef };
+  }
+  if (id === "template.automation.insert_fx_parameter_envelope_points") {
+    return { fx_ref: fxRef, envelope_ref: envelopeRef };
   }
   if (id.startsWith("template.routing.set_send_")
     || id === "template.routing.set_send_volume"
