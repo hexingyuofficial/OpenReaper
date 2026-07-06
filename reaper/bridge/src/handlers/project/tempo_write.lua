@@ -134,6 +134,26 @@ local function d6_tempo_marker_index_at(project, position_seconds)
   return -1
 end
 
+local function d6_tempo_marker_readback(project, position_seconds)
+  local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  if marker_index < 0 then
+    return nil
+  end
+  local ok_marker, retval, timepos, measurepos, beatpos, bpm, timesig_num, timesig_denom, lineartempo =
+    call_reaper("GetTempoTimeSigMarker", project, marker_index)
+  if not ok_marker or not retval then
+    return nil
+  end
+  return {
+    marker_index = marker_index,
+    position_seconds = first_number(timepos) or position_seconds,
+    bpm = first_number(bpm) or 0,
+    time_sig_num = math.floor(first_number(timesig_num) or 0),
+    time_sig_denom = math.floor(first_number(timesig_denom) or 0),
+    linear_tempo = lineartempo == true,
+  }
+end
+
 local function d6_tempo_set_marker(request)
   local project = d6_tempo_current_project()
   local bpm = d6_tempo_bounded_bpm(request.params.bpm)
@@ -170,23 +190,25 @@ local function d6_tempo_set_marker(request)
     }, false)
   end
   call_reaper("UpdateTimeline")
-  local effective = d6_tempo_effective_at(project, position_seconds)
-  local updated = math.abs(effective.bpm - bpm) < 0.01
+  local readback = d6_tempo_marker_readback(project, position_seconds)
+  local updated = readback and math.abs(readback.bpm - bpm) < 0.01
   if not updated then
     return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
       position_seconds = position_seconds,
       requested_bpm = bpm,
-      readback_bpm = effective.bpm,
-      time_sig_num = effective.time_sig_num,
-      time_sig_denom = effective.time_sig_denom,
+      readback_bpm = readback and readback.bpm or JSON_NULL,
+      time_sig_num = readback and readback.time_sig_num or JSON_NULL,
+      time_sig_denom = readback and readback.time_sig_denom or JSON_NULL,
     }, false)
   end
   return d6_tempo_summary(request, {
     position_seconds = position_seconds,
-    bpm = effective.bpm,
+    bpm = readback.bpm,
     requested_bpm = bpm,
-    time_sig_num = effective.time_sig_num,
-    time_sig_denom = effective.time_sig_denom,
+    time_sig_num = readback.time_sig_num,
+    time_sig_denom = readback.time_sig_denom,
+    marker_index = readback.marker_index,
+    linear_tempo = readback.linear_tempo,
     updated = updated,
   }), nil, json_array({}), json_array({}), d6_tempo_refs()
 end

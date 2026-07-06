@@ -114,7 +114,9 @@ describe("D12 transport safe live handler expansion", () => {
       assert.match(POLICY_SOURCE, new RegExp(`\\["${escapeRegExp(capability)}"\\]`));
     }
     assert.match(HANDLER_SOURCE, /GetPlayState/);
+    assert.match(HANDLER_SOURCE, /CSurf_OnPlay/);
     assert.match(HANDLER_SOURCE, /OnPlayButton/);
+    assert.match(HANDLER_SOURCE, /CSurf_OnPause/);
     assert.match(HANDLER_SOURCE, /OnPauseButton/);
     assert.match(HANDLER_SOURCE, /OnStopButton/);
     assert.match(HANDLER_SOURCE, /CSurf_OnRecord/);

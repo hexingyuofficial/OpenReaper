@@ -142,9 +142,12 @@ local function d12_transport_play(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("OnPlayButton")
+  local ok = call_reaper("CSurf_OnPlay")
   if not ok then
-    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPlayButton.", {}, false)
+    ok = call_reaper("OnPlayButton")
+  end
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected play command.", {}, false)
   end
   return d12_transport_verify_state(request, "playing")
 end
@@ -154,9 +157,12 @@ local function d12_transport_pause(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("OnPauseButton")
+  local ok = call_reaper("CSurf_OnPause")
   if not ok then
-    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPauseButton.", {}, false)
+    ok = call_reaper("OnPauseButton")
+  end
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected pause command.", {}, false)
   end
   return d12_transport_verify_state(request, "paused")
 end

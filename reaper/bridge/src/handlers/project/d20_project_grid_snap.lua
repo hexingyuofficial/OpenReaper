@@ -69,9 +69,13 @@ local function d20_project_grid_division(value)
 end
 
 local function d20_project_grid_read(project)
-  local ok, division = call_reaper("GetSetProjectGrid", project, false, 0)
+  local ok, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
   if ok and type(division) == "number" then
-    return division
+    return {
+      division = division,
+      swingmode = type(swingmode) == "number" and swingmode or 0,
+      swing = type(swingamt) == "number" and swingamt or 0,
+    }
   end
   return nil
 end
@@ -96,27 +100,39 @@ local function d20_project_set_grid(request)
       division = request.params.division,
     })
   end
-  local ok = call_reaper("GetSetProjectGrid", project, true, division)
+  local swing = tonumber(request.params.swing) or 0
+  if swing < 0 then
+    swing = 0
+  elseif swing > 1 then
+    swing = 1
+  end
+  local swingmode = swing > 0 and 1 or 0
+  local ok = call_reaper("GetSetProjectGrid", project, true, division, swingmode, swing)
   if not ok then
     return d20_project_grid_error("COMMAND_FAILED", "REAPER rejected project grid update.", {
       division = division_label,
       division_qn = division,
+      swing = swing,
     }, false)
   end
   call_reaper("UpdateTimeline")
   local readback = d20_project_grid_read(project)
-  local updated = type(readback) == "number" and math.abs(readback - division) < 0.000001
+  local updated = readback and math.abs(readback.division - division) < 0.000001
   if not updated then
     return d20_project_grid_error("READBACK_MISMATCH", "Project grid division did not read back the requested value.", {
       requested_division = division_label,
       requested_division_qn = division,
-      readback_division_qn = readback,
+      requested_swing = swing,
+      readback_division_qn = readback and readback.division or JSON_NULL,
+      readback_swingmode = readback and readback.swingmode or JSON_NULL,
+      readback_swing = readback and readback.swing or JSON_NULL,
     }, false)
   end
   return d20_project_grid_summary(request, {
     division = division_label,
-    division_qn = readback,
-    swing = request.params.swing,
+    division_qn = readback.division,
+    swingmode = readback.swingmode,
+    swing = readback.swing,
     updated = true,
   }), nil, json_array({}), json_array({}), d20_project_grid_refs()
 end

@@ -41,6 +41,7 @@ describe("D6 project tempo/grid live handler expansion", () => {
 
     assert.match(HANDLER_SOURCE, /SetCurrentBPM/);
     assert.match(HANDLER_SOURCE, /SetTempoTimeSigMarker/);
+    assert.match(HANDLER_SOURCE, /GetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /Master_GetTempo|TimeMap_GetTimeSigAtTime/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
   });
@@ -51,6 +52,8 @@ describe("D6 project tempo/grid live handler expansion", () => {
       "utf8",
     );
     assert.match(gridSource, /GetSetProjectGrid/);
+    assert.match(gridSource, /GetSetProjectGrid", project, false, 0, 0, 0/);
+    assert.match(gridSource, /GetSetProjectGrid", project, true, division, swingmode, swing/);
     assert.doesNotMatch(gridSource, /request\.params\.(?:action|command|command_id|lua|script|shell)/);
     assert.doesNotMatch(gridSource, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
   });

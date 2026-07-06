@@ -3690,6 +3690,26 @@ local function d6_tempo_marker_index_at(project, position_seconds)
   return -1
 end
 
+local function d6_tempo_marker_readback(project, position_seconds)
+  local marker_index = d6_tempo_marker_index_at(project, position_seconds)
+  if marker_index < 0 then
+    return nil
+  end
+  local ok_marker, retval, timepos, measurepos, beatpos, bpm, timesig_num, timesig_denom, lineartempo =
+    call_reaper("GetTempoTimeSigMarker", project, marker_index)
+  if not ok_marker or not retval then
+    return nil
+  end
+  return {
+    marker_index = marker_index,
+    position_seconds = first_number(timepos) or position_seconds,
+    bpm = first_number(bpm) or 0,
+    time_sig_num = math.floor(first_number(timesig_num) or 0),
+    time_sig_denom = math.floor(first_number(timesig_denom) or 0),
+    linear_tempo = lineartempo == true,
+  }
+end
+
 local function d6_tempo_set_marker(request)
   local project = d6_tempo_current_project()
   local bpm = d6_tempo_bounded_bpm(request.params.bpm)
@@ -3726,23 +3746,25 @@ local function d6_tempo_set_marker(request)
     }, false)
   end
   call_reaper("UpdateTimeline")
-  local effective = d6_tempo_effective_at(project, position_seconds)
-  local updated = math.abs(effective.bpm - bpm) < 0.01
+  local readback = d6_tempo_marker_readback(project, position_seconds)
+  local updated = readback and math.abs(readback.bpm - bpm) < 0.01
   if not updated then
     return d6_tempo_error("READBACK_MISMATCH", "Tempo marker write did not read back the requested BPM.", {
       position_seconds = position_seconds,
       requested_bpm = bpm,
-      readback_bpm = effective.bpm,
-      time_sig_num = effective.time_sig_num,
-      time_sig_denom = effective.time_sig_denom,
+      readback_bpm = readback and readback.bpm or JSON_NULL,
+      time_sig_num = readback and readback.time_sig_num or JSON_NULL,
+      time_sig_denom = readback and readback.time_sig_denom or JSON_NULL,
     }, false)
   end
   return d6_tempo_summary(request, {
     position_seconds = position_seconds,
-    bpm = effective.bpm,
+    bpm = readback.bpm,
     requested_bpm = bpm,
-    time_sig_num = effective.time_sig_num,
-    time_sig_denom = effective.time_sig_denom,
+    time_sig_num = readback.time_sig_num,
+    time_sig_denom = readback.time_sig_denom,
+    marker_index = readback.marker_index,
+    linear_tempo = readback.linear_tempo,
     updated = updated,
   }), nil, json_array({}), json_array({}), d6_tempo_refs()
 end
@@ -3837,9 +3859,13 @@ local function d20_project_grid_division(value)
 end
 
 local function d20_project_grid_read(project)
-  local ok, division = call_reaper("GetSetProjectGrid", project, false, 0)
+  local ok, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
   if ok and type(division) == "number" then
-    return division
+    return {
+      division = division,
+      swingmode = type(swingmode) == "number" and swingmode or 0,
+      swing = type(swingamt) == "number" and swingamt or 0,
+    }
   end
   return nil
 end
@@ -3864,27 +3890,39 @@ local function d20_project_set_grid(request)
       division = request.params.division,
     })
   end
-  local ok = call_reaper("GetSetProjectGrid", project, true, division)
+  local swing = tonumber(request.params.swing) or 0
+  if swing < 0 then
+    swing = 0
+  elseif swing > 1 then
+    swing = 1
+  end
+  local swingmode = swing > 0 and 1 or 0
+  local ok = call_reaper("GetSetProjectGrid", project, true, division, swingmode, swing)
   if not ok then
     return d20_project_grid_error("COMMAND_FAILED", "REAPER rejected project grid update.", {
       division = division_label,
       division_qn = division,
+      swing = swing,
     }, false)
   end
   call_reaper("UpdateTimeline")
   local readback = d20_project_grid_read(project)
-  local updated = type(readback) == "number" and math.abs(readback - division) < 0.000001
+  local updated = readback and math.abs(readback.division - division) < 0.000001
   if not updated then
     return d20_project_grid_error("READBACK_MISMATCH", "Project grid division did not read back the requested value.", {
       requested_division = division_label,
       requested_division_qn = division,
-      readback_division_qn = readback,
+      requested_swing = swing,
+      readback_division_qn = readback and readback.division or JSON_NULL,
+      readback_swingmode = readback and readback.swingmode or JSON_NULL,
+      readback_swing = readback and readback.swing or JSON_NULL,
     }, false)
   end
   return d20_project_grid_summary(request, {
     division = division_label,
-    division_qn = readback,
-    swing = request.params.swing,
+    division_qn = readback.division,
+    swingmode = readback.swingmode,
+    swing = readback.swing,
     updated = true,
   }), nil, json_array({}), json_array({}), d20_project_grid_refs()
 end
@@ -5364,9 +5402,12 @@ local function d12_transport_play(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("OnPlayButton")
+  local ok = call_reaper("CSurf_OnPlay")
   if not ok then
-    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPlayButton.", {}, false)
+    ok = call_reaper("OnPlayButton")
+  end
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected play command.", {}, false)
   end
   return d12_transport_verify_state(request, "playing")
 end
@@ -5376,9 +5417,12 @@ local function d12_transport_pause(request)
   if guard then
     return nil, guard
   end
-  local ok = call_reaper("OnPauseButton")
+  local ok = call_reaper("CSurf_OnPause")
   if not ok then
-    return d12_transport_error("COMMAND_FAILED", "REAPER rejected OnPauseButton.", {}, false)
+    ok = call_reaper("OnPauseButton")
+  end
+  if not ok then
+    return d12_transport_error("COMMAND_FAILED", "REAPER rejected pause command.", {}, false)
   end
   return d12_transport_verify_state(request, "paused")
 end
