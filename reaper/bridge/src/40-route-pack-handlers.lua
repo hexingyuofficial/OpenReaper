@@ -1101,6 +1101,10 @@ local ALLOWED_OPERATIONS = {
     pack = "actions",
     handler = search_action_commands,
   },
+  ["query_state:fx.installed.search"] = {
+    pack = "fx",
+    handler = search_installed_fx,
+  },
   ["query_state:actions.read_custom_action_metadata"] = {
     pack = "actions",
     handler = read_custom_action_metadata,

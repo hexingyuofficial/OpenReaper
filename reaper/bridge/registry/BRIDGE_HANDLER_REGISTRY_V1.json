@@ -2310,6 +2310,22 @@
       ]
     },
     {
+      "template_id": "template.fx.search_installed_fx",
+      "operation": {
+        "family": "query_state",
+        "name": "fx.installed.search"
+      },
+      "pack": "fx",
+      "risk": "read",
+      "route": "d23-fx-discovery-read-handlers",
+      "handler_file": "fx/e2_fx_l1_read_route.lua",
+      "handler_export": "search_installed_fx",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.analysis.detect_loop_candidates",
       "operation": {
         "family": "run_job",

@@ -128,6 +128,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "automation.read_track_automation_mode",
       "automation.resolve_envelope_ref",
       "automation.resolve_send_envelope",
+      "fx.installed.search",
       "fx.list_parameters",
       "fx.list_take_chain",
       "fx.list_track_chain",

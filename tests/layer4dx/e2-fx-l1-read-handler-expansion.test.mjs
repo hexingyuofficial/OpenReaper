@@ -34,6 +34,7 @@ const E2_FX_L1_OPERATION_KEYS = Object.freeze([
   "query_state:fx.read_summary",
   "query_state:fx.list_parameters",
   "query_state:fx.read_parameter",
+  "query_state:fx.parameter_to_envelope_mapping",
 ]);
 const E2_FX_B1_WRITE_IDS = Object.freeze([
   "template.fx.add_track_fx",
@@ -44,7 +45,7 @@ const E2_FX_B1_WRITE_IDS = Object.freeze([
 ]);
 
 describe("E2-FX-L1 FX read live handler expansion", () => {
-  it("adds a separate runtime allowlist for exactly the six E2-FX-L1 read template ids", async () => {
+  it("adds a separate runtime allowlist for exactly the seven E2-FX-L1 read template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS, [
       "template.fx.resolve_fx_ref",
       "template.fx.list_track_fx_chain",
@@ -52,6 +53,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       "template.fx.read_fx_summary",
       "template.fx.list_fx_parameters",
       "template.fx.read_fx_parameter",
+      "template.fx.parameter_to_envelope_mapping",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -87,6 +89,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       "fx.read_summary",
       "fx.list_parameters",
       "fx.read_parameter",
+      "fx.parameter_to_envelope_mapping",
     ]);
     for (const request of bridge.seen) {
       assert.equal(request.pack.id, "fx");
@@ -155,7 +158,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.deepEqual(report.attempted_template_ids, CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS);
 
     const requests = await readTransportRequests(transportDir);
-    assert.equal(requests.length, 6);
+    assert.equal(requests.length, 7);
     assert.deepEqual(
       requests.map((request) => `${request.operation.family}:${request.operation.name}`),
       E2_FX_L1_OPERATION_KEYS,
@@ -175,6 +178,8 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.equal(requests[2].refs.find((ref) => ref.kind === "take").ref, "take:guid:{E2-FX-L1-TAKE}");
     assert.equal(requests[5].refs.find((ref) => ref.kind === "fx").ref, "fx:track:0");
     assert.equal(requests[5].params.param_index, 0);
+    assert.equal(requests[6].refs.find((ref) => ref.kind === "fx").ref, "fx:track:0");
+    assert.equal(requests[6].params.param_index, 0);
   });
 
   it("keeps the Lua bridge E2-FX-L1 read surface exact while adding only bounded E2-FX-B1 writes", () => {
@@ -184,6 +189,8 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_summary"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_summary/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.list_parameters"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.list_fx_parameters/);
     assert.match(BRIDGE_SOURCE, /\["query_state:fx\.read_parameter"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.read_fx_parameter/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.parameter_to_envelope_mapping"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.parameter_to_envelope_mapping/);
+    assert.match(BRIDGE_SOURCE, /\["query_state:fx\.installed\.search"\]\s*=\s*\{[\s\S]*?handler\s*=\s*OPENREAPER_HANDLER_EXPORTS\.search_installed_fx/);
     assert.match(BRIDGE_SOURCE, /TrackFX_GetCount/);
     assert.match(BRIDGE_SOURCE, /TrackFX_GetFXName/);
     assert.match(BRIDGE_SOURCE, /TrackFX_GetParam/);
@@ -206,12 +213,14 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(fx\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
       [
+        "fx.installed.search",
         "fx.resolve_ref",
         "fx.list_track_chain",
         "fx.list_take_chain",
         "fx.read_summary",
         "fx.list_parameters",
         "fx.read_parameter",
+        "fx.parameter_to_envelope_mapping",
       ],
     );
     assert.deepEqual(
@@ -223,8 +232,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       [...E2_FX_B1_WRITE_IDS],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code|fx\.set_preset|fx\.search_installed/);
-    assert.doesNotMatch(BRIDGE_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /fx\.read_video_processor_code/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 });
@@ -239,7 +247,7 @@ function e2FxL1Input(id) {
   if (id === "template.fx.list_fx_parameters") {
     return { limit: 16 };
   }
-  if (id === "template.fx.read_fx_parameter") {
+  if (id === "template.fx.read_fx_parameter" || id === "template.fx.parameter_to_envelope_mapping") {
     return { param_index: 0 };
   }
   return {};

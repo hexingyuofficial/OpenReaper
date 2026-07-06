@@ -162,6 +162,7 @@ export const CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS = deepFreeze([
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
   "template.fx.read_fx_parameter",
+  "template.fx.parameter_to_envelope_mapping",
   "template.fx.add_track_fx",
   "template.fx.add_take_fx",
   "template.fx.set_fx_bypass",
@@ -300,6 +301,10 @@ export const CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS = deep
   "template.render.set_render_sample_rate",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS = deepFreeze([
+  "template.fx.search_installed_fx",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -331,6 +336,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d17_midi_edit", CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS],
   ["d21_render_read", CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS],
   ["d22_render_settings_write", CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS],
+  ["d23_fx_discovery_read", CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1197,6 +1203,9 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

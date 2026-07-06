@@ -564,6 +564,93 @@ local function read_fx_parameter(request)
   }), nil, json_array({}), json_array({}), e2_fx_read_refs()
 end
 
+local function e2_fx_search_query(request)
+  local query = request.params and request.params.query
+  if not is_string(query) or query:gsub("%s+", "") == "" then
+    return nil
+  end
+  return bounded_string(query, 120)
+end
+
+local function e2_fx_non_negative_integer(value, fallback)
+  local number = tonumber(value)
+  if not number or number < 0 or number ~= math.floor(number) then
+    return fallback
+  end
+  return number
+end
+
+local function e2_fx_enum_installed_name(index)
+  local ok, first, second = call_reaper("EnumInstalledFX", index, "")
+  if not ok then
+    return nil, "missing"
+  end
+  if first == false or first == nil then
+    return nil, nil
+  end
+  if type(first) == "string" then
+    return bounded_string(first, 240), nil
+  end
+  if type(second) == "string" then
+    return bounded_string(second, 240), nil
+  end
+  return nil, nil
+end
+
+local function search_installed_fx(request)
+  local query = e2_fx_search_query(request)
+  if not query then
+    return e2_fx_read_error("QUERY_INVALID", "FX installed search requires a non-empty query string.", {
+      query = request.params and request.params.query or JSON_NULL,
+    })
+  end
+  local limit = e2_fx_read_bounded_limit(request, request.params and request.params.limit, 16, 50)
+  local offset = e2_fx_non_negative_integer(request.params and request.params.offset, 0)
+  local needle = query:lower()
+  local rows = json_array({})
+  local matched = 0
+  local scanned = 0
+  local truncated = false
+  local max_scan = 2048
+  for index = 0, max_scan - 1 do
+    local name, blocker = e2_fx_enum_installed_name(index)
+    if blocker == "missing" then
+      return e2_fx_read_error("API_UNAVAILABLE", "REAPER EnumInstalledFX API is not available in this bridge runtime.", {
+        api = "EnumInstalledFX",
+      })
+    end
+    if not name then
+      break
+    end
+    scanned = scanned + 1
+    if name:lower():find(needle, 1, true) then
+      if matched >= offset and #rows < limit then
+        rows[#rows + 1] = {
+          index = index,
+          name = name,
+          ident = name,
+        }
+      elseif matched >= offset and #rows >= limit then
+        truncated = true
+      end
+      matched = matched + 1
+    end
+  end
+  if scanned >= max_scan then
+    truncated = true
+  end
+  return e2_fx_read_summary(request, {
+    query = query,
+    rows = rows,
+    row_count = #rows,
+    matched_count = matched,
+    scanned_count = scanned,
+    limit = limit,
+    offset = offset,
+    truncated = truncated,
+  }), nil, json_array({}), json_array({}), e2_fx_read_refs()
+end
+
 local function e2_fx_write_summary(request, readback)
   local summary = e2_fx_read_summary(request, readback)
   summary.undo_evidence = "required"

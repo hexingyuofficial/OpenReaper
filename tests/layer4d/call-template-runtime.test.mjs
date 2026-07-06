@@ -531,6 +531,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.fx.read_fx_summary",
       "template.fx.list_fx_parameters",
       "template.fx.read_fx_parameter",
+      "template.fx.parameter_to_envelope_mapping",
       "template.fx.add_track_fx",
       "template.fx.add_take_fx",
       "template.fx.set_fx_bypass",
@@ -573,6 +574,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "query_state:fx.read_summary",
         "query_state:fx.list_parameters",
         "query_state:fx.read_parameter",
+        "query_state:fx.parameter_to_envelope_mapping",
         "run_command:template.execute",
         "run_command:template.execute",
         "run_command:template.execute",
@@ -592,6 +594,7 @@ describe("Layer 4D call_template runtime binding", () => {
         "fx.read_summary",
         "fx.list_parameters",
         "fx.read_parameter",
+        "fx.parameter_to_envelope_mapping",
         "fx.add_track",
         "fx.add_take",
         "fx.set_bypass",
@@ -602,21 +605,21 @@ describe("Layer 4D call_template runtime binding", () => {
         "fx.read_video_processor_code",
       ],
     );
-    for (const request of bridge.seen.slice(0, 6)) {
+    for (const request of bridge.seen.slice(0, 7)) {
       assert.equal(request.pack.id, "fx");
       assert.equal(request.pack.risk, "read");
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
     }
-    for (const request of bridge.seen.slice(6, 13)) {
+    for (const request of bridge.seen.slice(7, 14)) {
       assert.equal(request.pack.id, "fx");
       assert.equal(request.pack.risk, "write");
       assert.equal(request.undo.mode, "required");
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
     }
-    assert.equal(bridge.seen[13].pack.risk, "read");
-    assert.equal(bridge.seen[13].artifacts.allow, true);
+    assert.equal(bridge.seen[14].pack.risk, "read");
+    assert.equal(bridge.seen[14].artifacts.allow, true);
 
     const mixed = createCallTemplateRuntime({
       live: {
@@ -645,6 +648,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "query_state:fx.read_summary",
       "query_state:fx.list_parameters",
       "query_state:fx.read_parameter",
+      "query_state:fx.parameter_to_envelope_mapping",
       "query_state:fx.read_video_processor_code",
       "run_command:template.execute",
     ]);
@@ -657,7 +661,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "fx_preset_fixture_missing",
       "video_processor_fixture_missing",
     ]);
-    assert.equal(fake.executions.length, 14);
+    assert.equal(fake.executions.length, 15);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
     assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 5);
     assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 1);
@@ -1229,7 +1233,7 @@ function fxB1RouteInput(id) {
   if (id === "template.fx.list_fx_parameters") {
     return { limit: 16 };
   }
-  if (id === "template.fx.read_fx_parameter") {
+  if (id === "template.fx.read_fx_parameter" || id === "template.fx.parameter_to_envelope_mapping") {
     return { param_index: 0 };
   }
   if (id === "template.fx.add_track_fx" || id === "template.fx.add_take_fx") {

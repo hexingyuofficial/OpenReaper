@@ -43,6 +43,7 @@ const EXPECTED_LUA_OPERATIONS = Object.freeze([
   "items.list_selected_items",
   "items.read_item_summary",
   "items.resolve_item_ref",
+  "fx.installed.search",
   "fx.list_parameters",
   "fx.list_take_chain",
   "fx.list_track_chain",

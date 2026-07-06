@@ -23,6 +23,7 @@ import {
   CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D22_RENDER_SETTINGS_WRITE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
@@ -204,6 +205,10 @@ export const registryRoutes = Object.freeze({
   "e2-fx-b1-write-handlers": Object.freeze({
     ids: E2_FX_B1_WRITE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/e2-fx-l1-read-handler-expansion.test.mjs"]),
+  }),
+  "d23-fx-discovery-read-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dr/bridge-handler-registry.test.mjs"]),
   }),
   "first-real-a1": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,

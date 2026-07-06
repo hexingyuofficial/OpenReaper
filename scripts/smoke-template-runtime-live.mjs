@@ -301,6 +301,15 @@ const E2_FX_B1_ROUTE_TEMPLATE_SPECS = Object.freeze([
     phase: "primary_read",
   }),
   Object.freeze({
+    id: "template.fx.parameter_to_envelope_mapping",
+    operation: "query_state:fx.parameter_to_envelope_mapping",
+    pack: "fx",
+    risk: "read",
+    capability: "fx.parameter_to_envelope_mapping",
+    ref_group: "fx",
+    phase: "primary_read",
+  }),
+  Object.freeze({
     id: "template.fx.add_track_fx",
     operation: "run_command:template.execute",
     pack: "fx",
@@ -1057,6 +1066,7 @@ function selectRoute(argv, env) {
         "query_state:fx.read_summary",
         "query_state:fx.list_parameters",
         "query_state:fx.read_parameter",
+        "query_state:fx.parameter_to_envelope_mapping",
         "query_state:fx.read_video_processor_code",
         "run_command:template.execute",
       ],
@@ -3587,6 +3597,9 @@ function e2FxB1RouteInput(spec, fixtureInputsForRun) {
       limit: 16,
     },
     "template.fx.read_fx_parameter": {
+      param_index: fixtureInputsForRun.param_index,
+    },
+    "template.fx.parameter_to_envelope_mapping": {
       param_index: fixtureInputsForRun.param_index,
     },
     "template.fx.add_track_fx": {

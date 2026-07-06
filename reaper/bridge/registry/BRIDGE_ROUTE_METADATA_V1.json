@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 170,
+    "entryCount": 171,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 170,
+    "extractedHandlerCount": 171,
     "handlerModuleCount": 77,
-    "routeCount": 26,
-    "operationCount": 69
+    "routeCount": 27,
+    "operationCount": 70
   },
   "routes": [
     {
@@ -606,6 +606,27 @@
         "template.fx.set_fx_preset_by_name",
         "template.fx.set_fx_preset_by_index",
         "template.fx.reorder_fx"
+      ]
+    },
+    {
+      "route": "d23-fx-discovery-read-handlers",
+      "template_count": 1,
+      "handler_module_count": 1,
+      "operation_count": 1,
+      "packs": [
+        "fx"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "template_ids": [
+        "template.fx.search_installed_fx"
       ]
     },
     {
