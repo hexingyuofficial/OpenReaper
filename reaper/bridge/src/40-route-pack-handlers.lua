@@ -893,6 +893,16 @@ local D15_ITEMS_SOURCE_PHASE_HANDLERS = {
   ["items.choose_new_source_file"] = d15_items_choose_new_source_file,
 }
 
+local D16_TRACKS_ORG_HANDLERS = {
+  ["track.delete"] = d16_tracks_delete_track,
+  ["tracks.delete"] = d16_tracks_delete_tracks,
+  ["track.create_folder"] = d16_tracks_create_folder_track,
+  ["track.set_folder_depth"] = d16_tracks_set_folder_depth,
+  ["track.move"] = d16_tracks_move_track,
+  ["tracks.move"] = d16_tracks_move_tracks,
+  ["tracks.nest_in_folder"] = d16_tracks_nest_tracks_in_folder,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -943,6 +953,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D15_ITEMS_SOURCE_PHASE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D16_TRACKS_ORG_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

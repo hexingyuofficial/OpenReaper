@@ -904,6 +904,125 @@
       "capability": "items.choose_new_source_file"
     },
     {
+      "template_id": "template.tracks.delete_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "destructive",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_delete_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "track.delete"
+    },
+    {
+      "template_id": "template.tracks.delete_tracks",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "destructive",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_delete_tracks",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "tracks.delete"
+    },
+    {
+      "template_id": "template.tracks.create_folder_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_create_folder_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "track.create_folder"
+    },
+    {
+      "template_id": "template.tracks.set_folder_depth",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_set_folder_depth",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "track.set_folder_depth"
+    },
+    {
+      "template_id": "template.tracks.move_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_move_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "track.move"
+    },
+    {
+      "template_id": "template.tracks.move_tracks",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_move_tracks",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "tracks.move"
+    },
+    {
+      "template_id": "template.tracks.nest_tracks_in_folder",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d16-tracks-org-handlers",
+      "handler_file": "tracks/d16_tracks_org_route.lua",
+      "handler_export": "d16_tracks_nest_tracks_in_folder",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d16-tracks-org-handler-expansion.test.mjs"
+      ],
+      "capability": "tracks.nest_in_folder"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",
