@@ -455,6 +455,7 @@ const D6_PROJECT_TEMPO_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.project.set_tempo", "run_command:template.execute", "project", "write", "project.set_tempo", "none", "tempo_write", true),
   routeSpec("template.project.set_bpm", "run_command:template.execute", "project", "write", "project.set_bpm", "none", "tempo_write", true),
   routeSpec("template.project.set_tempo_marker", "run_command:template.execute", "project", "write", "project.set_tempo_marker", "none", "tempo_marker_write", true),
+  routeSpec("template.project.set_grid", "run_command:template.execute", "project", "write", "project.set_grid", "none", "grid_write", true),
 ]);
 
 const D6_PROJECT_TEMPO_SPEC_BY_CAPABILITY = new Map(
@@ -3818,6 +3819,9 @@ function d6ProjectTempoRouteInput(spec, fixtureInputsForRun) {
       time_signature_numerator: 4,
       time_signature_denominator: 4,
     },
+    "template.project.set_grid": {
+      division: "1/8",
+    },
   };
   return inputs[spec.id] ?? {};
 }
@@ -5437,6 +5441,8 @@ async function dispatchFakeD6ProjectTempoRoute(request) {
       phase: spec.phase,
       project_ref: "project:current",
       bpm: request?.params?.bpm ?? 120,
+      division: request?.params?.division ?? null,
+      enabled: request?.params?.enabled ?? null,
       position_seconds: request?.params?.position_seconds ?? null,
       updated: true,
       readback_status: "passed",

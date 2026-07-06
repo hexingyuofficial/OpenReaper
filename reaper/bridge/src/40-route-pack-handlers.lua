@@ -848,6 +848,7 @@ local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
   ["project.set_tempo"] = d6_project_set_tempo,
   ["project.set_bpm"] = d6_project_set_bpm,
   ["project.set_tempo_marker"] = d6_project_set_tempo_marker,
+  ["project.set_grid"] = d20_project_set_grid,
 }
 
 local D9_TRACKS_MIXER_WRITE_HANDLERS = {

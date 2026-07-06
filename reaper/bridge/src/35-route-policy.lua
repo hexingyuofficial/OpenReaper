@@ -68,6 +68,7 @@ local D6_PROJECT_TEMPO_WRITE_CAPABILITIES = {
   ["project.set_tempo"] = { pack = "project", risk = "write" },
   ["project.set_bpm"] = { pack = "project", risk = "write" },
   ["project.set_tempo_marker"] = { pack = "project", risk = "write" },
+  ["project.set_grid"] = { pack = "project", risk = "write" },
 }
 
 local D9_TRACKS_MIXER_WRITE_CAPABILITIES = {

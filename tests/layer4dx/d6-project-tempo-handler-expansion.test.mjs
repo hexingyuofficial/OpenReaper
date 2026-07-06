@@ -17,8 +17,8 @@ const HANDLER_SOURCE = readFileSync(
   "utf8",
 );
 
-describe("D6 project tempo live handler expansion", () => {
-  it("registers the bounded project tempo/BPM handler batch", () => {
+describe("D6 project tempo/grid live handler expansion", () => {
+  it("registers the bounded project tempo/BPM/grid handler batch", () => {
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
     assert.deepEqual(
@@ -34,6 +34,7 @@ describe("D6 project tempo live handler expansion", () => {
       "project.set_tempo",
       "project.set_bpm",
       "project.set_tempo_marker",
+      "project.set_grid",
     ]) {
       assert.match(ROUTE_SOURCE, new RegExp(`\\["${capability.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"\\]`));
     }
@@ -42,6 +43,16 @@ describe("D6 project tempo live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /SetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /Master_GetTempo|TimeMap_GetTimeSigAtTime/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
+  });
+
+  it("binds grid writes to fixed REAPER primitives without exposing raw action input", () => {
+    const gridSource = readFileSync(
+      new URL("../../reaper/bridge/src/handlers/project/d20_project_grid_snap.lua", import.meta.url),
+      "utf8",
+    );
+    assert.match(gridSource, /GetSetProjectGrid/);
+    assert.doesNotMatch(gridSource, /request\.params\.(?:action|command|command_id|lua|script|shell)/);
+    assert.doesNotMatch(gridSource, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
   });
 
   it("runs the route harness in fake mode without REAPER", () => {

@@ -3,10 +3,10 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 164,
+    "entryCount": 165,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 164,
-    "handlerModuleCount": 74,
+    "extractedHandlerCount": 165,
+    "handlerModuleCount": 75,
     "routeCount": 24,
     "operationCount": 64
   },
@@ -75,9 +75,9 @@
     },
     {
       "route": "d6-project-tempo-handlers",
-      "template_count": 3,
-      "handler_module_count": 1,
-      "operation_count": 3,
+      "template_count": 4,
+      "handler_module_count": 2,
+      "operation_count": 4,
       "packs": [
         "project"
       ],
@@ -93,7 +93,8 @@
       "template_ids": [
         "template.project.set_tempo",
         "template.project.set_bpm",
-        "template.project.set_tempo_marker"
+        "template.project.set_tempo_marker",
+        "template.project.set_grid"
       ]
     },
     {

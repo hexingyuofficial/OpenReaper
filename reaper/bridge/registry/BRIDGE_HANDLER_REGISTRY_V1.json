@@ -283,6 +283,23 @@
       ]
     },
     {
+      "template_id": "template.project.set_grid",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.set_grid",
+      "pack": "project",
+      "risk": "write",
+      "route": "d6-project-tempo-handlers",
+      "handler_file": "project/d20_project_grid_snap.lua",
+      "handler_export": "d20_project_set_grid",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.tracks.list_tracks",
       "operation": {
         "family": "query_state",

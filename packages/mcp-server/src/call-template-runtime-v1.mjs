@@ -211,6 +211,7 @@ export const CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS = deepFreeze([
   "template.project.set_tempo",
   "template.project.set_bpm",
   "template.project.set_tempo_marker",
+  "template.project.set_grid",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS = deepFreeze([
