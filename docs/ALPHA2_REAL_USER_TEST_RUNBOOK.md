@@ -2,10 +2,10 @@
 
 Status: ready for the next beginner-style product test.
 
-Baseline commit:
+Product behavior baseline commit:
 
 ```text
-7500020798b4b73835342718bddde2fc634ceffb
+ff5a6ebaa83256bb217f989f418ee480f91d49a2
 ```
 
 Latest product surface contract:
