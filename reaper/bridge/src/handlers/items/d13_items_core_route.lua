@@ -366,6 +366,24 @@ local function d13_items_channel_mode_value(value)
   return nil
 end
 
+local function d13_items_pitch_mode_label(value)
+  local number = math.floor(tonumber(value) or -1)
+  if number == -1 then
+    return "project_default"
+  end
+  return tostring(number)
+end
+
+local function d13_items_pitch_mode_value(value)
+  if value == "project_default" or value == "default" then
+    return -1
+  end
+  if is_string(value) and value:match("^%-?%d+$") then
+    return tonumber(value)
+  end
+  return nil
+end
+
 local function d13_items_active_take(item)
   local ok_take, take = call_reaper("GetActiveTake", item)
   return ok_take and take or nil
@@ -405,6 +423,8 @@ local function d13_items_item_summary(item, include_take_summary)
       summary.take_pan = d13_items_take_number(take, "D_PAN")
       summary.start_offset_seconds = d13_items_take_number(take, "D_STARTOFFS")
       summary.channel_mode = d13_items_channel_mode_label(d13_items_take_number(take, "I_CHANMODE"))
+      summary.pitch_shift_mode = d13_items_pitch_mode_label(d13_items_take_number(take, "I_PITCHMODE"))
+      summary.stretch_marker_fade_size_ms = d13_items_take_number(take, "F_STRETCHFADESIZE") * 1000
     else
       summary.active_take_name = ""
     end
@@ -480,6 +500,11 @@ local function d13_items_write_summary(request, item)
   summary.undo_evidence = "required"
   summary.artifacts_allowed = false
   summary.truncated = false
+  if request.pack.capability == "items.set_pitch_shift_mode" then
+    summary.mode = summary.pitch_shift_mode
+  elseif request.pack.capability == "items.set_stretch_marker_fade_size" then
+    summary.fade_size_ms = summary.stretch_marker_fade_size_ms
+  end
   return summary, nil, json_array({}), json_array({}), d13_items_refs(d13_items_item_object_ref(item))
 end
 
@@ -628,4 +653,24 @@ local function d13_items_set_channel_mode(request)
     })
   end
   return d13_items_set_take_value(request, "I_CHANMODE", mode)
+end
+
+local function d13_items_set_pitch_shift_mode(request)
+  local mode = d13_items_pitch_mode_value(request.params.mode)
+  if mode == nil then
+    return d13_items_error("PARAMS_INVALID", "Take pitch mode must be project_default or an integer I_PITCHMODE value.", {
+      mode = request.params.mode,
+    })
+  end
+  return d13_items_set_take_value(request, "I_PITCHMODE", mode)
+end
+
+local function d13_items_set_stretch_marker_fade_size(request)
+  local fade_size_ms = d13_items_finite_number(request.params.fade_size_ms)
+  if not fade_size_ms or fade_size_ms < 0 or fade_size_ms > 10000 then
+    return d13_items_error("PARAMS_INVALID", "Stretch marker fade_size_ms must be between 0 and 10000.", {
+      fade_size_ms = request.params.fade_size_ms,
+    })
+  end
+  return d13_items_set_take_value(request, "F_STRETCHFADESIZE", fade_size_ms / 1000)
 end

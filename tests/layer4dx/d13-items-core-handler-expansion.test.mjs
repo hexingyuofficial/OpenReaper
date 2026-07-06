@@ -37,6 +37,8 @@ const WRITE_CAPABILITIES = Object.freeze([
   "items.set_play_all_takes",
   "items.set_take_start_in_source",
   "items.set_channel_mode",
+  "items.set_pitch_shift_mode",
+  "items.set_stretch_marker_fade_size",
 ]);
 
 describe("D13 items core live handler expansion", () => {
@@ -51,7 +53,7 @@ describe("D13 items core live handler expansion", () => {
     );
   });
 
-  it("adds a separate runtime allowlist for the twelve D13 template ids", async () => {
+  it("adds a separate runtime allowlist for the fourteen D13 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS, [
       "template.items.list_selected_items",
       "template.items.list_items_on_track",
@@ -65,6 +67,8 @@ describe("D13 items core live handler expansion", () => {
       "template.items.set_play_all_takes",
       "template.items.set_take_start_in_source",
       "template.items.set_channel_mode",
+      "template.items.set_pitch_shift_mode",
+      "template.items.set_stretch_marker_fade_size",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -156,6 +160,8 @@ describe("D13 items core live handler expansion", () => {
       "B_ALLTAKESPLAY",
       "D_STARTOFFS",
       "I_CHANMODE",
+      "I_PITCHMODE",
+      "F_STRETCHFADESIZE",
     ]) {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }
@@ -206,6 +212,12 @@ function d13Input(id) {
   if (id === "template.items.set_channel_mode") {
     return { channel_mode: "normal" };
   }
+  if (id === "template.items.set_pitch_shift_mode") {
+    return { mode: "project_default" };
+  }
+  if (id === "template.items.set_stretch_marker_fade_size") {
+    return { fade_size_ms: 2.5 };
+  }
   return {};
 }
 
@@ -241,6 +253,8 @@ function handlerExport(capability) {
     "items.set_play_all_takes": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_play_all_takes",
     "items.set_take_start_in_source": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_start_in_source",
     "items.set_channel_mode": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_channel_mode",
+    "items.set_pitch_shift_mode": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_pitch_shift_mode",
+    "items.set_stretch_marker_fade_size": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_stretch_marker_fade_size",
   }[capability];
 }
 

@@ -260,6 +260,8 @@ export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
   "template.items.set_play_all_takes",
   "template.items.set_take_start_in_source",
   "template.items.set_channel_mode",
+  "template.items.set_pitch_shift_mode",
+  "template.items.set_stretch_marker_fade_size",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS = deepFreeze([

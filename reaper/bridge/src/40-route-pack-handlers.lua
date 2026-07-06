@@ -885,6 +885,8 @@ local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_play_all_takes"] = d13_items_set_play_all_takes,
   ["items.set_take_start_in_source"] = d13_items_set_take_start_in_source,
   ["items.set_channel_mode"] = d13_items_set_channel_mode,
+  ["items.set_pitch_shift_mode"] = d13_items_set_pitch_shift_mode,
+  ["items.set_stretch_marker_fade_size"] = d13_items_set_stretch_marker_fade_size,
 }
 
 local D14_ITEMS_DELETE_HANDLERS = {

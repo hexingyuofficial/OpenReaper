@@ -105,6 +105,8 @@ local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_play_all_takes"] = { pack = "items", risk = "write" },
   ["items.set_take_start_in_source"] = { pack = "items", risk = "write" },
   ["items.set_channel_mode"] = { pack = "items", risk = "write" },
+  ["items.set_pitch_shift_mode"] = { pack = "items", risk = "write" },
+  ["items.set_stretch_marker_fade_size"] = { pack = "items", risk = "write" },
 }
 
 local D14_ITEMS_DELETE_CAPABILITIES = {

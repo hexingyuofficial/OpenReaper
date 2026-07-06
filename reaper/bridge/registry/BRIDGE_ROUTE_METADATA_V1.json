@@ -3,9 +3,9 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 171,
+    "entryCount": 173,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 171,
+    "extractedHandlerCount": 173,
     "handlerModuleCount": 77,
     "routeCount": 27,
     "operationCount": 70
@@ -226,9 +226,9 @@
     },
     {
       "route": "d13-items-core-handlers",
-      "template_count": 12,
+      "template_count": 14,
       "handler_module_count": 1,
-      "operation_count": 12,
+      "operation_count": 14,
       "packs": [
         "items"
       ],
@@ -254,7 +254,9 @@
         "template.items.set_lock",
         "template.items.set_play_all_takes",
         "template.items.set_take_start_in_source",
-        "template.items.set_channel_mode"
+        "template.items.set_channel_mode",
+        "template.items.set_pitch_shift_mode",
+        "template.items.set_stretch_marker_fade_size"
       ]
     },
     {

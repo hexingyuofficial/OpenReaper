@@ -900,6 +900,40 @@
       "capability": "items.set_channel_mode"
     },
     {
+      "template_id": "template.items.set_pitch_shift_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_pitch_shift_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_pitch_shift_mode"
+    },
+    {
+      "template_id": "template.items.set_stretch_marker_fade_size",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_stretch_marker_fade_size",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_stretch_marker_fade_size"
+    },
+    {
       "template_id": "template.items.delete_item",
       "operation": {
         "family": "run_command",
