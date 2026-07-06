@@ -333,6 +333,27 @@ export const CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS = deepFreeze([
   "template.routing.track_mono_or_stereo_button",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS = deepFreeze([
+  "template.render.output_absolute_path",
+  "template.render.output_file_metadata",
+  "template.render.render_aiff",
+  "template.render.render_flac",
+  "template.render.render_item",
+  "template.render.render_m4a",
+  "template.render.render_mp3",
+  "template.render.render_ogg",
+  "template.render.render_opus",
+  "template.render.render_region_with_track_filter",
+  "template.render.render_selected_item",
+  "template.render.render_selected_tracks",
+  "template.render.render_track_item",
+  "template.render.set_aiff_bit_depth",
+  "template.render.set_flac_compression",
+  "template.render.set_mp3_bitrate_or_quality",
+  "template.render.set_ogg_quality_or_compression",
+  "template.render.set_render_format",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -367,6 +388,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d23_fx_discovery_read", CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS],
   ["d27_analysis_audio", CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS],
   ["d28_small_handlers", CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS],
+  ["d29_render_output_policy", CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1238,6 +1260,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

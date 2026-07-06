@@ -243,7 +243,15 @@ describe("Safe-Write-A handler expansion", () => {
   it("keeps the Lua bridge Safe-Write-A surface exact and rejects unrelated powers", () => {
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
     assert.match(BRIDGE_SOURCE, /local SAFE_WRITE_A_CAPABILITIES/);
     for (const capability of EXPECTED_CAPABILITIES) {

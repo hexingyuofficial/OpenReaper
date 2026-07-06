@@ -148,6 +148,28 @@ local D22_RENDER_SETTINGS_WRITE_CAPABILITIES = {
   ["render.sample_rate.set"] = { pack = "render", risk = "write" },
 }
 
+local D29_RENDER_SETTINGS_WRITE_CAPABILITIES = {
+  ["render.format.set"] = { pack = "render", risk = "write" },
+  ["render.ogg_quality.set"] = { pack = "render", risk = "write" },
+  ["render.mp3_bitrate_kbps.set"] = { pack = "render", risk = "write" },
+  ["render.flac_compression.set"] = { pack = "render", risk = "write" },
+  ["render.aiff_bit_depth.set"] = { pack = "render", risk = "write" },
+}
+
+local D29_RENDER_JOB_OPERATIONS = {
+  ["run_job:render.item"] = { pack = "render", risk = "write" },
+  ["run_job:render.selected_item"] = { pack = "render", risk = "write" },
+  ["run_job:render.track_item"] = { pack = "render", risk = "write" },
+  ["run_job:render.selected_tracks"] = { pack = "render", risk = "write" },
+  ["run_job:render.ogg"] = { pack = "render", risk = "write" },
+  ["run_job:render.mp3"] = { pack = "render", risk = "write" },
+  ["run_job:render.flac"] = { pack = "render", risk = "write" },
+  ["run_job:render.aiff"] = { pack = "render", risk = "write" },
+  ["run_job:render.m4a"] = { pack = "render", risk = "write" },
+  ["run_job:render.opus"] = { pack = "render", risk = "write" },
+  ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
+}
+
 local D28_SMALL_WRITE_CAPABILITIES = {
   ["items.set_item_pan"] = { pack = "items", risk = "write" },
   ["items.set_reverse"] = { pack = "items", risk = "write" },
@@ -315,6 +337,24 @@ local function d22_render_settings_write_capability(request, operation_key)
   return D22_RENDER_SETTINGS_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function d29_render_settings_write_capability(request, operation_key)
+  if not D29_RENDER_SETTINGS_WRITE_CAPABILITIES[operation_key:gsub("^run_command:", "")] then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D29_RENDER_SETTINGS_WRITE_CAPABILITIES[request.pack.capability]
+end
+
+local function d29_render_job_operation(request, operation_key)
+  local operation = D29_RENDER_JOB_OPERATIONS[operation_key]
+  if not operation or not is_object(request and request.pack) then
+    return nil
+  end
+  return operation
+end
+
 local function d28_small_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -353,6 +393,7 @@ local function template_execute_write_capability(request, operation_key)
     or d17_midi_edit_capability(request, operation_key)
     or d22_render_settings_write_capability(request, operation_key)
     or d28_small_write_capability(request, operation_key)
+    or d29_render_settings_write_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -436,6 +477,8 @@ local function validate_request(request)
   local d17_midi_edit_operation = d17_midi_edit_capability(request, operation_key)
   local d22_render_settings_write_operation = d22_render_settings_write_capability(request, operation_key)
   local d28_small_write_operation = d28_small_write_capability(request, operation_key)
+  local d29_render_settings_write_operation = d29_render_settings_write_capability(request, operation_key)
+  local d29_render_job = d29_render_job_operation(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -506,6 +549,14 @@ local function validate_request(request)
   elseif d22_render_settings_write_operation then
     if request.pack.id ~= d22_render_settings_write_operation.pack or request.pack.risk ~= d22_render_settings_write_operation.risk then
       return false, "D22 render settings write request pack/capability/risk mismatch."
+    end
+  elseif d29_render_settings_write_operation then
+    if request.pack.id ~= d29_render_settings_write_operation.pack or request.pack.risk ~= d29_render_settings_write_operation.risk then
+      return false, "D29 render settings write request pack/capability/risk mismatch."
+    end
+  elseif d29_render_job then
+    if request.pack.id ~= d29_render_job.pack or request.pack.risk ~= d29_render_job.risk then
+      return false, "D29 render job request pack/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -591,6 +642,14 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D28 small write requests must use undo.mode required."
     end
+  elseif d29_render_settings_write_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D29 render settings write requests must use undo.mode required."
+    end
+  elseif d29_render_job then
+    if request.undo.mode ~= "required" then
+      return false, "D29 render job requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -674,6 +733,10 @@ local function validate_request(request)
   elseif d28_small_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D28 small write requests must use artifacts.allow false."
+    end
+  elseif d29_render_settings_write_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D29 render settings write requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -759,6 +822,14 @@ local function validate_request(request)
   elseif d28_small_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D28 small write idempotency_key must be a string when present."
+    end
+  elseif d29_render_settings_write_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D29 render settings write idempotency_key must be a string when present."
+    end
+  elseif d29_render_job then
+    if not is_string(request.idempotency_key) then
+      return false, "D29 render jobs require an idempotency_key."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."

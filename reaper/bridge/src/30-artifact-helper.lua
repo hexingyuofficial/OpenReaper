@@ -16,6 +16,17 @@ local FX_ARTIFACT_OPERATIONS = {
 local A2_ARTIFACT_OPERATIONS = {
   ["run_job:render.region_wav"] = true,
   ["run_job:render.delivery_report.create"] = true,
+  ["run_job:render.item"] = true,
+  ["run_job:render.selected_item"] = true,
+  ["run_job:render.track_item"] = true,
+  ["run_job:render.selected_tracks"] = true,
+  ["run_job:render.ogg"] = true,
+  ["run_job:render.mp3"] = true,
+  ["run_job:render.flac"] = true,
+  ["run_job:render.aiff"] = true,
+  ["run_job:render.m4a"] = true,
+  ["run_job:render.opus"] = true,
+  ["run_job:render.region_track_filter"] = true,
 }
 
 local A3_ARTIFACT_OPERATIONS = {

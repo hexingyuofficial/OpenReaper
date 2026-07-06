@@ -233,7 +233,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       ].includes(id)),
       [...E2_FX_B1_WRITE_IDS],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
 });

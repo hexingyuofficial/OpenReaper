@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 191,
+    "entryCount": 209,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 191,
-    "handlerModuleCount": 78,
-    "routeCount": 29,
-    "operationCount": 77
+    "extractedHandlerCount": 209,
+    "handlerModuleCount": 79,
+    "routeCount": 30,
+    "operationCount": 95
   },
   "routes": [
     {
@@ -435,6 +435,47 @@
         "template.project.set_snap",
         "template.fx.read_video_processor_code",
         "template.routing.track_mono_or_stereo_button"
+      ]
+    },
+    {
+      "route": "d29-render-output-policy-handlers",
+      "template_count": 18,
+      "handler_module_count": 1,
+      "operation_count": 18,
+      "packs": [
+        "render"
+      ],
+      "risks": [
+        "read",
+        "write"
+      ],
+      "artifact_policies": [
+        "metadata",
+        "none",
+        "write"
+      ],
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "template_ids": [
+        "template.render.output_absolute_path",
+        "template.render.output_file_metadata",
+        "template.render.render_aiff",
+        "template.render.render_flac",
+        "template.render.render_item",
+        "template.render.render_m4a",
+        "template.render.render_mp3",
+        "template.render.render_ogg",
+        "template.render.render_opus",
+        "template.render.render_region_with_track_filter",
+        "template.render.render_selected_item",
+        "template.render.render_selected_tracks",
+        "template.render.render_track_item",
+        "template.render.set_aiff_bit_depth",
+        "template.render.set_flac_compression",
+        "template.render.set_mp3_bitrate_or_quality",
+        "template.render.set_ogg_quality_or_compression",
+        "template.render.set_render_format"
       ]
     },
     {

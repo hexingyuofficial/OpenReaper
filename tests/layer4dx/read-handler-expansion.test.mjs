@@ -253,9 +253,24 @@ describe("4D.x Wave 1A read-handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /bounded_limit/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
+    assert.deepEqual(
+      [...new Set([...BRIDGE_SOURCE.matchAll(/\["artifact_metadata:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
+      [
+        "render.output.absolute_path",
+        "render.output_file.metadata",
+      ],
+    );
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_job:([^"]+)"\]\s*=/g)].map((match) => match[1]))].sort(),
       [
@@ -268,8 +283,19 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         "analysis.measure_loop_click_risk",
         "items.create_layer_report",
         "project.create_cleanup_report",
+        "render.aiff",
         "render.delivery_report.create",
+        "render.flac",
+        "render.item",
+        "render.m4a",
+        "render.mp3",
+        "render.ogg",
+        "render.opus",
+        "render.region_track_filter",
         "render.region_wav",
+        "render.selected_item",
+        "render.selected_tracks",
+        "render.track_item",
       ].sort(),
     );
     assert.doesNotMatch(

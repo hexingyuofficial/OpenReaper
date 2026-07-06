@@ -26,6 +26,7 @@ import {
   CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
@@ -184,6 +185,10 @@ export const registryRoutes = Object.freeze({
   }),
   "d28-small-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dr/bridge-handler-registry.test.mjs"]),
+  }),
+  "d29-render-output-policy-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dr/bridge-handler-registry.test.mjs"]),
   }),
   "read-b": Object.freeze({

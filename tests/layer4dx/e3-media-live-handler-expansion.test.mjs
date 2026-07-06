@@ -210,9 +210,17 @@ describe("E3 media live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /E3 media route write requests must use artifacts\.allow false/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /InsertMedia|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

@@ -252,6 +252,26 @@ const EXTRACTED_D28_SMALL_HANDLERS = Object.freeze(new Map([
   ["template.fx.read_video_processor_code", ["fx/e2_fx_l1_read_route.lua", "read_video_processor_code"]],
   ["template.routing.track_mono_or_stereo_button", ["routing/e5_r1_routing_read_route.lua", "track_mono_or_stereo_button"]],
 ]));
+const EXTRACTED_D29_RENDER_OUTPUT_POLICY_HANDLERS = Object.freeze(new Map([
+  ["template.render.output_absolute_path", ["render/d29_render_output_policy_route.lua", "output_absolute_path"]],
+  ["template.render.output_file_metadata", ["render/d29_render_output_policy_route.lua", "output_file_metadata"]],
+  ["template.render.render_aiff", ["render/d29_render_output_policy_route.lua", "render_aiff"]],
+  ["template.render.render_flac", ["render/d29_render_output_policy_route.lua", "render_flac"]],
+  ["template.render.render_item", ["render/d29_render_output_policy_route.lua", "render_item"]],
+  ["template.render.render_m4a", ["render/d29_render_output_policy_route.lua", "render_m4a"]],
+  ["template.render.render_mp3", ["render/d29_render_output_policy_route.lua", "render_mp3"]],
+  ["template.render.render_ogg", ["render/d29_render_output_policy_route.lua", "render_ogg"]],
+  ["template.render.render_opus", ["render/d29_render_output_policy_route.lua", "render_opus"]],
+  ["template.render.render_region_with_track_filter", ["render/d29_render_output_policy_route.lua", "render_region_with_track_filter"]],
+  ["template.render.render_selected_item", ["render/d29_render_output_policy_route.lua", "render_selected_item"]],
+  ["template.render.render_selected_tracks", ["render/d29_render_output_policy_route.lua", "render_selected_tracks"]],
+  ["template.render.render_track_item", ["render/d29_render_output_policy_route.lua", "render_track_item"]],
+  ["template.render.set_aiff_bit_depth", ["render/d29_render_output_policy_route.lua", "set_aiff_bit_depth"]],
+  ["template.render.set_flac_compression", ["render/d29_render_output_policy_route.lua", "set_flac_compression"]],
+  ["template.render.set_mp3_bitrate_or_quality", ["render/d29_render_output_policy_route.lua", "set_mp3_bitrate_or_quality"]],
+  ["template.render.set_ogg_quality_or_compression", ["render/d29_render_output_policy_route.lua", "set_ogg_quality_or_compression"]],
+  ["template.render.set_render_format", ["render/d29_render_output_policy_route.lua", "set_render_format"]],
+]));
 const EXTRACTED_SAFE_WRITE_A_HANDLERS = Object.freeze(new Map([
   ["template.project.set_metadata_field", ["project/set_metadata_field.lua", "safe_write_project_metadata"]],
   ["template.project.create_marker", ["project/create_marker.lua", "safe_write_create_marker"]],
@@ -295,6 +315,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_D22_RENDER_SETTINGS_WRITE_HANDLERS,
   ...EXTRACTED_D27_ANALYSIS_AUDIO_HANDLERS,
   ...EXTRACTED_D28_SMALL_HANDLERS,
+  ...EXTRACTED_D29_RENDER_OUTPUT_POLICY_HANDLERS,
   ...EXTRACTED_READ_B_HANDLERS,
   ...EXTRACTED_E3_MEDIA_HANDLERS,
   ...EXTRACTED_E4_ITEM_HANDLERS,
@@ -311,7 +332,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 191);
+    assert.equal(REGISTRY.entries.length, 209);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -343,12 +364,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 191,
+      entryCount: 209,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 191,
-      handlerModuleCount: 78,
-      routeCount: 29,
-      operationCount: 77,
+      extractedHandlerCount: 209,
+      handlerModuleCount: 79,
+      routeCount: 30,
+      operationCount: 95,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -411,6 +432,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => entry.route === "d28-small-handlers" && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_D28_SMALL_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "d29-render-output-policy-handlers" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_D29_RENDER_OUTPUT_POLICY_HANDLERS.keys()],
     );
     assert.deepEqual(
       REGISTRY.entries
@@ -679,7 +706,7 @@ describe("Layer 4D.R bridge handler registry", () => {
         "midi.insert_text_sysex_events",
       ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,
       /\b(Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
@@ -690,7 +717,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(191 registered template handler row\(s\); 0 legacy_monolith row\(s\); 191 extracted handler row\(s\); 78 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(209 registered template handler row\(s\); 0 legacy_monolith row\(s\); 209 extracted handler row\(s\); 79 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

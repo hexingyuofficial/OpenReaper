@@ -37,6 +37,19 @@ const A3_ARTIFACT_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT";
 const A3_LAYER_EVIDENCE_REF_ENV = "OPENREAPER_FIRST_REAL_A_LAYER_EVIDENCE_REF";
 const A3_OPERATION = "items.create_layer_report";
 const A3_OPERATION_KEY = `run_job:${A3_OPERATION}`;
+const D29_RENDER_JOB_OPERATION_KEYS = Object.freeze([
+  "render.aiff",
+  "render.flac",
+  "render.item",
+  "render.m4a",
+  "render.mp3",
+  "render.ogg",
+  "render.opus",
+  "render.region_track_filter",
+  "render.selected_item",
+  "render.selected_tracks",
+  "render.track_item",
+].map((operation) => `run_job:${operation}`));
 const A3_INPUT_SCHEMA = "items.layer_evidence.v1";
 const A3_OUTPUT_SCHEMA = "items.layer_report.v1";
 const A3_DEFAULT_LAYER_EVIDENCE_REF = "artifact:items:layer_evidence:art_20260704000000000_003_a3a3a3";
@@ -287,6 +300,7 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
       "run_job:analysis.measure_loop_click_risk",
       "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
+      ...D29_RENDER_JOB_OPERATION_KEYS,
       "run_job:render.delivery_report.create",
       "run_job:render.region_wav",
     ].sort());
@@ -300,9 +314,17 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /create_layer_plan|apply_layer_plan|assign_item_roles|move_items_to_layer_tracks/);
     assert.doesNotMatch(BRIDGE_SOURCE, /role_assignment_plan|target_track_plan|official recipe|call_recipe|list_recipes|recipes\//i);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX/);

@@ -278,9 +278,17 @@ describe("Read-B live handler expansion", () => {
 
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /relink_project_source_path|import_folder_as_items|render_source_section/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(

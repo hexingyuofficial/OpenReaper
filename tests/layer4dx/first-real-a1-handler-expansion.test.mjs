@@ -37,6 +37,19 @@ const A1_OPERATIONS = Object.freeze([
   "analysis.create_loop_qa_report",
   "project.create_cleanup_report",
 ]);
+const D29_RENDER_JOB_OPERATIONS = Object.freeze([
+  "render.aiff",
+  "render.flac",
+  "render.item",
+  "render.m4a",
+  "render.mp3",
+  "render.ogg",
+  "render.opus",
+  "render.region_track_filter",
+  "render.selected_item",
+  "render.selected_tracks",
+  "render.track_item",
+]);
 
 const A1_OPERATION_KEYS = Object.freeze(A1_OPERATIONS.map((operation) => `run_job:${operation}`));
 const D27_ANALYSIS_AUDIO_OPERATIONS = Object.freeze([
@@ -254,6 +267,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
       ...A1_OPERATIONS,
       ...D27_ANALYSIS_AUDIO_OPERATIONS,
       "items.create_layer_report",
+      ...D29_RENDER_JOB_OPERATIONS,
       "render.delivery_report.create",
       "render.region_wav",
     ].sort());
@@ -280,9 +294,17 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /A3_ARTIFACT_OPERATIONS/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /Read-B|LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,

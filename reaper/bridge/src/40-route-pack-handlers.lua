@@ -935,6 +935,14 @@ local D28_SMALL_WRITE_HANDLERS = {
   ["routing.track_mono_stereo.set"] = track_mono_or_stereo_button,
 }
 
+local D29_RENDER_SETTINGS_WRITE_HANDLERS = {
+  ["render.format.set"] = set_render_format,
+  ["render.ogg_quality.set"] = set_ogg_quality_or_compression,
+  ["render.mp3_bitrate_kbps.set"] = set_mp3_bitrate_or_quality,
+  ["render.flac_compression.set"] = set_flac_compression,
+  ["render.aiff_bit_depth.set"] = set_aiff_bit_depth,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -1004,6 +1012,10 @@ local function dispatch_template_execute(request)
   if handler then
     return handler(request)
   end
+  handler = D29_RENDER_SETTINGS_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
     })
@@ -1016,6 +1028,34 @@ local ALLOWED_OPERATIONS = {
   ["run_command:render.sample_rate.set"] = {
     pack = "render",
     handler = set_render_sample_rate,
+  },
+  ["run_command:render.format.set"] = {
+    pack = "render",
+    handler = set_render_format,
+  },
+  ["run_command:render.ogg_quality.set"] = {
+    pack = "render",
+    handler = set_ogg_quality_or_compression,
+  },
+  ["run_command:render.mp3_bitrate_kbps.set"] = {
+    pack = "render",
+    handler = set_mp3_bitrate_or_quality,
+  },
+  ["run_command:render.flac_compression.set"] = {
+    pack = "render",
+    handler = set_flac_compression,
+  },
+  ["run_command:render.aiff_bit_depth.set"] = {
+    pack = "render",
+    handler = set_aiff_bit_depth,
+  },
+  ["artifact_metadata:render.output.absolute_path"] = {
+    pack = "render",
+    handler = output_absolute_path,
+  },
+  ["artifact_metadata:render.output_file.metadata"] = {
+    pack = "render",
+    handler = output_file_metadata,
   },
   ["query_state:project.read_summary"] = {
     pack = "project",
@@ -1308,6 +1348,50 @@ local ALLOWED_OPERATIONS = {
   ["run_job:render.region_wav"] = {
     pack = "render",
     handler = render_region_wav,
+  },
+  ["run_job:render.item"] = {
+    pack = "render",
+    handler = render_item,
+  },
+  ["run_job:render.selected_item"] = {
+    pack = "render",
+    handler = render_selected_item,
+  },
+  ["run_job:render.track_item"] = {
+    pack = "render",
+    handler = render_track_item,
+  },
+  ["run_job:render.selected_tracks"] = {
+    pack = "render",
+    handler = render_selected_tracks,
+  },
+  ["run_job:render.ogg"] = {
+    pack = "render",
+    handler = render_ogg,
+  },
+  ["run_job:render.mp3"] = {
+    pack = "render",
+    handler = render_mp3,
+  },
+  ["run_job:render.flac"] = {
+    pack = "render",
+    handler = render_flac,
+  },
+  ["run_job:render.aiff"] = {
+    pack = "render",
+    handler = render_aiff,
+  },
+  ["run_job:render.m4a"] = {
+    pack = "render",
+    handler = render_m4a,
+  },
+  ["run_job:render.opus"] = {
+    pack = "render",
+    handler = render_opus,
+  },
+  ["run_job:render.region_track_filter"] = {
+    pack = "render",
+    handler = render_region_with_track_filter,
   },
   ["run_job:render.delivery_report.create"] = {
     pack = "render",

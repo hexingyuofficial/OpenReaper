@@ -37,6 +37,19 @@ const A2_OPERATIONS = Object.freeze([
   "render.delivery_report.create",
 ]);
 const A2_OPERATION_KEYS = Object.freeze(A2_OPERATIONS.map((operation) => `run_job:${operation}`));
+const D29_RENDER_JOB_OPERATION_KEYS = Object.freeze([
+  "render.aiff",
+  "render.flac",
+  "render.item",
+  "render.m4a",
+  "render.mp3",
+  "render.ogg",
+  "render.opus",
+  "render.region_track_filter",
+  "render.selected_item",
+  "render.selected_tracks",
+  "render.track_item",
+].map((operation) => `run_job:${operation}`));
 const A2_SCHEMAS = Object.freeze([
   "render.region_wav_output.v1",
   "render.render_job_evidence.v1",
@@ -269,6 +282,7 @@ describe("First-Real-Fixture-A A2 render route", () => {
       "run_job:analysis.measure_loop_click_risk",
       "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
+      ...D29_RENDER_JOB_OPERATION_KEYS,
       ...A2_OPERATION_KEYS,
     ].sort());
 
@@ -284,9 +298,17 @@ describe("First-Real-Fixture-A A2 render route", () => {
     assert.match(BRIDGE_SOURCE, /Only scoped First-Real-Fixture-A artifact handlers may write artifacts/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["run_command:([^"]+)"\]\s*=/g)].map((match) => match[1]))],
-      ["template.execute", "render.sample_rate.set"],
+      [
+        "template.execute",
+        "render.sample_rate.set",
+        "render.format.set",
+        "render.ogg_quality.set",
+        "render.mp3_bitrate_kbps.set",
+        "render.flac_compression.set",
+        "render.aiff_bit_depth.set",
+      ],
     );
-    assert.doesNotMatch(BRIDGE_SOURCE, /\["(?:run_action|artifact_metadata):/);
+    assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /render_full_project|render_region_video|render_stems|upload|publish|LIVE_SMOKE_MATRIX|list_recipes|call_recipe/);
     assert.doesNotMatch(
       BRIDGE_SOURCE,

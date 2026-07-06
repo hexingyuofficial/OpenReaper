@@ -1455,6 +1455,294 @@
       "capability": "routing.track_mono_stereo.set"
     },
     {
+      "template_id": "template.render.output_absolute_path",
+      "operation": {
+        "family": "artifact_metadata",
+        "name": "render.output.absolute_path"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "output_absolute_path",
+      "artifact_policy": "metadata",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.output_file_metadata",
+      "operation": {
+        "family": "artifact_metadata",
+        "name": "render.output_file.metadata"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "output_file_metadata",
+      "artifact_policy": "metadata",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_aiff",
+      "operation": {
+        "family": "run_job",
+        "name": "render.aiff"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_aiff",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_flac",
+      "operation": {
+        "family": "run_job",
+        "name": "render.flac"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_flac",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_item",
+      "operation": {
+        "family": "run_job",
+        "name": "render.item"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_item",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_m4a",
+      "operation": {
+        "family": "run_job",
+        "name": "render.m4a"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_m4a",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_mp3",
+      "operation": {
+        "family": "run_job",
+        "name": "render.mp3"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_mp3",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_ogg",
+      "operation": {
+        "family": "run_job",
+        "name": "render.ogg"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_ogg",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_opus",
+      "operation": {
+        "family": "run_job",
+        "name": "render.opus"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_opus",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_region_with_track_filter",
+      "operation": {
+        "family": "run_job",
+        "name": "render.region_track_filter"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_region_with_track_filter",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_selected_item",
+      "operation": {
+        "family": "run_job",
+        "name": "render.selected_item"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_selected_item",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_selected_tracks",
+      "operation": {
+        "family": "run_job",
+        "name": "render.selected_tracks"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_selected_tracks",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.render_track_item",
+      "operation": {
+        "family": "run_job",
+        "name": "render.track_item"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "render_track_item",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.set_aiff_bit_depth",
+      "operation": {
+        "family": "run_command",
+        "name": "render.aiff_bit_depth.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "set_aiff_bit_depth",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.set_flac_compression",
+      "operation": {
+        "family": "run_command",
+        "name": "render.flac_compression.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "set_flac_compression",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.set_mp3_bitrate_or_quality",
+      "operation": {
+        "family": "run_command",
+        "name": "render.mp3_bitrate_kbps.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "set_mp3_bitrate_or_quality",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.set_ogg_quality_or_compression",
+      "operation": {
+        "family": "run_command",
+        "name": "render.ogg_quality.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "set_ogg_quality_or_compression",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.set_render_format",
+      "operation": {
+        "family": "run_command",
+        "name": "render.format.set"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d29_render_output_policy_route.lua",
+      "handler_export": "set_render_format",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",
