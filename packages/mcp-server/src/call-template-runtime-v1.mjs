@@ -229,6 +229,7 @@ export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS = deepFreeze(
   "template.analysis.measure_loop_click_risk",
   "template.analysis.create_loop_qa_report",
   "template.project.create_cleanup_report",
+  "template.project.create_project_map_snapshot",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS = deepFreeze([
@@ -542,7 +543,8 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.filter((id) =>
-    LIVE_TEMPLATE_GROUPS.some(([, ids]) => ids.includes(id)),
+    LIVE_TEMPLATE_GROUPS.some(([, ids]) => ids.includes(id)) &&
+    id !== "template.project.create_project_map_snapshot",
   ),
 );
 

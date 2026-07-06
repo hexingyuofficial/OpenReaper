@@ -7,6 +7,7 @@ local A1_ARTIFACT_OPERATIONS = {
   ["run_job:analysis.detect_item_silence"] = true,
   ["run_job:analysis.detect_item_transients"] = true,
   ["run_job:project.create_cleanup_report"] = true,
+  ["run_job:project.create_project_map_snapshot"] = true,
 }
 
 local FX_ARTIFACT_OPERATIONS = {
@@ -71,6 +72,12 @@ local A1_ARTIFACT_SPECS = {
     owner_pack = "project",
     scope = "cleanup_report",
     schema = "project.cleanup_report.v1",
+  },
+  ["run_job:project.create_project_map_snapshot"] = {
+    template_id = "template.project.create_project_map_snapshot",
+    owner_pack = "project",
+    scope = "project_map_snapshot",
+    schema = "project.project_map_snapshot.v1",
   },
   ["run_job:analysis.measure_item_rms"] = {
     template_id = "template.analysis.measure_item_rms",

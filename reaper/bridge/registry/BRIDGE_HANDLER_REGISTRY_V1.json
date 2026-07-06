@@ -3079,6 +3079,22 @@
       ]
     },
     {
+      "template_id": "template.project.create_project_map_snapshot",
+      "operation": {
+        "family": "run_job",
+        "name": "project.create_project_map_snapshot"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "first-real-a1",
+      "handler_file": "project/create_cleanup_report.lua",
+      "handler_export": "create_project_map_snapshot",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dx/first-real-a1-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.render.render_region_wav",
       "operation": {
         "family": "run_job",

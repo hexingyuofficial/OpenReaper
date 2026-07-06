@@ -536,6 +536,13 @@ const FIRST_REAL_A1_TEMPLATE_SPECS = Object.freeze([
     scope: "cleanup_report",
     schema: "project.cleanup_report.v1",
   }),
+  Object.freeze({
+    id: "template.project.create_project_map_snapshot",
+    operation: "run_job:project.create_project_map_snapshot",
+    owner_pack: "project",
+    scope: "project_map_snapshot",
+    schema: "project.project_map_snapshot.v1",
+  }),
 ]);
 
 const FIRST_REAL_A1_SPEC_BY_ID = new Map(FIRST_REAL_A1_TEMPLATE_SPECS.map((spec) => [spec.id, spec]));
@@ -2198,6 +2205,16 @@ function firstRealA1Input(spec) {
   if (spec.id === "template.analysis.create_loop_qa_report") {
     return {
       max_report_rows: 8,
+    };
+  }
+  if (spec.id === "template.project.create_project_map_snapshot") {
+    return {
+      max_tracks: 16,
+      max_items_per_track: 2,
+      max_selected_items: 8,
+      track_cursor: 0,
+      include_selected_items: true,
+      include_track_items: true,
     };
   }
   return {
@@ -5906,6 +5923,23 @@ function fakeA1Summary(spec, artifactRef, request) {
       candidate_count: 1,
       risk_fact_count: 1,
       report_row_count: 1,
+      truncated: false,
+    };
+  }
+  if (spec.schema === "project.project_map_snapshot.v1") {
+    return {
+      artifact_ref: artifactRef,
+      schema: spec.schema,
+      project_ref: "project:current",
+      track_count: 8,
+      item_count: 24,
+      track_cursor: 0,
+      returned_track_count: 8,
+      selected_count: 1,
+      snapshot_token: `fake-${request.id.slice(-6)}`,
+      coverage_status: "complete_page",
+      diff_compared: false,
+      diff_changed_count: 0,
       truncated: false,
     };
   }

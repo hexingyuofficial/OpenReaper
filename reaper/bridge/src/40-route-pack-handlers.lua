@@ -1359,6 +1359,10 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = create_cleanup_report,
   },
+  ["run_job:project.create_project_map_snapshot"] = {
+    pack = "project",
+    handler = create_project_map_snapshot,
+  },
   ["run_job:render.region_wav"] = {
     pack = "render",
     handler = render_region_wav,

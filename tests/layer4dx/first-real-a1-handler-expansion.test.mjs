@@ -36,6 +36,7 @@ const A1_OPERATIONS = Object.freeze([
   "analysis.measure_loop_click_risk",
   "analysis.create_loop_qa_report",
   "project.create_cleanup_report",
+  "project.create_project_map_snapshot",
 ]);
 const D29_RENDER_JOB_OPERATIONS = Object.freeze([
   "render.aiff",
@@ -65,15 +66,17 @@ const A1_SCHEMAS = Object.freeze([
   "analysis.loop_click_risk.v1",
   "analysis.loop_qa_report.v1",
   "project.cleanup_report.v1",
+  "project.project_map_snapshot.v1",
 ]);
 
 describe("First-Real-Fixture-A A1 live handler expansion", () => {
-  it("adds a separate runtime allowlist for exactly the four A1 template ids", async () => {
+  it("adds a separate runtime allowlist for exactly the five A1 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS, [
       "template.analysis.detect_loop_candidates",
       "template.analysis.measure_loop_click_risk",
       "template.analysis.create_loop_qa_report",
       "template.project.create_cleanup_report",
+      "template.project.create_project_map_snapshot",
     ]);
 
     const bridge = new FakeFoundationBridge();
@@ -194,12 +197,14 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.deepEqual(report.attempted_template_ids, [
       "template.analysis.detect_loop_candidates",
       "template.project.create_cleanup_report",
+      "template.project.create_project_map_snapshot",
     ]);
 
     const requests = await readTransportRequests(transportDir);
     assert.deepEqual(requests.map((request) => `${request.operation.family}:${request.operation.name}`).sort(), [
       "run_job:analysis.detect_loop_candidates",
       "run_job:project.create_cleanup_report",
+      "run_job:project.create_project_map_snapshot",
     ].sort());
     for (const request of requests) {
       assert.equal(request.artifacts.allow, true);
@@ -228,7 +233,7 @@ describe("First-Real-Fixture-A A1 live handler expansion", () => {
     assert.equal(report.live_pass_claimed, false);
     assert.deepEqual(report.expected_template_ids, CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS);
     assert.deepEqual(Object.keys(report.artifact_refs).sort(), [...A1_SCHEMAS].sort());
-    assert.equal(report.executions.length, 4);
+    assert.equal(report.executions.length, 5);
 
     for (const execution of report.executions) {
       assert.equal(execution.ok, true, execution.id);
@@ -324,6 +329,16 @@ function a1Input(id) {
   if (id === "template.analysis.create_loop_qa_report") {
     return { max_report_rows: 8 };
   }
+  if (id === "template.project.create_project_map_snapshot") {
+    return {
+      max_tracks: 16,
+      max_items_per_track: 2,
+      max_selected_items: 8,
+      track_cursor: 0,
+      include_selected_items: true,
+      include_track_items: true,
+    };
+  }
   return {
     max_report_rows: 32,
     marker_region_limit: 64,
@@ -361,6 +376,7 @@ function a1RefsById() {
       click_risk_artifact_ref: risk,
     },
     "template.project.create_cleanup_report": {},
+    "template.project.create_project_map_snapshot": {},
   };
 }
 

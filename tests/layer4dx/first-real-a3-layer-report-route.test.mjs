@@ -301,6 +301,7 @@ describe("First-Real-Fixture-A A3 layer report route", () => {
       "run_job:analysis.measure_loop_click_risk",
       "run_job:items.create_layer_report",
       "run_job:project.create_cleanup_report",
+      "run_job:project.create_project_map_snapshot",
       ...D29_RENDER_JOB_OPERATION_KEYS,
       "run_job:render.delivery_report.create",
       "run_job:render.region_wav",

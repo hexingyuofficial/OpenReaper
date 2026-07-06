@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 213,
+    "entryCount": 214,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 213,
+    "extractedHandlerCount": 214,
     "handlerModuleCount": 80,
     "routeCount": 31,
-    "operationCount": 96
+    "operationCount": 97
   },
   "routes": [
     {
@@ -762,9 +762,9 @@
     },
     {
       "route": "first-real-a1",
-      "template_count": 4,
+      "template_count": 5,
       "handler_module_count": 4,
-      "operation_count": 4,
+      "operation_count": 5,
       "packs": [
         "analysis",
         "project"
@@ -782,7 +782,8 @@
         "template.analysis.detect_loop_candidates",
         "template.analysis.measure_loop_click_risk",
         "template.analysis.create_loop_qa_report",
-        "template.project.create_cleanup_report"
+        "template.project.create_cleanup_report",
+        "template.project.create_project_map_snapshot"
       ]
     },
     {

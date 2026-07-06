@@ -40,6 +40,7 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 
 const ALLOWLIST = Object.freeze([
   "template.project.create_cleanup_report",
+  "template.project.create_project_map_snapshot",
 ]);
 
 const BLOCKED_PROJECT_REPORT_IDS = Object.freeze([
@@ -51,8 +52,8 @@ const BLOCKED_PROJECT_REPORT_IDS = Object.freeze([
   "template.cleanup.create_cleanup_report",
 ]);
 
-describe("Critical project cleanup report template descriptor", () => {
-  it("exports exactly the R3-B project report descriptor allowlist", () => {
+describe("Critical project report template descriptors", () => {
+  it("exports exactly the project report descriptor allowlist", () => {
     const templates = createCriticalProjectReportTemplates();
     const ids = templates.map((descriptor) => descriptor.id);
 
@@ -64,24 +65,39 @@ describe("Critical project cleanup report template descriptor", () => {
     }
   });
 
-  it("passes Layer 4A validation as a project-owned read-risk report artifact producer", () => {
-    const [descriptor] = createCriticalProjectReportTemplates();
-    const validation = validateTemplateDescriptor(descriptor);
+  it("passes Layer 4A validation as project-owned read-risk artifact producers", () => {
+    const templates = createCriticalProjectReportTemplates();
+    for (const descriptor of templates) {
+      const validation = validateTemplateDescriptor(descriptor);
 
-    assert.deepEqual(validation.errors, []);
-    assert.equal(validation.ok, true);
-    assert.equal(descriptor.pack, "project");
-    assert.equal(descriptor.id, "template.project.create_cleanup_report");
-    assert.equal(descriptor.lifecycle, "experimental");
-    assert.equal(descriptor.risk, "read");
-    assert.equal(descriptor.entity_kind, "cleanup_report");
-    assert.equal(descriptor.bridge.operation_family, "run_job");
-    assert.equal(descriptor.bridge.operation_name, "project.create_cleanup_report");
-    assert.equal(descriptor.bridge.capability, "project.create_cleanup_report");
-    assert.equal(descriptor.bridge.idempotency, "none");
-    assert.equal(descriptor.artifacts.mode, "produces");
-    assert.equal(descriptor.artifacts.input.length, 0);
-    assert.deepEqual(descriptor.artifacts.output, [
+      assert.deepEqual(validation.errors, [], descriptor.id);
+      assert.equal(validation.ok, true, descriptor.id);
+      assert.equal(descriptor.pack, "project", descriptor.id);
+      assert.equal(descriptor.lifecycle, "experimental", descriptor.id);
+      assert.equal(descriptor.risk, "read", descriptor.id);
+      assert.equal(descriptor.bridge.operation_family, "run_job", descriptor.id);
+      assert.equal(descriptor.bridge.idempotency, "none", descriptor.id);
+      assert.equal(descriptor.artifacts.mode, "produces", descriptor.id);
+      assert.equal(descriptor.artifacts.input.length, 0, descriptor.id);
+      assert.deepEqual(descriptor.refs.output.map((entry) => [entry.name, entry.kind, entry.required]), [
+        ["artifact_ref", "artifact", true],
+      ], descriptor.id);
+      assert.equal(descriptor.expectedDelta.kind, "artifact", descriptor.id);
+      assert.deepEqual(descriptor.expectedDelta.entities.map((entry) => entry.action), ["emit"], descriptor.id);
+      assert.equal(descriptor.verification.mode, "none", descriptor.id);
+      assert.equal(
+        Buffer.byteLength(JSON.stringify(descriptor), "utf8") <= TEMPLATE_DESCRIPTOR_BUDGETS.descriptor_max_bytes,
+        true,
+        descriptor.id,
+      );
+    }
+
+    const cleanup = templates[0];
+    assert.equal(cleanup.id, "template.project.create_cleanup_report");
+    assert.equal(cleanup.entity_kind, "cleanup_report");
+    assert.equal(cleanup.bridge.operation_name, "project.create_cleanup_report");
+    assert.equal(cleanup.bridge.capability, "project.create_cleanup_report");
+    assert.deepEqual(cleanup.artifacts.output, [
       {
         name: "cleanup_report",
         schema: "project.cleanup_report.v1",
@@ -89,24 +105,37 @@ describe("Critical project cleanup report template descriptor", () => {
         summary: "Bounded project cleanup report artifact.",
       },
     ]);
-    assert.deepEqual(descriptor.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
+    assert.deepEqual(cleanup.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
       ["project_ref", "project", false],
     ]);
-    assert.deepEqual(descriptor.refs.output.map((entry) => [entry.name, entry.kind, entry.required]), [
-      ["artifact_ref", "artifact", true],
+
+    const snapshot = templates[1];
+    assert.equal(snapshot.id, "template.project.create_project_map_snapshot");
+    assert.equal(snapshot.entity_kind, "project_snapshot");
+    assert.equal(snapshot.bridge.operation_name, "project.create_project_map_snapshot");
+    assert.equal(snapshot.bridge.capability, "project.create_project_map_snapshot");
+    assert.deepEqual(snapshot.artifacts.output, [
+      {
+        name: "project_map_snapshot",
+        schema: "project.project_map_snapshot.v1",
+        owner_pack: "project",
+        summary: "Artifact-backed project map page with compact coverage and diff facts.",
+      },
     ]);
-    assert.equal(descriptor.expectedDelta.kind, "artifact");
-    assert.deepEqual(descriptor.expectedDelta.entities.map((entry) => entry.action), ["emit"]);
-    assert.equal(descriptor.verification.mode, "none");
-    assert.equal(
-      Buffer.byteLength(JSON.stringify(descriptor), "utf8") <= TEMPLATE_DESCRIPTOR_BUDGETS.descriptor_max_bytes,
-      true,
-    );
+    assert.deepEqual(snapshot.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
+      ["project_ref", "project", false],
+      ["previous_snapshot_ref", "artifact", false],
+    ]);
   });
 
-  it("limits inputs and outputs to project evidence controls, artifact refs, and bounded summary fields", () => {
-    const catalog = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() });
-    const descriptor = catalog.require("template.project.create_cleanup_report");
+  it("keeps cleanup report shape unchanged", () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_cleanup_report");
+
+    assert.equal(descriptor.id, "template.project.create_cleanup_report");
+    assert.equal(descriptor.entity_kind, "cleanup_report");
+    assert.equal(descriptor.bridge.operation_name, "project.create_cleanup_report");
+    assert.equal(descriptor.bridge.capability, "project.create_cleanup_report");
 
     assert.deepEqual(Object.keys(descriptor.inputSchema.properties), [
       "max_report_rows",
@@ -143,6 +172,57 @@ describe("Critical project cleanup report template descriptor", () => {
     assert.equal(JSON.stringify(descriptor).includes("fx_ref"), false);
     assert.equal(JSON.stringify(descriptor).includes("payload"), false);
     assert.equal(Object.hasOwn(descriptor.outputSchema.properties, "report_rows"), false);
+  });
+
+  it("adds a large-project map snapshot artifact shape without inline project payload", () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_project_map_snapshot");
+
+    assert.deepEqual(Object.keys(descriptor.inputSchema.properties), [
+      "max_tracks",
+      "max_items_per_track",
+      "max_selected_items",
+      "track_cursor",
+      "include_selected_items",
+      "include_track_items",
+      "previous_snapshot_ref",
+    ]);
+    assert.deepEqual(descriptor.inputSchema.required, []);
+    assert.deepEqual(Object.keys(descriptor.outputSchema.properties), [
+      "artifact_ref",
+      "schema",
+      "project_ref",
+      "track_count",
+      "item_count",
+      "track_cursor",
+      "returned_track_count",
+      "next_track_cursor",
+      "selected_count",
+      "snapshot_token",
+      "coverage_status",
+      "diff_compared",
+      "diff_changed_count",
+      "truncated",
+      "bytes",
+    ]);
+    assert.deepEqual(descriptor.outputSchema.required, [
+      "artifact_ref",
+      "schema",
+      "project_ref",
+      "track_count",
+      "item_count",
+      "track_cursor",
+      "returned_track_count",
+      "selected_count",
+      "snapshot_token",
+      "coverage_status",
+      "diff_compared",
+      "diff_changed_count",
+      "truncated",
+    ]);
+    assert.equal(Object.hasOwn(descriptor.outputSchema.properties, "tracks"), false);
+    assert.equal(Object.hasOwn(descriptor.outputSchema.properties, "selected_items"), false);
+    assert.equal(JSON.stringify(descriptor).includes("raw_lua"), false);
   });
 
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery bounded", () => {
@@ -191,7 +271,11 @@ describe("Critical project cleanup report template descriptor", () => {
     const catalog = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() });
     const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);
     const exact = discovery.list_templates({
-      ids: ["template.project.create_cleanup_report", "template.project.create_cleanup_plan"],
+      ids: [
+        "template.project.create_cleanup_report",
+        "template.project.create_project_map_snapshot",
+        "template.project.create_cleanup_plan",
+      ],
       fields: ["summary", "inputSchema", "outputSchema", "examples", "expectedDelta"],
     });
 
@@ -212,7 +296,8 @@ describe("Critical project cleanup report template descriptor", () => {
   });
 
   it("builds a legal 4B bridge request without undo, idempotency, or non-project refs", () => {
-    const [descriptor] = createCriticalProjectReportTemplates();
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_cleanup_report");
     const project = projectRef();
     const request = buildTemplateBridgeRequest({
       descriptor,
@@ -239,7 +324,8 @@ describe("Critical project cleanup report template descriptor", () => {
   });
 
   it("runs 4B fake smoke and returns only a project report artifact ref plus bounded summary", async () => {
-    const [descriptor] = createCriticalProjectReportTemplates();
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_cleanup_report");
     const artifact = cleanupReportArtifact();
     const bridge = new FakeFoundationBridge();
     const result = await executeTemplate({
@@ -290,8 +376,61 @@ describe("Critical project cleanup report template descriptor", () => {
     );
   });
 
+  it("runs 4B fake smoke for a project map snapshot artifact with concise summary", async () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_project_map_snapshot");
+    const artifact = projectMapSnapshotArtifact();
+    const bridge = new FakeFoundationBridge();
+    const result = await executeTemplate({
+      descriptor,
+      input: projectMapSnapshotInput(),
+      refs: { project_ref: projectRef() },
+      context: context(),
+      executor: (request) =>
+        bridge.okEnvelope(request, "2026-07-03T00:00:00.000Z", {
+          summary: {
+            artifact_ref: artifact.ref,
+            schema: "project.project_map_snapshot.v1",
+            project_ref: "project:current",
+            track_count: 48,
+            item_count: 320,
+            track_cursor: 0,
+            returned_track_count: 16,
+            next_track_cursor: "16",
+            selected_count: 2,
+            snapshot_token: "tracks:48|items:320|cursor:0|returned:16",
+            coverage_status: "paged_partial",
+            diff_compared: false,
+            diff_changed_count: 0,
+            truncated: true,
+          },
+          refs: [],
+          artifacts: [artifact],
+          jobs: [],
+          last_result: {
+            updated: false,
+            refs: [],
+            truncated: false,
+          },
+        }),
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.template.id, "template.project.create_project_map_snapshot");
+    assert.deepEqual(result.result.refs.map((ref) => ref.ref), ["project:current"]);
+    assert.equal(result.result.artifacts.length, 1);
+    assert.equal(result.result.artifacts[0].kind, "artifact");
+    assert.equal(result.result.artifacts[0].ref, "artifact:project:project_map_snapshot:art_20260703000000000_032_bc12ef");
+    assert.equal(result.result.artifacts[0].summary.schema, "project.project_map_snapshot.v1");
+    assert.equal(result.result.summary.returned_track_count, 16);
+    assert.equal(result.result.summary.truncated, true);
+    assert.equal(Buffer.byteLength(JSON.stringify(result.result.summary), "utf8") < 768, true);
+    assert.doesNotMatch(JSON.stringify(result.result.summary), /"tracks"|"selected_items"|"payload"/);
+  });
+
   it("rejects destructive cleanup and recipe-plan-shaped inputs before fake dispatch", async () => {
-    const [descriptor] = createCriticalProjectReportTemplates();
+    const descriptor = createTemplateCatalog({ templates: createCriticalProjectReportTemplates() })
+      .require("template.project.create_cleanup_report");
     const bridge = new FakeFoundationBridge();
     const destructiveInput = await executeTemplate({
       descriptor,
@@ -342,6 +481,8 @@ describe("Critical project cleanup report template descriptor", () => {
 
     assert.equal(sharedIds.includes("template.project.create_cleanup_report"), true);
     assert.equal(sharedDescriptorIds.includes("template.project.create_cleanup_report"), true);
+    assert.equal(sharedIds.includes("template.project.create_project_map_snapshot"), true);
+    assert.equal(sharedDescriptorIds.includes("template.project.create_project_map_snapshot"), true);
   });
 
   it("keeps pack-local source free of cleanup execution, recipes, raw execution, paths, and shared wiring", () => {
@@ -379,6 +520,22 @@ function cleanupReportArtifact() {
   });
 }
 
+function projectMapSnapshotArtifact() {
+  return createArtifactRef({
+    owner_pack: "project",
+    scope: "project_map_snapshot",
+    id: "art_20260703000000000_032_bc12ef",
+    schema: "project.project_map_snapshot.v1",
+    summary: {
+      schema: "project.project_map_snapshot.v1",
+      template_id: "template.project.create_project_map_snapshot",
+      track_count: 48,
+      item_count: 320,
+      truncated: true,
+    },
+  });
+}
+
 function limitedReportInput(overrides = {}) {
   return {
     max_report_rows: 32,
@@ -389,6 +546,18 @@ function limitedReportInput(overrides = {}) {
     include_metadata: true,
     include_tempo: true,
     include_project_fingerprint: true,
+    ...overrides,
+  };
+}
+
+function projectMapSnapshotInput(overrides = {}) {
+  return {
+    max_tracks: 16,
+    max_items_per_track: 2,
+    max_selected_items: 8,
+    track_cursor: 0,
+    include_selected_items: true,
+    include_track_items: true,
     ...overrides,
   };
 }
