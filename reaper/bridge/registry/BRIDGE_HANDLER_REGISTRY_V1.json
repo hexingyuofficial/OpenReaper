@@ -283,6 +283,122 @@
       ]
     },
     {
+      "template_id": "template.tracks.list_tracks",
+      "operation": {
+        "family": "query_state",
+        "name": "tracks.list_tracks"
+      },
+      "pack": "tracks",
+      "risk": "read",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "list_tracks",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.read_mixer_controls",
+      "operation": {
+        "family": "query_state",
+        "name": "tracks.read_mixer_controls"
+      },
+      "pack": "tracks",
+      "risk": "read",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "read_mixer_controls",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.read_folder_structure",
+      "operation": {
+        "family": "query_state",
+        "name": "tracks.read_folder_structure"
+      },
+      "pack": "tracks",
+      "risk": "read",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "read_folder_structure",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_record_arm",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "track.set_record_arm",
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "set_record_arm",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_volume",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "track.set_volume",
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "set_volume",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_pan",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "track.set_pan",
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "set_pan",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.set_width",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "track.set_width",
+      "pack": "tracks",
+      "risk": "write",
+      "route": "d9-tracks-mixer-handlers",
+      "handler_file": "tracks/d9_tracks_mixer_route.lua",
+      "handler_export": "set_width",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d9-tracks-mixer-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

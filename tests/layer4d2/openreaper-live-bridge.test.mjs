@@ -9,6 +9,7 @@ import {
   validateFoundationBridgeResult,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -105,7 +106,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("keeps the approved Wave 0, Wave 1A, Read-B, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {
+  it("keeps the approved Wave 0, Wave 1A, Read-B, D9 tracks mixer, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
@@ -157,6 +158,9 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "system.runtime_environment.read",
       "template_catalog.read_summary",
       "track.resolve_ref",
+      "tracks.list_tracks",
+      "tracks.read_folder_structure",
+      "tracks.read_mixer_controls",
       "transport.read_state",
     ].sort());
 
@@ -194,6 +198,15 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "template.media.probe_file",
       "template.media.read_take_source",
       "template.media.read_project_media_files",
+    ]);
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS, [
+      "template.tracks.list_tracks",
+      "template.tracks.read_mixer_controls",
+      "template.tracks.read_folder_structure",
+      "template.tracks.set_record_arm",
+      "template.tracks.set_volume",
+      "template.tracks.set_pan",
+      "template.tracks.set_width",
     ]);
   });
 

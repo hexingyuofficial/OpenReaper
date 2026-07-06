@@ -210,6 +210,16 @@ export const CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS = deepFreeze([
   "template.project.set_tempo_marker",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS = deepFreeze([
+  "template.tracks.list_tracks",
+  "template.tracks.read_mixer_controls",
+  "template.tracks.read_folder_structure",
+  "template.tracks.set_record_arm",
+  "template.tracks.set_volume",
+  "template.tracks.set_pan",
+  "template.tracks.set_width",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -230,6 +240,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["e2_fx_b1_route", CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS],
   ["e5_routing_automation", CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS],
   ["d6_project_tempo", CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS],
+  ["d9_tracks_mixer", CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1087,6 +1098,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_E2_FX_B1_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

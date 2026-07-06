@@ -846,6 +846,13 @@ local D6_PROJECT_TEMPO_WRITE_HANDLERS = {
   ["project.set_tempo_marker"] = d6_project_set_tempo_marker,
 }
 
+local D9_TRACKS_MIXER_WRITE_HANDLERS = {
+  ["track.set_record_arm"] = set_record_arm,
+  ["track.set_volume"] = set_volume,
+  ["track.set_pan"] = set_pan,
+  ["track.set_width"] = set_width,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -872,6 +879,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D6_PROJECT_TEMPO_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D9_TRACKS_MIXER_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
@@ -919,6 +930,18 @@ local ALLOWED_OPERATIONS = {
   ["query_state:track.resolve_ref"] = {
     pack = "tracks",
     handler = resolve_track_ref,
+  },
+  ["query_state:tracks.list_tracks"] = {
+    pack = "tracks",
+    handler = list_tracks,
+  },
+  ["query_state:tracks.read_mixer_controls"] = {
+    pack = "tracks",
+    handler = read_mixer_controls,
+  },
+  ["query_state:tracks.read_folder_structure"] = {
+    pack = "tracks",
+    handler = read_folder_structure,
   },
   ["query_state:items.resolve_item_ref"] = {
     pack = "items",
