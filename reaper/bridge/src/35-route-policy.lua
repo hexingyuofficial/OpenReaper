@@ -75,6 +75,15 @@ local D9_TRACKS_MIXER_WRITE_CAPABILITIES = {
   ["track.set_width"] = { pack = "tracks", risk = "write" },
 }
 
+local D11_PROJECT_MARKER_REGION_CAPABILITIES = {
+  ["project.delete_marker"] = { pack = "project", risk = "destructive" },
+  ["project.delete_region"] = { pack = "project", risk = "destructive" },
+  ["project.remove_marker"] = { pack = "project", risk = "destructive" },
+  ["project.remove_region"] = { pack = "project", risk = "destructive" },
+  ["project.rename_marker"] = { pack = "project", risk = "write" },
+  ["project.rename_region"] = { pack = "project", risk = "write" },
+}
+
 local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_track"] = { pack = "fx", risk = "write" },
   ["fx.add_take"] = { pack = "fx", risk = "write" },
@@ -153,6 +162,16 @@ local function d9_tracks_mixer_write_capability(request, operation_key)
   return D9_TRACKS_MIXER_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function d11_project_marker_region_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D11_PROJECT_MARKER_REGION_CAPABILITIES[request.pack.capability]
+end
+
 local function e2_fx_b1_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -172,6 +191,7 @@ local function template_execute_write_capability(request, operation_key)
     or e2_fx_b1_write_capability(request, operation_key)
     or d6_project_tempo_write_capability(request, operation_key)
     or d9_tracks_mixer_write_capability(request, operation_key)
+    or d11_project_marker_region_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -246,6 +266,7 @@ local function validate_request(request)
   local e2_fx_b1_write_operation = e2_fx_b1_write_capability(request, operation_key)
   local d6_project_tempo_write_operation = d6_project_tempo_write_capability(request, operation_key)
   local d9_tracks_mixer_write_operation = d9_tracks_mixer_write_capability(request, operation_key)
+  local d11_project_marker_region_operation = d11_project_marker_region_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -284,6 +305,10 @@ local function validate_request(request)
   elseif d9_tracks_mixer_write_operation then
     if request.pack.id ~= d9_tracks_mixer_write_operation.pack or request.pack.risk ~= d9_tracks_mixer_write_operation.risk then
       return false, "D9 tracks mixer write request pack/capability/risk mismatch."
+    end
+  elseif d11_project_marker_region_operation then
+    if request.pack.id ~= d11_project_marker_region_operation.pack or request.pack.risk ~= d11_project_marker_region_operation.risk then
+      return false, "D11 project marker/region request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -333,6 +358,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D9 tracks mixer write requests must use undo.mode required."
     end
+  elseif d11_project_marker_region_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D11 project marker/region requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -380,6 +409,10 @@ local function validate_request(request)
   elseif d9_tracks_mixer_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D9 tracks mixer write requests must use artifacts.allow false."
+    end
+  elseif d11_project_marker_region_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D11 project marker/region requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -429,6 +462,10 @@ local function validate_request(request)
   elseif d9_tracks_mixer_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D9 tracks mixer write idempotency_key must be a string when present."
+    end
+  elseif d11_project_marker_region_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D11 project marker/region idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."

@@ -853,6 +853,15 @@ local D9_TRACKS_MIXER_WRITE_HANDLERS = {
   ["track.set_width"] = set_width,
 }
 
+local D11_PROJECT_MARKER_REGION_HANDLERS = {
+  ["project.delete_marker"] = d11_project_delete_marker,
+  ["project.delete_region"] = d11_project_delete_region,
+  ["project.remove_marker"] = d11_project_remove_marker,
+  ["project.remove_region"] = d11_project_remove_region,
+  ["project.rename_marker"] = d11_project_rename_marker,
+  ["project.rename_region"] = d11_project_rename_region,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -883,6 +892,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D9_TRACKS_MIXER_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D11_PROJECT_MARKER_REGION_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

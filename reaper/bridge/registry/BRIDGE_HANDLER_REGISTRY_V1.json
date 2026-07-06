@@ -447,6 +447,108 @@
       ]
     },
     {
+      "template_id": "template.project.delete_marker",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.delete_marker",
+      "pack": "project",
+      "risk": "destructive",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_delete_marker",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.delete_region",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.delete_region",
+      "pack": "project",
+      "risk": "destructive",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_delete_region",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.remove_marker",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.remove_marker",
+      "pack": "project",
+      "risk": "destructive",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_remove_marker",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.remove_region",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.remove_region",
+      "pack": "project",
+      "risk": "destructive",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_remove_region",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.rename_marker",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.rename_marker",
+      "pack": "project",
+      "risk": "write",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_rename_marker",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.rename_region",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "project.rename_region",
+      "pack": "project",
+      "risk": "write",
+      "route": "d11-project-marker-region-handlers",
+      "handler_file": "project/d11_marker_region_mutations.lua",
+      "handler_export": "d11_project_rename_region",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

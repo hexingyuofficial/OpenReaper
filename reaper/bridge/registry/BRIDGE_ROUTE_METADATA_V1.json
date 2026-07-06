@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 121,
+    "entryCount": 127,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 121,
-    "handlerModuleCount": 67,
-    "routeCount": 17,
+    "extractedHandlerCount": 127,
+    "handlerModuleCount": 68,
+    "routeCount": 18,
     "operationCount": 61
   },
   "routes": [
@@ -146,6 +146,33 @@
         "template.project.read_track_item_overview",
         "template.actions.read_custom_action_metadata",
         "template.actions.read_cycle_action_metadata"
+      ]
+    },
+    {
+      "route": "d11-project-marker-region-handlers",
+      "template_count": 6,
+      "handler_module_count": 1,
+      "operation_count": 6,
+      "packs": [
+        "project"
+      ],
+      "risks": [
+        "destructive",
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d11-project-marker-region-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.project.delete_marker",
+        "template.project.delete_region",
+        "template.project.remove_marker",
+        "template.project.remove_region",
+        "template.project.rename_marker",
+        "template.project.rename_region"
       ]
     },
     {
