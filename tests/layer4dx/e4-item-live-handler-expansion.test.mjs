@@ -175,6 +175,10 @@ describe("E4 item live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /AddMediaItemToTrack/);
     assert.match(BRIDGE_SOURCE, /SplitMediaItem/);
     assert.match(BRIDGE_SOURCE, /SetMediaItemTakeInfo_Value/);
+    assert.match(BRIDGE_SOURCE, /SetActiveTake/);
+    assert.match(BRIDGE_SOURCE, /active_take_available/);
+    assert.match(BRIDGE_SOURCE, /readback_playrate/);
+    assert.match(BRIDGE_SOURCE, /VERIFY_FAILED/);
     assert.match(BRIDGE_SOURCE, /loop_source_status = "held"/);
     assert.match(BRIDGE_SOURCE, /E4 item route write requests must use undo\.mode required/);
     assert.match(BRIDGE_SOURCE, /E4 item route write requests must use artifacts\.allow false/);

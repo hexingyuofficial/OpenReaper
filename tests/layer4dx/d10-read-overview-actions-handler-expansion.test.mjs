@@ -110,6 +110,10 @@ describe("D10 read overview/actions live handler expansion", () => {
     assert.match(PROJECT_HANDLER_SOURCE, /CountTracks/);
     assert.match(PROJECT_HANDLER_SOURCE, /CountMediaItems/);
     assert.match(PROJECT_HANDLER_SOURCE, /GetTrackMediaItem/);
+    assert.match(PROJECT_HANDLER_SOURCE, /track_cursor = d10_overview_bounded_offset/);
+    assert.match(PROJECT_HANDLER_SOURCE, /max_items_per_track_effective/);
+    assert.match(PROJECT_HANDLER_SOURCE, /summary\.next_track_cursor = tostring\(end_track\)/);
+    assert.doesNotMatch(PROJECT_HANDLER_SOURCE, /next_track_cursor = .*JSON_NULL/);
     assert.match(BRIDGE_SOURCE, /kbd_getTextFromCmd/);
     assert.match(BRIDGE_SOURCE, /NamedCommandLookup/);
     assert.match(ACTION_HANDLER_SOURCE, /CF_GetSWSVersion/);
@@ -124,7 +128,14 @@ describe("D10 read overview/actions live handler expansion", () => {
 
 function d10Input(id) {
   if (id === "template.project.read_track_item_overview") {
-    return { max_tracks: 12, max_items_per_track: 4, include_selected_items: true };
+    return {
+      max_tracks: 12,
+      max_items_per_track: 4,
+      max_selected_items: 4,
+      track_cursor: 0,
+      include_selected_items: true,
+      include_track_items: true,
+    };
   }
   return { section: "main", named_command: "_OPENREAPER_D10_FAKE", include_step_summary: false };
 }

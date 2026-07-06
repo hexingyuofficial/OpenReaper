@@ -4187,8 +4187,8 @@ function e2FxB1RouteFixtureInputs(env) {
   const artifactRoot = nonEmpty(env[E2_FX_B1_ARTIFACT_ROOT_ENV]);
   const trackRef = rawTrackRef ? normalizeTrackFixtureRef(rawTrackRef) ?? rawTrackRef : "track:index:0";
   const takeRef = rawTakeRef ? normalizeTakeFixtureRef(rawTakeRef) ?? rawTakeRef : "take:index:0";
-  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:0";
-  const videoFxRef = rawVideoFxRef ? normalizeFxFixtureRef(rawVideoFxRef) ?? rawVideoFxRef : "fx:track:video_processor:0";
+  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:index:0:0";
+  const videoFxRef = rawVideoFxRef ? normalizeFxFixtureRef(rawVideoFxRef) ?? rawVideoFxRef : "fx:track:index:0:0";
   const pluginName = rawPluginName ?? "ReaEQ (Cockos)";
   const secondPluginName = rawSecondPluginName ?? "ReaComp (Cockos)";
   const paramIndex = nonNegativeInteger(env[E2_FX_B1_PARAM_INDEX_ENV], 0);
@@ -4266,7 +4266,7 @@ function e5RoutingAutomationRouteFixtureInputs(env) {
   const trackRef = rawTrackRef ? normalizeTrackFixtureRef(rawTrackRef) ?? rawTrackRef : "track:index:0";
   const destinationTrackRef = rawDestinationTrackRef ? normalizeTrackFixtureRef(rawDestinationTrackRef) ?? rawDestinationTrackRef : "track:index:1";
   const sendRef = rawSendRef ? normalizeSendFixtureRef(rawSendRef) ?? rawSendRef : "send:track:0:0";
-  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:0";
+  const fxRef = rawFxRef ? normalizeFxFixtureRef(rawFxRef) ?? rawFxRef : "fx:track:index:0:0";
   const envelopeRef = rawEnvelopeRef ? normalizeEnvelopeFixtureRef(rawEnvelopeRef) ?? rawEnvelopeRef : "envelope:track:volume";
   const takeRef = rawTakeRef ? normalizeTakeFixtureRef(rawTakeRef) ?? rawTakeRef : "take:index:0";
   const sendVolume = finiteNumber(env[E5_SEND_VOLUME_ENV], 1);
@@ -4522,7 +4522,7 @@ function takeObjectRefFromFixture(takeRef) {
 }
 
 function fxObjectRefFromFixture(fxRef) {
-  const parsed = parseFxFixtureRef(fxRef) ?? parseFxFixtureRef("fx:track:0");
+  const parsed = parseFxFixtureRef(fxRef) ?? parseFxFixtureRef("fx:track:index:0:0");
   return createObjectRef("fx", parsed.identity, { ref: parsed.ref });
 }
 
@@ -4671,20 +4671,36 @@ function parseTakeFixtureRef(takeRef) {
 
 function parseFxFixtureRef(fxRef) {
   const token = String(fxRef ?? "").trim();
-  const typed = token.match(/^fx:(track|take):(.+)$/);
-  if (typed?.[1] && typed?.[2]) {
+  const typedTrack = token.match(/^fx:(track:[^:]+:.+):(\d+)$/);
+  if (typedTrack?.[1] && typedTrack?.[2]) {
     return {
       input_ref: token,
-      identity: { scheme: typed[1], value: typed[2] },
+      identity: { scheme: "track_fx", value: `${typedTrack[1]}:${typedTrack[2]}` },
       ref: token,
     };
   }
-  const compact = token.match(/^(track|take):(.+)$/);
-  if (compact?.[1] && compact?.[2]) {
+  const typedTake = token.match(/^fx:(take:[^:]+:.+):(\d+)$/);
+  if (typedTake?.[1] && typedTake?.[2]) {
     return {
       input_ref: token,
-      identity: { scheme: compact[1], value: compact[2] },
-      ref: `fx:${compact[1]}:${compact[2]}`,
+      identity: { scheme: "take_fx", value: `${typedTake[1]}:${typedTake[2]}` },
+      ref: token,
+    };
+  }
+  const compactTrack = token.match(/^(track:[^:]+:.+):(\d+)$/);
+  if (compactTrack?.[1] && compactTrack?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: "track_fx", value: `${compactTrack[1]}:${compactTrack[2]}` },
+      ref: `fx:${compactTrack[1]}:${compactTrack[2]}`,
+    };
+  }
+  const compactTake = token.match(/^(take:[^:]+:.+):(\d+)$/);
+  if (compactTake?.[1] && compactTake?.[2]) {
+    return {
+      input_ref: token,
+      identity: { scheme: "take_fx", value: `${compactTake[1]}:${compactTake[2]}` },
+      ref: `fx:${compactTake[1]}:${compactTake[2]}`,
     };
   }
   return null;
@@ -5253,16 +5269,16 @@ async function dispatchFakeE2FxL1ReadRoute(request) {
 
 function fakeE2FxB1RouteRefs(request, spec) {
   if (spec.id === "template.fx.resolve_fx_ref") {
-    return [createObjectRef("fx", { scheme: "track", value: "0" }, { ref: "fx:track:0" })];
+    return [scopedFxObjectRefFromRequest(request, "track", 0)];
   }
   if (spec.id === "template.fx.list_track_fx_chain") {
     return [
-      createObjectRef("fx", { scheme: "track", value: "0" }, { ref: "fx:track:0" }),
-      createObjectRef("fx", { scheme: "track", value: "1" }, { ref: "fx:track:1" }),
+      scopedFxObjectRefFromRequest(request, "track", 0),
+      scopedFxObjectRefFromRequest(request, "track", 1),
     ];
   }
   if (spec.id === "template.fx.list_take_fx_chain") {
-    return [createObjectRef("fx", { scheme: "take", value: "0" }, { ref: "fx:take:0" })];
+    return [scopedFxObjectRefFromRequest(request, "take", 0)];
   }
   if (spec.id === "template.fx.add_track_fx") {
     return [
@@ -5284,6 +5300,20 @@ function fakeE2FxB1RouteRefs(request, spec) {
     return request.refs.filter((ref) => ref.kind === "fx").slice(0, 1);
   }
   return request.refs.filter((ref) => ref.kind === "fx").slice(0, 1);
+}
+
+function scopedFxObjectRefFromRequest(request, ownerKind, slotIndex) {
+  const owner = Array.isArray(request.refs)
+    ? request.refs.find((ref) => ref.kind === ownerKind)
+    : null;
+  const ownerRef = owner?.ref ?? `${ownerKind}:guid:{E2-FX-${ownerKind.toUpperCase()}}`;
+  return createObjectRef("fx", {
+    scheme: `${ownerKind}_fx`,
+    value: `${ownerRef}:${slotIndex}`,
+  }, {
+    ref: `fx:${ownerRef}:${slotIndex}`,
+    display: { owner_ref: ownerRef, slot_index: slotIndex },
+  });
 }
 
 function fakeE2FxB1RouteArtifacts(request, spec) {

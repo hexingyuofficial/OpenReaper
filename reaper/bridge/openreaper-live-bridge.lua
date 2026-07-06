@@ -4817,6 +4817,33 @@ local function d10_overview_bounded_limit(request, requested, default_limit, har
   return limit
 end
 
+local function d10_overview_bounded_offset(value)
+  local number = tonumber(value)
+  if not number or number < 0 or number ~= math.floor(number) then
+    return 0
+  end
+  return math.floor(number)
+end
+
+local function d10_overview_budget_track_limit(request, requested)
+  local budget = safe_budget(request)
+  local inline_budget = budget.max_inline_value_bytes or 2048
+  local requested_limit = d10_overview_bounded_limit(request, requested, 8, 32)
+  local budget_limit = math.floor(math.max(1, inline_budget - 640) / 220)
+  if budget_limit < 1 then
+    budget_limit = 1
+  end
+  return math.min(requested_limit, budget_limit)
+end
+
+local function d10_overview_budget_item_limit(request, requested, track_limit)
+  local requested_limit = d10_overview_bounded_limit(request, requested, 1, 8)
+  if track_limit >= 6 then
+    return math.min(requested_limit, 1)
+  end
+  return math.min(requested_limit, 2)
+end
+
 local function d10_overview_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   return ok and first_string(guid) or nil
@@ -4871,7 +4898,7 @@ end
 
 local function d10_overview_track_name(track)
   local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return bounded_string(ok and first_string(name) or "", 80)
 end
 
 local function d10_overview_item_guid(item)
@@ -4961,9 +4988,12 @@ local function d10_overview_track_summary(track, max_items_per_track)
 end
 
 local function read_track_item_overview(request)
-  local max_tracks = d10_overview_bounded_limit(request, request.params.max_tracks, 24, 128)
-  local max_items_per_track = d10_overview_bounded_limit(request, request.params.max_items_per_track, 8, 64)
-  local include_selected_items = request.params.include_selected_items ~= false
+  local track_cursor = d10_overview_bounded_offset(request.params and request.params.track_cursor)
+  local max_tracks = d10_overview_budget_track_limit(request, request.params and request.params.max_tracks)
+  local include_track_items = request.params and request.params.include_track_items ~= false
+  local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
+  local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
+  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 16)
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
   local ok_items, item_count = call_reaper("CountMediaItems", 0)
   local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
@@ -4972,7 +5002,8 @@ local function read_track_item_overview(request)
   local selected_items = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
-  for index = 0, math.min(total_tracks, max_tracks) - 1 do
+  local end_track = math.min(total_tracks, track_cursor + max_tracks)
+  for index = track_cursor, end_track - 1 do
     local ok_track, track = call_reaper("GetTrack", 0, index)
     if ok_track and track then
       tracks[#tracks + 1] = d10_overview_track_summary(track, max_items_per_track)
@@ -4980,10 +5011,11 @@ local function read_track_item_overview(request)
     end
   end
 
+  local total_selected = 0
   if include_selected_items then
     local ok_selected, selected_count = call_reaper("CountSelectedMediaItems", 0)
-    local total_selected = ok_selected and math.max(0, math.floor(first_number(selected_count) or 0)) or 0
-    local selected_limit = d10_overview_bounded_limit(request, total_selected, 16, 64)
+    total_selected = ok_selected and math.max(0, math.floor(first_number(selected_count) or 0)) or 0
+    local selected_limit = math.min(total_selected, max_selected_items)
     for index = 0, math.min(total_selected, selected_limit) - 1 do
       local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
       if ok_item and item then
@@ -4994,14 +5026,23 @@ local function read_track_item_overview(request)
     end
   end
 
-  return {
+  local summary = {
     project_ref = "project:current",
     tracks = tracks,
     selected_items = selected_items,
     track_count = total_tracks,
     item_count = total_items,
-    truncated = total_tracks > #tracks,
-  }, nil, json_array({}), json_array({}), refs
+    track_cursor = track_cursor,
+    returned_track_count = #tracks,
+    max_tracks_effective = max_tracks,
+    max_items_per_track_effective = max_items_per_track,
+    selected_items_truncated = include_selected_items and total_selected ~= nil and total_selected > #selected_items or false,
+    truncated = end_track < total_tracks,
+  }
+  if end_track < total_tracks then
+    summary.next_track_cursor = tostring(end_track)
+  end
+  return summary, nil, json_array({}), json_array({}), refs
 end
 return {
   exports = { read_track_item_overview = read_track_item_overview },
@@ -6065,6 +6106,14 @@ local function d13_items_take_number(take, key)
   return ok and first_number(value) or 0
 end
 
+local function d13_items_values_match(actual, requested, key)
+  local tolerance = 0
+  if key == "D_VOL" or key == "D_PAN" or key == "D_STARTOFFS" or key == "F_STRETCHFADESIZE" then
+    tolerance = 0.000001
+  end
+  return math.abs((actual or 0) - (requested or 0)) <= tolerance
+end
+
 local function d13_items_channel_mode_label(value)
   local number = math.floor(tonumber(value) or 0)
   if number == 1 then
@@ -6278,6 +6327,15 @@ local function d13_items_set_item_value(request, key, value)
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
+  local readback = d13_items_item_number(item, key)
+  if not d13_items_values_match(readback, value, key) then
+    return d13_items_error("VERIFICATION_FAILED", "Item property readback did not match the requested value.", {
+      key = key,
+      requested = value,
+      readback = readback,
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
   return d13_items_write_summary(request, item)
 end
 
@@ -6297,6 +6355,15 @@ local function d13_items_set_take_value(request, key, value)
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
+  local readback = d13_items_take_number(take, key)
+  if not d13_items_values_match(readback, value, key) then
+    return d13_items_error("VERIFICATION_FAILED", "Take property readback did not match the requested value.", {
+      key = key,
+      requested = value,
+      readback = readback,
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
   return d13_items_write_summary(request, item)
 end
 
@@ -8591,7 +8658,7 @@ local function e2_fx_read_take_from_request_refs(request)
 end
 
 local function e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index)
-  return "fx:" .. tostring(owner_kind) .. ":" .. tostring(slot_index)
+  return "fx:" .. tostring(owner_ref) .. ":" .. tostring(slot_index)
 end
 
 local function e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
@@ -8600,8 +8667,8 @@ local function e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
     kind = "fx",
     ref = ref,
     identity = {
-      scheme = owner_kind,
-      value = tostring(slot_index),
+      scheme = tostring(owner_kind) .. "_fx",
+      value = tostring(owner_ref) .. ":" .. tostring(slot_index),
     },
     display = {
       name = bounded_string(name or "", 160),
@@ -8615,9 +8682,28 @@ local function e2_fx_read_fx_owner_from_ref_object(ref, request)
   if not is_object(ref) or ref.kind ~= "fx" then
     return nil, nil, nil
   end
+  local track_ref, track_slot = ref.ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if track_ref and track_slot then
+    return "track", e2_fx_read_resolve_track_token(track_ref), math.floor(tonumber(track_slot))
+  end
+  local take_ref, take_slot = ref.ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+  if take_ref and take_slot then
+    return "take", e2_fx_read_resolve_take_token(take_ref), math.floor(tonumber(take_slot))
+  end
   local identity = is_object(ref.identity) and ref.identity or {}
   local scheme = identity.scheme
   local value = tostring(identity.value or "")
+  if scheme == "track_fx" then
+    local owner_ref, slot_text = value:match("^(track:[^:]+:.+):(%d+)$")
+    if owner_ref and slot_text then
+      return "track", e2_fx_read_resolve_track_token(owner_ref), math.floor(tonumber(slot_text))
+    end
+  elseif scheme == "take_fx" then
+    local owner_ref, slot_text = value:match("^(take:[^:]+:.+):(%d+)$")
+    if owner_ref and slot_text then
+      return "take", e2_fx_read_resolve_take_token(owner_ref), math.floor(tonumber(slot_text))
+    end
+  end
   if not is_string(scheme) or scheme == "" then
     scheme, value = ref.ref:match("^fx:([^:]+):(.+)$")
   end
@@ -8628,20 +8714,9 @@ local function e2_fx_read_fx_owner_from_ref_object(ref, request)
   slot_index = math.floor(slot_index)
   if scheme == "track" then
     local track = e2_fx_read_track_from_request_refs(request)
-    if not track then
-      local ok, default_track = call_reaper("GetTrack", 0, 0)
-      track = ok and default_track or nil
-    end
     return "track", track, slot_index
   elseif scheme == "take" then
     local take = e2_fx_read_take_from_request_refs(request)
-    if not take then
-      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, 0)
-      if ok_item and item then
-        local ok_take, default_take = call_reaper("GetActiveTake", item)
-        take = ok_take and default_take or nil
-      end
-    end
     return "take", take, slot_index
   end
   return nil, nil, nil
@@ -9652,12 +9727,6 @@ local function e5_routing_fx_from_ref(fx_ref)
     return nil, nil
   end
   local track_ref, slot_text = fx_ref:match("^fx:(track:[^:]+:.+):(%d+)$")
-  if not track_ref then
-    slot_text = fx_ref:match("^fx:track:(%d+)$")
-    if slot_text then
-      track_ref = "track:index:0"
-    end
-  end
   if not track_ref or not slot_text then
     return nil, nil
   end
@@ -14026,6 +14095,22 @@ local function e4_item_ref_string(item)
   return "item:unknown"
 end
 
+local function e4_item_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  return nil
+end
+
+local function e4_item_take_ref_string(take)
+  local guid = e4_item_take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  return "take:index:0"
+end
+
 local function e4_item_find_item_by_guid(guid)
   local ok_count, count = call_reaper("CountMediaItems", 0)
   local total = ok_count and first_number(count) or 0
@@ -14168,6 +14253,11 @@ local function e4_item_clone_active_take_footprint(source_item, target_item)
   if ok_preserve then
     call_reaper("SetMediaItemTakeInfo_Value", target_take, "B_PPITCH", first_number(preserve) or 0)
   end
+  call_reaper("SetActiveTake", target_take)
+  local active_take = e4_item_take(target_item)
+  if not active_take then
+    return nil, e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track created an item without an active take.", {}, false)
+  end
   return target_take
 end
 
@@ -14188,7 +14278,7 @@ local function copy_item_to_track(request)
   local length = math.max(0, e4_item_number(source_item, "D_LENGTH"))
   call_reaper("SetMediaItemInfo_Value", new_item, "D_POSITION", position)
   call_reaper("SetMediaItemInfo_Value", new_item, "D_LENGTH", length)
-  local _, failure = e4_item_clone_active_take_footprint(source_item, new_item)
+  local target_take, failure = e4_item_clone_active_take_footprint(source_item, new_item)
   if failure then
     call_reaper("DeleteTrackMediaItem", target_track, new_item)
     return nil, failure
@@ -14200,6 +14290,8 @@ local function copy_item_to_track(request)
     new_item_ref = new_ref.ref,
     source_item_ref = source_ref.ref,
     target_track_ref = e4_item_track_ref_string(target_track),
+    active_take_ref = target_take and e4_item_take_ref_string(target_take) or JSON_NULL,
+    active_take_available = target_take ~= nil,
     position_seconds = position,
     copy_depth = "active_take_footprint",
     source_item = e4_item_summary_for_item(source_item),
@@ -14265,10 +14357,18 @@ local function set_take_playrate(request)
   call_reaper("SetMediaItemTakeInfo_Value", take, "D_PLAYRATE", playrate)
   call_reaper("SetMediaItemTakeInfo_Value", take, "B_PPITCH", request.params.preserve_pitch == true and 1 or 0)
   call_reaper("UpdateItemInProject", item)
+  local readback_playrate = e4_item_finite_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")), 1)
+  if math.abs(readback_playrate - playrate) > 0.000001 then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 set_take_playrate readback did not match the requested playrate.", {
+      requested_playrate = playrate,
+      readback_playrate = readback_playrate,
+    }, false)
+  end
   local item_ref = e4_item_object_ref(item)
   return e4_item_summary(request, {
     item_ref = item_ref.ref,
-    playrate = playrate,
+    playrate = readback_playrate,
+    requested_playrate = playrate,
     preserve_pitch = request.params.preserve_pitch == true,
     item = e4_item_summary_for_item(item),
   }), nil, nil, nil, e4_item_refs(item_ref)

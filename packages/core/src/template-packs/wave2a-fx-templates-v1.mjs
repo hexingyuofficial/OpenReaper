@@ -125,7 +125,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     capability: "fx.read_summary",
     outputProperties: fxSummaryOutput(),
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose compact metadata is read.")],
+      input: fxOwnerScopedInputRefs("FX ref whose compact metadata is read."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after reading metadata.")],
     }),
     expectedSummary: "Reads one FX summary without enumerating parameters.",
@@ -156,7 +156,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       truncated: { type: "boolean" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose parameter metadata is listed.")],
+      input: fxOwnerScopedInputRefs("FX ref whose parameter metadata is listed."),
     }),
     expectedSummary: "Reads bounded FX parameter metadata without creating envelopes or learn mappings.",
     expectedEntitySummary: "FX parameter metadata is read.",
@@ -180,7 +180,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     requiredInput: ["param_index"],
     outputProperties: parameterValueOutput(),
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose parameter is read.")],
+      input: fxOwnerScopedInputRefs("FX ref whose parameter is read."),
     }),
     expectedSummary: "Reads one FX parameter value without editing state.",
     expectedEntitySummary: "One FX parameter value is read.",
@@ -274,7 +274,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       enabled: { type: "boolean" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose enabled state is set.")],
+      input: fxOwnerScopedInputRefs("FX ref whose enabled state is set."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after bypass update.")],
     }),
     expectedAction: "update",
@@ -309,7 +309,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     requiredInput: ["param_index", "normalized_value"],
     outputProperties: parameterValueOutput(),
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose parameter is updated.")],
+      input: fxOwnerScopedInputRefs("FX ref whose parameter is updated."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after parameter update.")],
     }),
     expectedAction: "update",
@@ -343,7 +343,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       preset_name: { type: "string" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose preset is activated.")],
+      input: fxOwnerScopedInputRefs("FX ref whose preset is activated."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after preset activation.")],
     }),
     expectedAction: "update",
@@ -375,7 +375,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       preset_count: { type: "integer" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose preset index is activated.")],
+      input: fxOwnerScopedInputRefs("FX ref whose preset index is activated."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after preset index update.")],
     }),
     expectedAction: "update",
@@ -406,7 +406,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       slot_index: { type: "integer" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref moved within its current chain.")],
+      input: fxOwnerScopedInputRefs("FX ref moved within its current chain."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after chain reorder.")],
     }),
     expectedAction: "update",
@@ -436,7 +436,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       truncated: { type: "boolean" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "Video processor FX ref whose code is read.")],
+      input: fxOwnerScopedInputRefs("Video processor FX ref whose code is read."),
       output: [ref("artifact_ref", "artifact", true, "Artifact ref containing bounded VIDEO_CODE facts.")],
     }),
     artifacts: artifacts({
@@ -484,7 +484,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       normalized_max: { type: "number" },
     },
     refs: refs({
-      input: [ref("fx_ref", "fx", true, "FX ref whose parameter mapping is read.")],
+      input: fxOwnerScopedInputRefs("FX ref whose parameter mapping is read."),
       output: [
         ref("fx_ref", "fx", true, "Same FX ref returned with mapping metadata."),
         ref("envelope_ref", "envelope", false, "Existing parameter envelope ref when present."),
@@ -546,6 +546,14 @@ function readDescriptor(options) {
     verification: verification({ mode: "none", checks: [] }),
     examples: options.examples,
   };
+}
+
+function fxOwnerScopedInputRefs(fxSummary) {
+  return [
+    ref("fx_ref", "fx", true, fxSummary),
+    ref("track_ref", "track", false, "Track owner ref required when the FX ref is an unscoped track-slot alias."),
+    ref("take_ref", "take", false, "Take owner ref required when the FX ref is an unscoped take-slot alias."),
+  ];
 }
 
 function writeDescriptor(options) {

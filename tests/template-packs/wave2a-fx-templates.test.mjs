@@ -457,9 +457,12 @@ function takeRef(guid) {
 }
 
 function fxRef(ownerKind, slot) {
+  const ownerRef = ownerKind === "take" ? "take:guid:{TAKE-FX}" : "track:guid:{TRACK-FX}";
   return createObjectRef("fx", {
-    scheme: "slot",
-    value: `${ownerKind}:${slot}`,
+    scheme: `${ownerKind}_fx`,
+    value: `${ownerRef}:${slot}`,
+  }, {
+    ref: `fx:${ownerRef}:${slot}`,
   });
 }
 

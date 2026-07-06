@@ -781,7 +781,7 @@ describe("Layer 4D call_template runtime binding", () => {
       [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transportDir,
       OPENREAPER_E2_FX_TRACK_REF: "track:index:0",
       OPENREAPER_E2_FX_TAKE_REF: "take:index:0",
-      OPENREAPER_E2_FX_REF: "fx:track:0",
+      OPENREAPER_E2_FX_REF: "fx:track:index:0:0",
       OPENREAPER_E2_FX_PLUGIN_NAME: "ReaEQ (Cockos)",
       OPENREAPER_E2_FX_SECOND_PLUGIN_NAME: "ReaComp (Cockos)",
       OPENREAPER_E2_FX_PARAM_INDEX: "0",
@@ -938,7 +938,7 @@ describe("Layer 4D call_template runtime binding", () => {
       OPENREAPER_E5_TRACK_REF: "track:index:0",
       OPENREAPER_E5_DESTINATION_TRACK_REF: "track:index:1",
       OPENREAPER_E5_SEND_REF: "send:track:0:0",
-      OPENREAPER_E5_FX_REF: "fx:track:0",
+      OPENREAPER_E5_FX_REF: "fx:track:index:0:0",
       OPENREAPER_E5_ENVELOPE_REF: "envelope:track:volume",
     };
 
@@ -1373,11 +1373,11 @@ function fxB1RouteRefs(id) {
   const takeRef = createObjectRef("take", { scheme: "guid", value: "{E2-FX-TAKE}" }, {
     ref: "take:guid:{E2-FX-TAKE}",
   });
-  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
-    ref: "fx:track:0",
+  const fxRef = createObjectRef("fx", { scheme: "track_fx", value: "track:guid:{E2-FX-TRACK}:0" }, {
+    ref: "fx:track:guid:{E2-FX-TRACK}:0",
   });
-  const videoFxRef = createObjectRef("fx", { scheme: "track", value: "video_processor:0" }, {
-    ref: "fx:track:video_processor:0",
+  const videoFxRef = createObjectRef("fx", { scheme: "track_fx", value: "track:guid:{E2-FX-TRACK}:0" }, {
+    ref: "fx:track:guid:{E2-FX-TRACK}:0",
   });
 
   if (id === "template.fx.resolve_fx_ref" || id === "template.fx.list_track_fx_chain" || id === "template.fx.add_track_fx") {
@@ -1652,8 +1652,8 @@ function e5RouteRefs(id) {
   const sendRef = createObjectRef("send", { scheme: "track", value: "0:0" }, {
     ref: "send:track:0:0",
   });
-  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
-    ref: "fx:track:0",
+  const fxRef = createObjectRef("fx", { scheme: "track_fx", value: "track:guid:{E5-SOURCE-TRACK}:0" }, {
+    ref: "fx:track:guid:{E5-SOURCE-TRACK}:0",
   });
   const envelopeRef = createObjectRef("envelope", { scheme: "track", value: "volume" }, {
     ref: "envelope:track:volume",

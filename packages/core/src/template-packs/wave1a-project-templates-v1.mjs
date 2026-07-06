@@ -829,7 +829,10 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     inputSchema: objectSchema({
       max_tracks: { type: "integer" },
       max_items_per_track: { type: "integer" },
+      max_selected_items: { type: "integer" },
+      track_cursor: { type: "integer" },
       include_selected_items: { type: "boolean" },
+      include_track_items: { type: "boolean" },
     }, []),
     outputSchema: objectSchema({
       project_ref: { type: "string" },
@@ -837,6 +840,12 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       selected_items: { type: "array" },
       track_count: { type: "integer" },
       item_count: { type: "integer" },
+      track_cursor: { type: "integer" },
+      returned_track_count: { type: "integer" },
+      next_track_cursor: { type: "string" },
+      max_tracks_effective: { type: "integer" },
+      max_items_per_track_effective: { type: "integer" },
+      selected_items_truncated: { type: "boolean" },
       truncated: { type: "boolean" },
     }, ["project_ref", "tracks", "selected_items", "track_count", "item_count", "truncated"]),
     refs: refs({

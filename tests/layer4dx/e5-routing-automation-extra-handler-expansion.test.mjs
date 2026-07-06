@@ -60,6 +60,8 @@ describe("E5 routing/automation extra live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /SetTrackAutomationMode/);
     assert.match(HANDLER_SOURCE, /InsertAutomationItem/);
     assert.match(HANDLER_SOURCE, /BR_GetMediaTrackSendInfo_Envelope|P_ENV:<VOLENV/);
+    assert.doesNotMatch(HANDLER_SOURCE, /track_ref = "track:index:0"/);
+    assert.doesNotMatch(HANDLER_SOURCE, /\^fx:track:\(%d\+\)\$/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
   });
 });

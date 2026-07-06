@@ -162,6 +162,8 @@ describe("D13 items core live handler expansion", () => {
       "I_CHANMODE",
       "I_PITCHMODE",
       "F_STRETCHFADESIZE",
+      "d13_items_values_match",
+      "VERIFICATION_FAILED",
     ]) {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }

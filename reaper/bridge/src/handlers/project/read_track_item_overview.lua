@@ -24,6 +24,33 @@ local function d10_overview_bounded_limit(request, requested, default_limit, har
   return limit
 end
 
+local function d10_overview_bounded_offset(value)
+  local number = tonumber(value)
+  if not number or number < 0 or number ~= math.floor(number) then
+    return 0
+  end
+  return math.floor(number)
+end
+
+local function d10_overview_budget_track_limit(request, requested)
+  local budget = safe_budget(request)
+  local inline_budget = budget.max_inline_value_bytes or 2048
+  local requested_limit = d10_overview_bounded_limit(request, requested, 8, 32)
+  local budget_limit = math.floor(math.max(1, inline_budget - 640) / 220)
+  if budget_limit < 1 then
+    budget_limit = 1
+  end
+  return math.min(requested_limit, budget_limit)
+end
+
+local function d10_overview_budget_item_limit(request, requested, track_limit)
+  local requested_limit = d10_overview_bounded_limit(request, requested, 1, 8)
+  if track_limit >= 6 then
+    return math.min(requested_limit, 1)
+  end
+  return math.min(requested_limit, 2)
+end
+
 local function d10_overview_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   return ok and first_string(guid) or nil
@@ -78,7 +105,7 @@ end
 
 local function d10_overview_track_name(track)
   local ok, _, name = call_reaper("GetTrackName", track, "")
-  return bounded_string(ok and first_string(name) or "", 160)
+  return bounded_string(ok and first_string(name) or "", 80)
 end
 
 local function d10_overview_item_guid(item)
@@ -168,9 +195,12 @@ local function d10_overview_track_summary(track, max_items_per_track)
 end
 
 local function read_track_item_overview(request)
-  local max_tracks = d10_overview_bounded_limit(request, request.params.max_tracks, 24, 128)
-  local max_items_per_track = d10_overview_bounded_limit(request, request.params.max_items_per_track, 8, 64)
-  local include_selected_items = request.params.include_selected_items ~= false
+  local track_cursor = d10_overview_bounded_offset(request.params and request.params.track_cursor)
+  local max_tracks = d10_overview_budget_track_limit(request, request.params and request.params.max_tracks)
+  local include_track_items = request.params and request.params.include_track_items ~= false
+  local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
+  local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
+  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 16)
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
   local ok_items, item_count = call_reaper("CountMediaItems", 0)
   local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
@@ -179,7 +209,8 @@ local function read_track_item_overview(request)
   local selected_items = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
-  for index = 0, math.min(total_tracks, max_tracks) - 1 do
+  local end_track = math.min(total_tracks, track_cursor + max_tracks)
+  for index = track_cursor, end_track - 1 do
     local ok_track, track = call_reaper("GetTrack", 0, index)
     if ok_track and track then
       tracks[#tracks + 1] = d10_overview_track_summary(track, max_items_per_track)
@@ -187,10 +218,11 @@ local function read_track_item_overview(request)
     end
   end
 
+  local total_selected = 0
   if include_selected_items then
     local ok_selected, selected_count = call_reaper("CountSelectedMediaItems", 0)
-    local total_selected = ok_selected and math.max(0, math.floor(first_number(selected_count) or 0)) or 0
-    local selected_limit = d10_overview_bounded_limit(request, total_selected, 16, 64)
+    total_selected = ok_selected and math.max(0, math.floor(first_number(selected_count) or 0)) or 0
+    local selected_limit = math.min(total_selected, max_selected_items)
     for index = 0, math.min(total_selected, selected_limit) - 1 do
       local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
       if ok_item and item then
@@ -201,12 +233,21 @@ local function read_track_item_overview(request)
     end
   end
 
-  return {
+  local summary = {
     project_ref = "project:current",
     tracks = tracks,
     selected_items = selected_items,
     track_count = total_tracks,
     item_count = total_items,
-    truncated = total_tracks > #tracks,
-  }, nil, json_array({}), json_array({}), refs
+    track_cursor = track_cursor,
+    returned_track_count = #tracks,
+    max_tracks_effective = max_tracks,
+    max_items_per_track_effective = max_items_per_track,
+    selected_items_truncated = include_selected_items and total_selected ~= nil and total_selected > #selected_items or false,
+    truncated = end_track < total_tracks,
+  }
+  if end_track < total_tracks then
+    summary.next_track_cursor = tostring(end_track)
+  end
+  return summary, nil, json_array({}), json_array({}), refs
 end

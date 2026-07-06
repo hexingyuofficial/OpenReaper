@@ -260,7 +260,7 @@ local function e2_fx_read_take_from_request_refs(request)
 end
 
 local function e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index)
-  return "fx:" .. tostring(owner_kind) .. ":" .. tostring(slot_index)
+  return "fx:" .. tostring(owner_ref) .. ":" .. tostring(slot_index)
 end
 
 local function e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
@@ -269,8 +269,8 @@ local function e2_fx_read_fx_object_ref(owner_kind, owner_ref, slot_index, name)
     kind = "fx",
     ref = ref,
     identity = {
-      scheme = owner_kind,
-      value = tostring(slot_index),
+      scheme = tostring(owner_kind) .. "_fx",
+      value = tostring(owner_ref) .. ":" .. tostring(slot_index),
     },
     display = {
       name = bounded_string(name or "", 160),
@@ -284,9 +284,28 @@ local function e2_fx_read_fx_owner_from_ref_object(ref, request)
   if not is_object(ref) or ref.kind ~= "fx" then
     return nil, nil, nil
   end
+  local track_ref, track_slot = ref.ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if track_ref and track_slot then
+    return "track", e2_fx_read_resolve_track_token(track_ref), math.floor(tonumber(track_slot))
+  end
+  local take_ref, take_slot = ref.ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+  if take_ref and take_slot then
+    return "take", e2_fx_read_resolve_take_token(take_ref), math.floor(tonumber(take_slot))
+  end
   local identity = is_object(ref.identity) and ref.identity or {}
   local scheme = identity.scheme
   local value = tostring(identity.value or "")
+  if scheme == "track_fx" then
+    local owner_ref, slot_text = value:match("^(track:[^:]+:.+):(%d+)$")
+    if owner_ref and slot_text then
+      return "track", e2_fx_read_resolve_track_token(owner_ref), math.floor(tonumber(slot_text))
+    end
+  elseif scheme == "take_fx" then
+    local owner_ref, slot_text = value:match("^(take:[^:]+:.+):(%d+)$")
+    if owner_ref and slot_text then
+      return "take", e2_fx_read_resolve_take_token(owner_ref), math.floor(tonumber(slot_text))
+    end
+  end
   if not is_string(scheme) or scheme == "" then
     scheme, value = ref.ref:match("^fx:([^:]+):(.+)$")
   end
@@ -297,20 +316,9 @@ local function e2_fx_read_fx_owner_from_ref_object(ref, request)
   slot_index = math.floor(slot_index)
   if scheme == "track" then
     local track = e2_fx_read_track_from_request_refs(request)
-    if not track then
-      local ok, default_track = call_reaper("GetTrack", 0, 0)
-      track = ok and default_track or nil
-    end
     return "track", track, slot_index
   elseif scheme == "take" then
     local take = e2_fx_read_take_from_request_refs(request)
-    if not take then
-      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, 0)
-      if ok_item and item then
-        local ok_take, default_take = call_reaper("GetActiveTake", item)
-        take = ok_take and default_take or nil
-      end
-    end
     return "take", take, slot_index
   end
   return nil, nil, nil

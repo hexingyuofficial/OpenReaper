@@ -341,6 +341,14 @@ local function d13_items_take_number(take, key)
   return ok and first_number(value) or 0
 end
 
+local function d13_items_values_match(actual, requested, key)
+  local tolerance = 0
+  if key == "D_VOL" or key == "D_PAN" or key == "D_STARTOFFS" or key == "F_STRETCHFADESIZE" then
+    tolerance = 0.000001
+  end
+  return math.abs((actual or 0) - (requested or 0)) <= tolerance
+end
+
 local function d13_items_channel_mode_label(value)
   local number = math.floor(tonumber(value) or 0)
   if number == 1 then
@@ -554,6 +562,15 @@ local function d13_items_set_item_value(request, key, value)
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
+  local readback = d13_items_item_number(item, key)
+  if not d13_items_values_match(readback, value, key) then
+    return d13_items_error("VERIFICATION_FAILED", "Item property readback did not match the requested value.", {
+      key = key,
+      requested = value,
+      readback = readback,
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
   return d13_items_write_summary(request, item)
 end
 
@@ -573,6 +590,15 @@ local function d13_items_set_take_value(request, key, value)
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
+  local readback = d13_items_take_number(take, key)
+  if not d13_items_values_match(readback, value, key) then
+    return d13_items_error("VERIFICATION_FAILED", "Take property readback did not match the requested value.", {
+      key = key,
+      requested = value,
+      readback = readback,
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
   return d13_items_write_summary(request, item)
 end
 

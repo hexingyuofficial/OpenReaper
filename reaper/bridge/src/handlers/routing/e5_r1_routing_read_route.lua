@@ -152,12 +152,6 @@ local function e5_routing_fx_from_ref(fx_ref)
     return nil, nil
   end
   local track_ref, slot_text = fx_ref:match("^fx:(track:[^:]+:.+):(%d+)$")
-  if not track_ref then
-    slot_text = fx_ref:match("^fx:track:(%d+)$")
-    if slot_text then
-      track_ref = "track:index:0"
-    end
-  end
   if not track_ref or not slot_text then
     return nil, nil
   end

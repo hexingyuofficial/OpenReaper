@@ -21,6 +21,7 @@ import {
 const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
+const HANDLER_SOURCE = readFileSync(new URL("../../reaper/bridge/src/handlers/fx/e2_fx_l1_read_route.lua", import.meta.url), "utf8");
 const E2_FX_L1_FLAG = "--fx-read";
 const E2_FX_L1_OPT_IN_ENV = "OPENREAPER_E2_FX_L1_READ_LIVE_SMOKE";
 const E2_FX_TRACK_REF_ENV = "OPENREAPER_E2_FX_TRACK_REF";
@@ -146,7 +147,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
       [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "1",
       [E2_FX_TRACK_REF_ENV]: "track:guid:{E2-FX-L1-TRACK}",
       [E2_FX_TAKE_REF_ENV]: "take:guid:{E2-FX-L1-TAKE}",
-      [E2_FX_REF_ENV]: "fx:track:0",
+      [E2_FX_REF_ENV]: "fx:track:guid:{E2-FX-L1-TRACK}:0",
       [E2_FX_PARAM_INDEX_ENV]: "0",
     });
 
@@ -176,9 +177,9 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     }
     assert.equal(requests[0].refs.find((ref) => ref.kind === "track").ref, "track:guid:{E2-FX-L1-TRACK}");
     assert.equal(requests[2].refs.find((ref) => ref.kind === "take").ref, "take:guid:{E2-FX-L1-TAKE}");
-    assert.equal(requests[5].refs.find((ref) => ref.kind === "fx").ref, "fx:track:0");
+    assert.equal(requests[5].refs.find((ref) => ref.kind === "fx").ref, "fx:track:guid:{E2-FX-L1-TRACK}:0");
     assert.equal(requests[5].params.param_index, 0);
-    assert.equal(requests[6].refs.find((ref) => ref.kind === "fx").ref, "fx:track:0");
+    assert.equal(requests[6].refs.find((ref) => ref.kind === "fx").ref, "fx:track:guid:{E2-FX-L1-TRACK}:0");
     assert.equal(requests[6].params.param_index, 0);
   });
 
@@ -211,6 +212,11 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /TakeFX_SetParamNormalized/);
     assert.match(BRIDGE_SOURCE, /TrackFX_CopyToTrack/);
     assert.match(BRIDGE_SOURCE, /TakeFX_CopyToTake/);
+    assert.match(HANDLER_SOURCE, /fx:" \.\. tostring\(owner_ref\) \.\. ":" \.\. tostring\(slot_index\)/);
+    assert.match(HANDLER_SOURCE, /scheme == "track_fx"/);
+    assert.match(HANDLER_SOURCE, /scheme == "take_fx"/);
+    assert.doesNotMatch(HANDLER_SOURCE, /GetTrack", 0, 0/);
+    assert.doesNotMatch(HANDLER_SOURCE, /GetSelectedMediaItem", 0, 0/);
     assert.deepEqual(
       [...new Set([...BRIDGE_SOURCE.matchAll(/\["query_state:(fx\.[^"]+)"\]\s*=/g)].map((match) => match[1]))],
       [
@@ -261,8 +267,8 @@ function e2FxL1Refs(id) {
   const takeRef = createObjectRef("take", { scheme: "guid", value: "{E2-FX-L1-TAKE}" }, {
     ref: "take:guid:{E2-FX-L1-TAKE}",
   });
-  const fxRef = createObjectRef("fx", { scheme: "track", value: "0" }, {
-    ref: "fx:track:0",
+  const fxRef = createObjectRef("fx", { scheme: "track_fx", value: "track:guid:{E2-FX-L1-TRACK}:0" }, {
+    ref: "fx:track:guid:{E2-FX-L1-TRACK}:0",
   });
   if (id === "template.fx.resolve_fx_ref" || id === "template.fx.list_track_fx_chain") {
     return { track_ref: trackRef };

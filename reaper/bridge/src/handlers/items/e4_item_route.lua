@@ -157,6 +157,22 @@ local function e4_item_ref_string(item)
   return "item:unknown"
 end
 
+local function e4_item_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  return nil
+end
+
+local function e4_item_take_ref_string(take)
+  local guid = e4_item_take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  return "take:index:0"
+end
+
 local function e4_item_find_item_by_guid(guid)
   local ok_count, count = call_reaper("CountMediaItems", 0)
   local total = ok_count and first_number(count) or 0
@@ -299,6 +315,11 @@ local function e4_item_clone_active_take_footprint(source_item, target_item)
   if ok_preserve then
     call_reaper("SetMediaItemTakeInfo_Value", target_take, "B_PPITCH", first_number(preserve) or 0)
   end
+  call_reaper("SetActiveTake", target_take)
+  local active_take = e4_item_take(target_item)
+  if not active_take then
+    return nil, e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track created an item without an active take.", {}, false)
+  end
   return target_take
 end
 
@@ -319,7 +340,7 @@ local function copy_item_to_track(request)
   local length = math.max(0, e4_item_number(source_item, "D_LENGTH"))
   call_reaper("SetMediaItemInfo_Value", new_item, "D_POSITION", position)
   call_reaper("SetMediaItemInfo_Value", new_item, "D_LENGTH", length)
-  local _, failure = e4_item_clone_active_take_footprint(source_item, new_item)
+  local target_take, failure = e4_item_clone_active_take_footprint(source_item, new_item)
   if failure then
     call_reaper("DeleteTrackMediaItem", target_track, new_item)
     return nil, failure
@@ -331,6 +352,8 @@ local function copy_item_to_track(request)
     new_item_ref = new_ref.ref,
     source_item_ref = source_ref.ref,
     target_track_ref = e4_item_track_ref_string(target_track),
+    active_take_ref = target_take and e4_item_take_ref_string(target_take) or JSON_NULL,
+    active_take_available = target_take ~= nil,
     position_seconds = position,
     copy_depth = "active_take_footprint",
     source_item = e4_item_summary_for_item(source_item),
@@ -396,10 +419,18 @@ local function set_take_playrate(request)
   call_reaper("SetMediaItemTakeInfo_Value", take, "D_PLAYRATE", playrate)
   call_reaper("SetMediaItemTakeInfo_Value", take, "B_PPITCH", request.params.preserve_pitch == true and 1 or 0)
   call_reaper("UpdateItemInProject", item)
+  local readback_playrate = e4_item_finite_number(select(2, call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")), 1)
+  if math.abs(readback_playrate - playrate) > 0.000001 then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 set_take_playrate readback did not match the requested playrate.", {
+      requested_playrate = playrate,
+      readback_playrate = readback_playrate,
+    }, false)
+  end
   local item_ref = e4_item_object_ref(item)
   return e4_item_summary(request, {
     item_ref = item_ref.ref,
-    playrate = playrate,
+    playrate = readback_playrate,
+    requested_playrate = playrate,
     preserve_pitch = request.params.preserve_pitch == true,
     item = e4_item_summary_for_item(item),
   }), nil, nil, nil, e4_item_refs(item_ref)
