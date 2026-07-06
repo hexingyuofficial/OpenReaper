@@ -39,6 +39,8 @@ const WAVE1A_OPERATION_NAMES = Object.freeze([
 ]);
 
 const EXPECTED_LUA_OPERATIONS = Object.freeze([
+  "items.list_items_on_track",
+  "items.list_selected_items",
   "items.read_item_summary",
   "items.resolve_item_ref",
   "fx.list_parameters",
@@ -209,6 +211,8 @@ describe("4D.x Wave 1A read-handler expansion", () => {
       "track.resolve_ref": "resolve_track_ref",
       "items.resolve_item_ref": "resolve_item_ref",
       "items.read_item_summary": "read_item_summary",
+      "items.list_selected_items": "d13_items_list_selected_items",
+      "items.list_items_on_track": "d13_items_list_items_on_track",
     };
     for (const [operation, handler] of Object.entries(handlerMappings)) {
       assert.match(

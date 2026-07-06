@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 131,
+    "entryCount": 143,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 131,
-    "handlerModuleCount": 69,
-    "routeCount": 19,
-    "operationCount": 61
+    "extractedHandlerCount": 143,
+    "handlerModuleCount": 70,
+    "routeCount": 20,
+    "operationCount": 63
   },
   "routes": [
     {
@@ -197,6 +197,39 @@
         "template.transport.pause",
         "template.transport.stop_playback",
         "template.transport.set_punch_record_range"
+      ]
+    },
+    {
+      "route": "d13-items-core-handlers",
+      "template_count": 12,
+      "handler_module_count": 1,
+      "operation_count": 12,
+      "packs": [
+        "items"
+      ],
+      "risks": [
+        "read",
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.items.list_selected_items",
+        "template.items.list_items_on_track",
+        "template.items.set_item_volume",
+        "template.items.set_take_volume",
+        "template.items.set_take_pan",
+        "template.items.rename_take",
+        "template.items.set_loop_source",
+        "template.items.set_mute",
+        "template.items.set_lock",
+        "template.items.set_play_all_takes",
+        "template.items.set_take_start_in_source",
+        "template.items.set_channel_mode"
       ]
     },
     {

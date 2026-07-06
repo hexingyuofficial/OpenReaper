@@ -242,6 +242,21 @@ export const CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS = deepFreeze(
   "template.transport.set_punch_record_range",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
+  "template.items.list_selected_items",
+  "template.items.list_items_on_track",
+  "template.items.set_item_volume",
+  "template.items.set_take_volume",
+  "template.items.set_take_pan",
+  "template.items.rename_take",
+  "template.items.set_loop_source",
+  "template.items.set_mute",
+  "template.items.set_lock",
+  "template.items.set_play_all_takes",
+  "template.items.set_take_start_in_source",
+  "template.items.set_channel_mode",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -266,6 +281,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d10_read_overview_actions", CALL_TEMPLATE_RUNTIME_D10_READ_OVERVIEW_ACTIONS_TEMPLATE_IDS],
   ["d11_project_marker_region", CALL_TEMPLATE_RUNTIME_D11_PROJECT_MARKER_REGION_TEMPLATE_IDS],
   ["d12_transport_safe", CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS],
+  ["d13_items_core", CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1127,6 +1143,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D10_READ_OVERVIEW_ACTIONS_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D11_PROJECT_MARKER_REGION_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

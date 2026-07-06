@@ -869,6 +869,19 @@ local D12_TRANSPORT_SAFE_HANDLERS = {
   ["transport.set_punch_record_range"] = d12_transport_set_punch_record_range,
 }
 
+local D13_ITEMS_CORE_WRITE_HANDLERS = {
+  ["items.set_item_volume"] = d13_items_set_item_volume,
+  ["items.set_take_volume"] = d13_items_set_take_volume,
+  ["items.set_take_pan"] = d13_items_set_take_pan,
+  ["items.rename_take"] = d13_items_rename_take,
+  ["items.set_loop_source"] = d13_items_set_loop_source,
+  ["items.set_mute"] = d13_items_set_mute,
+  ["items.set_lock"] = d13_items_set_lock,
+  ["items.set_play_all_takes"] = d13_items_set_play_all_takes,
+  ["items.set_take_start_in_source"] = d13_items_set_take_start_in_source,
+  ["items.set_channel_mode"] = d13_items_set_channel_mode,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -907,6 +920,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D12_TRANSPORT_SAFE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D13_ITEMS_CORE_WRITE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
@@ -978,6 +995,14 @@ local ALLOWED_OPERATIONS = {
   ["query_state:items.read_item_summary"] = {
     pack = "items",
     handler = read_item_summary,
+  },
+  ["query_state:items.list_selected_items"] = {
+    pack = "items",
+    handler = d13_items_list_selected_items,
+  },
+  ["query_state:items.list_items_on_track"] = {
+    pack = "items",
+    handler = d13_items_list_items_on_track,
   },
   ["query_state:system.runtime_environment.read"] = {
     pack = "system",

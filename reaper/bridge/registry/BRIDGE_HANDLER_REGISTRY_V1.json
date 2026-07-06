@@ -617,6 +617,208 @@
       ]
     },
     {
+      "template_id": "template.items.list_selected_items",
+      "operation": {
+        "family": "query_state",
+        "name": "items.list_selected_items"
+      },
+      "pack": "items",
+      "risk": "read",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_list_selected_items",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.list_items_on_track",
+      "operation": {
+        "family": "query_state",
+        "name": "items.list_items_on_track"
+      },
+      "pack": "items",
+      "risk": "read",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_list_items_on_track",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.set_item_volume",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_item_volume",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_item_volume"
+    },
+    {
+      "template_id": "template.items.set_take_volume",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_take_volume",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_take_volume"
+    },
+    {
+      "template_id": "template.items.set_take_pan",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_take_pan",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_take_pan"
+    },
+    {
+      "template_id": "template.items.rename_take",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_rename_take",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.rename_take"
+    },
+    {
+      "template_id": "template.items.set_loop_source",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_loop_source",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_loop_source"
+    },
+    {
+      "template_id": "template.items.set_mute",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_mute",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_mute"
+    },
+    {
+      "template_id": "template.items.set_lock",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_lock",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_lock"
+    },
+    {
+      "template_id": "template.items.set_play_all_takes",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_play_all_takes",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_play_all_takes"
+    },
+    {
+      "template_id": "template.items.set_take_start_in_source",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_take_start_in_source",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_take_start_in_source"
+    },
+    {
+      "template_id": "template.items.set_channel_mode",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/d13_items_core_route.lua",
+      "handler_export": "d13_items_set_channel_mode",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_channel_mode"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",
