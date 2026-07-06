@@ -887,6 +887,12 @@ local D14_ITEMS_DELETE_HANDLERS = {
   ["items.delete_items"] = d14_items_delete_items,
 }
 
+local D15_ITEMS_SOURCE_PHASE_HANDLERS = {
+  ["items.set_no_autofades"] = d15_items_set_no_autofades,
+  ["items.set_invert_phase"] = d15_items_set_invert_phase,
+  ["items.choose_new_source_file"] = d15_items_choose_new_source_file,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -933,6 +939,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D14_ITEMS_DELETE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D15_ITEMS_SOURCE_PHASE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

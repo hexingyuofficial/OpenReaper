@@ -18,6 +18,7 @@ import {
   CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
@@ -143,6 +144,10 @@ export const registryRoutes = Object.freeze({
   "d14-items-delete-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/d14-items-delete-handler-expansion.test.mjs"]),
+  }),
+  "d15-items-source-phase-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs"]),
   }),
   "read-b": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,

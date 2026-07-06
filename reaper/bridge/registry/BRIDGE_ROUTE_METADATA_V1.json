@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 145,
+    "entryCount": 148,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 145,
-    "handlerModuleCount": 71,
-    "routeCount": 21,
+    "extractedHandlerCount": 148,
+    "handlerModuleCount": 72,
+    "routeCount": 22,
     "operationCount": 63
   },
   "routes": [
@@ -252,6 +252,29 @@
       "template_ids": [
         "template.items.delete_item",
         "template.items.delete_items"
+      ]
+    },
+    {
+      "route": "d15-items-source-phase-handlers",
+      "template_count": 3,
+      "handler_module_count": 1,
+      "operation_count": 3,
+      "packs": [
+        "items"
+      ],
+      "risks": [
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.items.set_no_autofades",
+        "template.items.set_invert_phase",
+        "template.items.choose_new_source_file"
       ]
     },
     {

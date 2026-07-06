@@ -853,6 +853,57 @@
       "capability": "items.delete_items"
     },
     {
+      "template_id": "template.items.set_no_autofades",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d15-items-source-phase-handlers",
+      "handler_file": "items/d15_items_source_phase_route.lua",
+      "handler_export": "d15_items_set_no_autofades",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_no_autofades"
+    },
+    {
+      "template_id": "template.items.set_invert_phase",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d15-items-source-phase-handlers",
+      "handler_file": "items/d15_items_source_phase_route.lua",
+      "handler_export": "d15_items_set_invert_phase",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_invert_phase"
+    },
+    {
+      "template_id": "template.items.choose_new_source_file",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d15-items-source-phase-handlers",
+      "handler_file": "items/d15_items_source_phase_route.lua",
+      "handler_export": "d15_items_choose_new_source_file",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs"
+      ],
+      "capability": "items.choose_new_source_file"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",
