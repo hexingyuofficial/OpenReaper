@@ -1,0 +1,257 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.project.map_snapshot_page",
+  "title": "Project map snapshot page",
+  "summary": "Draft read-only Alpha3 workflow that creates one artifact-backed page of a large project map.",
+  "pack": "project",
+  "lifecycle": "draft",
+  "risk": "read",
+  "entity_kind": "project_snapshot",
+  "tags": [
+    "project",
+    "snapshot",
+    "map",
+    "artifact",
+    "large_project",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Create one compact project-map page before hydrating large project details.",
+    "entry_conditions": [
+      "Run when a full overview would be too large or the project scale is unknown.",
+      "Use summary first, then payload only for targeted follow-up planning."
+    ],
+    "supported_steps": [
+      "Create one bounded project map snapshot page.",
+      "Read the artifact summary for counts, cursor, and coverage.",
+      "Read the payload only when the agent needs the page details."
+    ],
+    "candidate_steps": [
+      "Future Alpha3 passes may add changed-since and richer query recipes."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not mutate project state from this read-only workflow."
+    ],
+    "required_questions": [
+      "Ask for a target page or narrower scope if the next cursor is still too broad."
+    ],
+    "template_atoms": [
+      "template.project.create_project_map_snapshot"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "snapshot artifact summary before long payload output"
+    ],
+    "cleanup_plan": "No mutation cleanup is expected; retain the snapshot artifact for targeted follow-up.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "blocked_bridge_not_running",
+      "response_too_large_retry_with_smaller_page"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "create_project_map_snapshot",
+      "title": "Create project map snapshot",
+      "summary": "Create the first compact artifact-backed project map page.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.project.create_project_map_snapshot",
+        "input": {
+          "max_tracks": 16,
+          "max_items_per_track": 2,
+          "max_selected_items": 8,
+          "track_cursor": 0,
+          "include_selected_items": true,
+          "include_track_items": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_project_map_snapshot",
+      "evidence": "evidence_create_project_map_snapshot",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_retry_snapshot"
+    },
+    {
+      "id": "read_project_map_summary",
+      "title": "Read project map summary",
+      "summary": "Read the project map snapshot summary by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.summary",
+        "refs": [
+          "project_map_snapshot"
+        ]
+      },
+      "checkpoint": "checkpoint_read_project_map_summary",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_project_map_payload",
+      "title": "Read project map payload",
+      "summary": "Read the bounded project map snapshot payload by declared artifact label.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "artifact.payload",
+        "refs": [
+          "project_map_snapshot"
+        ]
+      },
+      "checkpoint": "checkpoint_read_project_map_payload",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_project_map_snapshot_artifact",
+      "kind": "expected_output",
+      "summary": "The workflow must retain one project map snapshot artifact ref.",
+      "required": true,
+      "evidence": [
+        "evidence_create_project_map_snapshot"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [
+          "project_map_snapshot"
+        ],
+        "jobs": [],
+        "state": [
+          "project_snapshot"
+        ]
+      }
+    },
+    {
+      "id": "assert_read_only_snapshot",
+      "kind": "checkpoint",
+      "summary": "The workflow is read-only and does not apply project edits.",
+      "required": true,
+      "evidence": [
+        "evidence_create_project_map_snapshot"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_create_project_map_snapshot",
+        "after_step": "create_project_map_snapshot",
+        "required_evidence": [
+          "evidence_create_project_map_snapshot"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Project map snapshot artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_project_map_summary",
+        "after_step": "read_project_map_summary",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Project map snapshot summary was read by label."
+      },
+      {
+        "id": "checkpoint_read_project_map_payload",
+        "after_step": "read_project_map_payload",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Project map snapshot payload was read by label."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_create_project_map_snapshot",
+        "step": "create_project_map_snapshot",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.project.create_project_map_snapshot",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_snapshot",
+        "trigger": "template_error",
+        "step": "create_project_map_snapshot",
+        "strategy": "retry_step",
+        "summary": "Retry the compact project map page with a smaller bounded page if needed."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if retained project map evidence conflicts with the current project target."
+      }
+    ],
+    "risk_gates": []
+  }
+}

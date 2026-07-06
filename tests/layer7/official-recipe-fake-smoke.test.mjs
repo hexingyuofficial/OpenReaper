@@ -36,6 +36,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.project.fast_observation_bundle",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.project.inspect_current_fixture_readiness",
+  "recipe.project.map_snapshot_page",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
@@ -66,7 +67,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the thirteen draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the fourteen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -368,6 +369,27 @@ describe("Layer 7 official draft recipe fake smoke", () => {
       ],
     );
     assert.equal(run.expected.artifacts.has("observation_bundle"), true);
+  });
+
+  it("fake-smokes the Alpha3 project map snapshot as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.project.map_snapshot_page");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      ["template.project.create_project_map_snapshot"],
+    );
+    assert.equal(run.risk_pauses.length, 0);
+    assert.equal(run.state_reads.length, 2);
+    assert.deepEqual(
+      run.state_reads.map((read) => [read.projection, read.label, read.schema]),
+      [
+        ["artifact.summary", "project_map_snapshot", "project.project_map_snapshot.v1"],
+        ["artifact.payload", "project_map_snapshot", "project.project_map_snapshot.v1"],
+      ],
+    );
+    assert.equal(run.expected.artifacts.has("project_map_snapshot"), true);
   });
 
   it("keeps the fake smoke free of live, raw execution, public last-result, and hidden recipe surfaces", () => {

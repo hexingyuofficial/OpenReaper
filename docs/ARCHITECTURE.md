@@ -167,7 +167,7 @@ Template expansion is a separate reviewed maintainer path:
 | V1 accepted runtime/recipe catalog baseline had 126 template ids; Alpha2 static catalog has 213 accepted official ids. | OpenReaper layer progress, Alpha2 closure records, and catalog checks. |
 | V1 bridge baseline had 60 registered bridge rows; current runtime registry checks report 76 registered handler rows. | Bridge handler registry/split closeout at `57540d4` and current runtime registry checks. |
 | Artifact summary/payload readback is supported. | Artifact State Store v1 and R1 evidence. |
-| V1 had six Layer 7 draft/fake-smoked recipe candidates; Alpha2 has twelve first-atoms draft recipes; Alpha3 has thirteen with the fast observation bundle card. | Official recipe checks and Alpha2/Alpha3 closure records. |
+| V1 had six Layer 7 draft/fake-smoked recipe candidates; Alpha2 has twelve first-atoms draft recipes; Alpha3 has fourteen with fast observation and project-map snapshot cards. | Official recipe checks and Alpha2/Alpha3 closure records. |
 | `recipe.project.cleanup_fingerprint_report` has accepted recipe-level live and local clean-source portability evidence. | R1 evidence root `/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001`. |
 
 See [Support Matrix](SUPPORT_MATRIX.md) for support wording and unsupported

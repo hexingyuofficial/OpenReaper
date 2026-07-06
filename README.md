@@ -80,6 +80,10 @@ For a faster Alpha3 project-start read, use
 artifact summary or payload through `get_state`. This is a draft recipe card,
 not a public recipe executor.
 
+For large projects, use `recipe.project.map_snapshot_page` to create one
+artifact-backed project map page with counts, cursor, coverage, and optional
+payload hydration before asking for more detail.
+
 The product action menu is versioned by
 `alpha2.product_action_surface.v1`; see
 `docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md` for the schema, status values,

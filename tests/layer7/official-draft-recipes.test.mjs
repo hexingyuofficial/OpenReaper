@@ -38,6 +38,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.project.fast_observation_bundle",
   "recipe.project.cleanup_fingerprint_report",
   "recipe.project.inspect_current_fixture_readiness",
+  "recipe.project.map_snapshot_page",
   "recipe.render.region_delivery_report",
   "recipe.render.region_wav_render",
   "recipe.routing.send_fx_automation_setup",
@@ -56,6 +57,9 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   ]),
   "recipe.project.fast_observation_bundle": Object.freeze([
     "template.project.create_observation_bundle",
+  ]),
+  "recipe.project.map_snapshot_page": Object.freeze([
+    "template.project.create_project_map_snapshot",
   ]),
   "recipe.project.cleanup_trial_created_objects": Object.freeze([
     "template.project.read_track_item_overview",
@@ -127,7 +131,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the thirteen first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the fourteen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -155,6 +159,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "project.cleanup_trial_created_objects.recipe.json",
       "project.fast_observation_bundle.recipe.json",
       "project.inspect_current_fixture_readiness.recipe.json",
+      "project.map_snapshot_page.recipe.json",
       "render.region_delivery_report.recipe.json",
       "render.region_wav_render.recipe.json",
       "routing.send_fx_automation_setup.recipe.json",
@@ -442,6 +447,44 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
+  it("adds an Alpha3 project map snapshot workflow over the fixed snapshot atom", () => {
+    const recipe = recipesById().get("recipe.project.map_snapshot_page");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "read");
+    assert.equal(recipe.tags.includes("large_project"), true);
+    assert.deepEqual(
+      recipe.steps.map((step) => [step.id, step.uses]),
+      [
+        ["create_project_map_snapshot", "call_template"],
+        ["read_project_map_summary", "get_state"],
+        ["read_project_map_payload", "get_state"],
+      ],
+    );
+    assert.deepEqual(recipe.steps[0].call_template.input, {
+      max_tracks: 16,
+      max_items_per_track: 2,
+      max_selected_items: 8,
+      track_cursor: 0,
+      include_selected_items: true,
+      include_track_items: true,
+    });
+    assert.deepEqual(recipe.assertions[0].outputs.artifacts, ["project_map_snapshot"]);
+    assert.deepEqual(
+      recipe.steps
+        .filter((step) => step.uses === "get_state")
+        .map((step) => step.get_state.refs),
+      [["project_map_snapshot"], ["project_map_snapshot"]],
+    );
+    assert.match(recipe.workflow_card.intent, /project-map page/);
+    assert.equal(
+      recipe.workflow_card.supported_steps.some((step) => /counts, cursor, and coverage/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
   it("discovers the Alpha3 fast observation workflow through compact recipe-menu fields", () => {
     const menu = listUserRecipes({
       query: "observation",
@@ -454,6 +497,22 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.status, "candidate");
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("observation"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 project map snapshot workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "snapshot",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.project.map_snapshot_page");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "project.project_snapshot");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("snapshot"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });
