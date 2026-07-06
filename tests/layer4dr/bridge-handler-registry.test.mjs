@@ -129,6 +129,11 @@ const EXTRACTED_D9_TRACKS_MIXER_HANDLERS = Object.freeze(new Map([
   ["template.tracks.set_pan", ["tracks/d9_tracks_mixer_route.lua", "set_pan"]],
   ["template.tracks.set_width", ["tracks/d9_tracks_mixer_route.lua", "set_width"]],
 ]));
+const EXTRACTED_D10_READ_OVERVIEW_ACTIONS_HANDLERS = Object.freeze(new Map([
+  ["template.project.read_track_item_overview", ["project/read_track_item_overview.lua", "read_track_item_overview"]],
+  ["template.actions.read_custom_action_metadata", ["actions/read_action_metadata.lua", "read_custom_action_metadata"]],
+  ["template.actions.read_cycle_action_metadata", ["actions/read_action_metadata.lua", "read_cycle_action_metadata"]],
+]));
 const EXTRACTED_E2_FX_L1_READ_HANDLERS = Object.freeze(new Map([
   ["template.fx.resolve_fx_ref", ["fx/e2_fx_l1_read_route.lua", "resolve_fx_ref"]],
   ["template.fx.list_track_fx_chain", ["fx/e2_fx_l1_read_route.lua", "list_track_fx_chain"]],
@@ -184,6 +189,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_WAVE1A_HANDLERS,
   ...EXTRACTED_D6_PROJECT_TEMPO_HANDLERS,
   ...EXTRACTED_D9_TRACKS_MIXER_HANDLERS,
+  ...EXTRACTED_D10_READ_OVERVIEW_ACTIONS_HANDLERS,
   ...EXTRACTED_READ_B_HANDLERS,
   ...EXTRACTED_E3_MEDIA_HANDLERS,
   ...EXTRACTED_E4_ITEM_HANDLERS,
@@ -199,7 +205,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 118);
+    assert.equal(REGISTRY.entries.length, 121);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -231,12 +237,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 118,
+      entryCount: 121,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 118,
-      handlerModuleCount: 66,
-      routeCount: 16,
-      operationCount: 58,
+      extractedHandlerCount: 121,
+      handlerModuleCount: 67,
+      routeCount: 17,
+      operationCount: 61,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -262,7 +268,7 @@ describe("Layer 4D.R bridge handler registry", () => {
     }
   });
 
-  it("extracts exactly the Wave 0, Wave 1A, Read-B, E3 media, E4 item, E5 routing/automation, D6 project tempo, D9 tracks mixer, E2-FX read/write, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A batches into deterministic handler modules", () => {
+  it("extracts exactly the Wave 0, Wave 1A, Read-B, E3 media, E4 item, E5 routing/automation, D6 project tempo, D9 tracks mixer, D10 read overview/actions, E2-FX read/write, First-Real-Fixture-A A1/A2/A3, and Safe-Write-A batches into deterministic handler modules", () => {
     const extractedRows = REGISTRY.entries.filter((entry) => entry.handler_file !== "legacy_monolith");
     assert.deepEqual(extractedRows.map((entry) => entry.template_id), [...EXTRACTED_HANDLER_ROWS.keys()]);
     assert.deepEqual(
@@ -329,6 +335,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .filter((entry) => entry.route === "d9-tracks-mixer-handlers" && entry.handler_file !== "legacy_monolith")
         .map((entry) => entry.template_id),
       [...EXTRACTED_D9_TRACKS_MIXER_HANDLERS.keys()],
+    );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "d10-read-overview-actions-handlers" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_D10_READ_OVERVIEW_ACTIONS_HANDLERS.keys()],
     );
     assert.deepEqual(
       REGISTRY.entries
@@ -446,7 +458,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(118 registered template handler row\(s\); 0 legacy_monolith row\(s\); 118 extracted handler row\(s\); 66 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(121 registered template handler row\(s\); 0 legacy_monolith row\(s\); 121 extracted handler row\(s\); 67 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

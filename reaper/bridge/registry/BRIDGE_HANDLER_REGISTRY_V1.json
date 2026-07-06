@@ -399,6 +399,54 @@
       ]
     },
     {
+      "template_id": "template.project.read_track_item_overview",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_track_item_overview"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "d10-read-overview-actions-handlers",
+      "handler_file": "project/read_track_item_overview.lua",
+      "handler_export": "read_track_item_overview",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d10-read-overview-actions-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.read_custom_action_metadata",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.read_custom_action_metadata"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "d10-read-overview-actions-handlers",
+      "handler_file": "actions/read_action_metadata.lua",
+      "handler_export": "read_custom_action_metadata",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d10-read-overview-actions-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.actions.read_cycle_action_metadata",
+      "operation": {
+        "family": "query_state",
+        "name": "actions.read_cycle_action_metadata"
+      },
+      "pack": "actions",
+      "risk": "read",
+      "route": "d10-read-overview-actions-handlers",
+      "handler_file": "actions/read_action_metadata.lua",
+      "handler_export": "read_cycle_action_metadata",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d10-read-overview-actions-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

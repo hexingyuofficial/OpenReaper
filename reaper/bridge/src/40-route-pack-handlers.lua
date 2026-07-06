@@ -911,6 +911,10 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = read_tempo_map,
   },
+  ["query_state:project.read_track_item_overview"] = {
+    pack = "project",
+    handler = read_track_item_overview,
+  },
   ["query_state:transport.read_state"] = {
     pack = "transport",
     handler = read_transport_state,
@@ -986,6 +990,14 @@ local ALLOWED_OPERATIONS = {
   ["query_state:actions.search_action_commands"] = {
     pack = "actions",
     handler = search_action_commands,
+  },
+  ["query_state:actions.read_custom_action_metadata"] = {
+    pack = "actions",
+    handler = read_custom_action_metadata,
+  },
+  ["query_state:actions.read_cycle_action_metadata"] = {
+    pack = "actions",
+    handler = read_cycle_action_metadata,
   },
   ["query_state:midi.resolve_midi_take_ref"] = {
     pack = "midi",

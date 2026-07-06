@@ -9,6 +9,7 @@ import {
   validateFoundationBridgeResult,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_D10_READ_OVERVIEW_ACTIONS_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
@@ -106,7 +107,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
   });
 
-  it("keeps the approved Wave 0, Wave 1A, Read-B, D9 tracks mixer, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {
+  it("keeps the approved Wave 0, Wave 1A, Read-B, D9 tracks mixer, D10 read overview/actions, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {
     const operationKeys = [...BRIDGE_SOURCE.matchAll(/\["query_state:([^"]+)"\]\s*=/g)]
       .map((match) => match[1])
       .sort();
@@ -116,6 +117,8 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "actions.read_action_metadata",
       "actions.read_action_shortcuts",
       "actions.read_action_toggle_state",
+      "actions.read_custom_action_metadata",
+      "actions.read_cycle_action_metadata",
       "actions.resolve_named_command",
       "actions.search_action_commands",
       "automation.evaluate_envelope_at_time",
@@ -149,6 +152,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "project.read_metadata",
       "project.read_summary",
       "project.read_tempo_map",
+      "project.read_track_item_overview",
       "routing.fx_pin_mapping.read",
       "routing.project_graph.read",
       "routing.send.resolve_ref",
@@ -207,6 +211,11 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "template.tracks.set_volume",
       "template.tracks.set_pan",
       "template.tracks.set_width",
+    ]);
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_D10_READ_OVERVIEW_ACTIONS_TEMPLATE_IDS, [
+      "template.project.read_track_item_overview",
+      "template.actions.read_custom_action_metadata",
+      "template.actions.read_cycle_action_metadata",
     ]);
   });
 

@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (118 registered template handler row(s); 0 legacy_monolith row(s); 118 extracted handler row(s); 66 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (121 registered template handler row(s); 0 legacy_monolith row(s); 121 extracted handler row(s); 67 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -3638,6 +3638,296 @@ return {
 }
 end)
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_track_item_overview.lua
+__openreaper_register_handler_module("project/read_track_item_overview.lua", function()
+-- Extracted D10 handler: template.project.read_track_item_overview.
+
+local function d10_overview_project_ref()
+  return {
+    kind = "project",
+    ref = "project:current",
+    identity = {
+      scheme = "current",
+      value = "current",
+    },
+  }
+end
+
+local function d10_overview_bounded_limit(request, requested, default_limit, hard_limit)
+  local budget = safe_budget(request)
+  local limit = default_limit or budget.max_items
+  if is_non_negative_integer(requested) and requested > 0 then
+    limit = requested
+  end
+  limit = math.min(limit, budget.max_items, hard_limit or budget.max_items)
+  if limit < 1 then
+    return 1
+  end
+  return limit
+end
+
+local function d10_overview_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function d10_overview_track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return 0
+end
+
+local function d10_overview_track_ref_string(track)
+  local guid = d10_overview_track_guid(track)
+  if guid then
+    return "track:guid:" .. guid
+  end
+  return "track:index:" .. tostring(d10_overview_track_index(track))
+end
+
+local function d10_overview_track_ref(track)
+  local ref = d10_overview_track_ref_string(track)
+  local guid = ref:match("^track:guid:(.+)$")
+  if guid then
+    return {
+      kind = "track",
+      ref = ref,
+      identity = {
+        scheme = "guid",
+        value = guid,
+      },
+    }
+  end
+  return {
+    kind = "track",
+    ref = ref,
+    identity = {
+      scheme = "index",
+      value = tostring(d10_overview_track_index(track)),
+    },
+  }
+end
+
+local function d10_overview_track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function d10_overview_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function d10_overview_item_index(item)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return index
+    end
+  end
+  return 0
+end
+
+local function d10_overview_item_ref_string(item)
+  local guid = d10_overview_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  return "item:index:" .. tostring(d10_overview_item_index(item))
+end
+
+local function d10_overview_item_ref(item)
+  local ref = d10_overview_item_ref_string(item)
+  local guid = ref:match("^item:guid:(.+)$")
+  if guid then
+    return {
+      kind = "item",
+      ref = ref,
+      identity = {
+        scheme = "guid",
+        value = guid,
+      },
+    }
+  end
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = "index",
+      value = tostring(d10_overview_item_index(item)),
+    },
+  }
+end
+
+local function d10_overview_item_summary(item, track)
+  return {
+    item_ref = d10_overview_item_ref_string(item),
+    track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
+    index = d10_overview_item_index(item),
+    position_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_POSITION"))) or 0,
+    length_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH"))) or 0,
+    selected = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_UISEL"))) or 0) == 1,
+  }
+end
+
+local function d10_overview_track_summary(track, max_items_per_track)
+  local ok_track_items, track_item_count = call_reaper("CountTrackMediaItems", track)
+  local item_count = ok_track_items and math.max(0, math.floor(first_number(track_item_count) or 0)) or 0
+  local items = json_array({})
+  for index = 0, math.min(item_count, max_items_per_track) - 1 do
+    local ok_item, item = call_reaper("GetTrackMediaItem", track, index)
+    if ok_item and item then
+      items[#items + 1] = d10_overview_item_summary(item, track)
+    end
+  end
+  return {
+    track_ref = d10_overview_track_ref_string(track),
+    index = d10_overview_track_index(track),
+    name = d10_overview_track_name(track),
+    item_count = item_count,
+    items = items,
+    items_truncated = item_count > #items,
+  }
+end
+
+local function read_track_item_overview(request)
+  local max_tracks = d10_overview_bounded_limit(request, request.params.max_tracks, 24, 128)
+  local max_items_per_track = d10_overview_bounded_limit(request, request.params.max_items_per_track, 8, 64)
+  local include_selected_items = request.params.include_selected_items ~= false
+  local ok_tracks, track_count = call_reaper("CountTracks", 0)
+  local ok_items, item_count = call_reaper("CountMediaItems", 0)
+  local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
+  local total_items = ok_items and math.max(0, math.floor(first_number(item_count) or 0)) or 0
+  local tracks = json_array({})
+  local selected_items = json_array({})
+  local refs = json_array({ d10_overview_project_ref() })
+
+  for index = 0, math.min(total_tracks, max_tracks) - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track then
+      tracks[#tracks + 1] = d10_overview_track_summary(track, max_items_per_track)
+      refs[#refs + 1] = d10_overview_track_ref(track)
+    end
+  end
+
+  if include_selected_items then
+    local ok_selected, selected_count = call_reaper("CountSelectedMediaItems", 0)
+    local total_selected = ok_selected and math.max(0, math.floor(first_number(selected_count) or 0)) or 0
+    local selected_limit = d10_overview_bounded_limit(request, total_selected, 16, 64)
+    for index = 0, math.min(total_selected, selected_limit) - 1 do
+      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+      if ok_item and item then
+        local ok_track, track = call_reaper("GetMediaItemTrack", item)
+        selected_items[#selected_items + 1] = d10_overview_item_summary(item, ok_track and track or nil)
+        refs[#refs + 1] = d10_overview_item_ref(item)
+      end
+    end
+  end
+
+  return {
+    project_ref = "project:current",
+    tracks = tracks,
+    selected_items = selected_items,
+    track_count = total_tracks,
+    item_count = total_items,
+    truncated = total_tracks > #tracks,
+  }, nil, json_array({}), json_array({}), refs
+end
+return {
+  exports = { read_track_item_overview = read_track_item_overview },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_metadata.lua
+__openreaper_register_handler_module("actions/read_action_metadata.lua", function()
+local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
+-- Extracted read-only handler: template.actions.read_action_metadata.
+
+local function read_action_metadata(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
+  local named_command = READ_B_ACTIONS.reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
+  local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
+  return {
+    section = section,
+    command_id = command_id,
+    named_command = named_command,
+    display_name = display_name,
+    available = command_id ~= nil and command_id > 0,
+    source = READ_B_ACTIONS.action_source(named_command, command_id),
+  }
+end
+
+local function read_custom_action_metadata(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
+  local named_command = READ_B_ACTIONS.reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
+  local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
+  local resolved = command_id ~= nil and command_id > 0
+  return {
+    section = section,
+    named_command = named_command,
+    command_id = resolved and command_id or nil,
+    display_name = display_name,
+    step_count = 0,
+    has_step_details = false,
+    steps_truncated = false,
+    resolved = resolved,
+    source = READ_B_ACTIONS.action_source(named_command, command_id),
+    metadata_scope = "bounded_metadata_only",
+  }
+end
+
+local function read_cycle_action_metadata(request)
+  local section = READ_B_ACTIONS.section_name(request.params.section)
+  local section_id = READ_B_ACTIONS.section_id(section)
+  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
+  local named_command = READ_B_ACTIONS.reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
+  local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
+  local ok_sws, sws_version = call_reaper("CF_GetSWSVersion")
+  local resolved = command_id ~= nil and command_id > 0
+  return {
+    section = section,
+    named_command = named_command,
+    command_id = resolved and command_id or nil,
+    display_name = display_name,
+    sws_available = ok_sws and type(sws_version) == "string" and sws_version ~= "",
+    step_count = 0,
+    conditional = false,
+    steps_truncated = false,
+    resolved = resolved,
+    source = READ_B_ACTIONS.action_source(named_command, command_id),
+    metadata_scope = "bounded_metadata_only",
+  }
+end
+return {
+  exports = { read_custom_action_metadata = read_custom_action_metadata, read_cycle_action_metadata = read_cycle_action_metadata, read_action_metadata = read_action_metadata },
+  shared = {  },
+}
+end)
+
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/resolve_named_command.lua
 __openreaper_register_handler_module("actions/resolve_named_command.lua", function()
 -- Extracted read-only handler: template.actions.resolve_named_command.
@@ -3737,32 +4027,6 @@ end
 return {
   exports = { resolve_named_command = resolve_named_command },
   shared = { READ_B_ACTIONS = READ_B_ACTIONS },
-}
-end)
-
--- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/read_action_metadata.lua
-__openreaper_register_handler_module("actions/read_action_metadata.lua", function()
-local READ_B_ACTIONS = OPENREAPER_HANDLER_SHARED.READ_B_ACTIONS
--- Extracted read-only handler: template.actions.read_action_metadata.
-
-local function read_action_metadata(request)
-  local section = READ_B_ACTIONS.section_name(request.params.section)
-  local section_id = READ_B_ACTIONS.section_id(section)
-  local command_id = READ_B_ACTIONS.integer_value(request.params.command_id) or READ_B_ACTIONS.lookup_named_command(request.params.named_command)
-  local named_command = READ_B_ACTIONS.reverse_named_command(command_id) or bounded_string(request.params.named_command, 160)
-  local display_name = READ_B_ACTIONS.action_display_name(section_id, command_id)
-  return {
-    section = section,
-    command_id = command_id,
-    named_command = named_command,
-    display_name = display_name,
-    available = command_id ~= nil and command_id > 0,
-    source = READ_B_ACTIONS.action_source(named_command, command_id),
-  }
-end
-return {
-  exports = { read_action_metadata = read_action_metadata },
-  shared = {  },
 }
 end)
 
@@ -14607,6 +14871,10 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = OPENREAPER_HANDLER_EXPORTS.read_tempo_map,
   },
+  ["query_state:project.read_track_item_overview"] = {
+    pack = "project",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_track_item_overview,
+  },
   ["query_state:transport.read_state"] = {
     pack = "transport",
     handler = OPENREAPER_HANDLER_EXPORTS.read_transport_state,
@@ -14682,6 +14950,14 @@ local ALLOWED_OPERATIONS = {
   ["query_state:actions.search_action_commands"] = {
     pack = "actions",
     handler = OPENREAPER_HANDLER_EXPORTS.search_action_commands,
+  },
+  ["query_state:actions.read_custom_action_metadata"] = {
+    pack = "actions",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_custom_action_metadata,
+  },
+  ["query_state:actions.read_cycle_action_metadata"] = {
+    pack = "actions",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_cycle_action_metadata,
   },
   ["query_state:midi.resolve_midi_take_ref"] = {
     pack = "midi",
