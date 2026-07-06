@@ -257,6 +257,11 @@ export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
   "template.items.set_channel_mode",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS = deepFreeze([
+  "template.items.delete_item",
+  "template.items.delete_items",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -282,6 +287,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d11_project_marker_region", CALL_TEMPLATE_RUNTIME_D11_PROJECT_MARKER_REGION_TEMPLATE_IDS],
   ["d12_transport_safe", CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS],
   ["d13_items_core", CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS],
+  ["d14_items_delete", CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS],
 ]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -1144,6 +1150,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D11_PROJECT_MARKER_REGION_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D12_TRANSPORT_SAFE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D14_ITEMS_DELETE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

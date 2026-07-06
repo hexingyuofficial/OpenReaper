@@ -819,6 +819,40 @@
       "capability": "items.set_channel_mode"
     },
     {
+      "template_id": "template.items.delete_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "destructive",
+      "route": "d14-items-delete-handlers",
+      "handler_file": "items/d14_items_delete_route.lua",
+      "handler_export": "d14_items_delete_item",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d14-items-delete-handler-expansion.test.mjs"
+      ],
+      "capability": "items.delete_item"
+    },
+    {
+      "template_id": "template.items.delete_items",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "destructive",
+      "route": "d14-items-delete-handlers",
+      "handler_file": "items/d14_items_delete_route.lua",
+      "handler_export": "d14_items_delete_items",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d14-items-delete-handler-expansion.test.mjs"
+      ],
+      "capability": "items.delete_items"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

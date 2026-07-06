@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 143,
+    "entryCount": 145,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 143,
-    "handlerModuleCount": 70,
-    "routeCount": 20,
+    "extractedHandlerCount": 145,
+    "handlerModuleCount": 71,
+    "routeCount": 21,
     "operationCount": 63
   },
   "routes": [
@@ -230,6 +230,28 @@
         "template.items.set_play_all_takes",
         "template.items.set_take_start_in_source",
         "template.items.set_channel_mode"
+      ]
+    },
+    {
+      "route": "d14-items-delete-handlers",
+      "template_count": 2,
+      "handler_module_count": 1,
+      "operation_count": 2,
+      "packs": [
+        "items"
+      ],
+      "risks": [
+        "destructive"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/d14-items-delete-handler-expansion.test.mjs"
+      ],
+      "template_ids": [
+        "template.items.delete_item",
+        "template.items.delete_items"
       ]
     },
     {

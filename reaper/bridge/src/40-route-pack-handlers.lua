@@ -882,6 +882,11 @@ local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_channel_mode"] = d13_items_set_channel_mode,
 }
 
+local D14_ITEMS_DELETE_HANDLERS = {
+  ["items.delete_item"] = d14_items_delete_item,
+  ["items.delete_items"] = d14_items_delete_items,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -924,6 +929,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D13_ITEMS_CORE_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D14_ITEMS_DELETE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

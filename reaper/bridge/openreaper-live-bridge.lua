@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (143 registered template handler row(s); 0 legacy_monolith row(s); 143 extracted handler row(s); 70 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (145 registered template handler row(s); 0 legacy_monolith row(s); 145 extracted handler row(s); 71 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1417,6 +1417,11 @@ local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_channel_mode"] = { pack = "items", risk = "write" },
 }
 
+local D14_ITEMS_DELETE_CAPABILITIES = {
+  ["items.delete_item"] = { pack = "items", risk = "destructive" },
+  ["items.delete_items"] = { pack = "items", risk = "destructive" },
+}
+
 local E2_FX_B1_WRITE_CAPABILITIES = {
   ["fx.add_track"] = { pack = "fx", risk = "write" },
   ["fx.add_take"] = { pack = "fx", risk = "write" },
@@ -1525,6 +1530,16 @@ local function d13_items_core_write_capability(request, operation_key)
   return D13_ITEMS_CORE_WRITE_CAPABILITIES[request.pack.capability]
 end
 
+local function d14_items_delete_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D14_ITEMS_DELETE_CAPABILITIES[request.pack.capability]
+end
+
 local function e2_fx_b1_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1547,6 +1562,7 @@ local function template_execute_write_capability(request, operation_key)
     or d11_project_marker_region_capability(request, operation_key)
     or d12_transport_safe_capability(request, operation_key)
     or d13_items_core_write_capability(request, operation_key)
+    or d14_items_delete_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1624,6 +1640,7 @@ local function validate_request(request)
   local d11_project_marker_region_operation = d11_project_marker_region_capability(request, operation_key)
   local d12_transport_safe_operation = d12_transport_safe_capability(request, operation_key)
   local d13_items_core_write_operation = d13_items_core_write_capability(request, operation_key)
+  local d14_items_delete_operation = d14_items_delete_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1674,6 +1691,10 @@ local function validate_request(request)
   elseif d13_items_core_write_operation then
     if request.pack.id ~= d13_items_core_write_operation.pack or request.pack.risk ~= d13_items_core_write_operation.risk then
       return false, "D13 items core request pack/capability/risk mismatch."
+    end
+  elseif d14_items_delete_operation then
+    if request.pack.id ~= d14_items_delete_operation.pack or request.pack.risk ~= d14_items_delete_operation.risk then
+      return false, "D14 items delete request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -1735,6 +1756,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D13 items core write requests must use undo.mode required."
     end
+  elseif d14_items_delete_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D14 items delete requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -1794,6 +1819,10 @@ local function validate_request(request)
   elseif d13_items_core_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D13 items core write requests must use artifacts.allow false."
+    end
+  elseif d14_items_delete_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D14 items delete requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -1855,6 +1884,10 @@ local function validate_request(request)
   elseif d13_items_core_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D13 items core idempotency_key must be a string when present."
+    end
+  elseif d14_items_delete_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D14 items delete idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -5064,6 +5097,291 @@ local function d13_items_set_channel_mode(request)
 end
 return {
   exports = { d13_items_list_selected_items = d13_items_list_selected_items, d13_items_list_items_on_track = d13_items_list_items_on_track, d13_items_set_item_volume = d13_items_set_item_volume, d13_items_set_take_volume = d13_items_set_take_volume, d13_items_set_take_pan = d13_items_set_take_pan, d13_items_rename_take = d13_items_rename_take, d13_items_set_loop_source = d13_items_set_loop_source, d13_items_set_mute = d13_items_set_mute, d13_items_set_lock = d13_items_set_lock, d13_items_set_play_all_takes = d13_items_set_play_all_takes, d13_items_set_take_start_in_source = d13_items_set_take_start_in_source, d13_items_set_channel_mode = d13_items_set_channel_mode },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/d14_items_delete_route.lua
+__openreaper_register_handler_module("items/d14_items_delete_route.lua", function()
+-- Extracted D14 handler: destructive item deletion by canonical item refs.
+
+local function d14_items_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function d14_items_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function d14_items_item_ref_string(item)
+  local guid = d14_items_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
+    if ok_item and candidate == item then
+      return "item:index:" .. tostring(index)
+    end
+  end
+  return "item:unknown"
+end
+
+local function d14_items_find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and d14_items_item_guid(item) == guid then
+      return item
+    end
+  end
+  return nil
+end
+
+local function d14_items_resolve_item_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^item:selected:(%d+)$")
+  if selected_index then
+    local ok, item = call_reaper("GetSelectedMediaItem", 0, tonumber(selected_index))
+    return ok and item or nil
+  end
+  local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
+  if index then
+    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
+    return ok and item or nil
+  end
+  local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
+  if guid then
+    return d14_items_find_item_by_guid(guid)
+  end
+  return nil
+end
+
+local function d14_items_resolve_item_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "item" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return d14_items_resolve_item_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return d14_items_resolve_item_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return d14_items_resolve_item_token("guid:" .. tostring(identity.value))
+  end
+  return d14_items_resolve_item_token(ref.ref)
+end
+
+local function d14_items_item_object_ref_from_string(ref)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = scheme or "index",
+      value = tostring(value or "0"),
+    },
+  }
+end
+
+local function d14_items_item_track(item)
+  local ok_track, track = call_reaper("GetMediaItemTrack", item)
+  if ok_track and track then
+    return track
+  end
+  ok_track, track = call_reaper("GetMediaItem_Track", item)
+  return ok_track and track or nil
+end
+
+local function d14_items_item_selected(item)
+  local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", item, "B_UISEL")
+  return ok_selected and first_number(selected) == 1
+end
+
+local function d14_items_collect_entries(request)
+  if not is_json_array(request.refs) then
+    return nil, {
+      code = "REF_INVALID",
+      message = "D14 items delete request requires item refs.",
+      details = {},
+    }
+  end
+  local entries = {}
+  local seen = {}
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "item" then
+      local item = d14_items_resolve_item_from_ref_object(ref)
+      if not item then
+        return nil, {
+          code = "ITEM_NOT_FOUND",
+          message = "Item ref could not be resolved for deletion.",
+          details = {
+            item_ref = bounded_string(ref.ref, 160),
+          },
+        }
+      end
+      local item_ref = d14_items_item_ref_string(item)
+      if not seen[item_ref] then
+        seen[item_ref] = true
+        entries[#entries + 1] = {
+          item = item,
+          item_ref = item_ref,
+          object_ref = d14_items_item_object_ref_from_string(item_ref),
+          track = d14_items_item_track(item),
+          selected = d14_items_item_selected(item),
+        }
+      end
+    end
+  end
+  if #entries == 0 then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "D14 items delete request requires at least one resolvable item ref.",
+      details = {},
+    }
+  end
+  local budget = safe_budget(request)
+  if #entries > budget.max_items then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "D14 items delete request exceeds the request item budget.",
+      details = {
+        requested = #entries,
+        max_items = budget.max_items,
+      },
+    }
+  end
+  return entries
+end
+
+local function d14_items_delete_entries(request, entries)
+  if request.params.require_selected == true then
+    for index = 1, #entries do
+      if not entries[index].selected then
+        return nil, {
+          code = "ITEM_NOT_SELECTED",
+          message = "D14 items delete request required selected items.",
+          details = {
+            item_ref = entries[index].item_ref,
+          },
+        }
+      end
+    end
+  end
+  for index = 1, #entries do
+    if not entries[index].track then
+      return nil, {
+        code = "TRACK_NOT_FOUND",
+        message = "Parent track could not be resolved for item deletion.",
+        details = {
+          item_ref = entries[index].item_ref,
+        },
+      }
+    end
+  end
+  for index = 1, #entries do
+    local ok, deleted = call_reaper("DeleteTrackMediaItem", entries[index].track, entries[index].item)
+    if not ok or deleted == false then
+      return nil, {
+        code = "COMMAND_FAILED",
+        message = "REAPER rejected item deletion.",
+        recoverable = false,
+        details = {
+          item_ref = entries[index].item_ref,
+        },
+      }
+    end
+  end
+  call_reaper("UpdateArrange")
+  for index = 1, #entries do
+    if d14_items_resolve_item_token(entries[index].item_ref) then
+      return nil, {
+        code = "VERIFICATION_FAILED",
+        message = "Deleted item still resolved after deletion.",
+        recoverable = false,
+        details = {
+          item_ref = entries[index].item_ref,
+        },
+      }
+    end
+  end
+  return true
+end
+
+local function d14_items_delete_summary(request, entries, singular)
+  local deleted_item_refs = json_array({})
+  local refs = json_array({})
+  for index = 1, #entries do
+    deleted_item_refs[#deleted_item_refs + 1] = entries[index].item_ref
+    refs[#refs + 1] = entries[index].object_ref
+  end
+  local summary = {
+    kind = singular and "item_deleted" or "items_deleted",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    deleted_count = #entries,
+    deleted_item_refs = deleted_item_refs,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }
+  if singular then
+    summary.deleted_item_ref = entries[1].item_ref
+  end
+  return summary, nil, json_array({}), json_array({}), refs
+end
+
+local function d14_items_delete_item(request)
+  local entries, failure = d14_items_collect_entries(request)
+  if not entries then
+    return d14_items_error(failure.code, failure.message, failure.details, failure.recoverable)
+  end
+  if #entries ~= 1 then
+    return d14_items_error("REF_INVALID", "delete_item requires exactly one item ref.", {
+      item_ref_count = #entries,
+    })
+  end
+  local ok, delete_failure = d14_items_delete_entries(request, entries)
+  if not ok then
+    return d14_items_error(delete_failure.code, delete_failure.message, delete_failure.details, delete_failure.recoverable)
+  end
+  return d14_items_delete_summary(request, entries, true)
+end
+
+local function d14_items_delete_items(request)
+  local entries, failure = d14_items_collect_entries(request)
+  if not entries then
+    return d14_items_error(failure.code, failure.message, failure.details, failure.recoverable)
+  end
+  local ok, delete_failure = d14_items_delete_entries(request, entries)
+  if not ok then
+    return d14_items_error(delete_failure.code, delete_failure.message, delete_failure.details, delete_failure.recoverable)
+  end
+  return d14_items_delete_summary(request, entries, false)
+end
+return {
+  exports = { d14_items_delete_item = d14_items_delete_item, d14_items_delete_items = d14_items_delete_items },
   shared = {  },
 }
 end)
@@ -15982,6 +16300,11 @@ local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_channel_mode"] = OPENREAPER_HANDLER_EXPORTS.d13_items_set_channel_mode,
 }
 
+local D14_ITEMS_DELETE_HANDLERS = {
+  ["items.delete_item"] = OPENREAPER_HANDLER_EXPORTS.d14_items_delete_item,
+  ["items.delete_items"] = OPENREAPER_HANDLER_EXPORTS.d14_items_delete_items,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -16024,6 +16347,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D13_ITEMS_CORE_WRITE_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = D14_ITEMS_DELETE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end
