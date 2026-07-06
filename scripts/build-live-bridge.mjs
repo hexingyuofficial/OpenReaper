@@ -21,6 +21,7 @@ import {
   CALL_TEMPLATE_RUNTIME_D15_ITEMS_SOURCE_PHASE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D16_TRACKS_ORG_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E2_FX_L1_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_E3_MEDIA_ROUTE_TEMPLATE_IDS,
@@ -126,6 +127,10 @@ export const registryRoutes = Object.freeze({
   "d6-project-tempo-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/d6-project-tempo-handler-expansion.test.mjs"]),
+  }),
+  "d21-render-read-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_D21_RENDER_READ_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dr/bridge-handler-registry.test.mjs"]),
   }),
   "d9-tracks-mixer-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D9_TRACKS_MIXER_TEMPLATE_IDS,

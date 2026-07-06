@@ -1209,6 +1209,22 @@ local ALLOWED_OPERATIONS = {
     pack = "fx",
     handler = parameter_to_envelope_mapping,
   },
+  ["query_state:render.settings.read"] = {
+    pack = "render",
+    handler = read_render_settings,
+  },
+  ["query_state:render.bounds.resolve"] = {
+    pack = "render",
+    handler = resolve_render_bounds,
+  },
+  ["query_state:render.targets.preview"] = {
+    pack = "render",
+    handler = preview_render_targets,
+  },
+  ["query_state:render.region_matrix.read"] = {
+    pack = "render",
+    handler = read_region_render_matrix,
+  },
   ["run_job:analysis.detect_loop_candidates"] = {
     pack = "analysis",
     handler = detect_loop_candidates,

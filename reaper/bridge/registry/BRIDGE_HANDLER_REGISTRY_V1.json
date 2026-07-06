@@ -300,6 +300,70 @@
       ]
     },
     {
+      "template_id": "template.render.read_settings",
+      "operation": {
+        "family": "query_state",
+        "name": "render.settings.read"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d21-render-read-handlers",
+      "handler_file": "render/d21_render_read_route.lua",
+      "handler_export": "read_render_settings",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.resolve_bounds",
+      "operation": {
+        "family": "query_state",
+        "name": "render.bounds.resolve"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d21-render-read-handlers",
+      "handler_file": "render/d21_render_read_route.lua",
+      "handler_export": "resolve_render_bounds",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.preview_targets",
+      "operation": {
+        "family": "query_state",
+        "name": "render.targets.preview"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d21-render-read-handlers",
+      "handler_file": "render/d21_render_read_route.lua",
+      "handler_export": "preview_render_targets",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.render.read_region_matrix",
+      "operation": {
+        "family": "query_state",
+        "name": "render.region_matrix.read"
+      },
+      "pack": "render",
+      "risk": "read",
+      "route": "d21-render-read-handlers",
+      "handler_file": "render/d21_render_read_route.lua",
+      "handler_export": "read_region_render_matrix",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.tracks.list_tracks",
       "operation": {
         "family": "query_state",
