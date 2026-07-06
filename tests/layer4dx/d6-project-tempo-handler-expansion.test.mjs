@@ -40,6 +40,7 @@ describe("D6 project tempo/grid live handler expansion", () => {
     }
 
     assert.match(HANDLER_SOURCE, /SetCurrentBPM/);
+    assert.match(HANDLER_SOURCE, /AddTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /SetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /GetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /Master_GetTempo|TimeMap_GetTimeSigAtTime/);

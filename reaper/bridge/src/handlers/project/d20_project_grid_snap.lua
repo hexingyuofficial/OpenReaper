@@ -69,7 +69,7 @@ local function d20_project_grid_division(value)
 end
 
 local function d20_project_grid_read(project)
-  local ok, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
+  local ok, retval, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
   if ok and type(division) == "number" then
     return {
       division = division,

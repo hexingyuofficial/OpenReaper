@@ -3726,23 +3726,38 @@ local function d6_tempo_set_marker(request)
   end
   local numerator = d6_tempo_time_sig_num(request.params.time_signature_numerator)
   local denominator = d6_tempo_time_sig_denom(request.params.time_signature_denominator)
+  local linear_tempo = request.params.linear_tempo == true
   local marker_index = d6_tempo_marker_index_at(project, position_seconds)
-  local ok = call_reaper(
-    "SetTempoTimeSigMarker",
-    project,
-    marker_index,
-    position_seconds,
-    -1,
-    -1,
-    bpm,
-    numerator,
-    denominator,
-    request.params.linear_tempo == true
-  )
-  if not ok then
-    return d6_tempo_error("COMMAND_FAILED", "REAPER rejected SetTempoTimeSigMarker.", {
+  local ok, retval
+  if marker_index < 0 then
+    ok, retval = call_reaper(
+      "AddTempoTimeSigMarker",
+      project,
+      position_seconds,
+      bpm,
+      numerator,
+      denominator,
+      linear_tempo
+    )
+  else
+    ok, retval = call_reaper(
+      "SetTempoTimeSigMarker",
+      project,
+      marker_index,
+      position_seconds,
+      -1,
+      -1,
+      bpm,
+      numerator,
+      denominator,
+      linear_tempo
+    )
+  end
+  if not ok or retval == false then
+    return d6_tempo_error("COMMAND_FAILED", "REAPER rejected tempo marker update.", {
       position_seconds = position_seconds,
       bpm = bpm,
+      marker_index = marker_index,
     }, false)
   end
   call_reaper("UpdateTimeline")
@@ -3859,7 +3874,7 @@ local function d20_project_grid_division(value)
 end
 
 local function d20_project_grid_read(project)
-  local ok, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
+  local ok, retval, division, swingmode, swingamt = call_reaper("GetSetProjectGrid", project, false, 0, 0, 0)
   if ok and type(division) == "number" then
     return {
       division = division,
