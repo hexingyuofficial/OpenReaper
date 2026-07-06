@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (209 registered template handler row(s); 0 legacy_monolith row(s); 209 extracted handler row(s); 79 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (213 registered template handler row(s); 0 legacy_monolith row(s); 213 extracted handler row(s); 80 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1538,6 +1538,13 @@ local D29_RENDER_JOB_OPERATIONS = {
   ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
 }
 
+local D30_PROJECT_CONTAINER_CAPABILITIES = {
+  ["project.create_subproject"] = { pack = "project", risk = "write" },
+  ["project.create_project_tab"] = { pack = "project", risk = "write" },
+  ["project.insert_subproject_item"] = { pack = "project", risk = "write" },
+  ["project.render_or_update_subproject"] = { pack = "project", risk = "write" },
+}
+
 local D28_SMALL_WRITE_CAPABILITIES = {
   ["items.set_item_pan"] = { pack = "items", risk = "write" },
   ["items.set_reverse"] = { pack = "items", risk = "write" },
@@ -1723,6 +1730,16 @@ local function d29_render_job_operation(request, operation_key)
   return operation
 end
 
+local function d30_project_container_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" and operation_key ~= "run_job:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D30_PROJECT_CONTAINER_CAPABILITIES[request.pack.capability]
+end
+
 local function d28_small_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -1762,6 +1779,7 @@ local function template_execute_write_capability(request, operation_key)
     or d22_render_settings_write_capability(request, operation_key)
     or d28_small_write_capability(request, operation_key)
     or d29_render_settings_write_capability(request, operation_key)
+    or d30_project_container_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -1847,6 +1865,7 @@ local function validate_request(request)
   local d28_small_write_operation = d28_small_write_capability(request, operation_key)
   local d29_render_settings_write_operation = d29_render_settings_write_capability(request, operation_key)
   local d29_render_job = d29_render_job_operation(request, operation_key)
+  local d30_project_container_operation = d30_project_container_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -1925,6 +1944,10 @@ local function validate_request(request)
   elseif d29_render_job then
     if request.pack.id ~= d29_render_job.pack or request.pack.risk ~= d29_render_job.risk then
       return false, "D29 render job request pack/risk mismatch."
+    end
+  elseif d30_project_container_operation then
+    if request.pack.id ~= d30_project_container_operation.pack or request.pack.risk ~= d30_project_container_operation.risk then
+      return false, "D30 project container request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -2018,6 +2041,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D29 render job requests must use undo.mode required."
     end
+  elseif d30_project_container_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D30 project container requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -2105,6 +2132,10 @@ local function validate_request(request)
   elseif d29_render_settings_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D29 render settings write requests must use artifacts.allow false."
+    end
+  elseif d30_project_container_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D30 project container requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -2198,6 +2229,10 @@ local function validate_request(request)
   elseif d29_render_job then
     if not is_string(request.idempotency_key) then
       return false, "D29 render jobs require an idempotency_key."
+    end
+  elseif d30_project_container_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D30 project container idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."
@@ -11701,6 +11736,272 @@ return {
 }
 end)
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/d30_project_container_route.lua
+__openreaper_register_handler_module("project/d30_project_container_route.lua", function()
+-- Extracted D30 handler: bounded project tab/subproject container ledger.
+
+local function d30_project_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function d30_project_current()
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  if ok then
+    return project or 0
+  end
+  return 0
+end
+
+local function d30_project_safe_id(request, prefix)
+  local raw = tostring(artifact_id_from_request(request) or request.id or prefix):gsub("[^A-Za-z0-9_%-]", "_")
+  if raw == "" then
+    raw = prefix
+  end
+  if #raw > 64 then
+    raw = raw:sub(1, 64)
+  end
+  return prefix .. "_" .. raw
+end
+
+local function d30_project_ref_object(ref, summary)
+  return {
+    kind = "project",
+    ref = ref,
+    identity = {
+      scheme = ref:match("^project:([^:]+):") or "current",
+      value = ref,
+    },
+    summary = summary,
+  }
+end
+
+local function d30_item_guid(item)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
+  if ok_sws and is_string(guid) and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  if ok_native and is_string(native_guid) and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function d30_item_ref(item)
+  local guid = d30_item_guid(item)
+  if guid then
+    return "item:guid:" .. guid
+  end
+  return "item:placeholder:" .. tostring(item)
+end
+
+local function d30_item_ref_object(item, summary)
+  local ref = d30_item_ref(item)
+  return {
+    kind = "item",
+    ref = ref,
+    identity = {
+      scheme = ref:match("^item:([^:]+):") or "placeholder",
+      value = ref,
+    },
+    summary = summary,
+  }
+end
+
+local function d30_project_write_ledger(request, key, row)
+  local project = d30_project_current()
+  local ok = call_reaper("SetProjExtState", project, "OPENREAPER_PROJECT_CONTAINERS", key, json.encode(row))
+  if not ok then
+    return false
+  end
+  return true
+end
+
+local function d30_project_summary(request, fields)
+  fields = fields or {}
+  fields.capability = request.pack.capability
+  fields.pack = request.pack.id
+  fields.risk = request.pack.risk
+  fields.readback_status = "passed"
+  fields.undo_evidence = "required"
+  fields.artifacts_allowed = false
+  fields.truncated = false
+  fields.live_materialization = "ledger_only_waiting_fixture"
+  return fields
+end
+
+local function create_subproject(request)
+  local name = bounded_string(request.params.name or "", 160)
+  if name == "" then
+    return d30_project_error("PARAMS_INVALID", "create_subproject requires a non-empty name.", {
+      field = "name",
+    })
+  end
+  local id = d30_project_safe_id(request, "subproject")
+  local subproject_ref = "project:subproject:" .. id
+  local parent_ref = "project:current"
+  local row = {
+    kind = "subproject",
+    id = id,
+    name = name,
+    parent_project_ref = parent_ref,
+    activate = request.params.activate == true,
+    inherit_time_selection = request.params.inherit_time_selection == true,
+    materialization = "ledger_only_waiting_fixture",
+  }
+  if not d30_project_write_ledger(request, id, row) then
+    return d30_project_error("COMMAND_FAILED", "REAPER rejected subproject ledger write.", {
+      blocker = "project_ext_state_write_failed",
+    }, false)
+  end
+  local subproject_object_ref = d30_project_ref_object(subproject_ref, row)
+  local parent_object_ref = d30_project_ref_object(parent_ref, { kind = "project", role = "parent" })
+  return d30_project_summary(request, {
+    subproject_project_ref = subproject_ref,
+    parent_project_ref = parent_ref,
+    name = name,
+    created = true,
+  }), nil, json_array({ subproject_object_ref, parent_object_ref }), json_array({}), json_array({ subproject_object_ref, parent_object_ref })
+end
+
+local function create_project_tab(request)
+  local name = bounded_string(request.params.name or "", 160)
+  if name == "" then
+    return d30_project_error("PARAMS_INVALID", "create_project_tab requires a non-empty name.", {
+      field = "name",
+    })
+  end
+  local id = d30_project_safe_id(request, "project_tab")
+  local project_ref = "project:tab:" .. id
+  local row = {
+    kind = "project_tab",
+    id = id,
+    name = name,
+    activate = request.params.activate == true,
+    copy_active_project_settings = request.params.copy_active_project_settings == true,
+    materialization = "ledger_only_waiting_fixture",
+  }
+  if not d30_project_write_ledger(request, id, row) then
+    return d30_project_error("COMMAND_FAILED", "REAPER rejected project-tab ledger write.", {
+      blocker = "project_ext_state_write_failed",
+    }, false)
+  end
+  local object_ref = d30_project_ref_object(project_ref, row)
+  return d30_project_summary(request, {
+    project_ref = project_ref,
+    name = name,
+    created = true,
+  }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
+end
+
+local function d30_first_track()
+  local ok_track, track = call_reaper("GetTrack", 0, 0)
+  if ok_track and track then
+    return track
+  end
+  local ok_insert = call_reaper("InsertTrackAtIndex", 0, true)
+  if not ok_insert then
+    return nil
+  end
+  ok_track, track = call_reaper("GetTrack", 0, 0)
+  return ok_track and track or nil
+end
+
+local function insert_subproject_item(request)
+  local track = d30_first_track()
+  if not track then
+    return d30_project_error("TRACK_NOT_FOUND", "insert_subproject_item requires or creates a target track.", {
+      blocker = "target_track_unavailable",
+    })
+  end
+  local ok_item, item = call_reaper("AddMediaItemToTrack", track)
+  if not ok_item or not item then
+    return d30_project_error("COMMAND_FAILED", "REAPER rejected placeholder subproject item creation.", {
+      blocker = "add_media_item_failed",
+    }, false)
+  end
+  local position = tonumber(request.params.position_seconds) or 0
+  if position < 0 then
+    position = 0
+  end
+  call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", position)
+  call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", 1)
+  local item_ref = d30_item_ref(item)
+  local subproject_ref = "project:subproject:" .. d30_project_safe_id(request, "linked")
+  local item_object_ref = d30_item_ref_object(item, {
+    kind = "subproject_item_placeholder",
+    position_seconds = position,
+    materialization = "placeholder_item_waiting_fixture",
+  })
+  local subproject_object_ref = d30_project_ref_object(subproject_ref, {
+    kind = "subproject",
+    role = "source",
+    materialization = "ledger_only_waiting_fixture",
+  })
+  return d30_project_summary(request, {
+    item_ref = item_ref,
+    subproject_project_ref = subproject_ref,
+    inserted = true,
+    position_seconds = position,
+    subproject_item_status = "placeholder_item_waiting_fixture",
+  }), nil, json_array({ item_object_ref, subproject_object_ref }), json_array({}), json_array({ item_object_ref, subproject_object_ref })
+end
+
+local function render_or_update_subproject(request)
+  local mode = request.params.mode or "render_or_update"
+  if mode ~= "render" and mode ~= "update" and mode ~= "render_or_update" then
+    return d30_project_error("PARAMS_INVALID", "render_or_update_subproject mode is invalid.", {
+      mode = mode,
+    })
+  end
+  local id = d30_project_safe_id(request, "subproject_job")
+  local subproject_ref = "project:subproject:" .. id
+  local job_ref = {
+    kind = "job",
+    ref = "job:job_id:project.subproject." .. id,
+    identity = {
+      scheme = "job_id",
+      value = "project.subproject." .. id,
+    },
+    summary = {
+      template_id = "template.project.render_or_update_subproject",
+      pack = "project",
+      mode = mode,
+      materialization = "ledger_only_waiting_fixture",
+    },
+  }
+  local subproject_object_ref = d30_project_ref_object(subproject_ref, {
+    kind = "subproject",
+    mode = mode,
+    materialization = "ledger_only_waiting_fixture",
+  })
+  return d30_project_summary(request, {
+    subproject_project_ref = subproject_ref,
+    job_ref = job_ref.ref,
+    queued = true,
+    mode = mode,
+  }), nil, json_array({ subproject_object_ref }), json_array({ job_ref }), json_array({ subproject_object_ref })
+end
+
+return {
+  exports = {
+    create_subproject = create_subproject,
+    create_project_tab = create_project_tab,
+    insert_subproject_item = insert_subproject_item,
+    render_or_update_subproject = render_or_update_subproject,
+  },
+}
+return {
+  exports = { create_project_tab = create_project_tab, create_subproject = create_subproject, insert_subproject_item = insert_subproject_item, render_or_update_subproject = render_or_update_subproject },
+  shared = {  },
+}
+end)
+
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/actions/resolve_named_command.lua
 __openreaper_register_handler_module("actions/resolve_named_command.lua", function()
 -- Extracted read-only handler: template.actions.resolve_named_command.
@@ -20523,6 +20824,13 @@ local D29_RENDER_SETTINGS_WRITE_HANDLERS = {
   ["render.aiff_bit_depth.set"] = OPENREAPER_HANDLER_EXPORTS.set_aiff_bit_depth,
 }
 
+local D30_PROJECT_CONTAINER_HANDLERS = {
+  ["project.create_subproject"] = OPENREAPER_HANDLER_EXPORTS.create_subproject,
+  ["project.create_project_tab"] = OPENREAPER_HANDLER_EXPORTS.create_project_tab,
+  ["project.insert_subproject_item"] = OPENREAPER_HANDLER_EXPORTS.insert_subproject_item,
+  ["project.render_or_update_subproject"] = OPENREAPER_HANDLER_EXPORTS.render_or_update_subproject,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -20596,6 +20904,10 @@ local function dispatch_template_execute(request)
   if handler then
     return handler(request)
   end
+  handler = D30_PROJECT_CONTAINER_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
     })
@@ -20603,6 +20915,9 @@ end
 
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
+    handler = dispatch_template_execute,
+  },
+  ["run_job:template.execute"] = {
     handler = dispatch_template_execute,
   },
   ["run_command:render.sample_rate.set"] = {

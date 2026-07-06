@@ -943,6 +943,13 @@ local D29_RENDER_SETTINGS_WRITE_HANDLERS = {
   ["render.aiff_bit_depth.set"] = set_aiff_bit_depth,
 }
 
+local D30_PROJECT_CONTAINER_HANDLERS = {
+  ["project.create_subproject"] = create_subproject,
+  ["project.create_project_tab"] = create_project_tab,
+  ["project.insert_subproject_item"] = insert_subproject_item,
+  ["project.render_or_update_subproject"] = render_or_update_subproject,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -1016,6 +1023,10 @@ local function dispatch_template_execute(request)
   if handler then
     return handler(request)
   end
+  handler = D30_PROJECT_CONTAINER_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
   return handler_error("OPERATION_NOT_FOUND", "template.execute supports only approved live-smoke capabilities.", {
       capability = bounded_string(request.pack.capability, 120),
     })
@@ -1023,6 +1034,9 @@ end
 
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
+    handler = dispatch_template_execute,
+  },
+  ["run_job:template.execute"] = {
     handler = dispatch_template_execute,
   },
   ["run_command:render.sample_rate.set"] = {

@@ -170,6 +170,13 @@ local D29_RENDER_JOB_OPERATIONS = {
   ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
 }
 
+local D30_PROJECT_CONTAINER_CAPABILITIES = {
+  ["project.create_subproject"] = { pack = "project", risk = "write" },
+  ["project.create_project_tab"] = { pack = "project", risk = "write" },
+  ["project.insert_subproject_item"] = { pack = "project", risk = "write" },
+  ["project.render_or_update_subproject"] = { pack = "project", risk = "write" },
+}
+
 local D28_SMALL_WRITE_CAPABILITIES = {
   ["items.set_item_pan"] = { pack = "items", risk = "write" },
   ["items.set_reverse"] = { pack = "items", risk = "write" },
@@ -355,6 +362,16 @@ local function d29_render_job_operation(request, operation_key)
   return operation
 end
 
+local function d30_project_container_capability(request, operation_key)
+  if operation_key ~= "run_command:template.execute" and operation_key ~= "run_job:template.execute" then
+    return nil
+  end
+  if not is_object(request and request.pack) then
+    return nil
+  end
+  return D30_PROJECT_CONTAINER_CAPABILITIES[request.pack.capability]
+end
+
 local function d28_small_write_capability(request, operation_key)
   if operation_key ~= "run_command:template.execute" then
     return nil
@@ -394,6 +411,7 @@ local function template_execute_write_capability(request, operation_key)
     or d22_render_settings_write_capability(request, operation_key)
     or d28_small_write_capability(request, operation_key)
     or d29_render_settings_write_capability(request, operation_key)
+    or d30_project_container_capability(request, operation_key)
 end
 
 local function open_required_undo_block(request, operation_key)
@@ -479,6 +497,7 @@ local function validate_request(request)
   local d28_small_write_operation = d28_small_write_capability(request, operation_key)
   local d29_render_settings_write_operation = d29_render_settings_write_capability(request, operation_key)
   local d29_render_job = d29_render_job_operation(request, operation_key)
+  local d30_project_container_operation = d30_project_container_capability(request, operation_key)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
@@ -557,6 +576,10 @@ local function validate_request(request)
   elseif d29_render_job then
     if request.pack.id ~= d29_render_job.pack or request.pack.risk ~= d29_render_job.risk then
       return false, "D29 render job request pack/risk mismatch."
+    end
+  elseif d30_project_container_operation then
+    if request.pack.id ~= d30_project_container_operation.pack or request.pack.risk ~= d30_project_container_operation.risk then
+      return false, "D30 project container request pack/capability/risk mismatch."
     end
   elseif request.pack.risk ~= "read" then
     return false, "OpenReaper live bridge accepts read-only live-smoke requests only."
@@ -650,6 +673,10 @@ local function validate_request(request)
     if request.undo.mode ~= "required" then
       return false, "D29 render job requests must use undo.mode required."
     end
+  elseif d30_project_container_operation then
+    if request.undo.mode ~= "required" then
+      return false, "D30 project container requests must use undo.mode required."
+    end
   elseif request.undo.mode ~= "none" then
     return false, "read-only live-smoke requests must use undo.mode none."
   end
@@ -737,6 +764,10 @@ local function validate_request(request)
   elseif d29_render_settings_write_operation then
     if request.artifacts.allow ~= false then
       return false, "D29 render settings write requests must use artifacts.allow false."
+    end
+  elseif d30_project_container_operation then
+    if request.artifacts.allow ~= false then
+      return false, "D30 project container requests must use artifacts.allow false."
     end
   elseif request.artifacts.allow ~= false then
     return false, "Only scoped First-Real-Fixture-A artifact handlers may write artifacts."
@@ -830,6 +861,10 @@ local function validate_request(request)
   elseif d29_render_job then
     if not is_string(request.idempotency_key) then
       return false, "D29 render jobs require an idempotency_key."
+    end
+  elseif d30_project_container_operation then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
+      return false, "D30 project container idempotency_key must be a string when present."
     end
   elseif request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
     return false, "read-only live-smoke requests must not carry idempotency_key."

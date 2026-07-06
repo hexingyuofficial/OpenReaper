@@ -1743,6 +1743,74 @@
       ]
     },
     {
+      "template_id": "template.project.create_project_tab",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "create_project_tab",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.create_project_tab"
+    },
+    {
+      "template_id": "template.project.create_subproject",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "create_subproject",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.create_subproject"
+    },
+    {
+      "template_id": "template.project.insert_subproject_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "insert_subproject_item",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.insert_subproject_item"
+    },
+    {
+      "template_id": "template.project.render_or_update_subproject",
+      "operation": {
+        "family": "run_job",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "render_or_update_subproject",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.render_or_update_subproject"
+    },
+    {
       "template_id": "template.actions.resolve_named_command",
       "operation": {
         "family": "query_state",

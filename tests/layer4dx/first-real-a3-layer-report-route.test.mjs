@@ -49,6 +49,7 @@ const D29_RENDER_JOB_OPERATION_KEYS = Object.freeze([
   "render.selected_item",
   "render.selected_tracks",
   "render.track_item",
+  "template.execute",
 ].map((operation) => `run_job:${operation}`));
 const A3_INPUT_SCHEMA = "items.layer_evidence.v1";
 const A3_OUTPUT_SCHEMA = "items.layer_report.v1";

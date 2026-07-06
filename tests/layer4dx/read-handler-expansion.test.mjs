@@ -296,6 +296,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         "render.selected_item",
         "render.selected_tracks",
         "render.track_item",
+        "template.execute",
       ].sort(),
     );
     assert.doesNotMatch(
