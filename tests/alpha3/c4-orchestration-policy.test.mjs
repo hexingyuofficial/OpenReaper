@@ -356,8 +356,11 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(flow.authorization_prompt.kind, "task_authorization");
     assert.equal(flow.authorization_prompt.one_prompt_only, true);
     assert.deepEqual(flow.authorization_prompt.allowed_risk_domains, ["write_project_reversible"]);
+    assert.deepEqual(flow.authorization_prompt.allowed_risk_labels, ["reversible project edits"]);
     assert.match(flow.authorization_prompt.message, /without repeated prompts/);
+    assert.match(flow.authorization_prompt.message, /reversible project edits/);
     assert.match(flow.authorization_prompt.message, /batch-read back/);
+    assert.doesNotMatch(flow.authorization_prompt.message, /write_project_reversible/);
     assert.deepEqual(
       flow.flow_steps.map((step) => step.id),
       ["discover", "authorize", "execute", "batch_readback", "report"],
@@ -416,6 +419,10 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(flow.ok, true);
     assert.equal(flow.authorization_prompt.needed, false);
     assert.equal(flow.authorization_prompt.kind, "already_authorized");
+    assert.deepEqual(flow.authorization_prompt.allowed_risk_labels, [
+      "reversible project edits",
+      "plugin parameter changes",
+    ]);
     assert.deepEqual(
       flow.execution_schedule.phases.map((phase) => phase.kind),
       ["authorized_mutation", "authorized_mutation"],
@@ -431,6 +438,33 @@ describe("Alpha3 C4 orchestration policy", () => {
       ["discover", "execute", "batch_readback", "report"],
     );
     assert.match(flow.report_policy, /one concise checkpoint/);
+  });
+
+  it("keeps hard-stop product prompts beginner-readable while retaining machine domains", () => {
+    const flow = planAlpha3C4ProductFlow({
+      authorization: {
+        granted: true,
+        task_id: "dangerous-task",
+        allowed_risk_domains: ["destructive_delete", "render_or_export"],
+      },
+      calls: [
+        { id: "template.items.delete_item", refs: { item_ref: "item:guid:{ITEM-A}" } },
+        { id: "template.render.render_selected_item" },
+      ],
+    });
+
+    assert.equal(flow.authorization_prompt.kind, "hard_stop_confirmation");
+    assert.deepEqual(flow.authorization_prompt.hard_stop_domains, [
+      "destructive_delete",
+      "render_or_export",
+    ]);
+    assert.deepEqual(flow.authorization_prompt.hard_stop_labels, [
+      "deleting project content",
+      "rendering or exporting files",
+    ]);
+    assert.match(flow.authorization_prompt.message, /deleting project content/);
+    assert.match(flow.authorization_prompt.message, /rendering or exporting files/);
+    assert.doesNotMatch(flow.authorization_prompt.message, /destructive_delete|render_or_export/);
   });
 
   it("deduplicates repeated readback requests and returns typed blockers for missing canonical refs", () => {

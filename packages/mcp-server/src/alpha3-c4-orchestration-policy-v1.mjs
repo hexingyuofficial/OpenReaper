@@ -90,6 +90,27 @@ const TASK_AUTHORIZATION_DEFAULT_ALLOWED_DOMAINS = Object.freeze([
   "fx_parameter_control",
 ]);
 
+const RISK_DOMAIN_USER_LABELS = deepFreeze({
+  read: "reading the project",
+  safe_write: "safe session setup",
+  write_project_reversible: "reversible project edits",
+  fx_parameter_control: "plugin parameter changes",
+  render_or_export: "rendering or exporting files",
+  destructive_delete: "deleting project content",
+  hardware_io: "hardware input or output changes",
+  privacy_sensitive: "privacy-sensitive scans",
+  paid_or_licensed_download: "paid or licensed downloads",
+});
+
+const DEFAULT_HARD_STOP_USER_LABELS = deepFreeze([
+  "deleting content",
+  "rendering or exporting files",
+  "hardware input or output changes",
+  "privacy-sensitive scans",
+  "paid downloads",
+  "unclear irreversible actions",
+]);
+
 const CONTROLLED_TEMPLATE_ID_HINTS = Object.freeze({
   destructive_delete: [
     /^template\.items\.delete_/,
@@ -460,7 +481,9 @@ function buildProductAuthorizationPrompt(execution) {
       kind: "blocked_before_authorization",
       message: "Some requested actions are unavailable in the accepted catalog; fix those before asking the user for task authorization.",
       allowed_risk_domains: [],
+      allowed_risk_labels: [],
       hard_stop_domains: hardStopDomains,
+      hard_stop_labels: riskDomainUserLabels(hardStopDomains),
       blocked_template_ids: blockedCalls.map((call) => call.id),
       one_prompt_only: false,
     });
@@ -472,7 +495,9 @@ function buildProductAuthorizationPrompt(execution) {
       kind: "task_authorization",
       message: authorizationMessage(neededDomains, hardStopDomains),
       allowed_risk_domains: neededDomains,
+      allowed_risk_labels: riskDomainUserLabels(neededDomains),
       hard_stop_domains: hardStopDomains,
+      hard_stop_labels: riskDomainUserLabels(hardStopDomains),
       one_prompt_only: true,
     });
   }
@@ -481,9 +506,11 @@ function buildProductAuthorizationPrompt(execution) {
     return deepFreeze({
       needed: true,
       kind: "hard_stop_confirmation",
-      message: `Stop for explicit confirmation before ${joinHumanList(hardStopDomains)}.`,
+      message: `Stop for explicit confirmation before ${joinHumanList(riskDomainUserLabels(hardStopDomains))}.`,
       allowed_risk_domains: [],
+      allowed_risk_labels: [],
       hard_stop_domains: hardStopDomains,
+      hard_stop_labels: riskDomainUserLabels(hardStopDomains),
       one_prompt_only: false,
     });
   }
@@ -495,7 +522,9 @@ function buildProductAuthorizationPrompt(execution) {
       ? "Task authorization is already present; proceed without repeated prompts inside the recorded risk-domain boundary."
       : "No user prompt is needed for this read-only or no-op plan.",
     allowed_risk_domains: execution.authorization.allowed_risk_domains.filter((domain) => domain !== "read"),
+    allowed_risk_labels: riskDomainUserLabels(execution.authorization.allowed_risk_domains.filter((domain) => domain !== "read")),
     hard_stop_domains: [],
+    hard_stop_labels: [],
     one_prompt_only: reusableCount > 0,
   });
 }
@@ -507,7 +536,9 @@ function buildProductFlowSteps({ execution, prompt, readback, mutations }) {
     steps.push(flowStep("authorize", prompt.message, {
       prompt_kind: prompt.kind,
       allowed_risk_domains: prompt.allowed_risk_domains,
+      allowed_risk_labels: prompt.allowed_risk_labels,
       hard_stop_domains: prompt.hard_stop_domains,
+      hard_stop_labels: prompt.hard_stop_labels,
     }));
   }
   steps.push(flowStep("execute", "Follow execution_schedule phases; run only parallel_read groups concurrently and keep all writes serial."));
@@ -516,7 +547,7 @@ function buildProductFlowSteps({ execution, prompt, readback, mutations }) {
       ? "Run the planned readback requests after the mutation group and compare requested deltas with concise evidence."
       : "Collect mutation result refs during execution, then call planAlpha3C4BatchReadback before reporting success."));
   }
-  steps.push(flowStep("report", "Give one concise user checkpoint with changed refs, readback status, blockers, and next recovery step if needed."));
+  steps.push(flowStep("report", "Give one concise user checkpoint with changed objects, readback status, blockers, and next recovery step if needed."));
   return deepFreeze(steps);
 }
 
@@ -542,11 +573,15 @@ function flowStep(id, instruction, extra = {}) {
 }
 
 function authorizationMessage(neededDomains, hardStopDomains) {
-  const allowed = joinHumanList(neededDomains);
+  const allowed = joinHumanList(riskDomainUserLabels(neededDomains));
   const hardStops = hardStopDomains.length > 0
-    ? ` I will still stop for ${joinHumanList(hardStopDomains)}.`
-    : " I will still stop for delete, export, hardware, privacy, paid downloads, or irreversible ambiguity.";
-  return `Allow this task to run ordinary reversible actions in ${allowed} without repeated prompts; I will batch-read back changes before reporting success.${hardStops}`;
+    ? ` I will still stop for ${joinHumanList(riskDomainUserLabels(hardStopDomains))}.`
+    : ` I will still stop for ${joinHumanList(DEFAULT_HARD_STOP_USER_LABELS)}.`;
+  return `Allow this task to make ${allowed} without repeated prompts; I will batch-read back changes before reporting success.${hardStops}`;
+}
+
+function riskDomainUserLabels(domains) {
+  return domains.map((domain) => RISK_DOMAIN_USER_LABELS[domain] ?? domain);
 }
 
 function normalizeProductTask(task) {
