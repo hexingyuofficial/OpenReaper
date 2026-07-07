@@ -962,6 +962,21 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.safety.raw_sql_exposed, false);
     assert.equal(plan.safety.raw_lua_action_shell_or_ui, false);
     assert.equal(plan.rows.length, 0);
+
+    const hydratePlan = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      raw_sql: "select 1",
+      refs: ["track:guid:{TRACK-1}"],
+      limit: 10,
+    }, { projectIndex: readyProjectIndex() });
+    assert.equal(hydratePlan.ok, false);
+    assert.equal(hydratePlan.blockers.some((blocker) => blocker.code === "RAW_SQL_NOT_ALLOWED"), true);
+    assert.deepEqual(
+      hydratePlan.hydrate_request.requests.map((request) => request.id),
+      ["template.tracks.resolve_track_ref", "template.tracks.read_mixer_controls"],
+    );
+    assert.equal(hydratePlan.hydrate_request.status, "blocked");
+    assert.equal(hydratePlan.hydrate_request.callable_now, false);
+    assert.equal(hydratePlan.hydrate_request.blocker.code, "RAW_SQL_NOT_ALLOWED");
   });
 
   it("plans exact ref hydration through accepted read templates", () => {
@@ -1093,6 +1108,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.ok, false);
     assert.equal(plan.blockers.some((entry) => entry.code === "HYDRATE_FIELD_UNSUPPORTED"), true);
     assert.equal(plan.hydrate_request.requests.length, 0);
+    assert.equal(plan.hydrate_request.status, "blocked");
+    assert.equal(plan.hydrate_request.callable_now, false);
+    assert.equal(plan.hydrate_request.blocker.code, "HYDRATE_FIELD_UNSUPPORTED");
     assert.equal(plan.rows[0].status, "blocked");
   });
 
@@ -1105,7 +1123,8 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.ok, false);
     assert.equal(plan.blockers.filter((entry) => entry.code === "HYDRATE_REF_UNSUPPORTED").length, 3);
     assert.equal(plan.hydrate_request.requests.length, 0);
-    assert.equal(plan.hydrate_request.status, "no_supported_refs");
+    assert.equal(plan.hydrate_request.status, "blocked");
+    assert.equal(plan.hydrate_request.callable_now, false);
     assert.equal(plan.rows[0].status, "blocked");
     assert.equal(plan.rows[1].ref_kind, "marker");
     assert.equal(plan.rows[2].ref_kind, "region");
@@ -1458,6 +1477,19 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       hydrate.result.hydrate_request.requests.map((request) => request.id),
       ["template.items.read_item_summary"],
     );
+    const blockedHydrate = await runtime.call_template({
+      id: "macro.hydrate_refs",
+      input: {
+        refs: ["fx:track:{TRACK-1}:0"],
+        fields: ["pin_mapping"],
+        limit: 10,
+      },
+    });
+    assert.equal(blockedHydrate.ok, false);
+    assert.equal(blockedHydrate.result.hydrate_request.status, "blocked");
+    assert.equal(blockedHydrate.result.hydrate_request.callable_now, false);
+    assert.equal(blockedHydrate.result.hydrate_request.blocker.code, "HYDRATE_FIELD_UNSUPPORTED");
+    assert.equal(blockedHydrate.result.hydrate_request.requests.length, 0);
     assert.equal(changed.ok, true);
     assert.equal(changed.result.execution.executed, false);
     assert.equal(changed.result.execution.hidden_executor, false);

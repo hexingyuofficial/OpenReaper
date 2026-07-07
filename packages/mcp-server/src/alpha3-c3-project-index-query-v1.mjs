@@ -1127,7 +1127,7 @@ function hydrateRefsPlan({ macro, normalized, indexState, blockers, catalog }) {
     },
     page: pageEnvelope(normalized.query.limit),
     refresh_requests: [],
-    hydrate_request: hydrateRefsRequestEnvelope(hydration.requests, normalized.query.refs, normalized.query.fields),
+    hydrate_request: hydrateRefsRequestEnvelope(hydration.requests, normalized.query.refs, normalized.query.fields, allBlockers),
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
@@ -2994,10 +2994,23 @@ function markerDetailRequest(refs, fields) {
   };
 }
 
-function hydrateRefsRequestEnvelope(requests, refs, fields) {
+function hydrateRefsRequestEnvelope(requests, refs, fields, blockers = []) {
+  if (blockers.length > 0) {
+    return {
+      status: "blocked",
+      callable_now: false,
+      planned_macro_id: "macro.hydrate_refs",
+      refs,
+      fields,
+      requests,
+      blocker: blockers[0],
+      blockers,
+      purpose: "Hydration cannot emit executable read requests until the reported blocker is resolved.",
+    };
+  }
   return {
     status: requests.length > 0 ? "planned_requests" : "no_supported_refs",
-    callable_now: true,
+    callable_now: requests.length > 0,
     planned_macro_id: "macro.hydrate_refs",
     refs,
     fields,
