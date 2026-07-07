@@ -23,6 +23,10 @@ import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
 import {
+  ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
+  ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+} from "../../packages/mcp-server/src/alpha3-e1-stock-plugin-fluency-v1.mjs";
+import {
   ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
   ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
@@ -369,7 +373,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 5);
+    assert.equal(runtimeMenu.items.length, 6);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -400,6 +404,10 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     );
     assert.deepEqual(
+      runtimeMenu.product_surface.stock_plugin_fluency,
+      ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
+    );
+    assert.deepEqual(
       runtimeMenu.product_surface.startup_health,
       ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
     );
@@ -423,6 +431,7 @@ describe("Layer 4D call_template runtime binding", () => {
     );
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.stock_plugin_fluency.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_assistant.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
@@ -430,6 +439,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
     assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
       ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
@@ -541,6 +551,12 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(macroSearch.items[0].current_status, "needs_ref");
     assert.equal(macroSearch.items[0].capability_truth.kind, "official_macro");
 
+    const stockMacroSearch = runtime.list_templates({ query: "stock plugin controls", limit: 10 });
+    assert.equal(stockMacroSearch.items.length, 1);
+    assert.equal(stockMacroSearch.items[0].id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(stockMacroSearch.items[0].template_id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(stockMacroSearch.items[0].capability_truth.kind, "official_macro");
+
     const liveRuntime = createCallTemplateRuntime({
       executor: new FakeFoundationBridge(),
       live: {
@@ -552,6 +568,7 @@ describe("Layer 4D call_template runtime binding", () => {
     const liveMenu = liveRuntime.list_templates();
     const liveMenuIds = liveMenu.items.map((item) => item.id);
     assert.equal(liveMenuIds.includes("macro.set_track_controls"), true);
+    assert.equal(liveMenuIds.includes(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
       liveMenuIds.filter((id) => id.startsWith("template.")),
       CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
