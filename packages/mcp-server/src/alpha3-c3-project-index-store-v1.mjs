@@ -345,6 +345,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     degraded_reason: null,
     rows: {
       tracks: [],
+      items: [],
       selection_state: [],
       object_changes: [],
     },
@@ -393,6 +394,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.tracks = normalizeCoverageStatus(input.coverage_status, "complete");
       return lifecycleResult(state, "replace_tracks", observedAt);
+    },
+    replaceItems(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.items = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeItemRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "items",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.project.create_project_map_snapshot",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.items = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_items", observedAt);
     },
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -568,6 +597,30 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "tracks",
       });
     }
+    if (scope === "items") {
+      requests.push({
+        tool: "call_template",
+        id: "template.project.create_project_map_snapshot",
+        refs: {},
+        input: {
+          max_tracks: limit,
+          max_items_per_track: Math.min(limit, 100),
+          include_selected_items: true,
+          include_track_items: true,
+        },
+        refresh_scope: "items",
+      });
+      requests.push({
+        tool: "call_template",
+        id: "template.items.list_selected_items",
+        refs: {},
+        input: {
+          limit,
+          include_take_summary: false,
+        },
+        refresh_scope: "items",
+      });
+    }
   }
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
@@ -644,6 +697,7 @@ function snapshotState(state) {
     degraded_reason: state.degraded_reason,
     rows: {
       tracks: cloneJson(state.rows.tracks),
+      items: cloneJson(state.rows.items),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -692,6 +746,38 @@ function normalizeTrackRow(row, defaults) {
     send_count: Number.isInteger(source.send_count) ? source.send_count : 0,
     freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
     coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "complete"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeItemRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  const startSeconds = finiteNumber(source.start_seconds ?? source.start);
+  const endSeconds = finiteNumber(source.end_seconds ?? source.end);
+  const explicitLength = finiteNumber(source.length_seconds ?? source.length);
+  const ownerRef = typeof source.owner_ref === "string" ? source.owner_ref : null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: ownerRef,
+    track_ref: typeof source.track_ref === "string"
+      ? source.track_ref
+      : ownerRef !== null && ownerRef.startsWith("track:")
+        ? ownerRef
+        : null,
+    start_seconds: startSeconds,
+    end_seconds: endSeconds,
+    length_seconds: explicitLength ?? (
+      startSeconds !== null && endSeconds !== null ? Math.max(0, endSeconds - startSeconds) : null
+    ),
+    selected: Boolean(source.selected),
+    muted: Boolean(source.muted),
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
     observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
     summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
@@ -748,6 +834,10 @@ function refKind(ref) {
   return "unknown";
 }
 
+function finiteNumber(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
 function mergeSessionMetadata(state, metadata) {
   if (typeof metadata.project_ref === "string") state.project_ref = metadata.project_ref;
   if (typeof metadata.projectRef === "string") state.project_ref = metadata.projectRef;
@@ -775,7 +865,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;

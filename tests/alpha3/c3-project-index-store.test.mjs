@@ -174,6 +174,62 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     });
   });
 
+  it("maintains item rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-5",
+    });
+
+    const result = index.replaceItems({
+      snapshot_id: "snapshot:c3-5:items",
+      observed_at: "2026-07-07T17:05:00.000Z",
+      payload_ref: "artifact:items:map",
+      rows: [
+        {
+          ref: "item:guid:{ITEM-1}",
+          track_ref: "track:guid:{A}",
+          start_seconds: 1.25,
+          end_seconds: 3.75,
+          selected: true,
+        },
+        {
+          ref: "item:guid:{ITEM-2}",
+          owner_ref: "track:guid:{B}",
+          start_seconds: 9,
+          end_seconds: 12,
+          muted: true,
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_items", {
+      scope: "selection",
+      limit: 10,
+      fields: ["track_ref", "start_seconds", "length_seconds", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_items");
+    assert.equal(snapshot.rows.items.length, 2);
+    assert.equal(snapshot.rows.items[0].length_seconds, 2.5);
+    assert.equal(snapshot.rows.items[1].track_ref, "track:guid:{B}");
+    assert.equal(snapshot.rows.items[0].payload_ref, "artifact:items:map");
+    assert.equal(snapshot.freshness_scopes.items.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.items.coverage_status, "paged");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "items"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["item:guid:{ITEM-1}"]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "item:guid:{ITEM-1}",
+      track_ref: "track:guid:{A}",
+      start_seconds: 1.25,
+      length_seconds: 2.5,
+      payload_ref: "artifact:items:map",
+    });
+  });
+
   it("marks selected context stale after selection-changing readback", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
 
@@ -204,12 +260,12 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
 
   it("plans task-scoped refresh requests over accepted templates only", () => {
     const plan = planAlpha3C3ProjectIndexTaskRefresh({
-      scopes: ["project_head", "tracks", "selection", "tracks"],
+      scopes: ["project_head", "tracks", "items", "selection", "tracks"],
       limit: 40,
     });
 
     assert.equal(plan.contract, ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT);
-    assert.deepEqual(plan.scopes, ["project_head", "tracks", "selection"]);
+    assert.deepEqual(plan.scopes, ["project_head", "tracks", "items", "selection"]);
     assert.deepEqual(
       plan.requests.map((request) => request.id),
       [
@@ -217,6 +273,8 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         "template.project.create_project_map_snapshot",
         "template.tracks.list_tracks",
         "template.tracks.read_mixer_controls",
+        "template.project.create_project_map_snapshot",
+        "template.items.list_selected_items",
       ],
     );
     assert.equal(plan.update_policy.source_truth, "REAPER");

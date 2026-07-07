@@ -54,6 +54,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.index_status",
     "macro.selected_context",
     "macro.query_tracks",
+    "macro.query_items",
     "macro.hydrate_refs",
     "macro.changed_since",
   ],
@@ -115,6 +116,9 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.project.create_observation_bundle",
   "template.tracks.list_tracks",
   "template.tracks.read_mixer_controls",
+  "template.items.list_items_on_track",
+  "template.items.list_selected_items",
+  "template.items.read_item_summary",
 ]);
 
 const QUERY_DETAIL_VALUES = new Set(["summary", "refs", "compact", "hydrated"]);
@@ -150,6 +154,22 @@ const TRACK_ROW_FIELDS = deepFreeze([
   "coverage_status",
   "observed_at",
   "payload_ref",
+]);
+
+const ITEM_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "track_ref",
+  "start_seconds",
+  "end_seconds",
+  "length_seconds",
+  "selected",
+  "muted",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
 ]);
 
 const SELECTED_CONTEXT_ROW_FIELDS = deepFreeze([
@@ -202,7 +222,21 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.tracks.read_mixer_controls",
     ],
   }),
-  queryMacro({ id: "macro.query_items", user_label: "Query items", query_kind: "items" }),
+  queryMacro({
+    id: "macro.query_items",
+    user_label: "Query items",
+    summary: "Query compact item rows from the Project SQLite Index by selection, track refs, and time range.",
+    status: "implemented",
+    query_kind: "items",
+    task_intents: ["find items", "selected items", "items on track", "items in time range", "large project item query"],
+    tags: ["project_index", "sqlite", "query", "items", "time_range", "alpha3_c3"],
+    required_templates: [
+      "template.project.create_project_map_snapshot",
+      "template.items.list_items_on_track",
+      "template.items.list_selected_items",
+      "template.items.read_item_summary",
+    ],
+  }),
   queryMacro({ id: "macro.query_takes", user_label: "Query takes", query_kind: "takes" }),
   queryMacro({ id: "macro.query_fx", user_label: "Query FX", query_kind: "fx" }),
   queryMacro({ id: "macro.query_routing", user_label: "Query routing", query_kind: "routing" }),
@@ -301,6 +335,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_tracks") {
     return queryTracksPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.query_items") {
+    return queryItemsPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.hydrate_refs") {
     return hydrateRefsPlan({ macro, normalized, indexState, blockers });
@@ -463,6 +500,56 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
       source_scope: "tracks",
       row_count: rows.rows.length,
       complete: trackScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
+function queryItemsPlan({ macro, normalized, indexState, blockers }) {
+  const itemScope = freshnessScope(indexState, "items");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, itemScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateItemScope(normalized.query.scope),
+    ...validateItemFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryItemRows(indexState.rows.items, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? queryItemRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: queryItemsDecisionSummary({ blockers: allBlockers, rows, itemScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "items",
+      status: itemScope.status,
+      coverage_status: itemScope.coverage_status,
+      observed_at: itemScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: itemScope.coverage_status,
+      source_scope: "items",
+      row_count: rows.rows.length,
+      complete: itemScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
@@ -808,6 +895,9 @@ function readProjectIndexState(projectIndex) {
     degraded_reason: typeof raw.degraded_reason === "string" ? raw.degraded_reason : null,
     rows: {
       tracks: Array.isArray(raw.rows?.tracks) ? raw.rows.tracks.map(normalizeTrackRow) : [],
+      items: Array.isArray(raw.rows?.items)
+        ? raw.rows.items.map(normalizeItemRow).filter(Boolean)
+        : [],
       selection_state: Array.isArray(raw.rows?.selection_state)
         ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
         : [],
@@ -855,6 +945,34 @@ function normalizeTrackRow(row) {
     coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+  };
+}
+
+function normalizeItemRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  const startSeconds = finiteNumber(source.start_seconds ?? source.start);
+  const endSeconds = finiteNumber(source.end_seconds ?? source.end);
+  const explicitLength = finiteNumber(source.length_seconds ?? source.length);
+  return {
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    track_ref: typeof source.track_ref === "string"
+      ? source.track_ref
+      : typeof source.owner_ref === "string" && source.owner_ref.startsWith("track:")
+        ? source.owner_ref
+        : null,
+    start_seconds: startSeconds,
+    end_seconds: endSeconds,
+    length_seconds: explicitLength ?? itemLengthSeconds({ start_seconds: startSeconds, end_seconds: endSeconds }),
+    selected: Boolean(source.selected),
+    muted: Boolean(source.muted),
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
   };
 }
 
@@ -1008,6 +1126,20 @@ function queryTrackRows(trackRows, query) {
   };
 }
 
+function queryItemRows(itemRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = itemRows
+    .filter((row) => row.ref)
+    .filter((row) => itemRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectItemRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function querySelectedContextRows(selectionRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = selectionRows
@@ -1032,6 +1164,47 @@ function trackRowMatches(row, filters) {
   if (filters.has_items !== undefined && Boolean(filters.has_items) !== (row.item_count > 0)) return false;
   if (filters.has_fx !== undefined && Boolean(filters.has_fx) !== (row.fx_count > 0)) return false;
   if (filters.has_sends !== undefined && Boolean(filters.has_sends) !== (row.send_count > 0)) return false;
+  return true;
+}
+
+function itemRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.scope === "selection" && row.selected !== true) return false;
+  if (query.refs.length > 0 && !itemRefsMatch(row, query.refs)) return false;
+  if (!itemTrackFiltersMatch(row, filters)) return false;
+  if (filters.selected !== undefined && Boolean(filters.selected) !== row.selected) return false;
+  if (filters.muted !== undefined && Boolean(filters.muted) !== row.muted) return false;
+  if (!itemTimeRangeMatches(row, query.time_range)) return false;
+  if (Number.isFinite(filters.min_length_seconds) && (itemLengthSeconds(row) ?? -Infinity) < filters.min_length_seconds) return false;
+  if (Number.isFinite(filters.max_length_seconds) && (itemLengthSeconds(row) ?? Infinity) > filters.max_length_seconds) return false;
+  if (Number.isFinite(filters.starts_after_seconds) && (row.start_seconds ?? -Infinity) < filters.starts_after_seconds) return false;
+  if (Number.isFinite(filters.starts_before_seconds) && (row.start_seconds ?? Infinity) > filters.starts_before_seconds) return false;
+  return true;
+}
+
+function itemRefsMatch(row, refs) {
+  return refs.includes(row.ref) || refs.includes(row.track_ref) || refs.includes(row.owner_ref);
+}
+
+function itemTrackFiltersMatch(row, filters) {
+  const raw = [];
+  if (typeof filters.track_ref === "string") raw.push(filters.track_ref);
+  if (Array.isArray(filters.track_refs)) raw.push(...filters.track_refs);
+  const trackRefs = unique(raw.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
+  if (trackRefs.length === 0) return true;
+  return trackRefs.includes(row.track_ref) || trackRefs.includes(row.owner_ref);
+}
+
+function itemTimeRangeMatches(row, timeRange) {
+  if (!isPlainObject(timeRange)) return true;
+  const rangeStart = finiteNumber(timeRange.start_seconds ?? timeRange.start);
+  const rangeEnd = finiteNumber(timeRange.end_seconds ?? timeRange.end);
+  if (rangeStart === null && rangeEnd === null) return true;
+  const itemStart = row.start_seconds;
+  const itemEnd = row.end_seconds ?? row.start_seconds;
+  if (itemStart === null && itemEnd === null) return false;
+  if (rangeStart !== null && itemEnd !== null && itemEnd < rangeStart) return false;
+  if (rangeEnd !== null && itemStart !== null && itemStart > rangeEnd) return false;
   return true;
 }
 
@@ -1078,6 +1251,28 @@ function projectTrackRow(row, fields) {
   return projected;
 }
 
+function projectItemRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "owner_ref",
+    "track_ref",
+    "start_seconds",
+    "end_seconds",
+    "length_seconds",
+    "selected",
+    "muted",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (ITEM_ROW_FIELDS.includes(field)) projected[field] = field === "length_seconds"
+      ? itemLengthSeconds(row)
+      : row[field];
+  }
+  return projected;
+}
+
 function projectSelectedContextRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -1098,6 +1293,17 @@ function validateTrackFields(fields) {
   return fields
     .filter((field) => !TRACK_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_tracks does not expose field ${field}.`));
+}
+
+function validateItemScope(scope) {
+  if (["project", "items", "selection", "tracks"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_items supports project, items, selection, or tracks scope.")];
+}
+
+function validateItemFields(fields) {
+  return fields
+    .filter((field) => !ITEM_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_items does not expose field ${field}.`));
 }
 
 function validateSelectedContextFields(fields) {
@@ -1171,6 +1377,75 @@ function queryTrackRefreshRequests(query) {
       purpose: "Hydrate compact mixer fields for track query rows.",
     },
   ];
+}
+
+function queryItemRefreshRequests(query) {
+  const trackRefs = queryItemTrackRefs(query);
+  const itemRefs = query.refs.filter((ref) => ref.startsWith("item:"));
+  const requests = [
+    {
+      tool: "call_template",
+      id: "template.project.create_project_map_snapshot",
+      refs: {},
+      input: {
+        max_tracks: query.limit,
+        max_items_per_track: Math.min(query.limit, 100),
+        include_selected_items: true,
+        include_track_items: true,
+      },
+      purpose: "Refresh paged item rows from REAPER truth before using Project SQLite Index item rows.",
+    },
+  ];
+
+  if (query.scope === "selection" || query.filters.selected === true) {
+    requests.push({
+      tool: "call_template",
+      id: "template.items.list_selected_items",
+      refs: {},
+      input: {
+        limit: query.limit,
+        include_take_summary: false,
+      },
+      purpose: "Refresh selected item refs from REAPER truth for selected-item queries.",
+    });
+  }
+
+  for (const trackRef of trackRefs) {
+    requests.push({
+      tool: "call_template",
+      id: "template.items.list_items_on_track",
+      refs: { track_ref: trackRef },
+      input: {
+        limit: query.limit,
+        include_take_summary: false,
+      },
+      purpose: "Refresh items for an exact track ref before using indexed item rows.",
+    });
+  }
+
+  for (const itemRef of itemRefs) {
+    requests.push({
+      tool: "call_template",
+      id: "template.items.read_item_summary",
+      refs: { item_ref: itemRef },
+      input: {
+        include_take_summary: false,
+      },
+      purpose: "Re-read an exact item ref from REAPER truth before using indexed item rows.",
+    });
+  }
+
+  return dedupeRequestPlans(requests);
+}
+
+function queryItemTrackRefs(query) {
+  const filterRefs = [];
+  if (typeof query.filters.track_ref === "string") filterRefs.push(query.filters.track_ref);
+  if (Array.isArray(query.filters.track_refs)) filterRefs.push(...query.filters.track_refs);
+  return unique([
+    ...query.refs.filter((ref) => ref.startsWith("track:")),
+    ...filterRefs.filter((ref) => typeof ref === "string" && ref.startsWith("track:")),
+  ]);
 }
 
 function selectedContextRefreshRequests(query) {
@@ -1385,6 +1660,18 @@ function refKind(ref) {
   return "unknown";
 }
 
+function finiteNumber(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+function itemLengthSeconds(row) {
+  if (Number.isFinite(row.length_seconds)) return row.length_seconds;
+  if (Number.isFinite(row.start_seconds) && Number.isFinite(row.end_seconds)) {
+    return Math.max(0, row.end_seconds - row.start_seconds);
+  }
+  return null;
+}
+
 function summarizeIndexStatus(indexState) {
   const staleScopes = Object.entries(indexState.freshness_scopes)
     .filter(([, scope]) => !freshnessStatusSatisfies(scope.status, "fresh_enough"))
@@ -1422,6 +1709,13 @@ function queryTracksDecisionSummary({ blockers, rows, trackScope }) {
     return "Track query needs a task-scoped index refresh before rows are safe to use.";
   }
   return `Track query returned ${rows.rows.length} compact rows with ${trackScope.status} freshness and ${trackScope.coverage_status} coverage.`;
+}
+
+function queryItemsDecisionSummary({ blockers, rows, itemScope }) {
+  if (blockers.length > 0) {
+    return "Item query needs a task-scoped item refresh before rows are safe to use.";
+  }
+  return `Item query returned ${rows.rows.length} compact rows with ${itemScope.status} freshness and ${itemScope.coverage_status} coverage.`;
 }
 
 function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
@@ -1575,13 +1869,14 @@ function officialQueryMacroDiscoveryItem(macro) {
     exists_in_catalog: true,
     evidence_level: implemented ? "runtime_bound_static_fake" : "contract_only",
     support_state: implemented ? "supported" : "blocked",
-    known_blocker: implemented ? null : "planned_after_c3_4",
+    known_blocker: implemented ? null : "planned_after_c3_5",
     allowed_live_group: null,
   });
 }
 
 function queryMacroExampleInput(id) {
   if (id === "macro.query_tracks") return { filters: { selected: true }, limit: 25 };
+  if (id === "macro.query_items") return { scope: "selection", filters: { selected: true }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
   if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
   if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };
