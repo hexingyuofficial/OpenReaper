@@ -1,6 +1,13 @@
 import {
-  createAcceptedOfficialTemplateCatalog,
-} from "./call-template-runtime-v1.mjs";
+  createTemplateCatalog,
+} from "../../core/src/template-catalog-v1.mjs";
+import {
+  createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogP1Templates,
+  createTemplateCatalogWave1aTemplates,
+  createTemplateCatalogWave2aTemplates,
+  createTemplateCatalogWave3bTemplates,
+} from "../../core/src/template-catalog-fixtures-v1.mjs";
 
 export const ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT = "alpha3.c4.orchestration_policy.v1";
 
@@ -33,6 +40,41 @@ export const ALPHA3_C4_HARD_STOP_DOMAINS = deepFreeze([
   "paid_or_licensed_download",
 ]);
 
+export const ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY = deepFreeze({
+  contract: ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
+  mode: "agent_side_plan_only",
+  tool_surface: {
+    added_tools: 0,
+    execution_tools: ["call_template", "get_state"],
+    discovery_tools: ["list_templates", "list_recipes"],
+  },
+  decision_values: ALPHA3_C4_EXECUTION_DECISIONS,
+  risk_domains: ALPHA3_C4_RISK_DOMAINS,
+  hard_stop_domains: ALPHA3_C4_HARD_STOP_DOMAINS,
+  prompt_policy: "ask_once_per_task_and_risk_domain_then_execute_until_boundary",
+  safe_parallel_reads: {
+    rule: "Independent read-risk call_template reads may run concurrently. Writes, jobs, hard-stop domains, and dependency-linked reads stay serial.",
+  },
+  authorized_fast_execution: {
+    rule: "Task authorization may suppress repeated prompts only inside reversible allowed risk domains.",
+  },
+  batch_readback: {
+    mode: "batch_after_mutation_group",
+    evidence_required: ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
+  },
+  planner_call_shape: {
+    function: "planAlpha3C4Execution",
+    input: {
+      calls: [{ id: "template.project.read_summary" }],
+      authorization: {
+        granted: true,
+        task_id: "task-id",
+        allowed_risk_domains: ["safe_write", "write_project_reversible", "fx_parameter_control"],
+      },
+    },
+  },
+});
+
 const TASK_AUTHORIZATION_DEFAULT_ALLOWED_DOMAINS = Object.freeze([
   "read",
   "safe_write",
@@ -55,7 +97,7 @@ const CONTROLLED_TEMPLATE_ID_HINTS = Object.freeze({
 });
 
 export function createAlpha3C4OrchestrationPlanner(options = {}) {
-  const catalog = options.catalog ?? createAcceptedOfficialTemplateCatalog();
+  const catalog = options.catalog ?? createAlpha3C4AcceptedCatalog();
   return Object.freeze({
     contract: ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
     plan(request = {}) {
@@ -65,7 +107,7 @@ export function createAlpha3C4OrchestrationPlanner(options = {}) {
 }
 
 export function planAlpha3C4Execution(request = {}, options = {}) {
-  const catalog = options.catalog ?? createAcceptedOfficialTemplateCatalog();
+  const catalog = options.catalog ?? createAlpha3C4AcceptedCatalog();
   const calls = normalizeCalls(request.calls);
   const authorization = normalizeTaskAuthorization(request.authorization);
   const plannedCalls = calls.map((call, index) => planCall({
@@ -107,6 +149,18 @@ export function planAlpha3C4Execution(request = {}, options = {}) {
       needs_confirmation_count: plannedCalls.filter((call) => call.decision === "requires_user_confirmation").length,
     },
     batch_readback: readbackPlan,
+  });
+}
+
+function createAlpha3C4AcceptedCatalog() {
+  return createTemplateCatalog({
+    templates: [
+      ...createTemplateCatalogWave1aTemplates(),
+      ...createTemplateCatalogWave2aTemplates(),
+      ...createTemplateCatalogWave3bTemplates(),
+      ...createTemplateCatalogCriticalFillTemplates(),
+      ...createTemplateCatalogP1Templates(),
+    ],
   });
 }
 

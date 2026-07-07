@@ -16,6 +16,10 @@ import {
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
 } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import {
+  ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
+  ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-c4-orchestration-policy-v1.mjs";
+import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
@@ -377,6 +381,19 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.deepEqual(runtimeMenu.product_surface.startup_preflight, CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT);
     assert.deepEqual(runtimeMenu.product_surface.blocker_guidance, CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE);
     assert.deepEqual(
+      runtimeMenu.product_surface.orchestration_policy,
+      ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+    );
+    assert.equal(
+      runtimeMenu.product_surface.orchestration_policy.contract,
+      ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
+    );
+    assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
+    assert.deepEqual(
+      runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
+      ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
+    );
+    assert.deepEqual(
       runtimeMenu.product_surface.workflow_rhythm.steps.map((step) => step.id),
       ["discover", "observe", "target", "confirm", "execute_one", "readback"],
     );
@@ -526,6 +543,10 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(
       graduatedMenu.product_surface.workflow_rhythm.steps.some((step) => step.tool === "call_template"),
       true,
+    );
+    assert.equal(
+      graduatedMenu.product_surface.orchestration_policy.prompt_policy,
+      "ask_once_per_task_and_risk_domain_then_execute_until_boundary",
     );
     assert.equal(
       graduatedRuntime.list_templates({

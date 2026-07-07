@@ -4,6 +4,7 @@ import {
   ALPHA3_C4_EXECUTION_DECISIONS,
   ALPHA3_C4_HARD_STOP_DOMAINS,
   ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
+  ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
   ALPHA3_C4_RISK_DOMAINS,
   createAlpha3C4OrchestrationPlanner,
   planAlpha3C4Execution,
@@ -181,6 +182,16 @@ describe("Alpha3 C4 orchestration policy", () => {
     ]);
     assert.equal(ALPHA3_C4_RISK_DOMAINS.includes("fx_parameter_control"), true);
     assert.equal(ALPHA3_C4_RISK_DOMAINS.includes("privacy_sensitive"), true);
+    assert.equal(
+      ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.contract,
+      ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
+    );
+    assert.equal(ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.tool_surface.added_tools, 0);
+    assert.deepEqual(
+      ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.batch_readback.evidence_required,
+      ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
+    );
+    assert.equal("executor" in ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY, false);
 
     const planner = createAlpha3C4OrchestrationPlanner();
     assert.equal(planner.contract, ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT);

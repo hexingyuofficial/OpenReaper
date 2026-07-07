@@ -26,6 +26,9 @@ import {
   TEMPLATE_SUMMARY_FIELDS,
   createDiscoveryCatalog,
 } from "./discovery-menu-v1.mjs";
+import {
+  ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+} from "./alpha3-c4-orchestration-policy-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -1158,6 +1161,7 @@ function runtimeProductSurfaceMetadata(surface) {
     workflow_rhythm: CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
     startup_preflight: CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT,
     blocker_guidance: CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
+    orchestration_policy: ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
   };
 }
 
