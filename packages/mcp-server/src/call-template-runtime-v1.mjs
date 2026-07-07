@@ -30,6 +30,13 @@ import {
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
 } from "./alpha3-c4-orchestration-policy-v1.mjs";
 import {
+  ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
+  createAlpha3C3OfficialQueryMacroDiscoveryItems,
+  createAlpha3C3ProjectIndexQueryRuntimeEnvelope,
+  isAlpha3C3OfficialQueryMacroId,
+  planAlpha3C3ProjectIndexQueryMacro,
+} from "./alpha3-c3-project-index-query-v1.mjs";
+import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
   createAlpha3C5MacroRuntimeEnvelope,
   createAlpha3C5OfficialMacroDiscoveryItems,
@@ -707,8 +714,10 @@ export function createCallTemplateRuntime(options = {}) {
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const live = normalizeLiveRuntimeOptions(options.live);
+  const projectIndex = options.projectIndex ?? null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
   const executableDiscoveryTemplates = [
+    ...createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog }),
     ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
     ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
     ...catalogDiscoveryTemplates,
@@ -719,6 +728,20 @@ export function createCallTemplateRuntime(options = {}) {
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (isAlpha3C3OfficialQueryMacroId(id)) {
+        const plan = planAlpha3C3ProjectIndexQueryMacro(id, {
+          ...normalized.input,
+          refs: normalized.input?.refs ?? normalized.refs,
+        }, { projectIndex });
+        const envelope = createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
+          request: normalized,
+          plan,
+          projectIndex,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       if (isAlpha3C5OfficialMacroId(id)) {
         const plan = planAlpha3C5GenericControlMacro(id, {
           refs: normalized.refs,
@@ -1239,6 +1262,7 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     startup_preflight: CALL_TEMPLATE_RUNTIME_PRODUCT_STARTUP_PREFLIGHT,
     blocker_guidance: CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
     orchestration_policy: ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+    project_index_queries: ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     startup_health: ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,

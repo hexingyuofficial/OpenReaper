@@ -20,6 +20,9 @@ import {
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c4-orchestration-policy-v1.mjs";
 import {
+  ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-c3-project-index-query-v1.mjs";
+import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
 import {
@@ -373,7 +376,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 6);
+    assert.equal(runtimeMenu.items.length, 8);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -398,6 +401,10 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy,
       ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+    );
+    assert.deepEqual(
+      runtimeMenu.product_surface.project_index_queries,
+      ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     );
     assert.deepEqual(
       runtimeMenu.product_surface.generic_control_macros,
@@ -430,6 +437,7 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
     );
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.project_index_queries.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.stock_plugin_fluency.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
@@ -438,6 +446,8 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
     assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.index_status"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
@@ -679,7 +689,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
       },
     });
-    const tempoMenu = tempoRuntime.list_templates({ limit: 10 });
+    const tempoMenu = tempoRuntime.list_templates({ limit: 20 });
     assert.equal(tempoMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.deepEqual(
       tempoMenu.items.map((item) => item.id).filter((id) => id.startsWith("template.")),
