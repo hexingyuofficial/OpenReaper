@@ -34,6 +34,8 @@ export const ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY = deepFreeze({
   rule: "Supported fields are optional. Unknown or blocked fields return typed blockers. Emit serial per-template call_template requests with per-template undo evidence; no atomic multi-field transaction is claimed.",
 });
 
+export const ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
+
 const MACRO_DEFINITIONS = deepFreeze([
   {
     id: "macro.set_track_controls",
@@ -236,11 +238,21 @@ export function listAlpha3C5GenericControlMacros(options = {}) {
   });
 }
 
+export function createAlpha3C5OfficialMacroDiscoveryItems(options = {}) {
+  return listAlpha3C5GenericControlMacros(options).macros.map((macro) =>
+    officialMacroDiscoveryItem(macro)
+  );
+}
+
 export function getAlpha3C5GenericControlMacro(id, options = {}) {
   const catalog = options.catalog ?? createAlpha3C5AcceptedCatalog();
   const definition = MACRO_DEFINITIONS.find((macro) => macro.id === id);
   if (!definition) return null;
   return annotateMacro(definition, catalog);
+}
+
+export function isAlpha3C5OfficialMacroId(id) {
+  return typeof id === "string" && MACRO_DEFINITIONS.some((macro) => macro.id === id);
 }
 
 export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) {
@@ -289,6 +301,87 @@ export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) 
   });
 }
 
+export function createAlpha3C5MacroRuntimeEnvelope({ request = {}, plan, now = () => new Date() } = {}) {
+  const normalizedPlan = plan ?? planAlpha3C5GenericControlMacro(request.id, request);
+  const macro = getAlpha3C5GenericControlMacro(normalizedPlan.id) ?? null;
+  const completedAt = safeNowIso(now);
+  const envelope = {
+    contract: "template.execution.v1",
+    ok: Boolean(normalizedPlan.ok),
+    template: {
+      id: normalizedPlan.id,
+      pack: "macro",
+      risk: macro?.risk_domain === "safe_write" ? "safe" : "write",
+      action_kind: "macro",
+    },
+    request: {
+      id: null,
+      client: {
+        id: "openreaper-mcp",
+      },
+      macro: {
+        id: normalizedPlan.id,
+        contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
+        mode: "plan_only_call_template_macro",
+      },
+      input: cloneJson(request.input ?? {}),
+      refs: cloneJson(request.refs ?? {}),
+    },
+    completed_at: completedAt,
+    error: normalizedPlan.ok
+      ? null
+      : macroRuntimeError(normalizedPlan),
+    result: {
+      contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
+      action_kind: "macro",
+      mode: "plan_only_call_template_macro",
+      execution_shape: "generic_control_macro_plan",
+      macro: macro === null
+        ? null
+        : {
+            id: macro.id,
+            user_label: macro.user_label,
+            menu_group: macro.menu_group,
+            risk_domain: macro.risk_domain,
+            coverage: macro.coverage,
+          },
+      plan: normalizedPlan,
+      execution: {
+        executed: false,
+        reason: "C5.1 binds official macro discovery and call_template planning only; child template requests remain agent-executed through call_template.",
+        added_tools: 0,
+        public_call_recipe: false,
+        hidden_executor: false,
+        raw_execution: false,
+        alias_execution: false,
+      },
+      child_requests: normalizedPlan.requests,
+      readback: normalizedPlan.readback,
+      blockers: normalizedPlan.blockers,
+    },
+    budget: {
+      max_response_bytes: 65_536,
+      response_bytes: 0,
+      truncated: false,
+    },
+  };
+  envelope.budget.response_bytes = byteLength(envelope);
+  return deepFreeze(envelope);
+}
+
+function macroRuntimeError(plan) {
+  const firstBlocker = plan.blockers[0] ?? blocker("macro", "MACRO_BLOCKED", "Macro plan returned a blocker.");
+  return {
+    source: "macro",
+    code: firstBlocker.code,
+    message: firstBlocker.message,
+    recoverable: firstBlocker.recoverable !== false,
+    details: {
+      blockers: plan.blockers,
+    },
+  };
+}
+
 function annotateMacro(definition, catalog) {
   const fields = definition.fields.map((fieldDef) => annotateField(fieldDef, catalog));
   const missing = fields
@@ -327,6 +420,117 @@ function annotateMacro(definition, catalog) {
       missing_capability_rule: "Route missing capability to audited handler/template work before exposing the field.",
     },
   });
+}
+
+function officialMacroDiscoveryItem(macro) {
+  const requiredRefs = macro.refs.filter((ref) => ref.required === true);
+  return deepFreeze({
+    id: macro.id,
+    title: macro.user_label,
+    summary: `${macro.user_label}. Updates supplied supported fields only, returns a plan-only call_template bundle plus compact readback requirements.`,
+    pack: "core",
+    lifecycle: macro.status === "planned_after_c5" ? "draft" : "experimental",
+    risk: macro.risk_domain === "safe_write" ? "safe" : "write",
+    entity_kind: `macro.${macro.scope}`,
+    tags: unique([
+      "macro",
+      "generic_control",
+      "alpha3_c5",
+      macro.scope,
+      ...macro.task_intents.flatMap((intent) => intent.split(/\s+/)),
+    ].map((entry) => entry.replace(/[^a-z0-9_]+/gi, "_").toLowerCase()).filter(Boolean)).slice(0, 12),
+    kind: ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND,
+    action_kind: "macro",
+    macro_kind: "generic_control",
+    menu_group: macro.menu_group,
+    execution_shape: macro.execution_shape,
+    user_label: macro.user_label,
+    task_intents: macro.task_intents,
+    support_status: macro.status === "planned_after_c5" ? "planned" : "plan_only_runtime_bound",
+    risk_domain: macro.risk_domain,
+    inputSchema: officialMacroInputSchema(macro),
+    outputSchema: {
+      type: "object",
+      required: ["contract", "action_kind", "mode", "plan", "execution"],
+      properties: {
+        contract: { const: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT },
+        action_kind: { const: "macro" },
+        mode: { const: "plan_only_call_template_macro" },
+        plan: { type: "object" },
+        execution: { type: "object" },
+      },
+    },
+    refs: {
+      input: macro.refs,
+      output: [],
+    },
+    expectedDelta: {
+      kind: "read",
+      action: "read",
+      entities: ["macro_plan"],
+      summary: "Returns a plan-only macro envelope. It does not mutate REAPER directly.",
+    },
+    examples: [
+      {
+        input: {
+          fields: exampleFieldsForMacro(macro),
+        },
+        refs: Object.fromEntries(requiredRefs.map((ref) => [ref.name, `${ref.kind}:example`])),
+      },
+    ],
+    live_runnable_now: true,
+    exists_in_catalog: true,
+    evidence_level: "runtime_bound_static_fake",
+    support_state: macro.status === "planned_after_c5" ? "blocked" : "supported",
+    known_blocker: macro.status === "planned_after_c5" ? "planned_after_c5" : null,
+    allowed_live_group: null,
+  });
+}
+
+function officialMacroInputSchema(macro) {
+  const properties = {};
+  for (const fieldDef of macro.fields) {
+    properties[fieldDef.name] = {
+      type: jsonSchemaType(fieldDef.type),
+      ...(fieldDef.constraints.values ? { enum: fieldDef.constraints.values } : {}),
+      ...(Number.isFinite(fieldDef.constraints.min) ? { minimum: fieldDef.constraints.min } : {}),
+      ...(Number.isFinite(fieldDef.constraints.max) ? { maximum: fieldDef.constraints.max } : {}),
+    };
+  }
+  return {
+    type: "object",
+    required: ["fields"],
+    properties: {
+      fields: {
+        type: "object",
+        additionalProperties: true,
+        properties,
+      },
+    },
+  };
+}
+
+function jsonSchemaType(type) {
+  if (type === "integer") return "integer";
+  if (type === "number") return "number";
+  if (type === "boolean") return "boolean";
+  return "string";
+}
+
+function exampleFieldsForMacro(macro) {
+  const examples = {};
+  for (const fieldDef of macro.fields.slice(0, 2)) {
+    examples[fieldDef.name] = exampleValueForField(fieldDef);
+  }
+  return examples;
+}
+
+function exampleValueForField(fieldDef) {
+  if (fieldDef.constraints.values) return fieldDef.constraints.values[0];
+  if (fieldDef.type === "boolean") return true;
+  if (fieldDef.type === "integer") return Math.max(1, fieldDef.constraints.min ?? 1);
+  if (fieldDef.type === "number") return fieldDef.constraints.min ?? 0;
+  return "example";
 }
 
 function annotateField(fieldDef, catalog) {
@@ -500,6 +704,29 @@ function pruneUndefined(object) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function safeNowIso(now) {
+  try {
+    const value = now();
+    const date = value instanceof Date ? value : new Date(value);
+    if (!Number.isNaN(date.getTime())) return date.toISOString();
+  } catch {
+    // Fall through to a valid timestamp.
+  }
+  return new Date().toISOString();
+}
+
+function byteLength(value) {
+  return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function unique(values) {
+  return [...new Set(values)];
 }
 
 function deepFreeze(value) {

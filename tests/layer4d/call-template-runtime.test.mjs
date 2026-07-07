@@ -361,7 +361,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 0);
+    assert.equal(runtimeMenu.items.length, 5);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -397,6 +397,11 @@ describe("Layer 4D call_template runtime binding", () => {
     );
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
+    assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
       ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
@@ -500,6 +505,14 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.match(exact.items[0].next_step, /bounded live executor/);
     assert.equal(exact.items[0].common_phrases.includes("create track"), true);
 
+    const macroSearch = runtime.list_templates({ query: "set track controls", limit: 10 });
+    assert.equal(macroSearch.items.length, 1);
+    assert.equal(macroSearch.items[0].id, "macro.set_track_controls");
+    assert.equal(macroSearch.items[0].template_id, "macro.set_track_controls");
+    assert.equal(macroSearch.items[0].beginner_label, "Select or resolve an object first");
+    assert.equal(macroSearch.items[0].current_status, "needs_ref");
+    assert.equal(macroSearch.items[0].capability_truth.kind, "official_macro");
+
     const liveRuntime = createCallTemplateRuntime({
       executor: new FakeFoundationBridge(),
       live: {
@@ -509,15 +522,21 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const liveMenu = liveRuntime.list_templates();
+    const liveMenuIds = liveMenu.items.map((item) => item.id);
+    assert.equal(liveMenuIds.includes("macro.set_track_controls"), true);
     assert.deepEqual(
-      liveMenu.items.map((item) => item.id),
+      liveMenuIds.filter((id) => id.startsWith("template.")),
       CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
     );
     assert.equal(liveMenu.applied.surface, "executable");
     assert.equal(liveMenu.items.every((item) => item.capability_truth.live_runnable_now === true), true);
-    assert.equal(liveMenu.items.every((item) => item.current_status === "available_now"), true);
-    assert.equal(liveMenu.items.every((item) => item.beginner_label === "Ready now"), true);
-    assert.equal(liveMenu.items[0].action_name, "read_project_summary");
+    assert.equal(
+      liveMenu.items
+        .filter((item) => item.id.startsWith("template."))
+        .every((item) => item.current_status === "available_now" && item.beginner_label === "Ready now"),
+      true,
+    );
+    assert.equal(liveMenu.items.find((item) => item.id === "template.project.read_summary").action_name, "read_project_summary");
 
     const liveExact = liveRuntime.list_templates({
       ids: ["template.project.read_summary", "template.tracks.create_track"],
@@ -616,8 +635,9 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const tempoMenu = tempoRuntime.list_templates({ limit: 10 });
+    assert.equal(tempoMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.deepEqual(
-      tempoMenu.items.map((item) => item.id),
+      tempoMenu.items.map((item) => item.id).filter((id) => id.startsWith("template.")),
       CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
     );
     assert.equal(
@@ -625,7 +645,9 @@ describe("Layer 4D call_template runtime binding", () => {
       true,
     );
     assert.equal(
-      tempoMenu.items.every((item) => item.current_status === "needs_confirmation"),
+      tempoMenu.items
+        .filter((item) => item.id.startsWith("template."))
+        .every((item) => item.current_status === "needs_confirmation"),
       true,
     );
     const tempoExact = tempoRuntime.list_templates({

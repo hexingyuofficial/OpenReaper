@@ -401,9 +401,11 @@ function capabilityGroup(item) {
 
 function taskIntents(item) {
   const tags = Array.isArray(item.tags) ? item.tags.filter((tag) => typeof tag === "string") : [];
+  const declared = Array.isArray(item.task_intents) ? item.task_intents.filter((intent) => typeof intent === "string") : [];
   const risk = stringValue(item.risk);
   const entityKind = stringValue(item.entity_kind);
   return unique([
+    ...declared,
     ...tags,
     risk,
     entityKind,

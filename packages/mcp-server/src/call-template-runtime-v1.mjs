@@ -31,6 +31,10 @@ import {
 } from "./alpha3-c4-orchestration-policy-v1.mjs";
 import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
+  createAlpha3C5MacroRuntimeEnvelope,
+  createAlpha3C5OfficialMacroDiscoveryItems,
+  isAlpha3C5OfficialMacroId,
+  planAlpha3C5GenericControlMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
@@ -673,9 +677,10 @@ export function createAcceptedOfficialTemplateCatalog() {
 
 export function createAcceptedOfficialTemplateDiscovery() {
   const catalog = createAcceptedOfficialTemplateCatalog();
-  const templates = runtimeDiscoveryTemplates(catalog, normalizeLiveRuntimeOptions());
+  const templates = runtimeCatalogDiscoveryTemplates(catalog, normalizeLiveRuntimeOptions());
   return runtimeTemplateDiscoveryFacade({
-    templates,
+    catalogTemplates: templates,
+    executableTemplates: templates,
     defaultSurface: "catalog",
   });
 }
@@ -686,13 +691,30 @@ export function createCallTemplateRuntime(options = {}) {
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const live = normalizeLiveRuntimeOptions(options.live);
-  const discoveryTemplates = runtimeDiscoveryTemplates(catalog, live);
+  const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
+  const executableDiscoveryTemplates = [
+    ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
+    ...catalogDiscoveryTemplates,
+  ];
 
   async function call_template(request = {}) {
     let id = null;
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (isAlpha3C5OfficialMacroId(id)) {
+        const plan = planAlpha3C5GenericControlMacro(id, {
+          refs: normalized.refs,
+          fields: normalized.input?.fields,
+        });
+        const envelope = createAlpha3C5MacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       assertLiveRuntimeDispatchAllowed(live, id);
       const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
       const execution = await executeTemplate({
@@ -723,7 +745,8 @@ export function createCallTemplateRuntime(options = {}) {
     accepted_catalog: acceptedCatalogSummary(catalog),
     live_gate: live.summary,
     list_templates: runtimeTemplateDiscoveryFacade({
-      templates: discoveryTemplates,
+      catalogTemplates: catalogDiscoveryTemplates,
+      executableTemplates: executableDiscoveryTemplates,
       defaultSurface: "executable",
     }).list_templates,
     async call_template(request = {}) {
@@ -1050,7 +1073,7 @@ function acceptedCatalogSummary(catalog) {
   });
 }
 
-function runtimeDiscoveryTemplates(catalog, live) {
+function runtimeCatalogDiscoveryTemplates(catalog, live) {
   return catalog.list().map((descriptor) => {
     const allowedGroup = liveAllowedGroupForTemplateId(descriptor.id);
     const knownBlocker = runtimeKnownBlocker(descriptor);
@@ -1076,21 +1099,26 @@ function runtimeDiscoveryTemplates(catalog, live) {
   });
 }
 
-function runtimeTemplateDiscoveryFacade({ templates, defaultSurface }) {
-  const templatesById = new Map(templates.map((template) => [template.id, template]));
-  const allDiscovery = createDiscoveryCatalog({ templates });
-  const executableDiscovery = createDiscoveryCatalog({
-    templates: templates.filter((template) => runtimeActionStatus(template) !== "blocked"
+function runtimeTemplateDiscoveryFacade({ catalogTemplates, executableTemplates, defaultSurface }) {
+  const templatesById = new Map([
+    ...catalogTemplates,
+    ...executableTemplates,
+  ].map((template) => [template.id, template]));
+  const catalogDiscovery = createDiscoveryCatalog({ templates: catalogTemplates });
+  const executableAllDiscovery = createDiscoveryCatalog({ templates: executableTemplates });
+  const executableMenuDiscovery = createDiscoveryCatalog({
+    templates: executableTemplates.filter((template) => runtimeActionStatus(template) !== "blocked"
       && runtimeActionStatus(template) !== "bug_known"),
   });
 
   return Object.freeze({
     list_templates(request = {}) {
       const normalized = normalizeRuntimeDiscoveryRequest(request, defaultSurface);
-      const discovery =
-        normalized.surface === "executable" && !runtimeDiscoveryRequestHasIds(normalized.request)
-          ? executableDiscovery
-          : allDiscovery;
+      const discovery = discoveryForRuntimeRequest(normalized, {
+        catalogDiscovery,
+        executableAllDiscovery,
+        executableMenuDiscovery,
+      });
       return runtimeActionDiscoveryResponse(
         discovery.list_templates(runtimeCapabilityTruthRequest(normalized.request)),
         normalized.surface,
@@ -1098,6 +1126,13 @@ function runtimeTemplateDiscoveryFacade({ templates, defaultSurface }) {
       );
     },
   });
+}
+
+function discoveryForRuntimeRequest(normalized, discoveries) {
+  if (normalized.surface === "catalog") return discoveries.catalogDiscovery;
+  return runtimeDiscoveryRequestHasIds(normalized.request)
+    ? discoveries.executableAllDiscovery
+    : discoveries.executableMenuDiscovery;
 }
 
 function normalizeRuntimeDiscoveryRequest(request, defaultSurface) {
@@ -1223,6 +1258,13 @@ function runtimeActionMetadata(item) {
   const currentStatus = runtimeActionStatus(item);
   return pruneUndefined({
     template_id: item.id,
+    action_kind: item.action_kind,
+    macro_kind: item.macro_kind,
+    menu_group: item.menu_group,
+    execution_shape: item.execution_shape,
+    user_label: item.user_label,
+    task_intents: item.task_intents,
+    support_status: item.support_status,
     action_name: runtimeActionName(item),
     beginner_label: runtimeBeginnerLabel(item, currentStatus),
     user_action_category: runtimeUserActionCategory(item),
@@ -1243,6 +1285,7 @@ function runtimeActionMetadata(item) {
 function runtimeActionStatus(item) {
   const blocker = typeof item.known_blocker === "string" ? item.known_blocker : null;
   if (blocker?.startsWith("known_bug:")) return "bug_known";
+  if (item.support_state === "blocked") return "blocked";
   if (item.live_runnable_now !== true) return "blocked";
   if (inputRefDeclarations(item).some((ref) => ref.required === true)) return "needs_ref";
   if (runtimeActionNeedsConfirmation(item)) return "needs_confirmation";
@@ -1250,6 +1293,9 @@ function runtimeActionStatus(item) {
 }
 
 function runtimeActionUserMessage(item, currentStatus) {
+  if (item.action_kind === "macro" && currentStatus === "available_now") {
+    return "Ready to return a plan-only macro bundle through call_template; child actions still run as accepted template calls.";
+  }
   if (currentStatus === "available_now") {
     return "Ready to run in the current bounded live runtime.";
   }
@@ -1275,6 +1321,7 @@ function runtimeActionUserMessage(item, currentStatus) {
 }
 
 function runtimeBeginnerLabel(item, currentStatus) {
+  if (item.action_kind === "macro" && currentStatus === "available_now") return "Ready as macro plan";
   if (currentStatus === "available_now" && requiredInputFields(item).length > 0) return "Ready after input";
   return ({
     available_now: "Ready now",
@@ -1294,6 +1341,9 @@ function runtimeUserActionCategory(item) {
 }
 
 function runtimeNextStep(item, currentStatus) {
+  if (item.action_kind === "macro" && currentStatus === "available_now") {
+    return "Call this macro id through call_template to get child call_template requests, typed blockers, and readback requirements.";
+  }
   if (currentStatus === "blocked") {
     return "Keep this in catalog/backlog view or configure a bounded live executor allowlist that includes this template.";
   }
@@ -1313,6 +1363,9 @@ function runtimeNextStep(item, currentStatus) {
 }
 
 function runtimeSafetyNote(item) {
+  if (item.action_kind === "macro") {
+    return "Macro planner only: no direct REAPER mutation, no alias execution, and no hidden executor.";
+  }
   if (item.risk === "destructive") return "Destructive action: use only in a disposable or explicitly approved project.";
   if (item.risk === "write") return "Changes the REAPER project: require user approval, undo evidence, and readback.";
   if (item.risk === "safe") return "Safe write: still verify the target and readback after running.";
@@ -1333,6 +1386,9 @@ function runtimeCommonPhrases(item) {
 
 function runtimeActionName(item) {
   const id = typeof item.id === "string" ? item.id : "";
+  if (id.startsWith("macro.")) {
+    return id.slice("macro.".length).replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  }
   const [, pack = "", rawName = id] = id.match(/^template\.([^.]+)\.(.+)$/) ?? [];
   const name = rawName.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
   const prefix = runtimeActionNamePrefix(pack);
