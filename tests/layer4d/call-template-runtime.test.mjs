@@ -23,6 +23,10 @@ import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
 import {
+  ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
+  ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
+import {
   ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
   ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-d1-startup-health-v1.mjs";
@@ -399,11 +403,20 @@ describe("Layer 4D call_template runtime binding", () => {
       runtimeMenu.product_surface.startup_health,
       ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
     );
+    assert.deepEqual(
+      runtimeMenu.product_surface.startup_assistant,
+      ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+    );
     assert.equal(
       runtimeMenu.product_surface.startup_health_snapshot.contract,
       ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
     );
+    assert.equal(
+      runtimeMenu.product_surface.startup_assistant_snapshot.contract,
+      ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
+    );
     assert.equal(runtimeMenu.product_surface.startup_health_snapshot.status, "needs_startup");
+    assert.equal(runtimeMenu.product_surface.startup_assistant_snapshot.status, "prepare_session");
     assert.equal(
       runtimeMenu.product_surface.orchestration_policy.contract,
       ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
@@ -411,6 +424,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.startup_assistant.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
@@ -1369,6 +1383,8 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(preview.startup_preflight[0].id, "manual_session_visible");
     assert.equal(preview.startup_health.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
     assert.equal(preview.startup_health.status, "needs_reconnect");
+    assert.equal(preview.startup_assistant.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
+    assert.equal(preview.startup_assistant.status, "reconnect_existing");
     assert.equal(preview.first_actions.length, 5);
     assert.equal(preview.first_actions.every((item) => typeof item.next_step === "string"), true);
   });

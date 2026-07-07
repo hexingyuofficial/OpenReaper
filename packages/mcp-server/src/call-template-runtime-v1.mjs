@@ -40,6 +40,10 @@ import {
   ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
   summarizeAlpha3D1StartupHealth,
 } from "./alpha3-d1-startup-health-v1.mjs";
+import {
+  ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+  summarizeAlpha3D1StartupAssistant,
+} from "./alpha3-d1-startup-assistant-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -1211,6 +1215,12 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     startup_health: ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
     startup_health_snapshot: summarizeAlpha3D1StartupHealth({
       runtime: productSurface.live_gate,
+    }),
+    startup_assistant: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+    startup_assistant_snapshot: summarizeAlpha3D1StartupAssistant({
+      runtime: productSurface.live_gate,
+    }, {
+      include_openreaper_script_path: surface === "executable",
     }),
   };
 }

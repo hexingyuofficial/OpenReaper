@@ -1,5 +1,18 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
+import {
+  ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
+  ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+  createAlpha3D1StartupSessionCard,
+  formatAlpha3D1StartupEnvFile,
+  planAlpha3D1StartupAssistant,
+  summarizeAlpha3D1StartupAssistant,
+} from "../../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
 import {
   ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
   ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
@@ -240,5 +253,175 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(menu.product_surface.startup_health_snapshot.status, "needs_reconnect");
     assert.equal(menu.product_surface.startup_health_snapshot.safety.spawned_reaper, false);
     assert.equal(menu.product_surface.startup_health_snapshot.safety.live_reaper_called, false);
+  });
+
+  it("plans a beginner startup assistant package without starting REAPER", () => {
+    const plan = planAlpha3D1StartupAssistant({
+      session: {
+        run_id: "openreaper-test-run",
+        run_root: "/tmp/openreaper-test-run",
+        owner: "owner-test",
+        generation: "3",
+      },
+    });
+
+    assert.equal(plan.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
+    assert.equal(plan.ok, false);
+    assert.equal(plan.status, "prepare_session");
+    assert.equal(plan.health.status, "needs_startup");
+    assert.equal(plan.session_card.run_id, "openreaper-test-run");
+    assert.equal(plan.session_card.owner, "owner-test");
+    assert.equal(plan.session_card.generation, 3);
+    assert.equal(plan.session_card.paths.requests_dir, "/tmp/openreaper-test-run/transport/requests");
+    assert.equal(plan.actions[0].id, "prepare_local_session_card");
+    assert.equal(plan.safety.opens_reaper, false);
+    assert.equal(plan.safety.live_reaper_called, false);
+    assert.equal(plan.safety.safe_write_called, false);
+    assert.equal(plan.safety.spawned_reaper, false);
+    assert.match(plan.user_steps.join("\n"), /Open or restart REAPER/);
+    assert.match(plan.agent_next_steps.join("\n"), /Write the session card/);
+  });
+
+  it("turns stale health into a reconnect assistant instead of live execution", () => {
+    const plan = planAlpha3D1StartupAssistant({
+      runtime: {
+        opted_in: true,
+        executor_configured: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+      expected: {
+        session_id: "old-session",
+        owner: "owner-a",
+        generation: 1,
+      },
+      observed: {
+        session_id: "new-session",
+        owner: "owner-b",
+        generation: 2,
+      },
+      requested: {
+        requires_live: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+
+    assert.equal(plan.status, "reconnect_existing");
+    assert.equal(plan.health.status, "stale_session");
+    assert.equal(plan.safety.requires_user_reaper_action, true);
+    assert.deepEqual(
+      plan.verification_steps,
+      [
+        "Check that requests and results directories exist.",
+        "Check that the session card owner, generation, session id, and connection folder match the live executor config.",
+        "Run startup health again before any live or safe-write call.",
+      ],
+    );
+  });
+
+  it("summarizes the startup assistant for compact product-surface readback", () => {
+    const summary = summarizeAlpha3D1StartupAssistant({
+      runtime: {
+        opted_in: true,
+        executor_configured: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+      expected: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      observed: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      requested: {
+        requires_live: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+
+    assert.equal(summary.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
+    assert.equal(summary.status, "ready");
+    assert.equal(summary.ok, true);
+    assert.equal(summary.helper, "npm run prepare:startup-session");
+    assert.equal(summary.session_card.env_file_path, "/tmp/openreaper-alpha3-session/reports/openreaper-session.env");
+    assert.equal(summary.session_card.openreaper_script_path, "reaper/bridge/openreaper-live-bridge.lua");
+    assert.equal(summary.safety.opens_reaper, false);
+  });
+
+  it("formats a sourceable env file from a startup session card", () => {
+    const card = createAlpha3D1StartupSessionCard({
+      run_id: "openreaper-test",
+      run_root: "/tmp/openreaper-test",
+      bridge_script_path: "/Applications/REAPER Scripts/openreaper-live-bridge.lua",
+    });
+    const envFile = formatAlpha3D1StartupEnvFile(card);
+
+    assert.match(envFile, /OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR='\/tmp\/openreaper-test\/transport'/);
+    assert.match(envFile, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH='\/Applications\/REAPER Scripts\/openreaper-live-bridge.lua'/);
+    assert.match(envFile, /OPENREAPER_LIVE_BRIDGE_GENERATION='1'/);
+  });
+
+  it("prepares a local startup session card without live calls or process spawning", () => {
+    const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-d1-"));
+    const output = execFileSync(
+      process.execPath,
+      [
+        "scripts/prepare-alpha3-startup-session.mjs",
+        "--run-id=test-session-card",
+        `--run-root=${root}`,
+        "--owner=owner-test",
+        "--generation=2",
+      ],
+      {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+      },
+    ).trim();
+    const result = JSON.parse(output);
+
+    assert.equal(result.contract, "alpha3.d1.startup_session_prepare_result.v1");
+    assert.equal(result.ok, true);
+    assert.equal(result.safety.opens_reaper, false);
+    assert.equal(result.safety.live_reaper_called, false);
+    assert.equal(result.safety.safe_write_called, false);
+    assert.equal(existsSync(result.paths.requests_dir), true);
+    assert.equal(existsSync(result.paths.results_dir), true);
+    assert.equal(existsSync(result.paths.card_path), true);
+    assert.equal(existsSync(result.paths.env_file_path), true);
+
+    const card = JSON.parse(readFileSync(result.paths.card_path, "utf8"));
+    assert.equal(card.owner, "owner-test");
+    assert.equal(card.generation, 2);
+    assert.equal(card.env.OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR, join(root, "transport"));
+
+    const scriptSource = readFileSync(
+      new URL("../../scripts/prepare-alpha3-startup-session.mjs", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(scriptSource, /child_process|spawn\(|execFile|execSync|open -a|REAPER\.app/);
+  });
+
+  it("exposes D1 startup assistant guidance through the existing list_templates product surface", () => {
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+    const menu = runtime.list_templates({ limit: 5 });
+
+    assert.deepEqual(menu.product_surface.startup_assistant, ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY);
+    assert.equal(menu.product_surface.startup_assistant.tool_surface.added_tools, 0);
+    assert.equal(menu.product_surface.startup_assistant_snapshot.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
+    assert.equal(menu.product_surface.startup_assistant_snapshot.status, "reconnect_existing");
+    assert.equal(
+      menu.product_surface.startup_assistant_snapshot.session_card.env_file_path,
+      "/tmp/openreaper-alpha3-session/reports/openreaper-session.env",
+    );
+    assert.equal(menu.product_surface.startup_assistant_snapshot.safety.opens_reaper, false);
+    assert.equal(menu.product_surface.startup_assistant_snapshot.safety.live_reaper_called, false);
   });
 });
