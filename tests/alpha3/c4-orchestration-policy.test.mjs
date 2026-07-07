@@ -7,6 +7,7 @@ import {
   ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
   ALPHA3_C4_RISK_DOMAINS,
+  ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
   createAlpha3C4OrchestrationPlanner,
   planAlpha3C4BatchReadback,
   planAlpha3C4Execution,
@@ -27,6 +28,7 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(plan.mode, "agent_side_plan_only");
     assert.equal(plan.tool_surface.added_tools, 0);
     assert.deepEqual(plan.tool_surface.execution_tools, ["call_template", "get_state"]);
+    assert.equal(plan.safe_parallel_reads.contract, ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT);
     assert.equal(plan.safe_parallel_reads.enabled, true);
     assert.deepEqual(plan.safe_parallel_reads.groups, [
       {
@@ -40,6 +42,42 @@ describe("Alpha3 C4 orchestration policy", () => {
       },
     ]);
     assert.equal(plan.calls.every((call) => call.decision === "parallel_read"), true);
+    assert.deepEqual(plan.execution_schedule, {
+      contract: ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
+      mode: "plan_only_call_template_schedule",
+      tool_surface: {
+        added_tools: 0,
+        execution_tool: "call_template",
+        artifact_tool: "get_state",
+      },
+      phases: [
+        {
+          kind: "parallel_read_group",
+          execution: "parallel",
+          call_indexes: [0, 1, 2],
+          template_ids: [
+            "template.project.read_summary",
+            "template.transport.read_state",
+            "template.project.list_markers_regions",
+          ],
+          requests: [
+            { id: "template.project.read_summary", input: {}, refs: {} },
+            { id: "template.transport.read_state", input: {}, refs: {} },
+            { id: "template.project.list_markers_regions", input: {}, refs: {} },
+          ],
+          stop_before: false,
+          evidence_required: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+        },
+      ],
+      summary: {
+        phase_count: 1,
+        parallel_phase_count: 1,
+        serial_phase_count: 0,
+        stop_phase_count: 0,
+        request_count: 3,
+      },
+      rule: "Execute parallel_read phases concurrently only when the caller can preserve per-call request/response evidence; all writes, prompts, hard stops, blockers, and dependency-linked reads stay serial.",
+    });
     assert.equal(plan.batch_readback.required, false);
   });
 
@@ -89,6 +127,12 @@ describe("Alpha3 C4 orchestration policy", () => {
     );
     assert.equal(plan.calls.every((call) => call.decision === "run_without_prompt"), true);
     assert.equal(plan.calls.every((call) => call.requires_user_prompt === false), true);
+    assert.deepEqual(
+      plan.execution_schedule.phases.map((phase) => phase.kind),
+      ["authorized_mutation", "authorized_mutation", "authorized_mutation"],
+    );
+    assert.equal(plan.execution_schedule.summary.serial_phase_count, 3);
+    assert.equal(plan.execution_schedule.summary.stop_phase_count, 0);
     assert.equal(plan.batch_readback.required, true);
     assert.equal(plan.batch_readback.contract, ALPHA3_C4_BATCH_READBACK_CONTRACT);
     assert.deepEqual(plan.batch_readback.call_indexes, [0, 1, 2]);
@@ -116,6 +160,11 @@ describe("Alpha3 C4 orchestration policy", () => {
     );
     assert.equal(plan.calls.every((call) => call.requires_user_prompt), true);
     assert.match(plan.calls[0].safety_note, /Ask once/);
+    assert.deepEqual(
+      plan.execution_schedule.phases.map((phase) => phase.execution),
+      ["stop_for_task_authorization", "stop_for_task_authorization"],
+    );
+    assert.equal(plan.execution_schedule.summary.stop_phase_count, 2);
   });
 
   it("hard-stops destructive, render/export, hardware, and privacy/download domains even when authorization is broad", () => {
@@ -159,6 +208,10 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(plan.calls.every((call) => call.decision === "requires_user_confirmation"), true);
     assert.equal(plan.calls.every((call) => call.requires_user_prompt), true);
     assert.equal(plan.authorized_fast_execution.needs_confirmation_count, 3);
+    assert.deepEqual(
+      plan.execution_schedule.phases.map((phase) => phase.kind),
+      ["hard_stop_confirmation", "hard_stop_confirmation", "hard_stop_confirmation"],
+    );
   });
 
   it("blocks unknown templates before execution planning", () => {
@@ -172,6 +225,8 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(plan.calls[0].decision, "blocked");
     assert.equal(plan.calls[0].reason, "template_not_in_accepted_runtime_catalog");
     assert.equal(plan.calls[0].readback_required, false);
+    assert.equal(plan.execution_schedule.phases[0].kind, "blocked");
+    assert.equal(plan.execution_schedule.phases[0].execution, "blocked");
   });
 
   it("exports stable vocabularies for product and trial-officer checks", () => {
@@ -190,6 +245,11 @@ describe("Alpha3 C4 orchestration policy", () => {
       ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
     );
     assert.equal(ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.tool_surface.added_tools, 0);
+    assert.equal(
+      ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.safe_parallel_reads.contract,
+      ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
+    );
+    assert.equal(ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.safe_parallel_reads.schedule_field, "execution_schedule");
     assert.deepEqual(
       ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY.batch_readback.evidence_required,
       ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],

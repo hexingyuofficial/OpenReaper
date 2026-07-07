@@ -11,6 +11,7 @@ import {
 
 export const ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT = "alpha3.c4.orchestration_policy.v1";
 export const ALPHA3_C4_BATCH_READBACK_CONTRACT = "alpha3.c4.batch_readback.v1";
+export const ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT = "alpha3.c4.safe_parallel_execution.v1";
 
 export const ALPHA3_C4_EXECUTION_DECISIONS = deepFreeze([
   "parallel_read",
@@ -54,7 +55,9 @@ export const ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY = deepFreeze({
   hard_stop_domains: ALPHA3_C4_HARD_STOP_DOMAINS,
   prompt_policy: "ask_once_per_task_and_risk_domain_then_execute_until_boundary",
   safe_parallel_reads: {
+    contract: ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
     rule: "Independent read-risk call_template reads may run concurrently. Writes, jobs, hard-stop domains, and dependency-linked reads stay serial.",
+    schedule_field: "execution_schedule",
   },
   authorized_fast_execution: {
     rule: "Task authorization may suppress repeated prompts only inside reversible allowed risk domains.",
@@ -140,6 +143,7 @@ export function planAlpha3C4Execution(request = {}, options = {}) {
     },
     calls: plannedCalls,
     safe_parallel_reads: {
+      contract: ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
       enabled: parallelReadGroups.some((group) => group.call_indexes.length > 1),
       groups: parallelReadGroups,
       rule: "Only independent read-risk call_template reads may run concurrently. Writes, jobs, hard-stop domains, and dependency-linked reads stay serial.",
@@ -151,6 +155,7 @@ export function planAlpha3C4Execution(request = {}, options = {}) {
       needs_authorization_count: plannedCalls.filter((call) => call.decision === "requires_task_authorization").length,
       needs_confirmation_count: plannedCalls.filter((call) => call.decision === "requires_user_confirmation").length,
     },
+    execution_schedule: buildSafeExecutionSchedule(plannedCalls),
     batch_readback: readbackPlan,
   });
 }
@@ -242,6 +247,7 @@ function planCall({ call, index, catalog, authorization }) {
     decision,
     can_parallelize: canParallelize,
     depends_on: normalizedDependsOn(call),
+    call_template: normalizedCallTemplateRequest(call),
     requires_user_prompt: decision === "requires_task_authorization" || decision === "requires_user_confirmation",
     readback_required: readbackRequired,
     readback_mode: readbackRequired ? "batch_after_mutation_group" : "none",
@@ -272,6 +278,108 @@ function buildSafeParallelReadGroups(plannedCalls) {
   }
   if (current.length > 0) groups.push(readGroup(current, plannedCalls));
   return groups;
+}
+
+function buildSafeExecutionSchedule(plannedCalls) {
+  const phases = [];
+  let currentParallel = [];
+  for (const call of plannedCalls) {
+    if (call.decision === "parallel_read") {
+      currentParallel.push(call);
+      continue;
+    }
+    flushParallelPhase(phases, currentParallel);
+    currentParallel = [];
+    phases.push(schedulePhaseForCall(call));
+  }
+  flushParallelPhase(phases, currentParallel);
+  return deepFreeze({
+    contract: ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
+    mode: "plan_only_call_template_schedule",
+    tool_surface: {
+      added_tools: 0,
+      execution_tool: "call_template",
+      artifact_tool: "get_state",
+    },
+    phases,
+    summary: summarizeSchedulePhases(phases),
+    rule: "Execute parallel_read phases concurrently only when the caller can preserve per-call request/response evidence; all writes, prompts, hard stops, blockers, and dependency-linked reads stay serial.",
+  });
+}
+
+function flushParallelPhase(phases, calls) {
+  if (calls.length === 0) return;
+  phases.push(deepFreeze({
+    kind: calls.length > 1 ? "parallel_read_group" : "serial_read",
+    execution: calls.length > 1 ? "parallel" : "serial",
+    call_indexes: calls.map((call) => call.index),
+    template_ids: calls.map((call) => call.id),
+    requests: calls.map((call) => call.call_template),
+    stop_before: false,
+    evidence_required: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+  }));
+}
+
+function schedulePhaseForCall(call) {
+  const base = {
+    call_indexes: [call.index],
+    template_ids: call.id ? [call.id] : [],
+    requests: call.call_template ? [call.call_template] : [],
+    evidence_required: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+  };
+  if (call.decision === "serial_read") {
+    return deepFreeze({
+      kind: "serial_read",
+      execution: "serial",
+      ...base,
+      stop_before: false,
+      reason: "dependency_linked_or_job_shaped_read",
+    });
+  }
+  if (call.decision === "run_without_prompt") {
+    return deepFreeze({
+      kind: "authorized_mutation",
+      execution: "serial",
+      ...base,
+      stop_before: false,
+      reason: "inside_task_authorization",
+    });
+  }
+  if (call.decision === "requires_task_authorization") {
+    return deepFreeze({
+      kind: "authorization_gate",
+      execution: "stop_for_task_authorization",
+      ...base,
+      stop_before: true,
+      reason: "missing_task_authorization",
+    });
+  }
+  if (call.decision === "requires_user_confirmation") {
+    return deepFreeze({
+      kind: "hard_stop_confirmation",
+      execution: "stop_for_user_confirmation",
+      ...base,
+      stop_before: true,
+      reason: call.risk_domain,
+    });
+  }
+  return deepFreeze({
+    kind: "blocked",
+    execution: "blocked",
+    ...base,
+    stop_before: true,
+    reason: call.reason ?? "blocked_before_execution",
+  });
+}
+
+function summarizeSchedulePhases(phases) {
+  return deepFreeze({
+    phase_count: phases.length,
+    parallel_phase_count: phases.filter((phase) => phase.execution === "parallel").length,
+    serial_phase_count: phases.filter((phase) => phase.execution === "serial").length,
+    stop_phase_count: phases.filter((phase) => phase.stop_before).length,
+    request_count: phases.reduce((total, phase) => total + phase.requests.length, 0),
+  });
 }
 
 function readGroup(indexes, plannedCalls) {
@@ -522,9 +630,19 @@ function normalizeCalls(calls) {
     .filter((call) => isPlainObject(call))
     .map((call) => ({
       id: typeof call.id === "string" ? call.id.trim() : null,
+      input: isPlainObject(call.input) ? clonePlainObject(call.input) : {},
+      refs: normalizeRefs(call.refs),
       depends_on: normalizedDependsOn(call),
     }))
     .filter((call) => call.id);
+}
+
+function normalizedCallTemplateRequest(call) {
+  return deepFreeze({
+    id: call.id,
+    input: isPlainObject(call.input) ? clonePlainObject(call.input) : {},
+    refs: normalizeRefs(call.refs),
+  });
 }
 
 function normalizeMutations(mutations) {
