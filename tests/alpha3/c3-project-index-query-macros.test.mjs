@@ -145,6 +145,12 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.project.create_project_map_snapshot",
       ],
     );
+    assert.equal(plan.next_actions[0].kind, "run_refresh_requests");
+    assert.deepEqual(plan.next_actions[0].request_ids, [
+      "template.project.create_observation_bundle",
+      "template.project.create_project_map_snapshot",
+    ]);
+    assert.equal(plan.next_actions[0].then, "update_project_index_from_readback_and_rerun_macro");
   });
 
   it("blocks catalog drift instead of emitting missing refresh requests", () => {
@@ -168,6 +174,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.tracks.read_mixer_controls",
       ],
     );
+    assert.equal(plan.next_actions[0].kind, "resolve_blockers");
+    assert.equal(plan.next_actions[1].kind, "run_refresh_requests");
+    assert.equal(plan.next_actions[1].status, "partial_blocked");
+    assert.deepEqual(plan.next_actions[1].blocker_codes, ["MISSING_ACCEPTED_TEMPLATE"]);
 
     const status = planAlpha3C3ProjectIndexQueryMacro("macro.index_status", {
       limit: 12,
@@ -177,6 +187,8 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       status.refresh_requests.map((request) => request.id),
       ["template.project.create_observation_bundle"],
     );
+    assert.equal(status.next_actions[0].kind, "resolve_blockers");
+    assert.equal(status.next_actions[1].status, "partial_blocked");
   });
 
   it("blocks track queries until the task-scoped index scope is fresh enough", () => {
@@ -452,6 +464,17 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(firstPage.hydrate_request.planned_macro_id, "macro.hydrate_refs");
     assert.equal(firstPage.hydrate_request.blocker, null);
     assert.deepEqual(firstPage.hydrate_request.input.refs, ["track:guid:{TRACK-1}"]);
+    assert.deepEqual(
+      firstPage.next_actions.map((action) => action.kind),
+      ["page_next", "hydrate_refs", "before_write_or_mutation"],
+    );
+    assert.equal(firstPage.next_actions[0].input.cursor, firstPage.page.next_cursor);
+    assert.equal(firstPage.next_actions[1].status, "available");
+    assert.equal(firstPage.next_actions[2].status, "required_for_writes");
+    assert.equal(
+      firstPage.next_actions[2].sequence.includes("re_resolve_targets_in_reaper"),
+      true,
+    );
 
     const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       limit: 1,
@@ -488,6 +511,13 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       ),
       true,
     );
+    const hydrateAction = firstPage.next_actions.find((action) => action.kind === "hydrate_refs");
+    const writeAction = firstPage.next_actions.find((action) => action.kind === "before_write_or_mutation");
+    assert.equal(hydrateAction.status, "blocked");
+    assert.deepEqual(hydrateAction.blocker_codes, ["MISSING_ACCEPTED_TEMPLATE"]);
+    assert.equal(hydrateAction.blockers.length, 1);
+    assert.equal(writeAction.status, "blocked_until_ref_re_resolve_available");
+    assert.deepEqual(writeAction.blocker_codes, ["MISSING_ACCEPTED_TEMPLATE"]);
   });
 
   it("queries compact selected context refs from a fresh resident project index", () => {
@@ -1237,6 +1267,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.refresh_requests.length, 0);
     assert.equal(response.result.hydrate_request.callable_now, true);
     assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(
+      response.result.next_actions.map((action) => action.kind),
+      ["hydrate_refs", "before_write_or_mutation"],
+    );
     assert.equal(runtime.last_evidence().template.id, "macro.query_tracks");
   });
 
@@ -1511,6 +1545,8 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.rows.length, 0);
     assert.equal(response.result.execution.executed, false);
     assert.equal(response.result.blockers[0].code, "MACRO_PLANNED");
+    assert.equal(response.result.next_actions[0].kind, "resolve_blockers");
+    assert.deepEqual(response.result.next_actions[0].blocker_codes, ["MACRO_PLANNED"]);
   });
 });
 

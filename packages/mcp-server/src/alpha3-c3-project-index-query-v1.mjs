@@ -620,6 +620,7 @@ export function createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
       page: normalizedPlan.page,
       refresh_requests: normalizedPlan.refresh_requests,
       hydrate_request: normalizedPlan.hydrate_request,
+      next_actions: normalizedPlan.next_actions,
       blockers: normalizedPlan.blockers,
     },
     budget: {
@@ -1195,6 +1196,17 @@ function basePlan({
   blockers,
   index_status,
 }) {
+  const uniquePlanBlockers = uniqueBlockers(blockers);
+  const next_actions = projectIndexNextActions({
+    id: macro.id,
+    input: normalized.query,
+    refs,
+    page,
+    refresh_requests,
+    hydrate_request,
+    blockers: uniquePlanBlockers,
+  });
+
   return {
     contract: ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
     ok,
@@ -1220,6 +1232,7 @@ function basePlan({
     artifact_ref: null,
     refresh_requests,
     hydrate_request,
+    next_actions,
     query_policy: {
       default_output: "decision_summary + canonical refs + freshness + coverage + compact rows",
       deep_detail_requires: ["fields", "detail", "time_range", "hydrate_refs"],
@@ -1229,7 +1242,120 @@ function basePlan({
     write_safety_loop: projectIndexWriteSafetyLoop(),
     safety: projectIndexSafety(),
     index_status,
-    blockers: uniqueBlockers(blockers),
+    blockers: uniquePlanBlockers,
+  };
+}
+
+function projectIndexNextActions({
+  id,
+  input = {},
+  refs = [],
+  page = pageEnvelope(25),
+  refresh_requests = [],
+  hydrate_request = null,
+  blockers = [],
+}) {
+  const actions = [];
+  const blockerCodes = unique(blockers.map((entry) => entry.code));
+  const nonRefreshBlockerCodes = unique(
+    blockerCodes.filter((code) => code !== "INDEX_NOT_READY" && code !== "INDEX_REFRESH_REQUIRED")
+  );
+  const hydrateBlockers = hydrateRequestBlockers(hydrate_request);
+  const hydrateBlockerCodes = unique(hydrateBlockers.map((entry) => entry.code));
+  const refreshResolvable = nonRefreshBlockerCodes.length === 0;
+  if (refresh_requests.length > 0) {
+    if (!refreshResolvable) {
+      actions.push(resolveBlockersNextAction(nonRefreshBlockerCodes));
+    }
+    actions.push({
+      kind: "run_refresh_requests",
+      status: refreshResolvable ? "available" : "partial_blocked",
+      tool: "call_template",
+      request_count: refresh_requests.length,
+      request_ids: refresh_requests.map((request) => request.id),
+      then: "update_project_index_from_readback_and_rerun_macro",
+      blocker_codes: refreshResolvable ? [] : nonRefreshBlockerCodes,
+      purpose: refreshResolvable
+        ? "Refresh the task-scoped Project SQLite Index from REAPER truth before relying on returned rows."
+        : "Some refresh requests are available, but non-refresh blockers must be resolved before this macro can become safe.",
+    });
+  } else if (blockers.length > 0) {
+    actions.push(resolveBlockersNextAction(blockerCodes));
+  }
+
+  if (page?.has_more) {
+    actions.push({
+      kind: "page_next",
+      status: blockers.length === 0 ? "available" : "blocked_until_blockers_clear",
+      tool: "call_template",
+      id,
+      input: {
+        ...cloneJson(input),
+        limit: page.limit,
+        cursor: page.next_cursor,
+      },
+      purpose: "Fetch the next compact page with the same query macro instead of requesting a full project dump.",
+    });
+  }
+
+  if (hydrate_request) {
+    actions.push({
+      kind: "hydrate_refs",
+      status: hydrate_request.callable_now ? "available" : "blocked",
+      tool: hydrate_request.id === null ? null : "call_template",
+      id: hydrate_request.id,
+      input: hydrate_request.input ?? {
+        refs: hydrate_request.refs ?? refs,
+        fields: hydrate_request.fields ?? [],
+      },
+      request_count: Array.isArray(hydrate_request.requests) ? hydrate_request.requests.length : null,
+      blocker: hydrate_request.blocker ?? null,
+      blockers: hydrateBlockers,
+      blocker_codes: hydrateBlockerCodes,
+      purpose: hydrate_request.callable_now
+        ? "Only hydrate when deeper detail is explicitly needed; compact rows are enough for scan/query decisions."
+        : hydrate_request.purpose,
+    });
+  }
+
+  if (refs.length > 0 && blockers.length === 0) {
+    const reResolveBlocked = hydrate_request !== null && hydrate_request.callable_now === false;
+    actions.push({
+      kind: "before_write_or_mutation",
+      status: reResolveBlocked ? "blocked_until_ref_re_resolve_available" : "required_for_writes",
+      sequence: projectIndexWriteSafetyLoop().required_sequence,
+      blocker_codes: reResolveBlocked ? hydrateBlockerCodes : [],
+      purpose: reResolveBlocked
+        ? "Project SQLite Index refs are candidates only; resolve the blocked ref hydration/re-resolve path before planning writes."
+        : "Project SQLite Index refs are candidates only; writes must re-resolve in REAPER and verify with readback.",
+    });
+  }
+
+  if (actions.length === 0) {
+    actions.push({
+      kind: "no_followup_required",
+      status: "complete",
+      purpose: "Use the decision summary and compact rows; request deeper detail only when the task needs it.",
+    });
+  }
+
+  return deepFreeze(actions);
+}
+
+function hydrateRequestBlockers(hydrate_request) {
+  if (!hydrate_request) return [];
+  const blockers = [];
+  if (hydrate_request.blocker) blockers.push(hydrate_request.blocker);
+  if (Array.isArray(hydrate_request.blockers)) blockers.push(...hydrate_request.blockers);
+  return uniqueBlockers(blockers);
+}
+
+function resolveBlockersNextAction(blockerCodes) {
+  return {
+    kind: "resolve_blockers",
+    status: "blocked",
+    blocker_codes: unique(blockerCodes),
+    purpose: "Resolve the reported blocker before using Project SQLite Index rows or child requests.",
   };
 }
 
@@ -3671,6 +3797,7 @@ function sharedQueryOutputContract() {
     coverage: "coverage summary",
     page: "limit/cursor/next_cursor/has_more",
     artifact_ref: "optional artifact ref for large hydrated payloads",
+    next_actions: "ordered agent/user next steps for refresh, paging, hydration, blocker recovery, and write safety",
     warnings: "bounded typed blockers or warnings",
   });
 }
@@ -3730,6 +3857,8 @@ function normalizeSince(value, blockers) {
 }
 
 function blockedPlan(id, blockers) {
+  const uniquePlanBlockers = uniqueBlockers(blockers);
+  const page = pageEnvelope(25);
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
     ok: false,
@@ -3743,12 +3872,20 @@ function blockedPlan(id, blockers) {
     rows: [],
     freshness: {},
     coverage: {},
-    page: pageEnvelope(25),
+    page,
     refresh_requests: [],
     hydrate_request: null,
+    next_actions: projectIndexNextActions({
+      id,
+      refs: [],
+      page,
+      refresh_requests: [],
+      hydrate_request: null,
+      blockers: uniquePlanBlockers,
+    }),
     write_safety_loop: projectIndexWriteSafetyLoop(),
     safety: projectIndexSafety(),
-    blockers: uniqueBlockers(blockers),
+    blockers: uniquePlanBlockers,
   });
 }
 
