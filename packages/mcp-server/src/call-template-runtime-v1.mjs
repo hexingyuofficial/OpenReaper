@@ -732,11 +732,12 @@ export function createCallTemplateRuntime(options = {}) {
         const plan = planAlpha3C3ProjectIndexQueryMacro(id, {
           ...normalized.input,
           refs: normalized.input?.refs ?? normalized.refs,
-        }, { projectIndex });
+        }, { projectIndex, catalog });
         const envelope = createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
           request: normalized,
           plan,
           projectIndex,
+          catalog,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);

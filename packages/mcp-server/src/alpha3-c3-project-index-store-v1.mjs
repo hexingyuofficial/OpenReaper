@@ -455,11 +455,12 @@ export function planAlpha3C3ProjectIndexBackgroundRefresh(input = {}) {
   });
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT,
-    ok: true,
+    ok: refreshPlan.ok,
     mode: "background_refresh_plan",
     job,
     refresh_plan: refreshPlan,
     requests: refreshPlan.requests,
+    blockers: refreshPlan.blockers,
     update_policy: {
       source_truth: "REAPER",
       apply_after_readback: true,
@@ -1064,11 +1065,14 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
       });
     }
   }
+  const bound = catalogBoundRequests(dedupeRequests(requests), input.catalog);
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
+    ok: bound.blockers.length === 0,
     mode: "task_scoped_refresh_plan",
     scopes,
-    requests: dedupeRequests(requests),
+    requests: bound.requests,
+    blockers: bound.blockers,
     update_policy: {
       source_truth: "REAPER",
       apply_after_readback: true,
@@ -1706,6 +1710,60 @@ function dedupeRequests(requests) {
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(request);
+  }
+  return result;
+}
+
+function catalogBoundRequests(requests, catalog) {
+  const blockers = [];
+  const result = [];
+  for (const request of requests) {
+    const missingTemplateIds = missingCatalogTemplateIdsForRequest(request, catalog);
+    if (missingTemplateIds.length > 0) {
+      for (const templateId of missingTemplateIds) {
+        blockers.push({
+          field: "template",
+          code: "MISSING_ACCEPTED_TEMPLATE",
+          message: `Required refresh template ${templateId} is not accepted.`,
+          recoverable: true,
+        });
+      }
+      continue;
+    }
+    result.push(request);
+  }
+  return {
+    requests: result,
+    blockers: uniqueBlockers(blockers),
+  };
+}
+
+function missingCatalogTemplateIdsForRequest(request, catalog) {
+  const ids = [];
+  if (request?.id && !catalogHasTemplate(catalog, request.id)) ids.push(request.id);
+  for (const dependencyId of Array.isArray(request?.depends_on) ? request.depends_on : []) {
+    if (!catalogHasTemplate(catalog, dependencyId)) ids.push(dependencyId);
+  }
+  return unique(ids);
+}
+
+function catalogHasTemplate(catalog, templateId) {
+  if (!templateId || !catalog || typeof catalog.get !== "function") return true;
+  return catalog.get(templateId) !== null;
+}
+
+function unique(values) {
+  return [...new Set(values)];
+}
+
+function uniqueBlockers(blockers) {
+  const seen = new Set();
+  const result = [];
+  for (const entry of blockers) {
+    const key = `${entry.field}:${entry.code}:${entry.message}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(entry);
   }
   return result;
 }

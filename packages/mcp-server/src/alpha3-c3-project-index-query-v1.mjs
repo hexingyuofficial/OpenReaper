@@ -486,7 +486,8 @@ export function createAlpha3C3ProjectIndexSchemaContract() {
 }
 
 export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {}) {
-  const macro = getAlpha3C3ProjectIndexQueryMacro(id, options);
+  const catalog = options.catalog ?? createAlpha3C3AcceptedCatalog();
+  const macro = getAlpha3C3ProjectIndexQueryMacro(id, { ...options, catalog });
   if (!macro) {
     return blockedPlan(id, [blocker("macro", "MACRO_UNKNOWN", "Project index query macro is not registered.")]);
   }
@@ -506,34 +507,34 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
 
   if (macro.id === "macro.index_status") {
-    return indexStatusPlan({ macro, normalized, indexState, blockers });
+    return indexStatusPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.selected_context") {
-    return selectedContextPlan({ macro, normalized, indexState, blockers });
+    return selectedContextPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_tracks") {
-    return queryTracksPlan({ macro, normalized, indexState, blockers });
+    return queryTracksPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_items") {
-    return queryItemsPlan({ macro, normalized, indexState, blockers });
+    return queryItemsPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_takes") {
-    return queryTakesPlan({ macro, normalized, indexState, blockers });
+    return queryTakesPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_fx") {
-    return queryFxPlan({ macro, normalized, indexState, blockers });
+    return queryFxPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_routing") {
-    return queryRoutingPlan({ macro, normalized, indexState, blockers });
+    return queryRoutingPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_markers") {
-    return queryMarkersPlan({ macro, normalized, indexState, blockers });
+    return queryMarkersPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_media") {
-    return queryMediaPlan({ macro, normalized, indexState, blockers });
+    return queryMediaPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.hydrate_refs") {
-    return hydrateRefsPlan({ macro, normalized, indexState, blockers });
+    return hydrateRefsPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.changed_since") {
     return changedSincePlan({
@@ -542,6 +543,7 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
       indexState,
       projectIndex: options.projectIndex,
       blockers,
+      catalog,
     });
   }
 
@@ -552,13 +554,14 @@ export function createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
   request = {},
   plan,
   projectIndex,
+  catalog,
   now = () => new Date(),
 } = {}) {
   const normalizedPlan = plan ?? planAlpha3C3ProjectIndexQueryMacro(request.id, {
     ...cloneJson(request.input ?? {}),
     refs: cloneJson(request.refs ?? {}),
-  }, { projectIndex });
-  const macro = getAlpha3C3ProjectIndexQueryMacro(normalizedPlan.id) ?? null;
+  }, { projectIndex, catalog });
+  const macro = getAlpha3C3ProjectIndexQueryMacro(normalizedPlan.id, { catalog }) ?? null;
   const completedAt = safeNowIso(now);
   const envelope = {
     contract: "template.execution.v1",
@@ -629,16 +632,23 @@ export function createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
   return deepFreeze(envelope);
 }
 
-function indexStatusPlan({ macro, normalized, indexState, blockers }) {
+function indexStatusPlan({ macro, normalized, indexState, blockers, catalog }) {
   const status = summarizeIndexStatus(indexState);
+  const refreshPlan = status.lifecycle === "stale_session"
+    ? { requests: [], blockers: [] }
+    : catalogBoundRequestPlans(indexStatusRefreshRequests(normalized.query), catalog);
+  const allBlockers = [
+    ...blockers,
+    ...refreshPlan.blockers,
+  ];
   const refreshRequests = status.lifecycle === "stale_session"
     ? []
-    : indexStatusRefreshRequests(normalized.query);
+    : refreshPlan.requests;
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: blockers.length === 0,
+    ok: allBlockers.length === 0,
     decision_summary: indexStatusDecisionSummary(status),
     rows: [],
     refs: [],
@@ -650,12 +660,12 @@ function indexStatusPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit),
     refresh_requests: refreshRequests,
     hydrate_request: null,
-    blockers,
+    blockers: allBlockers,
     index_status: status,
   }));
 }
 
-function queryTracksPlan({ macro, normalized, indexState, blockers }) {
+function queryTracksPlan({ macro, normalized, indexState, blockers, catalog }) {
   const trackScope = freshnessScope(indexState, "tracks");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, trackScope, normalized.query.freshness);
   const allBlockers = [
@@ -666,18 +676,22 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryTrackRows(indexState.rows.tracks, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryTrackRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryTrackRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryTracksDecisionSummary({ blockers: allBlockers, rows, trackScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryTracksDecisionSummary({ blockers: finalBlockers, rows, trackScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -695,16 +709,16 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
       complete: trackScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryItemsPlan({ macro, normalized, indexState, blockers }) {
+function queryItemsPlan({ macro, normalized, indexState, blockers, catalog }) {
   const itemScope = freshnessScope(indexState, "items");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, itemScope, normalized.query.freshness);
   const allBlockers = [
@@ -716,18 +730,22 @@ function queryItemsPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryItemRows(indexState.rows.items, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryItemRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryItemRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryItemsDecisionSummary({ blockers: allBlockers, rows, itemScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryItemsDecisionSummary({ blockers: finalBlockers, rows, itemScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -745,16 +763,16 @@ function queryItemsPlan({ macro, normalized, indexState, blockers }) {
       complete: itemScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryTakesPlan({ macro, normalized, indexState, blockers }) {
+function queryTakesPlan({ macro, normalized, indexState, blockers, catalog }) {
   const takeScope = freshnessScope(indexState, "takes");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, takeScope, normalized.query.freshness);
   const allBlockers = [
@@ -766,18 +784,22 @@ function queryTakesPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryTakeRows(indexState.rows.takes, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryTakeRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryTakeRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryTakesDecisionSummary({ blockers: allBlockers, rows, takeScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryTakesDecisionSummary({ blockers: finalBlockers, rows, takeScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -795,16 +817,16 @@ function queryTakesPlan({ macro, normalized, indexState, blockers }) {
       complete: takeScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryFxPlan({ macro, normalized, indexState, blockers }) {
+function queryFxPlan({ macro, normalized, indexState, blockers, catalog }) {
   const fxScope = freshnessScope(indexState, "fx");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, fxScope, normalized.query.freshness);
   const allBlockers = [
@@ -816,18 +838,22 @@ function queryFxPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryFxRows(indexState.rows.fx, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryFxRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryFxRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryFxDecisionSummary({ blockers: allBlockers, rows, fxScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryFxDecisionSummary({ blockers: finalBlockers, rows, fxScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -845,16 +871,16 @@ function queryFxPlan({ macro, normalized, indexState, blockers }) {
       complete: fxScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
+function queryRoutingPlan({ macro, normalized, indexState, blockers, catalog }) {
   const routingScope = freshnessScope(indexState, "routing");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, routingScope, normalized.query.freshness);
   const allBlockers = [
@@ -866,18 +892,22 @@ function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryRoutingRows(indexState.rows.sends, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryRoutingRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryRoutingRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryRoutingDecisionSummary({ blockers: allBlockers, rows, routingScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryRoutingDecisionSummary({ blockers: finalBlockers, rows, routingScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -895,16 +925,16 @@ function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
       complete: routingScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryMarkersPlan({ macro, normalized, indexState, blockers }) {
+function queryMarkersPlan({ macro, normalized, indexState, blockers, catalog }) {
   const markersScope = freshnessScope(indexState, "markers");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, markersScope, normalized.query.freshness);
   const allBlockers = [
@@ -916,18 +946,22 @@ function queryMarkersPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryMarkerRows(indexState.rows.markers_regions, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryMarkerRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryMarkerRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryMarkersDecisionSummary({ blockers: allBlockers, rows, markersScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryMarkersDecisionSummary({ blockers: finalBlockers, rows, markersScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -945,16 +979,16 @@ function queryMarkersPlan({ macro, normalized, indexState, blockers }) {
       complete: markersScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
       ? markerDetailRequest(rows.refs, normalized.query.fields)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function queryMediaPlan({ macro, normalized, indexState, blockers }) {
+function queryMediaPlan({ macro, normalized, indexState, blockers, catalog }) {
   const mediaScope = freshnessScope(indexState, "media");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, mediaScope, normalized.query.freshness);
   const allBlockers = [
@@ -966,18 +1000,22 @@ function queryMediaPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? queryMediaRows(indexState.rows.media_sources, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? queryMediaRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(queryMediaRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: queryMediaDecisionSummary({ blockers: allBlockers, rows, mediaScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: queryMediaDecisionSummary({ blockers: finalBlockers, rows, mediaScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -995,16 +1033,16 @@ function queryMediaPlan({ macro, normalized, indexState, blockers }) {
       complete: mediaScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function selectedContextPlan({ macro, normalized, indexState, blockers }) {
+function selectedContextPlan({ macro, normalized, indexState, blockers, catalog }) {
   const selectionScope = freshnessScope(indexState, "selection");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, selectionScope, normalized.query.freshness);
   const allBlockers = [
@@ -1015,18 +1053,22 @@ function selectedContextPlan({ macro, normalized, indexState, blockers }) {
   const rows = allBlockers.length === 0
     ? querySelectedContextRows(indexState.rows.selection_state, normalized.query)
     : { rows: [], next_cursor: null, refs: [] };
-  const refreshRequests = allBlockers.some((entry) =>
+  const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? selectedContextRefreshRequests(normalized.query)
-    : [];
+    ? catalogBoundRequestPlans(selectedContextRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: selectedContextDecisionSummary({ blockers: allBlockers, rows, selectionScope }),
+    ok: finalBlockers.length === 0,
+    decision_summary: selectedContextDecisionSummary({ blockers: finalBlockers, rows, selectionScope }),
     rows: rows.rows,
     refs: rows.refs,
     freshness: {
@@ -1044,17 +1086,20 @@ function selectedContextPlan({ macro, normalized, indexState, blockers }) {
       complete: selectionScope.coverage_status === "complete" || selectionScope.coverage_status === "selected_only",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
-    refresh_requests: refreshRequests,
+    refresh_requests: refreshPlan.requests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
 
-function hydrateRefsPlan({ macro, normalized, indexState, blockers }) {
-  const hydration = planHydrateRefs(normalized.query.refs, normalized.query);
+function hydrateRefsPlan({ macro, normalized, indexState, blockers, catalog }) {
+  const hydration = catalogBoundHydrationPlan(
+    planHydrateRefs(normalized.query.refs, normalized.query),
+    catalog,
+  );
   const allBlockers = [
     ...blockers,
     ...hydrateReadinessBlockers(indexState),
@@ -1078,7 +1123,7 @@ function hydrateRefsPlan({ macro, normalized, indexState, blockers }) {
       status: hydration.blockers.length === 0 ? "complete" : "partial",
       requested_ref_count: normalized.query.refs.length,
       planned_request_count: hydration.requests.length,
-      unsupported_ref_count: hydration.blockers.length,
+      unsupported_ref_count: hydration.blockers.filter((entry) => entry.code === "HYDRATE_REF_UNSUPPORTED").length,
     },
     page: pageEnvelope(normalized.query.limit),
     refresh_requests: [],
@@ -1088,7 +1133,7 @@ function hydrateRefsPlan({ macro, normalized, indexState, blockers }) {
   }));
 }
 
-function changedSincePlan({ macro, normalized, indexState, projectIndex, blockers }) {
+function changedSincePlan({ macro, normalized, indexState, projectIndex, blockers, catalog }) {
   const allBlockers = [
     ...blockers,
     ...changedSinceReadinessBlockers(indexState),
@@ -1127,7 +1172,7 @@ function changedSincePlan({ macro, normalized, indexState, projectIndex, blocker
     page: changes.page,
     refresh_requests: [],
     hydrate_request: changes.refs.length > 0
-      ? hydrateRefsRequest(changes.refs, normalized.query.fields, normalized.query.detail)
+      ? hydrateRefsNextStep(changes.refs, normalized.query, catalog)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -2907,6 +2952,31 @@ function hydrateRefsRequest(refs, fields, detail = "summary") {
   };
 }
 
+function hydrateRefsNextStep(refs, query, catalog) {
+  const hydration = catalogBoundHydrationPlan(planHydrateRefs(refs, query), catalog);
+  const missingTemplateBlockers = uniqueBlockers(
+    hydration.blockers.filter((entry) => entry.code === "MISSING_ACCEPTED_TEMPLATE")
+  );
+  if (missingTemplateBlockers.length === 0) {
+    return hydrateRefsRequest(refs, query.fields, query.detail);
+  }
+  const input = { refs, fields: query.fields };
+  if (query.detail !== "summary") input.detail = query.detail;
+  return {
+    status: "blocked_by_catalog_drift",
+    callable_now: false,
+    tool: "call_template",
+    id: "macro.hydrate_refs",
+    input,
+    planned_macro_id: "macro.hydrate_refs",
+    blocker: missingTemplateBlockers[0],
+    blockers: missingTemplateBlockers,
+    refs,
+    fields: query.fields,
+    purpose: "Hydration depends on missing accepted read templates; do not call macro.hydrate_refs until the runtime catalog drift is fixed.",
+  };
+}
+
 function markerDetailRequest(refs, fields) {
   return {
     status: "no_supported_exact_hydration",
@@ -3103,6 +3173,73 @@ function dedupeRequestPlans(requests) {
     result.push(request);
   }
   return result;
+}
+
+function catalogBoundRequestPlans(requests, catalog) {
+  const deduped = dedupeRequestPlans(requests);
+  const blockers = [];
+  const result = [];
+  for (const request of deduped) {
+    const missingTemplateIds = missingCatalogTemplateIdsForRequest(request, catalog);
+    if (missingTemplateIds.length > 0) {
+      for (const templateId of missingTemplateIds) {
+        blockers.push(blocker("template", "MISSING_ACCEPTED_TEMPLATE", `Required refresh template ${templateId} is not accepted.`));
+      }
+      continue;
+    }
+    result.push(request);
+  }
+  return {
+    requests: result,
+    blockers,
+  };
+}
+
+function catalogBoundHydrationPlan(hydration, catalog) {
+  const bound = catalogBoundRequestPlans(hydration.requests, catalog);
+  const allowedKeys = new Set(bound.requests.map((request) => JSON.stringify([request.id, request.refs, request.input])));
+  const rows = hydration.rows.map((row) => {
+    const plannedRequestIds = [];
+    for (const request of hydration.requests) {
+      if (!row.planned_request_ids.includes(request.id)) continue;
+      const key = JSON.stringify([request.id, request.refs, request.input]);
+      if (allowedKeys.has(key) && !plannedRequestIds.includes(request.id)) {
+        plannedRequestIds.push(request.id);
+      }
+    }
+    const lostRequest = plannedRequestIds.length !== row.planned_request_ids.length;
+    const status = row.status === "planned" && lostRequest
+      ? plannedRequestIds.length > 0 ? "partial" : "blocked"
+      : row.status;
+    return {
+      ...row,
+      status,
+      planned_request_ids: plannedRequestIds,
+    };
+  });
+  return {
+    ...hydration,
+    rows,
+    requests: bound.requests,
+    blockers: [
+      ...hydration.blockers,
+      ...bound.blockers,
+    ],
+  };
+}
+
+function missingCatalogTemplateIdsForRequest(request, catalog) {
+  const ids = [];
+  if (request?.id && !catalogHasTemplate(catalog, request.id)) ids.push(request.id);
+  for (const dependencyId of Array.isArray(request?.depends_on) ? request.depends_on : []) {
+    if (!catalogHasTemplate(catalog, dependencyId)) ids.push(dependencyId);
+  }
+  return unique(ids);
+}
+
+function catalogHasTemplate(catalog, templateId) {
+  if (!templateId || !catalog || typeof catalog.get !== "function") return true;
+  return catalog.get(templateId) !== null;
 }
 
 function refKind(ref) {

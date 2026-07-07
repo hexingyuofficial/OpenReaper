@@ -726,6 +726,50 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(plan.safety.live_reaper, false);
   });
 
+  it("blocks catalog drift instead of emitting missing task refresh requests", () => {
+    const plan = planAlpha3C3ProjectIndexTaskRefresh({
+      scopes: ["tracks"],
+      limit: 40,
+      catalog: catalogMissing("template.tracks.list_tracks"),
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(
+      plan.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.tracks\.list_tracks/.test(entry.message)
+      ),
+      true,
+    );
+    assert.deepEqual(
+      plan.requests.map((request) => request.id),
+      [
+        "template.project.create_project_map_snapshot",
+        "template.tracks.read_mixer_controls",
+      ],
+    );
+
+    const background = planAlpha3C3ProjectIndexBackgroundRefresh({
+      job_id: "job:c3-13:refresh",
+      scopes: ["takes"],
+      limit: 40,
+      catalog: catalogMissing("template.items.list_selected_items"),
+    });
+    assert.equal(background.ok, false);
+    assert.equal(background.refresh_plan.ok, false);
+    assert.deepEqual(
+      background.requests.map((request) => request.id),
+      ["template.project.create_project_map_snapshot"],
+    );
+    assert.equal(
+      background.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.items\.list_selected_items/.test(entry.message)
+      ),
+      true,
+    );
+    assert.equal(background.execution.executed, false);
+    assert.equal(background.execution.hidden_executor, false);
+  });
+
   it("plans background refresh jobs without adding an executor", () => {
     const plan = planAlpha3C3ProjectIndexBackgroundRefresh({
       job_id: "job:c3-12:refresh",
@@ -886,4 +930,13 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
 
 function fixedNow() {
   return new Date("2026-07-07T16:59:15.000Z");
+}
+
+function catalogMissing(...missingTemplateIds) {
+  const missing = new Set(missingTemplateIds);
+  return {
+    get(id) {
+      return missing.has(id) ? null : { id };
+    },
+  };
 }

@@ -143,6 +143,38 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     );
   });
 
+  it("blocks catalog drift instead of emitting missing refresh requests", () => {
+    const catalog = catalogMissing("template.tracks.list_tracks");
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+      limit: 10,
+      filters: { selected: true },
+    }, { catalog });
+
+    assert.equal(plan.ok, false);
+    assert.equal(
+      plan.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.tracks\.list_tracks/.test(entry.message)
+      ),
+      true,
+    );
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      [
+        "template.project.create_project_map_snapshot",
+        "template.tracks.read_mixer_controls",
+      ],
+    );
+
+    const status = planAlpha3C3ProjectIndexQueryMacro("macro.index_status", {
+      limit: 12,
+    }, { catalog: catalogMissing("template.project.create_project_map_snapshot") });
+    assert.equal(status.ok, false);
+    assert.deepEqual(
+      status.refresh_requests.map((request) => request.id),
+      ["template.project.create_observation_bundle"],
+    );
+  });
+
   it("blocks track queries until the task-scoped index scope is fresh enough", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       limit: 10,
@@ -430,6 +462,28 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(secondPage.ok, true);
     assert.deepEqual(secondPage.refs, ["track:guid:{TRACK-3}"]);
     assert.equal(secondPage.page.has_more, false);
+  });
+
+  it("blocks catalog drift on parent query hydrate next steps", () => {
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+      limit: 1,
+      fields: ["name"],
+    }, {
+      projectIndex: readyProjectIndex(),
+      catalog: catalogMissing("template.tracks.resolve_track_ref"),
+    });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["track:guid:{TRACK-1}"]);
+    assert.equal(firstPage.hydrate_request.status, "blocked_by_catalog_drift");
+    assert.equal(firstPage.hydrate_request.callable_now, false);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(
+      firstPage.hydrate_request.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.tracks\.resolve_track_ref/.test(entry.message)
+      ),
+      true,
+    );
   });
 
   it("queries compact selected context refs from a fresh resident project index", () => {
@@ -948,6 +1002,33 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.result, undefined);
   });
 
+  it("blocks catalog drift instead of emitting missing hydration requests", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      refs: ["fx:track:{TRACK-1}:0"],
+      fields: ["parameter_metadata"],
+      detail: "hydrated",
+      limit: 64,
+    }, {
+      projectIndex: readyProjectIndex(),
+      catalog: catalogMissing("template.fx.list_fx_parameters"),
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(
+      plan.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.fx\.list_fx_parameters/.test(entry.message)
+      ),
+      true,
+    );
+    assert.deepEqual(
+      plan.hydrate_request.requests.map((request) => request.id),
+      ["template.fx.read_fx_summary"],
+    );
+    assert.deepEqual(plan.rows[0].planned_request_ids, ["template.fx.read_fx_summary"]);
+    assert.equal(plan.rows[0].status, "partial");
+    assert.equal(plan.coverage.unsupported_ref_count, 0);
+  });
+
   it("blocks unsupported hydration refs with typed blockers", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
       refs: ["file:/tmp/source.wav", "marker:guid:{MARKER-1}", "region:guid:{REGION-1}"],
@@ -986,6 +1067,27 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(second.ok, true);
     assert.deepEqual(second.refs, ["item:guid:{ITEM-1}"]);
     assert.equal(second.page.has_more, false);
+  });
+
+  it("blocks catalog drift on changed-since hydrate next steps", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.changed_since", {
+      since: "2026-07-07T17:05:00.000Z",
+      limit: 2,
+    }, {
+      projectIndex: changedProjectIndex(),
+      catalog: catalogMissing("template.items.read_item_summary"),
+    });
+
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["track:guid:{TRACK-1}", "item:guid:{ITEM-1}"]);
+    assert.equal(plan.hydrate_request.status, "blocked_by_catalog_drift");
+    assert.equal(plan.hydrate_request.callable_now, false);
+    assert.equal(
+      plan.hydrate_request.blockers.some((entry) =>
+        entry.code === "MISSING_ACCEPTED_TEMPLATE" && /template\.items\.read_item_summary/.test(entry.message)
+      ),
+      true,
+    );
   });
 
   it("exposes C3 query macros and metadata through the existing executable surface", () => {
@@ -1394,6 +1496,15 @@ function readyProjectIndex() {
           payload_ref: "artifact:tracks:3",
         },
       ],
+    },
+  };
+}
+
+function catalogMissing(...missingTemplateIds) {
+  const missing = new Set(missingTemplateIds);
+  return {
+    get(id) {
+      return missing.has(id) ? null : { id };
     },
   };
 }
