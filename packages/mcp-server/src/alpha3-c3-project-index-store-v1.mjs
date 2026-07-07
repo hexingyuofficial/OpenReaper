@@ -348,6 +348,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       items: [],
       takes: [],
       fx: [],
+      sends: [],
       selection_state: [],
       object_changes: [],
     },
@@ -480,6 +481,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.fx = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_fx", observedAt);
+    },
+    replaceSends(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.sends = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeSendRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "routing",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.routing.read_project_routing_graph",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.routing = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_sends", observedAt);
     },
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -744,6 +773,19 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "fx",
       });
     }
+    if (scope === "routing") {
+      requests.push({
+        tool: "call_template",
+        id: "template.routing.read_project_routing_graph",
+        refs: {},
+        input: {
+          max_tracks: limit,
+          max_edges: Math.min(limit * 4, 400),
+          include_master_parent: true,
+        },
+        refresh_scope: "routing",
+      });
+    }
   }
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
@@ -823,6 +865,7 @@ function snapshotState(state) {
       items: cloneJson(state.rows.items),
       fx: cloneJson(state.rows.fx),
       takes: cloneJson(state.rows.takes),
+      sends: cloneJson(state.rows.sends),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -984,6 +1027,72 @@ function normalizeFxRow(row, defaults) {
   };
 }
 
+function normalizeSendRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const sourceTrackRef = typeof source.source_track_ref === "string"
+    ? source.source_track_ref
+    : typeof summary.source_track_ref === "string"
+      ? summary.source_track_ref
+      : typeof source.owner_ref === "string" && source.owner_ref.startsWith("track:")
+        ? source.owner_ref
+        : null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : sourceTrackRef,
+    source_track_ref: sourceTrackRef,
+    destination_track_ref: typeof source.destination_track_ref === "string"
+      ? source.destination_track_ref
+      : typeof summary.destination_track_ref === "string"
+        ? summary.destination_track_ref
+        : null,
+    send_index: Number.isInteger(source.send_index)
+      ? source.send_index
+      : Number.isInteger(source.index)
+        ? source.index
+        : Number.isInteger(summary.send_index)
+          ? summary.send_index
+          : null,
+    send_kind: typeof source.send_kind === "string"
+      ? source.send_kind
+      : typeof summary.send_kind === "string"
+        ? summary.send_kind
+        : "track_send",
+    muted: Boolean(source.muted ?? source.mute ?? summary.muted ?? summary.mute),
+    volume_db: finiteNumber(source.volume_db ?? summary.volume_db),
+    pan: finiteNumber(source.pan ?? summary.pan),
+    send_mode: typeof source.send_mode === "string"
+      ? source.send_mode
+      : typeof source.mode === "string"
+        ? source.mode
+        : typeof summary.send_mode === "string"
+          ? summary.send_mode
+          : typeof summary.mode === "string"
+            ? summary.mode
+            : null,
+    audio_channels: typeof source.audio_channels === "string"
+      ? source.audio_channels
+      : typeof summary.audio_channels === "string"
+        ? summary.audio_channels
+        : null,
+    midi_channels: typeof source.midi_channels === "string"
+      ? source.midi_channels
+      : typeof summary.midi_channels === "string"
+        ? summary.midi_channels
+        : null,
+    phase_inverted: Boolean(source.phase_inverted ?? summary.phase_inverted),
+    mono: Boolean(source.mono ?? summary.mono),
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary,
+  };
+}
+
 function normalizeObjectChange(change, defaults) {
   const source = isPlainObject(change) ? change : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1065,7 +1174,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;

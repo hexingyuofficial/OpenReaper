@@ -57,6 +57,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.query_items",
     "macro.query_takes",
     "macro.query_fx",
+    "macro.query_routing",
     "macro.hydrate_refs",
     "macro.changed_since",
   ],
@@ -125,6 +126,9 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.fx.list_take_fx_chain",
   "template.fx.read_fx_summary",
   "template.media.read_take_source",
+  "template.routing.read_project_routing_graph",
+  "template.routing.read_track_routing",
+  "template.routing.resolve_send_ref",
 ]);
 
 const QUERY_DETAIL_VALUES = new Set(["summary", "refs", "compact", "hydrated"]);
@@ -208,6 +212,28 @@ const FX_ROW_FIELDS = deepFreeze([
   "offline",
   "stock_plugin",
   "parameter_summary_available",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
+const ROUTING_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "source_track_ref",
+  "destination_track_ref",
+  "send_index",
+  "send_kind",
+  "muted",
+  "volume_db",
+  "pan",
+  "send_mode",
+  "audio_channels",
+  "midi_channels",
+  "phase_inverted",
+  "mono",
   "freshness_status",
   "coverage_status",
   "observed_at",
@@ -312,7 +338,20 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.fx.read_fx_summary",
     ],
   }),
-  queryMacro({ id: "macro.query_routing", user_label: "Query routing", query_kind: "routing" }),
+  queryMacro({
+    id: "macro.query_routing",
+    user_label: "Query routing",
+    summary: "Query compact send/routing rows from the Project SQLite Index by source/destination track refs, send refs, mute/mode/channel facts, and send level/pan.",
+    status: "implemented",
+    query_kind: "routing",
+    task_intents: ["find sends", "track routing", "routing graph", "receives", "large project routing query"],
+    tags: ["project_index", "sqlite", "query", "routing", "sends", "alpha3_c3"],
+    required_templates: [
+      "template.routing.read_project_routing_graph",
+      "template.routing.read_track_routing",
+      "template.routing.resolve_send_ref",
+    ],
+  }),
   queryMacro({ id: "macro.query_automation", user_label: "Query automation", query_kind: "automation" }),
   queryMacro({ id: "macro.query_markers", user_label: "Query markers", query_kind: "markers" }),
   queryMacro({ id: "macro.query_media", user_label: "Query media", query_kind: "media" }),
@@ -417,6 +456,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_fx") {
     return queryFxPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.query_routing") {
+    return queryRoutingPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.hydrate_refs") {
     return hydrateRefsPlan({ macro, normalized, indexState, blockers });
@@ -729,6 +771,56 @@ function queryFxPlan({ macro, normalized, indexState, blockers }) {
       source_scope: "fx",
       row_count: rows.rows.length,
       complete: fxScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
+function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
+  const routingScope = freshnessScope(indexState, "routing");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, routingScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateRoutingScope(normalized.query.scope),
+    ...validateRoutingFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryRoutingRows(indexState.rows.sends, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? queryRoutingRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: queryRoutingDecisionSummary({ blockers: allBlockers, rows, routingScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "routing",
+      status: routingScope.status,
+      coverage_status: routingScope.coverage_status,
+      observed_at: routingScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: routingScope.coverage_status,
+      source_scope: "routing",
+      row_count: rows.rows.length,
+      complete: routingScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
@@ -1083,6 +1175,9 @@ function readProjectIndexState(projectIndex) {
       fx: Array.isArray(raw.rows?.fx)
         ? raw.rows.fx.map(normalizeFxRow).filter(Boolean)
         : [],
+      sends: Array.isArray(raw.rows?.sends)
+        ? raw.rows.sends.map(normalizeRoutingRow).filter(Boolean)
+        : [],
       selection_state: Array.isArray(raw.rows?.selection_state)
         ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
         : [],
@@ -1231,6 +1326,71 @@ function normalizeFxRow(row) {
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
     summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeRoutingRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const sourceTrackRef = typeof source.source_track_ref === "string"
+    ? source.source_track_ref
+    : typeof summary.source_track_ref === "string"
+      ? summary.source_track_ref
+      : typeof source.owner_ref === "string" && source.owner_ref.startsWith("track:")
+        ? source.owner_ref
+        : null;
+  return {
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : sourceTrackRef,
+    source_track_ref: sourceTrackRef,
+    destination_track_ref: typeof source.destination_track_ref === "string"
+      ? source.destination_track_ref
+      : typeof summary.destination_track_ref === "string"
+        ? summary.destination_track_ref
+        : null,
+    send_index: Number.isInteger(source.send_index)
+      ? source.send_index
+      : Number.isInteger(source.index)
+        ? source.index
+        : Number.isInteger(summary.send_index)
+          ? summary.send_index
+          : null,
+    send_kind: typeof source.send_kind === "string"
+      ? source.send_kind
+      : typeof summary.send_kind === "string"
+        ? summary.send_kind
+        : "track_send",
+    muted: Boolean(source.muted ?? source.mute ?? summary.muted ?? summary.mute),
+    volume_db: finiteNumber(source.volume_db ?? summary.volume_db),
+    pan: finiteNumber(source.pan ?? summary.pan),
+    send_mode: typeof source.send_mode === "string"
+      ? source.send_mode
+      : typeof source.mode === "string"
+        ? source.mode
+        : typeof summary.send_mode === "string"
+          ? summary.send_mode
+          : typeof summary.mode === "string"
+            ? summary.mode
+            : null,
+    audio_channels: typeof source.audio_channels === "string"
+      ? source.audio_channels
+      : typeof summary.audio_channels === "string"
+        ? summary.audio_channels
+        : null,
+    midi_channels: typeof source.midi_channels === "string"
+      ? source.midi_channels
+      : typeof summary.midi_channels === "string"
+        ? summary.midi_channels
+        : null,
+    phase_inverted: Boolean(source.phase_inverted ?? summary.phase_inverted),
+    mono: Boolean(source.mono ?? summary.mono),
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary,
   };
 }
 
@@ -1426,6 +1586,20 @@ function queryFxRows(fxRows, query) {
   };
 }
 
+function queryRoutingRows(routingRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = routingRows
+    .filter((row) => row.ref)
+    .filter((row) => routingRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectRoutingRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function querySelectedContextRows(selectionRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = selectionRows
@@ -1502,8 +1676,37 @@ function fxRowMatches(row, query) {
   return true;
 }
 
+function routingRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.refs.length > 0 && !routingRefsMatch(row, query.refs)) return false;
+  if (!routingTrackFiltersMatch(row, filters)) return false;
+  if (filters.muted !== undefined && Boolean(filters.muted) !== row.muted) return false;
+  if (typeof filters.send_mode === "string" && filters.send_mode !== row.send_mode) return false;
+  if (typeof filters.mode === "string" && filters.mode !== row.send_mode) return false;
+  if (typeof filters.send_kind === "string" && filters.send_kind !== row.send_kind) return false;
+  if (filters.phase_inverted !== undefined && Boolean(filters.phase_inverted) !== row.phase_inverted) return false;
+  if (filters.mono !== undefined && Boolean(filters.mono) !== row.mono) return false;
+  if (Number.isFinite(filters.send_index) && row.send_index !== filters.send_index) return false;
+  if (Number.isFinite(filters.send_index_min) && (row.send_index ?? -Infinity) < filters.send_index_min) return false;
+  if (Number.isFinite(filters.send_index_max) && (row.send_index ?? Infinity) > filters.send_index_max) return false;
+  if (Number.isFinite(filters.min_volume_db) && (row.volume_db ?? -Infinity) < filters.min_volume_db) return false;
+  if (Number.isFinite(filters.max_volume_db) && (row.volume_db ?? Infinity) > filters.max_volume_db) return false;
+  if (Number.isFinite(filters.min_pan) && (row.pan ?? -Infinity) < filters.min_pan) return false;
+  if (Number.isFinite(filters.max_pan) && (row.pan ?? Infinity) > filters.max_pan) return false;
+  if (typeof filters.audio_channels === "string" && filters.audio_channels !== row.audio_channels) return false;
+  if (typeof filters.midi_channels === "string" && filters.midi_channels !== row.midi_channels) return false;
+  return true;
+}
+
 function fxRefsMatch(row, refs) {
   return refs.includes(row.ref) || refs.includes(row.owner_ref);
+}
+
+function routingRefsMatch(row, refs) {
+  return refs.includes(row.ref)
+    || refs.includes(row.owner_ref)
+    || refs.includes(row.source_track_ref)
+    || refs.includes(row.destination_track_ref);
 }
 
 function fxOwnerFiltersMatch(row, filters) {
@@ -1513,6 +1716,18 @@ function fxOwnerFiltersMatch(row, filters) {
   const ownerRefs = unique(raw.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
   if (ownerRefs.length === 0) return true;
   return ownerRefs.includes(row.owner_ref);
+}
+
+function routingTrackFiltersMatch(row, filters) {
+  const ownerRefs = normalizeFilterRefs(filters, "owner_ref", "owner_refs");
+  if (ownerRefs.length > 0 && !ownerRefs.includes(row.owner_ref) && !ownerRefs.includes(row.source_track_ref)) return false;
+
+  const sourceTrackRefs = normalizeFilterRefs(filters, "source_track_ref", "source_track_refs");
+  if (sourceTrackRefs.length > 0 && !sourceTrackRefs.includes(row.source_track_ref)) return false;
+
+  const destinationTrackRefs = normalizeFilterRefs(filters, "destination_track_ref", "destination_track_refs");
+  if (destinationTrackRefs.length > 0 && !destinationTrackRefs.includes(row.destination_track_ref)) return false;
+  return true;
 }
 
 function itemRefsMatch(row, refs) {
@@ -1545,6 +1760,13 @@ function takeOwnerFiltersMatch(row, filters) {
   const normalizedTrackRefs = unique(trackRefs.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
   if (normalizedTrackRefs.length > 0 && !normalizedTrackRefs.includes(row.track_ref)) return false;
   return true;
+}
+
+function normalizeFilterRefs(filters, singularField, pluralField) {
+  const raw = [];
+  if (typeof filters[singularField] === "string") raw.push(filters[singularField]);
+  if (Array.isArray(filters[pluralField])) raw.push(...filters[pluralField]);
+  return unique(raw.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
 }
 
 function itemTimeRangeMatches(row, timeRange) {
@@ -1670,6 +1892,27 @@ function projectFxRow(row, fields) {
   return projected;
 }
 
+function projectRoutingRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "owner_ref",
+    "source_track_ref",
+    "destination_track_ref",
+    "send_index",
+    "muted",
+    "volume_db",
+    "pan",
+    "send_mode",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (ROUTING_ROW_FIELDS.includes(field)) projected[field] = row[field];
+  }
+  return projected;
+}
+
 function projectSelectedContextRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -1723,6 +1966,17 @@ function validateFxFields(fields) {
   return fields
     .filter((field) => !FX_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_fx does not expose field ${field}.`));
+}
+
+function validateRoutingScope(scope) {
+  if (["project", "routing", "tracks"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_routing supports project, routing, or tracks scope.")];
+}
+
+function validateRoutingFields(fields) {
+  return fields
+    .filter((field) => !ROUTING_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_routing does not expose field ${field}.`));
 }
 
 function validateSelectedContextFields(fields) {
@@ -2013,6 +2267,50 @@ function queryFxRefreshRequests(query) {
   return dedupeRequestPlans(requests);
 }
 
+function queryRoutingRefreshRequests(query) {
+  const trackRefs = queryRoutingTrackRefs(query);
+  const sendRefs = query.refs.filter((ref) => ref.startsWith("send:"));
+  const requests = [
+    {
+      tool: "call_template",
+      id: "template.routing.read_project_routing_graph",
+      refs: {},
+      input: {
+        max_tracks: query.limit,
+        max_edges: Math.min(query.limit * 4, 400),
+        include_master_parent: true,
+      },
+      purpose: "Refresh compact project send/routing candidates from REAPER truth before using indexed routing rows.",
+    },
+  ];
+
+  for (const trackRef of trackRefs) {
+    requests.push({
+      tool: "call_template",
+      id: "template.routing.read_track_routing",
+      refs: { track_ref: trackRef },
+      input: {
+        include_receives: true,
+        include_master_parent: true,
+        max_routes: query.limit,
+      },
+      purpose: "Refresh send/receive rows for an exact track ref before using indexed routing rows.",
+    });
+  }
+
+  for (const sendRef of sendRefs) {
+    requests.push({
+      tool: "call_template",
+      id: "template.routing.resolve_send_ref",
+      refs: {},
+      input: { send_ref: sendRef },
+      purpose: "Re-resolve an exact send ref from REAPER truth before using indexed routing rows.",
+    });
+  }
+
+  return dedupeRequestPlans(requests);
+}
+
 function queryItemTrackRefs(query) {
   const filterRefs = [];
   if (typeof query.filters.track_ref === "string") filterRefs.push(query.filters.track_ref);
@@ -2052,6 +2350,18 @@ function queryFxOwnerRefs(query) {
     ...filterRefs.filter((ref) =>
       typeof ref === "string" && (ref.startsWith("track:") || ref.startsWith("take:"))
     ),
+  ]);
+}
+
+function queryRoutingTrackRefs(query) {
+  const filterRefs = [
+    ...normalizeFilterRefs(query.filters, "owner_ref", "owner_refs"),
+    ...normalizeFilterRefs(query.filters, "source_track_ref", "source_track_refs"),
+    ...normalizeFilterRefs(query.filters, "destination_track_ref", "destination_track_refs"),
+  ];
+  return unique([
+    ...query.refs.filter((ref) => ref.startsWith("track:")),
+    ...filterRefs.filter((ref) => typeof ref === "string" && ref.startsWith("track:")),
   ]);
 }
 
@@ -2368,6 +2678,13 @@ function queryFxDecisionSummary({ blockers, rows, fxScope }) {
   return `FX query returned ${rows.rows.length} compact rows with ${fxScope.status} freshness and ${fxScope.coverage_status} coverage.`;
 }
 
+function queryRoutingDecisionSummary({ blockers, rows, routingScope }) {
+  if (blockers.length > 0) {
+    return "Routing query needs a task-scoped routing refresh before send rows are safe to use.";
+  }
+  return `Routing query returned ${rows.rows.length} compact send rows with ${routingScope.status} freshness and ${routingScope.coverage_status} coverage.`;
+}
+
 function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
   if (blockers.length > 0) {
     return "Selected-context query needs a task-scoped selection refresh before refs are safe to use.";
@@ -2529,6 +2846,7 @@ function queryMacroExampleInput(id) {
   if (id === "macro.query_items") return { scope: "selection", filters: { selected: true }, limit: 25 };
   if (id === "macro.query_takes") return { scope: "selection", filters: { active: true }, limit: 25 };
   if (id === "macro.query_fx") return { filters: { stock_plugin: true }, limit: 25 };
+  if (id === "macro.query_routing") return { scope: "tracks", filters: { source_track_ref: "track:guid:{TRACK-GUID}" }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
   if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
   if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };

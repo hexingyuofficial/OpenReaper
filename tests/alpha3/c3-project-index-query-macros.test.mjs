@@ -48,9 +48,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_items").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_takes").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_fx").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_routing").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
-    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_routing").status, "planned");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_automation").status, "planned");
   });
 
   it("creates official query macro discovery entries over list_templates/call_template", () => {
@@ -63,6 +64,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const items = entries.find((entry) => entry.id === "macro.query_items");
     const takes = entries.find((entry) => entry.id === "macro.query_takes");
     const fx = entries.find((entry) => entry.id === "macro.query_fx");
+    const routing = entries.find((entry) => entry.id === "macro.query_routing");
 
     assert.equal(entries.length, 12);
     assert.equal(status.kind, "official_macro");
@@ -90,6 +92,13 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(fx.support_state, "supported");
     assert.equal(fx.known_blocker, null);
     assert.deepEqual(fx.examples[0].input, { filters: { stock_plugin: true }, limit: 25 });
+    assert.equal(routing.support_state, "supported");
+    assert.equal(routing.known_blocker, null);
+    assert.deepEqual(routing.examples[0].input, {
+      scope: "tracks",
+      filters: { source_track_ref: "track:guid:{TRACK-GUID}" },
+      limit: 25,
+    });
   });
 
   it("reports index status and refresh requests when no project index exists yet", () => {
@@ -262,6 +271,47 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       { fx_ref: "fx:track:guid:{TRACK-1}:0" },
     );
     assert.equal(plan.query_policy.raw_sql_exposed, false);
+    assert.equal(plan.safety.live_reaper, false);
+  });
+
+  it("blocks routing queries until the task-scoped routing scope is fresh enough", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      limit: 8,
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}", "send:track:guid:{TRACK-1}:0"],
+      filters: {
+        source_track_ref: "track:guid:{TRACK-1}",
+        destination_track_ref: "track:guid:{TRACK-2}",
+      },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      [
+        "template.routing.read_project_routing_graph",
+        "template.routing.read_track_routing",
+        "template.routing.read_track_routing",
+        "template.routing.resolve_send_ref",
+      ],
+    );
+    assert.deepEqual(
+      plan.refresh_requests
+        .filter((request) => request.id === "template.routing.read_track_routing")
+        .map((request) => request.refs),
+      [
+        { track_ref: "track:guid:{TRACK-1}" },
+        { track_ref: "track:guid:{TRACK-2}" },
+      ],
+    );
+    assert.deepEqual(
+      plan.refresh_requests.find((request) => request.id === "template.routing.resolve_send_ref").input,
+      { send_ref: "send:track:guid:{TRACK-1}:0" },
+    );
+    assert.equal(plan.query_policy.raw_sql_exposed, false);
+    assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
+    assert.equal(plan.safety.hidden_executor, false);
     assert.equal(plan.safety.live_reaper, false);
   });
 
@@ -537,6 +587,102 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("queries compact routing rows from a fresh resident project index", () => {
+    const projectIndex = routingProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}"],
+      filters: {
+        source_track_ref: "track:guid:{TRACK-1}",
+        muted: false,
+      },
+      limit: 1,
+      fields: ["source_track_ref", "destination_track_ref", "send_index", "volume_db", "pan", "send_mode", "payload_ref"],
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}"],
+      filters: {
+        source_track_ref: "track:guid:{TRACK-1}",
+        muted: false,
+      },
+      limit: 1,
+      cursor: firstPage.page.next_cursor,
+      fields: ["destination_track_ref", "audio_channels"],
+    }, { projectIndex });
+    const destination = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "routing",
+      filters: {
+        destination_track_ref: "track:guid:{TRACK-2}",
+        send_mode: "post_fader",
+        min_volume_db: -12,
+        max_pan: 0.25,
+      },
+      limit: 10,
+      fields: ["source_track_ref", "destination_track_ref", "send_mode", "muted"],
+    }, { projectIndex });
+    const defaultCompact = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "routing",
+      filters: { source_track_ref: "track:guid:{TRACK-1}" },
+      limit: 1,
+    }, { projectIndex });
+    const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "automation",
+      limit: 10,
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["send:track:guid:{TRACK-1}:0"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "send:track:guid:{TRACK-1}:0",
+      source_track_ref: "track:guid:{TRACK-1}",
+      destination_track_ref: "track:guid:{TRACK-2}",
+      send_index: 0,
+      volume_db: -6,
+      pan: 0,
+      send_mode: "post_fader",
+      payload_ref: "artifact:routing:graph",
+    });
+    assert.equal(firstPage.freshness.status, "fresh");
+    assert.equal(firstPage.coverage.status, "paged");
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.callable_now, true);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(firstPage.hydrate_request.input.refs, ["send:track:guid:{TRACK-1}:0"]);
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["send:track:guid:{TRACK-1}:1"]);
+    assert.equal(secondPage.page.has_more, false);
+    assert.equal(destination.ok, true);
+    assert.deepEqual(destination.refs, ["send:track:guid:{TRACK-1}:0"]);
+    assert.deepEqual(destination.rows[0], {
+      ref: "send:track:guid:{TRACK-1}:0",
+      source_track_ref: "track:guid:{TRACK-1}",
+      destination_track_ref: "track:guid:{TRACK-2}",
+      send_mode: "post_fader",
+      muted: false,
+    });
+    assert.equal(defaultCompact.ok, true);
+    assert.deepEqual(defaultCompact.rows[0], {
+      ref: "send:track:guid:{TRACK-1}:0",
+      owner_ref: "track:guid:{TRACK-1}",
+      source_track_ref: "track:guid:{TRACK-1}",
+      destination_track_ref: "track:guid:{TRACK-2}",
+      send_index: 0,
+      muted: false,
+      volume_db: -6,
+      pan: 0,
+      send_mode: "post_fader",
+      freshness_status: "fresh",
+      coverage_status: "paged",
+    });
+    assert.equal("summary" in defaultCompact.rows[0], false);
+    assert.equal("payload_ref" in defaultCompact.rows[0], false);
+    assert.equal(JSON.stringify(defaultCompact.rows[0]).includes("hardware_outputs"), false);
+    assert.equal(JSON.stringify(defaultCompact.rows[0]).includes("routing_graph"), false);
+    assert.equal(unsupportedScope.ok, false);
+    assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
+  });
+
   it("rejects raw SQL-shaped input instead of exposing database execution", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       raw_sql: "select * from tracks",
@@ -643,7 +789,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_tracks"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_items"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.query_takes"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_fx"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.query_routing"), true);
     assert.deepEqual(
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
@@ -809,6 +957,36 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(runtime.last_evidence().template.id, "macro.query_takes");
   });
 
+  it("calls query_routing through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T19:10:00.000Z"),
+      projectIndex: routingProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.query_routing",
+      input: {
+        limit: 2,
+        filters: { source_track_ref: "track:guid:{TRACK-1}" },
+        fields: ["destination_track_ref", "send_mode", "volume_db"],
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.query_routing");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.added_tools, 0);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "send:track:guid:{TRACK-1}:0",
+      "send:track:guid:{TRACK-1}:1",
+    ]);
+    assert.equal(response.result.rows.length, 2);
+    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(runtime.last_evidence().template.id, "macro.query_routing");
+  });
+
   it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T17:25:00.000Z"),
@@ -846,7 +1024,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
   it("returns typed planned blockers for future query macros through call_template", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
-      id: "macro.query_routing",
+      id: "macro.query_automation",
       input: { limit: 10 },
     });
 
@@ -1131,6 +1309,59 @@ function fxProjectIndex() {
         plugin_id: "reacomp",
         slot_index: 2,
         summary: { parameter_summary_available: true },
+      },
+    ],
+  });
+  return index;
+}
+
+function routingProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T19:08:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-9",
+  });
+  index.replaceSends({
+    snapshot_id: "snapshot:c3-9:routing",
+    observed_at: "2026-07-07T19:06:00.000Z",
+    payload_ref: "artifact:routing:graph",
+    rows: [
+      {
+        ref: "send:track:guid:{TRACK-1}:0",
+        source_track_ref: "track:guid:{TRACK-1}",
+        destination_track_ref: "track:guid:{TRACK-2}",
+        send_index: 0,
+        send_mode: "post_fader",
+        volume_db: -6,
+        pan: 0,
+        audio_channels: "1/2->1/2",
+        midi_channels: "all",
+        summary: {
+          hardware_outputs: ["hw:output:1"],
+          routing_graph: { edges: Array.from({ length: 16 }, (_, index) => `edge:${index}`) },
+        },
+      },
+      {
+        ref: "send:track:guid:{TRACK-1}:1",
+        source_track_ref: "track:guid:{TRACK-1}",
+        destination_track_ref: "track:guid:{TRACK-3}",
+        send_index: 1,
+        send_mode: "pre_fader",
+        volume_db: -12,
+        pan: 0.5,
+        audio_channels: "1/2->3/4",
+      },
+      {
+        ref: "send:track:guid:{TRACK-2}:0",
+        source_track_ref: "track:guid:{TRACK-2}",
+        destination_track_ref: "track:guid:{TRACK-1}",
+        send_index: 0,
+        send_mode: "post_fader",
+        muted: true,
+        volume_db: -18,
+        pan: -0.25,
       },
     ],
   });

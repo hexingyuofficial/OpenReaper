@@ -349,6 +349,71 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     });
   });
 
+  it("maintains routing/send rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-9",
+    });
+
+    const result = index.replaceSends({
+      snapshot_id: "snapshot:c3-9:routing",
+      observed_at: "2026-07-07T19:05:00.000Z",
+      payload_ref: "artifact:routing:graph",
+      rows: [
+        {
+          ref: "send:track:guid:{A}:0",
+          source_track_ref: "track:guid:{A}",
+          destination_track_ref: "track:guid:{B}",
+          send_index: 0,
+          send_mode: "post_fader",
+          volume_db: -6,
+          pan: 0,
+        },
+        {
+          ref: "send:track:guid:{B}:0",
+          owner_ref: "track:guid:{B}",
+          destination_track_ref: "track:guid:{A}",
+          send_index: 0,
+          muted: true,
+          summary: {
+            send_mode: "pre_fader",
+            audio_channels: "1/2->1/2",
+          },
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_routing", {
+      scope: "routing",
+      limit: 10,
+      filters: { source_track_ref: "track:guid:{A}" },
+      fields: ["source_track_ref", "destination_track_ref", "send_index", "send_mode", "volume_db", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_sends");
+    assert.equal(snapshot.rows.sends.length, 2);
+    assert.equal(snapshot.rows.sends[1].source_track_ref, "track:guid:{B}");
+    assert.equal(snapshot.rows.sends[1].send_mode, "pre_fader");
+    assert.equal(snapshot.rows.sends[0].payload_ref, "artifact:routing:graph");
+    assert.equal(snapshot.freshness_scopes.routing.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.routing.coverage_status, "paged");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "routing"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["send:track:guid:{A}:0"]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "send:track:guid:{A}:0",
+      source_track_ref: "track:guid:{A}",
+      destination_track_ref: "track:guid:{B}",
+      send_index: 0,
+      send_mode: "post_fader",
+      volume_db: -6,
+      payload_ref: "artifact:routing:graph",
+    });
+  });
+
   it("marks selected context stale after selection-changing readback", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
 
@@ -379,12 +444,12 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
 
   it("plans task-scoped refresh requests over accepted templates only", () => {
     const plan = planAlpha3C3ProjectIndexTaskRefresh({
-      scopes: ["project_head", "tracks", "items", "takes", "fx", "selection", "tracks"],
+      scopes: ["project_head", "tracks", "items", "takes", "fx", "routing", "selection", "tracks"],
       limit: 40,
     });
 
     assert.equal(plan.contract, ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT);
-    assert.deepEqual(plan.scopes, ["project_head", "tracks", "items", "takes", "fx", "selection"]);
+    assert.deepEqual(plan.scopes, ["project_head", "tracks", "items", "takes", "fx", "routing", "selection"]);
     assert.deepEqual(
       plan.requests.map((request) => request.id),
       [
@@ -396,6 +461,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         "template.items.list_selected_items",
         "template.items.list_selected_items",
         "template.items.read_item_summary",
+        "template.routing.read_project_routing_graph",
       ],
     );
     const takesOnly = planAlpha3C3ProjectIndexTaskRefresh({
@@ -431,6 +497,19 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         "template.tracks.read_mixer_controls",
       ],
     );
+    const routingOnly = planAlpha3C3ProjectIndexTaskRefresh({
+      scopes: ["routing"],
+      limit: 40,
+    });
+    assert.deepEqual(
+      routingOnly.requests.map((request) => request.id),
+      ["template.routing.read_project_routing_graph"],
+    );
+    assert.deepEqual(routingOnly.requests[0].input, {
+      max_tracks: 40,
+      max_edges: 160,
+      include_master_parent: true,
+    });
     assert.equal(plan.update_policy.source_truth, "REAPER");
     assert.equal(plan.update_policy.apply_after_readback, true);
     assert.equal(plan.safety.hidden_executor, false);
