@@ -10,6 +10,7 @@ import {
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
 
 export const ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT = "alpha3.c4.orchestration_policy.v1";
+export const ALPHA3_C4_BATCH_READBACK_CONTRACT = "alpha3.c4.batch_readback.v1";
 
 export const ALPHA3_C4_EXECUTION_DECISIONS = deepFreeze([
   "parallel_read",
@@ -59,8 +60,10 @@ export const ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY = deepFreeze({
     rule: "Task authorization may suppress repeated prompts only inside reversible allowed risk domains.",
   },
   batch_readback: {
+    contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
     mode: "batch_after_mutation_group",
     evidence_required: ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
+    planner_function: "planAlpha3C4BatchReadback",
   },
   planner_call_shape: {
     function: "planAlpha3C4Execution",
@@ -149,6 +152,38 @@ export function planAlpha3C4Execution(request = {}, options = {}) {
       needs_confirmation_count: plannedCalls.filter((call) => call.decision === "requires_user_confirmation").length,
     },
     batch_readback: readbackPlan,
+  });
+}
+
+export function planAlpha3C4BatchReadback(request = {}, options = {}) {
+  const catalog = options.catalog ?? createAlpha3C4AcceptedCatalog();
+  const mutations = normalizeMutations(request.mutations ?? request.calls);
+  const planned = mutations.map((mutation, index) => planReadbackForMutation({
+    mutation,
+    index,
+    catalog,
+  }));
+  const requests = dedupeReadbackRequests(planned.flatMap((entry) => entry.requests));
+  const blockers = planned.flatMap((entry) => entry.blockers);
+
+  return deepFreeze({
+    contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
+    ok: blockers.length === 0,
+    mode: "plan_only_call_template_readback",
+    tool_surface: {
+      added_tools: 0,
+      readback_tool: "call_template",
+      artifact_tool: "get_state",
+    },
+    requests,
+    blockers,
+    coverage: {
+      mutation_count: mutations.length,
+      readback_request_count: requests.length,
+      blocked_count: blockers.length,
+      status: blockers.length === 0 ? "covered" : requests.length > 0 ? "partial" : "blocked",
+    },
+    policy: "Execute readback requests after the mutation group, compare requested deltas against readback, and report mismatch as typed blockers.",
   });
 }
 
@@ -250,6 +285,7 @@ function readGroup(indexes, plannedCalls) {
 function buildBatchReadbackPlan(plannedCalls) {
   const mutationCalls = plannedCalls.filter((call) => call.readback_required);
   return deepFreeze({
+    contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
     required: mutationCalls.length > 0,
     mode: mutationCalls.length > 0 ? "batch_after_mutation_group" : "none",
     call_indexes: mutationCalls.map((call) => call.index),
@@ -261,6 +297,201 @@ function buildBatchReadbackPlan(plannedCalls) {
       ? "Run concise batch readback after the mutation group, verify requested deltas, update project index/artifacts later when available, and report mismatches as typed blockers."
       : "No mutation readback needed.",
   });
+}
+
+function planReadbackForMutation({ mutation, index, catalog }) {
+  const descriptor = typeof mutation.id === "string" ? catalog.get(mutation.id) : null;
+  if (!descriptor) {
+    return readbackPlanEntry({
+      index,
+      id: mutation.id,
+      requests: [],
+      blockers: [readbackBlocker(index, mutation.id, "READBACK_TEMPLATE_UNKNOWN", "Mutation template is not in the accepted runtime catalog.")],
+    });
+  }
+  if (descriptor.risk === "read" || descriptor.expectedDelta?.kind !== "mutation") {
+    return readbackPlanEntry({ index, id: descriptor.id, requests: [], blockers: [] });
+  }
+
+  const entities = Array.isArray(descriptor.expectedDelta?.entities) ? descriptor.expectedDelta.entities : [];
+  const requests = [];
+  const blockers = [];
+
+  for (const entity of entities) {
+    const kind = typeof entity?.entity_kind === "string" ? entity.entity_kind : "";
+    const planned = readbackRequestForEntity({ descriptor, mutation, index, kind });
+    if (planned.request) requests.push(planned.request);
+    if (planned.blocker) blockers.push(planned.blocker);
+  }
+
+  if (entities.length === 0) {
+    blockers.push(readbackBlocker(index, descriptor.id, "READBACK_DELTA_UNDECLARED", "Mutation descriptor has no expectedDelta entities to map."));
+  }
+
+  return readbackPlanEntry({
+    index,
+    id: descriptor.id,
+    requests: dedupeReadbackRequests(requests),
+    blockers,
+  });
+}
+
+function readbackRequestForEntity({ descriptor, mutation, index, kind }) {
+  if (kind === "track") {
+    const trackRef = findRef(mutation, "track");
+    if (!trackRef) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_TARGET_REF_MISSING", "Track readback needs a track ref from mutation input or output.") };
+    }
+    return {
+      request: readbackRequest(index, descriptor.id, "track_mixer_readback", {
+        id: "template.tracks.read_mixer_controls",
+        input: { include_selected: true, limit: 50 },
+        refs: { track_ref: trackRef },
+      }),
+    };
+  }
+
+  if (kind === "item" || kind === "take") {
+    const itemRef = findRef(mutation, "item");
+    if (!itemRef) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_TARGET_REF_MISSING", "Item/take readback needs an item ref from mutation input or output.") };
+    }
+    return {
+      request: readbackRequest(index, descriptor.id, "item_summary_readback", {
+        id: "template.items.read_item_summary",
+        input: { include_take_summary: true },
+        refs: { item_ref: itemRef },
+      }),
+    };
+  }
+
+  if (kind === "time_selection" || kind === "transport") {
+    return {
+      request: readbackRequest(index, descriptor.id, "transport_state_readback", {
+        id: "template.transport.read_state",
+        input: {},
+        refs: {},
+      }),
+    };
+  }
+
+  if (kind === "marker" || kind === "region") {
+    return {
+      request: readbackRequest(index, descriptor.id, "project_marker_region_readback", {
+        id: "template.project.list_markers_regions",
+        input: {
+          include_markers: kind === "marker",
+          include_regions: kind === "region",
+          limit: 100,
+        },
+        refs: {},
+      }),
+    };
+  }
+
+  if (kind === "fx_param") {
+    const fxRef = findRef(mutation, "fx");
+    if (!fxRef) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_TARGET_REF_MISSING", "FX parameter readback needs an fx ref from mutation input or output.") };
+    }
+    const input = isPlainObject(mutation.input) ? mutation.input : {};
+    const param_index = Number.isInteger(input.param_index) ? input.param_index : null;
+    if (param_index === null) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_INPUT_MISSING", "FX parameter readback needs the original param_index.") };
+    }
+    return {
+      request: readbackRequest(index, descriptor.id, "fx_parameter_readback", {
+        id: "template.fx.read_fx_parameter",
+        input: pruneUndefined({
+          param_index,
+          param_ident: typeof input.param_ident === "string" ? input.param_ident : undefined,
+        }),
+        refs: pruneUndefined({
+          fx_ref: fxRef,
+          track_ref: findRef(mutation, "track"),
+          take_ref: findRef(mutation, "take"),
+        }),
+      }),
+    };
+  }
+
+  if (kind === "fx") {
+    const fxRef = findRef(mutation, "fx");
+    if (!fxRef) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_TARGET_REF_MISSING", "FX readback needs an fx ref from mutation input or output.") };
+    }
+    return {
+      request: readbackRequest(index, descriptor.id, "fx_summary_readback", {
+        id: "template.fx.read_fx_summary",
+        input: {},
+        refs: pruneUndefined({
+          fx_ref: fxRef,
+          track_ref: findRef(mutation, "track"),
+          take_ref: findRef(mutation, "take"),
+        }),
+      }),
+    };
+  }
+
+  if (kind === "send" || kind === "routing") {
+    const trackRef = findRef(mutation, "track");
+    if (!trackRef) {
+      return { blocker: readbackBlocker(index, descriptor.id, "READBACK_TARGET_REF_MISSING", "Routing readback needs the owner track ref; send ref alone is not enough.") };
+    }
+    return {
+      request: readbackRequest(index, descriptor.id, "track_routing_readback", {
+        id: "template.routing.read_track_routing",
+        input: { include_receives: true, include_master_parent: true, max_routes: 100 },
+        refs: { track_ref: trackRef },
+      }),
+    };
+  }
+
+  return {
+    blocker: readbackBlocker(index, descriptor.id, "READBACK_ENTITY_UNMAPPED", `No generic batch readback mapping exists for entity kind ${kind || "unknown"}.`),
+  };
+}
+
+function readbackPlanEntry({ index, id, requests, blockers }) {
+  return deepFreeze({
+    mutation_index: index,
+    mutation_template_id: id ?? null,
+    requests,
+    blockers,
+  });
+}
+
+function readbackRequest(mutationIndex, mutationTemplateId, purpose, request) {
+  return deepFreeze({
+    mutation_index: mutationIndex,
+    mutation_template_id: mutationTemplateId,
+    purpose,
+    tool: "call_template",
+    call_template: request,
+    expected_evidence: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+  });
+}
+
+function readbackBlocker(mutationIndex, mutationTemplateId, code, message) {
+  return deepFreeze({
+    mutation_index: mutationIndex,
+    mutation_template_id: mutationTemplateId ?? null,
+    code,
+    message,
+    recoverable: true,
+  });
+}
+
+function dedupeReadbackRequests(requests) {
+  const seen = new Set();
+  const deduped = [];
+  for (const request of requests) {
+    const key = JSON.stringify(request.call_template);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(request);
+  }
+  return deduped;
 }
 
 function riskDomainForDescriptor(descriptor) {
@@ -294,6 +525,55 @@ function normalizeCalls(calls) {
       depends_on: normalizedDependsOn(call),
     }))
     .filter((call) => call.id);
+}
+
+function normalizeMutations(mutations) {
+  if (!Array.isArray(mutations)) return [];
+  return mutations
+    .filter(isPlainObject)
+    .map((mutation) => ({
+      id: typeof mutation.id === "string" ? mutation.id.trim() : null,
+      input: isPlainObject(mutation.input) ? clonePlainObject(mutation.input) : {},
+      refs: normalizeRefs(mutation.refs),
+      result_refs: normalizeRefs(mutation.result_refs ?? mutation.resultRefs ?? mutation.output_refs ?? mutation.outputRefs),
+    }))
+    .filter((mutation) => mutation.id);
+}
+
+function normalizeRefs(refs) {
+  if (Array.isArray(refs)) return refs.filter((ref) => typeof ref === "string" || isPlainObject(ref));
+  if (isPlainObject(refs)) return clonePlainObject(refs);
+  return {};
+}
+
+function findRef(mutation, kind) {
+  return findRefInContainer(mutation.result_refs, kind) ?? findRefInContainer(mutation.refs, kind);
+}
+
+function findRefInContainer(container, kind) {
+  if (Array.isArray(container)) {
+    return container.find((ref) => refKind(ref) === kind) ?? null;
+  }
+  if (!isPlainObject(container)) return null;
+  const direct = container[`${kind}_ref`];
+  if (direct !== undefined) return Array.isArray(direct) ? direct.find((ref) => refKind(ref) === kind) ?? direct[0] ?? null : direct;
+  for (const value of Object.values(container)) {
+    if (Array.isArray(value)) {
+      const found = value.find((entry) => refKind(entry) === kind);
+      if (found) return found;
+      continue;
+    }
+    if (refKind(value) === kind) return value;
+  }
+  return null;
+}
+
+function refKind(ref) {
+  if (typeof ref === "string") return ref.split(":")[0] ?? "";
+  if (!isPlainObject(ref)) return "";
+  if (typeof ref.kind === "string") return ref.kind;
+  if (typeof ref.ref === "string") return ref.ref.split(":")[0] ?? "";
+  return "";
 }
 
 function normalizeTaskAuthorization(authorization) {
@@ -342,6 +622,18 @@ function matchesAny(value, patterns) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function clonePlainObject(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function pruneUndefined(value) {
+  const pruned = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry !== undefined && entry !== null) pruned[key] = entry;
+  }
+  return pruned;
 }
 
 function deepFreeze(value) {

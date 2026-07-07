@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ALPHA3_C4_BATCH_READBACK_CONTRACT,
   ALPHA3_C4_EXECUTION_DECISIONS,
   ALPHA3_C4_HARD_STOP_DOMAINS,
   ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
   ALPHA3_C4_RISK_DOMAINS,
   createAlpha3C4OrchestrationPlanner,
+  planAlpha3C4BatchReadback,
   planAlpha3C4Execution,
 } from "../../packages/mcp-server/src/alpha3-c4-orchestration-policy-v1.mjs";
 
@@ -88,6 +90,7 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(plan.calls.every((call) => call.decision === "run_without_prompt"), true);
     assert.equal(plan.calls.every((call) => call.requires_user_prompt === false), true);
     assert.equal(plan.batch_readback.required, true);
+    assert.equal(plan.batch_readback.contract, ALPHA3_C4_BATCH_READBACK_CONTRACT);
     assert.deepEqual(plan.batch_readback.call_indexes, [0, 1, 2]);
     assert.deepEqual(plan.batch_readback.evidence_required, [
       "request_id",
@@ -199,5 +202,123 @@ describe("Alpha3 C4 orchestration policy", () => {
       planner.plan({ calls: [{ id: "template.project.read_summary" }] }).calls[0].decision,
       "parallel_read",
     );
+  });
+
+  it("plans concrete batch readback requests for common reversible mutations", () => {
+    const readback = planAlpha3C4BatchReadback({
+      mutations: [
+        {
+          id: "template.tracks.create_track",
+          input: { name: "Vox" },
+          result_refs: { track_ref: "track:guid:{TRACK-A}" },
+        },
+        {
+          id: "template.items.move_item",
+          input: { position_seconds: 1.25 },
+          refs: { item_ref: "item:guid:{ITEM-A}" },
+        },
+        {
+          id: "template.transport.set_time_selection",
+          input: { start_seconds: 1, end_seconds: 5 },
+        },
+        {
+          id: "template.project.create_marker",
+          input: { name: "Hook", position_seconds: 12 },
+          result_refs: { marker_ref: "marker:guid:{MARKER-A}" },
+        },
+        {
+          id: "template.fx.set_fx_parameter_normalized",
+          input: { param_index: 3, normalized_value: 0.42 },
+          refs: {
+            fx_ref: "fx:track:{TRACK-A}:0",
+            track_ref: "track:guid:{TRACK-A}",
+          },
+        },
+      ],
+    });
+
+    assert.equal(readback.contract, ALPHA3_C4_BATCH_READBACK_CONTRACT);
+    assert.equal(readback.ok, true);
+    assert.equal(readback.tool_surface.added_tools, 0);
+    assert.equal(readback.tool_surface.readback_tool, "call_template");
+    assert.deepEqual(
+      readback.requests.map((request) => request.call_template.id),
+      [
+        "template.tracks.read_mixer_controls",
+        "template.items.read_item_summary",
+        "template.transport.read_state",
+        "template.project.list_markers_regions",
+        "template.fx.read_fx_parameter",
+      ],
+    );
+    assert.deepEqual(readback.requests[0].call_template.refs, { track_ref: "track:guid:{TRACK-A}" });
+    assert.deepEqual(readback.requests[1].call_template.input, { include_take_summary: true });
+    assert.deepEqual(readback.requests[3].call_template.input, {
+      include_markers: true,
+      include_regions: false,
+      limit: 100,
+    });
+    assert.deepEqual(readback.requests[4].call_template.input, { param_index: 3 });
+    assert.deepEqual(readback.requests[4].call_template.refs, {
+      fx_ref: "fx:track:{TRACK-A}:0",
+      track_ref: "track:guid:{TRACK-A}",
+    });
+    assert.equal(readback.coverage.status, "covered");
+    assert.equal(readback.coverage.readback_request_count, 5);
+    assert.deepEqual(readback.blockers, []);
+  });
+
+  it("deduplicates repeated readback requests and returns typed blockers for missing canonical refs", () => {
+    const readback = planAlpha3C4BatchReadback({
+      mutations: [
+        {
+          id: "template.tracks.rename_track",
+          input: { name: "Lead" },
+          refs: { track_ref: "track:guid:{TRACK-A}" },
+        },
+        {
+          id: "template.tracks.set_mute",
+          input: { muted: true },
+          refs: { track_ref: "track:guid:{TRACK-A}" },
+        },
+        {
+          id: "template.items.move_item",
+          input: { position_seconds: 2 },
+        },
+      ],
+    });
+
+    assert.equal(readback.ok, false);
+    assert.equal(readback.coverage.status, "partial");
+    assert.deepEqual(
+      readback.requests.map((request) => request.call_template.id),
+      ["template.tracks.read_mixer_controls"],
+    );
+    assert.equal(readback.blockers.length, 1);
+    assert.equal(readback.blockers[0].code, "READBACK_TARGET_REF_MISSING");
+    assert.match(readback.blockers[0].message, /Item\/take readback needs an item ref/);
+  });
+
+  it("blocks unknown or currently unmapped readback targets without guessing", () => {
+    const readback = planAlpha3C4BatchReadback({
+      mutations: [
+        {
+          id: "template.project.not_real",
+        },
+        {
+          id: "template.routing.set_send_volume",
+          input: { volume_db: -6 },
+          refs: { send_ref: "send:track:{TRACK-A}:0" },
+        },
+      ],
+    });
+
+    assert.equal(readback.ok, false);
+    assert.equal(readback.coverage.status, "blocked");
+    assert.deepEqual(
+      readback.blockers.map((blocker) => blocker.code),
+      ["READBACK_TEMPLATE_UNKNOWN", "READBACK_TARGET_REF_MISSING"],
+    );
+    assert.match(readback.blockers[1].message, /owner track ref/);
   });
 });
