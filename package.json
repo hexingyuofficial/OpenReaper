@@ -25,6 +25,7 @@
     "check:alpha3-c5": "node --test tests/alpha3/c5-generic-control-macros.test.mjs",
     "check:alpha3-d2": "node scripts/check-alpha3-d2.mjs",
     "prepare:startup-session": "node scripts/prepare-alpha3-startup-session.mjs",
+    "workflow:portability": "node scripts/alpha3-d2-workflow-entrypoint.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
     "build:live-bridge": "node scripts/build-live-bridge.mjs",
     "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes && npm run check:alpha3-d1 && npm run check:alpha3-c4 && npm run check:alpha3-c5 && npm run check:alpha3-d2"
