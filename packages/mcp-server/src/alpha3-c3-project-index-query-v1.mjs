@@ -52,6 +52,8 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
   implemented_macro_ids: [
     "macro.index_status",
     "macro.query_tracks",
+    "macro.hydrate_refs",
+    "macro.changed_since",
   ],
   rule: "SQLite is a task-scoped project index/cache. REAPER remains truth; writes must re-resolve in REAPER and update the index only after readback.",
 });
@@ -182,8 +184,34 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
   queryMacro({ id: "macro.query_automation", user_label: "Query automation", query_kind: "automation" }),
   queryMacro({ id: "macro.query_markers", user_label: "Query markers", query_kind: "markers" }),
   queryMacro({ id: "macro.query_media", user_label: "Query media", query_kind: "media" }),
-  queryMacro({ id: "macro.hydrate_refs", user_label: "Hydrate refs", query_kind: "hydrate_refs" }),
-  queryMacro({ id: "macro.changed_since", user_label: "Changed since", query_kind: "changed_since" }),
+  queryMacro({
+    id: "macro.hydrate_refs",
+    user_label: "Hydrate refs",
+    summary: "Plan accepted call_template reads that hydrate exact canonical refs without dumping broad project state.",
+    status: "implemented",
+    query_kind: "hydrate_refs",
+    task_intents: ["hydrate refs", "read exact refs", "detail for selected refs", "fetch object details"],
+    tags: ["project_index", "sqlite", "query", "hydrate_refs", "refs", "alpha3_c3"],
+    required_templates: [
+      "template.tracks.resolve_track_ref",
+      "template.tracks.read_mixer_controls",
+      "template.items.read_item_summary",
+      "template.media.read_take_source",
+      "template.fx.read_fx_summary",
+      "template.fx.list_fx_parameters",
+      "template.routing.resolve_send_ref",
+      "template.automation.read_envelope_summary",
+    ],
+  }),
+  queryMacro({
+    id: "macro.changed_since",
+    user_label: "Changed since",
+    summary: "Read compact Project Index object changes since a timestamp and suggest exact hydration when needed.",
+    status: "implemented",
+    query_kind: "changed_since",
+    task_intents: ["changed since", "what changed", "recent readback changes", "index diff"],
+    tags: ["project_index", "sqlite", "query", "changed_since", "diff", "alpha3_c3"],
+  }),
 ]);
 
 export function listAlpha3C3ProjectIndexQueryMacros(options = {}) {
@@ -237,7 +265,7 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   ];
 
   if (macro.status !== "implemented") {
-    blockers.push(blocker("macro", "MACRO_PLANNED", `${macro.id} is planned but not implemented in C3.1.`));
+    blockers.push(blocker("macro", "MACRO_PLANNED", `${macro.id} is planned but not implemented in the current C3 runtime slice.`));
   }
 
   if (macro.id === "macro.index_status") {
@@ -245,6 +273,18 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_tracks") {
     return queryTracksPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.hydrate_refs") {
+    return hydrateRefsPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.changed_since") {
+    return changedSincePlan({
+      macro,
+      normalized,
+      indexState,
+      projectIndex: options.projectIndex,
+      blockers,
+    });
   }
 
   return blockedPlan(macro.id, blockers);
@@ -303,7 +343,7 @@ export function createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
       plan: normalizedPlan,
       execution: {
         executed: false,
-        reason: "C3.1 binds Project SQLite Index query planning and macro discovery only; refresh and hydration remain agent-executed through existing call_template/get_state requests.",
+        reason: "C3 query macros are plan-only. They may read resident Project Index rows or emit existing call_template requests, but they do not execute child requests, raw SQL, live REAPER, or writes.",
         added_tools: 0,
         public_call_recipe: false,
         hidden_executor: false,
@@ -406,6 +446,87 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
   }));
 }
 
+function hydrateRefsPlan({ macro, normalized, indexState, blockers }) {
+  const hydration = planHydrateRefs(normalized.query.refs, normalized.query);
+  const allBlockers = [
+    ...blockers,
+    ...hydrateReadinessBlockers(indexState),
+    ...hydration.blockers,
+  ];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: hydrateRefsDecisionSummary({ blockers: allBlockers, hydration }),
+    rows: hydration.rows,
+    refs: hydration.refs,
+    freshness: {
+      status: indexState.lifecycle === "ready" || indexState.lifecycle === "degraded" ? "fresh_enough" : "unknown",
+      source: "exact_ref_hydration_plan",
+      sqlite_is_truth: false,
+    },
+    coverage: {
+      status: hydration.blockers.length === 0 ? "complete" : "partial",
+      requested_ref_count: normalized.query.refs.length,
+      planned_request_count: hydration.requests.length,
+      unsupported_ref_count: hydration.blockers.length,
+    },
+    page: pageEnvelope(normalized.query.limit),
+    refresh_requests: [],
+    hydrate_request: hydrateRefsRequestEnvelope(hydration.requests, normalized.query.refs, normalized.query.fields),
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
+function changedSincePlan({ macro, normalized, indexState, projectIndex, blockers }) {
+  const allBlockers = [
+    ...blockers,
+    ...changedSinceReadinessBlockers(indexState),
+  ];
+  const changes = allBlockers.length === 0
+    ? readChangedSinceRows({ projectIndex, indexState, query: normalized.query })
+    : {
+        refs: [],
+        rows: [],
+        page: pageEnvelope(normalized.query.limit, normalized.query.cursor),
+        freshness: {
+          source: "project_index_object_changes",
+          sqlite_is_truth: false,
+        },
+      };
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: changedSinceDecisionSummary({ blockers: allBlockers, changes, since: normalized.query.since }),
+    rows: changes.rows,
+    refs: changes.refs,
+    freshness: {
+      ...changes.freshness,
+      lifecycle: indexState.lifecycle,
+      since: normalized.query.since,
+    },
+    coverage: {
+      status: "complete",
+      source_scope: "object_changes",
+      row_count: changes.rows.length,
+      complete: true,
+    },
+    page: changes.page,
+    refresh_requests: [],
+    hydrate_request: changes.refs.length > 0
+      ? hydrateRefsRequest(changes.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
 function basePlan({
   macro,
   normalized,
@@ -474,6 +595,7 @@ function normalizeQueryInput(request) {
   const fields = normalizeFields(source.fields, blockers);
   const detail = normalizeDetail(source.detail, blockers);
   const freshness = normalizeFreshness(source.freshness, blockers);
+  const since = normalizeSince(source.since, blockers);
 
   return {
     blockers,
@@ -483,6 +605,7 @@ function normalizeQueryInput(request) {
       filters: normalizeFilters(source.filters, blockers),
       fields,
       detail,
+      since,
       time_range: source.time_range ?? null,
       limit,
       cursor,
@@ -568,8 +691,14 @@ function normalizeFreshness(value, blockers) {
 }
 
 function normalizeRefs(value) {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim());
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? [value]
+      : isPlainObject(value)
+        ? Object.values(value).flatMap((entry) => Array.isArray(entry) ? entry : [entry])
+        : [];
+  return unique(raw.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
 }
 
 function readProjectIndexState(projectIndex) {
@@ -594,6 +723,7 @@ function readProjectIndexState(projectIndex) {
     degraded_reason: typeof raw.degraded_reason === "string" ? raw.degraded_reason : null,
     rows: {
       tracks: Array.isArray(raw.rows?.tracks) ? raw.rows.tracks.map(normalizeTrackRow) : [],
+      object_changes: Array.isArray(raw.rows?.object_changes) ? raw.rows.object_changes.map(normalizeObjectChangeRow).filter(Boolean) : [],
     },
   });
 }
@@ -640,6 +770,24 @@ function normalizeTrackRow(row) {
   };
 }
 
+function normalizeObjectChangeRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  const observedAt = typeof source.observed_at === "string" ? source.observed_at : null;
+  if (!ref || !observedAt) return null;
+  return {
+    change_id: typeof source.change_id === "string" && source.change_id
+      ? source.change_id
+      : `change:${observedAt}:${ref}`,
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    change_kind: typeof source.change_kind === "string" && source.change_kind ? source.change_kind : "changed",
+    observed_at: observedAt,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
 function freshnessScope(indexState, scopeKind) {
   return indexState.freshness_scopes[scopeKind] ?? {
     scope_kind: scopeKind,
@@ -667,9 +815,76 @@ function queryReadinessBlockers(indexState, scope, freshness) {
   return [];
 }
 
+function hydrateReadinessBlockers(indexState) {
+  if (indexState.lifecycle === "stale_session") {
+    return [blocker("index", "INDEX_STALE_SESSION", "Project index belongs to a stale bridge/session; reconnect before hydrating refs.")];
+  }
+  if (indexState.lifecycle === "closed") {
+    return [blocker("index", "INDEX_NOT_READY", "Project index is closed; reconnect or rebuild before hydrating refs.")];
+  }
+  return [];
+}
+
+function changedSinceReadinessBlockers(indexState) {
+  if (indexState.lifecycle === "stale_session") {
+    return [blocker("index", "INDEX_STALE_SESSION", "Project index belongs to a stale bridge/session; reconnect before reading changes.")];
+  }
+  if (indexState.lifecycle !== "ready" && indexState.lifecycle !== "degraded") {
+    return [blocker("index", "INDEX_NOT_READY", "Project index is not ready; run a task-scoped refresh before reading changed-since rows.")];
+  }
+  return [];
+}
+
 function freshnessStatusSatisfies(status, require) {
   if (require === "fresh") return status === "fresh";
   return status === "fresh" || status === "fresh_enough";
+}
+
+function readChangedSinceRows({ projectIndex, indexState, query }) {
+  if (typeof projectIndex?.changedSince === "function") {
+    const result = projectIndex.changedSince({
+      since: query.since,
+      limit: query.limit,
+      cursor: query.cursor,
+    });
+    return {
+      refs: Array.isArray(result.refs) ? result.refs : [],
+      rows: Array.isArray(result.rows) ? result.rows.map(projectObjectChangeRow) : [],
+      page: result.page ?? pageEnvelope(query.limit, query.cursor),
+      freshness: result.freshness ?? {
+        source: "project_index_object_changes",
+        sqlite_is_truth: false,
+      },
+    };
+  }
+
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const rows = indexState.rows.object_changes
+    .filter((row) => query.since === null || row.observed_at > query.since)
+    .sort((a, b) => a.observed_at.localeCompare(b.observed_at) || a.change_id.localeCompare(b.change_id));
+  const pageRows = rows.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < rows.length ? offset + pageRows.length : null;
+  return {
+    refs: pageRows.map((row) => row.ref),
+    rows: pageRows.map(projectObjectChangeRow),
+    page: pageEnvelope(query.limit, query.cursor, nextOffset === null ? null : encodeCursor(nextOffset)),
+    freshness: {
+      source: "project_index_object_changes",
+      sqlite_is_truth: false,
+    },
+  };
+}
+
+function projectObjectChangeRow(row) {
+  return {
+    change_id: row.change_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref ?? null,
+    change_kind: row.change_kind,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref ?? null,
+    summary: isPlainObject(row.summary) ? cloneJson(row.summary) : {},
+  };
 }
 
 function queryTrackRows(trackRows, query) {
@@ -795,19 +1010,196 @@ function queryTrackRefreshRequests(query) {
 
 function hydrateRefsRequest(refs, fields) {
   return {
-    status: "planned",
-    callable_now: false,
-    planned_macro_id: "macro.hydrate_refs",
-    blocker: {
-      code: "HYDRATE_REFS_PLANNED",
-      message: "macro.hydrate_refs is planned after C3.1; do not call it as an executable macro yet.",
-      recoverable: true,
+    status: "available",
+    callable_now: true,
+    tool: "call_template",
+    id: "macro.hydrate_refs",
+    input: {
+      refs,
+      fields,
     },
+    planned_macro_id: "macro.hydrate_refs",
+    blocker: null,
     refs,
     fields,
-    current_safe_alternative: "Request additional compact query_tracks fields now, or run accepted read templates against the returned canonical refs.",
-    purpose: "Declare the future exact-ref hydration path without suggesting an unavailable call_template route.",
+    purpose: "Hydrate returned canonical refs through the official plan-only hydrate_refs macro.",
   };
+}
+
+function hydrateRefsRequestEnvelope(requests, refs, fields) {
+  return {
+    status: requests.length > 0 ? "planned_requests" : "no_supported_refs",
+    callable_now: true,
+    planned_macro_id: "macro.hydrate_refs",
+    refs,
+    fields,
+    requests,
+    purpose: "Agent executes these existing call_template read requests when deeper detail is explicitly requested.",
+  };
+}
+
+function planHydrateRefs(refs, query) {
+  const blockers = [];
+  if (refs.length === 0) {
+    blockers.push(blocker("refs", "HYDRATE_REFS_REQUIRED", "macro.hydrate_refs requires at least one canonical ref."));
+  }
+
+  const requests = [];
+  const rows = [];
+  for (const ref of refs) {
+    const kind = refKind(ref);
+    const requestGroup = hydrateRequestsForRef(kind, ref, query);
+    if (requestGroup.blocker) {
+      blockers.push(requestGroup.blocker);
+      rows.push({
+        ref,
+        ref_kind: kind,
+        status: "blocked",
+        planned_request_ids: [],
+      });
+      continue;
+    }
+    for (const request of requestGroup.requests) requests.push(request);
+    rows.push({
+      ref,
+      ref_kind: kind,
+      status: "planned",
+      planned_request_ids: requestGroup.requests.map((request) => request.id),
+    });
+  }
+
+  return {
+    refs,
+    rows,
+    requests: dedupeRequestPlans(requests),
+    blockers,
+  };
+}
+
+function hydrateRequestsForRef(kind, ref, query) {
+  if (kind === "track") {
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.tracks.resolve_track_ref",
+        input: { track_ref: ref },
+        purpose: "Re-resolve the track ref against REAPER truth.",
+      }),
+      callTemplateRequest({
+        id: "template.tracks.read_mixer_controls",
+        refs: { track_ref: ref },
+        input: { limit: 1, include_selected: true },
+        purpose: "Read compact mixer controls for the exact track ref.",
+      }),
+    ]);
+  }
+  if (kind === "item") {
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.items.read_item_summary",
+        refs: { item_ref: ref },
+        input: { include_take_summary: query.detail === "hydrated" || query.fields.includes("take_summary") },
+        purpose: "Read compact item summary for the exact item ref.",
+      }),
+    ]);
+  }
+  if (kind === "take") {
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.media.read_take_source",
+        refs: { take_ref: ref },
+        input: {
+          include_metadata_keys: query.fields.includes("metadata_keys"),
+          include_parent_source: query.detail === "hydrated",
+        },
+        purpose: "Read compact media source information for the exact take ref.",
+      }),
+    ]);
+  }
+  if (kind === "fx") {
+    const requests = [
+      callTemplateRequest({
+        id: "template.fx.read_fx_summary",
+        refs: { fx_ref: ref },
+        input: {},
+        purpose: "Read compact FX identity and bypass/preset summary for the exact FX ref.",
+      }),
+    ];
+    if (query.detail === "hydrated" || query.fields.includes("parameters") || query.fields.includes("parameter_metadata")) {
+      requests.push(callTemplateRequest({
+        id: "template.fx.list_fx_parameters",
+        refs: { fx_ref: ref },
+        input: { limit: query.limit },
+        purpose: "List FX parameter metadata only because parameter fields were explicitly requested.",
+      }));
+    }
+    return requestGroup(requests);
+  }
+  if (kind === "send") {
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.routing.resolve_send_ref",
+        input: { send_ref: ref },
+        purpose: "Re-resolve the send ref against REAPER truth.",
+      }),
+    ]);
+  }
+  if (kind === "envelope") {
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.automation.read_envelope_summary",
+        refs: { envelope_ref: ref },
+        input: {},
+        purpose: "Read compact automation envelope summary for the exact envelope ref.",
+      }),
+    ]);
+  }
+  return {
+    requests: [],
+    blocker: blocker("refs", "HYDRATE_REF_UNSUPPORTED", `No accepted exact hydration template is mapped for ref ${ref}.`),
+  };
+}
+
+function requestGroup(requests) {
+  return {
+    requests,
+    blocker: null,
+  };
+}
+
+function callTemplateRequest({ id, refs = {}, input = {}, purpose }) {
+  return {
+    tool: "call_template",
+    id,
+    refs,
+    input,
+    purpose,
+  };
+}
+
+function dedupeRequestPlans(requests) {
+  const seen = new Set();
+  const result = [];
+  for (const request of requests) {
+    const key = JSON.stringify([request.id, request.refs, request.input]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(request);
+  }
+  return result;
+}
+
+function refKind(ref) {
+  if (typeof ref !== "string") return "unknown";
+  const lower = ref.toLocaleLowerCase();
+  if (lower.startsWith("track:")) return "track";
+  if (lower.startsWith("item:")) return "item";
+  if (lower.startsWith("take:")) return "take";
+  if (lower.startsWith("fx:")) return "fx";
+  if (lower.startsWith("send:")) return "send";
+  if (lower.startsWith("envelope:")) return "envelope";
+  if (lower.startsWith("marker:")) return "marker";
+  if (lower.startsWith("region:")) return "region";
+  return "unknown";
 }
 
 function summarizeIndexStatus(indexState) {
@@ -847,6 +1239,21 @@ function queryTracksDecisionSummary({ blockers, rows, trackScope }) {
     return "Track query needs a task-scoped index refresh before rows are safe to use.";
   }
   return `Track query returned ${rows.rows.length} compact rows with ${trackScope.status} freshness and ${trackScope.coverage_status} coverage.`;
+}
+
+function hydrateRefsDecisionSummary({ blockers, hydration }) {
+  if (blockers.length > 0) {
+    return `Hydrate refs planned ${hydration.requests.length} accepted read requests, but ${blockers.length} blockers need attention.`;
+  }
+  return `Hydrate refs planned ${hydration.requests.length} accepted read requests for ${hydration.refs.length} refs.`;
+}
+
+function changedSinceDecisionSummary({ blockers, changes, since }) {
+  if (blockers.length > 0) {
+    return "Changed-since query needs a ready Project Index before changes are safe to use.";
+  }
+  const sinceText = since === null ? "the beginning of the task index" : since;
+  return `Changed-since query returned ${changes.rows.length} compact change rows since ${sinceText}.`;
 }
 
 function pageEnvelope(limit, cursor = null, nextCursor = null) {
@@ -980,7 +1387,7 @@ function officialQueryMacroDiscoveryItem(macro) {
     exists_in_catalog: true,
     evidence_level: implemented ? "runtime_bound_static_fake" : "contract_only",
     support_state: implemented ? "supported" : "blocked",
-    known_blocker: implemented ? null : "planned_after_c3_1",
+    known_blocker: implemented ? null : "planned_after_c3_3",
     allowed_live_group: null,
   });
 }
@@ -992,6 +1399,7 @@ function sharedQueryInputContract() {
     filters: "bounded JSON object filters; no raw SQL",
     fields: "optional compact field names",
     detail: "summary|refs|compact|hydrated",
+    since: "optional ISO timestamp for changed_since",
     time_range: "optional bounded time range",
     limit: "1..100",
     cursor: "opaque project index cursor",
@@ -1025,6 +1433,7 @@ function sharedQueryInputSchema() {
       filters: { type: "object", additionalProperties: true },
       fields: { type: "array" },
       detail: { type: "string" },
+      since: { type: "string" },
       time_range: { type: "object", additionalProperties: true },
       limit: { type: "integer" },
       cursor: { type: "string" },
@@ -1053,6 +1462,19 @@ function queryMacro({
     tags,
     required_templates,
   });
+}
+
+function normalizeSince(value, blockers) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || value.trim() === "") {
+    blockers.push(blocker("since", "CHANGED_SINCE_INVALID", "since must be an ISO timestamp string."));
+    return null;
+  }
+  if (Number.isNaN(Date.parse(value))) {
+    blockers.push(blocker("since", "CHANGED_SINCE_INVALID", "since must be a valid ISO timestamp string."));
+    return null;
+  }
+  return value;
 }
 
 function blockedPlan(id, blockers) {
