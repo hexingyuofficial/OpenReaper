@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
   ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT,
@@ -185,6 +186,30 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       "release_ms",
       "wet_mix_percent",
     ]);
+    assert.equal(plan.agent_execution_flow.contract, ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT);
+    assert.equal(plan.agent_execution_flow.status, "needs_hydration_then_resume");
+    assert.equal(plan.agent_execution_flow.agent_can_continue_after_task_authorization, true);
+    assert.equal(plan.agent_execution_flow.safety.hidden_executor, false);
+    assert.equal(plan.agent_execution_flow.safety.public_call_recipe, false);
+    assert.equal(plan.agent_execution_flow.safety.raw_lua_action_shell_or_ui, false);
+    assert.equal(plan.agent_execution_flow.friction_reduction.expected_agent_round_trips, 2);
+    assert.deepEqual(plan.agent_execution_flow.steps.map((step) => step.id), [
+      "run_resolution_requests",
+      "resume_macro_with_fresh_parameter_metadata",
+      "continue_with_ready_flow",
+    ]);
+    assert.equal(plan.agent_execution_flow.steps[0].request_source, "result.plan.resolution_requests");
+    assert.deepEqual(plan.agent_execution_flow.steps[0].requests[1].budget, {
+      max_response_bytes: 120000,
+      max_items: 1000,
+      max_inline_value_bytes: 12000,
+    });
+    assert.equal(plan.agent_execution_flow.steps[0].identity_gate.expected_plugin_id, "reacomp");
+    assert.equal(plan.agent_execution_flow.steps[0].identity_gate.must_match_before_metadata_fresh, true);
+    assert.equal(plan.agent_execution_flow.steps[0].identity_gate.accepted_names.includes("ReaComp"), true);
+    assert.equal(plan.agent_execution_flow.steps[1].template_id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(plan.agent_execution_flow.steps[1].input_policy.freshness_status, "fresh");
+    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(plan.agent_execution_flow);
     assert.equal(
       plan.blockers.every((blocker) => blocker.code === "PARAMETER_METADATA_REQUIRED"),
       true,
@@ -257,6 +282,23 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.customer_readback.status, "ready_for_execution_and_readback");
     assert.equal(plan.customer_readback.success_wording_allowed, false);
     assert.equal(plan.customer_readback.lines[2].includes("read back every touched control"), true);
+    assert.equal(plan.agent_execution_flow.contract, ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT);
+    assert.equal(plan.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+    assert.equal(plan.agent_execution_flow.agent_can_continue_after_task_authorization, true);
+    assert.equal(plan.agent_execution_flow.execution_authority, "agent_calls_existing_call_template_requests");
+    assert.deepEqual(plan.agent_execution_flow.steps.map((step) => step.id), [
+      "execute_child_requests",
+      "run_readback_requests",
+      "compare_readback_to_evidence_plan",
+      "customer_readback_gate",
+    ]);
+    assert.equal(plan.agent_execution_flow.steps[0].request_source, "result.child_requests");
+    assert.equal(plan.agent_execution_flow.steps[0].request_count, 2);
+    assert.equal(plan.agent_execution_flow.steps[1].request_source, "result.readback");
+    assert.equal(plan.agent_execution_flow.friction_reduction.expected_agent_round_trips, 1);
+    assert.equal(plan.agent_execution_flow.safety.direct_live_write_from_macro, false);
+    assert.equal(plan.agent_execution_flow.safety.success_wording_allowed, false);
+    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(plan.agent_execution_flow);
     assert.equal(plan.human_readback[0].phrase, "Threshold at -18 dB.");
     assert.equal(plan.human_readback[1].phrase, "4:1 ratio.");
   });
@@ -461,6 +503,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.evidence_plan.readback_status, "not_run");
     assert.equal(response.result.customer_readback.success_wording_allowed, false);
     assert.equal(response.result.customer_readback.lines[2].includes("read back every touched control"), true);
+    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+    assert.equal(response.result.agent_execution_flow.safety.hidden_executor, false);
+    assert.equal(response.result.agent_execution_flow.tool_surface.added_tools, 0);
+    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(response.result.agent_execution_flow);
     assert.deepEqual(
       response.result.child_requests.map((request) => request.id),
       [
@@ -491,6 +537,9 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.plan.hydration_flow.status, "needs_fresh_parameter_metadata");
     assert.equal(response.result.customer_readback.status, "needs_fresh_parameter_metadata");
     assert.equal(response.result.customer_readback.lines[1].includes("Threshold at -18 dB"), true);
+    assert.equal(response.result.agent_execution_flow.status, "needs_hydration_then_resume");
+    assert.equal(response.result.agent_execution_flow.steps[1].id, "resume_macro_with_fresh_parameter_metadata");
+    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(response.result.agent_execution_flow);
     assert.equal(response.result.evidence_plan.child_request_count, 0);
     assert.deepEqual(response.result.plan.hydration_flow.steps.map((step) => step.id), [
       "verify_fx_identity",
@@ -541,3 +590,18 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.blockers[0].field, "ratio");
   });
 });
+
+function assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(agentExecutionFlow) {
+  const allowedIds = new Set([
+    "template.fx.read_fx_summary",
+    "template.fx.list_fx_parameters",
+    "template.fx.read_fx_parameter",
+    "template.fx.set_fx_parameter_normalized",
+  ]);
+  for (const step of agentExecutionFlow.steps) {
+    for (const request of step.requests ?? []) {
+      assert.equal(request.tool, "call_template", step.id);
+      assert.equal(allowedIds.has(request.id), true, `${step.id}:${request.id}`);
+    }
+  }
+}

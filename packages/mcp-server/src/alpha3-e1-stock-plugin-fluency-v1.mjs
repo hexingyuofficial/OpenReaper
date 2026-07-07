@@ -12,6 +12,7 @@ import {
 export const ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT = "alpha3.e1.stock_plugin_fluency.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT = "alpha3.e1.stock_plugin_customer_readback.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT = "alpha3.e1.stock_plugin_evidence_plan.v1";
+export const ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT = "alpha3.e1.stock_plugin_agent_execution_flow.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_MACRO_ID = "macro.set_stock_plugin_controls";
 export const ALPHA3_E1_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
 
@@ -343,6 +344,26 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
     ? fieldPlans.map((plan) => readParameterRequest(plan, refs))
     : [];
   const humanReadback = blockers.length === 0 ? fieldPlans.map(humanReadbackItem) : [];
+  const resolutionRequests = plugin && refs.fx_ref
+    ? [
+        {
+          tool: "call_template",
+          id: "template.fx.read_fx_summary",
+          refs: { fx_ref: refs.fx_ref },
+          input: {},
+          budget: STOCK_PLUGIN_SUMMARY_BUDGET,
+          purpose: "verify plugin identity before semantic parameter writes",
+        },
+        {
+          tool: "call_template",
+          id: "template.fx.list_fx_parameters",
+          refs: { fx_ref: refs.fx_ref },
+          input: { limit: 128 },
+          budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+          purpose: "resolve semantic controls to fresh param_index values",
+        },
+      ]
+    : [];
   const hydrationFlow = createHydrationFlow({
     plugin,
     starter,
@@ -372,6 +393,18 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
     hydrationFlow,
     evidencePlan,
   });
+  const agentExecutionFlow = createAgentExecutionFlow({
+    plugin,
+    starter,
+    controls,
+    refs,
+    blockers,
+    resolutionRequests,
+    requests,
+    readback,
+    hydrationFlow,
+    evidencePlan,
+  });
 
   return deepFreeze({
     contract: ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
@@ -390,31 +423,13 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
       "plugin_identity",
       "fresh_fx_parameter_metadata",
     ],
-    resolution_requests: plugin && refs.fx_ref
-      ? [
-          {
-            tool: "call_template",
-            id: "template.fx.read_fx_summary",
-            refs: { fx_ref: refs.fx_ref },
-            input: {},
-            budget: STOCK_PLUGIN_SUMMARY_BUDGET,
-            purpose: "verify plugin identity before semantic parameter writes",
-          },
-          {
-            tool: "call_template",
-            id: "template.fx.list_fx_parameters",
-            refs: { fx_ref: refs.fx_ref },
-            input: { limit: 128 },
-            budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
-            purpose: "resolve semantic controls to fresh param_index values",
-          },
-        ]
-      : [],
+    resolution_requests: resolutionRequests,
     requests,
     readback,
     hydration_flow: hydrationFlow,
     evidence_plan: evidencePlan,
     customer_readback: customerReadback,
+    agent_execution_flow: agentExecutionFlow,
     human_readback: humanReadback,
     blockers: uniqueBlockers(blockers),
     safety: stockPluginSafety(),
@@ -469,6 +484,7 @@ export function createAlpha3E1StockPluginRuntimeEnvelope({ request = {}, plan, n
       readback: normalizedPlan.readback,
       evidence_plan: normalizedPlan.evidence_plan ?? null,
       customer_readback: normalizedPlan.customer_readback ?? null,
+      agent_execution_flow: normalizedPlan.agent_execution_flow ?? null,
       blockers: normalizedPlan.blockers,
     },
     budget: {
@@ -555,6 +571,7 @@ function officialStockPluginMacroDiscoveryItem(maps) {
         execution: { type: "object" },
         evidence_plan: { type: "object" },
         customer_readback: { type: "object" },
+        agent_execution_flow: { type: "object" },
       },
     },
     refs: {
@@ -752,6 +769,170 @@ function createCustomerReadback({ plugin, starter, controls, blockers, humanRead
     ],
     recovery_hint: customerRecoveryHint(status, blockers),
   });
+}
+
+function createAgentExecutionFlow({
+  plugin,
+  starter,
+  controls,
+  refs,
+  blockers,
+  resolutionRequests,
+  requests,
+  readback,
+  hydrationFlow,
+  evidencePlan,
+}) {
+  const blockerList = uniqueBlockers(blockers);
+  const metadataOnlyBlockers = blockerList.length > 0 && blockerList.every((entry) =>
+    entry.code === "PARAMETER_METADATA_REQUIRED" || entry.code === "PARAMETER_METADATA_NOT_FRESH"
+  );
+  const status = requests.length > 0
+    ? "ready_for_child_execution_and_readback"
+    : metadataOnlyBlockers && resolutionRequests.length > 0
+      ? "needs_hydration_then_resume"
+      : "blocked_before_agent_execution";
+  const steps = createAgentExecutionSteps({
+    status,
+    plugin,
+    refs,
+    blockers: blockerList,
+    resolutionRequests,
+    requests,
+    readback,
+    evidencePlan,
+  });
+  return deepFreeze({
+    contract: ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT,
+    mode: "agent_runs_existing_call_template_requests",
+    status,
+    plugin_id: plugin?.id ?? null,
+    starter_action_id: starter?.id ?? null,
+    fx_ref: refs.fx_ref ?? null,
+    requested_controls: summarizeRequestedControls(plugin, controls),
+    hydration_status: hydrationFlow.status,
+    agent_can_continue_after_task_authorization: status !== "blocked_before_agent_execution",
+    execution_authority: "agent_calls_existing_call_template_requests",
+    tool_surface: {
+      added_tools: 0,
+      execution_tool: "call_template",
+      discovery_tool: "list_templates",
+      state_tool: "get_state",
+    },
+    safety: {
+      plan_only_macro: true,
+      hidden_executor: false,
+      public_call_recipe: false,
+      raw_lua_action_shell_or_ui: false,
+      alias_execution: false,
+      direct_live_write_from_macro: false,
+      success_wording_allowed: false,
+      user_prompt_policy: "After task authorization for fx_parameter_control, continue through this flow without extra prompts unless a hard stop is hit.",
+      hard_stops: [
+        "destructive_or_irreversible_request",
+        "export_or_filesystem_write",
+        "hardware_or_privacy_boundary",
+        "unresolved_or_stale_fx_identity",
+        "readback_mismatch",
+        "typed_child_request_blocker",
+      ],
+    },
+    friction_reduction: {
+      previous_manual_loop: "fx_ref -> hydrate -> rerun macro -> execute child requests -> readback",
+      current_agent_loop: "run the listed resolution requests, resume once with fresh parameter_metadata, execute child_requests, run readback, then compare evidence",
+      expected_agent_round_trips: status === "needs_hydration_then_resume" ? 2 : status === "ready_for_child_execution_and_readback" ? 1 : 0,
+    },
+    steps,
+    child_request_count: requests.length,
+    readback_request_count: readback.length,
+    blockers: blockerList,
+  });
+}
+
+function createAgentExecutionSteps({
+  status,
+  plugin,
+  refs,
+  blockers,
+  resolutionRequests,
+  requests,
+  readback,
+  evidencePlan,
+}) {
+  if (status === "needs_hydration_then_resume") {
+    return [
+      deepFreeze({
+        id: "run_resolution_requests",
+        request_source: "result.plan.resolution_requests",
+        request_count: resolutionRequests.length,
+        requests: resolutionRequests,
+        identity_gate: plugin
+          ? {
+              summary_request_id: "template.fx.read_fx_summary",
+              expected_plugin_id: plugin.id,
+              accepted_names: [plugin.display_name, ...plugin.aliases],
+              must_match_before_metadata_fresh: true,
+            }
+          : null,
+        expected_result: "Verified stock plugin identity plus fresh parameter metadata for the requested semantic controls.",
+      }),
+      deepFreeze({
+        id: "resume_macro_with_fresh_parameter_metadata",
+        tool: "call_template",
+        template_id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+        refs: { fx_ref: refs.fx_ref },
+        input_policy: {
+          preserve_original_input: true,
+          add_parameter_metadata: "Map each requested semantic control to fresh param_index and optional param_ident from template.fx.list_fx_parameters.",
+          freshness_status: "fresh",
+        },
+        expected_result: "A ready_for_child_execution_and_readback agent_execution_flow with child_requests and readback requests.",
+      }),
+      deepFreeze({
+        id: "continue_with_ready_flow",
+        request_source: "next_result.agent_execution_flow",
+        purpose: "Follow the resumed ready flow without asking the user again when the task authorization still covers fx_parameter_control.",
+      }),
+    ];
+  }
+
+  if (status === "ready_for_child_execution_and_readback") {
+    return [
+      deepFreeze({
+        id: "execute_child_requests",
+        request_source: "result.child_requests",
+        request_count: requests.length,
+        requests,
+        stop_on_first_blocker: true,
+      }),
+      deepFreeze({
+        id: "run_readback_requests",
+        request_source: "result.readback",
+        request_count: readback.length,
+        requests: readback,
+        stop_on_first_blocker: true,
+      }),
+      deepFreeze({
+        id: "compare_readback_to_evidence_plan",
+        source_of_truth: evidencePlan.source_of_truth,
+        required_after_execution: evidencePlan.required_after_execution,
+        mismatch_policy: evidencePlan.mismatch_policy,
+      }),
+      deepFreeze({
+        id: "customer_readback_gate",
+        success_wording_allowed_now: false,
+        success_wording_allowed_after: "All child requests and planned readbacks returned ok and matched the requested semantic controls within tolerance.",
+      }),
+    ];
+  }
+
+  return [
+    deepFreeze({
+      id: "resolve_typed_blockers",
+      blockers,
+      purpose: "Do not hydrate, execute, or report success until these blockers are resolved.",
+    }),
+  ];
 }
 
 function customerHeadline({ plugin, starter, status, requestedControls }) {
