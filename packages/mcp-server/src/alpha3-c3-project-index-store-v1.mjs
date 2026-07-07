@@ -4,6 +4,8 @@ export const ALPHA3_C3_PROJECT_INDEX_MIGRATION_CONTRACT = "alpha3.c3.project_ind
 export const ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT = "alpha3.c3.project_index_lifecycle.v1";
 export const ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT = "alpha3.c3.project_index_refresh_plan.v1";
 export const ALPHA3_C3_PROJECT_INDEX_CHANGED_SINCE_CONTRACT = "alpha3.c3.project_index_changed_since.v1";
+export const ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT = "alpha3.c3.project_index_sqlite_lifecycle.v1";
+export const ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT = "alpha3.c3.project_index_background_refresh.v1";
 
 export const ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION = 1;
 export const ALPHA3_C3_PROJECT_INDEX_DB_PATH = "run_root/state/openreaper-project-index.sqlite";
@@ -56,6 +58,15 @@ export const ALPHA3_C3_PROJECT_INDEX_DB_LIFECYCLE_STATES = deepFreeze([
   "rebuilding",
   "stale_session",
   "closed",
+]);
+
+const BACKGROUND_JOB_STATUSES = deepFreeze([
+  "planned",
+  "queued",
+  "running",
+  "completed",
+  "blocked",
+  "failed",
 ]);
 
 const OBJECT_ROW_REQUIRED_FIELDS = deepFreeze([
@@ -279,7 +290,8 @@ export function createAlpha3C3ProjectIndexSchemaContract(options = {}) {
     backend_policy: {
       current_runtime_backend: "resident_memory_adapter",
       future_persistent_backend: "sqlite_file",
-      node_sqlite_dependency: "deferred_until_node20_safe_dependency_or_bundled_sqlite_adapter",
+      optional_runtime_backend: "sqlite_file_when_node_sqlite_is_available",
+      node_sqlite_dependency: "optional_dynamic_node_sqlite_with_degraded_mode",
     },
     tables: ALPHA3_C3_PROJECT_INDEX_TABLES,
     object_row_required_fields: OBJECT_ROW_REQUIRED_FIELDS,
@@ -329,6 +341,142 @@ export function createAlpha3C3ProjectIndexMigrations(options = {}) {
   });
 }
 
+export async function openAlpha3C3ProjectIndexSqliteLifecycle(options = {}) {
+  const now = typeof options.now === "function" ? options.now : () => new Date();
+  const observedAt = safeInputIso(options.observed_at, now);
+  const dbPath = typeof options.dbPath === "string" && options.dbPath
+    ? options.dbPath
+    : ALPHA3_C3_PROJECT_INDEX_DB_PATH;
+  const migrationIds = createAlpha3C3ProjectIndexMigrations({ dbPath }).migrations.map((migration) => migration.id);
+  let sqliteModule;
+  try {
+    sqliteModule = await import("node:sqlite");
+  } catch (error) {
+    return sqliteLifecycleResult({
+      ok: false,
+      lifecycle: "degraded",
+      dbPath,
+      observedAt,
+      migrationIds,
+      blockers: [
+        {
+          code: "SQLITE_BACKEND_UNAVAILABLE",
+          message: "node:sqlite is not available in this runtime; use the resident adapter and task-scoped refresh until a SQLite backend is available.",
+          detail: typeof error?.code === "string" ? error.code : "import_failed",
+        },
+      ],
+    });
+  }
+
+  try {
+    const { mkdir } = await import("node:fs/promises");
+    const path = await import("node:path");
+    await mkdir(path.dirname(dbPath), { recursive: true });
+    const database = new sqliteModule.DatabaseSync(dbPath);
+    try {
+      for (const statement of SQLITE_DDL_V1) database.exec(statement);
+      for (const statement of SQLITE_INDEX_DDL_V1) database.exec(statement);
+      const schemaBlockers = validateSqliteSchema(database);
+      if (schemaBlockers.length > 0) {
+        return sqliteLifecycleResult({
+          ok: false,
+          lifecycle: "degraded",
+          dbPath,
+          observedAt,
+          migrationIds,
+          blockers: schemaBlockers,
+        });
+      }
+      const schemaSummary = {
+        schema_version: ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION,
+        migrations: migrationIds,
+        project_truth: "REAPER",
+        index_role: "local_query_navigation_cache",
+      };
+      database
+        .prepare("INSERT OR REPLACE INTO index_meta (key, value_json, observed_at) VALUES (?, ?, ?)")
+        .run("schema", JSON.stringify(schemaSummary), observedAt);
+      const row = database
+        .prepare("SELECT value_json FROM index_meta WHERE key = ?")
+        .get("schema");
+      return sqliteLifecycleResult({
+        ok: true,
+        lifecycle: "ready",
+        dbPath,
+        observedAt,
+        migrationIds,
+        schemaSummary: parseJsonObject(row?.value_json),
+      });
+    } finally {
+      database.close();
+    }
+  } catch (error) {
+    return sqliteLifecycleResult({
+      ok: false,
+      lifecycle: "degraded",
+      dbPath,
+      observedAt,
+      migrationIds,
+      blockers: [
+        {
+          code: "SQLITE_OPEN_OR_MIGRATION_FAILED",
+          message: "Project SQLite Index could not open or apply internal migrations; fall back to resident adapter and refresh before relying on rows.",
+          detail: String(error?.message ?? error),
+        },
+      ],
+    });
+  }
+}
+
+export function planAlpha3C3ProjectIndexBackgroundRefresh(input = {}) {
+  const now = typeof input.now === "function" ? input.now : () => new Date();
+  const observedAt = safeInputIso(input.observed_at, now);
+  const refreshPlan = planAlpha3C3ProjectIndexTaskRefresh(input);
+  const jobSource = isPlainObject(input.job) ? input.job : input;
+  const job = normalizeBackgroundJob({
+    job_id: typeof jobSource.job_id === "string" ? jobSource.job_id : null,
+    job_kind: "task_scoped_refresh",
+    status: "planned",
+    started_at: observedAt,
+    summary: {
+      scopes: refreshPlan.scopes,
+      request_count: refreshPlan.requests.length,
+      source_truth: "REAPER",
+      execution: "agent_runs_planned_call_template_requests",
+    },
+  }, {
+    job_id: typeof jobSource.job_id === "string" && jobSource.job_id
+      ? jobSource.job_id
+      : `job:project-index-refresh:${observedAt}:${refreshPlan.scopes.join("+")}`,
+    job_kind: "task_scoped_refresh",
+    status: "planned",
+    started_at: observedAt,
+    summary: {},
+  });
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT,
+    ok: true,
+    mode: "background_refresh_plan",
+    job,
+    refresh_plan: refreshPlan,
+    requests: refreshPlan.requests,
+    update_policy: {
+      source_truth: "REAPER",
+      apply_after_readback: true,
+      write_sqlite_only_after_readback: true,
+      background_job_is_not_truth: true,
+    },
+    execution: {
+      executed: false,
+      hidden_executor: false,
+      added_tools: 0,
+      live_reaper: false,
+      safe_write: false,
+    },
+    safety: projectIndexSafety(),
+  });
+}
+
 export function createAlpha3C3ProjectIndex(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const state = {
@@ -353,6 +501,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       media_sources: [],
       selection_state: [],
       object_changes: [],
+      background_jobs: [],
     },
   };
 
@@ -623,6 +772,47 @@ export function createAlpha3C3ProjectIndex(options = {}) {
         if (row) upsertByKey(state.rows.object_changes, row, "change_id");
       }
       return lifecycleResult(state, "record_object_changes", observedAt);
+    },
+    recordBackgroundJob(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const row = normalizeBackgroundJob(input, {
+        job_id: `job:project-index:${observedAt}`,
+        job_kind: "task_scoped_refresh",
+        status: "planned",
+        started_at: observedAt,
+        summary: {},
+      });
+      upsertByKey(state.rows.background_jobs, row, "job_id");
+      return lifecycleResult(state, "record_background_job", observedAt);
+    },
+    completeBackgroundJob(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const jobId = typeof input.job_id === "string" && input.job_id
+        ? input.job_id
+        : `job:project-index:${observedAt}`;
+      const existing = state.rows.background_jobs.find((entry) => entry.job_id === jobId);
+      const existingSummary = isPlainObject(existing?.summary) ? existing.summary : {};
+      const inputSummary = isPlainObject(input.summary) ? input.summary : {};
+      const row = normalizeBackgroundJob({
+        ...(isPlainObject(existing) ? existing : {}),
+        ...input,
+        job_id: jobId,
+        status: "completed",
+        started_at: input.started_at ?? existing?.started_at,
+        completed_at: input.completed_at ?? observedAt,
+        summary: {
+          ...cloneJson(existingSummary),
+          ...cloneJson(inputSummary),
+        },
+      }, {
+        job_id: jobId,
+        job_kind: "task_scoped_refresh",
+        status: "completed",
+        completed_at: observedAt,
+        summary: {},
+      });
+      upsertByKey(state.rows.background_jobs, row, "job_id");
+      return lifecycleResult(state, "complete_background_job", observedAt);
     },
     markWriteReadbackApplied(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -957,6 +1147,7 @@ function snapshotState(state) {
       media_sources: cloneJson(state.rows.media_sources),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
+      background_jobs: cloneJson(state.rows.background_jobs),
     },
     safety: projectIndexSafety(),
   });
@@ -1330,6 +1521,24 @@ function normalizeObjectChange(change, defaults) {
   };
 }
 
+function normalizeBackgroundJob(job, defaults) {
+  const source = isPlainObject(job) ? job : {};
+  const summary = isPlainObject(source.summary)
+    ? cloneJson(source.summary)
+    : isPlainObject(defaults.summary)
+      ? cloneJson(defaults.summary)
+      : {};
+  return {
+    job_id: typeof source.job_id === "string" && source.job_id ? source.job_id : defaults.job_id,
+    job_kind: typeof source.job_kind === "string" && source.job_kind ? source.job_kind : defaults.job_kind,
+    status: BACKGROUND_JOB_STATUSES.includes(source.status) ? source.status : defaults.status,
+    started_at: typeof source.started_at === "string" ? source.started_at : defaults.started_at ?? null,
+    completed_at: typeof source.completed_at === "string" ? source.completed_at : defaults.completed_at ?? null,
+    blocker: isPlainObject(source.blocker) ? cloneJson(source.blocker) : defaults.blocker ?? null,
+    summary,
+  };
+}
+
 function normalizeSelectionRow(row, defaults) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1525,6 +1734,82 @@ function projectIndexSafety() {
   });
 }
 
+function sqliteLifecycleResult({
+  ok,
+  lifecycle,
+  dbPath,
+  observedAt,
+  migrationIds,
+  schemaSummary = null,
+  blockers = [],
+}) {
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT,
+    ok,
+    lifecycle,
+    backend: "sqlite_file",
+    db_path: dbPath,
+    schema_version: ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION,
+    migrations: {
+      applied: ok ? migrationIds : [],
+      planned: migrationIds,
+    },
+    schema_summary: schemaSummary,
+    blockers,
+    observed_at: observedAt,
+    truth_boundary: projectIndexTruthBoundary(),
+    safety: projectIndexSafety(),
+  });
+}
+
+function validateSqliteSchema(database) {
+  const blockers = [];
+  for (const [table, columns] of Object.entries(expectedSqliteColumns())) {
+    let rows = [];
+    try {
+      rows = database.prepare(`PRAGMA table_info(${table})`).all();
+    } catch (error) {
+      blockers.push({
+        code: "SQLITE_SCHEMA_MISMATCH",
+        table,
+        message: `Project SQLite Index table ${table} could not be inspected; falling back to degraded mode.`,
+        detail: String(error?.message ?? error),
+      });
+      continue;
+    }
+    const actual = new Set(rows.map((row) => row.name).filter(Boolean));
+    const missing = columns.filter((column) => !actual.has(column));
+    if (missing.length > 0) {
+      blockers.push({
+        code: "SQLITE_SCHEMA_MISMATCH",
+        table,
+        missing_columns: missing,
+        message: `Project SQLite Index table ${table} does not match schema v${ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION}; falling back to degraded mode.`,
+      });
+    }
+  }
+  return blockers;
+}
+
+function expectedSqliteColumns() {
+  const result = {};
+  for (const statement of SQLITE_DDL_V1) {
+    const tableMatch = statement.match(/CREATE TABLE IF NOT EXISTS\s+([a-z_]+)/i);
+    const open = statement.indexOf("(");
+    const close = statement.lastIndexOf(")");
+    if (!tableMatch || open === -1 || close === -1 || close <= open) continue;
+    const columns = statement
+      .slice(open + 1, close)
+      .split("\n")
+      .map((line) => line.trim().replace(/,$/, ""))
+      .filter((line) => line && !/^(PRIMARY|FOREIGN|UNIQUE|CHECK|CONSTRAINT)\b/i.test(line))
+      .map((line) => line.split(/\s+/)[0])
+      .filter(Boolean);
+    result[tableMatch[1]] = columns;
+  }
+  return result;
+}
+
 function normalizeFreshnessStatus(value, fallback) {
   return ALPHA3_C3_PROJECT_INDEX_FRESHNESS_STATUSES.includes(value) ? value : fallback;
 }
@@ -1588,6 +1873,16 @@ function upsertByKey(rows, row, key) {
 
 function cloneJson(value) {
   return JSON.parse(JSON.stringify(value ?? null));
+}
+
+function parseJsonObject(value) {
+  if (typeof value !== "string") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 function isPlainObject(value) {

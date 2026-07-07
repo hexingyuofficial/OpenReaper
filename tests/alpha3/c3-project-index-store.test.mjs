@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 import {
+  ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_CHANGED_SINCE_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_MIGRATION_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_SCHEMA_CONTRACT,
+  ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT,
   createAlpha3C3ProjectIndex,
   createAlpha3C3ProjectIndexMigrations,
   createAlpha3C3ProjectIndexSchemaContract,
+  openAlpha3C3ProjectIndexSqliteLifecycle,
+  planAlpha3C3ProjectIndexBackgroundRefresh,
   planAlpha3C3ProjectIndexTaskRefresh,
   projectIndexScopeIsFreshEnough,
 } from "../../packages/mcp-server/src/alpha3-c3-project-index-store-v1.mjs";
@@ -25,6 +32,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(schema.schema_version, 1);
     assert.equal(schema.backend_policy.current_runtime_backend, "resident_memory_adapter");
     assert.equal(schema.backend_policy.future_persistent_backend, "sqlite_file");
+    assert.equal(schema.backend_policy.optional_runtime_backend, "sqlite_file_when_node_sqlite_is_available");
     assert.equal(schema.truth_boundary.project_truth, "REAPER");
     assert.equal(schema.truth_boundary.index_role, "local_query_navigation_cache");
     assert.equal(schema.truth_boundary.artifact_role, "evidence_payload_and_readback_proof");
@@ -57,6 +65,70 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       migrations.migrations[0].statements.some((statement) => /CREATE TABLE IF NOT EXISTS freshness_scopes/.test(statement)),
       true,
     );
+  });
+
+  it("opens the optional SQLite lifecycle without making SQLite truth", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-c3-sqlite-"));
+    const dbPath = path.join(tempRoot, "state", "openreaper-project-index.sqlite");
+    try {
+      const result = await openAlpha3C3ProjectIndexSqliteLifecycle({
+        dbPath,
+        observed_at: "2026-07-07T20:10:00.000Z",
+      });
+
+      assert.equal(result.contract, ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT);
+      assert.equal(result.backend, "sqlite_file");
+      assert.equal(result.safety.sqlite_is_truth, false);
+      assert.equal(result.safety.raw_sql_exposed, false);
+      if (result.ok) {
+        assert.equal(result.lifecycle, "ready");
+        assert.equal(result.db_path, dbPath);
+        assert.deepEqual(result.migrations.applied, ["001_project_index_core"]);
+        assert.equal(result.schema_summary.schema_version, 1);
+        assert.equal(result.schema_summary.project_truth, "REAPER");
+      } else {
+        assert.equal(result.lifecycle, "degraded");
+        assert.equal(result.blockers[0].code, "SQLITE_BACKEND_UNAVAILABLE");
+      }
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("degrades instead of accepting an incompatible existing SQLite cache", async () => {
+    let sqliteModule;
+    try {
+      sqliteModule = await import("node:sqlite");
+    } catch {
+      return;
+    }
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-c3-sqlite-bad-"));
+    const dbPath = path.join(tempRoot, "state", "openreaper-project-index.sqlite");
+    try {
+      await mkdir(path.dirname(dbPath), { recursive: true });
+      const database = new sqliteModule.DatabaseSync(dbPath);
+      try {
+        database.exec("CREATE TABLE media_sources (foo TEXT)");
+      } finally {
+        database.close();
+      }
+      const result = await openAlpha3C3ProjectIndexSqliteLifecycle({
+        dbPath,
+        observed_at: "2026-07-07T20:12:00.000Z",
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.lifecycle, "degraded");
+      assert.equal(result.blockers.some((blocker) =>
+        blocker.code === "SQLITE_SCHEMA_MISMATCH" &&
+        blocker.table === "media_sources" &&
+        blocker.missing_columns.includes("ref")
+      ), true);
+      assert.deepEqual(result.migrations.applied, []);
+      assert.equal(result.safety.sqlite_is_truth, false);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("maintains a resident project index adapter snapshot that C3.1 query macros can consume", () => {
@@ -654,6 +726,35 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(plan.safety.live_reaper, false);
   });
 
+  it("plans background refresh jobs without adding an executor", () => {
+    const plan = planAlpha3C3ProjectIndexBackgroundRefresh({
+      job_id: "job:c3-12:refresh",
+      status: "completed",
+      completed_at: "2026-07-07T20:16:00.000Z",
+      observed_at: "2026-07-07T20:15:00.000Z",
+      scopes: ["tracks", "media"],
+      limit: 40,
+      summary: {
+        applied_after_readback: true,
+      },
+    });
+
+    assert.equal(plan.contract, ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT);
+    assert.equal(plan.ok, true);
+    assert.equal(plan.job.job_id, "job:c3-12:refresh");
+    assert.equal(plan.job.status, "planned");
+    assert.equal(plan.job.completed_at, null);
+    assert.deepEqual(plan.job.summary.scopes, ["tracks", "media"]);
+    assert.equal("applied_after_readback" in plan.job.summary, false);
+    assert.equal(plan.requests.some((request) => request.id === "template.tracks.list_tracks"), true);
+    assert.equal(plan.requests.some((request) => request.id === "template.media.read_project_media_files"), true);
+    assert.equal(plan.execution.executed, false);
+    assert.equal(plan.execution.hidden_executor, false);
+    assert.equal(plan.execution.added_tools, 0);
+    assert.equal(plan.update_policy.write_sqlite_only_after_readback, true);
+    assert.equal(plan.safety.sqlite_is_truth, false);
+  });
+
   it("records object changes only after readback and supports changed-since paging", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
 
@@ -746,6 +847,40 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(staleSessionPlan.blockers.some((blocker) => blocker.code === "INDEX_STALE_SESSION"), true);
     assert.equal(index.snapshot().lifecycle, "stale_session");
     assert.equal(projectIndexScopeIsFreshEnough(index.snapshot(), "tracks"), false);
+  });
+
+  it("keeps background job rows as status ledger, not project truth", () => {
+    const index = createAlpha3C3ProjectIndex({ now: fixedNow });
+    index.recordBackgroundJob({
+      job_id: "job:c3-12:refresh",
+      job_kind: "task_scoped_refresh",
+      status: "queued",
+      started_at: "2026-07-07T20:20:00.000Z",
+      summary: {
+        scopes: ["tracks"],
+        request_count: 3,
+      },
+    });
+    index.completeBackgroundJob({
+      job_id: "job:c3-12:refresh",
+      job_kind: "task_scoped_refresh",
+      status: "completed",
+      completed_at: "2026-07-07T20:21:00.000Z",
+      summary: {
+        applied_after_readback: true,
+      },
+    });
+    const snapshot = index.snapshot();
+
+    assert.equal(snapshot.rows.background_jobs.length, 1);
+    assert.equal(snapshot.rows.background_jobs[0].status, "completed");
+    assert.equal(snapshot.rows.background_jobs[0].started_at, "2026-07-07T20:20:00.000Z");
+    assert.equal(snapshot.rows.background_jobs[0].completed_at, "2026-07-07T20:21:00.000Z");
+    assert.deepEqual(snapshot.rows.background_jobs[0].summary.scopes, ["tracks"]);
+    assert.equal(snapshot.rows.background_jobs[0].summary.request_count, 3);
+    assert.equal(snapshot.rows.background_jobs[0].summary.applied_after_readback, true);
+    assert.equal(snapshot.safety.sqlite_is_truth, false);
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "tracks"), false);
   });
 });
 
