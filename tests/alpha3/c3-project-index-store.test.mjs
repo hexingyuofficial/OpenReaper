@@ -10,10 +10,12 @@ import {
   ALPHA3_C3_PROJECT_INDEX_MIGRATION_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_SCHEMA_CONTRACT,
+  ALPHA3_C3_PROJECT_INDEX_SQLITE_ADAPTER_CONTRACT,
   ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT,
   createAlpha3C3ProjectIndex,
   createAlpha3C3ProjectIndexMigrations,
   createAlpha3C3ProjectIndexSchemaContract,
+  openAlpha3C3ProjectIndexSqliteAdapter,
   openAlpha3C3ProjectIndexSqliteLifecycle,
   planAlpha3C3ProjectIndexBackgroundRefresh,
   planAlpha3C3ProjectIndexTaskRefresh,
@@ -33,6 +35,7 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(schema.backend_policy.current_runtime_backend, "resident_memory_adapter");
     assert.equal(schema.backend_policy.future_persistent_backend, "sqlite_file");
     assert.equal(schema.backend_policy.optional_runtime_backend, "sqlite_file_when_node_sqlite_is_available");
+    assert.equal(schema.backend_policy.optional_persistent_adapter, "sqlite_file_adapter_when_node_sqlite_is_available");
     assert.equal(schema.truth_boundary.project_truth, "REAPER");
     assert.equal(schema.truth_boundary.index_role, "local_query_navigation_cache");
     assert.equal(schema.truth_boundary.artifact_role, "evidence_payload_and_readback_proof");
@@ -126,6 +129,385 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       ), true);
       assert.deepEqual(result.migrations.applied, []);
       assert.equal(result.safety.sqlite_is_truth, false);
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("persists compact rows into the SQLite adapter and restores them on reopen", async () => {
+    try {
+      await import("node:sqlite");
+    } catch {
+      return;
+    }
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-c3-sqlite-adapter-"));
+    const dbPath = path.join(tempRoot, "state", "openreaper-project-index.sqlite");
+    try {
+      const first = await openAlpha3C3ProjectIndexSqliteAdapter({
+        dbPath,
+        now: fixedNow,
+        projectRef: "project:active",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 4,
+        sessionId: "session:c3-sqlite",
+        observed_at: "2026-07-08T00:05:00.000Z",
+      });
+
+      assert.equal(first.contract, ALPHA3_C3_PROJECT_INDEX_SQLITE_ADAPTER_CONTRACT);
+      assert.equal(first.ok, true);
+      assert.equal(first.lifecycle, "ready");
+      assert.equal(first.adapter_lifecycle, "ready");
+      assert.equal(first.backend, "sqlite_file_adapter");
+      assert.equal(first.safety.sqlite_is_truth, false);
+      assert.equal(first.safety.hidden_executor, false);
+
+      first.adapter.replaceTracks({
+        snapshot_id: "snapshot:c3-sqlite:tracks",
+        observed_at: "2026-07-08T00:06:00.000Z",
+        payload_ref: "artifact:sqlite:tracks",
+        rows: [
+          {
+            ref: "track:guid:{SQLITE-A}",
+            owner_ref: "project:active",
+            name: "SQLite Kick",
+            index: 0,
+            selected: true,
+            item_count: 8,
+            fx_count: 2,
+            summary: { role: "drums" },
+          },
+        ],
+      });
+      first.adapter.replaceItems({
+        snapshot_id: "snapshot:c3-sqlite:items",
+        observed_at: "2026-07-08T00:06:30.000Z",
+        payload_ref: "artifact:sqlite:items",
+        rows: [
+          {
+            ref: "item:guid:{SQLITE-ITEM}",
+            track_ref: "track:guid:{SQLITE-A}",
+            start_seconds: 1,
+            end_seconds: 2.5,
+          },
+        ],
+      });
+      first.adapter.recordObjectChanges({
+        observed_at: "2026-07-08T00:07:00.000Z",
+        changes: [
+          {
+            change_id: "change:sqlite:001",
+            ref: "track:guid:{SQLITE-A}",
+            owner_ref: "project:active",
+            change_kind: "track_controls_readback",
+            payload_ref: "artifact:sqlite:readback",
+            summary: { source: "batch_readback" },
+          },
+        ],
+      });
+      first.adapter.recordBackgroundJob({
+        job_id: "job:sqlite:refresh",
+        status: "queued",
+        started_at: "2026-07-08T00:08:00.000Z",
+        summary: { scopes: ["tracks"], request_count: 3 },
+      });
+      first.adapter.close({ observed_at: "2026-07-08T00:09:00.000Z" });
+      const postCloseWrite = first.adapter.replaceTracks({
+        snapshot_id: "snapshot:c3-sqlite:post-close",
+        observed_at: "2026-07-08T00:09:30.000Z",
+        rows: [{ ref: "track:guid:{SHOULD-NOT-WRITE}", name: "Closed Write" }],
+      });
+      assert.equal(postCloseWrite.ok, false);
+      assert.equal(postCloseWrite.blockers[0].code, "SQLITE_ADAPTER_CLOSED");
+      assert.equal(first.adapter.snapshot().rows.tracks[0].name, "SQLite Kick");
+
+      const missingIdentity = await openAlpha3C3ProjectIndexSqliteAdapter({
+        dbPath,
+        now: fixedNow,
+        observed_at: "2026-07-08T00:10:00.000Z",
+      });
+      assert.equal(missingIdentity.ok, true);
+      assert.equal(missingIdentity.lifecycle, "stale_session");
+      assert.equal(missingIdentity.blockers.some((blocker) =>
+        blocker.code === "SQLITE_SESSION_IDENTITY_REQUIRED"
+      ), true);
+      const missingIdentityPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        limit: 10,
+      }, { projectIndex: missingIdentity.adapter });
+      assert.equal(missingIdentityPlan.ok, false);
+      assert.equal(missingIdentityPlan.blockers.some((blocker) => blocker.code === "INDEX_STALE_SESSION"), true);
+      const missingIdentityChanged = missingIdentity.adapter.changedSince({
+        since: "2026-07-08T00:06:30.000Z",
+        limit: 10,
+      });
+      assert.equal(missingIdentityChanged.ok, false);
+      assert.equal(missingIdentityChanged.blockers[0].code, "INDEX_STALE_SESSION");
+      missingIdentity.adapter.close({ observed_at: "2026-07-08T00:10:15.000Z" });
+
+      const second = await openAlpha3C3ProjectIndexSqliteAdapter({
+        dbPath,
+        now: fixedNow,
+        projectRef: "project:active",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 4,
+        sessionId: "session:c3-sqlite",
+        observed_at: "2026-07-08T00:10:30.000Z",
+      });
+      assert.equal(second.ok, true);
+      assert.equal(second.lifecycle, "closed");
+      assert.equal(second.adapter_lifecycle, "ready");
+      assert.equal(second.snapshot.lifecycle, "closed");
+      const snapshot = second.adapter.snapshot();
+      const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        filters: { selected: true },
+        fields: ["name", "item_count", "fx_count", "payload_ref"],
+        limit: 10,
+      }, { projectIndex: second.adapter });
+      const changed = second.adapter.changedSince({
+        since: "2026-07-08T00:06:30.000Z",
+        limit: 10,
+      });
+
+      assert.equal(snapshot.db_path, dbPath);
+      assert.equal(snapshot.project_ref, "project:active");
+      assert.equal(snapshot.bridge_generation, 4);
+      assert.equal(snapshot.rows.tracks.length, 1);
+      assert.equal(snapshot.rows.items.length, 1);
+      assert.equal(snapshot.rows.tracks[0].name, "SQLite Kick");
+      assert.equal(snapshot.rows.tracks[0].payload_ref, "artifact:sqlite:tracks");
+      assert.deepEqual(snapshot.rows.tracks[0].summary, { role: "drums" });
+      assert.equal("name" in snapshot.rows.tracks[0].summary, false);
+      assert.equal(snapshot.freshness_scopes.tracks.status, "fresh");
+      assert.equal(snapshot.rows.background_jobs[0].job_id, "job:sqlite:refresh");
+      assert.equal(plan.ok, false);
+      assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+      assert.equal(changed.ok, false);
+      assert.equal(changed.blockers[0].code, "INDEX_NOT_READY");
+      second.adapter.open({ observed_at: "2026-07-08T00:11:00.000Z" });
+      const reopenedPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        filters: { selected: true },
+        fields: ["name", "item_count", "fx_count", "payload_ref"],
+        limit: 10,
+      }, { projectIndex: second.adapter });
+      const reopenedItemsPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_items", {
+        filters: { track_ref: "track:guid:{SQLITE-A}" },
+        fields: ["track_ref", "start_seconds", "length_seconds", "payload_ref"],
+        limit: 10,
+      }, { projectIndex: second.adapter });
+      assert.equal(reopenedPlan.ok, true);
+      assert.deepEqual(reopenedPlan.refs, ["track:guid:{SQLITE-A}"]);
+      assert.deepEqual(reopenedPlan.rows[0], {
+        ref: "track:guid:{SQLITE-A}",
+        name: "SQLite Kick",
+        item_count: 8,
+        fx_count: 2,
+        payload_ref: "artifact:sqlite:tracks",
+      });
+      assert.equal(reopenedItemsPlan.ok, true);
+      assert.deepEqual(reopenedItemsPlan.refs, ["item:guid:{SQLITE-ITEM}"]);
+      assert.deepEqual(reopenedItemsPlan.rows[0], {
+        ref: "item:guid:{SQLITE-ITEM}",
+        track_ref: "track:guid:{SQLITE-A}",
+        start_seconds: 1,
+        length_seconds: 1.5,
+        payload_ref: "artifact:sqlite:items",
+      });
+      const reopenedChanged = second.adapter.changedSince({
+        since: "2026-07-08T00:06:30.000Z",
+        limit: 10,
+      });
+      assert.deepEqual(reopenedChanged.refs, ["track:guid:{SQLITE-A}"]);
+      assert.equal(reopenedChanged.rows[0].payload_ref, "artifact:sqlite:readback");
+      second.adapter.close({ observed_at: "2026-07-08T00:12:00.000Z" });
+      const closedChanged = second.adapter.changedSince({
+        since: "2026-07-08T00:06:30.000Z",
+        limit: 10,
+      });
+      assert.equal(closedChanged.ok, false);
+      assert.equal(closedChanged.blockers[0].code, "INDEX_NOT_READY");
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("marks restored SQLite rows stale when caller identity does not match the cache", async () => {
+    try {
+      await import("node:sqlite");
+    } catch {
+      return;
+    }
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-c3-sqlite-stale-"));
+    const dbPath = path.join(tempRoot, "state", "openreaper-project-index.sqlite");
+    try {
+      const first = await openAlpha3C3ProjectIndexSqliteAdapter({
+        dbPath,
+        now: fixedNow,
+        projectRef: "project:old",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 4,
+        sessionId: "session:old",
+        observed_at: "2026-07-08T00:20:00.000Z",
+      });
+      assert.equal(first.ok, true);
+      first.adapter.replaceTracks({
+        snapshot_id: "snapshot:c3-sqlite:old",
+        observed_at: "2026-07-08T00:21:00.000Z",
+        rows: [{ ref: "track:guid:{OLD}", owner_ref: "project:old", name: "Old Session Track" }],
+      });
+      first.adapter.recordObjectChanges({
+        observed_at: "2026-07-08T00:21:30.000Z",
+        changes: [
+          {
+            change_id: "change:old-session:001",
+            ref: "track:guid:{OLD}",
+            owner_ref: "project:old",
+            change_kind: "old_session_change",
+          },
+        ],
+      });
+      first.adapter.close({ observed_at: "2026-07-08T00:22:00.000Z" });
+
+      const second = await openAlpha3C3ProjectIndexSqliteAdapter({
+        dbPath,
+        now: fixedNow,
+        projectRef: "project:new",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 5,
+        sessionId: "session:new",
+        observed_at: "2026-07-08T00:23:00.000Z",
+      });
+      const snapshot = second.adapter.snapshot();
+      const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        limit: 10,
+      }, { projectIndex: second.adapter });
+
+      assert.equal(second.ok, true);
+      assert.equal(second.lifecycle, "stale_session");
+      assert.equal(second.adapter_lifecycle, "ready");
+      assert.equal(second.blockers.some((blocker) =>
+        blocker.code === "SQLITE_SESSION_MISMATCH" && blocker.field === "project_ref"
+      ), true);
+      assert.equal(second.blockers.some((blocker) =>
+        blocker.code === "SQLITE_SESSION_MISMATCH" && blocker.field === "bridge_generation"
+      ), true);
+      assert.equal(snapshot.lifecycle, "stale_session");
+      assert.equal(snapshot.freshness_scopes.tracks.status, "stale_session");
+      assert.equal(snapshot.rows.tracks[0].name, "Old Session Track");
+      assert.equal(plan.ok, false);
+      assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_STALE_SESSION"), true);
+      const staleChanged = second.adapter.changedSince({
+        since: "2026-07-08T00:20:00.000Z",
+        limit: 10,
+      });
+      assert.equal(staleChanged.ok, false);
+      assert.equal(staleChanged.blockers[0].code, "INDEX_STALE_SESSION");
+      assert.deepEqual(staleChanged.refs, []);
+      const staleRecordChange = second.adapter.recordObjectChanges({
+        observed_at: "2026-07-08T00:23:02.000Z",
+        changes: [{ change_id: "change:stale:should-not-write", ref: "track:guid:{STALE}" }],
+      });
+      const staleReadbackChange = second.adapter.markWriteReadbackApplied({
+        observed_at: "2026-07-08T00:23:03.000Z",
+        refs: ["track:guid:{STALE-READBACK}"],
+      });
+      const staleBackgroundJob = second.adapter.recordBackgroundJob({
+        job_id: "job:stale:should-not-write",
+        observed_at: "2026-07-08T00:23:04.000Z",
+      });
+      const staleCompleteJob = second.adapter.completeBackgroundJob({
+        job_id: "job:stale:should-not-complete",
+        observed_at: "2026-07-08T00:23:05.000Z",
+      });
+      assert.equal(staleRecordChange.ok, false);
+      assert.equal(staleRecordChange.blockers[0].code, "INDEX_STALE_SESSION_MUTATION_REJECTED");
+      assert.equal(staleReadbackChange.ok, false);
+      assert.equal(staleReadbackChange.blockers[0].code, "INDEX_STALE_SESSION_MUTATION_REJECTED");
+      assert.equal(staleBackgroundJob.ok, false);
+      assert.equal(staleBackgroundJob.blockers[0].code, "INDEX_STALE_SESSION_MUTATION_REJECTED");
+      assert.equal(staleCompleteJob.ok, false);
+      assert.equal(staleCompleteJob.blockers[0].code, "INDEX_STALE_SESSION_MUTATION_REJECTED");
+      assert.deepEqual(
+        second.adapter.snapshot().rows.object_changes.map((row) => row.change_id),
+        ["change:old-session:001"],
+      );
+      assert.deepEqual(second.adapter.snapshot().rows.background_jobs, []);
+      const partialRefresh = second.adapter.replaceTracks({
+        projectRef: "project:new",
+        snapshot_id: "snapshot:c3-sqlite:partial",
+        observed_at: "2026-07-08T00:23:10.000Z",
+        rows: [{ ref: "track:guid:{PARTIAL}", owner_ref: "project:new", name: "Partial Identity Track" }],
+      });
+      assert.equal(partialRefresh.ok, false);
+      assert.equal(partialRefresh.blockers[0].code, "INDEX_STALE_SESSION_REFRESH_REJECTED");
+      assert.equal(second.adapter.snapshot().lifecycle, "stale_session");
+      assert.equal(second.adapter.snapshot().project_ref, "project:old");
+      assert.equal(second.adapter.snapshot().rows.tracks[0].name, "Old Session Track");
+      const staleOpen = second.adapter.open({
+        projectRef: "project:new",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 5,
+        sessionId: "session:new",
+        observed_at: "2026-07-08T00:23:15.000Z",
+      });
+      assert.equal(staleOpen.lifecycle, "stale_session");
+      assert.equal(second.adapter.snapshot().project_ref, "project:old");
+      const oldIdentityRefresh = second.adapter.replaceTracks({
+        projectRef: "project:old",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 4,
+        sessionId: "session:old",
+        snapshot_id: "snapshot:c3-sqlite:wrong",
+        observed_at: "2026-07-08T00:23:20.000Z",
+        rows: [{ ref: "track:guid:{OLD-AGAIN}", owner_ref: "project:old", name: "Old Again Track" }],
+      });
+      assert.equal(oldIdentityRefresh.ok, false);
+      assert.equal(oldIdentityRefresh.blockers[0].code, "INDEX_STALE_SESSION_REFRESH_REJECTED");
+      assert.equal(second.adapter.snapshot().lifecycle, "stale_session");
+      assert.equal(second.adapter.snapshot().session_id, "session:old");
+      assert.equal(second.adapter.snapshot().rows.tracks[0].name, "Old Session Track");
+      second.adapter.replaceSelection({
+        projectRef: "project:new",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 5,
+        sessionId: "session:new",
+        snapshot_id: "snapshot:c3-sqlite:new-selection",
+        observed_at: "2026-07-08T00:23:25.000Z",
+        rows: [{ ref: "track:guid:{NEW-SELECTION}", owner_ref: "project:new" }],
+      });
+      const tracksAfterSelectionRecovery = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        limit: 10,
+      }, { projectIndex: second.adapter });
+      assert.equal(second.adapter.snapshot().lifecycle, "ready");
+      assert.equal(second.adapter.snapshot().freshness_scopes.tracks.status, "stale_session");
+      assert.equal(tracksAfterSelectionRecovery.ok, false);
+      assert.equal(tracksAfterSelectionRecovery.blockers.some((blocker) => blocker.code === "INDEX_REFRESH_REQUIRED"), true);
+      second.adapter.replaceTracks({
+        projectRef: "project:new",
+        bridgeOwner: "openreaper-alpha3-local",
+        bridgeGeneration: 5,
+        sessionId: "session:new",
+        snapshot_id: "snapshot:c3-sqlite:new",
+        observed_at: "2026-07-08T00:23:30.000Z",
+        rows: [{ ref: "track:guid:{NEW}", owner_ref: "project:new", name: "New Session Track" }],
+      });
+      const refreshedPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+        limit: 10,
+        fields: ["name"],
+      }, { projectIndex: second.adapter });
+      assert.equal(second.adapter.snapshot().lifecycle, "ready");
+      assert.equal(second.adapter.snapshot().project_ref, "project:new");
+      assert.equal(second.adapter.snapshot().freshness_scopes.tracks.status, "fresh");
+      assert.deepEqual(refreshedPlan.refs, ["track:guid:{NEW}"]);
+      assert.deepEqual(refreshedPlan.rows[0], {
+        ref: "track:guid:{NEW}",
+        name: "New Session Track",
+      });
+      const changedAfterRecovery = second.adapter.changedSince({
+        since: "2026-07-08T00:20:00.000Z",
+        limit: 10,
+      });
+      assert.deepEqual(changedAfterRecovery.refs, []);
+      assert.deepEqual(second.adapter.snapshot().rows.background_jobs, []);
+      second.adapter.close({ observed_at: "2026-07-08T00:24:00.000Z" });
     } finally {
       await rm(tempRoot, { recursive: true, force: true });
     }

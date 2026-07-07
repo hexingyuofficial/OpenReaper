@@ -6,6 +6,7 @@ export const ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT = "alpha3.c3.project_
 export const ALPHA3_C3_PROJECT_INDEX_CHANGED_SINCE_CONTRACT = "alpha3.c3.project_index_changed_since.v1";
 export const ALPHA3_C3_PROJECT_INDEX_SQLITE_LIFECYCLE_CONTRACT = "alpha3.c3.project_index_sqlite_lifecycle.v1";
 export const ALPHA3_C3_PROJECT_INDEX_BACKGROUND_REFRESH_CONTRACT = "alpha3.c3.project_index_background_refresh.v1";
+export const ALPHA3_C3_PROJECT_INDEX_SQLITE_ADAPTER_CONTRACT = "alpha3.c3.project_index_sqlite_adapter.v1";
 
 export const ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION = 1;
 export const ALPHA3_C3_PROJECT_INDEX_DB_PATH = "run_root/state/openreaper-project-index.sqlite";
@@ -291,6 +292,7 @@ export function createAlpha3C3ProjectIndexSchemaContract(options = {}) {
       current_runtime_backend: "resident_memory_adapter",
       future_persistent_backend: "sqlite_file",
       optional_runtime_backend: "sqlite_file_when_node_sqlite_is_available",
+      optional_persistent_adapter: "sqlite_file_adapter_when_node_sqlite_is_available",
       node_sqlite_dependency: "optional_dynamic_node_sqlite_with_degraded_mode",
     },
     tables: ALPHA3_C3_PROJECT_INDEX_TABLES,
@@ -428,6 +430,85 @@ export async function openAlpha3C3ProjectIndexSqliteLifecycle(options = {}) {
   }
 }
 
+export async function openAlpha3C3ProjectIndexSqliteAdapter(options = {}) {
+  const lifecycle = await openAlpha3C3ProjectIndexSqliteLifecycle(options);
+  if (!lifecycle.ok) {
+    return sqliteAdapterOpenResult({
+      ok: false,
+      lifecycle: lifecycle.lifecycle,
+      dbPath: lifecycle.db_path,
+      adapter: null,
+      snapshot: null,
+      blockers: lifecycle.blockers,
+      observedAt: lifecycle.observed_at,
+    });
+  }
+
+  const now = typeof options.now === "function" ? options.now : () => new Date();
+  const observedAt = safeInputIso(options.observed_at, now);
+  let database = null;
+  try {
+    const sqliteModule = await import("node:sqlite");
+    database = new sqliteModule.DatabaseSync(lifecycle.db_path);
+    const expectedIdentity = sqliteAdapterExpectedIdentity(options);
+    const restoredSnapshot = readSqliteProjectIndexSnapshot(database, {
+      dbPath: lifecycle.db_path,
+      ...expectedIdentity,
+    });
+    const identityBlockers = sqliteSnapshotIdentityBlockers(restoredSnapshot, expectedIdentity);
+    const initialSnapshot = identityBlockers.length > 0
+      ? staleSqliteSnapshot(restoredSnapshot, identityBlockers, observedAt)
+      : restoredSnapshot;
+    const resident = createAlpha3C3ProjectIndex({
+      ...options,
+      dbPath: lifecycle.db_path,
+      initialSnapshot,
+    });
+    const adapter = createSqliteBackedProjectIndexAdapter({
+      resident,
+      database,
+      now,
+    });
+    if (shouldPersistSqliteSnapshot(adapter.snapshot())) {
+      persistProjectIndexSnapshot(database, adapter.snapshot(), observedAt);
+    }
+    return sqliteAdapterOpenResult({
+      ok: true,
+      lifecycle: adapter.snapshot().lifecycle,
+      adapterLifecycle: "ready",
+      dbPath: lifecycle.db_path,
+      adapter,
+      snapshot: adapter.snapshot(),
+      blockers: identityBlockers,
+      observedAt,
+    });
+  } catch (error) {
+    if (database !== null) {
+      try {
+        database.close();
+      } catch {
+        // Ignore close failures while returning degraded mode.
+      }
+    }
+    return sqliteAdapterOpenResult({
+      ok: false,
+      lifecycle: "degraded",
+      adapterLifecycle: "degraded",
+      dbPath: lifecycle.db_path,
+      adapter: null,
+      snapshot: null,
+      blockers: [
+        {
+          code: "SQLITE_ADAPTER_OPEN_FAILED",
+          message: "Project SQLite Index adapter could not open; fall back to resident adapter and task-scoped refresh.",
+          detail: String(error?.message ?? error),
+        },
+      ],
+      observedAt,
+    });
+  }
+}
+
 export function planAlpha3C3ProjectIndexBackgroundRefresh(input = {}) {
   const now = typeof input.now === "function" ? input.now : () => new Date();
   const observedAt = safeInputIso(input.observed_at, now);
@@ -505,6 +586,9 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       background_jobs: [],
     },
   };
+  if (isPlainObject(options.initialSnapshot)) {
+    mergeSnapshotIntoState(state, options.initialSnapshot);
+  }
 
   return Object.freeze({
     contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
@@ -513,7 +597,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     schema_version: state.schema_version,
     safety: projectIndexSafety(),
     open(metadata = {}) {
-      mergeSessionMetadata(state, metadata);
+      if (state.lifecycle !== "stale_session") mergeSessionMetadata(state, metadata);
       if (state.lifecycle === "closed" || state.lifecycle === "missing" || state.lifecycle === "opening") {
         state.lifecycle = "ready";
       }
@@ -525,8 +609,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceTracks(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_tracks", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.tracks = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeTrackRow(row, {
@@ -553,8 +637,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceItems(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_items", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.items = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeItemRow(row, {
@@ -581,8 +665,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceTakes(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_takes", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.takes = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeTakeRow(row, {
@@ -609,8 +693,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceFx(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_fx", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.fx = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeFxRow(row, {
@@ -637,8 +721,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceSends(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_sends", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.sends = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeSendRow(row, {
@@ -665,8 +749,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceMarkersRegions(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_markers_regions", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.markers_regions = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeMarkerRegionRow(row, {
@@ -693,8 +777,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceMediaSources(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_media_sources", observedAt);
       state.snapshot_id = snapshotId;
       const rows = Array.isArray(input.rows)
         ? input.rows
@@ -724,8 +808,8 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
-      mergeSessionMetadata(state, input);
-      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_selection", observedAt);
       state.snapshot_id = snapshotId;
       state.rows.selection_state = Array.isArray(input.rows)
         ? input.rows.map((row) => normalizeSelectionRow(row, {
@@ -749,6 +833,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     },
     markScopeStale(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
+      if (state.lifecycle !== "ready") return lifecycleMutationRejectedResult(state, "mark_scope_stale", observedAt);
       updateScope(state, {
         scope_kind: input.scope_kind,
         scope_ref: input.scope_ref ?? "project",
@@ -762,6 +847,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     },
     recordObjectChanges(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
+      if (state.lifecycle !== "ready") return lifecycleMutationRejectedResult(state, "record_object_changes", observedAt);
       const snapshotId = input.snapshot_id ?? state.snapshot_id ?? normalizeSnapshotId(null, observedAt);
       const changes = Array.isArray(input.changes) ? input.changes : [];
       for (const change of changes) {
@@ -776,6 +862,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     },
     recordBackgroundJob(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
+      if (state.lifecycle !== "ready") return lifecycleMutationRejectedResult(state, "record_background_job", observedAt);
       const row = normalizeBackgroundJob(input, {
         job_id: `job:project-index:${observedAt}`,
         job_kind: "task_scoped_refresh",
@@ -788,6 +875,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     },
     completeBackgroundJob(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
+      if (state.lifecycle !== "ready") return lifecycleMutationRejectedResult(state, "complete_background_job", observedAt);
       const jobId = typeof input.job_id === "string" && input.job_id
         ? input.job_id
         : `job:project-index:${observedAt}`;
@@ -817,6 +905,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     },
     markWriteReadbackApplied(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
+      if (state.lifecycle !== "ready") return lifecycleMutationRejectedResult(state, "mark_write_readback_applied", observedAt);
       const snapshotId = input.snapshot_id ?? state.snapshot_id ?? normalizeSnapshotId(null, observedAt);
       const refs = normalizeRefs(input.refs);
       const changes = refs.map((ref, index) => ({
@@ -1092,6 +1181,29 @@ export function projectIndexScopeIsFreshEnough(snapshot, scopeKind, require = "f
 }
 
 function changedSinceSnapshot(state, input) {
+  if (state.lifecycle !== "ready") {
+    const blocker = projectIndexLifecycleBlocker(state);
+    return deepFreeze({
+      contract: ALPHA3_C3_PROJECT_INDEX_CHANGED_SINCE_CONTRACT,
+      ok: false,
+      since: typeof input.since === "string" ? input.since : null,
+      refs: [],
+      rows: [],
+      page: {
+        limit: normalizeLimit(input.limit, 100),
+        cursor: input.cursor ?? null,
+        next_cursor: null,
+        has_more: false,
+      },
+      blockers: [
+        blocker,
+      ],
+      freshness: {
+        source: "project_index_object_changes",
+        sqlite_is_truth: false,
+      },
+    });
+  }
   const limit = normalizeLimit(input.limit, 100);
   const offset = decodeCursor(input.cursor);
   const since = typeof input.since === "string" ? input.since : null;
@@ -1627,6 +1739,50 @@ function mergeSessionMetadata(state, metadata) {
   if (typeof metadata.sessionId === "string") state.session_id = metadata.sessionId;
 }
 
+function applyRefreshLifecycleAndSessionMetadata(state, input) {
+  const recoveringIdentityMismatch = state.lifecycle === "stale_session"
+    && state.degraded_reason === "sqlite_session_identity_mismatch";
+  const lifecycle = nextLifecycleAfterRefresh(state, input);
+  state.lifecycle = lifecycle;
+  if (lifecycle === "ready") {
+    if (recoveringIdentityMismatch) clearStaleSessionLedgers(state);
+    mergeSessionMetadata(state, input);
+  }
+}
+
+function nextLifecycleAfterRefresh(state, input) {
+  if (state.lifecycle !== "stale_session") return "ready";
+  if (state.degraded_reason !== "sqlite_session_identity_mismatch") return "stale_session";
+  const identity = completeRefreshIdentity(input);
+  if (identity === null) return "stale_session";
+  if (!refreshIdentityDiffersFromState(identity, state)) return "stale_session";
+  state.degraded_reason = null;
+  return "ready";
+}
+
+function completeRefreshIdentity(input) {
+  const identity = sqliteAdapterExpectedIdentity(input);
+  if (identity.projectRef === null
+    || identity.bridgeOwner === null
+    || identity.bridgeGeneration === null
+    || identity.sessionId === null) {
+    return null;
+  }
+  return identity;
+}
+
+function refreshIdentityDiffersFromState(identity, state) {
+  return identity.projectRef !== state.project_ref
+    || identity.bridgeOwner !== state.bridge_owner
+    || identity.bridgeGeneration !== state.bridge_generation
+    || identity.sessionId !== state.session_id;
+}
+
+function clearStaleSessionLedgers(state) {
+  state.rows.object_changes = [];
+  state.rows.background_jobs = [];
+}
+
 function lifecycleResult(state, operation, observedAt) {
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
@@ -1639,6 +1795,69 @@ function lifecycleResult(state, operation, observedAt) {
     observed_at: observedAt,
     safety: projectIndexSafety(),
   });
+}
+
+function staleSessionRefreshRejectedResult(state, operation, observedAt) {
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
+    ok: false,
+    operation,
+    lifecycle: "stale_session",
+    schema_version: state.schema_version,
+    db_path: state.db_path,
+    snapshot_id: state.snapshot_id,
+    observed_at: observedAt,
+    blockers: [
+      {
+        field: "session",
+        code: "INDEX_STALE_SESSION_REFRESH_REJECTED",
+        message: "Project SQLite Index rejected refresh rows because the cache identity is stale; reopen or refresh with complete matching session identity first.",
+        recoverable: true,
+      },
+    ],
+    safety: projectIndexSafety(),
+  });
+}
+
+function lifecycleMutationRejectedResult(state, operation, observedAt) {
+  const blocker = projectIndexLifecycleBlocker(state);
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
+    ok: false,
+    operation,
+    lifecycle: state.lifecycle,
+    schema_version: state.schema_version,
+    db_path: state.db_path,
+    snapshot_id: state.snapshot_id,
+    observed_at: observedAt,
+    blockers: [
+      {
+        ...blocker,
+        code: blocker.code === "INDEX_STALE_SESSION"
+          ? "INDEX_STALE_SESSION_MUTATION_REJECTED"
+          : "INDEX_NOT_READY_MUTATION_REJECTED",
+      },
+    ],
+    safety: projectIndexSafety(),
+  });
+}
+
+function projectIndexLifecycleBlocker(state) {
+  if (state.lifecycle === "stale_session") {
+    return {
+      field: "session",
+      code: "INDEX_STALE_SESSION",
+      message: "Project index belongs to a stale bridge/session; reconnect or rebuild before using cached rows.",
+      recoverable: true,
+    };
+  }
+  return {
+    field: "lifecycle",
+    code: "INDEX_NOT_READY",
+    message: `Project index lifecycle is ${state.lifecycle}; open and refresh from REAPER before using cached rows.`,
+    lifecycle: state.lifecycle,
+    recoverable: true,
+  };
 }
 
 function normalizeRefreshScopes(scopes) {
@@ -1752,6 +1971,724 @@ function catalogHasTemplate(catalog, templateId) {
   return catalog.get(templateId) !== null;
 }
 
+function createSqliteBackedProjectIndexAdapter({ resident, database, now }) {
+  let closed = false;
+  const persist = () => {
+    if (closed) return;
+    const snapshot = resident.snapshot();
+    if (!shouldPersistSqliteSnapshot(snapshot)) return;
+    persistProjectIndexSnapshot(database, snapshot, safeNowIso(now));
+  };
+  const persistAfter = (methodName) => (...args) => {
+    if (closed) return closedSqliteAdapterResult(resident, methodName, safeNowIso(now));
+    const result = resident[methodName](...args);
+    persist();
+    return result;
+  };
+  return Object.freeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
+    backend: "sqlite_file_adapter",
+    db_path: resident.db_path,
+    schema_version: resident.schema_version,
+    safety: projectIndexSafety(),
+    open: persistAfter("open"),
+    snapshot() {
+      return resident.snapshot();
+    },
+    replaceTracks: persistAfter("replaceTracks"),
+    replaceItems: persistAfter("replaceItems"),
+    replaceTakes: persistAfter("replaceTakes"),
+    replaceFx: persistAfter("replaceFx"),
+    replaceSends: persistAfter("replaceSends"),
+    replaceMarkersRegions: persistAfter("replaceMarkersRegions"),
+    replaceMediaSources: persistAfter("replaceMediaSources"),
+    replaceSelection: persistAfter("replaceSelection"),
+    markScopeStale: persistAfter("markScopeStale"),
+    recordObjectChanges: persistAfter("recordObjectChanges"),
+    recordBackgroundJob: persistAfter("recordBackgroundJob"),
+	    completeBackgroundJob: persistAfter("completeBackgroundJob"),
+	    markWriteReadbackApplied: persistAfter("markWriteReadbackApplied"),
+	    changedSince(input = {}) {
+	      if (closed) return changedSinceSnapshot(resident.snapshot(), input);
+	      return resident.changedSince(input);
+	    },
+    degrade: persistAfter("degrade"),
+    markStaleSession: persistAfter("markStaleSession"),
+    close(input = {}) {
+      if (closed) return closedSqliteAdapterResult(resident, "close", safeInputIso(input.observed_at, now));
+      const result = resident.close(input);
+      persist();
+      closed = true;
+      database.close();
+      return result;
+    },
+  });
+}
+
+function shouldPersistSqliteSnapshot(snapshot) {
+  return snapshot?.degraded_reason !== "sqlite_session_identity_mismatch";
+}
+
+function closedSqliteAdapterResult(resident, operation, observedAt) {
+  const snapshot = resident.snapshot();
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_LIFECYCLE_CONTRACT,
+    ok: false,
+    operation,
+    lifecycle: "closed",
+    schema_version: snapshot.schema_version,
+    db_path: snapshot.db_path,
+    snapshot_id: snapshot.snapshot_id,
+    observed_at: observedAt,
+    blockers: [
+      {
+        field: "adapter",
+        code: "SQLITE_ADAPTER_CLOSED",
+        message: "Project SQLite Index adapter is closed; reopen it before applying readback rows.",
+        recoverable: true,
+      },
+    ],
+    safety: projectIndexSafety(),
+  });
+}
+
+function persistProjectIndexSnapshot(database, snapshot, observedAt) {
+  database.exec("BEGIN");
+  try {
+    const meta = {
+      snapshot_id: snapshot.snapshot_id,
+      project_ref: snapshot.project_ref,
+      bridge_owner: snapshot.bridge_owner,
+      bridge_generation: snapshot.bridge_generation,
+      session_id: snapshot.session_id,
+      lifecycle: snapshot.lifecycle,
+    };
+    database
+      .prepare("INSERT OR REPLACE INTO index_meta (key, value_json, observed_at) VALUES (?, ?, ?)")
+      .run("current_snapshot", JSON.stringify(meta), observedAt);
+    if (snapshot.session_id) {
+      database
+        .prepare("INSERT OR REPLACE INTO sessions (session_id, project_ref, bridge_owner, bridge_generation, status, observed_at, stale_reason) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(
+          snapshot.session_id,
+          snapshot.project_ref,
+          snapshot.bridge_owner,
+          snapshot.bridge_generation,
+          snapshot.lifecycle === "stale_session" ? "stale_session" : "ready",
+          observedAt,
+          snapshot.degraded_reason,
+        );
+    }
+    if (snapshot.snapshot_id) {
+      database
+        .prepare("INSERT OR REPLACE INTO snapshots (snapshot_id, project_ref, session_id, observed_at, source_template_id, coverage_status, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(
+          snapshot.snapshot_id,
+          snapshot.project_ref,
+          snapshot.session_id,
+          latestObservedAt(snapshot) ?? observedAt,
+          null,
+          overallCoverageStatus(snapshot),
+          null,
+          JSON.stringify(snapshotSummary(snapshot)),
+        );
+    }
+    replaceFreshnessScopes(database, snapshot);
+    replaceTableRows(database, "tracks", snapshot.rows.tracks, insertTrackRow);
+    replaceTableRows(database, "items", snapshot.rows.items, insertItemRow);
+    replaceTableRows(database, "takes", snapshot.rows.takes, insertTakeRow);
+    replaceTableRows(database, "fx", snapshot.rows.fx, insertFxRow);
+    replaceTableRows(database, "sends", snapshot.rows.sends, insertSendRow);
+    replaceTableRows(database, "markers_regions", snapshot.rows.markers_regions, insertMarkerRegionRow);
+    replaceTableRows(database, "media_sources", snapshot.rows.media_sources, insertMediaSourceRow);
+    replaceTableRows(database, "selection_state", snapshot.rows.selection_state, insertSelectionRow);
+    replaceTableRows(database, "object_changes", snapshot.rows.object_changes, insertObjectChangeRow);
+    replaceTableRows(database, "background_jobs", snapshot.rows.background_jobs, insertBackgroundJobRow);
+    database.exec("COMMIT");
+  } catch (error) {
+    database.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function replaceFreshnessScopes(database, snapshot) {
+  database.prepare("DELETE FROM freshness_scopes").run();
+  const statement = database.prepare("INSERT OR REPLACE INTO freshness_scopes (scope_key, scope_kind, scope_ref, snapshot_id, status, coverage_status, observed_at, expires_at, source_template_id, reason, payload_ref) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  for (const [key, scope] of Object.entries(snapshot.freshness_scopes ?? {})) {
+    statement.run(
+      key,
+      scope.scope_kind,
+      scope.scope_ref,
+      scope.snapshot_id,
+      scope.status,
+      scope.coverage_status,
+      scope.observed_at,
+      scope.expires_at,
+      scope.source_template_id,
+      scope.reason,
+      scope.payload_ref,
+    );
+  }
+}
+
+function replaceTableRows(database, tableName, rows, insertRow) {
+  database.prepare(`DELETE FROM ${tableName}`).run();
+  for (const row of Array.isArray(rows) ? rows : []) insertRow(database, row);
+}
+
+function insertTrackRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO tracks (snapshot_id, ref, owner_ref, name, track_index, display_number, selected, muted, solo, record_arm, folder_depth, item_count, fx_count, send_count, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.name, row.index, row.display_number, boolInt(row.selected), boolInt(row.muted), boolInt(row.solo), boolInt(row.record_arm), row.folder_depth, row.item_count, row.fx_count, row.send_count, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertItemRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO items (snapshot_id, ref, owner_ref, track_ref, start_seconds, end_seconds, selected, muted, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.track_ref, row.start_seconds, row.end_seconds, boolInt(row.selected), boolInt(row.muted), row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertTakeRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO takes (snapshot_id, ref, owner_ref, item_ref, active, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.item_ref, boolInt(row.active), row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertFxRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO fx (snapshot_id, ref, owner_ref, plugin_name, plugin_id, slot_index, bypassed, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.plugin_name, row.plugin_id, row.slot_index, boolInt(row.bypassed), row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertSendRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO sends (snapshot_id, ref, owner_ref, source_track_ref, destination_track_ref, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.source_track_ref, row.destination_track_ref, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertMarkerRegionRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO markers_regions (snapshot_id, ref, owner_ref, marker_kind, position_seconds, end_seconds, name, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.marker_kind, row.position_seconds, row.end_seconds, row.name, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertMediaSourceRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO media_sources (snapshot_id, ref, owner_ref, path_fingerprint, source_kind, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.path_fingerprint, row.source_kind, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertSelectionRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO selection_state (snapshot_id, scope_kind, ref, owner_ref, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.scope_kind, row.ref, row.owner_ref, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertObjectChangeRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO object_changes (change_id, snapshot_id, ref, owner_ref, change_kind, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.change_id, row.snapshot_id, row.ref, row.owner_ref, row.change_kind, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertBackgroundJobRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO background_jobs (job_id, job_kind, status, started_at, completed_at, blocker_json, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(row.job_id, row.job_kind, row.status, row.started_at, row.completed_at, row.blocker ? JSON.stringify(row.blocker) : null, JSON.stringify(row.summary ?? {}));
+}
+
+function readSqliteProjectIndexSnapshot(database, defaults = {}) {
+  const current = parseJsonObject(
+    database.prepare("SELECT value_json FROM index_meta WHERE key = ?").get("current_snapshot")?.value_json,
+  ) ?? {};
+  const latestSnapshot = database
+    .prepare("SELECT * FROM snapshots ORDER BY observed_at DESC LIMIT 1")
+    .get();
+  const snapshotId = typeof current.snapshot_id === "string" && current.snapshot_id
+    ? current.snapshot_id
+    : typeof latestSnapshot?.snapshot_id === "string"
+      ? latestSnapshot.snapshot_id
+      : null;
+  const sessionId = typeof current.session_id === "string" && current.session_id
+    ? current.session_id
+    : typeof defaults.sessionId === "string"
+      ? defaults.sessionId
+      : null;
+  const session = sessionId
+    ? database.prepare("SELECT * FROM sessions WHERE session_id = ?").get(sessionId)
+    : null;
+  const freshnessScopes = readFreshnessScopes(database);
+  return {
+    contract: ALPHA3_C3_PROJECT_INDEX_CONTRACT,
+    schema_version: ALPHA3_C3_PROJECT_INDEX_SCHEMA_VERSION,
+    db_path: defaults.dbPath ?? ALPHA3_C3_PROJECT_INDEX_DB_PATH,
+    lifecycle: current.lifecycle ?? "ready",
+    project_ref: session?.project_ref ?? current.project_ref ?? defaults.projectRef ?? null,
+    bridge_owner: session?.bridge_owner ?? current.bridge_owner ?? defaults.bridgeOwner ?? null,
+    bridge_generation: Number.isInteger(session?.bridge_generation)
+      ? session.bridge_generation
+      : Number.isInteger(current.bridge_generation)
+        ? current.bridge_generation
+        : Number.isInteger(defaults.bridgeGeneration)
+          ? defaults.bridgeGeneration
+          : null,
+    session_id: sessionId,
+    snapshot_id: snapshotId,
+    freshness_scopes: freshnessScopes,
+    coverage: {},
+    degraded_reason: session?.stale_reason ?? null,
+    rows: {
+      tracks: readSnapshotRows(database, "tracks", snapshotIdForScope(freshnessScopes, "tracks", snapshotId), mapTrackSqliteRow),
+      items: readSnapshotRows(database, "items", snapshotIdForScope(freshnessScopes, "items", snapshotId), mapItemSqliteRow),
+      takes: readSnapshotRows(database, "takes", snapshotIdForScope(freshnessScopes, "takes", snapshotId), mapTakeSqliteRow),
+      fx: readSnapshotRows(database, "fx", snapshotIdForScope(freshnessScopes, "fx", snapshotId), mapFxSqliteRow),
+      sends: readSnapshotRows(database, "sends", snapshotIdForScope(freshnessScopes, "routing", snapshotId), mapSendSqliteRow),
+      markers_regions: readSnapshotRows(database, "markers_regions", snapshotIdForScope(freshnessScopes, "markers", snapshotId), mapMarkerRegionSqliteRow),
+      media_sources: readSnapshotRows(database, "media_sources", snapshotIdForScope(freshnessScopes, "media", snapshotId), mapMediaSourceSqliteRow),
+      selection_state: readSnapshotRows(database, "selection_state", snapshotIdForScope(freshnessScopes, "selection", snapshotId), mapSelectionSqliteRow),
+      object_changes: database.prepare("SELECT * FROM object_changes ORDER BY observed_at, change_id").all().map(mapObjectChangeSqliteRow),
+      background_jobs: database.prepare("SELECT * FROM background_jobs ORDER BY started_at, job_id").all().map(mapBackgroundJobSqliteRow),
+    },
+  };
+}
+
+function snapshotIdForScope(freshnessScopes, scopeKind, fallbackSnapshotId) {
+  const scope = freshnessScopes?.[scopeKind];
+  return typeof scope?.snapshot_id === "string" && scope.snapshot_id
+    ? scope.snapshot_id
+    : fallbackSnapshotId;
+}
+
+function sqliteAdapterExpectedIdentity(options = {}) {
+  return {
+    projectRef: typeof options.projectRef === "string"
+      ? options.projectRef
+      : typeof options.project_ref === "string"
+        ? options.project_ref
+        : null,
+    bridgeOwner: typeof options.bridgeOwner === "string"
+      ? options.bridgeOwner
+      : typeof options.bridge_owner === "string"
+        ? options.bridge_owner
+        : null,
+    bridgeGeneration: Number.isInteger(options.bridgeGeneration)
+      ? options.bridgeGeneration
+      : Number.isInteger(options.bridge_generation)
+        ? options.bridge_generation
+        : null,
+    sessionId: typeof options.sessionId === "string"
+      ? options.sessionId
+      : typeof options.session_id === "string"
+        ? options.session_id
+        : null,
+  };
+}
+
+function sqliteSnapshotIdentityBlockers(snapshot, expected) {
+  const checks = [
+    ["project_ref", "projectRef", snapshot.project_ref, expected.projectRef],
+    ["bridge_owner", "bridgeOwner", snapshot.bridge_owner, expected.bridgeOwner],
+    ["bridge_generation", "bridgeGeneration", snapshot.bridge_generation, expected.bridgeGeneration],
+    ["session_id", "sessionId", snapshot.session_id, expected.sessionId],
+  ];
+  const blockers = [];
+  const hasProjectCache = sqliteSnapshotHasProjectCache(snapshot);
+  for (const [field, expectedField, actual, wanted] of checks) {
+    if (hasProjectCache && (wanted === null || wanted === undefined)) {
+      blockers.push({
+        field,
+        code: "SQLITE_SESSION_IDENTITY_REQUIRED",
+        message: `Project SQLite Index cache has persisted project rows; provide current ${expectedField} before using cached rows.`,
+        recoverable: true,
+      });
+      continue;
+    }
+    if (hasProjectCache && (actual === null || actual === undefined)) {
+      blockers.push({
+        field,
+        code: "SQLITE_CACHE_IDENTITY_MISSING",
+        message: `Project SQLite Index cache is missing persisted ${field}; refresh from REAPER before using cached rows.`,
+        expected: wanted,
+        actual,
+        recoverable: true,
+      });
+      continue;
+    }
+    if (wanted === null || wanted === undefined || actual === null || actual === undefined) continue;
+    if (actual === wanted) continue;
+    blockers.push({
+      field,
+      code: "SQLITE_SESSION_MISMATCH",
+      message: `Project SQLite Index cache ${field} does not match the requested ${expectedField}; refresh from REAPER before using rows.`,
+      expected: wanted,
+      actual,
+      recoverable: true,
+    });
+  }
+  return blockers;
+}
+
+function sqliteSnapshotHasProjectCache(snapshot) {
+  if (!isPlainObject(snapshot)) return false;
+  if (typeof snapshot.project_ref === "string" && snapshot.project_ref) return true;
+  if (typeof snapshot.bridge_owner === "string" && snapshot.bridge_owner) return true;
+  if (Number.isInteger(snapshot.bridge_generation)) return true;
+  if (typeof snapshot.session_id === "string" && snapshot.session_id) return true;
+  if (typeof snapshot.snapshot_id === "string" && snapshot.snapshot_id) return true;
+  if (Object.keys(snapshot.freshness_scopes ?? {}).length > 0) return true;
+  const rows = isPlainObject(snapshot.rows) ? snapshot.rows : {};
+  return Object.values(rows).some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function staleSqliteSnapshot(snapshot, blockers, observedAt) {
+  const staleScopes = {};
+  for (const [key, scope] of Object.entries(snapshot.freshness_scopes ?? {})) {
+    staleScopes[key] = {
+      ...scope,
+      status: "stale_session",
+      observed_at: observedAt,
+      reason: "sqlite_session_identity_mismatch",
+    };
+  }
+  return {
+    ...snapshot,
+    lifecycle: "stale_session",
+    degraded_reason: "sqlite_session_identity_mismatch",
+    freshness_scopes: staleScopes,
+    identity_blockers: blockers,
+  };
+}
+
+function readFreshnessScopes(database) {
+  const result = {};
+  for (const row of database.prepare("SELECT * FROM freshness_scopes").all()) {
+    result[row.scope_key] = {
+      scope_kind: row.scope_kind,
+      scope_ref: row.scope_ref,
+      snapshot_id: row.snapshot_id,
+      status: row.status,
+      coverage_status: row.coverage_status,
+      observed_at: row.observed_at,
+      expires_at: row.expires_at,
+      source_template_id: row.source_template_id,
+      reason: row.reason,
+      payload_ref: row.payload_ref,
+    };
+  }
+  return result;
+}
+
+function readSnapshotRows(database, tableName, snapshotId, mapRow) {
+  if (!snapshotId) return [];
+  return database
+    .prepare(`SELECT * FROM ${tableName} WHERE snapshot_id = ?`)
+    .all(snapshotId)
+    .map(mapRow);
+}
+
+function mapTrackSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    name: row.name,
+    index: row.track_index,
+    display_number: row.display_number,
+    selected: Boolean(row.selected),
+    muted: Boolean(row.muted),
+    solo: Boolean(row.solo),
+    record_arm: Boolean(row.record_arm),
+    folder_depth: row.folder_depth,
+    item_count: row.item_count,
+    fx_count: row.fx_count,
+    send_count: row.send_count,
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapItemSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    track_ref: row.track_ref,
+    start_seconds: row.start_seconds,
+    end_seconds: row.end_seconds,
+    selected: Boolean(row.selected),
+    muted: Boolean(row.muted),
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapTakeSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    item_ref: row.item_ref,
+    active: Boolean(row.active),
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapFxSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    plugin_name: row.plugin_name,
+    plugin_id: row.plugin_id,
+    slot_index: row.slot_index,
+    bypassed: Boolean(row.bypassed),
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapSendSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    source_track_ref: row.source_track_ref,
+    destination_track_ref: row.destination_track_ref,
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapMarkerRegionSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    marker_kind: row.marker_kind,
+    position_seconds: row.position_seconds,
+    end_seconds: row.end_seconds,
+    name: row.name,
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapMediaSourceSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    path_fingerprint: row.path_fingerprint,
+    source_kind: row.source_kind,
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapSelectionSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    scope_kind: row.scope_kind,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapObjectChangeSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    change_id: row.change_id,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    change_kind: row.change_kind,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
+function mapBackgroundJobSqliteRow(row) {
+  return {
+    job_id: row.job_id,
+    job_kind: row.job_kind,
+    status: row.status,
+    started_at: row.started_at,
+    completed_at: row.completed_at,
+    blocker: parseJsonObject(row.blocker_json),
+    summary: parseJsonObject(row.summary_json) ?? {},
+  };
+}
+
+function mergeSnapshotIntoState(state, snapshot) {
+  state.lifecycle = ALPHA3_C3_PROJECT_INDEX_DB_LIFECYCLE_STATES.includes(snapshot.lifecycle)
+    ? snapshot.lifecycle
+    : "ready";
+  state.project_ref = typeof snapshot.project_ref === "string" ? snapshot.project_ref : state.project_ref;
+  state.bridge_owner = typeof snapshot.bridge_owner === "string" ? snapshot.bridge_owner : state.bridge_owner;
+  state.bridge_generation = Number.isInteger(snapshot.bridge_generation) ? snapshot.bridge_generation : state.bridge_generation;
+  state.session_id = typeof snapshot.session_id === "string" ? snapshot.session_id : state.session_id;
+  state.snapshot_id = typeof snapshot.snapshot_id === "string" ? snapshot.snapshot_id : state.snapshot_id;
+  state.freshness_scopes = isPlainObject(snapshot.freshness_scopes) ? cloneJson(snapshot.freshness_scopes) : {};
+  state.coverage = coverageFromFreshnessScopes(state.freshness_scopes);
+  state.degraded_reason = typeof snapshot.degraded_reason === "string" ? snapshot.degraded_reason : null;
+  const defaults = { snapshot_id: state.snapshot_id, observed_at: null, payload_ref: null };
+  state.rows.tracks = normalizeLoadedRows(snapshot.rows?.tracks, normalizeTrackRow, defaults);
+  state.rows.items = normalizeLoadedRows(snapshot.rows?.items, normalizeItemRow, defaults);
+  state.rows.takes = normalizeLoadedRows(snapshot.rows?.takes, normalizeTakeRow, defaults);
+  state.rows.fx = normalizeLoadedRows(snapshot.rows?.fx, normalizeFxRow, defaults);
+  state.rows.sends = normalizeLoadedRows(snapshot.rows?.sends, normalizeSendRow, defaults);
+  state.rows.markers_regions = normalizeLoadedRows(snapshot.rows?.markers_regions, normalizeMarkerRegionRow, defaults);
+  state.rows.media_sources = normalizeLoadedRows(snapshot.rows?.media_sources, normalizeMediaSourceRow, defaults);
+  state.rows.selection_state = normalizeLoadedRows(snapshot.rows?.selection_state, normalizeSelectionRow, defaults);
+  state.rows.object_changes = normalizeLoadedRows(snapshot.rows?.object_changes, normalizeObjectChange, defaults);
+  state.rows.background_jobs = normalizeLoadedRows(snapshot.rows?.background_jobs, normalizeBackgroundJob, {
+    job_id: "job:project-index:loaded",
+    job_kind: "task_scoped_refresh",
+    status: "planned",
+    summary: {},
+  });
+}
+
+function normalizeLoadedRows(rows, normalize, defaults) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => normalize(row, defaults))
+    .filter(Boolean);
+}
+
+function coverageFromFreshnessScopes(scopes) {
+  const result = {};
+  for (const scope of Object.values(scopes ?? {})) {
+    if (!scope?.scope_kind) continue;
+    result[scope.scope_kind] = scope.coverage_status ?? "unknown";
+  }
+  return result;
+}
+
+function summaryJson(row) {
+  const summary = isPlainObject(row?.summary) ? cloneJson(row.summary) : {};
+  return JSON.stringify({
+    summary,
+    row: cloneJson({
+      ...row,
+      summary: undefined,
+    }),
+  });
+}
+
+function parseStoredRowSummary(value) {
+  const parsed = parseJsonObject(value) ?? {};
+  if (isPlainObject(parsed.summary) && isPlainObject(parsed.row)) {
+    return {
+      summary: cloneJson(parsed.summary),
+      row: cloneJson(parsed.row),
+    };
+  }
+  const fallbackRow = cloneJson({
+    ...parsed,
+    summary: undefined,
+  });
+  return {
+    summary: isPlainObject(parsed.summary) ? cloneJson(parsed.summary) : {},
+    row: fallbackRow,
+  };
+}
+
+function snapshotSummary(snapshot) {
+  return {
+    row_counts: {
+      tracks: snapshot.rows.tracks.length,
+      items: snapshot.rows.items.length,
+      takes: snapshot.rows.takes.length,
+      fx: snapshot.rows.fx.length,
+      sends: snapshot.rows.sends.length,
+      markers_regions: snapshot.rows.markers_regions.length,
+      media_sources: snapshot.rows.media_sources.length,
+      selection_state: snapshot.rows.selection_state.length,
+      object_changes: snapshot.rows.object_changes.length,
+      background_jobs: snapshot.rows.background_jobs.length,
+    },
+    freshness_scopes: Object.keys(snapshot.freshness_scopes ?? {}),
+    sqlite_is_truth: false,
+  };
+}
+
+function latestObservedAt(snapshot) {
+  const candidates = [
+    ...Object.values(snapshot.freshness_scopes ?? {}).map((scope) => scope.observed_at),
+    ...Object.values(snapshot.rows ?? {}).flat().map((row) => row.observed_at ?? row.completed_at ?? row.started_at),
+  ].filter((value) => typeof value === "string" && value);
+  return candidates.sort().at(-1) ?? null;
+}
+
+function overallCoverageStatus(snapshot) {
+  const statuses = Object.values(snapshot.freshness_scopes ?? {})
+    .map((scope) => scope.coverage_status)
+    .filter(Boolean);
+  if (statuses.includes("failed")) return "failed";
+  if (statuses.includes("truncated")) return "truncated";
+  if (statuses.includes("paged")) return "paged";
+  if (statuses.includes("partial")) return "partial";
+  if (statuses.includes("head_only")) return "head_only";
+  if (statuses.includes("selected_only")) return "selected_only";
+  if (statuses.includes("complete")) return "complete";
+  return "unknown";
+}
+
+function boolInt(value) {
+  return value ? 1 : 0;
+}
+
 function unique(values) {
   return [...new Set(values)];
 }
@@ -1813,6 +2750,32 @@ function sqliteLifecycleResult({
       planned: migrationIds,
     },
     schema_summary: schemaSummary,
+    blockers,
+    observed_at: observedAt,
+    truth_boundary: projectIndexTruthBoundary(),
+    safety: projectIndexSafety(),
+  });
+}
+
+function sqliteAdapterOpenResult({
+  ok,
+  lifecycle,
+  adapterLifecycle = lifecycle,
+  dbPath,
+  adapter,
+  snapshot,
+  blockers,
+  observedAt,
+}) {
+  return deepFreeze({
+    contract: ALPHA3_C3_PROJECT_INDEX_SQLITE_ADAPTER_CONTRACT,
+    ok,
+    lifecycle,
+    adapter_lifecycle: adapterLifecycle,
+    backend: "sqlite_file_adapter",
+    db_path: dbPath,
+    adapter,
+    snapshot,
     blockers,
     observed_at: observedAt,
     truth_boundary: projectIndexTruthBoundary(),
