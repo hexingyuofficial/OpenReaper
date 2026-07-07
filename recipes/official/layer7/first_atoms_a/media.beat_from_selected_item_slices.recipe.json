@@ -1,0 +1,1003 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.media.beat_from_selected_item_slices",
+  "title": "Beat from selected item slices",
+  "summary": "Draft write-risk Alpha3 starter workflow that turns one selected recorded item and project media source into a three-track kick/snare/hat slice loop.",
+  "pack": "media",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "beat_from_slices",
+  "tags": [
+    "media",
+    "items",
+    "tracks",
+    "slice",
+    "beat",
+    "kick",
+    "snare",
+    "hat",
+    "starter_recipe",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Create a simple three-track source-slice beat starter with fewer manual decisions and compact readback.",
+    "entry_conditions": [
+      "Use when the user selected a recorded audio item and wants a starter kick/snare/hat loop from slices.",
+      "The current project must expose the source media through project media file refs."
+    ],
+    "supported_steps": [
+      "Resolve and read the selected source item.",
+      "Detect transient evidence for slice-picking context.",
+      "Read bounded project media file refs.",
+      "Create kick, snare, and hat target tracks.",
+      "Import three fixed starter source sections, set loop points, and create a loop region."
+    ],
+    "candidate_steps": [
+      "Future versions should bind the selected item exact take source, choose slice windows from transient payloads, duplicate to grid, pitch and level slices, and/or load RS5k pads."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim automatic best-slice selection, sampler drum rack creation, duplicate-to-grid batching, or live support from this starter."
+    ],
+    "required_questions": [
+      "Ask before scanning private folders or importing media outside the current project media set.",
+      "Ask before deleting or replacing existing beat tracks."
+    ],
+    "template_atoms": [
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+      "template.media.read_project_media_files",
+      "template.tracks.create_track",
+      "template.media.import_file_section_to_track",
+      "template.transport.set_loop_points",
+      "template.project.create_region"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "transient artifact ref for the selected source item",
+      "three imported item refs and final item readback"
+    ],
+    "cleanup_plan": "If the beat starter is unwanted, delete only the three created tracks after user confirmation.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "selected_item_required",
+      "project_media_source_required",
+      "fixed_slice_starter_not_transient_solver",
+      "sampler_loader_missing"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "read_project_state",
+      "title": "Read project state",
+      "summary": "Read bounded project state before creating beat tracks.",
+      "uses": "get_state",
+      "call_template": null,
+      "get_state": {
+        "projection": "project.summary",
+        "refs": []
+      },
+      "checkpoint": "checkpoint_read_project_state",
+      "evidence": null,
+      "idempotency": {
+        "mode": "read_only",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "resolve_source_item",
+      "title": "Resolve selected source item",
+      "summary": "Resolve selected:0 as the recorded source item for slice analysis.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.resolve_item_ref",
+        "input": {
+          "ref": "selected:0"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_resolve_source_item",
+      "evidence": "evidence_resolve_source_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_source_item",
+      "title": "Read source item",
+      "summary": "Read compact selected item timing and active-take facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "resolve_source_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_source_item",
+      "evidence": "evidence_read_source_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "detect_source_transients",
+      "title": "Detect source transients",
+      "summary": "Capture transient evidence for the selected source item before importing starter slices.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.detect_item_transients",
+        "input": {},
+        "refs": {
+          "item_ref": {
+            "$from_step": "read_source_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_detect_source_transients",
+      "evidence": "evidence_detect_source_transients",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_project_media",
+      "title": "Read project media",
+      "summary": "Read bounded project media file refs to identify a project-local source for starter slice imports.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.read_project_media_files",
+        "input": {
+          "include_offline": false,
+          "include_metadata_keys": false,
+          "max_sources": 8
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_project_media",
+      "evidence": "evidence_read_project_media",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "create_kick_track",
+      "title": "Create kick slice track",
+      "summary": "Create a target track for low-pitched kick-like starter slices.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.create_track",
+        "input": {
+          "name": "BEAT KICK - source slice"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_kick_track",
+      "evidence": "evidence_create_kick_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_track_setup"
+    },
+    {
+      "id": "create_snare_track",
+      "title": "Create snare slice track",
+      "summary": "Create a target track for mid-pitched snare-like starter slices.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.create_track",
+        "input": {
+          "name": "BEAT SNARE - source slice"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_snare_track",
+      "evidence": "evidence_create_snare_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_track_setup"
+    },
+    {
+      "id": "create_hat_track",
+      "title": "Create hat slice track",
+      "summary": "Create a target track for high-pitched hat-like starter slices.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.tracks.create_track",
+        "input": {
+          "name": "BEAT HAT - source slice"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_hat_track",
+      "evidence": "evidence_create_hat_track",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_track_setup"
+    },
+    {
+      "id": "import_kick_slice",
+      "title": "Import kick starter slice",
+      "summary": "Import a short early source section to the kick track at bar start.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.import_file_section_to_track",
+        "input": {
+          "position_seconds": 0,
+          "start_percent": 0.004,
+          "end_percent": 0.025,
+          "preserve_selection": true
+        },
+        "refs": {
+          "source_file_ref": {
+            "$from_step": "read_project_media",
+            "output": "file_refs"
+          },
+          "track_ref": {
+            "$from_step": "create_kick_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_import_kick_slice",
+      "evidence": "evidence_import_kick_slice",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_slice_import"
+    },
+    {
+      "id": "import_snare_slice",
+      "title": "Import snare starter slice",
+      "summary": "Import a mid-source starter section to the snare track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.import_file_section_to_track",
+        "input": {
+          "position_seconds": 0.909091,
+          "start_percent": 0.13,
+          "end_percent": 0.155,
+          "preserve_selection": true
+        },
+        "refs": {
+          "source_file_ref": {
+            "$from_step": "read_project_media",
+            "output": "file_refs"
+          },
+          "track_ref": {
+            "$from_step": "create_snare_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_import_snare_slice",
+      "evidence": "evidence_import_snare_slice",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_slice_import"
+    },
+    {
+      "id": "import_hat_slice",
+      "title": "Import hat starter slice",
+      "summary": "Import a short early source section to the hat track.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.media.import_file_section_to_track",
+        "input": {
+          "position_seconds": 0.454545,
+          "start_percent": 0.007,
+          "end_percent": 0.012,
+          "preserve_selection": true
+        },
+        "refs": {
+          "source_file_ref": {
+            "$from_step": "read_project_media",
+            "output": "file_refs"
+          },
+          "track_ref": {
+            "$from_step": "create_hat_track",
+            "output": "track_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_import_hat_slice",
+      "evidence": "evidence_import_hat_slice",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_slice_import"
+    },
+    {
+      "id": "set_loop_points",
+      "title": "Set starter loop points",
+      "summary": "Set a two-bar starter loop at 132 BPM timing.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.transport.set_loop_points",
+        "input": {
+          "start_seconds": 0,
+          "end_seconds": 3.636364
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_set_loop_points",
+      "evidence": "evidence_set_loop_points",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_timeline"
+    },
+    {
+      "id": "create_loop_region",
+      "title": "Create starter loop region",
+      "summary": "Create a named region around the starter beat loop.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.project.create_region",
+        "input": {
+          "name": "starter beat from slices",
+          "start_seconds": 0,
+          "end_seconds": 3.636364
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_create_loop_region",
+      "evidence": "evidence_create_loop_region",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_retry_timeline"
+    },
+    {
+      "id": "read_kick_slice",
+      "title": "Read kick slice",
+      "summary": "Read final kick slice facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "import_kick_slice",
+            "output": "imported_item_refs"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_kick_slice",
+      "evidence": "evidence_read_kick_slice",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_snare_slice",
+      "title": "Read snare slice",
+      "summary": "Read final snare slice facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "import_snare_slice",
+            "output": "imported_item_refs"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_snare_slice",
+      "evidence": "evidence_read_snare_slice",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_hat_slice",
+      "title": "Read hat slice",
+      "summary": "Read final hat slice facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "import_hat_slice",
+            "output": "imported_item_refs"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_hat_slice",
+      "evidence": "evidence_read_hat_slice",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_beat_from_slices_outputs",
+      "kind": "expected_output",
+      "summary": "The starter run must retain source evidence, three created tracks, three imported slice item refs, transient artifact evidence, loop points, and a region ref.",
+      "required": true,
+      "evidence": [
+        "evidence_resolve_source_item",
+        "evidence_read_source_item",
+        "evidence_detect_source_transients",
+        "evidence_read_project_media",
+        "evidence_create_kick_track",
+        "evidence_create_snare_track",
+        "evidence_create_hat_track",
+        "evidence_import_kick_slice",
+        "evidence_import_snare_slice",
+        "evidence_import_hat_slice",
+        "evidence_set_loop_points",
+        "evidence_create_loop_region",
+        "evidence_read_kick_slice",
+        "evidence_read_snare_slice",
+        "evidence_read_hat_slice"
+      ],
+      "outputs": {
+        "refs": [
+          "item_ref",
+          "file_refs",
+          "track_ref",
+          "imported_item_refs",
+          "source_file_ref",
+          "region_ref"
+        ],
+        "artifacts": [
+          "item_transients_report"
+        ],
+        "jobs": [],
+        "state": [
+          "beat_from_slices_starter_ready"
+        ]
+      }
+    },
+    {
+      "id": "assert_no_sampler_or_batch_claim",
+      "kind": "checkpoint",
+      "summary": "The starter does not claim sampler loading, duplicate-to-grid batching, transient-derived slice solving, raw execution, or live support.",
+      "required": true,
+      "evidence": [
+        "evidence_read_hat_slice"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_read_project_state",
+        "after_step": "read_project_state",
+        "required_evidence": [],
+        "on_resume": "continue_next_step",
+        "summary": "Fresh bounded project state was read before beat starter writes."
+      },
+      {
+        "id": "checkpoint_resolve_source_item",
+        "after_step": "resolve_source_item",
+        "required_evidence": [
+          "evidence_resolve_source_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Selected source item ref is retained."
+      },
+      {
+        "id": "checkpoint_read_source_item",
+        "after_step": "read_source_item",
+        "required_evidence": [
+          "evidence_read_source_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Source item timing evidence is retained."
+      },
+      {
+        "id": "checkpoint_detect_source_transients",
+        "after_step": "detect_source_transients",
+        "required_evidence": [
+          "evidence_detect_source_transients"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Transient artifact evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_project_media",
+        "after_step": "read_project_media",
+        "required_evidence": [
+          "evidence_read_project_media"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Project media file refs are retained for starter slice imports."
+      },
+      {
+        "id": "checkpoint_create_kick_track",
+        "after_step": "create_kick_track",
+        "required_evidence": [
+          "evidence_create_kick_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Kick target track ref is retained."
+      },
+      {
+        "id": "checkpoint_create_snare_track",
+        "after_step": "create_snare_track",
+        "required_evidence": [
+          "evidence_create_snare_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Snare target track ref is retained."
+      },
+      {
+        "id": "checkpoint_create_hat_track",
+        "after_step": "create_hat_track",
+        "required_evidence": [
+          "evidence_create_hat_track"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Hat target track ref is retained."
+      },
+      {
+        "id": "checkpoint_import_kick_slice",
+        "after_step": "import_kick_slice",
+        "required_evidence": [
+          "evidence_import_kick_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Kick slice item ref is retained."
+      },
+      {
+        "id": "checkpoint_import_snare_slice",
+        "after_step": "import_snare_slice",
+        "required_evidence": [
+          "evidence_import_snare_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Snare slice item ref is retained."
+      },
+      {
+        "id": "checkpoint_import_hat_slice",
+        "after_step": "import_hat_slice",
+        "required_evidence": [
+          "evidence_import_hat_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Hat slice item ref is retained."
+      },
+      {
+        "id": "checkpoint_set_loop_points",
+        "after_step": "set_loop_points",
+        "required_evidence": [
+          "evidence_set_loop_points"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Starter loop points are retained."
+      },
+      {
+        "id": "checkpoint_create_loop_region",
+        "after_step": "create_loop_region",
+        "required_evidence": [
+          "evidence_create_loop_region"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Starter loop region ref is retained."
+      },
+      {
+        "id": "checkpoint_read_kick_slice",
+        "after_step": "read_kick_slice",
+        "required_evidence": [
+          "evidence_read_kick_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Final kick slice readback is retained."
+      },
+      {
+        "id": "checkpoint_read_snare_slice",
+        "after_step": "read_snare_slice",
+        "required_evidence": [
+          "evidence_read_snare_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Final snare slice readback is retained."
+      },
+      {
+        "id": "checkpoint_read_hat_slice",
+        "after_step": "read_hat_slice",
+        "required_evidence": [
+          "evidence_read_hat_slice"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Final hat slice readback is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_resolve_source_item",
+        "step": "resolve_source_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.resolve_item_ref",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_source_item",
+        "step": "read_source_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_detect_source_transients",
+        "step": "detect_source_transients",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.detect_item_transients",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_project_media",
+        "step": "read_project_media",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.read_project_media_files",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_kick_track",
+        "step": "create_kick_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.create_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_snare_track",
+        "step": "create_snare_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.create_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_hat_track",
+        "step": "create_hat_track",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.tracks.create_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_import_kick_slice",
+        "step": "import_kick_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.import_file_section_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_import_snare_slice",
+        "step": "import_snare_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.import_file_section_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_import_hat_slice",
+        "step": "import_hat_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.media.import_file_section_to_track",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 2,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_set_loop_points",
+        "step": "set_loop_points",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.transport.set_loop_points",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_create_loop_region",
+        "step": "create_loop_region",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.project.create_region",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_kick_slice",
+        "step": "read_kick_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_snare_slice",
+        "step": "read_snare_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_hat_slice",
+        "step": "read_hat_slice",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_retry_track_setup",
+        "trigger": "template_error",
+        "step": null,
+        "strategy": "retry_step",
+        "summary": "Retry created track setup only when the target project state is still current."
+      },
+      {
+        "id": "branch_retry_slice_import",
+        "trigger": "template_error",
+        "step": null,
+        "strategy": "retry_step",
+        "summary": "Retry slice import only when source media and created track refs remain current."
+      },
+      {
+        "id": "branch_retry_timeline",
+        "trigger": "template_error",
+        "step": null,
+        "strategy": "retry_step",
+        "summary": "Retry loop or region setup when timeline refs remain current."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "risk_gate_blocked",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause when selected item, project media source, transient analysis, or mutation scope is ambiguous."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_fresh_state",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "create_kick_track",
+        "policy": "fresh_state",
+        "blocks_auto_resume": true,
+        "summary": "Require fresh bounded project state before creating beat tracks."
+      },
+      {
+        "id": "gate_user_confirmation",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "create_kick_track",
+        "policy": "user_confirmation",
+        "blocks_auto_resume": true,
+        "summary": "Require user confirmation before creating tracks and importing source slices."
+      }
+    ]
+  }
+}

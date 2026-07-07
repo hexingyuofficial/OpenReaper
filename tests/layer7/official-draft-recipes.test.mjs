@@ -34,6 +34,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.items.align_selected_item_onsets",
   "recipe.items.layer_report_from_evidence",
   "recipe.items.reverse_riser_from_selected_item",
+  "recipe.media.beat_from_selected_item_slices",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
@@ -111,6 +112,16 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
     "template.items.split_item_at_time",
     "template.items.copy_item_to_track",
   ]),
+  "recipe.media.beat_from_selected_item_slices": Object.freeze([
+    "template.items.resolve_item_ref",
+    "template.items.read_item_summary",
+    "template.analysis.detect_item_transients",
+    "template.media.read_project_media_files",
+    "template.tracks.create_track",
+    "template.media.import_file_section_to_track",
+    "template.transport.set_loop_points",
+    "template.project.create_region",
+  ]),
   "recipe.midi.track_phrase_seed": Object.freeze([
     "template.tracks.create_track",
     "template.midi.create_midi_item",
@@ -162,7 +173,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the eighteen first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the nineteen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -186,6 +197,7 @@ describe("Layer 7 official draft recipe packet", () => {
       "items.align_selected_item_onsets.recipe.json",
       "items.layer_report_from_evidence.recipe.json",
       "items.reverse_riser_from_selected_item.recipe.json",
+      "media.beat_from_selected_item_slices.recipe.json",
       "media.item_prep_from_folder.recipe.json",
       "midi.track_phrase_seed.recipe.json",
       "project.cleanup_fingerprint_report.recipe.json",
@@ -352,6 +364,52 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(recipe.assertions.some((assertion) => assertion.id === "assert_no_loop_source_authority"), true);
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
     assert.doesNotMatch(JSON.stringify(recipe), /template\.media\.relink_take_source|B_LOOPSRC|set_item_loop_source/i);
+  });
+
+  it("adds an Alpha3 beat-from-slices starter over selected-item and media atoms", () => {
+    const recipe = recipesById().get("recipe.media.beat_from_selected_item_slices");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("starter_recipe"), true);
+    assert.equal(recipe.tags.includes("beat"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.analysis.detect_item_transients",
+        "template.media.read_project_media_files",
+        "template.tracks.create_track",
+        "template.tracks.create_track",
+        "template.tracks.create_track",
+        "template.media.import_file_section_to_track",
+        "template.media.import_file_section_to_track",
+        "template.media.import_file_section_to_track",
+        "template.transport.set_loop_points",
+        "template.project.create_region",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.deepEqual(recipe.steps[1].call_template.input, {
+      ref: "selected:0",
+    });
+    assert.equal(recipe.recovery.risk_gates[0].required_before_step, "create_kick_track");
+    assert.equal(recipe.recovery.risk_gates[0].policy, "fresh_state");
+    assert.equal(recipe.recovery.risk_gates[1].required_before_step, "create_kick_track");
+    assert.equal(recipe.recovery.risk_gates[1].policy, "user_confirmation");
+    assert.equal(
+      recipe.workflow_card.candidate_steps.some((step) => /RS5k pads/i.test(step)),
+      true,
+    );
+    assert.equal(
+      recipe.workflow_card.blocked_steps.some((step) => /best-slice selection/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
   it("discovers the E6 family through compact recipe-menu intent fields", () => {
@@ -750,6 +808,25 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("alignment"), true);
     assert.equal(item.task_intents.includes("transient"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 beat-from-slices workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "slice",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.media.beat_from_selected_item_slices");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "media.beat_from_slices");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("beat"), true);
+    assert.equal(item.task_intents.includes("kick"), true);
+    assert.equal(item.task_intents.includes("snare"), true);
+    assert.equal(item.task_intents.includes("hat"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });

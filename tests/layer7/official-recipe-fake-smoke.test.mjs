@@ -32,6 +32,7 @@ const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.items.align_selected_item_onsets",
   "recipe.items.layer_report_from_evidence",
   "recipe.items.reverse_riser_from_selected_item",
+  "recipe.media.beat_from_selected_item_slices",
   "recipe.media.item_prep_from_folder",
   "recipe.midi.track_phrase_seed",
   "recipe.project.cleanup_trial_created_objects",
@@ -52,6 +53,7 @@ const WRITE_ATOMS = new Set([
   "recipe.midi.track_phrase_seed",
   "recipe.render.region_wav_render",
   "recipe.media.item_prep_from_folder",
+  "recipe.media.beat_from_selected_item_slices",
   "recipe.routing.send_fx_automation_setup",
   "recipe.project.cleanup_trial_created_objects",
   "recipe.tracks.adjust_selected_track_basic_balance",
@@ -75,7 +77,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the eighteen draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the nineteen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -269,6 +271,44 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.equal(run.state_reads.some((read) => read.projection === "project.summary"), true);
     assert.equal(run.expected.refs.has("file_refs"), true);
     assert.equal(run.expected.refs.has("new_item_ref"), true);
+  });
+
+  it("fake-smokes the Alpha3 beat-from-slices starter as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.media.beat_from_selected_item_slices");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.analysis.detect_item_transients",
+        "template.media.read_project_media_files",
+        "template.tracks.create_track",
+        "template.tracks.create_track",
+        "template.tracks.create_track",
+        "template.media.import_file_section_to_track",
+        "template.media.import_file_section_to_track",
+        "template.media.import_file_section_to_track",
+        "template.transport.set_loop_points",
+        "template.project.create_region",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 2);
+    assert.equal(run.risk_pauses[0].before_step, "create_kick_track");
+    assert.equal(run.risk_pauses[0].policy, "fresh_state");
+    assert.equal(run.risk_pauses[1].before_step, "create_kick_track");
+    assert.equal(run.risk_pauses[1].policy, "user_confirmation");
+    assert.equal(run.expected.refs.has("file_refs"), true);
+    assert.equal(run.expected.refs.has("track_ref"), true);
+    assert.equal(run.expected.refs.has("imported_item_refs"), true);
+    assert.equal(run.expected.refs.has("region_ref"), true);
+    assert.equal(run.expected.artifacts.has("item_transients_report"), true);
+    assert.equal(run.expected.state.has("beat_from_slices_starter_ready"), true);
   });
 
   it("fake-smokes the E6 routing/FX/automation family as a recipe-only composition", () => {
