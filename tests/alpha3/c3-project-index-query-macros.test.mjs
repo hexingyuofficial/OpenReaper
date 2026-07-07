@@ -49,6 +49,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_takes").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_fx").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_routing").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_markers").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_automation").status, "planned");
@@ -65,6 +66,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const takes = entries.find((entry) => entry.id === "macro.query_takes");
     const fx = entries.find((entry) => entry.id === "macro.query_fx");
     const routing = entries.find((entry) => entry.id === "macro.query_routing");
+    const markers = entries.find((entry) => entry.id === "macro.query_markers");
 
     assert.equal(entries.length, 12);
     assert.equal(status.kind, "official_macro");
@@ -97,6 +99,13 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.deepEqual(routing.examples[0].input, {
       scope: "tracks",
       filters: { source_track_ref: "track:guid:{TRACK-GUID}" },
+      limit: 25,
+    });
+    assert.equal(markers.support_state, "supported");
+    assert.equal(markers.known_blocker, null);
+    assert.deepEqual(markers.examples[0].input, {
+      filters: { marker_kind: "region" },
+      time_range: { start_seconds: 0, end_seconds: 120 },
       limit: 25,
     });
   });
@@ -309,6 +318,30 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       plan.refresh_requests.find((request) => request.id === "template.routing.resolve_send_ref").input,
       { send_ref: "send:track:guid:{TRACK-1}:0" },
     );
+    assert.equal(plan.query_policy.raw_sql_exposed, false);
+    assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
+    assert.equal(plan.safety.hidden_executor, false);
+    assert.equal(plan.safety.live_reaper, false);
+  });
+
+  it("blocks marker queries until the task-scoped marker scope is fresh enough", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      limit: 8,
+      filters: { marker_kind: "region" },
+      time_range: { start_seconds: 0, end_seconds: 60 },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      ["template.project.list_markers_regions"],
+    );
+    assert.deepEqual(plan.refresh_requests[0].input, {
+      limit: 8,
+      include_markers: false,
+      include_regions: true,
+    });
     assert.equal(plan.query_policy.raw_sql_exposed, false);
     assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
     assert.equal(plan.safety.hidden_executor, false);
@@ -683,6 +716,71 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("queries compact marker/region rows from a fresh resident project index", () => {
+    const projectIndex = markersProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      filters: {
+        marker_kind: "region",
+        name: "chorus",
+      },
+      time_range: { start_seconds: 0, end_seconds: 90 },
+      limit: 1,
+      fields: ["marker_kind", "position_seconds", "end_seconds", "length_seconds", "name", "payload_ref"],
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      filters: {
+        marker_kind: "region",
+        name: "chorus",
+      },
+      time_range: { start_seconds: 0, end_seconds: 90 },
+      limit: 1,
+      cursor: firstPage.page.next_cursor,
+      fields: ["marker_kind", "name", "color"],
+    }, { projectIndex });
+    const defaultCompact = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      filters: { marker_kind: "marker" },
+      limit: 1,
+    }, { projectIndex });
+    const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      scope: "automation",
+      limit: 10,
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["region:guid:{REGION-1}"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "region:guid:{REGION-1}",
+      marker_kind: "region",
+      position_seconds: 32,
+      end_seconds: 64,
+      length_seconds: 32,
+      name: "Chorus A",
+      payload_ref: "artifact:markers:regions",
+    });
+    assert.equal(firstPage.freshness.status, "fresh");
+    assert.equal(firstPage.coverage.status, "complete");
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.callable_now, false);
+    assert.equal(firstPage.hydrate_request.status, "no_supported_exact_hydration");
+    assert.equal(firstPage.hydrate_request.blocker.code, "HYDRATE_REF_UNSUPPORTED");
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["region:guid:{REGION-2}"]);
+    assert.equal(secondPage.page.has_more, false);
+    assert.deepEqual(defaultCompact.rows[0], {
+      ref: "marker:guid:{MARKER-1}",
+      marker_kind: "marker",
+      position_seconds: 8,
+      end_seconds: null,
+      name: "Intro cue",
+      freshness_status: "fresh",
+      coverage_status: "complete",
+    });
+    assert.equal("summary" in defaultCompact.rows[0], false);
+    assert.equal("payload_ref" in defaultCompact.rows[0], false);
+    assert.equal(unsupportedScope.ok, false);
+    assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
+  });
+
   it("rejects raw SQL-shaped input instead of exposing database execution", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       raw_sql: "select * from tracks",
@@ -792,6 +890,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(menu.items.some((item) => item.id === "macro.query_takes"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_fx"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_routing"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.query_markers"), true);
     assert.deepEqual(
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
@@ -985,6 +1084,37 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.rows.length, 2);
     assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
     assert.equal(runtime.last_evidence().template.id, "macro.query_routing");
+  });
+
+  it("calls query_markers through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T19:30:00.000Z"),
+      projectIndex: markersProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.query_markers",
+      input: {
+        limit: 2,
+        filters: { marker_kind: "region" },
+        fields: ["marker_kind", "name", "position_seconds", "end_seconds"],
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.query_markers");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.added_tools, 0);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "region:guid:{REGION-1}",
+      "region:guid:{REGION-2}",
+    ]);
+    assert.equal(response.result.rows.length, 2);
+    assert.equal(response.result.hydrate_request.callable_now, false);
+    assert.equal(response.result.hydrate_request.status, "no_supported_exact_hydration");
+    assert.equal(runtime.last_evidence().template.id, "macro.query_markers");
   });
 
   it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
@@ -1362,6 +1492,46 @@ function routingProjectIndex() {
         muted: true,
         volume_db: -18,
         pan: -0.25,
+      },
+    ],
+  });
+  return index;
+}
+
+function markersProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T19:28:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-10",
+  });
+  index.replaceMarkersRegions({
+    snapshot_id: "snapshot:c3-10:markers",
+    observed_at: "2026-07-07T19:25:00.000Z",
+    payload_ref: "artifact:markers:regions",
+    rows: [
+      {
+        ref: "marker:guid:{MARKER-1}",
+        marker_kind: "marker",
+        position_seconds: 8,
+        name: "Intro cue",
+      },
+      {
+        ref: "region:guid:{REGION-1}",
+        marker_kind: "region",
+        position_seconds: 32,
+        end_seconds: 64,
+        name: "Chorus A",
+        color: "#7fb3ff",
+      },
+      {
+        ref: "region:guid:{REGION-2}",
+        marker_kind: "region",
+        position_seconds: 72,
+        end_seconds: 88,
+        name: "Chorus B",
+        color: "#ffd36a",
       },
     ],
   });

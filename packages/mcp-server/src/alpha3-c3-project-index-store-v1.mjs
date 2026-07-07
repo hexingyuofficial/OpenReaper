@@ -349,6 +349,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       takes: [],
       fx: [],
       sends: [],
+      markers_regions: [],
       selection_state: [],
       object_changes: [],
     },
@@ -509,6 +510,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.routing = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_sends", observedAt);
+    },
+    replaceMarkersRegions(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.markers_regions = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeMarkerRegionRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "markers",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "complete"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.project.list_markers_regions",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.markers = normalizeCoverageStatus(input.coverage_status, "complete");
+      return lifecycleResult(state, "replace_markers_regions", observedAt);
     },
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -786,6 +815,19 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "routing",
       });
     }
+    if (scope === "markers") {
+      requests.push({
+        tool: "call_template",
+        id: "template.project.list_markers_regions",
+        refs: {},
+        input: {
+          limit,
+          include_markers: true,
+          include_regions: true,
+        },
+        refresh_scope: "markers",
+      });
+    }
   }
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
@@ -866,6 +908,7 @@ function snapshotState(state) {
       fx: cloneJson(state.rows.fx),
       takes: cloneJson(state.rows.takes),
       sends: cloneJson(state.rows.sends),
+      markers_regions: cloneJson(state.rows.markers_regions),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -1093,6 +1136,63 @@ function normalizeSendRow(row, defaults) {
   };
 }
 
+function normalizeMarkerRegionRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.marker_ref === "string" && source.marker_ref
+      ? source.marker_ref
+      : typeof source.region_ref === "string" && source.region_ref
+        ? source.region_ref
+        : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const positionSeconds = finiteNumber(source.position_seconds ?? source.position ?? summary.position_seconds ?? summary.position);
+  const endSeconds = finiteNumber(source.end_seconds ?? source.end ?? summary.end_seconds ?? summary.end);
+  const explicitLength = finiteNumber(source.length_seconds ?? source.length ?? summary.length_seconds ?? summary.length);
+  const markerKind = typeof source.marker_kind === "string"
+    ? source.marker_kind
+    : typeof source.kind === "string"
+      ? source.kind
+      : refKind(ref);
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : "project:active",
+    marker_kind: markerKind === "region" ? "region" : "marker",
+    position_seconds: positionSeconds,
+    end_seconds: endSeconds,
+    length_seconds: explicitLength ?? (
+      positionSeconds !== null && endSeconds !== null ? Math.max(0, endSeconds - positionSeconds) : null
+    ),
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof summary.name === "string"
+        ? summary.name
+        : "",
+    index: Number.isInteger(source.index)
+      ? source.index
+      : Number.isInteger(summary.index)
+        ? summary.index
+        : null,
+    number: Number.isInteger(source.number)
+      ? source.number
+      : Number.isInteger(summary.number)
+        ? summary.number
+        : null,
+    color: typeof source.color === "string"
+      ? source.color
+      : typeof summary.color === "string"
+        ? summary.color
+        : null,
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "complete"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary,
+  };
+}
+
 function normalizeObjectChange(change, defaults) {
   const source = isPlainObject(change) ? change : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1174,7 +1274,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "markers"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;

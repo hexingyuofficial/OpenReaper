@@ -414,6 +414,64 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     });
   });
 
+  it("maintains marker/region rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-10",
+    });
+
+    const result = index.replaceMarkersRegions({
+      snapshot_id: "snapshot:c3-10:markers",
+      observed_at: "2026-07-07T19:25:00.000Z",
+      payload_ref: "artifact:markers:regions",
+      rows: [
+        {
+          marker_ref: "marker:guid:{M1}",
+          marker_kind: "marker",
+          position_seconds: 4,
+          name: "Intro",
+        },
+        {
+          region_ref: "region:guid:{R1}",
+          kind: "region",
+          position_seconds: 16,
+          end_seconds: 48,
+          name: "Chorus",
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
+      scope: "markers",
+      limit: 10,
+      filters: { marker_kind: "region" },
+      fields: ["marker_kind", "position_seconds", "end_seconds", "length_seconds", "name", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_markers_regions");
+    assert.equal(snapshot.rows.markers_regions.length, 2);
+    assert.equal(snapshot.rows.markers_regions[1].marker_kind, "region");
+    assert.equal(snapshot.rows.markers_regions[1].length_seconds, 32);
+    assert.equal(snapshot.rows.markers_regions[0].payload_ref, "artifact:markers:regions");
+    assert.equal(snapshot.freshness_scopes.markers.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.markers.coverage_status, "complete");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "markers"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["region:guid:{R1}"]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "region:guid:{R1}",
+      marker_kind: "region",
+      position_seconds: 16,
+      end_seconds: 48,
+      length_seconds: 32,
+      name: "Chorus",
+      payload_ref: "artifact:markers:regions",
+    });
+  });
+
   it("marks selected context stale after selection-changing readback", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
 
@@ -509,6 +567,19 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       max_tracks: 40,
       max_edges: 160,
       include_master_parent: true,
+    });
+    const markersOnly = planAlpha3C3ProjectIndexTaskRefresh({
+      scopes: ["markers"],
+      limit: 40,
+    });
+    assert.deepEqual(
+      markersOnly.requests.map((request) => request.id),
+      ["template.project.list_markers_regions"],
+    );
+    assert.deepEqual(markersOnly.requests[0].input, {
+      limit: 40,
+      include_markers: true,
+      include_regions: true,
     });
     assert.equal(plan.update_policy.source_truth, "REAPER");
     assert.equal(plan.update_policy.apply_after_readback, true);

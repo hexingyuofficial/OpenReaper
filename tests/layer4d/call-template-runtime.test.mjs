@@ -376,7 +376,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 15);
+    assert.equal(runtimeMenu.items.length, 16);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -453,6 +453,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_takes"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_fx"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_routing"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_markers"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.hydrate_refs"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.changed_since"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);

@@ -58,6 +58,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.query_takes",
     "macro.query_fx",
     "macro.query_routing",
+    "macro.query_markers",
     "macro.hydrate_refs",
     "macro.changed_since",
   ],
@@ -129,6 +130,7 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.routing.read_project_routing_graph",
   "template.routing.read_track_routing",
   "template.routing.resolve_send_ref",
+  "template.project.list_markers_regions",
 ]);
 
 const QUERY_DETAIL_VALUES = new Set(["summary", "refs", "compact", "hydrated"]);
@@ -234,6 +236,24 @@ const ROUTING_ROW_FIELDS = deepFreeze([
   "midi_channels",
   "phase_inverted",
   "mono",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
+const MARKER_REGION_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "marker_kind",
+  "position_seconds",
+  "end_seconds",
+  "length_seconds",
+  "name",
+  "index",
+  "number",
+  "color",
   "freshness_status",
   "coverage_status",
   "observed_at",
@@ -353,7 +373,18 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
     ],
   }),
   queryMacro({ id: "macro.query_automation", user_label: "Query automation", query_kind: "automation" }),
-  queryMacro({ id: "macro.query_markers", user_label: "Query markers", query_kind: "markers" }),
+  queryMacro({
+    id: "macro.query_markers",
+    user_label: "Query markers",
+    summary: "Query compact marker/region rows from the Project SQLite Index by kind, name, refs, and time range.",
+    status: "implemented",
+    query_kind: "markers",
+    task_intents: ["find markers", "find regions", "timeline markers", "marker regions", "large project marker query"],
+    tags: ["project_index", "sqlite", "query", "markers", "regions", "alpha3_c3"],
+    required_templates: [
+      "template.project.list_markers_regions",
+    ],
+  }),
   queryMacro({ id: "macro.query_media", user_label: "Query media", query_kind: "media" }),
   queryMacro({
     id: "macro.hydrate_refs",
@@ -459,6 +490,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_routing") {
     return queryRoutingPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.query_markers") {
+    return queryMarkersPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.hydrate_refs") {
     return hydrateRefsPlan({ macro, normalized, indexState, blockers });
@@ -832,6 +866,56 @@ function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
   }));
 }
 
+function queryMarkersPlan({ macro, normalized, indexState, blockers }) {
+  const markersScope = freshnessScope(indexState, "markers");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, markersScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateMarkerScope(normalized.query.scope),
+    ...validateMarkerFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryMarkerRows(indexState.rows.markers_regions, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? queryMarkerRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: queryMarkersDecisionSummary({ blockers: allBlockers, rows, markersScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "markers",
+      status: markersScope.status,
+      coverage_status: markersScope.coverage_status,
+      observed_at: markersScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: markersScope.coverage_status,
+      source_scope: "markers",
+      row_count: rows.rows.length,
+      complete: markersScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? markerDetailRequest(rows.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
 function selectedContextPlan({ macro, normalized, indexState, blockers }) {
   const selectionScope = freshnessScope(indexState, "selection");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, selectionScope, normalized.query.freshness);
@@ -1178,6 +1262,9 @@ function readProjectIndexState(projectIndex) {
       sends: Array.isArray(raw.rows?.sends)
         ? raw.rows.sends.map(normalizeRoutingRow).filter(Boolean)
         : [],
+      markers_regions: Array.isArray(raw.rows?.markers_regions)
+        ? raw.rows.markers_regions.map(normalizeMarkerRegionRow).filter(Boolean)
+        : [],
       selection_state: Array.isArray(raw.rows?.selection_state)
         ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
         : [],
@@ -1394,6 +1481,62 @@ function normalizeRoutingRow(row) {
   };
 }
 
+function normalizeMarkerRegionRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.marker_ref === "string" && source.marker_ref
+      ? source.marker_ref
+      : typeof source.region_ref === "string" && source.region_ref
+        ? source.region_ref
+        : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const positionSeconds = finiteNumber(source.position_seconds ?? source.position ?? summary.position_seconds ?? summary.position);
+  const endSeconds = finiteNumber(source.end_seconds ?? source.end ?? summary.end_seconds ?? summary.end);
+  const explicitLength = finiteNumber(source.length_seconds ?? source.length ?? summary.length_seconds ?? summary.length);
+  const markerKind = typeof source.marker_kind === "string"
+    ? source.marker_kind
+    : typeof source.kind === "string"
+      ? source.kind
+      : refKind(ref);
+  return {
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : "project:active",
+    marker_kind: markerKind === "region" ? "region" : "marker",
+    position_seconds: positionSeconds,
+    end_seconds: endSeconds,
+    length_seconds: explicitLength ?? (
+      positionSeconds !== null && endSeconds !== null ? Math.max(0, endSeconds - positionSeconds) : null
+    ),
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof summary.name === "string"
+        ? summary.name
+        : "",
+    index: Number.isInteger(source.index)
+      ? source.index
+      : Number.isInteger(summary.index)
+        ? summary.index
+        : null,
+    number: Number.isInteger(source.number)
+      ? source.number
+      : Number.isInteger(summary.number)
+        ? summary.number
+        : null,
+    color: typeof source.color === "string"
+      ? source.color
+      : typeof summary.color === "string"
+        ? summary.color
+        : null,
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary,
+  };
+}
+
 function normalizeObjectChangeRow(row) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1600,6 +1743,20 @@ function queryRoutingRows(routingRows, query) {
   };
 }
 
+function queryMarkerRows(markerRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = markerRows
+    .filter((row) => row.ref)
+    .filter((row) => markerRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectMarkerRegionRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function querySelectedContextRows(selectionRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = selectionRows
@@ -1698,6 +1855,30 @@ function routingRowMatches(row, query) {
   return true;
 }
 
+function markerRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.refs.length > 0 && !markerRefsMatch(row, query.refs)) return false;
+  const ownerRefs = normalizeFilterRefs(filters, "owner_ref", "owner_refs");
+  if (ownerRefs.length > 0 && !ownerRefs.includes(row.owner_ref)) return false;
+  const kind = typeof filters.marker_kind === "string"
+    ? filters.marker_kind
+    : typeof filters.kind === "string"
+      ? filters.kind
+      : null;
+  if (kind !== null && kind !== row.marker_kind) return false;
+  if (filters.include_markers === false && row.marker_kind === "marker") return false;
+  if (filters.include_regions === false && row.marker_kind === "region") return false;
+  if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
+  if (Number.isFinite(filters.index) && row.index !== filters.index) return false;
+  if (Number.isFinite(filters.number) && row.number !== filters.number) return false;
+  if (Number.isFinite(filters.min_position_seconds) && (row.position_seconds ?? -Infinity) < filters.min_position_seconds) return false;
+  if (Number.isFinite(filters.max_position_seconds) && (row.position_seconds ?? Infinity) > filters.max_position_seconds) return false;
+  if (Number.isFinite(filters.min_length_seconds) && (row.length_seconds ?? -Infinity) < filters.min_length_seconds) return false;
+  if (Number.isFinite(filters.max_length_seconds) && (row.length_seconds ?? Infinity) > filters.max_length_seconds) return false;
+  if (!markerTimeRangeMatches(row, query.time_range)) return false;
+  return true;
+}
+
 function fxRefsMatch(row, refs) {
   return refs.includes(row.ref) || refs.includes(row.owner_ref);
 }
@@ -1707,6 +1888,10 @@ function routingRefsMatch(row, refs) {
     || refs.includes(row.owner_ref)
     || refs.includes(row.source_track_ref)
     || refs.includes(row.destination_track_ref);
+}
+
+function markerRefsMatch(row, refs) {
+  return refs.includes(row.ref) || refs.includes(row.owner_ref);
 }
 
 function fxOwnerFiltersMatch(row, filters) {
@@ -1779,6 +1964,19 @@ function itemTimeRangeMatches(row, timeRange) {
   if (itemStart === null && itemEnd === null) return false;
   if (rangeStart !== null && itemEnd !== null && itemEnd < rangeStart) return false;
   if (rangeEnd !== null && itemStart !== null && itemStart > rangeEnd) return false;
+  return true;
+}
+
+function markerTimeRangeMatches(row, timeRange) {
+  if (!isPlainObject(timeRange)) return true;
+  const rangeStart = finiteNumber(timeRange.start_seconds ?? timeRange.start);
+  const rangeEnd = finiteNumber(timeRange.end_seconds ?? timeRange.end);
+  if (rangeStart === null && rangeEnd === null) return true;
+  const markerStart = row.position_seconds;
+  const markerEnd = row.end_seconds ?? row.position_seconds;
+  if (markerStart === null && markerEnd === null) return false;
+  if (rangeStart !== null && markerEnd !== null && markerEnd < rangeStart) return false;
+  if (rangeEnd !== null && markerStart !== null && markerStart > rangeEnd) return false;
   return true;
 }
 
@@ -1913,6 +2111,25 @@ function projectRoutingRow(row, fields) {
   return projected;
 }
 
+function projectMarkerRegionRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "marker_kind",
+    "position_seconds",
+    "end_seconds",
+    "name",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (MARKER_REGION_ROW_FIELDS.includes(field)) projected[field] = field === "length_seconds"
+      ? markerRegionLengthSeconds(row)
+      : row[field];
+  }
+  return projected;
+}
+
 function projectSelectedContextRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -1977,6 +2194,17 @@ function validateRoutingFields(fields) {
   return fields
     .filter((field) => !ROUTING_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_routing does not expose field ${field}.`));
+}
+
+function validateMarkerScope(scope) {
+  if (["project", "markers"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_markers supports project or markers scope.")];
+}
+
+function validateMarkerFields(fields) {
+  return fields
+    .filter((field) => !MARKER_REGION_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_markers does not expose field ${field}.`));
 }
 
 function validateSelectedContextFields(fields) {
@@ -2311,6 +2539,30 @@ function queryRoutingRefreshRequests(query) {
   return dedupeRequestPlans(requests);
 }
 
+function queryMarkerRefreshRequests(query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  const kind = typeof filters.marker_kind === "string"
+    ? filters.marker_kind
+    : typeof filters.kind === "string"
+      ? filters.kind
+      : null;
+  const includeMarkers = kind === "region" ? false : filters.include_markers !== false;
+  const includeRegions = kind === "marker" ? false : filters.include_regions !== false;
+  return [
+    {
+      tool: "call_template",
+      id: "template.project.list_markers_regions",
+      refs: {},
+      input: {
+        limit: query.limit,
+        include_markers: includeMarkers,
+        include_regions: includeRegions,
+      },
+      purpose: "Refresh compact marker/region rows from REAPER truth before using Project SQLite Index marker rows.",
+    },
+  ];
+}
+
 function queryItemTrackRefs(query) {
   const filterRefs = [];
   if (typeof query.filters.track_ref === "string") filterRefs.push(query.filters.track_ref);
@@ -2398,6 +2650,23 @@ function hydrateRefsRequest(refs, fields) {
     refs,
     fields,
     purpose: "Hydrate returned canonical refs through the official plan-only hydrate_refs macro.",
+  };
+}
+
+function markerDetailRequest(refs, fields) {
+  return {
+    status: "no_supported_exact_hydration",
+    callable_now: false,
+    tool: "call_template",
+    id: null,
+    planned_macro_id: "macro.hydrate_refs",
+    blocker: {
+      code: "HYDRATE_REF_UNSUPPORTED",
+      message: "No exact marker/region hydration template is accepted yet; use returned compact marker rows or refresh macro.query_markers.",
+    },
+    refs,
+    fields,
+    purpose: "Marker/region query rows are compact by default; deeper exact hydration waits for a dedicated accepted template.",
   };
 }
 
@@ -2618,6 +2887,14 @@ function itemLengthSeconds(row) {
   return null;
 }
 
+function markerRegionLengthSeconds(row) {
+  if (Number.isFinite(row.length_seconds)) return row.length_seconds;
+  if (Number.isFinite(row.position_seconds) && Number.isFinite(row.end_seconds)) {
+    return Math.max(0, row.end_seconds - row.position_seconds);
+  }
+  return null;
+}
+
 function summarizeIndexStatus(indexState) {
   const staleScopes = Object.entries(indexState.freshness_scopes)
     .filter(([, scope]) => !freshnessStatusSatisfies(scope.status, "fresh_enough"))
@@ -2683,6 +2960,13 @@ function queryRoutingDecisionSummary({ blockers, rows, routingScope }) {
     return "Routing query needs a task-scoped routing refresh before send rows are safe to use.";
   }
   return `Routing query returned ${rows.rows.length} compact send rows with ${routingScope.status} freshness and ${routingScope.coverage_status} coverage.`;
+}
+
+function queryMarkersDecisionSummary({ blockers, rows, markersScope }) {
+  if (blockers.length > 0) {
+    return "Marker query needs a task-scoped marker/region refresh before rows are safe to use.";
+  }
+  return `Marker query returned ${rows.rows.length} compact marker/region rows with ${markersScope.status} freshness and ${markersScope.coverage_status} coverage.`;
 }
 
 function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
@@ -2847,6 +3131,7 @@ function queryMacroExampleInput(id) {
   if (id === "macro.query_takes") return { scope: "selection", filters: { active: true }, limit: 25 };
   if (id === "macro.query_fx") return { filters: { stock_plugin: true }, limit: 25 };
   if (id === "macro.query_routing") return { scope: "tracks", filters: { source_track_ref: "track:guid:{TRACK-GUID}" }, limit: 25 };
+  if (id === "macro.query_markers") return { filters: { marker_kind: "region" }, time_range: { start_seconds: 0, end_seconds: 120 }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
   if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
   if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };
