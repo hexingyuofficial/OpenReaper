@@ -8,6 +8,9 @@ import {
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
+import {
+  createAlpha3C3ProjectIndexSchemaContract as createAlpha3C3ProjectIndexStoreSchemaContract,
+} from "./alpha3-c3-project-index-store-v1.mjs";
 
 export const ALPHA3_C3_PROJECT_INDEX_CONTRACT = "alpha3.c3.project_sqlite_index.v1";
 export const ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT = "alpha3.c3.project_index_query_macros.v1";
@@ -214,27 +217,7 @@ export function isAlpha3C3OfficialQueryMacroId(id) {
 }
 
 export function createAlpha3C3ProjectIndexSchemaContract() {
-  return deepFreeze({
-    contract: ALPHA3_C3_PROJECT_INDEX_SCHEMA_CONTRACT,
-    schema_version: 1,
-    db_path: ALPHA3_C3_PROJECT_INDEX_DB_PATH,
-    tables: PROJECT_INDEX_TABLES,
-    object_row_required_fields: [
-      "snapshot_id",
-      "ref",
-      "owner_ref",
-      "summary",
-      "observed_at",
-      "freshness_status",
-      "coverage_status",
-      "payload_ref",
-    ],
-    truth_boundary: {
-      project_truth: "REAPER",
-      index_role: "local_query_navigation_cache",
-      capability_truth: "runtime_catalog_not_sqlite",
-    },
-  });
+  return createAlpha3C3ProjectIndexStoreSchemaContract();
 }
 
 export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {}) {
