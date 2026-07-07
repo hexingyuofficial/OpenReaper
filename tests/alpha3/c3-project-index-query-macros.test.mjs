@@ -43,6 +43,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       "update_artifact_store_and_project_index_after_readback",
     ]);
     assert.equal(registry.macros.find((macro) => macro.id === "macro.index_status").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.selected_context").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_tracks").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
@@ -52,12 +53,13 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
   it("creates official query macro discovery entries over list_templates/call_template", () => {
     const entries = createAlpha3C3OfficialQueryMacroDiscoveryItems();
     const status = entries.find((entry) => entry.id === "macro.index_status");
+    const selected = entries.find((entry) => entry.id === "macro.selected_context");
     const tracks = entries.find((entry) => entry.id === "macro.query_tracks");
     const hydrate = entries.find((entry) => entry.id === "macro.hydrate_refs");
     const changed = entries.find((entry) => entry.id === "macro.changed_since");
     const items = entries.find((entry) => entry.id === "macro.query_items");
 
-    assert.equal(entries.length, 11);
+    assert.equal(entries.length, 12);
     assert.equal(status.kind, "official_macro");
     assert.equal(status.action_kind, "macro");
     assert.equal(status.menu_group, "query");
@@ -65,6 +67,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(status.execution_shape, "project_index_query_plan");
     assert.equal(status.live_runnable_now, true);
     assert.equal(status.support_state, "supported");
+    assert.equal(selected.support_state, "supported");
+    assert.equal(selected.known_blocker, null);
+    assert.deepEqual(selected.examples[0].input, { scope: "selection", limit: 25 });
     assert.equal(tracks.inputSchema.properties.filters.type, "object");
     assert.equal(tracks.expectedDelta.summary, "Returns a plan-only Project SQLite Index query envelope. It does not mutate REAPER or execute SQL.");
     assert.equal(hydrate.support_state, "supported");
@@ -72,7 +77,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(changed.support_state, "supported");
     assert.equal(changed.known_blocker, null);
     assert.equal(items.support_state, "blocked");
-    assert.equal(items.known_blocker, "planned_after_c3_3");
+    assert.equal(items.known_blocker, "planned_after_c3_4");
   });
 
   it("reports index status and refresh requests when no project index exists yet", () => {
@@ -115,6 +120,24 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
     assert.equal(plan.write_safety_loop.sqlite_may_authorize_write, false);
     assert.equal(plan.page.has_more, false);
+  });
+
+  it("blocks selected context until the task-scoped selection scope is fresh enough", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 8,
+      scope: "selection",
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      ["template.project.create_observation_bundle"],
+    );
+    assert.equal(plan.refresh_requests[0].input.max_selected_items, 8);
+    assert.equal(plan.safety.added_tools, 0);
+    assert.equal(plan.safety.hidden_executor, false);
+    assert.equal(plan.safety.live_reaper, false);
   });
 
   it("queries compact track rows from a fresh injected project index adapter", () => {
@@ -162,6 +185,53 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(secondPage.ok, true);
     assert.deepEqual(secondPage.refs, ["track:guid:{TRACK-3}"]);
     assert.equal(secondPage.page.has_more, false);
+  });
+
+  it("queries compact selected context refs from a fresh resident project index", () => {
+    const projectIndex = selectedProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 2,
+      scope: "selection",
+      fields: ["ref_kind", "owner_ref", "payload_ref"],
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 2,
+      scope: "items",
+      cursor: null,
+      fields: ["ref_kind", "owner_ref"],
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.equal(firstPage.rows.length, 2);
+    assert.deepEqual(firstPage.refs, ["track:guid:{TRACK-1}", "item:guid:{ITEM-1}"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "track:guid:{TRACK-1}",
+      ref_kind: "track",
+      owner_ref: "project:active",
+      payload_ref: "artifact:selection:1",
+    });
+    assert.equal(firstPage.freshness.status, "fresh");
+    assert.equal(firstPage.coverage.complete, true);
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.callable_now, true);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(firstPage.hydrate_request.input.refs, ["track:guid:{TRACK-1}", "item:guid:{ITEM-1}"]);
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["item:guid:{ITEM-1}"]);
+    assert.deepEqual(secondPage.rows[0], {
+      ref: "item:guid:{ITEM-1}",
+      ref_kind: "item",
+      owner_ref: "track:guid:{TRACK-1}",
+    });
+
+    const typoScope = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 10,
+      scope: "item",
+    }, { projectIndex });
+
+    assert.equal(typoScope.ok, false);
+    assert.equal(typoScope.rows.length, 0);
+    assert.equal(typoScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
   it("rejects raw SQL-shaped input instead of exposing database execution", () => {
@@ -267,6 +337,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     });
 
     assert.equal(menu.items.some((item) => item.id === "macro.index_status"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_tracks"), true);
     assert.deepEqual(
       menu.product_surface.project_index_queries,
@@ -313,6 +384,34 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.hydrate_request.callable_now, true);
     assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
     assert.equal(runtime.last_evidence().template.id, "macro.query_tracks");
+  });
+
+  it("calls selected_context through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T17:45:00.000Z"),
+      projectIndex: selectedProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.selected_context",
+      input: {
+        scope: "selection",
+        limit: 3,
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.selected_context");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "track:guid:{TRACK-1}",
+      "item:guid:{ITEM-1}",
+      "fx:track:{TRACK-1}:0",
+    ]);
+    assert.equal(response.result.rows.length, 3);
+    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
   });
 
   it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
@@ -479,6 +578,36 @@ function changedProjectIndex() {
         owner_ref: "track:guid:{TRACK-1}",
         change_kind: "item_moved",
         summary: { source: "batch_readback" },
+      },
+    ],
+  });
+  return index;
+}
+
+function selectedProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T17:45:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-4",
+  });
+  index.replaceSelection({
+    snapshot_id: "snapshot:c3-4:selection",
+    observed_at: "2026-07-07T17:40:00.000Z",
+    payload_ref: "artifact:selection:1",
+    rows: [
+      {
+        ref: "track:guid:{TRACK-1}",
+        owner_ref: "project:active",
+      },
+      {
+        ref: "item:guid:{ITEM-1}",
+        owner_ref: "track:guid:{TRACK-1}",
+      },
+      {
+        ref: "fx:track:{TRACK-1}:0",
+        owner_ref: "track:guid:{TRACK-1}",
       },
     ],
   });

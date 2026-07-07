@@ -38,6 +38,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
   },
   macro_ids: [
     "macro.index_status",
+    "macro.selected_context",
     "macro.query_tracks",
     "macro.query_items",
     "macro.query_takes",
@@ -51,6 +52,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
   ],
   implemented_macro_ids: [
     "macro.index_status",
+    "macro.selected_context",
     "macro.query_tracks",
     "macro.hydrate_refs",
     "macro.changed_since",
@@ -116,6 +118,7 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
 ]);
 
 const QUERY_DETAIL_VALUES = new Set(["summary", "refs", "compact", "hydrated"]);
+const QUERY_SCOPE_VALUES = new Set(["project", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"]);
 const FRESHNESS_REQUIRE_VALUES = new Set(["fresh", "fresh_enough"]);
 const REFRESH_POLICY_VALUES = new Set(["task_scoped", "none", "if_stale"]);
 const RAW_SQL_INPUT_FIELDS = new Set([
@@ -149,6 +152,16 @@ const TRACK_ROW_FIELDS = deepFreeze([
   "payload_ref",
 ]);
 
+const SELECTED_CONTEXT_ROW_FIELDS = deepFreeze([
+  "ref",
+  "ref_kind",
+  "scope_kind",
+  "owner_ref",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
 const QUERY_MACRO_DEFINITIONS = deepFreeze([
   queryMacro({
     id: "macro.index_status",
@@ -161,6 +174,18 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
     required_templates: [
       "template.project.create_observation_bundle",
       "template.project.create_project_map_snapshot",
+    ],
+  }),
+  queryMacro({
+    id: "macro.selected_context",
+    user_label: "Selected context",
+    summary: "Read compact selected refs from the Project SQLite Index after task-scoped selection freshness is satisfied.",
+    status: "implemented",
+    query_kind: "selected_context",
+    task_intents: ["selected context", "what is selected", "current selection", "selected refs"],
+    tags: ["project_index", "sqlite", "query", "selection", "selected_context", "alpha3_c3"],
+    required_templates: [
+      "template.project.create_observation_bundle",
     ],
   }),
   queryMacro({
@@ -270,6 +295,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
 
   if (macro.id === "macro.index_status") {
     return indexStatusPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.selected_context") {
+    return selectedContextPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.query_tracks") {
     return queryTracksPlan({ macro, normalized, indexState, blockers });
@@ -446,6 +474,55 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
   }));
 }
 
+function selectedContextPlan({ macro, normalized, indexState, blockers }) {
+  const selectionScope = freshnessScope(indexState, "selection");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, selectionScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateSelectedContextFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? querySelectedContextRows(indexState.rows.selection_state, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? selectedContextRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: selectedContextDecisionSummary({ blockers: allBlockers, rows, selectionScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "selection",
+      status: selectionScope.status,
+      coverage_status: selectionScope.coverage_status,
+      observed_at: selectionScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: selectionScope.coverage_status,
+      source_scope: "selection",
+      row_count: rows.rows.length,
+      complete: selectionScope.coverage_status === "complete" || selectionScope.coverage_status === "selected_only",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
 function hydrateRefsPlan({ macro, normalized, indexState, blockers }) {
   const hydration = planHydrateRefs(normalized.query.refs, normalized.query);
   const allBlockers = [
@@ -592,6 +669,7 @@ function normalizeQueryInput(request) {
 
   const limit = normalizeLimit(source.limit, blockers);
   const cursor = normalizeCursor(source.cursor, blockers);
+  const scope = normalizeScope(source.scope, blockers);
   const fields = normalizeFields(source.fields, blockers);
   const detail = normalizeDetail(source.detail, blockers);
   const freshness = normalizeFreshness(source.freshness, blockers);
@@ -600,7 +678,7 @@ function normalizeQueryInput(request) {
   return {
     blockers,
     query: {
-      scope: typeof source.scope === "string" && source.scope.trim() ? source.scope : "project",
+      scope,
       refs: normalizeRefs(source.refs),
       filters: normalizeFilters(source.filters, blockers),
       fields,
@@ -612,6 +690,13 @@ function normalizeQueryInput(request) {
       freshness,
     },
   };
+}
+
+function normalizeScope(value, blockers) {
+  if (value === undefined || value === null || value === "") return "project";
+  if (typeof value === "string" && QUERY_SCOPE_VALUES.has(value.trim())) return value.trim();
+  blockers.push(blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "scope must be project, selection, tracks, items, takes, fx, routing, automation, markers, or media."));
+  return "project";
 }
 
 function normalizeFilters(value, blockers) {
@@ -723,6 +808,9 @@ function readProjectIndexState(projectIndex) {
     degraded_reason: typeof raw.degraded_reason === "string" ? raw.degraded_reason : null,
     rows: {
       tracks: Array.isArray(raw.rows?.tracks) ? raw.rows.tracks.map(normalizeTrackRow) : [],
+      selection_state: Array.isArray(raw.rows?.selection_state)
+        ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
+        : [],
       object_changes: Array.isArray(raw.rows?.object_changes) ? raw.rows.object_changes.map(normalizeObjectChangeRow).filter(Boolean) : [],
     },
   });
@@ -783,6 +871,25 @@ function normalizeObjectChangeRow(row) {
     owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
     change_kind: typeof source.change_kind === "string" && source.change_kind ? source.change_kind : "changed",
     observed_at: observedAt,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeSelectionRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  return {
+    ref,
+    ref_kind: typeof source.ref_kind === "string" && source.ref_kind
+      ? source.ref_kind
+      : refKind(ref),
+    scope_kind: typeof source.scope_kind === "string" && source.scope_kind
+      ? source.scope_kind
+      : refKind(ref),
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
     summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
   };
@@ -901,6 +1008,20 @@ function queryTrackRows(trackRows, query) {
   };
 }
 
+function querySelectedContextRows(selectionRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = selectionRows
+    .filter((row) => row.ref)
+    .filter((row) => selectedContextRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectSelectedContextRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function trackRowMatches(row, filters) {
   if (!isPlainObject(filters)) return true;
   if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
@@ -911,6 +1032,28 @@ function trackRowMatches(row, filters) {
   if (filters.has_items !== undefined && Boolean(filters.has_items) !== (row.item_count > 0)) return false;
   if (filters.has_fx !== undefined && Boolean(filters.has_fx) !== (row.fx_count > 0)) return false;
   if (filters.has_sends !== undefined && Boolean(filters.has_sends) !== (row.send_count > 0)) return false;
+  return true;
+}
+
+function selectedContextRowMatches(row, query) {
+  if (!selectedContextScopeMatches(row, query.scope)) return false;
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (typeof filters.scope_kind === "string" && filters.scope_kind !== row.scope_kind) return false;
+  if (typeof filters.ref_kind === "string" && filters.ref_kind !== row.ref_kind) return false;
+  if (typeof filters.owner_ref === "string" && filters.owner_ref !== row.owner_ref) return false;
+  return true;
+}
+
+function selectedContextScopeMatches(row, scope) {
+  if (scope === "project" || scope === "selection") return true;
+  if (scope === "tracks") return row.ref_kind === "track" || row.scope_kind === "track";
+  if (scope === "items") return row.ref_kind === "item" || row.scope_kind === "item";
+  if (scope === "takes") return row.ref_kind === "take" || row.scope_kind === "take";
+  if (scope === "fx") return row.ref_kind === "fx" || row.scope_kind === "fx";
+  if (scope === "routing") return row.ref_kind === "send" || row.scope_kind === "send";
+  if (scope === "automation") return row.ref_kind === "envelope" || row.scope_kind === "envelope";
+  if (scope === "markers") return row.ref_kind === "marker" || row.ref_kind === "region";
+  if (scope === "media") return row.ref_kind === "take" || row.scope_kind === "media";
   return true;
 }
 
@@ -935,10 +1078,32 @@ function projectTrackRow(row, fields) {
   return projected;
 }
 
+function projectSelectedContextRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "ref_kind",
+    "scope_kind",
+    "owner_ref",
+    "observed_at",
+    "payload_ref",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (SELECTED_CONTEXT_ROW_FIELDS.includes(field)) projected[field] = row[field];
+  }
+  return projected;
+}
+
 function validateTrackFields(fields) {
   return fields
     .filter((field) => !TRACK_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_tracks does not expose field ${field}.`));
+}
+
+function validateSelectedContextFields(fields) {
+  return fields
+    .filter((field) => !SELECTED_CONTEXT_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `selected_context does not expose field ${field}.`));
 }
 
 function indexStatusRefreshRequests(query) {
@@ -1004,6 +1169,24 @@ function queryTrackRefreshRequests(query) {
         limit: query.limit,
       },
       purpose: "Hydrate compact mixer fields for track query rows.",
+    },
+  ];
+}
+
+function selectedContextRefreshRequests(query) {
+  return [
+    {
+      tool: "call_template",
+      id: "template.project.create_observation_bundle",
+      refs: {},
+      input: {
+        max_tracks: query.limit,
+        max_items_per_track: 0,
+        max_selected_items: Math.min(query.limit, 100),
+        include_transport: true,
+        include_track_items: false,
+      },
+      purpose: "Refresh selected refs from REAPER truth before using Project SQLite Index selection rows.",
     },
   ];
 }
@@ -1241,6 +1424,13 @@ function queryTracksDecisionSummary({ blockers, rows, trackScope }) {
   return `Track query returned ${rows.rows.length} compact rows with ${trackScope.status} freshness and ${trackScope.coverage_status} coverage.`;
 }
 
+function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
+  if (blockers.length > 0) {
+    return "Selected-context query needs a task-scoped selection refresh before refs are safe to use.";
+  }
+  return `Selected-context query returned ${rows.rows.length} compact refs with ${selectionScope.status} freshness and ${selectionScope.coverage_status} coverage.`;
+}
+
 function hydrateRefsDecisionSummary({ blockers, hydration }) {
   if (blockers.length > 0) {
     return `Hydrate refs planned ${hydration.requests.length} accepted read requests, but ${blockers.length} blockers need attention.`;
@@ -1377,9 +1567,7 @@ function officialQueryMacroDiscoveryItem(macro) {
     },
     examples: [
       {
-        input: macro.id === "macro.query_tracks"
-          ? { filters: { selected: true }, limit: 25 }
-          : { scope: "project" },
+        input: queryMacroExampleInput(macro.id),
         refs: {},
       },
     ],
@@ -1387,9 +1575,17 @@ function officialQueryMacroDiscoveryItem(macro) {
     exists_in_catalog: true,
     evidence_level: implemented ? "runtime_bound_static_fake" : "contract_only",
     support_state: implemented ? "supported" : "blocked",
-    known_blocker: implemented ? null : "planned_after_c3_3",
+    known_blocker: implemented ? null : "planned_after_c3_4",
     allowed_live_group: null,
   });
+}
+
+function queryMacroExampleInput(id) {
+  if (id === "macro.query_tracks") return { filters: { selected: true }, limit: 25 };
+  if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
+  if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
+  if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };
+  return { scope: "project" };
 }
 
 function sharedQueryInputContract() {

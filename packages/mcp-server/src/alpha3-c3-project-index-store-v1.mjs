@@ -233,6 +233,7 @@ const SQLITE_DDL_V1 = deepFreeze([
     owner_ref TEXT,
     observed_at TEXT NOT NULL,
     payload_ref TEXT,
+    summary_json TEXT NOT NULL,
     PRIMARY KEY (snapshot_id, scope_kind, ref)
   )`,
   `CREATE TABLE IF NOT EXISTS object_changes (
@@ -344,6 +345,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     degraded_reason: null,
     rows: {
       tracks: [],
+      selection_state: [],
       object_changes: [],
     },
   };
@@ -391,6 +393,32 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.tracks = normalizeCoverageStatus(input.coverage_status, "complete");
       return lifecycleResult(state, "replace_tracks", observedAt);
+    },
+    replaceSelection(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.selection_state = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeSelectionRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "selection",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "selected_only"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.project.create_observation_bundle",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.selection = normalizeCoverageStatus(input.coverage_status, "selected_only");
+      return lifecycleResult(state, "replace_selection", observedAt);
     },
     markScopeStale(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -616,6 +644,7 @@ function snapshotState(state) {
     degraded_reason: state.degraded_reason,
     rows: {
       tracks: cloneJson(state.rows.tracks),
+      selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
     safety: projectIndexSafety(),
@@ -689,6 +718,36 @@ function normalizeObjectChange(change, defaults) {
   };
 }
 
+function normalizeSelectionRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    scope_kind: typeof source.scope_kind === "string" && source.scope_kind
+      ? source.scope_kind
+      : refKind(ref),
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function refKind(ref) {
+  const lower = typeof ref === "string" ? ref.toLocaleLowerCase() : "";
+  if (lower.startsWith("track:")) return "track";
+  if (lower.startsWith("item:")) return "item";
+  if (lower.startsWith("take:")) return "take";
+  if (lower.startsWith("fx:")) return "fx";
+  if (lower.startsWith("send:")) return "send";
+  if (lower.startsWith("envelope:")) return "envelope";
+  if (lower.startsWith("marker:")) return "marker";
+  if (lower.startsWith("region:")) return "region";
+  return "unknown";
+}
+
 function mergeSessionMetadata(state, metadata) {
   if (typeof metadata.project_ref === "string") state.project_ref = metadata.project_ref;
   if (typeof metadata.projectRef === "string") state.project_ref = metadata.projectRef;
@@ -735,15 +794,20 @@ function inferAffectedScopeKinds(input, refs) {
     typeof input.change_kind === "string" ? input.change_kind : null,
   ].filter(Boolean);
   const lowered = candidates.map((candidate) => candidate.toLocaleLowerCase());
-  if (lowered.some((candidate) => candidate.startsWith("track:") || candidate.includes("track_"))) return ["tracks"];
-  if (lowered.some((candidate) => candidate.startsWith("item:") || candidate.includes("item_"))) return ["items"];
-  if (lowered.some((candidate) => candidate.startsWith("take:") || candidate.includes("take_"))) return ["takes"];
-  if (lowered.some((candidate) => candidate.startsWith("fx:") || candidate.includes("fx_") || candidate.includes("plugin"))) return ["fx"];
-  if (lowered.some((candidate) => candidate.startsWith("send:") || candidate.includes("send_") || candidate.includes("routing"))) return ["routing"];
-  if (lowered.some((candidate) => candidate.startsWith("marker:") || candidate.startsWith("region:") || candidate.includes("marker") || candidate.includes("region"))) return ["markers"];
-  if (lowered.some((candidate) => candidate.includes("automation") || candidate.includes("envelope"))) return ["automation"];
-  if (lowered.some((candidate) => candidate.includes("media"))) return ["media"];
-  return ["project_head"];
+  const inferred = [];
+  const add = (scopeKind) => {
+    if (!inferred.includes(scopeKind)) inferred.push(scopeKind);
+  };
+  if (lowered.some((candidate) => candidate.includes("selection") || candidate.includes("selected") || candidate.includes("select_"))) add("selection");
+  if (lowered.some((candidate) => candidate.startsWith("track:") || candidate.includes("track_"))) add("tracks");
+  if (lowered.some((candidate) => candidate.startsWith("item:") || candidate.includes("item_"))) add("items");
+  if (lowered.some((candidate) => candidate.startsWith("take:") || candidate.includes("take_"))) add("takes");
+  if (lowered.some((candidate) => candidate.startsWith("fx:") || candidate.includes("fx_") || candidate.includes("plugin"))) add("fx");
+  if (lowered.some((candidate) => candidate.startsWith("send:") || candidate.includes("send_") || candidate.includes("routing"))) add("routing");
+  if (lowered.some((candidate) => candidate.startsWith("marker:") || candidate.startsWith("region:") || candidate.includes("marker") || candidate.includes("region"))) add("markers");
+  if (lowered.some((candidate) => candidate.includes("automation") || candidate.includes("envelope"))) add("automation");
+  if (lowered.some((candidate) => candidate.includes("media"))) add("media");
+  return inferred.length > 0 ? inferred : ["project_head"];
 }
 
 function normalizeScopeKinds(value) {

@@ -32,7 +32,14 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(schema.safety.raw_sql_exposed, false);
     assert.equal(schema.safety.sqlite_is_truth, false);
     assert.equal(schema.tables.includes("tracks"), true);
+    assert.equal(schema.tables.includes("selection_state"), true);
     assert.equal(schema.tables.includes("object_changes"), true);
+    assert.equal(
+      migrations.migrations[0].statements.some((statement) =>
+        /CREATE TABLE IF NOT EXISTS selection_state[\s\S]*summary_json TEXT NOT NULL/.test(statement)
+      ),
+      true,
+    );
     assert.equal(schema.object_row_required_fields.includes("payload_ref"), true);
 
     assert.equal(migrations.contract, ALPHA3_C3_PROJECT_INDEX_MIGRATION_CONTRACT);
@@ -118,6 +125,81 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       payload_ref: "artifact:project_map:tracks",
     });
     assert.equal(plan.refresh_requests.length, 0);
+  });
+
+  it("maintains selected context rows with freshness and compact refs", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-4",
+    });
+
+    const result = index.replaceSelection({
+      snapshot_id: "snapshot:c3-4:selection",
+      observed_at: "2026-07-07T16:55:00.000Z",
+      payload_ref: "artifact:selection:bundle",
+      rows: [
+        {
+          ref: "track:guid:{A}",
+          owner_ref: "project:active",
+        },
+        {
+          ref: "item:guid:{ITEM-1}",
+          owner_ref: "track:guid:{A}",
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 10,
+      fields: ["ref_kind", "owner_ref", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_selection");
+    assert.equal(snapshot.rows.selection_state.length, 2);
+    assert.equal(snapshot.rows.selection_state[0].scope_kind, "track");
+    assert.equal(snapshot.rows.selection_state[0].payload_ref, "artifact:selection:bundle");
+    assert.equal(snapshot.freshness_scopes.selection.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.selection.coverage_status, "selected_only");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "selection"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["track:guid:{A}", "item:guid:{ITEM-1}"]);
+    assert.deepEqual(plan.rows[1], {
+      ref: "item:guid:{ITEM-1}",
+      ref_kind: "item",
+      owner_ref: "track:guid:{A}",
+      payload_ref: "artifact:selection:bundle",
+    });
+  });
+
+  it("marks selected context stale after selection-changing readback", () => {
+    const index = createAlpha3C3ProjectIndex({ now: fixedNow });
+
+    index.replaceSelection({
+      snapshot_id: "snapshot:c3-4:selection",
+      observed_at: "2026-07-07T16:55:00.000Z",
+      rows: [
+        { ref: "track:guid:{A}", owner_ref: "project:active" },
+      ],
+    });
+    index.markWriteReadbackApplied({
+      snapshot_id: "snapshot:c3-4:selection-write",
+      observed_at: "2026-07-07T16:56:00.000Z",
+      refs: ["track:guid:{A}"],
+      change_kind: "track_selection_changed",
+      payload_ref: "artifact:readback:selection-write",
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.selected_context", {
+      limit: 5,
+    }, { projectIndex: index });
+
+    assert.equal(snapshot.freshness_scopes.selection.status, "stale");
+    assert.equal(snapshot.freshness_scopes.tracks.status, "stale");
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_REFRESH_REQUIRED"), true);
   });
 
   it("plans task-scoped refresh requests over accepted templates only", () => {
