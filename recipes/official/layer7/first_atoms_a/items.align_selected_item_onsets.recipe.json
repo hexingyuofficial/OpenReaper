@@ -1,0 +1,671 @@
+{
+  "contract": "recipe.contract.v1",
+  "id": "recipe.items.align_selected_item_onsets",
+  "title": "Align selected item onsets",
+  "summary": "Draft write-risk Alpha3 starter workflow that analyzes two selected items and aligns the second item to the first item start.",
+  "pack": "items",
+  "lifecycle": "draft",
+  "risk": "write",
+  "entity_kind": "item_onset_alignment",
+  "tags": [
+    "items",
+    "analysis",
+    "transient",
+    "silence",
+    "alignment",
+    "move",
+    "starter_recipe",
+    "alpha3",
+    "product_surface"
+  ],
+  "workflow_card": {
+    "intent": "Align a second selected layer to the first selected layer with analysis evidence and compact readback.",
+    "entry_conditions": [
+      "Use when two selected audio items should start together or be layer-aligned.",
+      "Treat selected:0 as the anchor and selected:1 as the item to move."
+    ],
+    "supported_steps": [
+      "List selected items and read anchor/moving item summaries.",
+      "Detect transient and silence evidence before moving.",
+      "Move the second item to the anchor start and read it back."
+    ],
+    "candidate_steps": [
+      "Future bridge handlers should move by detected onset offset, not only item start."
+    ],
+    "blocked_steps": [
+      "Do not use public call_recipe or a hidden recipe executor.",
+      "Do not claim arbitrary multi-item transient alignment from this starter."
+    ],
+    "required_questions": [
+      "Ask before moving more than the two selected starter items."
+    ],
+    "template_atoms": [
+      "template.items.list_selected_items",
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+      "template.analysis.detect_item_silence",
+      "template.items.move_item"
+    ],
+    "evidence_required": [
+      "template.runtime.evidence.v1 with request id",
+      "anchor and moved item readback after alignment"
+    ],
+    "cleanup_plan": "If alignment is unwanted, move the second item back using its pre-move position from readback evidence.",
+    "typed_blockers": [
+      "no_public_call_recipe_executor",
+      "two_selected_items_required",
+      "onset_offset_handler_missing"
+    ],
+    "token_budget": {
+      "menu_max_bytes": 4096,
+      "exact_max_bytes": 32768,
+      "compact_chat_max_items": 5,
+      "same_typed_blocker_stop_after": 2
+    }
+  },
+  "steps": [
+    {
+      "id": "list_selected_items",
+      "title": "List selected items",
+      "summary": "Read the selected item set before choosing the two starter alignment targets.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.list_selected_items",
+        "input": {
+          "limit": 2,
+          "include_track_refs": true
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_list_selected_items",
+      "evidence": "evidence_list_selected_items",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "resolve_anchor_item",
+      "title": "Resolve anchor item",
+      "summary": "Resolve selected:0 as the alignment anchor item.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.resolve_item_ref",
+        "input": {
+          "ref": "selected:0"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_resolve_anchor_item",
+      "evidence": "evidence_resolve_anchor_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "resolve_moving_item",
+      "title": "Resolve moving item",
+      "summary": "Resolve selected:1 as the item to move toward the anchor.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.resolve_item_ref",
+        "input": {
+          "ref": "selected:1"
+        },
+        "refs": {}
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_resolve_moving_item",
+      "evidence": "evidence_resolve_moving_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_anchor_item",
+      "title": "Read anchor item",
+      "summary": "Read compact anchor item timing and active-take facts.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "resolve_anchor_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_anchor_item",
+      "evidence": "evidence_read_anchor_item",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_moving_item_before",
+      "title": "Read moving item before",
+      "summary": "Read compact moving item facts before changing its position.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "resolve_moving_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_moving_item_before",
+      "evidence": "evidence_read_moving_item_before",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "detect_anchor_transients",
+      "title": "Detect anchor transients",
+      "summary": "Detect bounded transient facts for the anchor item.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.detect_item_transients",
+        "input": {},
+        "refs": {
+          "item_ref": {
+            "$from_step": "read_anchor_item",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_detect_anchor_transients",
+      "evidence": "evidence_detect_anchor_transients",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_continue_with_start_alignment"
+    },
+    {
+      "id": "detect_moving_transients",
+      "title": "Detect moving transients",
+      "summary": "Detect bounded transient facts for the item that will move.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.detect_item_transients",
+        "input": {},
+        "refs": {
+          "item_ref": {
+            "$from_step": "read_moving_item_before",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_detect_moving_transients",
+      "evidence": "evidence_detect_moving_transients",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_continue_with_start_alignment"
+    },
+    {
+      "id": "detect_moving_silence",
+      "title": "Detect moving silence",
+      "summary": "Detect silence facts for the moving item so the agent can explain onset confidence.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.analysis.detect_item_silence",
+        "input": {},
+        "refs": {
+          "item_ref": {
+            "$from_step": "read_moving_item_before",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_detect_moving_silence",
+      "evidence": "evidence_detect_moving_silence",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_continue_with_start_alignment"
+    },
+    {
+      "id": "move_item_to_anchor_start",
+      "title": "Move item to anchor start",
+      "summary": "Move selected:1 to the starter anchor position at project time 0.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.move_item",
+        "input": {
+          "position_seconds": 0
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "read_moving_item_before",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_move_item_to_anchor_start",
+      "evidence": "evidence_move_item_to_anchor_start",
+      "idempotency": {
+        "mode": "supported",
+        "key_scope": "recipe_run",
+        "on_resume": "reuse_evidence"
+      },
+      "on_failure": "branch_request_user"
+    },
+    {
+      "id": "read_moving_item_after",
+      "title": "Read moving item after",
+      "summary": "Read compact moving item facts after alignment.",
+      "uses": "call_template",
+      "call_template": {
+        "id": "template.items.read_item_summary",
+        "input": {
+          "include_take_summary": true
+        },
+        "refs": {
+          "item_ref": {
+            "$from_step": "move_item_to_anchor_start",
+            "output": "item_ref"
+          }
+        }
+      },
+      "get_state": null,
+      "checkpoint": "checkpoint_read_moving_item_after",
+      "evidence": "evidence_read_moving_item_after",
+      "idempotency": {
+        "mode": "none",
+        "key_scope": "none",
+        "on_resume": "rerun"
+      },
+      "on_failure": "branch_request_user"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "assert_two_item_alignment_readback",
+      "kind": "expected_output",
+      "summary": "The workflow must retain selected item refs, analysis artifacts, and moved-item readback evidence.",
+      "required": true,
+      "evidence": [
+        "evidence_list_selected_items",
+        "evidence_read_anchor_item",
+        "evidence_read_moving_item_before",
+        "evidence_detect_anchor_transients",
+        "evidence_detect_moving_transients",
+        "evidence_detect_moving_silence",
+        "evidence_move_item_to_anchor_start",
+        "evidence_read_moving_item_after"
+      ],
+      "outputs": {
+        "refs": [
+          "item_ref",
+          "track_ref"
+        ],
+        "artifacts": [
+          "item_transients_report",
+          "item_silence_report"
+        ],
+        "jobs": [],
+        "state": [
+          "two_item_start_alignment_ready"
+        ]
+      }
+    },
+    {
+      "id": "assert_starter_not_full_transient_aligner",
+      "kind": "checkpoint",
+      "summary": "This starter aligns the second item to a known start position and does not claim arbitrary onset-offset solving.",
+      "required": true,
+      "evidence": [
+        "evidence_detect_anchor_transients",
+        "evidence_detect_moving_transients",
+        "evidence_move_item_to_anchor_start"
+      ],
+      "outputs": {
+        "refs": [],
+        "artifacts": [],
+        "jobs": [],
+        "state": []
+      }
+    }
+  ],
+  "recovery": {
+    "run_state": {
+      "contract": "recipe.run_state.v1",
+      "initial": "not_started",
+      "states": [
+        "not_started",
+        "running",
+        "paused",
+        "succeeded",
+        "failed",
+        "blocked"
+      ],
+      "terminal": [
+        "succeeded",
+        "failed",
+        "blocked"
+      ]
+    },
+    "checkpoints": [
+      {
+        "id": "checkpoint_list_selected_items",
+        "after_step": "list_selected_items",
+        "required_evidence": [
+          "evidence_list_selected_items"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Selected item list evidence is retained."
+      },
+      {
+        "id": "checkpoint_resolve_anchor_item",
+        "after_step": "resolve_anchor_item",
+        "required_evidence": [
+          "evidence_resolve_anchor_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Anchor item resolution evidence is retained."
+      },
+      {
+        "id": "checkpoint_resolve_moving_item",
+        "after_step": "resolve_moving_item",
+        "required_evidence": [
+          "evidence_resolve_moving_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Moving item resolution evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_anchor_item",
+        "after_step": "read_anchor_item",
+        "required_evidence": [
+          "evidence_read_anchor_item"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Anchor timing readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_moving_item_before",
+        "after_step": "read_moving_item_before",
+        "required_evidence": [
+          "evidence_read_moving_item_before"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Pre-move item readback evidence is retained."
+      },
+      {
+        "id": "checkpoint_detect_anchor_transients",
+        "after_step": "detect_anchor_transients",
+        "required_evidence": [
+          "evidence_detect_anchor_transients"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Anchor transient evidence is retained."
+      },
+      {
+        "id": "checkpoint_detect_moving_transients",
+        "after_step": "detect_moving_transients",
+        "required_evidence": [
+          "evidence_detect_moving_transients"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Moving transient evidence is retained."
+      },
+      {
+        "id": "checkpoint_detect_moving_silence",
+        "after_step": "detect_moving_silence",
+        "required_evidence": [
+          "evidence_detect_moving_silence"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Moving silence evidence is retained."
+      },
+      {
+        "id": "checkpoint_move_item_to_anchor_start",
+        "after_step": "move_item_to_anchor_start",
+        "required_evidence": [
+          "evidence_move_item_to_anchor_start"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Move evidence is retained."
+      },
+      {
+        "id": "checkpoint_read_moving_item_after",
+        "after_step": "read_moving_item_after",
+        "required_evidence": [
+          "evidence_read_moving_item_after"
+        ],
+        "on_resume": "continue_next_step",
+        "summary": "Post-move readback evidence is retained."
+      }
+    ],
+    "evidence_requirements": [
+      {
+        "id": "evidence_list_selected_items",
+        "step": "list_selected_items",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.list_selected_items",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_resolve_anchor_item",
+        "step": "resolve_anchor_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.resolve_item_ref",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_resolve_moving_item",
+        "step": "resolve_moving_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.resolve_item_ref",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_anchor_item",
+        "step": "read_anchor_item",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_moving_item_before",
+        "step": "read_moving_item_before",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_detect_anchor_transients",
+        "step": "detect_anchor_transients",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.detect_item_transients",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_detect_moving_transients",
+        "step": "detect_moving_transients",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.detect_item_transients",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_detect_moving_silence",
+        "step": "detect_moving_silence",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.analysis.detect_item_silence",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 0,
+          "artifacts_min": 1,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_move_item_to_anchor_start",
+        "step": "move_item_to_anchor_start",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.move_item",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      },
+      {
+        "id": "evidence_read_moving_item_after",
+        "step": "read_moving_item_after",
+        "source": "template.runtime.evidence.v1",
+        "template_id": "template.items.read_item_summary",
+        "require_ok": true,
+        "require_request_id": true,
+        "counts": {
+          "refs_min": 1,
+          "artifacts_min": 0,
+          "jobs_min": 0,
+          "last_result_refs_min": 0
+        },
+        "timestamps": "current_run"
+      }
+    ],
+    "idempotency": {
+      "scope": "recipe_run",
+      "default_step_policy": "follow_step_idempotency",
+      "on_resume": "skip_completed_checkpoints",
+      "on_replay": "reuse_verified_evidence"
+    },
+    "resume": {
+      "from_checkpoint": "latest_verified",
+      "on_missing_evidence": "rerun_step",
+      "on_failed_evidence": "use_recovery_branch",
+      "on_risk_gate": "pause_for_user"
+    },
+    "branches": [
+      {
+        "id": "branch_continue_with_start_alignment",
+        "trigger": "template_error",
+        "step": "detect_moving_transients",
+        "strategy": "request_user",
+        "summary": "Continue only as a visible start-alignment fallback if analysis evidence is weak."
+      },
+      {
+        "id": "branch_request_user",
+        "trigger": "resume_conflict",
+        "step": null,
+        "strategy": "request_user",
+        "summary": "Pause if the selected items changed or the desired anchor is unclear."
+      }
+    ],
+    "risk_gates": [
+      {
+        "id": "gate_confirm_two_item_alignment",
+        "applies_to": [
+          "write"
+        ],
+        "required_before_step": "move_item_to_anchor_start",
+        "policy": "user_confirmation",
+        "blocks_auto_resume": true,
+        "summary": "Confirm before moving the second selected item."
+      }
+    ]
+  }
+}

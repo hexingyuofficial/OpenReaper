@@ -31,6 +31,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
+  "recipe.items.align_selected_item_onsets",
   "recipe.items.layer_report_from_evidence",
   "recipe.items.reverse_riser_from_selected_item",
   "recipe.media.item_prep_from_folder",
@@ -85,6 +86,14 @@ const EXPECTED_DEPENDENCIES = Object.freeze({
   ]),
   "recipe.items.layer_report_from_evidence": Object.freeze([
     "template.items.create_layer_report",
+  ]),
+  "recipe.items.align_selected_item_onsets": Object.freeze([
+    "template.items.list_selected_items",
+    "template.items.resolve_item_ref",
+    "template.items.read_item_summary",
+    "template.analysis.detect_item_transients",
+    "template.analysis.detect_item_silence",
+    "template.items.move_item",
   ]),
   "recipe.items.reverse_riser_from_selected_item": Object.freeze([
     "template.items.resolve_item_ref",
@@ -153,7 +162,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe packet", () => {
-  it("loads exactly the seventeen first-atoms draft recipes through Layer 6 authoring", () => {
+  it("loads exactly the eighteen first-atoms draft recipes through Layer 6 authoring", () => {
     const authoring = loadUserRecipeAuthoringCatalog({ repoRoot: REPO_ROOT });
 
     assert.equal(authoring.catalog.size, EXPECTED_PACKET_IDS.length);
@@ -174,6 +183,7 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(files.length, EXPECTED_PACKET_IDS.length);
     assert.deepEqual(files.map((file) => path.basename(file)).sort(), [
       "analysis.selected_item_cycle_quality_report.recipe.json",
+      "items.align_selected_item_onsets.recipe.json",
       "items.layer_report_from_evidence.recipe.json",
       "items.reverse_riser_from_selected_item.recipe.json",
       "media.item_prep_from_folder.recipe.json",
@@ -507,6 +517,46 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
   });
 
+  it("adds an Alpha3 selected-item onset alignment starter over analysis and item atoms", () => {
+    const recipe = recipesById().get("recipe.items.align_selected_item_onsets");
+
+    assert.deepEqual(recipeTemplateDependencies(recipe), EXPECTED_DEPENDENCIES[recipe.id]);
+    assert.equal(recipe.lifecycle, "draft");
+    assert.equal(recipe.risk, "write");
+    assert.equal(recipe.tags.includes("starter_recipe"), true);
+    assert.deepEqual(
+      recipe.steps.filter((step) => step.uses === "call_template").map((step) => step.call_template.id),
+      [
+        "template.items.list_selected_items",
+        "template.items.resolve_item_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+        "template.analysis.detect_item_transients",
+        "template.analysis.detect_item_transients",
+        "template.analysis.detect_item_silence",
+        "template.items.move_item",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.deepEqual(recipe.steps[1].call_template.input, {
+      ref: "selected:0",
+    });
+    assert.deepEqual(recipe.steps[2].call_template.input, {
+      ref: "selected:1",
+    });
+    assert.deepEqual(recipe.steps[8].call_template.input, {
+      position_seconds: 0,
+    });
+    assert.equal(recipe.recovery.risk_gates[0].required_before_step, "move_item_to_anchor_start");
+    assert.equal(recipe.recovery.risk_gates[0].policy, "user_confirmation");
+    assert.equal(
+      recipe.workflow_card.candidate_steps.some((step) => /detected onset offset/i.test(step)),
+      true,
+    );
+    assert.doesNotMatch(JSON.stringify(withoutWorkflowCard(recipe)), /call_recipe|executor|raw_lua|raw_action|shell/i);
+  });
+
   it("adds an Alpha3 stock vocal cleanup-chain starter over stock Rea FX atoms", () => {
     const recipe = recipesById().get("recipe.tracks.add_stock_vocal_cleanup_chain");
 
@@ -683,6 +733,23 @@ describe("Layer 7 official draft recipe packet", () => {
     assert.equal(item.support.evidence, "lifecycle:draft");
     assert.equal(item.task_intents.includes("reverse"), true);
     assert.equal(item.task_intents.includes("riser"), true);
+    assert.equal("steps" in item, false);
+    assert.equal("assertions" in item, false);
+  });
+
+  it("discovers the Alpha3 selected-item onset alignment workflow through compact recipe-menu fields", () => {
+    const menu = listUserRecipes({
+      query: "alignment",
+      fields: ["id", "summary", "capability_group", "task_intents", "support"],
+    }, { repoRoot: REPO_ROOT });
+    const item = menu.items.find((entry) => entry.id === "recipe.items.align_selected_item_onsets");
+
+    assert.ok(item);
+    assert.equal(item.capability_group, "items.item_onset_alignment");
+    assert.equal(item.support.status, "candidate");
+    assert.equal(item.support.evidence, "lifecycle:draft");
+    assert.equal(item.task_intents.includes("alignment"), true);
+    assert.equal(item.task_intents.includes("transient"), true);
     assert.equal("steps" in item, false);
     assert.equal("assertions" in item, false);
   });

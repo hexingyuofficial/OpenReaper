@@ -88,6 +88,12 @@ For a basic recording setup, use `recipe.tracks.prepare_recording_track`: it
 creates one recording track, selects it, record-arms it, and reads back the
 compact track list without starting transport recording.
 
+For a quick two-layer audio alignment pass, use
+`recipe.items.align_selected_item_onsets`: it treats `selected:0` as the anchor,
+checks transient/silence evidence, moves `selected:1` to the starter anchor
+position, and reads the moved item back. It is a draft starter, not a full
+multi-item transient aligner.
+
 The product action menu is versioned by
 `alpha2.product_action_surface.v1`; see
 `docs/abi/ALPHA2_PRODUCT_ACTION_SURFACE_V1.md` for the schema, status values,

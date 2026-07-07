@@ -29,6 +29,7 @@ const PACKET_ROOT = path.join(REPO_ROOT, "recipes", "official", "layer7", "first
 
 const EXPECTED_PACKET_IDS = Object.freeze([
   "recipe.analysis.selected_item_cycle_quality_report",
+  "recipe.items.align_selected_item_onsets",
   "recipe.items.layer_report_from_evidence",
   "recipe.items.reverse_riser_from_selected_item",
   "recipe.media.item_prep_from_folder",
@@ -58,6 +59,7 @@ const WRITE_ATOMS = new Set([
   "recipe.tracks.prepare_recording_track",
   "recipe.tracks.add_stock_vocal_cleanup_chain",
   "recipe.items.reverse_riser_from_selected_item",
+  "recipe.items.align_selected_item_onsets",
 ]);
 
 const FIXTURE_BACKED_LAYER_REPORT_ID = "recipe.items.layer_report_from_evidence";
@@ -73,7 +75,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
 });
 
 describe("Layer 7 official draft recipe fake smoke", () => {
-  it("executes exactly the seventeen draft atoms as composed fake recipe graphs", () => {
+  it("executes exactly the eighteen draft atoms as composed fake recipe graphs", () => {
     const runs = loadDraftRecipes().map((recipe) => fakeSmokeRecipe(recipe));
 
     assert.deepEqual(
@@ -400,6 +402,35 @@ describe("Layer 7 official draft recipe fake smoke", () => {
     assert.equal(run.risk_pauses[0].policy, "user_confirmation");
     assert.equal(run.expected.refs.has("new_item_ref"), true);
     assert.equal(run.expected.state.has("reverse_riser_ready"), true);
+  });
+
+  it("fake-smokes the Alpha3 selected-item onset alignment starter as a recipe-only composition", () => {
+    const recipe = loadDraftRecipes().find((entry) => entry.id === "recipe.items.align_selected_item_onsets");
+    const run = fakeSmokeRecipe(recipe);
+
+    assert.equal(run.status, "succeeded");
+    assert.deepEqual(
+      run.template_calls.map((call) => call.template_id),
+      [
+        "template.items.list_selected_items",
+        "template.items.resolve_item_ref",
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.items.read_item_summary",
+        "template.analysis.detect_item_transients",
+        "template.analysis.detect_item_transients",
+        "template.analysis.detect_item_silence",
+        "template.items.move_item",
+        "template.items.read_item_summary",
+      ],
+    );
+    assert.equal(run.risk_pauses.length, 1);
+    assert.equal(run.risk_pauses[0].before_step, "move_item_to_anchor_start");
+    assert.equal(run.risk_pauses[0].policy, "user_confirmation");
+    assert.equal(run.expected.refs.has("item_ref"), true);
+    assert.equal(run.expected.artifacts.has("item_transients_report"), true);
+    assert.equal(run.expected.artifacts.has("item_silence_report"), true);
+    assert.equal(run.expected.state.has("two_item_start_alignment_ready"), true);
   });
 
   it("fake-smokes the Alpha3 stock vocal cleanup-chain starter as a recipe-only composition", () => {
