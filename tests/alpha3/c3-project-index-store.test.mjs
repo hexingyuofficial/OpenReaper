@@ -230,6 +230,68 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     });
   });
 
+  it("maintains take rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-takes",
+    });
+
+    const result = index.replaceTakes({
+      snapshot_id: "snapshot:c3-takes",
+      observed_at: "2026-07-07T18:25:00.000Z",
+      payload_ref: "artifact:takes:map",
+      rows: [
+        {
+          ref: "take:guid:{TAKE-1}",
+          item_ref: "item:guid:{ITEM-1}",
+          track_ref: "track:guid:{A}",
+          active: true,
+          source_kind: "wav",
+          playrate: 1,
+          pitch_semitones: 0,
+        },
+        {
+          ref: "take:guid:{TAKE-2}",
+          owner_ref: "item:guid:{ITEM-2}",
+          track_ref: "track:guid:{B}",
+          active: true,
+          source_kind: "wav",
+          reverse: true,
+          has_take_fx: true,
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_takes", {
+      scope: "takes",
+      limit: 10,
+      filters: { has_take_fx: true },
+      fields: ["item_ref", "track_ref", "active", "reverse", "has_take_fx", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_takes");
+    assert.equal(snapshot.rows.takes.length, 2);
+    assert.equal(snapshot.rows.takes[1].item_ref, "item:guid:{ITEM-2}");
+    assert.equal(snapshot.rows.takes[0].payload_ref, "artifact:takes:map");
+    assert.equal(snapshot.freshness_scopes.takes.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.takes.coverage_status, "paged");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "takes"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["take:guid:{TAKE-2}"]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "take:guid:{TAKE-2}",
+      item_ref: "item:guid:{ITEM-2}",
+      track_ref: "track:guid:{B}",
+      active: true,
+      reverse: true,
+      has_take_fx: true,
+      payload_ref: "artifact:takes:map",
+    });
+  });
+
   it("maintains FX rows with task-scoped freshness and compact query fields", () => {
     const index = createAlpha3C3ProjectIndex({
       now: fixedNow,
@@ -317,12 +379,12 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
 
   it("plans task-scoped refresh requests over accepted templates only", () => {
     const plan = planAlpha3C3ProjectIndexTaskRefresh({
-      scopes: ["project_head", "tracks", "items", "fx", "selection", "tracks"],
+      scopes: ["project_head", "tracks", "items", "takes", "fx", "selection", "tracks"],
       limit: 40,
     });
 
     assert.equal(plan.contract, ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT);
-    assert.deepEqual(plan.scopes, ["project_head", "tracks", "items", "fx", "selection"]);
+    assert.deepEqual(plan.scopes, ["project_head", "tracks", "items", "takes", "fx", "selection"]);
     assert.deepEqual(
       plan.requests.map((request) => request.id),
       [
@@ -332,8 +394,32 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         "template.tracks.read_mixer_controls",
         "template.project.create_project_map_snapshot",
         "template.items.list_selected_items",
+        "template.items.list_selected_items",
+        "template.items.read_item_summary",
       ],
     );
+    const takesOnly = planAlpha3C3ProjectIndexTaskRefresh({
+      scopes: ["takes"],
+      limit: 40,
+    });
+    assert.deepEqual(
+      takesOnly.requests.map((request) => request.id),
+      [
+        "template.project.create_project_map_snapshot",
+        "template.items.list_selected_items",
+        "template.items.read_item_summary",
+      ],
+    );
+    const selectedTakeSummary = takesOnly.requests.find((request) =>
+      request.id === "template.items.read_item_summary"
+    );
+    assert.equal(selectedTakeSummary.callable_now, false);
+    assert.deepEqual(selectedTakeSummary.foreach_ref_from, {
+      request_id: "template.items.list_selected_items",
+      output_ref: "item_ref",
+      bind_ref_as: "item_ref",
+      max: 40,
+    });
     const fxOnly = planAlpha3C3ProjectIndexTaskRefresh({
       scopes: ["fx"],
       limit: 40,

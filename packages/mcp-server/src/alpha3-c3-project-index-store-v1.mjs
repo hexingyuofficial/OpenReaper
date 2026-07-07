@@ -346,6 +346,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     rows: {
       tracks: [],
       items: [],
+      takes: [],
       fx: [],
       selection_state: [],
       object_changes: [],
@@ -423,6 +424,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.items = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_items", observedAt);
+    },
+    replaceTakes(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.takes = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeTakeRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "takes",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.items.read_item_summary",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.takes = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_takes", observedAt);
     },
     replaceFx(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -650,6 +679,47 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "items",
       });
     }
+    if (scope === "takes") {
+      requests.push({
+        tool: "call_template",
+        id: "template.project.create_project_map_snapshot",
+        refs: {},
+        input: {
+          max_tracks: limit,
+          max_items_per_track: Math.min(limit, 100),
+          include_selected_items: true,
+          include_track_items: true,
+        },
+        refresh_scope: "takes",
+      });
+      requests.push({
+        tool: "call_template",
+        id: "template.items.list_selected_items",
+        refs: {},
+        input: {
+          limit,
+          include_track_refs: true,
+        },
+        refresh_scope: "takes",
+      });
+      requests.push({
+        tool: "call_template",
+        id: "template.items.read_item_summary",
+        refs: {},
+        input: {
+          include_take_summary: true,
+        },
+        callable_now: false,
+        depends_on: ["template.items.list_selected_items"],
+        foreach_ref_from: {
+          request_id: "template.items.list_selected_items",
+          output_ref: "item_ref",
+          bind_ref_as: "item_ref",
+          max: limit,
+        },
+        refresh_scope: "takes",
+      });
+    }
     if (scope === "fx") {
       requests.push({
         tool: "call_template",
@@ -752,6 +822,7 @@ function snapshotState(state) {
       tracks: cloneJson(state.rows.tracks),
       items: cloneJson(state.rows.items),
       fx: cloneJson(state.rows.fx),
+      takes: cloneJson(state.rows.takes),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -835,6 +906,57 @@ function normalizeItemRow(row, defaults) {
     observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
     summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeTakeRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const ownerRef = typeof source.owner_ref === "string"
+    ? source.owner_ref
+    : typeof source.item_ref === "string"
+      ? source.item_ref
+      : null;
+  const itemRef = typeof source.item_ref === "string"
+    ? source.item_ref
+    : ownerRef !== null && ownerRef.startsWith("item:")
+      ? ownerRef
+      : typeof summary.item_ref === "string"
+        ? summary.item_ref
+        : null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: ownerRef,
+    item_ref: itemRef,
+    track_ref: typeof source.track_ref === "string"
+      ? source.track_ref
+      : typeof summary.track_ref === "string"
+        ? summary.track_ref
+        : null,
+    active: Boolean(source.active ?? source.is_active ?? summary.active ?? summary.is_active),
+    selected: Boolean(source.selected ?? summary.selected),
+    source_kind: typeof source.source_kind === "string"
+      ? source.source_kind
+      : typeof summary.source_kind === "string"
+        ? summary.source_kind
+        : null,
+    source_ref: typeof source.source_ref === "string"
+      ? source.source_ref
+      : typeof summary.source_ref === "string"
+        ? summary.source_ref
+        : null,
+    pitch_semitones: finiteNumber(source.pitch_semitones ?? source.pitch ?? summary.pitch_semitones ?? summary.pitch),
+    playrate: finiteNumber(source.playrate ?? source.play_rate ?? summary.playrate ?? summary.play_rate),
+    reverse: Boolean(source.reverse ?? source.reversed ?? summary.reverse ?? summary.reversed),
+    has_take_fx: Boolean(source.has_take_fx ?? summary.has_take_fx ?? summary.fx_count > 0),
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary,
   };
 }
 
@@ -943,7 +1065,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items", "fx"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;
