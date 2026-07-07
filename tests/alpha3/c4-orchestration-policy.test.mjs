@@ -7,6 +7,7 @@ import {
   ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
   ALPHA3_C4_PRODUCT_FLOW_CONTRACT,
+  ALPHA3_C4_RECOVERY_PLAN_CONTRACT,
   ALPHA3_C4_RISK_DOMAINS,
   ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
   createAlpha3C4OrchestrationPlanner,
@@ -375,6 +376,26 @@ describe("Alpha3 C4 orchestration policy", () => {
       "template.tracks.create_track",
       "template.tracks.set_record_arm",
     ]);
+    assert.equal(flow.recovery_plan.contract, ALPHA3_C4_RECOVERY_PLAN_CONTRACT);
+    assert.equal(flow.recovery_plan.status, "needs_recovery");
+    assert.equal(flow.recovery_plan.success_wording_allowed, false);
+    assert.deepEqual(
+      flow.recovery_plan.actions.map((action) => action.id),
+      ["collect_mutation_refs"],
+    );
+    assert.match(flow.recovery_plan.actions[0].next_step, /plan batch readback/);
+    assert.deepEqual(flow.batch_readback.expected_result_refs, [
+      {
+        call_index: 1,
+        template_id: "template.tracks.create_track",
+        expected_ref_kinds: ["track_ref"],
+      },
+      {
+        call_index: 2,
+        template_id: "template.tracks.set_record_arm",
+        expected_ref_kinds: ["track_ref"],
+      },
+    ]);
   });
 
   it("plans an already-authorized product flow with concrete batch readback requests", () => {
@@ -437,7 +458,9 @@ describe("Alpha3 C4 orchestration policy", () => {
       flow.flow_steps.map((step) => step.id),
       ["discover", "execute", "batch_readback", "report"],
     );
-    assert.match(flow.report_policy, /one concise checkpoint/);
+    assert.equal(flow.recovery_plan.status, "clear");
+    assert.equal(flow.recovery_plan.success_wording_allowed, true);
+    assert.match(flow.report_policy, /claim success only/);
   });
 
   it("keeps hard-stop product prompts beginner-readable while retaining machine domains", () => {
@@ -465,6 +488,38 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.match(flow.authorization_prompt.message, /deleting project content/);
     assert.match(flow.authorization_prompt.message, /rendering or exporting files/);
     assert.doesNotMatch(flow.authorization_prompt.message, /destructive_delete|render_or_export/);
+    assert.equal(flow.recovery_plan.status, "needs_recovery");
+    assert.equal(flow.recovery_plan.success_wording_allowed, false);
+    assert.equal(flow.recovery_plan.actions[0].id, "confirm_hard_stop");
+    assert.match(flow.recovery_plan.actions[0].next_step, /explicit confirmation/);
+  });
+
+  it("gives a beginner-readable recovery plan for partial or blocked readback", () => {
+    const flow = planAlpha3C4ProductFlow({
+      authorization: {
+        granted: true,
+        task_id: "move-item",
+        allowed_risk_domains: ["write_project_reversible"],
+      },
+      calls: [
+        { id: "template.items.move_item", input: { position_seconds: 2 } },
+      ],
+      mutations: [
+        { id: "template.items.move_item", input: { position_seconds: 2 } },
+      ],
+    });
+
+    assert.equal(flow.ok, false);
+    assert.equal(flow.batch_readback.coverage.status, "blocked");
+    assert.equal(flow.recovery_plan.status, "needs_recovery");
+    assert.equal(flow.recovery_plan.success_wording_allowed, false);
+    assert.deepEqual(
+      flow.recovery_plan.actions.map((action) => action.id),
+      ["repair_readback_coverage"],
+    );
+    assert.match(flow.recovery_plan.actions[0].user_message, /could not verify every change/);
+    assert.match(flow.recovery_plan.actions[0].next_step, /refreshed refs/);
+    assert.equal(flow.recovery_plan.actions[0].evidence.blockers[0].code, "READBACK_TARGET_REF_MISSING");
   });
 
   it("deduplicates repeated readback requests and returns typed blockers for missing canonical refs", () => {

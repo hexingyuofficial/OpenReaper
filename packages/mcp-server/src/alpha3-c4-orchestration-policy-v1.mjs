@@ -13,6 +13,7 @@ export const ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT = "alpha3.c4.orchestration_
 export const ALPHA3_C4_BATCH_READBACK_CONTRACT = "alpha3.c4.batch_readback.v1";
 export const ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT = "alpha3.c4.safe_parallel_execution.v1";
 export const ALPHA3_C4_PRODUCT_FLOW_CONTRACT = "alpha3.c4.product_flow.v1";
+export const ALPHA3_C4_RECOVERY_PLAN_CONTRACT = "alpha3.c4.recovery_plan.v1";
 
 export const ALPHA3_C4_EXECUTION_DECISIONS = deepFreeze([
   "parallel_read",
@@ -69,6 +70,10 @@ export const ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY = deepFreeze({
     mode: "batch_after_mutation_group",
     evidence_required: ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
     planner_function: "planAlpha3C4BatchReadback",
+  },
+  recovery: {
+    contract: ALPHA3_C4_RECOVERY_PLAN_CONTRACT,
+    rule: "If readback is pending, partial, blocked, or mismatched, stop success wording and give one beginner-readable recovery step.",
   },
   planner_call_shape: {
     function: "planAlpha3C4Execution",
@@ -224,6 +229,8 @@ export function planAlpha3C4ProductFlow(request = {}, options = {}) {
     : null;
   const prompt = buildProductAuthorizationPrompt(execution);
   const flowSteps = buildProductFlowSteps({ execution, prompt, readback, mutations });
+  const batchReadback = readback ?? pendingBatchReadback(execution);
+  const recoveryPlan = buildRecoveryPlan({ execution, readback: batchReadback });
 
   return deepFreeze({
     contract: ALPHA3_C4_PRODUCT_FLOW_CONTRACT,
@@ -238,9 +245,10 @@ export function planAlpha3C4ProductFlow(request = {}, options = {}) {
     task: normalizeProductTask(request.task),
     authorization_prompt: prompt,
     execution_schedule: execution.execution_schedule,
-    batch_readback: readback ?? pendingBatchReadback(execution),
+    batch_readback: batchReadback,
+    recovery_plan: recoveryPlan,
     flow_steps: flowSteps,
-    report_policy: "Report one concise checkpoint after execution and batch readback; do not narrate every safe atomic step unless a blocker or user-visible mismatch appears.",
+    report_policy: "Report one concise checkpoint after execution and batch readback; claim success only when recovery_plan.success_wording_allowed is true.",
   });
 }
 
@@ -552,15 +560,114 @@ function buildProductFlowSteps({ execution, prompt, readback, mutations }) {
 }
 
 function pendingBatchReadback(execution) {
+  const mutationCalls = execution.calls.filter((call) => call.readback_required);
   return deepFreeze({
     contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
     status: execution.batch_readback.required ? "pending_mutation_refs" : "not_required",
     required: execution.batch_readback.required,
     expected_mutation_call_indexes: execution.batch_readback.call_indexes,
     expected_template_ids: execution.batch_readback.template_ids,
+    expected_result_refs: mutationCalls.map(expectedResultRefsForCall),
     next_step: execution.batch_readback.required
       ? "After execution, collect mutation input refs and result_refs, then call planAlpha3C4BatchReadback."
       : "No mutation readback needed.",
+  });
+}
+
+function buildRecoveryPlan({ execution, readback }) {
+  const blockedExecution = execution.calls.filter((call) => call.decision === "blocked");
+  const hardStops = execution.calls.filter((call) => call.decision === "requires_user_confirmation");
+  const readbackStatus = readback.coverage?.status ?? readback.status ?? "unknown";
+  const readbackBlockers = Array.isArray(readback.blockers) ? readback.blockers : [];
+  const actions = [];
+
+  if (blockedExecution.length > 0) {
+    actions.push(recoveryAction({
+      id: "fix_unavailable_templates",
+      severity: "block_success",
+      user_message: "Some requested actions are not available yet.",
+      next_step: "Stop before execution, name the unavailable action, and choose another supported workflow or wait for the missing capability.",
+      evidence: { template_ids: blockedExecution.map((call) => call.id) },
+    }));
+  }
+
+  if (hardStops.length > 0) {
+    actions.push(recoveryAction({
+      id: "confirm_hard_stop",
+      severity: "needs_user_decision",
+      user_message: "This task reaches a real risk boundary.",
+      next_step: `Ask for explicit confirmation before ${joinHumanList(riskDomainUserLabels(unique(hardStops.map((call) => call.risk_domain).filter(Boolean))))}.`,
+      evidence: { risk_domains: unique(hardStops.map((call) => call.risk_domain).filter(Boolean)) },
+    }));
+  }
+
+  if (readbackStatus === "pending_mutation_refs") {
+    actions.push(recoveryAction({
+      id: "collect_mutation_refs",
+      severity: "block_success",
+      user_message: "The change ran or is about to run, but readback still needs the exact changed objects.",
+      next_step: "Collect each mutation's input refs and result refs, then plan batch readback before claiming success.",
+      evidence: {
+        expected_template_ids: readback.expected_template_ids ?? [],
+        expected_result_refs: readback.expected_result_refs ?? [],
+      },
+    }));
+  }
+
+  if (readbackStatus === "partial" || readbackStatus === "blocked") {
+    actions.push(recoveryAction({
+      id: "repair_readback_coverage",
+      severity: "block_success",
+      user_message: "I could not verify every change yet.",
+      next_step: "Run the available readback requests, report the unverified targets, and ask for a narrower target or refreshed refs before further edits.",
+      evidence: {
+        status: readbackStatus,
+        blockers: readbackBlockers.map((blocker) => ({
+          code: blocker.code,
+          message: blocker.message,
+          mutation_template_id: blocker.mutation_template_id,
+        })),
+      },
+    }));
+  }
+
+  return deepFreeze({
+    contract: ALPHA3_C4_RECOVERY_PLAN_CONTRACT,
+    status: actions.length === 0 ? "clear" : "needs_recovery",
+    success_wording_allowed: actions.every((action) => action.severity !== "block_success"),
+    actions,
+    report_rule: actions.length === 0
+      ? "Success wording is allowed after concise readback."
+      : "Do not claim success until block_success recovery actions are handled or explicitly deferred.",
+  });
+}
+
+function expectedResultRefsForCall(call) {
+  return deepFreeze({
+    call_index: call.index,
+    template_id: call.id,
+    expected_ref_kinds: expectedRefKindsForRiskDomain(call.risk_domain, call.id),
+  });
+}
+
+function expectedRefKindsForRiskDomain(riskDomain, templateId) {
+  if (/\.tracks\./.test(templateId)) return ["track_ref"];
+  if (/\.items\./.test(templateId)) return ["item_ref"];
+  if (/\.fx\./.test(templateId)) return ["fx_ref", "track_ref_or_take_ref"];
+  if (/\.routing\./.test(templateId)) return ["track_ref"];
+  if (/\.project\.create_marker/.test(templateId)) return ["marker_ref"];
+  if (/\.project\.create_region/.test(templateId)) return ["region_ref"];
+  if (riskDomain === "safe_write") return ["transport_or_project_state_ref_if_returned"];
+  return ["canonical_target_ref"];
+}
+
+function recoveryAction({ id, severity, user_message, next_step, evidence }) {
+  return deepFreeze({
+    id,
+    severity,
+    user_message,
+    next_step,
+    evidence,
   });
 }
 
