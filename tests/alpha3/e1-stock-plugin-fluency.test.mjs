@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
+  ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
   createAlpha3E1OfficialMacroDiscoveryItems,
@@ -225,6 +227,16 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.requests[0].input.normalized_value, 0.7);
     assert.equal(plan.readback.length, 2);
     assert.equal(plan.readback[0].id, "template.fx.read_fx_parameter");
+    assert.equal(plan.evidence_plan.contract, ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT);
+    assert.equal(plan.evidence_plan.status, "ready_for_execution_and_readback");
+    assert.equal(plan.evidence_plan.success_wording_allowed, false);
+    assert.equal(plan.evidence_plan.evidence_items.length, 2);
+    assert.equal(plan.evidence_plan.evidence_items[0].control, "threshold_db");
+    assert.equal(plan.evidence_plan.evidence_items[0].pending, true);
+    assert.equal(plan.customer_readback.contract, ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT);
+    assert.equal(plan.customer_readback.status, "ready_for_execution_and_readback");
+    assert.equal(plan.customer_readback.success_wording_allowed, false);
+    assert.equal(plan.customer_readback.lines[2].includes("read back every touched control"), true);
     assert.equal(plan.human_readback[0].phrase, "Threshold at -18 dB.");
     assert.equal(plan.human_readback[1].phrase, "4:1 ratio.");
   });
@@ -248,6 +260,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.readback.length, 4);
     assert.equal(plan.hydration_flow.status, "ready_for_child_requests");
     assert.equal(plan.hydration_flow.steps.at(-1).id, "execute_stock_plugin_controls");
+    assert.equal(plan.customer_readback.headline.includes("Safe peak limit"), true);
+    assert.equal(plan.customer_readback.pending_readback_controls.length, 4);
+    assert.equal(plan.customer_readback.do_not_say_until_readback.includes("Done"), true);
+    assert.equal(plan.evidence_plan.required_after_execution.includes("all readback requests returned ok"), true);
     assert.deepEqual(plan.requests.map((request) => request.id), [
       "template.fx.set_fx_parameter_normalized",
       "template.fx.set_fx_parameter_normalized",
@@ -286,6 +302,30 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(missingRef.blockers.some((blocker) => blocker.code === "REQUIRED_REF_MISSING"), true);
     assert.equal(outOfRange.blockers[0].code, "CONTROL_VALUE_OUT_OF_RANGE");
     assert.equal(missingRef.blockers.some((blocker) => blocker.code === "PARAMETER_METADATA_NOT_FRESH"), true);
+  });
+
+  it("does not publish indexed evidence items when blockers suppress child requests", () => {
+    const mixed = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      plugin: "reacomp",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+      controls: {
+        threshold_db: -18,
+        ratio: 400,
+      },
+      parameter_metadata: {
+        threshold_db: { param_index: 0, param_ident: "threshold", freshness_status: "fresh" },
+        ratio: { param_index: 1, param_ident: "ratio", freshness_status: "fresh" },
+      },
+    });
+
+    assert.equal(mixed.ok, false);
+    assert.equal(mixed.requests.length, 0);
+    assert.equal(mixed.readback.length, 0);
+    assert.equal(mixed.blockers.some((blocker) => blocker.code === "CONTROL_VALUE_OUT_OF_RANGE"), true);
+    assert.equal(mixed.evidence_plan.child_request_count, 0);
+    assert.equal(mixed.evidence_plan.readback_request_count, 0);
+    assert.deepEqual(mixed.evidence_plan.evidence_items, []);
+    assert.equal(mixed.customer_readback.success_wording_allowed, false);
   });
 
   it("returns a typed blocker for unsupported starter actions", () => {
@@ -333,6 +373,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(stale.ok, false);
     assert.equal(stale.requests.length, 0);
     assert.equal(stale.blockers[0].code, "PARAMETER_METADATA_NOT_FRESH");
+    assert.equal(stale.customer_readback.status, "needs_fresh_parameter_metadata");
+    assert.equal(stale.customer_readback.lines[2].includes("fresh parameter_metadata"), true);
+    assert.equal(stale.evidence_plan.status, "needs_fresh_parameter_metadata");
+    assert.equal(stale.evidence_plan.success_wording_allowed, false);
     assert.equal(missingFreshness.ok, false);
     assert.equal(missingFreshness.requests.length, 0);
     assert.equal(missingFreshness.blockers[0].code, "PARAMETER_METADATA_NOT_FRESH");
@@ -393,6 +437,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.execution.hidden_executor, false);
     assert.equal(response.result.execution.live_reaper, false);
     assert.equal(response.result.plan.hydration_flow.status, "ready_for_child_requests");
+    assert.equal(response.result.evidence_plan.status, "ready_for_execution_and_readback");
+    assert.equal(response.result.evidence_plan.readback_status, "not_run");
+    assert.equal(response.result.customer_readback.success_wording_allowed, false);
+    assert.equal(response.result.customer_readback.lines[2].includes("read back every touched control"), true);
     assert.deepEqual(
       response.result.child_requests.map((request) => request.id),
       [
@@ -421,6 +469,9 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.plan.plugin.id, "reacomp");
     assert.equal(response.result.plan.starter_action.id, "gentle_vocal_compression");
     assert.equal(response.result.plan.hydration_flow.status, "needs_fresh_parameter_metadata");
+    assert.equal(response.result.customer_readback.status, "needs_fresh_parameter_metadata");
+    assert.equal(response.result.customer_readback.lines[1].includes("Threshold at -18 dB"), true);
+    assert.equal(response.result.evidence_plan.child_request_count, 0);
     assert.deepEqual(response.result.plan.hydration_flow.steps.map((step) => step.id), [
       "verify_fx_identity",
       "hydrate_parameter_metadata",

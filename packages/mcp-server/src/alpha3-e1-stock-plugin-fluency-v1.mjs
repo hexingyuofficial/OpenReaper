@@ -10,6 +10,8 @@ import {
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
 
 export const ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT = "alpha3.e1.stock_plugin_fluency.v1";
+export const ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT = "alpha3.e1.stock_plugin_customer_readback.v1";
+export const ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT = "alpha3.e1.stock_plugin_evidence_plan.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_MACRO_ID = "macro.set_stock_plugin_controls";
 export const ALPHA3_E1_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
 
@@ -322,6 +324,36 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
   const readback = blockers.length === 0
     ? fieldPlans.map((plan) => readParameterRequest(plan, refs))
     : [];
+  const humanReadback = blockers.length === 0 ? fieldPlans.map(humanReadbackItem) : [];
+  const hydrationFlow = createHydrationFlow({
+    plugin,
+    starter,
+    controls,
+    refs,
+    blockers,
+    requests,
+    readback,
+  });
+  const evidencePlan = createEvidencePlan({
+    plugin,
+    starter,
+    controls,
+    refs,
+    blockers,
+    fieldPlans,
+    requests,
+    readback,
+    hydrationFlow,
+  });
+  const customerReadback = createCustomerReadback({
+    plugin,
+    starter,
+    controls,
+    blockers,
+    humanReadback,
+    hydrationFlow,
+    evidencePlan,
+  });
 
   return deepFreeze({
     contract: ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
@@ -360,16 +392,10 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
       : [],
     requests,
     readback,
-    hydration_flow: createHydrationFlow({
-      plugin,
-      starter,
-      controls,
-      refs,
-      blockers,
-      requests,
-      readback,
-    }),
-    human_readback: blockers.length === 0 ? fieldPlans.map(humanReadbackItem) : [],
+    hydration_flow: hydrationFlow,
+    evidence_plan: evidencePlan,
+    customer_readback: customerReadback,
+    human_readback: humanReadback,
     blockers: uniqueBlockers(blockers),
     safety: stockPluginSafety(),
     policy: "Resolve plugin identity and parameter metadata from REAPER first, emit only accepted set_fx_parameter_normalized child requests, then read back every touched parameter.",
@@ -411,7 +437,7 @@ export function createAlpha3E1StockPluginRuntimeEnvelope({ request = {}, plan, n
       plan: normalizedPlan,
       execution: {
         executed: false,
-        reason: "E1.2 binds stock plugin semantic planning and starter actions only; child template requests remain agent-executed through call_template after freshness checks.",
+        reason: "E1.3 binds stock plugin semantic planning, starter actions, and customer readback evidence only; child template requests remain agent-executed through call_template after freshness checks.",
         added_tools: 0,
         public_call_recipe: false,
         hidden_executor: false,
@@ -421,6 +447,8 @@ export function createAlpha3E1StockPluginRuntimeEnvelope({ request = {}, plan, n
       },
       child_requests: normalizedPlan.requests,
       readback: normalizedPlan.readback,
+      evidence_plan: normalizedPlan.evidence_plan ?? null,
+      customer_readback: normalizedPlan.customer_readback ?? null,
       blockers: normalizedPlan.blockers,
     },
     budget: {
@@ -505,6 +533,8 @@ function officialStockPluginMacroDiscoveryItem(maps) {
         mode: { const: "plan_only_call_template_macro" },
         plan: { type: "object" },
         execution: { type: "object" },
+        evidence_plan: { type: "object" },
+        customer_readback: { type: "object" },
       },
     },
     refs: {
@@ -624,6 +654,139 @@ function createHydrationFlow({ plugin, starter, controls, refs, blockers, reques
   });
 }
 
+function createEvidencePlan({ plugin, starter, controls, refs, blockers, fieldPlans, requests, readback, hydrationFlow }) {
+  const status = hydrationFlow.status === "ready_for_child_requests"
+    ? "ready_for_execution_and_readback"
+    : hydrationFlow.status;
+  const evidenceItems = blockers.length === 0 ? fieldPlans.map((plan, index) => deepFreeze({
+    control: plan.parameter.id,
+    label: plan.parameter.label,
+    requested_value: plan.value,
+    unit: plan.parameter.unit,
+    tolerance: plan.parameter.tolerance,
+    param_index: plan.resolution.param_index,
+    param_ident: plan.resolution.param_ident,
+    write_request_index: index,
+    readback_request_index: index,
+    pending: true,
+  })) : [];
+  return deepFreeze({
+    contract: ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT,
+    status,
+    source_of_truth: "REAPER readback through accepted call_template requests",
+    plugin_id: plugin?.id ?? null,
+    starter_action_id: starter?.id ?? null,
+    fx_ref: refs.fx_ref ?? null,
+    readback_status: "not_run",
+    success_wording_allowed: false,
+    safe_claim_now: status === "ready_for_execution_and_readback"
+      ? "Plan is ready; do not claim the plugin changed until readback evidence exists."
+      : "Plan is blocked or needs hydration; do not claim any plugin change.",
+    required_sequence: [
+      "verify_fx_identity",
+      "hydrate_fresh_parameter_metadata",
+      "execute_child_requests",
+      "run_planned_readback",
+      "compare_readback_to_requested_controls",
+    ],
+    required_after_execution: [
+      "all child_requests returned ok",
+      "all readback requests returned ok",
+      "canonical fx_ref still matches the intended owner/plugin",
+      "readback values match requested semantic controls within tolerance",
+    ],
+    mismatch_policy: "Return a typed blocker and recovery step; never report success on mismatched readback.",
+    child_request_count: requests.length,
+    readback_request_count: readback.length,
+    blockers: uniqueBlockers(blockers),
+    evidence_items: evidenceItems,
+    requested_controls: summarizeRequestedControls(plugin, controls),
+  });
+}
+
+function createCustomerReadback({ plugin, starter, controls, blockers, humanReadback, hydrationFlow, evidencePlan }) {
+  const status = evidencePlan.status;
+  const requestedControls = summarizeRequestedControls(plugin, controls);
+  return deepFreeze({
+    contract: ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT,
+    status,
+    style: "compact_musical_readback",
+    success_wording_allowed: false,
+    headline: customerHeadline({ plugin, starter, status, requestedControls }),
+    lines: customerLines({ plugin, starter, status, requestedControls, humanReadback, hydrationFlow }),
+    requested_controls: requestedControls,
+    verified_controls: [],
+    pending_readback_controls: humanReadback.map((item) => deepFreeze({
+      control: item.control,
+      label: item.label,
+      phrase: item.phrase,
+    })),
+    do_not_say_until_readback: [
+      "Done",
+      "Applied",
+      "Changed in REAPER",
+      "The plugin is set",
+    ],
+    recovery_hint: customerRecoveryHint(status, blockers),
+  });
+}
+
+function customerHeadline({ plugin, starter, status, requestedControls }) {
+  if (!plugin) return "Stock plugin control is blocked: choose a supported REAPER stock plugin.";
+  const label = starter?.label ?? plugin.display_name;
+  if (status === "ready_for_execution_and_readback") {
+    return `${label} is planned on ${plugin.display_name}; ${requestedControls.length} controls need execution and readback before success.`;
+  }
+  if (status === "needs_fresh_parameter_metadata") {
+    return `${label} is planned on ${plugin.display_name}, but fresh FX parameter metadata is needed first.`;
+  }
+  return `${label} is blocked before stock plugin changes can be planned.`;
+}
+
+function customerLines({ plugin, starter, status, requestedControls, humanReadback, hydrationFlow }) {
+  const requestedLine = requestedControls.length > 0
+    ? formatPhraseList(requestedControls.map((control) => control.phrase))
+    : "No supported control values are ready yet.";
+  if (!plugin) {
+    return [
+      "I need a supported stock plugin such as ReaEQ, ReaComp, ReaDelay, RS5k, ReaTune, ReaPitch, ReaXcomp, or ReaLimit.",
+      "No REAPER mutation request was emitted.",
+    ];
+  }
+  if (status === "ready_for_execution_and_readback") {
+    return [
+      starter ? `Starter: ${starter.label}.` : `Plugin: ${plugin.display_name}.`,
+      `Planned controls: ${formatPhraseList(humanReadback.map((item) => item.phrase))}`,
+      "Next: run the emitted child requests and then read back every touched control before reporting success.",
+    ];
+  }
+  if (status === "needs_fresh_parameter_metadata") {
+    return [
+      starter ? `Starter: ${starter.label}.` : `Plugin: ${plugin.display_name}.`,
+      `Requested controls: ${requestedLine}.`,
+      hydrationFlow.next_step,
+    ];
+  }
+  return [
+    starter ? `Starter: ${starter.label}.` : `Plugin: ${plugin.display_name}.`,
+    `Requested controls: ${requestedLine}.`,
+    "Resolve the typed blockers before emitting stock plugin child requests.",
+  ];
+}
+
+function customerRecoveryHint(status, blockers) {
+  if (status === "ready_for_execution_and_readback") {
+    return "If any child request or readback fails, report the typed blocker and leave the user with a clear retry or manual-check step.";
+  }
+  if (status === "needs_fresh_parameter_metadata") {
+    return "Refresh FX identity and parameter metadata, then call the macro again with parameter_metadata marked fresh.";
+  }
+  const firstBlocker = uniqueBlockers(blockers)[0];
+  return firstBlocker
+    ? firstBlocker.message
+    : "Resolve blockers before planning stock plugin changes.";
+}
+
 function humanReadbackItem(plan) {
   return deepFreeze({
     control: plan.parameter.id,
@@ -654,6 +817,22 @@ function normalizeControlValue(parameterDef, value) {
     ok: true,
     normalized_value: normalizeToUnitInterval(parameterDef, value),
   };
+}
+
+function summarizeRequestedControls(pluginMap, controls) {
+  return Object.entries(controls).map(([field, value]) => {
+    const parameterDef = pluginMap ? resolveParameter(pluginMap, field) : null;
+    return deepFreeze({
+      control: field,
+      label: parameterDef?.label ?? field,
+      requested_value: value,
+      unit: parameterDef?.unit ?? null,
+      supported: Boolean(parameterDef),
+      phrase: parameterDef
+        ? formatReadback(parameterDef.readback_template, value)
+        : `${field}: ${value}`,
+    });
+  });
 }
 
 function resolveRequestedControls({ starter, requestedPluginMap, plugin, controls, control_overrides, action_parameters }) {
@@ -938,6 +1117,11 @@ function formatReadback(template, value) {
   return template
     .replaceAll("{value}", String(value))
     .replaceAll("{sign}", sign);
+}
+
+function formatPhraseList(phrases) {
+  const cleaned = phrases.map((phrase) => String(phrase).replace(/[.]+$/g, ""));
+  return `${cleaned.join("; ")}.`;
 }
 
 function normalizeToken(value) {
