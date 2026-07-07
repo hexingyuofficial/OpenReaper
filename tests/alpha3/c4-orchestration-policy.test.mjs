@@ -6,11 +6,13 @@ import {
   ALPHA3_C4_HARD_STOP_DOMAINS,
   ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
+  ALPHA3_C4_PRODUCT_FLOW_CONTRACT,
   ALPHA3_C4_RISK_DOMAINS,
   ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT,
   createAlpha3C4OrchestrationPlanner,
   planAlpha3C4BatchReadback,
   planAlpha3C4Execution,
+  planAlpha3C4ProductFlow,
 } from "../../packages/mcp-server/src/alpha3-c4-orchestration-policy-v1.mjs";
 
 describe("Alpha3 C4 orchestration policy", () => {
@@ -326,6 +328,109 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.equal(readback.coverage.status, "covered");
     assert.equal(readback.coverage.readback_request_count, 5);
     assert.deepEqual(readback.blockers, []);
+  });
+
+  it("plans a product flow with one task authorization prompt and deferred batch readback", () => {
+    const flow = planAlpha3C4ProductFlow({
+      task: {
+        id: "prep-recording",
+        label: "Prepare a recording track",
+        intent: "Create, arm, and verify one new track",
+      },
+      calls: [
+        { id: "template.project.read_summary" },
+        { id: "template.tracks.create_track", input: { name: "Vocal" } },
+        { id: "template.tracks.set_record_arm", refs: { track_ref: "track:pending:new" }, depends_on: [1] },
+      ],
+    });
+
+    assert.equal(flow.contract, ALPHA3_C4_PRODUCT_FLOW_CONTRACT);
+    assert.equal(flow.ok, true);
+    assert.equal(flow.mode, "plan_only_agent_product_flow");
+    assert.equal(flow.tool_surface.added_tools, 0);
+    assert.deepEqual(flow.task, {
+      id: "prep-recording",
+      label: "Prepare a recording track",
+      intent: "Create, arm, and verify one new track",
+    });
+    assert.equal(flow.authorization_prompt.kind, "task_authorization");
+    assert.equal(flow.authorization_prompt.one_prompt_only, true);
+    assert.deepEqual(flow.authorization_prompt.allowed_risk_domains, ["write_project_reversible"]);
+    assert.match(flow.authorization_prompt.message, /without repeated prompts/);
+    assert.match(flow.authorization_prompt.message, /batch-read back/);
+    assert.deepEqual(
+      flow.flow_steps.map((step) => step.id),
+      ["discover", "authorize", "execute", "batch_readback", "report"],
+    );
+    assert.equal(flow.execution_schedule.phases[0].execution, "serial");
+    assert.deepEqual(
+      flow.execution_schedule.phases.slice(1).map((phase) => phase.execution),
+      ["stop_for_task_authorization", "stop_for_task_authorization"],
+    );
+    assert.equal(flow.batch_readback.status, "pending_mutation_refs");
+    assert.deepEqual(flow.batch_readback.expected_template_ids, [
+      "template.tracks.create_track",
+      "template.tracks.set_record_arm",
+    ]);
+  });
+
+  it("plans an already-authorized product flow with concrete batch readback requests", () => {
+    const flow = planAlpha3C4ProductFlow({
+      authorization: {
+        granted: true,
+        task_id: "mix-pass",
+        allowed_risk_domains: ["write_project_reversible", "fx_parameter_control"],
+      },
+      calls: [
+        {
+          id: "template.tracks.rename_track",
+          input: { name: "Lead Vox" },
+          refs: { track_ref: "track:guid:{TRACK-A}" },
+        },
+        {
+          id: "template.fx.set_fx_parameter_normalized",
+          input: { param_index: 2, normalized_value: 0.2 },
+          refs: {
+            track_ref: "track:guid:{TRACK-A}",
+            fx_ref: "fx:track:{TRACK-A}:0",
+          },
+        },
+      ],
+      mutations: [
+        {
+          id: "template.tracks.rename_track",
+          input: { name: "Lead Vox" },
+          refs: { track_ref: "track:guid:{TRACK-A}" },
+        },
+        {
+          id: "template.fx.set_fx_parameter_normalized",
+          input: { param_index: 2, normalized_value: 0.2 },
+          refs: {
+            track_ref: "track:guid:{TRACK-A}",
+            fx_ref: "fx:track:{TRACK-A}:0",
+          },
+        },
+      ],
+    });
+
+    assert.equal(flow.ok, true);
+    assert.equal(flow.authorization_prompt.needed, false);
+    assert.equal(flow.authorization_prompt.kind, "already_authorized");
+    assert.deepEqual(
+      flow.execution_schedule.phases.map((phase) => phase.kind),
+      ["authorized_mutation", "authorized_mutation"],
+    );
+    assert.equal(flow.batch_readback.contract, ALPHA3_C4_BATCH_READBACK_CONTRACT);
+    assert.equal(flow.batch_readback.coverage.status, "covered");
+    assert.deepEqual(
+      flow.batch_readback.requests.map((request) => request.call_template.id),
+      ["template.tracks.read_mixer_controls", "template.fx.read_fx_parameter"],
+    );
+    assert.deepEqual(
+      flow.flow_steps.map((step) => step.id),
+      ["discover", "execute", "batch_readback", "report"],
+    );
+    assert.match(flow.report_policy, /one concise checkpoint/);
   });
 
   it("deduplicates repeated readback requests and returns typed blockers for missing canonical refs", () => {

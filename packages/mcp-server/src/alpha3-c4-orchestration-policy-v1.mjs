@@ -12,6 +12,7 @@ import {
 export const ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT = "alpha3.c4.orchestration_policy.v1";
 export const ALPHA3_C4_BATCH_READBACK_CONTRACT = "alpha3.c4.batch_readback.v1";
 export const ALPHA3_C4_SAFE_PARALLEL_EXECUTION_CONTRACT = "alpha3.c4.safe_parallel_execution.v1";
+export const ALPHA3_C4_PRODUCT_FLOW_CONTRACT = "alpha3.c4.product_flow.v1";
 
 export const ALPHA3_C4_EXECUTION_DECISIONS = deepFreeze([
   "parallel_read",
@@ -61,6 +62,7 @@ export const ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY = deepFreeze({
   },
   authorized_fast_execution: {
     rule: "Task authorization may suppress repeated prompts only inside reversible allowed risk domains.",
+    flow_planner_function: "planAlpha3C4ProductFlow",
   },
   batch_readback: {
     contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
@@ -189,6 +191,35 @@ export function planAlpha3C4BatchReadback(request = {}, options = {}) {
       status: blockers.length === 0 ? "covered" : requests.length > 0 ? "partial" : "blocked",
     },
     policy: "Execute readback requests after the mutation group, compare requested deltas against readback, and report mismatch as typed blockers.",
+  });
+}
+
+export function planAlpha3C4ProductFlow(request = {}, options = {}) {
+  const catalog = options.catalog ?? createAlpha3C4AcceptedCatalog();
+  const execution = planAlpha3C4Execution(request, { catalog });
+  const mutations = normalizeMutations(request.mutations ?? request.post_execution_mutations);
+  const readback = mutations.length > 0
+    ? planAlpha3C4BatchReadback({ mutations }, { catalog })
+    : null;
+  const prompt = buildProductAuthorizationPrompt(execution);
+  const flowSteps = buildProductFlowSteps({ execution, prompt, readback, mutations });
+
+  return deepFreeze({
+    contract: ALPHA3_C4_PRODUCT_FLOW_CONTRACT,
+    ok: execution.ok && (readback?.ok ?? true),
+    mode: "plan_only_agent_product_flow",
+    tool_surface: {
+      added_tools: 0,
+      discovery_tools: ["list_templates", "list_recipes"],
+      execution_tool: "call_template",
+      artifact_tool: "get_state",
+    },
+    task: normalizeProductTask(request.task),
+    authorization_prompt: prompt,
+    execution_schedule: execution.execution_schedule,
+    batch_readback: readback ?? pendingBatchReadback(execution),
+    flow_steps: flowSteps,
+    report_policy: "Report one concise checkpoint after execution and batch readback; do not narrate every safe atomic step unless a blocker or user-visible mismatch appears.",
   });
 }
 
@@ -404,6 +435,126 @@ function buildBatchReadbackPlan(plannedCalls) {
     policy: mutationCalls.length > 0
       ? "Run concise batch readback after the mutation group, verify requested deltas, update project index/artifacts later when available, and report mismatches as typed blockers."
       : "No mutation readback needed.",
+  });
+}
+
+function buildProductAuthorizationPrompt(execution) {
+  const neededDomains = unique(
+    execution.calls
+      .filter((call) => call.decision === "requires_task_authorization")
+      .map((call) => call.risk_domain)
+      .filter(Boolean),
+  );
+  const hardStopDomains = unique(
+    execution.calls
+      .filter((call) => call.decision === "requires_user_confirmation")
+      .map((call) => call.risk_domain)
+      .filter(Boolean),
+  );
+  const blockedCalls = execution.calls.filter((call) => call.decision === "blocked");
+  const reusableCount = execution.authorized_fast_execution.reusable_without_prompt_count;
+
+  if (blockedCalls.length > 0) {
+    return deepFreeze({
+      needed: true,
+      kind: "blocked_before_authorization",
+      message: "Some requested actions are unavailable in the accepted catalog; fix those before asking the user for task authorization.",
+      allowed_risk_domains: [],
+      hard_stop_domains: hardStopDomains,
+      blocked_template_ids: blockedCalls.map((call) => call.id),
+      one_prompt_only: false,
+    });
+  }
+
+  if (neededDomains.length > 0) {
+    return deepFreeze({
+      needed: true,
+      kind: "task_authorization",
+      message: authorizationMessage(neededDomains, hardStopDomains),
+      allowed_risk_domains: neededDomains,
+      hard_stop_domains: hardStopDomains,
+      one_prompt_only: true,
+    });
+  }
+
+  if (hardStopDomains.length > 0) {
+    return deepFreeze({
+      needed: true,
+      kind: "hard_stop_confirmation",
+      message: `Stop for explicit confirmation before ${joinHumanList(hardStopDomains)}.`,
+      allowed_risk_domains: [],
+      hard_stop_domains: hardStopDomains,
+      one_prompt_only: false,
+    });
+  }
+
+  return deepFreeze({
+    needed: false,
+    kind: reusableCount > 0 ? "already_authorized" : "read_only_or_no_prompt",
+    message: reusableCount > 0
+      ? "Task authorization is already present; proceed without repeated prompts inside the recorded risk-domain boundary."
+      : "No user prompt is needed for this read-only or no-op plan.",
+    allowed_risk_domains: execution.authorization.allowed_risk_domains.filter((domain) => domain !== "read"),
+    hard_stop_domains: [],
+    one_prompt_only: reusableCount > 0,
+  });
+}
+
+function buildProductFlowSteps({ execution, prompt, readback, mutations }) {
+  const steps = [];
+  steps.push(flowStep("discover", "Use list_templates/list_recipes only for compact discovery; expand exact ids only when needed."));
+  if (prompt.needed) {
+    steps.push(flowStep("authorize", prompt.message, {
+      prompt_kind: prompt.kind,
+      allowed_risk_domains: prompt.allowed_risk_domains,
+      hard_stop_domains: prompt.hard_stop_domains,
+    }));
+  }
+  steps.push(flowStep("execute", "Follow execution_schedule phases; run only parallel_read groups concurrently and keep all writes serial."));
+  if (execution.batch_readback.required || mutations.length > 0) {
+    steps.push(flowStep("batch_readback", readback
+      ? "Run the planned readback requests after the mutation group and compare requested deltas with concise evidence."
+      : "Collect mutation result refs during execution, then call planAlpha3C4BatchReadback before reporting success."));
+  }
+  steps.push(flowStep("report", "Give one concise user checkpoint with changed refs, readback status, blockers, and next recovery step if needed."));
+  return deepFreeze(steps);
+}
+
+function pendingBatchReadback(execution) {
+  return deepFreeze({
+    contract: ALPHA3_C4_BATCH_READBACK_CONTRACT,
+    status: execution.batch_readback.required ? "pending_mutation_refs" : "not_required",
+    required: execution.batch_readback.required,
+    expected_mutation_call_indexes: execution.batch_readback.call_indexes,
+    expected_template_ids: execution.batch_readback.template_ids,
+    next_step: execution.batch_readback.required
+      ? "After execution, collect mutation input refs and result_refs, then call planAlpha3C4BatchReadback."
+      : "No mutation readback needed.",
+  });
+}
+
+function flowStep(id, instruction, extra = {}) {
+  return deepFreeze({
+    id,
+    instruction,
+    ...extra,
+  });
+}
+
+function authorizationMessage(neededDomains, hardStopDomains) {
+  const allowed = joinHumanList(neededDomains);
+  const hardStops = hardStopDomains.length > 0
+    ? ` I will still stop for ${joinHumanList(hardStopDomains)}.`
+    : " I will still stop for delete, export, hardware, privacy, paid downloads, or irreversible ambiguity.";
+  return `Allow this task to run ordinary reversible actions in ${allowed} without repeated prompts; I will batch-read back changes before reporting success.${hardStops}`;
+}
+
+function normalizeProductTask(task) {
+  if (!isPlainObject(task)) return {};
+  return pruneUndefined({
+    id: typeof task.id === "string" ? task.id.trim() : undefined,
+    label: typeof task.label === "string" ? task.label.trim() : undefined,
+    intent: typeof task.intent === "string" ? task.intent.trim() : undefined,
   });
 }
 
@@ -732,6 +883,16 @@ function normalizedDependsOn(call) {
   }
   if (Number.isInteger(value) && value >= 0) return [value];
   return [];
+}
+
+function unique(values) {
+  return [...new Set(values)];
+}
+
+function joinHumanList(values) {
+  if (values.length === 0) return "";
+  if (values.length === 1) return values[0];
+  return `${values.slice(0, -1).join(", ")} and ${values.at(-1)}`;
 }
 
 function matchesAny(value, patterns) {
