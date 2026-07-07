@@ -634,11 +634,11 @@ function buildRecoveryPlan({ execution, readback }) {
   return deepFreeze({
     contract: ALPHA3_C4_RECOVERY_PLAN_CONTRACT,
     status: actions.length === 0 ? "clear" : "needs_recovery",
-    success_wording_allowed: actions.every((action) => action.severity !== "block_success"),
+    success_wording_allowed: actions.length === 0,
     actions,
     report_rule: actions.length === 0
       ? "Success wording is allowed after concise readback."
-      : "Do not claim success until block_success recovery actions are handled or explicitly deferred.",
+      : "Do not claim success until recovery actions are handled or explicitly deferred.",
   });
 }
 

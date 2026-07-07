@@ -494,6 +494,29 @@ describe("Alpha3 C4 orchestration policy", () => {
     assert.match(flow.recovery_plan.actions[0].next_step, /explicit confirmation/);
   });
 
+  it("blocks success wording for hard-stop-only read flows", () => {
+    const flow = planAlpha3C4ProductFlow({
+      authorization: {
+        granted: true,
+        task_id: "inspect-hardware",
+        allowed_risk_domains: ["hardware_io"],
+      },
+      calls: [
+        { id: "template.routing.list_available_audio_outputs" },
+      ],
+    });
+
+    assert.equal(flow.authorization_prompt.kind, "hard_stop_confirmation");
+    assert.equal(flow.batch_readback.required, false);
+    assert.equal(flow.recovery_plan.status, "needs_recovery");
+    assert.equal(flow.recovery_plan.success_wording_allowed, false);
+    assert.deepEqual(
+      flow.recovery_plan.actions.map((action) => action.id),
+      ["confirm_hard_stop"],
+    );
+    assert.match(flow.recovery_plan.report_rule, /Do not claim success/);
+  });
+
   it("gives a beginner-readable recovery plan for partial or blocked readback", () => {
     const flow = planAlpha3C4ProductFlow({
       authorization: {
