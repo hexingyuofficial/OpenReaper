@@ -7,6 +7,10 @@ OpenReaper by talking to an agent. You do not need to understand templates,
 macros, SQLite, artifacts, bridge internals, or the architecture layers to use
 the product.
 
+The goal is that you can use OpenReaper without reading this manual. Read it
+when you want more precise control over what to ask, what the agent may do
+after authorization, and how to share or reuse work.
+
 Some Phase 3 features described here are still being built. Support claims must
 stay tied to evidence in the repository and control-tower records.
 
@@ -75,9 +79,8 @@ Make the selected vocal brighter.
 Lower the selected track a little.
 ```
 
-The agent should choose the right reviewed action or workflow recipe. You
-should not need to choose between a template, macro, recipe, artifact, or
-SQLite query.
+The agent should choose the right reviewed action or workflow. You should not
+need to choose between a template, macro, recipe, artifact, or SQLite query.
 
 ## Authorization And Safety
 
@@ -114,18 +117,20 @@ If the agent says it needs to refresh or re-resolve a target, that means the
 project state may have changed and OpenReaper is checking REAPER again before
 acting.
 
-## Workflow Recipes
+## Workflows
 
-Workflow recipes are reusable workflows over reviewed OpenReaper actions.
+Workflows are reusable creative or utility flows over reviewed OpenReaper
+actions. Internally, OpenReaper may store them as recipe files, but normal
+product language should stay simple: workflow.
 
 Planned first-product flows:
 
 ```text
-Save this as a workflow recipe.
-Scrub this workflow recipe before sharing.
-Share this workflow recipe.
-Install this workflow recipe.
-Fork and tweak this workflow recipe.
+Save this as a workflow.
+Scrub this workflow before sharing.
+Share this workflow.
+Install this workflow.
+Fork and tweak this workflow.
 ```
 
 Before sharing, OpenReaper should remove private or machine-specific details
@@ -163,8 +168,8 @@ OpenReaper support is evidence-bound.
 
 The current repo contains V1 and Alpha2 evidence, plus Alpha3 draft product
 work. Phase 3 completion requires customer-usable startup, large-project query,
-fast readback/actions, workflow recipe portability, add-ons, stock plugin
-fluency, and trial-officer acceptance.
+fast readback/actions, workflow portability, add-ons, stock plugin fluency, and
+trial-officer acceptance.
 
 If the guide, README, agent, or add-on claims a feature is supported, that
 claim should point to matching evidence.

@@ -131,17 +131,21 @@ tool.
 Pack      = fixed REAPER capability domain
 Template  = reviewed concrete capability
 Recipe    = workflow contract over known templates
+Add-on    = extension bundle for users/developers
 Agent     = discovers recipes/templates and calls the five MCP tools
 User      = primarily creates or edits recipes, not raw templates
 ```
 
 Templates are reviewed project capabilities. User and community extension starts
-at recipes, which may compose accepted templates but may not define raw Lua,
-raw REAPER actions, shell commands, arbitrary bridge requests, or new template
-descriptors in the normal V1 path.
+at recipes and add-ons, which may compose accepted templates but may not define
+raw Lua, raw REAPER actions, shell commands, arbitrary bridge requests, or new
+template descriptors in the normal V1 path. Pack remains an internal
+capability-domain/taxonomy word, not the normal extension product word.
 
 ## Read Next
 
+- [User Guide](docs/USER_GUIDE.md)
+- [Developer Guide](docs/DEVELOPER_GUIDE.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Runbook](docs/RUNBOOK.md)
 - [Support Matrix](docs/SUPPORT_MATRIX.md)

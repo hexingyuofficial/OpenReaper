@@ -26,6 +26,20 @@ git status --short
 
 Use exact-path staging. Do not revert user or other-window changes.
 
+## Product Terms
+
+Use the same product words internally and externally when possible:
+
+- `workflow`: the user-facing reusable flow. It may be represented internally
+  by a recipe contract or recipe file.
+- `add-on`: an extension bundle for a plugin, domain, workflow set, or future
+  third-party capability surface.
+- `pack`: a frozen internal capability-domain/taxonomy term, such as
+  `reaper/packs/<pack>` and `docs/taxonomy/PACK_TAXONOMY_V1.md`. Do not use
+  pack as the normal product word for extension bundles.
+- `macro`: a product category of template for bounded high-frequency
+  operations. It remains a template, not a new tool layer.
+
 ## Seven-Layer Phase 3 Model
 
 Phase 3 uses seven developer-facing layers:
@@ -101,8 +115,8 @@ Discovery uses:
 
 `CapabilitySearchIndex` is a search/cache abstraction, not capability truth.
 Initial implementation should be in-memory. A future SQLite-backed
-implementation is allowed only when macros, installed recipe packs, or UI
-search scale justify it.
+implementation is allowed only when macro metadata, installed workflows or
+add-ons, or UI search scale justify it.
 
 Execution rule:
 
@@ -181,7 +195,7 @@ Product UX includes:
 - connection health;
 - stale-session guard;
 - non-annoying scoped authorization;
-- workflow recipe save/scrub/share/install/fork;
+- workflow save/scrub/share/install/fork;
 - add-on install/enable/support status;
 - stock plugin semantic fluency;
 - beginner-readable blockers.
