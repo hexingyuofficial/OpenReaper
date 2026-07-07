@@ -62,6 +62,24 @@ const REQUIRED_TEMPLATE_IDS = Object.freeze([
   "template.fx.set_fx_parameter_normalized",
 ]);
 
+const STOCK_PLUGIN_SUMMARY_BUDGET = Object.freeze({
+  max_response_bytes: 60_000,
+  max_items: 200,
+  max_inline_value_bytes: 6_000,
+});
+
+const STOCK_PLUGIN_PARAMETER_LIST_BUDGET = Object.freeze({
+  max_response_bytes: 120_000,
+  max_items: 1_000,
+  max_inline_value_bytes: 12_000,
+});
+
+const STOCK_PLUGIN_PARAMETER_READBACK_BUDGET = Object.freeze({
+  max_response_bytes: 60_000,
+  max_items: 200,
+  max_inline_value_bytes: 6_000,
+});
+
 const STOCK_PLUGIN_MAPS = deepFreeze([
   plugin("reaeq", "ReaEQ", ["ReaEQ (Cockos)", "VST: ReaEQ (Cockos)", "eq", "stock eq"], "eq", [
     parameter("high_pass_frequency_hz", "High-pass frequency", "hz", 20, 250, "log", ["cut rumble", "remove low end", "high pass"], "High-pass around {value} Hz."),
@@ -379,6 +397,7 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
             id: "template.fx.read_fx_summary",
             refs: { fx_ref: refs.fx_ref },
             input: {},
+            budget: STOCK_PLUGIN_SUMMARY_BUDGET,
             purpose: "verify plugin identity before semantic parameter writes",
           },
           {
@@ -386,6 +405,7 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
             id: "template.fx.list_fx_parameters",
             refs: { fx_ref: refs.fx_ref },
             input: { limit: 128 },
+            budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
             purpose: "resolve semantic controls to fresh param_index values",
           },
         ]
@@ -596,6 +616,7 @@ function readParameterRequest(plan, refs) {
       param_index: plan.resolution.param_index,
       param_ident: plan.resolution.param_ident,
     }),
+    budget: STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
     semantic_control: {
       id: plan.parameter.id,
       label: plan.parameter.label,
@@ -620,6 +641,7 @@ function createHydrationFlow({ plugin, starter, controls, refs, blockers, reques
       template_id: "template.fx.read_fx_summary",
       refs: { fx_ref: refs.fx_ref },
       input: {},
+      budget: STOCK_PLUGIN_SUMMARY_BUDGET,
       purpose: "Confirm the resolved FX is the intended stock plugin before planning parameter writes.",
     });
     steps.push({
@@ -628,6 +650,7 @@ function createHydrationFlow({ plugin, starter, controls, refs, blockers, reques
       template_id: "template.fx.list_fx_parameters",
       refs: { fx_ref: refs.fx_ref },
       input: { limit: 128 },
+      budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
       wanted_controls: controlIds,
       purpose: "Map semantic controls to fresh param_index and param_ident values.",
     });

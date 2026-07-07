@@ -139,6 +139,16 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.resolution_requests.length, 2);
     assert.equal(plan.resolution_requests[0].id, "template.fx.read_fx_summary");
     assert.equal(plan.resolution_requests[1].id, "template.fx.list_fx_parameters");
+    assert.deepEqual(plan.resolution_requests[0].budget, {
+      max_response_bytes: 60000,
+      max_items: 200,
+      max_inline_value_bytes: 6000,
+    });
+    assert.deepEqual(plan.resolution_requests[1].budget, {
+      max_response_bytes: 120000,
+      max_items: 1000,
+      max_inline_value_bytes: 12000,
+    });
     assert.equal(
       plan.blockers.every((blocker) => blocker.code === "PARAMETER_METADATA_REQUIRED"),
       true,
@@ -163,6 +173,11 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       "verify_fx_identity",
       "hydrate_parameter_metadata",
     ]);
+    assert.deepEqual(plan.hydration_flow.steps[1].budget, {
+      max_response_bytes: 120000,
+      max_items: 1000,
+      max_inline_value_bytes: 12000,
+    });
     assert.deepEqual(plan.hydration_flow.steps[1].wanted_controls, [
       "threshold_db",
       "ratio",
@@ -227,6 +242,11 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.requests[0].input.normalized_value, 0.7);
     assert.equal(plan.readback.length, 2);
     assert.equal(plan.readback[0].id, "template.fx.read_fx_parameter");
+    assert.deepEqual(plan.readback[0].budget, {
+      max_response_bytes: 60000,
+      max_items: 200,
+      max_inline_value_bytes: 6000,
+    });
     assert.equal(plan.evidence_plan.contract, ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT);
     assert.equal(plan.evidence_plan.status, "ready_for_execution_and_readback");
     assert.equal(plan.evidence_plan.success_wording_allowed, false);
