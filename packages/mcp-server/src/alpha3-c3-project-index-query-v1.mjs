@@ -3100,16 +3100,36 @@ function hydrateRequestsForRef(kind, ref, query) {
         purpose: "List FX parameter metadata only because parameter fields were explicitly requested.",
       }));
     }
+    if (fxPinMappingFieldRequested(query)) {
+      return {
+        requests: [],
+        blocker: blocker(
+          "fields",
+          "HYDRATE_FIELD_UNSUPPORTED",
+          "FX pin mapping hydration requires explicit direction and pin_index, so macro.hydrate_refs cannot infer a valid exact read from fx_ref alone.",
+        ),
+      };
+    }
     return requestGroup(requests);
   }
   if (kind === "send") {
-    return requestGroup([
+    const requests = [
       callTemplateRequest({
         id: "template.routing.resolve_send_ref",
         input: { send_ref: ref },
         purpose: "Re-resolve the send ref against REAPER truth.",
       }),
-    ]);
+    ];
+    const sourceTrackRef = sourceTrackRefFromSendRef(ref);
+    if (sourceTrackRef !== null) {
+      requests.push(callTemplateRequest({
+        id: "template.routing.read_track_routing",
+        refs: { track_ref: sourceTrackRef },
+        input: { include_receives: true, include_master_parent: false, max_routes: query.limit },
+        purpose: "Read source-track routing so the exact send ref can be verified against REAPER truth.",
+      }));
+    }
+    return requestGroup(requests);
   }
   if (kind === "envelope") {
     return requestGroup([
@@ -3343,6 +3363,21 @@ function filePathFromRef(ref) {
   const prefix = "file:path:";
   if (!ref.toLocaleLowerCase().startsWith(prefix)) return null;
   return ref.slice(prefix.length);
+}
+
+function sourceTrackRefFromSendRef(ref) {
+  if (typeof ref !== "string") return null;
+  const match = ref.match(/^send:(track:.+):\d+$/);
+  if (!match) return null;
+  const sourceTrackRef = match[1];
+  const numericIndex = sourceTrackRef.match(/^track:([0-9]+)$/);
+  return numericIndex ? `track:index:${numericIndex[1]}` : sourceTrackRef;
+}
+
+function fxPinMappingFieldRequested(query) {
+  return query.fields.includes("pin_mapping")
+    || query.fields.includes("routing")
+    || query.fields.includes("io_pins");
 }
 
 function summarizeIndexStatus(indexState) {

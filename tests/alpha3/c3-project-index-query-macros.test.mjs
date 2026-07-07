@@ -58,6 +58,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       registry.macros.find((macro) => macro.id === "macro.hydrate_refs").required_templates.includes("template.media.probe_file"),
       true,
     );
+    assert.equal(
+      registry.macros.find((macro) => macro.id === "macro.hydrate_refs").required_templates.includes("template.routing.read_track_routing"),
+      false,
+    );
   });
 
   it("creates official query macro discovery entries over list_templates/call_template", () => {
@@ -985,6 +989,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.fx.read_fx_summary",
         "template.fx.list_fx_parameters",
         "template.routing.resolve_send_ref",
+        "template.routing.read_track_routing",
         "template.automation.read_envelope_summary",
         "template.media.probe_file",
       ],
@@ -994,6 +999,27 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       { path: "/tmp/openreaper/Kick.wav", include_metadata_keys: true },
     );
     assert.equal(plan.hydrate_request.requests.every((request) => request.tool === "call_template"), true);
+    assert.deepEqual(
+      plan.hydrate_request.requests.find((request) => request.id === "template.routing.read_track_routing").refs,
+      { track_ref: "track:{TRACK-1}" },
+    );
+    assert.deepEqual(
+      plan.hydrate_request.requests.find((request) => request.id === "template.routing.read_track_routing").input,
+      { include_receives: true, include_master_parent: false, max_routes: 64 },
+    );
+    const numericSendPlan = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      refs: ["send:track:0:0"],
+      limit: 64,
+    }, { projectIndex: readyProjectIndex() });
+    assert.equal(numericSendPlan.ok, true);
+    assert.deepEqual(
+      numericSendPlan.hydrate_request.requests.find((request) => request.id === "template.routing.resolve_send_ref").input,
+      { send_ref: "send:track:0:0" },
+    );
+    assert.deepEqual(
+      numericSendPlan.hydrate_request.requests.find((request) => request.id === "template.routing.read_track_routing").refs,
+      { track_ref: "track:index:0" },
+    );
     assert.equal(plan.hydrate_request.status, "planned_requests");
     assert.equal(plan.safety.hidden_executor, false);
     assert.equal(plan.safety.raw_sql_exposed, false);
@@ -1027,6 +1053,47 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.deepEqual(plan.rows[0].planned_request_ids, ["template.fx.read_fx_summary"]);
     assert.equal(plan.rows[0].status, "partial");
     assert.equal(plan.coverage.unsupported_ref_count, 0);
+
+    const unrelatedHydrate = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      refs: ["item:guid:{ITEM-1}"],
+      fields: ["take_summary"],
+      limit: 64,
+    }, {
+      projectIndex: readyProjectIndex(),
+      catalog: catalogMissing("template.routing.read_track_routing"),
+    });
+    assert.equal(unrelatedHydrate.ok, true);
+    assert.deepEqual(
+      unrelatedHydrate.hydrate_request.requests.map((request) => request.id),
+      ["template.items.read_item_summary"],
+    );
+
+    const sendHydrate = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      refs: ["send:track:{TRACK-1}:0"],
+      limit: 64,
+    }, {
+      projectIndex: readyProjectIndex(),
+      catalog: catalogMissing("template.routing.read_track_routing"),
+    });
+    assert.equal(sendHydrate.ok, false);
+    assert.deepEqual(
+      sendHydrate.hydrate_request.requests.map((request) => request.id),
+      ["template.routing.resolve_send_ref"],
+    );
+    assert.equal(sendHydrate.rows[0].status, "partial");
+  });
+
+  it("blocks FX pin mapping hydration when exact pin coordinates are not supplied", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.hydrate_refs", {
+      refs: ["fx:track:{TRACK-1}:0"],
+      fields: ["pin_mapping"],
+      limit: 64,
+    }, { projectIndex: readyProjectIndex() });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((entry) => entry.code === "HYDRATE_FIELD_UNSUPPORTED"), true);
+    assert.equal(plan.hydrate_request.requests.length, 0);
+    assert.equal(plan.rows[0].status, "blocked");
   });
 
   it("blocks unsupported hydration refs with typed blockers", () => {
