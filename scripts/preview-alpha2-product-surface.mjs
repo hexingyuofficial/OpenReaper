@@ -31,6 +31,7 @@ console.log(JSON.stringify({
     id: entry.id,
     check: entry.check,
   })),
+  startup_health: menu.product_surface.startup_health_snapshot,
   counts: {
     by_status: countBy(menu.items, "current_status"),
     by_label: countBy(menu.items, "beginner_label"),

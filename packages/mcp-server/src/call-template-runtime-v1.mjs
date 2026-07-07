@@ -36,6 +36,10 @@ import {
   isAlpha3C5OfficialMacroId,
   planAlpha3C5GenericControlMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
+import {
+  ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
+  summarizeAlpha3D1StartupHealth,
+} from "./alpha3-d1-startup-health-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -682,6 +686,7 @@ export function createAcceptedOfficialTemplateDiscovery() {
     catalogTemplates: templates,
     executableTemplates: templates,
     defaultSurface: "catalog",
+    productSurface: { live_gate: normalizeLiveRuntimeOptions().summary },
   });
 }
 
@@ -748,6 +753,7 @@ export function createCallTemplateRuntime(options = {}) {
       catalogTemplates: catalogDiscoveryTemplates,
       executableTemplates: executableDiscoveryTemplates,
       defaultSurface: "executable",
+      productSurface: { live_gate: live.summary },
     }).list_templates,
     async call_template(request = {}) {
       return call_template(request);
@@ -1099,7 +1105,7 @@ function runtimeCatalogDiscoveryTemplates(catalog, live) {
   });
 }
 
-function runtimeTemplateDiscoveryFacade({ catalogTemplates, executableTemplates, defaultSurface }) {
+function runtimeTemplateDiscoveryFacade({ catalogTemplates, executableTemplates, defaultSurface, productSurface = {} }) {
   const templatesById = new Map([
     ...catalogTemplates,
     ...executableTemplates,
@@ -1123,6 +1129,7 @@ function runtimeTemplateDiscoveryFacade({ catalogTemplates, executableTemplates,
         discovery.list_templates(runtimeCapabilityTruthRequest(normalized.request)),
         normalized.surface,
         templatesById,
+        productSurface,
       );
     },
   });
@@ -1168,10 +1175,10 @@ function runtimeDiscoveryRequestHasIds(request) {
   return typeof request.ids === "string" && request.ids.trim() !== "";
 }
 
-function runtimeActionDiscoveryResponse(response, surface, templatesById) {
+function runtimeActionDiscoveryResponse(response, surface, templatesById, productSurface = {}) {
   return deepFreeze({
     ...response,
-    product_surface: runtimeProductSurfaceMetadata(surface),
+    product_surface: runtimeProductSurfaceMetadata(surface, productSurface),
     items: response.items.map((item) => {
       const descriptor = templatesById.get(item.id) ?? item;
       return {
@@ -1186,7 +1193,7 @@ function runtimeActionDiscoveryResponse(response, surface, templatesById) {
   });
 }
 
-function runtimeProductSurfaceMetadata(surface) {
+function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
   return {
     contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
     surface,
@@ -1201,6 +1208,10 @@ function runtimeProductSurfaceMetadata(surface) {
     blocker_guidance: CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
     orchestration_policy: ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
+    startup_health: ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
+    startup_health_snapshot: summarizeAlpha3D1StartupHealth({
+      runtime: productSurface.live_gate,
+    }),
   };
 }
 
