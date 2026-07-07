@@ -20,6 +20,9 @@ import {
   ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c4-orchestration-policy-v1.mjs";
 import {
+  ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
+import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
@@ -384,11 +387,16 @@ describe("Layer 4D call_template runtime binding", () => {
       runtimeMenu.product_surface.orchestration_policy,
       ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
     );
+    assert.deepEqual(
+      runtimeMenu.product_surface.generic_control_macros,
+      ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
+    );
     assert.equal(
       runtimeMenu.product_surface.orchestration_policy.contract,
       ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
     );
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
       ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
