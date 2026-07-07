@@ -472,6 +472,60 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     });
   });
 
+  it("maintains media source rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-11",
+    });
+
+    const result = index.replaceMediaSources({
+      snapshot_id: "snapshot:c3-11:media",
+      observed_at: "2026-07-07T19:45:00.000Z",
+      payload_ref: "artifact:media:project",
+      file_refs: [
+        "file:path:/tmp/openreaper/Kick.wav",
+        "file:path:/tmp/openreaper/Guide.mid",
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      scope: "media",
+      limit: 10,
+      filters: { media_type: "audio" },
+      fields: ["name", "media_type", "extension", "payload_ref"],
+    }, { projectIndex: index });
+    const onlineFilterPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      scope: "media",
+      limit: 10,
+      filters: { media_type: "audio", offline: false },
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_media_sources");
+    assert.equal(snapshot.rows.media_sources.length, 2);
+    assert.equal(snapshot.rows.media_sources[0].name, "Kick.wav");
+    assert.equal(snapshot.rows.media_sources[0].media_type, "audio");
+    assert.equal(snapshot.rows.media_sources[0].offline, null);
+    assert.equal(snapshot.rows.media_sources[1].media_type, "midi");
+    assert.equal(snapshot.rows.media_sources[0].payload_ref, "artifact:media:project");
+    assert.equal(snapshot.freshness_scopes.media.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.media.coverage_status, "paged");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "media"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, ["file:path:/tmp/openreaper/Kick.wav"]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "file:path:/tmp/openreaper/Kick.wav",
+      name: "Kick.wav",
+      media_type: "audio",
+      extension: "wav",
+      payload_ref: "artifact:media:project",
+    });
+    assert.equal(onlineFilterPlan.ok, true);
+    assert.deepEqual(onlineFilterPlan.refs, []);
+  });
+
   it("marks selected context stale after selection-changing readback", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
 
@@ -580,6 +634,19 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       limit: 40,
       include_markers: true,
       include_regions: true,
+    });
+    const mediaOnly = planAlpha3C3ProjectIndexTaskRefresh({
+      scopes: ["media"],
+      limit: 40,
+    });
+    assert.deepEqual(
+      mediaOnly.requests.map((request) => request.id),
+      ["template.media.read_project_media_files"],
+    );
+    assert.deepEqual(mediaOnly.requests[0].input, {
+      include_offline: true,
+      include_metadata_keys: false,
+      max_sources: 40,
     });
     assert.equal(plan.update_policy.source_truth, "REAPER");
     assert.equal(plan.update_policy.apply_after_readback, true);

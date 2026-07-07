@@ -350,6 +350,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       fx: [],
       sends: [],
       markers_regions: [],
+      media_sources: [],
       selection_state: [],
       object_changes: [],
     },
@@ -538,6 +539,37 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.markers = normalizeCoverageStatus(input.coverage_status, "complete");
       return lifecycleResult(state, "replace_markers_regions", observedAt);
+    },
+    replaceMediaSources(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      const rows = Array.isArray(input.rows)
+        ? input.rows
+        : Array.isArray(input.file_refs)
+          ? input.file_refs.map((fileRef) => ({ file_ref: fileRef }))
+          : [];
+      state.rows.media_sources = rows.map((row) => normalizeMediaSourceRow(row, {
+        snapshot_id: snapshotId,
+        observed_at: observedAt,
+        freshness_status: input.freshness_status,
+        coverage_status: input.coverage_status,
+        payload_ref: input.payload_ref,
+      })).filter(Boolean);
+      updateScope(state, {
+        scope_kind: "media",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.media.read_project_media_files",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.media = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_media_sources", observedAt);
     },
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -828,6 +860,19 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "markers",
       });
     }
+    if (scope === "media") {
+      requests.push({
+        tool: "call_template",
+        id: "template.media.read_project_media_files",
+        refs: {},
+        input: {
+          include_offline: true,
+          include_metadata_keys: false,
+          max_sources: limit,
+        },
+        refresh_scope: "media",
+      });
+    }
   }
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
@@ -909,6 +954,7 @@ function snapshotState(state) {
       takes: cloneJson(state.rows.takes),
       sends: cloneJson(state.rows.sends),
       markers_regions: cloneJson(state.rows.markers_regions),
+      media_sources: cloneJson(state.rows.media_sources),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -1193,6 +1239,77 @@ function normalizeMarkerRegionRow(row, defaults) {
   };
 }
 
+function normalizeMediaSourceRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.file_ref === "string" && source.file_ref
+      ? source.file_ref
+      : typeof source.source_file_ref === "string" && source.source_file_ref
+        ? source.source_file_ref
+        : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const name = typeof source.name === "string"
+    ? source.name
+    : typeof summary.name === "string"
+      ? summary.name
+      : mediaNameFromRef(ref);
+  const sourceKind = typeof source.source_kind === "string"
+    ? source.source_kind
+    : typeof source.source_type === "string"
+      ? source.source_type
+      : typeof source.media_type === "string"
+        ? source.media_type
+        : typeof summary.source_kind === "string"
+          ? summary.source_kind
+          : typeof summary.source_type === "string"
+            ? summary.source_type
+            : typeof summary.media_type === "string"
+              ? summary.media_type
+              : null;
+  const extension = typeof source.extension === "string"
+    ? normalizeExtension(source.extension)
+    : typeof summary.extension === "string"
+      ? normalizeExtension(summary.extension)
+      : extensionFromName(name);
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : "project:active",
+    name,
+    path_fingerprint: typeof source.path_fingerprint === "string" ? source.path_fingerprint : null,
+    source_kind: sourceKind,
+    media_type: typeof source.media_type === "string"
+      ? source.media_type
+      : typeof summary.media_type === "string"
+        ? summary.media_type
+        : mediaTypeFromExtension(extension),
+    extension,
+    offline: nullableBoolean(source.offline, summary.offline),
+    length_seconds: finiteNumber(source.length_seconds ?? source.length ?? summary.length_seconds ?? summary.length),
+    channel_count: Number.isInteger(source.channel_count)
+      ? source.channel_count
+      : Number.isInteger(summary.channel_count)
+        ? summary.channel_count
+        : null,
+    metadata_key_count: Array.isArray(source.metadata_keys)
+      ? source.metadata_keys.length
+      : Array.isArray(summary.metadata_keys)
+        ? summary.metadata_keys.length
+        : Number.isInteger(source.metadata_key_count)
+          ? source.metadata_key_count
+          : Number.isInteger(summary.metadata_key_count)
+            ? summary.metadata_key_count
+            : null,
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary,
+  };
+}
+
 function normalizeObjectChange(change, defaults) {
   const source = isPlainObject(change) ? change : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1247,6 +1364,45 @@ function finiteNumber(value) {
   return Number.isFinite(value) ? value : null;
 }
 
+function nullableBoolean(...values) {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
+function mediaNameFromRef(ref) {
+  const path = filePathFromRef(ref);
+  if (path === null) return "";
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) ?? "";
+}
+
+function extensionFromName(name) {
+  if (typeof name !== "string") return null;
+  const match = name.toLocaleLowerCase().match(/\.([a-z0-9]+)$/);
+  return match ? match[1] : null;
+}
+
+function normalizeExtension(value) {
+  return value.trim().replace(/^\./, "").toLocaleLowerCase();
+}
+
+function mediaTypeFromExtension(extension) {
+  if (extension === null) return null;
+  if (["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "m4a"].includes(extension)) return "audio";
+  if (["mid", "midi"].includes(extension)) return "midi";
+  if (["mov", "mp4", "mkv", "avi"].includes(extension)) return "video";
+  return "unknown";
+}
+
+function filePathFromRef(ref) {
+  if (typeof ref !== "string") return null;
+  const prefix = "file:path:";
+  if (!ref.toLocaleLowerCase().startsWith(prefix)) return null;
+  return ref.slice(prefix.length);
+}
+
 function mergeSessionMetadata(state, metadata) {
   if (typeof metadata.project_ref === "string") state.project_ref = metadata.project_ref;
   if (typeof metadata.projectRef === "string") state.project_ref = metadata.projectRef;
@@ -1274,7 +1430,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "markers"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "markers", "media"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;

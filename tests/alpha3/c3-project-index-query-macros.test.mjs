@@ -50,9 +50,14 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_fx").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_routing").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_markers").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_media").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_automation").status, "planned");
+    assert.equal(
+      registry.macros.find((macro) => macro.id === "macro.hydrate_refs").required_templates.includes("template.media.probe_file"),
+      true,
+    );
   });
 
   it("creates official query macro discovery entries over list_templates/call_template", () => {
@@ -67,6 +72,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const fx = entries.find((entry) => entry.id === "macro.query_fx");
     const routing = entries.find((entry) => entry.id === "macro.query_routing");
     const markers = entries.find((entry) => entry.id === "macro.query_markers");
+    const media = entries.find((entry) => entry.id === "macro.query_media");
 
     assert.equal(entries.length, 12);
     assert.equal(status.kind, "official_macro");
@@ -106,6 +112,12 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.deepEqual(markers.examples[0].input, {
       filters: { marker_kind: "region" },
       time_range: { start_seconds: 0, end_seconds: 120 },
+      limit: 25,
+    });
+    assert.equal(media.support_state, "supported");
+    assert.equal(media.known_blocker, null);
+    assert.deepEqual(media.examples[0].input, {
+      filters: { media_type: "audio", offline: false },
       limit: 25,
     });
   });
@@ -341,6 +353,31 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       limit: 8,
       include_markers: false,
       include_regions: true,
+    });
+    assert.equal(plan.query_policy.raw_sql_exposed, false);
+    assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
+    assert.equal(plan.safety.hidden_executor, false);
+    assert.equal(plan.safety.live_reaper, false);
+  });
+
+  it("blocks media queries until the task-scoped media scope is fresh enough", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      limit: 8,
+      filters: { media_type: "audio", offline: false },
+      fields: ["metadata_key_count"],
+      detail: "hydrated",
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      ["template.media.read_project_media_files"],
+    );
+    assert.deepEqual(plan.refresh_requests[0].input, {
+      include_offline: false,
+      include_metadata_keys: true,
+      max_sources: 8,
     });
     assert.equal(plan.query_policy.raw_sql_exposed, false);
     assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
@@ -781,6 +818,76 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("queries compact media rows from a fresh resident project index", () => {
+    const projectIndex = mediaProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      filters: {
+        media_type: "audio",
+        offline: false,
+        extensions: ["wav", ".flac"],
+      },
+      limit: 1,
+      fields: ["name", "media_type", "extension", "offline", "length_seconds", "channel_count", "metadata_key_count", "payload_ref"],
+      detail: "hydrated",
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      filters: {
+        media_type: "audio",
+        offline: false,
+        extensions: ["wav", ".flac"],
+      },
+      limit: 1,
+      cursor: firstPage.page.next_cursor,
+      fields: ["name", "extension"],
+    }, { projectIndex });
+    const defaultCompact = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      filters: { media_type: "midi" },
+      limit: 1,
+    }, { projectIndex });
+    const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_media", {
+      scope: "markers",
+      limit: 10,
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["file:path:/tmp/openreaper/Kick.wav"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "file:path:/tmp/openreaper/Kick.wav",
+      name: "Kick.wav",
+      media_type: "audio",
+      extension: "wav",
+      offline: false,
+      length_seconds: 1.25,
+      channel_count: 2,
+      metadata_key_count: 2,
+      payload_ref: "artifact:media:project",
+    });
+    assert.equal(firstPage.freshness.status, "fresh");
+    assert.equal(firstPage.coverage.status, "paged");
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.callable_now, true);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(firstPage.hydrate_request.input.refs, ["file:path:/tmp/openreaper/Kick.wav"]);
+    assert.equal(firstPage.hydrate_request.input.detail, "hydrated");
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["file:path:/tmp/openreaper/Pad.flac"]);
+    assert.equal(secondPage.page.has_more, false);
+    assert.deepEqual(defaultCompact.rows[0], {
+      ref: "file:path:/tmp/openreaper/Guide.mid",
+      name: "Guide.mid",
+      source_kind: "midi",
+      media_type: "midi",
+      extension: "mid",
+      offline: false,
+      freshness_status: "fresh",
+      coverage_status: "paged",
+    });
+    assert.equal("summary" in defaultCompact.rows[0], false);
+    assert.equal("payload_ref" in defaultCompact.rows[0], false);
+    assert.equal(unsupportedScope.ok, false);
+    assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
+  });
+
   it("rejects raw SQL-shaped input instead of exposing database execution", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       raw_sql: "select * from tracks",
@@ -807,6 +914,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "fx:track:{TRACK-1}:0",
         "send:track:{TRACK-1}:0",
         "envelope:track:{TRACK-1}:volume",
+        "file:path:/tmp/openreaper/Kick.wav",
       ],
       fields: ["parameters"],
       detail: "hydrated",
@@ -824,7 +932,12 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.fx.list_fx_parameters",
         "template.routing.resolve_send_ref",
         "template.automation.read_envelope_summary",
+        "template.media.probe_file",
       ],
+    );
+    assert.deepEqual(
+      plan.hydrate_request.requests.find((request) => request.id === "template.media.probe_file").input,
+      { path: "/tmp/openreaper/Kick.wav", include_metadata_keys: true },
     );
     assert.equal(plan.hydrate_request.requests.every((request) => request.tool === "call_template"), true);
     assert.equal(plan.hydrate_request.status, "planned_requests");
@@ -891,6 +1004,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(menu.items.some((item) => item.id === "macro.query_fx"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_routing"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_markers"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.query_media"), true);
     assert.deepEqual(
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
@@ -1115,6 +1229,37 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.hydrate_request.callable_now, false);
     assert.equal(response.result.hydrate_request.status, "no_supported_exact_hydration");
     assert.equal(runtime.last_evidence().template.id, "macro.query_markers");
+  });
+
+  it("calls query_media through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T19:45:00.000Z"),
+      projectIndex: mediaProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.query_media",
+      input: {
+        limit: 2,
+        filters: { media_type: "audio", offline: false },
+        fields: ["name", "media_type", "extension", "offline"],
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.query_media");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.added_tools, 0);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "file:path:/tmp/openreaper/Kick.wav",
+      "file:path:/tmp/openreaper/Pad.flac",
+    ]);
+    assert.equal(response.result.rows.length, 2);
+    assert.equal(response.result.hydrate_request.callable_now, true);
+    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(runtime.last_evidence().template.id, "macro.query_media");
   });
 
   it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
@@ -1532,6 +1677,49 @@ function markersProjectIndex() {
         end_seconds: 88,
         name: "Chorus B",
         color: "#ffd36a",
+      },
+    ],
+  });
+  return index;
+}
+
+function mediaProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T19:40:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-11",
+  });
+  index.replaceMediaSources({
+    snapshot_id: "snapshot:c3-11:media",
+    observed_at: "2026-07-07T19:38:00.000Z",
+    payload_ref: "artifact:media:project",
+    rows: [
+      {
+        file_ref: "file:path:/tmp/openreaper/Kick.wav",
+        source_kind: "audio",
+        offline: false,
+        length_seconds: 1.25,
+        channel_count: 2,
+        metadata_keys: ["BWF:Description", "IXML:PROJECT"],
+      },
+      {
+        file_ref: "file:path:/tmp/openreaper/Pad.flac",
+        source_kind: "audio",
+        offline: false,
+        length_seconds: 12.5,
+        channel_count: 2,
+      },
+      {
+        file_ref: "file:path:/tmp/openreaper/Guide.mid",
+        source_kind: "midi",
+        offline: false,
+      },
+      {
+        file_ref: "file:path:/tmp/openreaper/Missing.wav",
+        source_kind: "audio",
+        offline: true,
       },
     ],
   });

@@ -59,6 +59,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.query_fx",
     "macro.query_routing",
     "macro.query_markers",
+    "macro.query_media",
     "macro.hydrate_refs",
     "macro.changed_since",
   ],
@@ -127,6 +128,8 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.fx.list_take_fx_chain",
   "template.fx.read_fx_summary",
   "template.media.read_take_source",
+  "template.media.read_project_media_files",
+  "template.media.probe_file",
   "template.routing.read_project_routing_graph",
   "template.routing.read_track_routing",
   "template.routing.resolve_send_ref",
@@ -261,6 +264,25 @@ const MARKER_REGION_ROW_FIELDS = deepFreeze([
   "summary",
 ]);
 
+const MEDIA_SOURCE_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "name",
+  "path_fingerprint",
+  "source_kind",
+  "media_type",
+  "extension",
+  "offline",
+  "length_seconds",
+  "channel_count",
+  "metadata_key_count",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
 const SELECTED_CONTEXT_ROW_FIELDS = deepFreeze([
   "ref",
   "ref_kind",
@@ -385,7 +407,19 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.project.list_markers_regions",
     ],
   }),
-  queryMacro({ id: "macro.query_media", user_label: "Query media", query_kind: "media" }),
+  queryMacro({
+    id: "macro.query_media",
+    user_label: "Query media",
+    summary: "Query compact project media-source rows from the Project SQLite Index by file refs, kind, offline state, extension, and basic source facts.",
+    status: "implemented",
+    query_kind: "media",
+    task_intents: ["find project media", "media files", "offline media", "audio sources", "large project media query"],
+    tags: ["project_index", "sqlite", "query", "media", "files", "alpha3_c3"],
+    required_templates: [
+      "template.media.read_project_media_files",
+      "template.media.probe_file",
+    ],
+  }),
   queryMacro({
     id: "macro.hydrate_refs",
     user_label: "Hydrate refs",
@@ -399,6 +433,7 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.tracks.read_mixer_controls",
       "template.items.read_item_summary",
       "template.media.read_take_source",
+      "template.media.probe_file",
       "template.fx.read_fx_summary",
       "template.fx.list_fx_parameters",
       "template.routing.resolve_send_ref",
@@ -493,6 +528,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_markers") {
     return queryMarkersPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.query_media") {
+    return queryMediaPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.hydrate_refs") {
     return hydrateRefsPlan({ macro, normalized, indexState, blockers });
@@ -659,7 +697,7 @@ function queryTracksPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -709,7 +747,7 @@ function queryItemsPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -759,7 +797,7 @@ function queryTakesPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -809,7 +847,7 @@ function queryFxPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -859,7 +897,7 @@ function queryRoutingPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -916,6 +954,56 @@ function queryMarkersPlan({ macro, normalized, indexState, blockers }) {
   }));
 }
 
+function queryMediaPlan({ macro, normalized, indexState, blockers }) {
+  const mediaScope = freshnessScope(indexState, "media");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, mediaScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateMediaScope(normalized.query.scope),
+    ...validateMediaFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryMediaRows(indexState.rows.media_sources, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? queryMediaRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: queryMediaDecisionSummary({ blockers: allBlockers, rows, mediaScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "media",
+      status: mediaScope.status,
+      coverage_status: mediaScope.coverage_status,
+      observed_at: mediaScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: mediaScope.coverage_status,
+      source_scope: "media",
+      row_count: rows.rows.length,
+      complete: mediaScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
 function selectedContextPlan({ macro, normalized, indexState, blockers }) {
   const selectionScope = freshnessScope(indexState, "selection");
   const indexReadinessBlockers = queryReadinessBlockers(indexState, selectionScope, normalized.query.freshness);
@@ -958,7 +1046,7 @@ function selectedContextPlan({ macro, normalized, indexState, blockers }) {
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
     hydrate_request: rows.refs.length > 0
-      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -1039,7 +1127,7 @@ function changedSincePlan({ macro, normalized, indexState, projectIndex, blocker
     page: changes.page,
     refresh_requests: [],
     hydrate_request: changes.refs.length > 0
-      ? hydrateRefsRequest(changes.refs, normalized.query.fields)
+      ? hydrateRefsRequest(changes.refs, normalized.query.fields, normalized.query.detail)
       : null,
     blockers: allBlockers,
     index_status: summarizeIndexStatus(indexState),
@@ -1264,6 +1352,9 @@ function readProjectIndexState(projectIndex) {
         : [],
       markers_regions: Array.isArray(raw.rows?.markers_regions)
         ? raw.rows.markers_regions.map(normalizeMarkerRegionRow).filter(Boolean)
+        : [],
+      media_sources: Array.isArray(raw.rows?.media_sources)
+        ? raw.rows.media_sources.map(normalizeMediaSourceRow).filter(Boolean)
         : [],
       selection_state: Array.isArray(raw.rows?.selection_state)
         ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
@@ -1537,6 +1628,76 @@ function normalizeMarkerRegionRow(row) {
   };
 }
 
+function normalizeMediaSourceRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.file_ref === "string" && source.file_ref
+      ? source.file_ref
+      : typeof source.source_file_ref === "string" && source.source_file_ref
+        ? source.source_file_ref
+        : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const name = typeof source.name === "string"
+    ? source.name
+    : typeof summary.name === "string"
+      ? summary.name
+      : mediaNameFromRef(ref);
+  const sourceKind = typeof source.source_kind === "string"
+    ? source.source_kind
+    : typeof source.source_type === "string"
+      ? source.source_type
+      : typeof source.media_type === "string"
+        ? source.media_type
+        : typeof summary.source_kind === "string"
+          ? summary.source_kind
+          : typeof summary.source_type === "string"
+            ? summary.source_type
+            : typeof summary.media_type === "string"
+              ? summary.media_type
+              : null;
+  const extension = typeof source.extension === "string"
+    ? normalizeExtension(source.extension)
+    : typeof summary.extension === "string"
+      ? normalizeExtension(summary.extension)
+      : extensionFromName(name);
+  return {
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : "project:active",
+    name,
+    path_fingerprint: typeof source.path_fingerprint === "string" ? source.path_fingerprint : null,
+    source_kind: sourceKind,
+    media_type: typeof source.media_type === "string"
+      ? source.media_type
+      : typeof summary.media_type === "string"
+        ? summary.media_type
+        : mediaTypeFromExtension(extension),
+    extension,
+    offline: nullableBoolean(source.offline, summary.offline),
+    length_seconds: finiteNumber(source.length_seconds ?? source.length ?? summary.length_seconds ?? summary.length),
+    channel_count: Number.isInteger(source.channel_count)
+      ? source.channel_count
+      : Number.isInteger(summary.channel_count)
+        ? summary.channel_count
+        : null,
+    metadata_key_count: Array.isArray(source.metadata_keys)
+      ? source.metadata_keys.length
+      : Array.isArray(summary.metadata_keys)
+        ? summary.metadata_keys.length
+        : Number.isInteger(source.metadata_key_count)
+          ? source.metadata_key_count
+          : Number.isInteger(summary.metadata_key_count)
+            ? summary.metadata_key_count
+            : null,
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary,
+  };
+}
+
 function normalizeObjectChangeRow(row) {
   const source = isPlainObject(row) ? row : {};
   const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
@@ -1757,6 +1918,20 @@ function queryMarkerRows(markerRows, query) {
   };
 }
 
+function queryMediaRows(mediaRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = mediaRows
+    .filter((row) => row.ref)
+    .filter((row) => mediaRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectMediaSourceRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function querySelectedContextRows(selectionRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = selectionRows
@@ -1879,6 +2054,37 @@ function markerRowMatches(row, query) {
   return true;
 }
 
+function mediaRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.refs.length > 0 && !mediaRefsMatch(row, query.refs)) return false;
+  const ownerRefs = normalizeFilterRefs(filters, "owner_ref", "owner_refs");
+  if (ownerRefs.length > 0 && !ownerRefs.includes(row.owner_ref)) return false;
+  if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
+  if (typeof filters.source_kind === "string" && !String(row.source_kind ?? "").toLocaleLowerCase().includes(filters.source_kind.toLocaleLowerCase())) return false;
+  if (typeof filters.source_type === "string" && !String(row.source_kind ?? "").toLocaleLowerCase().includes(filters.source_type.toLocaleLowerCase())) return false;
+  if (typeof filters.media_type === "string" && filters.media_type !== row.media_type) return false;
+  if (typeof filters.extension === "string" && normalizeExtension(filters.extension) !== row.extension) return false;
+  if (Array.isArray(filters.extensions)) {
+    const extensions = filters.extensions
+      .filter((entry) => typeof entry === "string" && entry.trim())
+      .map(normalizeExtension);
+    if (extensions.length > 0 && !extensions.includes(row.extension)) return false;
+  }
+  if (filters.offline !== undefined) {
+    if (typeof row.offline !== "boolean") return false;
+    if (Boolean(filters.offline) !== row.offline) return false;
+  }
+  if (Number.isFinite(filters.min_length_seconds) && (row.length_seconds ?? -Infinity) < filters.min_length_seconds) return false;
+  if (Number.isFinite(filters.max_length_seconds) && (row.length_seconds ?? Infinity) > filters.max_length_seconds) return false;
+  if (Number.isFinite(filters.min_channel_count) && (row.channel_count ?? -Infinity) < filters.min_channel_count) return false;
+  if (Number.isFinite(filters.max_channel_count) && (row.channel_count ?? Infinity) > filters.max_channel_count) return false;
+  if (filters.metadata_available !== undefined) {
+    if (row.metadata_key_count === null) return false;
+    if (Boolean(filters.metadata_available) !== (row.metadata_key_count > 0)) return false;
+  }
+  return true;
+}
+
 function fxRefsMatch(row, refs) {
   return refs.includes(row.ref) || refs.includes(row.owner_ref);
 }
@@ -1891,6 +2097,10 @@ function routingRefsMatch(row, refs) {
 }
 
 function markerRefsMatch(row, refs) {
+  return refs.includes(row.ref) || refs.includes(row.owner_ref);
+}
+
+function mediaRefsMatch(row, refs) {
   return refs.includes(row.ref) || refs.includes(row.owner_ref);
 }
 
@@ -2130,6 +2340,24 @@ function projectMarkerRegionRow(row, fields) {
   return projected;
 }
 
+function projectMediaSourceRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "name",
+    "source_kind",
+    "media_type",
+    "extension",
+    "offline",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (MEDIA_SOURCE_ROW_FIELDS.includes(field)) projected[field] = row[field];
+  }
+  return projected;
+}
+
 function projectSelectedContextRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -2205,6 +2433,17 @@ function validateMarkerFields(fields) {
   return fields
     .filter((field) => !MARKER_REGION_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_markers does not expose field ${field}.`));
+}
+
+function validateMediaScope(scope) {
+  if (["project", "media"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_media supports project or media scope.")];
+}
+
+function validateMediaFields(fields) {
+  return fields
+    .filter((field) => !MEDIA_SOURCE_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_media does not expose field ${field}.`));
 }
 
 function validateSelectedContextFields(fields) {
@@ -2563,6 +2802,22 @@ function queryMarkerRefreshRequests(query) {
   ];
 }
 
+function queryMediaRefreshRequests(query) {
+  return [
+    {
+      tool: "call_template",
+      id: "template.media.read_project_media_files",
+      refs: {},
+      input: {
+        include_offline: query.filters.offline === false ? false : true,
+        include_metadata_keys: query.detail === "hydrated" || query.fields.includes("metadata_key_count"),
+        max_sources: query.limit,
+      },
+      purpose: "Refresh distinct project media file refs from REAPER truth before using Project SQLite Index media rows.",
+    },
+  ];
+}
+
 function queryItemTrackRefs(query) {
   const filterRefs = [];
   if (typeof query.filters.track_ref === "string") filterRefs.push(query.filters.track_ref);
@@ -2635,16 +2890,15 @@ function selectedContextRefreshRequests(query) {
   ];
 }
 
-function hydrateRefsRequest(refs, fields) {
+function hydrateRefsRequest(refs, fields, detail = "summary") {
+  const input = { refs, fields };
+  if (detail !== "summary") input.detail = detail;
   return {
     status: "available",
     callable_now: true,
     tool: "call_template",
     id: "macro.hydrate_refs",
-    input: {
-      refs,
-      fields,
-    },
+    input,
     planned_macro_id: "macro.hydrate_refs",
     blocker: null,
     refs,
@@ -2797,6 +3051,25 @@ function hydrateRequestsForRef(kind, ref, query) {
       }),
     ]);
   }
+  if (kind === "file") {
+    const path = filePathFromRef(ref);
+    if (path === null) {
+      return {
+        requests: [],
+        blocker: blocker("refs", "HYDRATE_REF_UNSUPPORTED", `No accepted exact hydration template is mapped for non-path file ref ${ref}.`),
+      };
+    }
+    return requestGroup([
+      callTemplateRequest({
+        id: "template.media.probe_file",
+        input: {
+          path,
+          include_metadata_keys: query.detail === "hydrated" || query.fields.includes("metadata_keys") || query.fields.includes("metadata_key_count"),
+        },
+        purpose: "Probe exact media file facts through the accepted media probe template.",
+      }),
+    ]);
+  }
   return {
     requests: [],
     blocker: blocker("refs", "HYDRATE_REF_UNSUPPORTED", `No accepted exact hydration template is mapped for ref ${ref}.`),
@@ -2843,6 +3116,7 @@ function refKind(ref) {
   if (lower.startsWith("envelope:")) return "envelope";
   if (lower.startsWith("marker:")) return "marker";
   if (lower.startsWith("region:")) return "region";
+  if (lower.startsWith("file:")) return "file";
   return "unknown";
 }
 
@@ -2879,6 +3153,13 @@ function finiteNumber(value) {
   return Number.isFinite(value) ? value : null;
 }
 
+function nullableBoolean(...values) {
+  for (const value of values) {
+    if (typeof value === "boolean") return value;
+  }
+  return null;
+}
+
 function itemLengthSeconds(row) {
   if (Number.isFinite(row.length_seconds)) return row.length_seconds;
   if (Number.isFinite(row.start_seconds) && Number.isFinite(row.end_seconds)) {
@@ -2893,6 +3174,38 @@ function markerRegionLengthSeconds(row) {
     return Math.max(0, row.end_seconds - row.position_seconds);
   }
   return null;
+}
+
+function mediaNameFromRef(ref) {
+  const path = filePathFromRef(ref);
+  if (path === null) return "";
+  const parts = path.split(/[\\/]+/).filter(Boolean);
+  return parts.at(-1) ?? "";
+}
+
+function extensionFromName(name) {
+  if (typeof name !== "string") return null;
+  const match = name.toLocaleLowerCase().match(/\.([a-z0-9]+)$/);
+  return match ? match[1] : null;
+}
+
+function normalizeExtension(value) {
+  return value.trim().replace(/^\./, "").toLocaleLowerCase();
+}
+
+function mediaTypeFromExtension(extension) {
+  if (extension === null) return null;
+  if (["wav", "wave", "aif", "aiff", "flac", "mp3", "ogg", "m4a"].includes(extension)) return "audio";
+  if (["mid", "midi"].includes(extension)) return "midi";
+  if (["mov", "mp4", "mkv", "avi"].includes(extension)) return "video";
+  return "unknown";
+}
+
+function filePathFromRef(ref) {
+  if (typeof ref !== "string") return null;
+  const prefix = "file:path:";
+  if (!ref.toLocaleLowerCase().startsWith(prefix)) return null;
+  return ref.slice(prefix.length);
 }
 
 function summarizeIndexStatus(indexState) {
@@ -2967,6 +3280,13 @@ function queryMarkersDecisionSummary({ blockers, rows, markersScope }) {
     return "Marker query needs a task-scoped marker/region refresh before rows are safe to use.";
   }
   return `Marker query returned ${rows.rows.length} compact marker/region rows with ${markersScope.status} freshness and ${markersScope.coverage_status} coverage.`;
+}
+
+function queryMediaDecisionSummary({ blockers, rows, mediaScope }) {
+  if (blockers.length > 0) {
+    return "Media query needs a task-scoped project-media refresh before rows are safe to use.";
+  }
+  return `Media query returned ${rows.rows.length} compact media rows with ${mediaScope.status} freshness and ${mediaScope.coverage_status} coverage.`;
 }
 
 function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
@@ -3132,6 +3452,7 @@ function queryMacroExampleInput(id) {
   if (id === "macro.query_fx") return { filters: { stock_plugin: true }, limit: 25 };
   if (id === "macro.query_routing") return { scope: "tracks", filters: { source_track_ref: "track:guid:{TRACK-GUID}" }, limit: 25 };
   if (id === "macro.query_markers") return { filters: { marker_kind: "region" }, time_range: { start_seconds: 0, end_seconds: 120 }, limit: 25 };
+  if (id === "macro.query_media") return { filters: { media_type: "audio", offline: false }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
   if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
   if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };
