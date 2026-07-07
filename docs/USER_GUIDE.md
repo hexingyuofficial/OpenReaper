@@ -137,13 +137,13 @@ Before sharing, OpenReaper should remove private or machine-specific details
 such as local paths, request ids, project refs, private notes, and assumptions
 that will not work on another machine.
 
-## Add-ons
+## Packs
 
-Add-ons extend OpenReaper with reviewed capability or domain-specific controls.
-For example, a synth/plugin add-on may expose musical controls for a plugin
-such as Vital.
+Packs extend OpenReaper with reviewed capability or domain-specific controls.
+For example, a synth/plugin pack may expose musical controls for a plugin such
+as Vital, and a sound-library pack may help search, preview, and import sounds.
 
-An add-on should clearly report:
+A pack should clearly report:
 
 - whether it is official, partner, experimental, or local;
 - what plugins or versions it needs;
@@ -168,8 +168,8 @@ OpenReaper support is evidence-bound.
 
 The current repo contains V1 and Alpha2 evidence, plus Alpha3 draft product
 work. Phase 3 completion requires customer-usable startup, large-project query,
-fast readback/actions, workflow portability, add-ons, stock plugin fluency, and
+fast readback/actions, workflow portability, packs, stock plugin fluency, and
 trial-officer acceptance.
 
-If the guide, README, agent, or add-on claims a feature is supported, that
+If the guide, README, agent, or pack claims a feature is supported, that
 claim should point to matching evidence.

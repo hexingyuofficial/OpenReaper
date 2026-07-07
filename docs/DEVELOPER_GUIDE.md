@@ -2,7 +2,7 @@
 
 Status: Alpha3 first-product draft.
 
-This guide is for maintainers, worker agents, reviewers, macro/add-on authors,
+This guide is for maintainers, worker agents, reviewers, macro/pack authors,
 and future contributors. It explains the Phase 3 architecture boundaries and
 how to extend OpenReaper without creating dual truth, hidden execution paths,
 or unsupported product claims.
@@ -32,11 +32,12 @@ Use the same product words internally and externally when possible:
 
 - `workflow`: the user-facing reusable flow. It may be represented internally
   by a recipe contract or recipe file.
-- `add-on`: an extension bundle for a plugin, domain, workflow set, or future
-  third-party capability surface.
-- `pack`: a frozen internal capability-domain/taxonomy term, such as
-  `reaper/packs/<pack>` and `docs/taxonomy/PACK_TAXONOMY_V1.md`. Do not use
-  pack as the normal product word for extension bundles.
+- `pack`: the user-facing extension bundle for a plugin, domain, workflow set,
+  media library, search surface, or private local capability.
+- `core capability pack`: a frozen internal capability-domain/taxonomy term,
+  such as `reaper/packs/<pack>` and `docs/taxonomy/PACK_TAXONOMY_V1.md`.
+  Normal users should not see or need this concept.
+- `extension pack`: the developer term for a user-facing pack.
 - `macro`: a product category of template for bounded high-frequency
   operations. It remains a template, not a new tool layer.
 
@@ -70,7 +71,7 @@ Capability truth:
 repo descriptors + validated runtime catalog
 ```
 
-Do not let SQLite, artifacts, capability search caches, recipes, or add-ons
+Do not let SQLite, artifacts, capability search caches, recipes, or packs
 become independent truth sources for execution.
 
 ## 2. Tool Surface
@@ -116,7 +117,7 @@ Discovery uses:
 `CapabilitySearchIndex` is a search/cache abstraction, not capability truth.
 Initial implementation should be in-memory. A future SQLite-backed
 implementation is allowed only when macro metadata, installed workflows or
-add-ons, or UI search scale justify it.
+packs, or UI search scale justify it.
 
 Execution rule:
 
@@ -196,7 +197,7 @@ Product UX includes:
 - stale-session guard;
 - non-annoying scoped authorization;
 - workflow save/scrub/share/install/fork;
-- add-on install/enable/support status;
+- pack install/enable/support status;
 - stock plugin semantic fluency;
 - beginner-readable blockers.
 
@@ -220,9 +221,9 @@ Bad redundancy:
 - default deep dumps of FX parameters, automation points, routing graphs, or
   media analysis.
 
-## Macro And Add-on Authoring
+## Macro And Pack Authoring
 
-Macro/add-on authors must declare:
+Macro and extension pack authors must declare:
 
 - namespace and owner;
 - task intent and customer-facing label;
@@ -238,8 +239,13 @@ Aliases:
 
 - official macro aliases may become globally unique exact aliases only through
   an approved bounded contract;
-- partner/DLC/local add-on aliases are package-scoped by default;
+- partner/DLC/local pack aliases are package-scoped by default;
 - alias collisions block installation or promotion.
+
+Extension packs are defined in `docs/EXTENSION_PACK_STANDARD.md`. That standard
+covers manifest fields, capability contracts, permissions, install/share/fork,
+scrub, validation, evidence tiers, plugin-control packs, and media/search
+packs.
 
 ## Testing And Evidence
 
@@ -265,6 +271,7 @@ notes.
 
 - `docs/USER_GUIDE.md` is for users and should stay task-first.
 - `docs/DEVELOPER_GUIDE.md` is for architecture and extension work.
+- `docs/EXTENSION_PACK_STANDARD.md` is for pack authors and pack validation.
 - `docs/RUNBOOK.md` is for operator/live evidence validation.
 
 Do not turn the user guide into an architecture manual, and do not hide
