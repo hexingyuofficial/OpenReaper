@@ -346,6 +346,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
     rows: {
       tracks: [],
       items: [],
+      fx: [],
       selection_state: [],
       object_changes: [],
     },
@@ -422,6 +423,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.items = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_items", observedAt);
+    },
+    replaceFx(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      mergeSessionMetadata(state, input);
+      state.lifecycle = state.lifecycle === "stale_session" ? "stale_session" : "ready";
+      state.snapshot_id = snapshotId;
+      state.rows.fx = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeFxRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "fx",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.fx.list_track_fx_chain",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.fx = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_fx", observedAt);
     },
     replaceSelection(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -621,6 +650,30 @@ export function planAlpha3C3ProjectIndexTaskRefresh(input = {}) {
         refresh_scope: "items",
       });
     }
+    if (scope === "fx") {
+      requests.push({
+        tool: "call_template",
+        id: "template.project.create_project_map_snapshot",
+        refs: {},
+        input: {
+          max_tracks: limit,
+          max_items_per_track: 0,
+          include_selected_items: true,
+          include_track_items: false,
+        },
+        refresh_scope: "fx",
+      });
+      requests.push({
+        tool: "call_template",
+        id: "template.tracks.read_mixer_controls",
+        refs: {},
+        input: {
+          include_selected: true,
+          limit,
+        },
+        refresh_scope: "fx",
+      });
+    }
   }
   return deepFreeze({
     contract: ALPHA3_C3_PROJECT_INDEX_REFRESH_PLAN_CONTRACT,
@@ -698,6 +751,7 @@ function snapshotState(state) {
     rows: {
       tracks: cloneJson(state.rows.tracks),
       items: cloneJson(state.rows.items),
+      fx: cloneJson(state.rows.fx),
       selection_state: cloneJson(state.rows.selection_state),
       object_changes: cloneJson(state.rows.object_changes),
     },
@@ -776,6 +830,30 @@ function normalizeItemRow(row, defaults) {
     ),
     selected: Boolean(source.selected),
     muted: Boolean(source.muted),
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeFxRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    plugin_name: typeof source.plugin_name === "string" ? source.plugin_name : "",
+    plugin_id: typeof source.plugin_id === "string" ? source.plugin_id : null,
+    slot_index: Number.isInteger(source.slot_index)
+      ? source.slot_index
+      : Number.isInteger(source.index)
+        ? source.index
+        : null,
+    bypassed: Boolean(source.bypassed),
     freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
     coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
     observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
@@ -865,7 +943,7 @@ function lifecycleResult(state, operation, observedAt) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "fx"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;

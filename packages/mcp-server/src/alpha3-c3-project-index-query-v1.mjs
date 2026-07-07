@@ -55,6 +55,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.selected_context",
     "macro.query_tracks",
     "macro.query_items",
+    "macro.query_fx",
     "macro.hydrate_refs",
     "macro.changed_since",
   ],
@@ -119,6 +120,9 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.items.list_items_on_track",
   "template.items.list_selected_items",
   "template.items.read_item_summary",
+  "template.fx.list_track_fx_chain",
+  "template.fx.list_take_fx_chain",
+  "template.fx.read_fx_summary",
 ]);
 
 const QUERY_DETAIL_VALUES = new Set(["summary", "refs", "compact", "hydrated"]);
@@ -165,6 +169,23 @@ const ITEM_ROW_FIELDS = deepFreeze([
   "length_seconds",
   "selected",
   "muted",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
+const FX_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "plugin_name",
+  "plugin_id",
+  "slot_index",
+  "bypassed",
+  "offline",
+  "stock_plugin",
+  "parameter_summary_available",
   "freshness_status",
   "coverage_status",
   "observed_at",
@@ -237,8 +258,23 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.items.read_item_summary",
     ],
   }),
+  queryMacro({
+    id: "macro.query_fx",
+    user_label: "Query FX",
+    summary: "Query compact FX rows from the Project SQLite Index by owner refs, plugin identity, stock status, bypass, and slot.",
+    status: "implemented",
+    query_kind: "fx",
+    task_intents: ["find fx", "find plugins", "stock plugins", "fx on track", "large project plugin query"],
+    tags: ["project_index", "sqlite", "query", "fx", "plugins", "stock_plugins", "alpha3_c3"],
+    required_templates: [
+      "template.project.create_project_map_snapshot",
+      "template.tracks.read_mixer_controls",
+      "template.fx.list_track_fx_chain",
+      "template.fx.list_take_fx_chain",
+      "template.fx.read_fx_summary",
+    ],
+  }),
   queryMacro({ id: "macro.query_takes", user_label: "Query takes", query_kind: "takes" }),
-  queryMacro({ id: "macro.query_fx", user_label: "Query FX", query_kind: "fx" }),
   queryMacro({ id: "macro.query_routing", user_label: "Query routing", query_kind: "routing" }),
   queryMacro({ id: "macro.query_automation", user_label: "Query automation", query_kind: "automation" }),
   queryMacro({ id: "macro.query_markers", user_label: "Query markers", query_kind: "markers" }),
@@ -338,6 +374,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_items") {
     return queryItemsPlan({ macro, normalized, indexState, blockers });
+  }
+  if (macro.id === "macro.query_fx") {
+    return queryFxPlan({ macro, normalized, indexState, blockers });
   }
   if (macro.id === "macro.hydrate_refs") {
     return hydrateRefsPlan({ macro, normalized, indexState, blockers });
@@ -550,6 +589,56 @@ function queryItemsPlan({ macro, normalized, indexState, blockers }) {
       source_scope: "items",
       row_count: rows.rows.length,
       complete: itemScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshRequests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsRequest(rows.refs, normalized.query.fields)
+      : null,
+    blockers: allBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
+function queryFxPlan({ macro, normalized, indexState, blockers }) {
+  const fxScope = freshnessScope(indexState, "fx");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, fxScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateFxScope(normalized.query.scope),
+    ...validateFxFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryFxRows(indexState.rows.fx, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshRequests = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? queryFxRefreshRequests(normalized.query)
+    : [];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: allBlockers.length === 0,
+    decision_summary: queryFxDecisionSummary({ blockers: allBlockers, rows, fxScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "fx",
+      status: fxScope.status,
+      coverage_status: fxScope.coverage_status,
+      observed_at: fxScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: fxScope.coverage_status,
+      source_scope: "fx",
+      row_count: rows.rows.length,
+      complete: fxScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshRequests,
@@ -898,6 +987,9 @@ function readProjectIndexState(projectIndex) {
       items: Array.isArray(raw.rows?.items)
         ? raw.rows.items.map(normalizeItemRow).filter(Boolean)
         : [],
+      fx: Array.isArray(raw.rows?.fx)
+        ? raw.rows.fx.map(normalizeFxRow).filter(Boolean)
+        : [],
       selection_state: Array.isArray(raw.rows?.selection_state)
         ? raw.rows.selection_state.map(normalizeSelectionRow).filter(Boolean)
         : [],
@@ -968,6 +1060,29 @@ function normalizeItemRow(row) {
     length_seconds: explicitLength ?? itemLengthSeconds({ start_seconds: startSeconds, end_seconds: endSeconds }),
     selected: Boolean(source.selected),
     muted: Boolean(source.muted),
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary: isPlainObject(source.summary) ? cloneJson(source.summary) : {},
+  };
+}
+
+function normalizeFxRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
+  return {
+    ref,
+    owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
+    plugin_name: typeof source.plugin_name === "string" ? source.plugin_name : "",
+    plugin_id: typeof source.plugin_id === "string" ? source.plugin_id : null,
+    slot_index: Number.isInteger(source.slot_index)
+      ? source.slot_index
+      : Number.isInteger(source.index)
+        ? source.index
+        : null,
+    bypassed: Boolean(source.bypassed),
     freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
     coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
@@ -1140,6 +1255,20 @@ function queryItemRows(itemRows, query) {
   };
 }
 
+function queryFxRows(fxRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = fxRows
+    .filter((row) => row.ref)
+    .filter((row) => fxRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectFxRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function querySelectedContextRows(selectionRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = selectionRows
@@ -1180,6 +1309,35 @@ function itemRowMatches(row, query) {
   if (Number.isFinite(filters.starts_after_seconds) && (row.start_seconds ?? -Infinity) < filters.starts_after_seconds) return false;
   if (Number.isFinite(filters.starts_before_seconds) && (row.start_seconds ?? Infinity) > filters.starts_before_seconds) return false;
   return true;
+}
+
+function fxRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.refs.length > 0 && !fxRefsMatch(row, query.refs)) return false;
+  if (!fxOwnerFiltersMatch(row, filters)) return false;
+  if (typeof filters.plugin_name === "string" && !row.plugin_name.toLocaleLowerCase().includes(filters.plugin_name.toLocaleLowerCase())) return false;
+  if (typeof filters.plugin_id === "string" && !String(row.plugin_id ?? "").toLocaleLowerCase().includes(filters.plugin_id.toLocaleLowerCase())) return false;
+  if (filters.stock_plugin !== undefined && Boolean(filters.stock_plugin) !== isStockReaperPlugin(row)) return false;
+  if (filters.bypassed !== undefined && Boolean(filters.bypassed) !== row.bypassed) return false;
+  if (filters.offline !== undefined && Boolean(filters.offline) !== fxOffline(row)) return false;
+  if (filters.parameter_summary_available !== undefined && Boolean(filters.parameter_summary_available) !== fxParameterSummaryAvailable(row)) return false;
+  if (Number.isFinite(filters.slot_index) && row.slot_index !== filters.slot_index) return false;
+  if (Number.isFinite(filters.slot_min) && (row.slot_index ?? -Infinity) < filters.slot_min) return false;
+  if (Number.isFinite(filters.slot_max) && (row.slot_index ?? Infinity) > filters.slot_max) return false;
+  return true;
+}
+
+function fxRefsMatch(row, refs) {
+  return refs.includes(row.ref) || refs.includes(row.owner_ref);
+}
+
+function fxOwnerFiltersMatch(row, filters) {
+  const raw = [];
+  if (typeof filters.owner_ref === "string") raw.push(filters.owner_ref);
+  if (Array.isArray(filters.owner_refs)) raw.push(...filters.owner_refs);
+  const ownerRefs = unique(raw.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim()));
+  if (ownerRefs.length === 0) return true;
+  return ownerRefs.includes(row.owner_ref);
 }
 
 function itemRefsMatch(row, refs) {
@@ -1273,6 +1431,29 @@ function projectItemRow(row, fields) {
   return projected;
 }
 
+function projectFxRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "owner_ref",
+    "plugin_name",
+    "plugin_id",
+    "slot_index",
+    "bypassed",
+    "stock_plugin",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (!FX_ROW_FIELDS.includes(field)) continue;
+    if (field === "stock_plugin") projected[field] = isStockReaperPlugin(row);
+    else if (field === "offline") projected[field] = fxOffline(row);
+    else if (field === "parameter_summary_available") projected[field] = fxParameterSummaryAvailable(row);
+    else projected[field] = row[field];
+  }
+  return projected;
+}
+
 function projectSelectedContextRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -1304,6 +1485,17 @@ function validateItemFields(fields) {
   return fields
     .filter((field) => !ITEM_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_items does not expose field ${field}.`));
+}
+
+function validateFxScope(scope) {
+  if (["project", "fx", "tracks", "items", "takes"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_fx supports project, fx, tracks, items, or takes scope.")];
+}
+
+function validateFxFields(fields) {
+  return fields
+    .filter((field) => !FX_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_fx does not expose field ${field}.`));
 }
 
 function validateSelectedContextFields(fields) {
@@ -1438,6 +1630,72 @@ function queryItemRefreshRequests(query) {
   return dedupeRequestPlans(requests);
 }
 
+function queryFxRefreshRequests(query) {
+  const ownerRefs = queryFxOwnerRefs(query);
+  const fxRefs = query.refs.filter((ref) => ref.startsWith("fx:"));
+  const requests = [
+    {
+      tool: "call_template",
+      id: "template.project.create_project_map_snapshot",
+      refs: {},
+      input: {
+        max_tracks: query.limit,
+        max_items_per_track: 0,
+        include_selected_items: true,
+        include_track_items: false,
+      },
+      purpose: "Refresh compact project/track rows before resolving FX candidates from REAPER truth.",
+    },
+    {
+      tool: "call_template",
+      id: "template.tracks.read_mixer_controls",
+      refs: {},
+      input: {
+        include_selected: true,
+        limit: query.limit,
+      },
+      purpose: "Refresh track mixer context and FX presence before using indexed FX rows.",
+    },
+  ];
+
+  for (const ownerRef of ownerRefs) {
+    const ownerKind = refKind(ownerRef);
+    if (ownerKind === "track") {
+      requests.push({
+        tool: "call_template",
+        id: "template.fx.list_track_fx_chain",
+        refs: { track_ref: ownerRef },
+        input: {
+          include_preset: false,
+        },
+        purpose: "Refresh FX chain rows for an exact track owner from REAPER truth.",
+      });
+    } else if (ownerKind === "take") {
+      requests.push({
+        tool: "call_template",
+        id: "template.fx.list_take_fx_chain",
+        refs: { take_ref: ownerRef },
+        input: {
+          include_preset: false,
+        },
+        purpose: "Refresh FX chain rows for an exact take owner from REAPER truth.",
+      });
+    }
+  }
+
+  for (const fxRef of fxRefs) {
+    requests.push({
+      tool: "call_template",
+      id: "template.fx.read_fx_summary",
+      refs: { fx_ref: fxRef },
+      input: {},
+      purpose: "Re-read an exact FX ref from REAPER truth before using indexed FX rows.",
+    });
+  }
+
+  return dedupeRequestPlans(requests);
+}
+
 function queryItemTrackRefs(query) {
   const filterRefs = [];
   if (typeof query.filters.track_ref === "string") filterRefs.push(query.filters.track_ref);
@@ -1445,6 +1703,18 @@ function queryItemTrackRefs(query) {
   return unique([
     ...query.refs.filter((ref) => ref.startsWith("track:")),
     ...filterRefs.filter((ref) => typeof ref === "string" && ref.startsWith("track:")),
+  ]);
+}
+
+function queryFxOwnerRefs(query) {
+  const filterRefs = [];
+  if (typeof query.filters.owner_ref === "string") filterRefs.push(query.filters.owner_ref);
+  if (Array.isArray(query.filters.owner_refs)) filterRefs.push(...query.filters.owner_refs);
+  return unique([
+    ...query.refs.filter((ref) => ref.startsWith("track:") || ref.startsWith("take:")),
+    ...filterRefs.filter((ref) =>
+      typeof ref === "string" && (ref.startsWith("track:") || ref.startsWith("take:"))
+    ),
   ]);
 }
 
@@ -1660,6 +1930,35 @@ function refKind(ref) {
   return "unknown";
 }
 
+function isStockReaperPlugin(row) {
+  const identity = `${row.plugin_name ?? ""} ${row.plugin_id ?? ""}`.toLocaleLowerCase();
+  return [
+    "reaeq",
+    "reacomp",
+    "reagate",
+    "readelay",
+    "reasynth",
+    "reasamplomatic",
+    "rs5k",
+    "reatune",
+    "reapitch",
+    "reaxcomp",
+    "realimit",
+  ].some((token) => identity.includes(token));
+}
+
+function fxOffline(row) {
+  return Boolean(row.summary?.offline ?? row.summary?.is_offline);
+}
+
+function fxParameterSummaryAvailable(row) {
+  if (row.summary?.parameter_summary_available !== undefined) {
+    return Boolean(row.summary.parameter_summary_available);
+  }
+  if (Number.isInteger(row.summary?.parameter_count)) return true;
+  return Array.isArray(row.summary?.parameters);
+}
+
 function finiteNumber(value) {
   return Number.isFinite(value) ? value : null;
 }
@@ -1716,6 +2015,13 @@ function queryItemsDecisionSummary({ blockers, rows, itemScope }) {
     return "Item query needs a task-scoped item refresh before rows are safe to use.";
   }
   return `Item query returned ${rows.rows.length} compact rows with ${itemScope.status} freshness and ${itemScope.coverage_status} coverage.`;
+}
+
+function queryFxDecisionSummary({ blockers, rows, fxScope }) {
+  if (blockers.length > 0) {
+    return "FX query needs a task-scoped FX refresh before rows are safe to use.";
+  }
+  return `FX query returned ${rows.rows.length} compact rows with ${fxScope.status} freshness and ${fxScope.coverage_status} coverage.`;
 }
 
 function selectedContextDecisionSummary({ blockers, rows, selectionScope }) {
@@ -1869,7 +2175,7 @@ function officialQueryMacroDiscoveryItem(macro) {
     exists_in_catalog: true,
     evidence_level: implemented ? "runtime_bound_static_fake" : "contract_only",
     support_state: implemented ? "supported" : "blocked",
-    known_blocker: implemented ? null : "planned_after_c3_5",
+    known_blocker: implemented ? null : "planned_after_c3_6",
     allowed_live_group: null,
   });
 }
@@ -1877,6 +2183,7 @@ function officialQueryMacroDiscoveryItem(macro) {
 function queryMacroExampleInput(id) {
   if (id === "macro.query_tracks") return { filters: { selected: true }, limit: 25 };
   if (id === "macro.query_items") return { scope: "selection", filters: { selected: true }, limit: 25 };
+  if (id === "macro.query_fx") return { filters: { stock_plugin: true }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
   if (id === "macro.changed_since") return { since: "2026-07-07T00:00:00.000Z", limit: 25 };
   if (id === "macro.hydrate_refs") return { refs: ["track:guid:{TRACK-GUID}"], detail: "summary" };

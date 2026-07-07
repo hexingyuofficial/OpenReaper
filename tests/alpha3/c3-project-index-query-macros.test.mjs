@@ -46,6 +46,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(registry.macros.find((macro) => macro.id === "macro.selected_context").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_tracks").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_items").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_fx").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_takes").status, "planned");
@@ -59,6 +60,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const hydrate = entries.find((entry) => entry.id === "macro.hydrate_refs");
     const changed = entries.find((entry) => entry.id === "macro.changed_since");
     const items = entries.find((entry) => entry.id === "macro.query_items");
+    const fx = entries.find((entry) => entry.id === "macro.query_fx");
 
     assert.equal(entries.length, 12);
     assert.equal(status.kind, "official_macro");
@@ -80,6 +82,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(items.support_state, "supported");
     assert.equal(items.known_blocker, null);
     assert.deepEqual(items.examples[0].input, { scope: "selection", filters: { selected: true }, limit: 25 });
+    assert.equal(fx.support_state, "supported");
+    assert.equal(fx.known_blocker, null);
+    assert.deepEqual(fx.examples[0].input, { filters: { stock_plugin: true }, limit: 25 });
   });
 
   it("reports index status and refresh requests when no project index exists yet", () => {
@@ -172,6 +177,36 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       request.id === "template.items.list_items_on_track"
     );
     assert.deepEqual(exactTrackRefresh.refs, { track_ref: "track:guid:{TRACK-1}" });
+  });
+
+  it("blocks FX queries until the task-scoped FX scope is fresh enough", () => {
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_fx", {
+      limit: 8,
+      refs: ["track:guid:{TRACK-1}", "fx:track:guid:{TRACK-1}:0"],
+      filters: { stock_plugin: true },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      plan.refresh_requests.map((request) => request.id),
+      [
+        "template.project.create_project_map_snapshot",
+        "template.tracks.read_mixer_controls",
+        "template.fx.list_track_fx_chain",
+        "template.fx.read_fx_summary",
+      ],
+    );
+    assert.deepEqual(
+      plan.refresh_requests.find((request) => request.id === "template.fx.list_track_fx_chain").refs,
+      { track_ref: "track:guid:{TRACK-1}" },
+    );
+    assert.deepEqual(
+      plan.refresh_requests.find((request) => request.id === "template.fx.read_fx_summary").refs,
+      { fx_ref: "fx:track:guid:{TRACK-1}:0" },
+    );
+    assert.equal(plan.query_policy.raw_sql_exposed, false);
+    assert.equal(plan.safety.live_reaper, false);
   });
 
   it("queries compact track rows from a fresh injected project index adapter", () => {
@@ -317,6 +352,69 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("queries compact FX rows from a fresh resident project index", () => {
+    const projectIndex = fxProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_fx", {
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}"],
+      filters: {
+        stock_plugin: true,
+        parameter_summary_available: true,
+      },
+      limit: 1,
+      fields: ["owner_ref", "plugin_name", "slot_index", "stock_plugin", "parameter_summary_available", "payload_ref"],
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_fx", {
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}"],
+      filters: {
+        stock_plugin: true,
+        parameter_summary_available: true,
+      },
+      limit: 1,
+      cursor: firstPage.page.next_cursor,
+      fields: ["plugin_name", "bypassed"],
+    }, { projectIndex });
+    const vital = planAlpha3C3ProjectIndexQueryMacro("macro.query_fx", {
+      filters: { plugin_name: "vital", bypassed: true },
+      limit: 10,
+      fields: ["owner_ref", "plugin_name", "bypassed", "stock_plugin"],
+    }, { projectIndex });
+    const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_fx", {
+      scope: "routing",
+      limit: 10,
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["fx:track:guid:{TRACK-1}:0"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "fx:track:guid:{TRACK-1}:0",
+      owner_ref: "track:guid:{TRACK-1}",
+      plugin_name: "VST: ReaEQ (Cockos)",
+      slot_index: 0,
+      stock_plugin: true,
+      parameter_summary_available: true,
+      payload_ref: "artifact:fx:chain",
+    });
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(firstPage.hydrate_request.input.refs, ["fx:track:guid:{TRACK-1}:0"]);
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["fx:track:guid:{TRACK-1}:2"]);
+    assert.equal(secondPage.page.has_more, false);
+    assert.equal(vital.ok, true);
+    assert.deepEqual(vital.refs, ["fx:track:guid:{TRACK-2}:1"]);
+    assert.deepEqual(vital.rows[0], {
+      ref: "fx:track:guid:{TRACK-2}:1",
+      owner_ref: "track:guid:{TRACK-2}",
+      plugin_name: "VST3: Vital",
+      bypassed: true,
+      stock_plugin: false,
+    });
+    assert.equal(unsupportedScope.ok, false);
+    assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
+  });
+
   it("rejects raw SQL-shaped input instead of exposing database execution", () => {
     const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       raw_sql: "select * from tracks",
@@ -423,6 +521,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_tracks"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.query_items"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.query_fx"), true);
     assert.deepEqual(
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
@@ -526,6 +625,36 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.rows.length, 2);
     assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
     assert.equal(runtime.last_evidence().template.id, "macro.query_items");
+  });
+
+  it("calls query_fx through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T18:35:00.000Z"),
+      projectIndex: fxProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.query_fx",
+      input: {
+        limit: 2,
+        filters: { stock_plugin: true },
+        fields: ["owner_ref", "plugin_name", "slot_index", "stock_plugin"],
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.query_fx");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.added_tools, 0);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "fx:track:guid:{TRACK-1}:0",
+      "fx:track:guid:{TRACK-1}:2",
+    ]);
+    assert.equal(response.result.rows.length, 2);
+    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(runtime.last_evidence().template.id, "macro.query_fx");
   });
 
   it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
@@ -761,6 +890,48 @@ function itemsProjectIndex() {
         start_seconds: 6,
         end_seconds: 7,
         muted: true,
+      },
+    ],
+  });
+  return index;
+}
+
+function fxProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T18:34:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-6",
+  });
+  index.replaceFx({
+    snapshot_id: "snapshot:c3-6:fx",
+    observed_at: "2026-07-07T18:30:00.000Z",
+    payload_ref: "artifact:fx:chain",
+    rows: [
+      {
+        ref: "fx:track:guid:{TRACK-1}:0",
+        owner_ref: "track:guid:{TRACK-1}",
+        plugin_name: "VST: ReaEQ (Cockos)",
+        plugin_id: "reaeq",
+        slot_index: 0,
+        summary: { parameter_count: 16 },
+      },
+      {
+        ref: "fx:track:guid:{TRACK-2}:1",
+        owner_ref: "track:guid:{TRACK-2}",
+        plugin_name: "VST3: Vital",
+        plugin_id: "vital",
+        slot_index: 1,
+        bypassed: true,
+      },
+      {
+        ref: "fx:track:guid:{TRACK-1}:2",
+        owner_ref: "track:guid:{TRACK-1}",
+        plugin_name: "VST: ReaComp (Cockos)",
+        plugin_id: "reacomp",
+        slot_index: 2,
+        summary: { parameter_summary_available: true },
       },
     ],
   });
