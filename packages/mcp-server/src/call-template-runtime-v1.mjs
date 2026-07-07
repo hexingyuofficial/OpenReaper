@@ -735,7 +735,12 @@ export function createCallTemplateRuntime(options = {}) {
       if (isAlpha3E1OfficialMacroId(id)) {
         const plan = planAlpha3E1StockPluginMacro(id, {
           plugin: normalized.input?.plugin,
+          plugin_id: normalized.input?.plugin_id,
+          plugin_name: normalized.input?.plugin_name,
           controls: normalized.input?.controls,
+          starter_action: normalized.input?.starter_action,
+          action_parameters: normalized.input?.action_parameters,
+          control_overrides: normalized.input?.control_overrides,
           parameter_metadata: normalized.input?.parameter_metadata,
           refs: normalized.refs,
         });

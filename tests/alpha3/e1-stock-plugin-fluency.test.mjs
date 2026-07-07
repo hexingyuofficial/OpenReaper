@@ -41,6 +41,30 @@ describe("Alpha3 E1 stock plugin fluency", () => {
         "realimit",
       ],
     );
+    assert.deepEqual(registry.starter_actions.map((action) => action.id), [
+      "vocal_presence_eq",
+      "gentle_vocal_compression",
+      "bleed_cleanup_gate",
+      "tempo_delay",
+      "soft_synth_pad",
+      "tight_sampler_pad",
+      "natural_pitch_correction",
+      "octave_down_pitch",
+      "gentle_multiband_control",
+      "safe_peak_limit",
+    ]);
+    assert.deepEqual(registry.starter_actions.map((action) => action.plugin_id), [
+      "reaeq",
+      "reacomp",
+      "reagate",
+      "readelay",
+      "reasynth",
+      "rs5k",
+      "reatune",
+      "reapitch",
+      "reaxcomp",
+      "realimit",
+    ]);
     assert.equal(registry.coverage.status, "covered_by_existing_templates");
     assert.equal(registry.safety.added_tools, 0);
     assert.equal(registry.safety.public_call_recipe, false);
@@ -88,8 +112,11 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(entry.pack, "core");
     assert.equal(entry.live_runnable_now, true);
     assert.equal(entry.known_blocker, null);
-    assert.equal(entry.inputSchema.required.includes("plugin"), true);
-    assert.equal(entry.inputSchema.required.includes("controls"), true);
+    assert.equal(entry.inputSchema.required.includes("plugin"), false);
+    assert.equal(entry.inputSchema.required.includes("controls"), false);
+    assert.equal(Object.hasOwn(entry.inputSchema.properties, "starter_action"), true);
+    assert.equal(entry.starter_action_ids.includes("gentle_vocal_compression"), true);
+    assert.equal(entry.task_intents.includes("monster voice"), true);
     assert.equal(entry.refs.input[0].name, "fx_ref");
     assert.equal(entry.expectedDelta.summary, "Returns a plan-only stock-plugin macro envelope. It does not mutate REAPER directly.");
   });
@@ -114,6 +141,56 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       plan.blockers.every((blocker) => blocker.code === "PARAMETER_METADATA_REQUIRED"),
       true,
     );
+  });
+
+  it("turns starter actions into hydration-first stock plugin control plans", () => {
+    const plan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "gentle_vocal_compression",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.plugin.id, "reacomp");
+    assert.equal(plan.starter_action.id, "gentle_vocal_compression");
+    assert.deepEqual(Object.keys(plan.starter_action.action_parameters), []);
+    assert.equal(plan.requests.length, 0);
+    assert.equal(plan.readback.length, 0);
+    assert.equal(plan.hydration_flow.contract, "alpha3.e1.stock_plugin_hydration_flow.v1");
+    assert.equal(plan.hydration_flow.status, "needs_fresh_parameter_metadata");
+    assert.deepEqual(plan.hydration_flow.steps.map((step) => step.id), [
+      "verify_fx_identity",
+      "hydrate_parameter_metadata",
+    ]);
+    assert.deepEqual(plan.hydration_flow.steps[1].wanted_controls, [
+      "threshold_db",
+      "ratio",
+      "attack_ms",
+      "release_ms",
+      "wet_mix_percent",
+    ]);
+    assert.equal(
+      plan.blockers.every((blocker) => blocker.code === "PARAMETER_METADATA_REQUIRED"),
+      true,
+    );
+  });
+
+  it("calculates tempo-delay starter controls without guessing tempo", () => {
+    const missingTempo = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "tempo_delay",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+    });
+    const tempoPlan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "tempo_delay",
+      action_parameters: { tempo_bpm: 120, division: "1/8d" },
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+    });
+
+    assert.equal(missingTempo.ok, false);
+    assert.equal(missingTempo.blockers.some((blocker) => blocker.code === "ACTION_INPUT_REQUIRED"), true);
+    assert.equal(tempoPlan.plugin.id, "readelay");
+    assert.equal(tempoPlan.starter_action.action_parameters.tempo_bpm, 120);
+    assert.equal(tempoPlan.hydration_flow.wanted_controls.includes("delay_ms"), true);
+    assert.equal(tempoPlan.hydration_flow.wanted_controls.includes("feedback_percent"), true);
   });
 
   it("plans accepted FX parameter calls and human readback when metadata is fresh", () => {
@@ -152,6 +229,35 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(plan.human_readback[1].phrase, "4:1 ratio.");
   });
 
+  it("plans accepted starter action child requests when all metadata is fresh", () => {
+    const plan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "safe_peak_limit",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+      parameter_metadata: {
+        threshold_db: { param_index: 0, freshness_status: "fresh" },
+        ceiling_db: { param_index: 1, freshness_status: "fresh" },
+        release_ms: { param_index: 2, freshness_status: "fresh" },
+        lookahead_ms: { param_index: 3, freshness_status: "fresh" },
+      },
+    });
+
+    assert.equal(plan.ok, true);
+    assert.equal(plan.plugin.id, "realimit");
+    assert.equal(plan.starter_action.id, "safe_peak_limit");
+    assert.equal(plan.requests.length, 4);
+    assert.equal(plan.readback.length, 4);
+    assert.equal(plan.hydration_flow.status, "ready_for_child_requests");
+    assert.equal(plan.hydration_flow.steps.at(-1).id, "execute_stock_plugin_controls");
+    assert.deepEqual(plan.requests.map((request) => request.id), [
+      "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_fx_parameter_normalized",
+    ]);
+    assert.equal(plan.human_readback[0].phrase, "Limiter threshold at -3 dB.");
+    assert.equal(plan.human_readback[1].phrase, "Limiter ceiling at -1 dB.");
+  });
+
   it("returns typed blockers for unsupported plugins, fields, refs, and unsafe ranges", () => {
     const unsupported = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
       plugin: "serum",
@@ -180,6 +286,30 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(missingRef.blockers.some((blocker) => blocker.code === "REQUIRED_REF_MISSING"), true);
     assert.equal(outOfRange.blockers[0].code, "CONTROL_VALUE_OUT_OF_RANGE");
     assert.equal(missingRef.blockers.some((blocker) => blocker.code === "PARAMETER_METADATA_NOT_FRESH"), true);
+  });
+
+  it("returns a typed blocker for unsupported starter actions", () => {
+    const plan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "make_everything_magical",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.requests.length, 0);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "STARTER_ACTION_NOT_SUPPORTED"), true);
+  });
+
+  it("blocks starter action and explicit plugin mismatches", () => {
+    const plan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, {
+      starter_action: "safe_peak_limit",
+      plugin: "reacomp",
+      refs: { fx_ref: "fx:track:guid:{TRACK}:1" },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.plugin.id, "realimit");
+    assert.equal(plan.requests.length, 0);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "STARTER_ACTION_PLUGIN_MISMATCH"), true);
   });
 
   it("requires parameter metadata to be explicitly fresh before emitting child write plans", () => {
@@ -262,6 +392,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.result.execution.public_call_recipe, false);
     assert.equal(response.result.execution.hidden_executor, false);
     assert.equal(response.result.execution.live_reaper, false);
+    assert.equal(response.result.plan.hydration_flow.status, "ready_for_child_requests");
     assert.deepEqual(
       response.result.child_requests.map((request) => request.id),
       [
@@ -271,6 +402,49 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     );
     assert.equal(response.result.readback[0].id, "template.fx.read_fx_parameter");
     assert.equal(runtime.last_evidence().template.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+  });
+
+  it("calls starter actions through call_template and returns hydration guidance", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({
+      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      input: {
+        starter_action: "gentle_vocal_compression",
+      },
+      refs: {
+        fx_ref: "fx:track:guid:{TRACK}:1",
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "PARAMETER_METADATA_REQUIRED");
+    assert.equal(response.result.plan.plugin.id, "reacomp");
+    assert.equal(response.result.plan.starter_action.id, "gentle_vocal_compression");
+    assert.equal(response.result.plan.hydration_flow.status, "needs_fresh_parameter_metadata");
+    assert.deepEqual(response.result.plan.hydration_flow.steps.map((step) => step.id), [
+      "verify_fx_identity",
+      "hydrate_parameter_metadata",
+    ]);
+    assert.equal(response.result.child_requests.length, 0);
+    assert.equal(response.result.readback.length, 0);
+  });
+
+  it("reports unsupported starter actions clearly through call_template", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({
+      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      input: {
+        starter_action: "make_everything_magical",
+      },
+      refs: {
+        fx_ref: "fx:track:guid:{TRACK}:1",
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "STARTER_ACTION_NOT_SUPPORTED");
+    assert.equal(response.result.child_requests.length, 0);
+    assert.equal(response.result.readback.length, 0);
   });
 
   it("returns typed macro blockers through call_template without child mutation requests", async () => {

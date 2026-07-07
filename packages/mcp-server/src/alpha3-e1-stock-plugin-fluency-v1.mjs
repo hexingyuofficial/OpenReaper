@@ -38,6 +38,18 @@ export const ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY = deepFreeze({
     "reaxcomp",
     "realimit",
   ],
+  starter_action_ids: [
+    "vocal_presence_eq",
+    "gentle_vocal_compression",
+    "bleed_cleanup_gate",
+    "tempo_delay",
+    "soft_synth_pad",
+    "tight_sampler_pad",
+    "natural_pitch_correction",
+    "octave_down_pitch",
+    "gentle_multiband_control",
+    "safe_peak_limit",
+  ],
   rule: "Stock plugin fluency maps human controls to plan-only parameter requests. Parameter indexes must come from fresh FX parameter metadata before any write request is emitted.",
 });
 
@@ -114,6 +126,74 @@ const STOCK_PLUGIN_MAPS = deepFreeze([
   ]),
 ]);
 
+const STOCK_PLUGIN_STARTER_ACTIONS = deepFreeze([
+  starterAction("vocal_presence_eq", "Vocal presence EQ", "reaeq", "Add a safe vocal EQ starting point: high-pass, reduce mud, add presence, and add a little air.", {
+    high_pass_frequency_hz: 85,
+    low_mid_gain_db: -3,
+    presence_gain_db: 3,
+    air_gain_db: 2,
+  }, ["vocal cleanup eq", "make vocal clearer", "remove vocal mud"]),
+  starterAction("gentle_vocal_compression", "Gentle vocal compression", "reacomp", "Set a reversible vocal compression starting point with moderate ratio and smooth release.", {
+    threshold_db: -18,
+    ratio: 3,
+    attack_ms: 12,
+    release_ms: 120,
+    wet_mix_percent: 100,
+  }, ["compress vocal", "gentle compressor", "vocal leveler"]),
+  starterAction("bleed_cleanup_gate", "Bleed cleanup gate", "reagate", "Gate a noisy or bleed-heavy source with conservative attack, hold, and release values.", {
+    threshold_db: -45,
+    hysteresis_db: 6,
+    attack_ms: 5,
+    hold_ms: 80,
+    release_ms: 160,
+  }, ["clean bleed", "noise gate", "tighten drum mic"]),
+  starterAction("tempo_delay", "Tempo delay", "readelay", "Create a tempo-derived delay starting point. Provide tempo_bpm and optionally division to calculate delay_ms.", {
+    feedback_percent: 28,
+    wet_mix_percent: 18,
+    low_pass_hz: 7000,
+  }, ["tempo delay", "quarter note delay", "echo in time"], {
+    requires: ["tempo_bpm"],
+    defaults: { division: "1/4" },
+  }),
+  starterAction("soft_synth_pad", "Soft synth pad", "reasynth", "Shape a soft ReaSynth pad envelope for a gentle sustained part.", {
+    volume_db: -12,
+    attack_ms: 250,
+    decay_ms: 900,
+    sustain_percent: 70,
+    release_ms: 1200,
+  }, ["soft synth pad", "slow attack synth", "pad envelope"]),
+  starterAction("tight_sampler_pad", "Tight sampler pad", "rs5k", "Shape a tight RS5k one-shot pad after the sample is already loaded.", {
+    volume_db: -9,
+    pitch_semitones: 0,
+    attack_ms: 2,
+    release_ms: 350,
+  }, ["tight rs5k", "sampler pad", "one shot sampler"]),
+  starterAction("natural_pitch_correction", "Natural pitch correction", "reatune", "Set a moderate ReaTune correction starting point without extreme retuning.", {
+    correction_amount_percent: 55,
+    attack_ms: 80,
+    formant_shift: 0,
+  }, ["natural autotune", "pitch correction", "tune vocal gently"]),
+  starterAction("octave_down_pitch", "Octave-down pitch utility", "reapitch", "Set a full-wet octave-down pitch starting point with a small formant move.", {
+    shift_semitones: -12,
+    fine_cents: 0,
+    formant_shift: -2,
+    wet_mix_percent: 100,
+  }, ["octave down", "monster voice", "pitch down"]),
+  starterAction("gentle_multiband_control", "Gentle multiband control", "reaxcomp", "Set a conservative ReaXcomp band-control starting point.", {
+    band_threshold_db: -24,
+    band_ratio: 2,
+    band_attack_ms: 20,
+    band_release_ms: 180,
+    band_gain_db: 0,
+  }, ["multiband control", "smooth harsh band", "reaxcomp starter"]),
+  starterAction("safe_peak_limit", "Safe peak limit", "realimit", "Set a safe peak limiter starting point with modest threshold, ceiling, release, and lookahead.", {
+    threshold_db: -3,
+    ceiling_db: -1,
+    release_ms: 80,
+    lookahead_ms: 3,
+  }, ["peak limit", "safe limiter", "catch peaks"]),
+]);
+
 export function listAlpha3E1StockPluginMaps(options = {}) {
   const catalog = options.catalog ?? createAlpha3E1AcceptedCatalog();
   const missingTemplates = REQUIRED_TEMPLATE_IDS.filter((id) => !catalog.get(id));
@@ -128,6 +208,7 @@ export function listAlpha3E1StockPluginMaps(options = {}) {
       missing_templates: missingTemplates,
     },
     plugins: STOCK_PLUGIN_MAPS,
+    starter_actions: STOCK_PLUGIN_STARTER_ACTIONS,
     safety: stockPluginSafety(),
   });
 }
@@ -152,8 +233,20 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
 
   const catalog = options.catalog ?? createAlpha3E1AcceptedCatalog();
   const missingTemplates = REQUIRED_TEMPLATE_IDS.filter((templateId) => !catalog.get(templateId));
-  const plugin = resolvePluginMap(request.plugin ?? request.plugin_id ?? request.plugin_name);
-  const controls = isPlainObject(request.controls) ? request.controls : {};
+  const starterInput = request.starter_action;
+  const starter = resolveStarterAction(starterInput);
+  const requestedPlugin = request.plugin ?? request.plugin_id ?? request.plugin_name;
+  const requestedPluginMap = resolvePluginMap(requestedPlugin);
+  const plugin = resolvePluginMap(starter?.plugin_id ?? requestedPlugin);
+  const controlResolution = resolveRequestedControls({
+    starter,
+    requestedPluginMap,
+    plugin,
+    controls: request.controls,
+    control_overrides: request.control_overrides ?? request.controlOverrides,
+    action_parameters: request.action_parameters ?? request.actionParameters,
+  });
+  const controls = controlResolution.controls;
   const refs = isPlainObject(request.refs) ? request.refs : {};
   const metadata = normalizeParameterMetadata(request.parameter_metadata ?? request.parameterMetadata);
   const blockers = [];
@@ -163,9 +256,15 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
       blocker("template", "MISSING_ACCEPTED_TEMPLATE", `Required template ${templateId} is not accepted.`)
     ));
   }
-  if (!plugin) {
+  if (typeof starterInput === "string" && !starter) {
+    blockers.push(blocker("starter_action", "STARTER_ACTION_NOT_SUPPORTED", "Supply one supported stock plugin starter_action id or omit starter_action and provide plugin plus controls."));
+  }
+  if (requestedPlugin && !requestedPluginMap) {
+    blockers.push(blocker("plugin", "PLUGIN_NOT_SUPPORTED", "Supply one supported stock plugin id or name."));
+  } else if (!plugin) {
     blockers.push(blocker("plugin", "PLUGIN_NOT_SUPPORTED", "Supply one supported stock plugin id or name."));
   }
+  blockers.push(...controlResolution.blockers);
   if (!refs.fx_ref) {
     blockers.push(blocker("fx_ref", "REQUIRED_REF_MISSING", "Stock plugin controls require a resolved owner-scoped fx_ref."));
   }
@@ -234,6 +333,7 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
     execution_shape: "stock_plugin_semantic_control_plan",
     risk_domain: "fx_parameter_control",
     plugin: plugin ? pluginSummary(plugin) : null,
+    starter_action: starter ? starterSummary(starter, controls, controlResolution.action_parameters) : null,
     freshness_requires: [
       "fx_ref",
       "fx_owner_identity",
@@ -260,6 +360,15 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
       : [],
     requests,
     readback,
+    hydration_flow: createHydrationFlow({
+      plugin,
+      starter,
+      controls,
+      refs,
+      blockers,
+      requests,
+      readback,
+    }),
     human_readback: blockers.length === 0 ? fieldPlans.map(humanReadbackItem) : [],
     blockers: uniqueBlockers(blockers),
     safety: stockPluginSafety(),
@@ -302,7 +411,7 @@ export function createAlpha3E1StockPluginRuntimeEnvelope({ request = {}, plan, n
       plan: normalizedPlan,
       execution: {
         executed: false,
-        reason: "E1.1 binds stock plugin semantic planning only; child template requests remain agent-executed through call_template after freshness checks.",
+        reason: "E1.2 binds stock plugin semantic planning and starter actions only; child template requests remain agent-executed through call_template after freshness checks.",
         added_tools: 0,
         public_call_recipe: false,
         hidden_executor: false,
@@ -349,6 +458,7 @@ function officialStockPluginMacroDiscoveryItem(maps) {
       "reapitch",
       "reaxcomp",
       "realimit",
+      ...maps.starter_actions.map((action) => action.id),
     ],
     kind: ALPHA3_E1_OFFICIAL_MACRO_ENTRY_KIND,
     action_kind: "macro",
@@ -368,16 +478,21 @@ function officialStockPluginMacroDiscoveryItem(maps) {
       "set reapitch musically",
       "set reaxcomp musically",
       "set realimit musically",
+      ...maps.starter_actions.flatMap((action) => [action.id, action.label, ...action.aliases]),
     ],
     support_status: "plan_only_runtime_bound",
     risk_domain: "fx_parameter_control",
     plugin_ids: maps.plugins.map((pluginMap) => pluginMap.id),
+    starter_action_ids: maps.starter_actions.map((action) => action.id),
     inputSchema: {
       type: "object",
-      required: ["plugin", "controls"],
+      required: [],
       properties: {
         plugin: { type: "string" },
         controls: { type: "object", additionalProperties: true },
+        starter_action: { type: "string" },
+        action_parameters: { type: "object", additionalProperties: true },
+        control_overrides: { type: "object", additionalProperties: true },
         parameter_metadata: { type: "object", additionalProperties: true },
       },
     },
@@ -405,11 +520,7 @@ function officialStockPluginMacroDiscoveryItem(maps) {
     examples: [
       {
         input: {
-          plugin: "reacomp",
-          controls: {
-            threshold_db: -18,
-            ratio: 4,
-          },
+          starter_action: "gentle_vocal_compression",
         },
         refs: {
           fx_ref: "fx:track:guid:{TRACK}:1",
@@ -463,6 +574,56 @@ function readParameterRequest(plan, refs) {
   });
 }
 
+function createHydrationFlow({ plugin, starter, controls, refs, blockers, requests, readback }) {
+  const hasFxRef = Boolean(refs.fx_ref);
+  const controlIds = Object.keys(controls);
+  const status = requests.length > 0
+    ? "ready_for_child_requests"
+    : blockers.some((entry) => entry.code === "PARAMETER_METADATA_REQUIRED" || entry.code === "PARAMETER_METADATA_NOT_FRESH")
+      ? "needs_fresh_parameter_metadata"
+      : "blocked";
+  const steps = [];
+  if (plugin && hasFxRef) {
+    steps.push({
+      id: "verify_fx_identity",
+      tool: "call_template",
+      template_id: "template.fx.read_fx_summary",
+      refs: { fx_ref: refs.fx_ref },
+      input: {},
+      purpose: "Confirm the resolved FX is the intended stock plugin before planning parameter writes.",
+    });
+    steps.push({
+      id: "hydrate_parameter_metadata",
+      tool: "call_template",
+      template_id: "template.fx.list_fx_parameters",
+      refs: { fx_ref: refs.fx_ref },
+      input: { limit: 128 },
+      wanted_controls: controlIds,
+      purpose: "Map semantic controls to fresh param_index and param_ident values.",
+    });
+  }
+  if (requests.length > 0) {
+    steps.push({
+      id: "execute_stock_plugin_controls",
+      tool: "call_template",
+      request_source: "result.child_requests",
+      child_request_ids: requests.map((request) => request.id),
+      child_request_count: requests.length,
+      purpose: "Run the accepted child parameter requests through call_template, then read back each touched parameter.",
+    });
+  }
+  return deepFreeze({
+    contract: "alpha3.e1.stock_plugin_hydration_flow.v1",
+    status,
+    starter_action_id: starter?.id ?? null,
+    plugin_id: plugin?.id ?? null,
+    wanted_controls: controlIds,
+    next_step: hydrationNextStep(status),
+    steps,
+    readback_request_count: readback.length,
+  });
+}
+
 function humanReadbackItem(plan) {
   return deepFreeze({
     control: plan.parameter.id,
@@ -493,6 +654,130 @@ function normalizeControlValue(parameterDef, value) {
     ok: true,
     normalized_value: normalizeToUnitInterval(parameterDef, value),
   };
+}
+
+function resolveRequestedControls({ starter, requestedPluginMap, plugin, controls, control_overrides, action_parameters }) {
+  const blockers = [];
+  const explicitControls = isPlainObject(controls) ? controls : {};
+  const overrides = isPlainObject(control_overrides) ? control_overrides : {};
+  const actionParameters = isPlainObject(action_parameters) ? action_parameters : {};
+
+  if (!starter) {
+    return { controls: explicitControls, blockers, action_parameters: actionParameters };
+  }
+
+  if (requestedPluginMap && plugin && requestedPluginMap.id !== starter.plugin_id) {
+    blockers.push(blocker(
+      "plugin",
+      "STARTER_ACTION_PLUGIN_MISMATCH",
+      `Starter action ${starter.id} requires ${starter.plugin_id}, but ${requestedPluginMap.id} was supplied.`,
+    ));
+  }
+
+  const actionControls = { ...starter.controls };
+  if (starter.tempo && starter.id === "tempo_delay") {
+    const tempo = resolveTempoDelay(actionParameters, starter.tempo);
+    if (tempo.ok) {
+      actionControls.delay_ms = tempo.delay_ms;
+    } else {
+      blockers.push(blocker("action_parameters.tempo_bpm", tempo.code, tempo.message));
+    }
+  }
+
+  return {
+    controls: { ...actionControls, ...overrides },
+    blockers,
+    action_parameters: actionParameters,
+  };
+}
+
+function resolveTempoDelay(actionParameters, tempoSpec) {
+  const tempoBpm = actionParameters.tempo_bpm ?? actionParameters.bpm;
+  if (typeof tempoBpm !== "number" || !Number.isFinite(tempoBpm) || tempoBpm <= 0) {
+    return {
+      ok: false,
+      code: "ACTION_INPUT_REQUIRED",
+      message: "tempo_delay needs a finite positive tempo_bpm so delay_ms can be calculated without guessing.",
+    };
+  }
+  const division = typeof actionParameters.division === "string" ? actionParameters.division : tempoSpec.defaults.division;
+  const beats = delayDivisionBeats(division);
+  if (beats === null) {
+    return {
+      ok: false,
+      code: "ACTION_INPUT_UNSUPPORTED",
+      message: "tempo_delay division must be one of 1/4, 1/8, 1/8d, 1/8t, 1/16, or 1/16d.",
+    };
+  }
+  return {
+    ok: true,
+    delay_ms: round((60_000 / tempoBpm) * beats),
+  };
+}
+
+function delayDivisionBeats(division) {
+  return ({
+    "1/4": 1,
+    "1/8": 0.5,
+    "1/8d": 0.75,
+    "1/8t": 1 / 3,
+    "1/16": 0.25,
+    "1/16d": 0.375,
+  })[division] ?? null;
+}
+
+function starterAction(id, label, pluginId, summary, controls, aliases, options = {}) {
+  return deepFreeze({
+    id,
+    label,
+    plugin_id: pluginId,
+    summary,
+    controls,
+    aliases,
+    tempo: options.requires?.includes("tempo_bpm")
+      ? {
+          requires: options.requires,
+          defaults: options.defaults ?? {},
+        }
+      : null,
+    safety: {
+      added_tools: 0,
+      plan_only: true,
+      requires_fresh_parameter_metadata: true,
+      writes_only_through: "template.fx.set_fx_parameter_normalized",
+    },
+  });
+}
+
+function resolveStarterAction(actionIdOrName) {
+  if (typeof actionIdOrName !== "string") return null;
+  const normalized = normalizeToken(actionIdOrName);
+  return STOCK_PLUGIN_STARTER_ACTIONS.find((action) =>
+    normalizeToken(action.id) === normalized ||
+    normalizeToken(action.label) === normalized ||
+    action.aliases.some((alias) => normalizeToken(alias) === normalized)
+  ) ?? null;
+}
+
+function starterSummary(starter, controls, actionParameters) {
+  return {
+    id: starter.id,
+    label: starter.label,
+    plugin_id: starter.plugin_id,
+    control_count: Object.keys(controls).length,
+    action_parameters: cloneJson(actionParameters ?? {}),
+    summary: starter.summary,
+  };
+}
+
+function hydrationNextStep(status) {
+  if (status === "ready_for_child_requests") {
+    return "Run the planned child call_template requests, then run planned readback requests before reporting success.";
+  }
+  if (status === "needs_fresh_parameter_metadata") {
+    return "Run verify_fx_identity and hydrate_parameter_metadata, then call this macro again with fresh parameter_metadata.";
+  }
+  return "Resolve blockers before planning stock plugin parameter writes.";
 }
 
 function normalizeToUnitInterval(parameterDef, value) {
