@@ -14,8 +14,10 @@ export const ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY = deepFreeze({
     "runtime_surface_visible",
     "live_opt_in",
     "executor_configured",
+    "spawned_reaper_guard",
     "session_identity_match",
-    "owner_generation_match",
+    "owner_match",
+    "generation_match",
     "allowed_live_scope",
   ],
   statuses: ["ready", "needs_startup", "needs_reconnect", "stale_session", "blocked"],
@@ -59,7 +61,7 @@ export function planAlpha3D1StartupHealth(input = {}) {
     recovery_actions: recoveryActions(status, { runtime, expected, observed, requested, blockers, warnings }),
     safety: {
       plan_only: true,
-      spawned_reaper: false,
+      spawned_reaper: runtime.spawned_reaper,
       live_reaper_called: false,
       safe_write_called: false,
       raw_execution: false,
@@ -108,18 +110,25 @@ function buildChecks({ runtime, expected, observed, requested }) {
         : "No live connection executor is configured.",
       "Ask the user to open REAPER/OpenReaper or paste the session line; do not try to spawn REAPER.",
     ),
+    check(
+      "spawned_reaper_guard",
+      runtime.spawned_reaper ? "fail" : "pass",
+      runtime.spawned_reaper
+        ? "This connection reports that REAPER was started by automation."
+        : "No automatic REAPER startup is reported.",
+      "Stop and ask the user to open or approve the live window manually before continuing.",
+    ),
     identityCheck("session_identity_match", "session_id", expected, observed),
     identityCheck("owner_match", "owner", expected, observed),
     identityCheck("generation_match", "generation", expected, observed),
     check(
       "allowed_live_scope",
-      requested.requires_live && runtime.allowed_template_ids.length === 0 ? "warn" : "pass",
-      requested.requires_live && runtime.allowed_template_ids.length === 0
-        ? "No live template allowlist is visible yet."
-        : "Live scope is bounded by the current allowlist.",
+      allowedLiveScopeStatus({ runtime, requested }),
+      allowedLiveScopeMessage({ runtime, requested }),
       "Use discovery and startup health before live execution; do not broaden support claims.",
       {
         allowed_template_count: runtime.allowed_template_ids.length,
+        missing_requested_template_ids: missingRequestedTemplateIds({ runtime, requested }),
       },
     ),
   ];
@@ -160,16 +169,17 @@ function startupStatus({ runtime, expected, observed, requested, blockers }) {
   if (blockers.some((blocker) => ["session_identity_match", "owner_match", "generation_match"].includes(blocker.id))) {
     return "stale_session";
   }
+  if (blockers.some((blocker) => blocker.id === "spawned_reaper_guard")) return "blocked";
   if (!runtime.opted_in && !runtime.executor_configured) return "needs_startup";
   if (!runtime.opted_in || !runtime.executor_configured) return "needs_reconnect";
-  if (requested.requires_live && runtime.allowed_template_ids.length === 0) return "blocked";
+  if (blockers.some((blocker) => blocker.id === "allowed_live_scope")) return "blocked";
   if (!identityMatch(expected, observed).known) return "needs_reconnect";
   return blockers.length === 0 ? "ready" : "blocked";
 }
 
 function nextStepForStatus(status, context) {
   if (status === "ready") return "Continue with discovery, then run only bounded allowed live/template calls.";
-  if (status === "needs_startup") return "Ask the user to open REAPER/OpenReaper, then run this health check again.";
+  if (status === "needs_startup") return "Ask the user to open REAPER/OpenReaper, then reconnect once.";
   if (status === "needs_reconnect") return "Refresh the connection or ask the user for the current OpenReaper session line.";
   if (status === "stale_session") return "Stop before live calls and reconnect to the current REAPER session.";
   return recoveryActions(status, context)[0]?.user_action ?? "Stop and report the connection blocker.";
@@ -230,7 +240,7 @@ function recoveryActions(status, { runtime, expected, observed, requested, block
   return [deepFreeze({
     id: "report_blocker",
     user_action: requested.requires_live
-      ? "Open a bounded live window with a visible allowlist for this task."
+      ? "Approve the live task scope, then reconnect before running it."
       : "Review the connection blocker before continuing.",
     agent_action: "Report blockers concisely and do not broaden support claims.",
     blockers: blockers.map((blocker) => blocker.id),
@@ -273,6 +283,7 @@ function checkCode(id) {
   return ({
     live_opt_in: "LIVE_OPT_IN_MISSING",
     executor_configured: "LIVE_EXECUTOR_MISSING",
+    spawned_reaper_guard: "SPAWNED_REAPER_REJECTED",
     session_identity_match: "SESSION_IDENTITY_MISMATCH",
     owner_match: "BRIDGE_OWNER_MISMATCH",
     generation_match: "BRIDGE_GENERATION_MISMATCH",
@@ -327,10 +338,31 @@ function identityMatch(expected, observed) {
 function normalizeGeneration(value) {
   if (Number.isInteger(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number.parseInt(value, 10);
+    const trimmed = value.trim();
+    if (!/^-?\d+$/.test(trimmed)) return null;
+    const parsed = Number.parseInt(trimmed, 10);
     if (Number.isInteger(parsed)) return parsed;
   }
   return null;
+}
+
+function allowedLiveScopeStatus({ runtime, requested }) {
+  if (!requested.requires_live) return "pass";
+  if (runtime.allowed_template_ids.length === 0) return "fail";
+  return missingRequestedTemplateIds({ runtime, requested }).length > 0 ? "fail" : "pass";
+}
+
+function allowedLiveScopeMessage({ runtime, requested }) {
+  if (!requested.requires_live) return "No live execution is requested for this health check.";
+  if (runtime.allowed_template_ids.length === 0) return "No live template allowlist is visible yet.";
+  const missing = missingRequestedTemplateIds({ runtime, requested });
+  if (missing.length > 0) return "The requested live action is outside the current bounded allowlist.";
+  return "Live scope is bounded by the current allowlist.";
+}
+
+function missingRequestedTemplateIds({ runtime, requested }) {
+  const allowed = new Set(runtime.allowed_template_ids);
+  return requested.allowed_template_ids.filter((id) => !allowed.has(id));
 }
 
 function nonEmptyString(value) {

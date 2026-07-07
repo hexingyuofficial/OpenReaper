@@ -108,6 +108,106 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.match(plan.next_step, /Stop before live calls/);
   });
 
+  it("rejects reported automatic REAPER startup instead of hiding it in safety output", () => {
+    const plan = planAlpha3D1StartupHealth({
+      runtime: {
+        opted_in: true,
+        executor_configured: true,
+        spawned_reaper: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+      expected: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      observed: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      requested: {
+        requires_live: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.status, "blocked");
+    assert.equal(plan.safety.spawned_reaper, true);
+    assert.equal(
+      plan.blockers.some((blocker) => blocker.code === "SPAWNED_REAPER_REJECTED"),
+      true,
+    );
+  });
+
+  it("blocks requested live template ids outside the current bounded allowlist", () => {
+    const plan = planAlpha3D1StartupHealth({
+      runtime: {
+        opted_in: true,
+        executor_configured: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+      expected: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      observed: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      requested: {
+        requires_live: true,
+        allowed_template_ids: ["template.transport.play"],
+      },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.status, "blocked");
+    assert.equal(
+      plan.blockers.some((blocker) => blocker.code === "LIVE_SCOPE_UNKNOWN"),
+      true,
+    );
+    assert.deepEqual(
+      plan.blockers.find((blocker) => blocker.code === "LIVE_SCOPE_UNKNOWN").details.missing_requested_template_ids,
+      ["template.transport.play"],
+    );
+  });
+
+  it("treats malformed generation strings as unknown instead of parsing prefixes", () => {
+    const plan = planAlpha3D1StartupHealth({
+      runtime: {
+        opted_in: true,
+        executor_configured: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+      expected: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: 4,
+      },
+      observed: {
+        session_id: "session-a",
+        owner: "owner-a",
+        generation: "4-old",
+      },
+      requested: {
+        requires_live: true,
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.status, "needs_reconnect");
+    assert.equal(plan.identity.observed.generation, null);
+    assert.equal(
+      plan.warnings.some((warning) => warning.id === "generation_match"),
+      true,
+    );
+  });
+
   it("summarizes health for compact product-surface readback", () => {
     const summary = summarizeAlpha3D1StartupHealth({
       runtime: {
