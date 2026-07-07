@@ -40,6 +40,42 @@ const sourceChecks = [
       "--operation save|scrub|share|install|fork",
     ],
   },
+  {
+    path: "packages/core/src/alpha3-d2-extension-pack-portability-v1.mjs",
+    requiredNeedles: [
+      "alpha3.d2.extension_pack_manifest.v1",
+      "alpha3.d2.extension_pack_packet.v1",
+      "alpha3.d2.extension_pack_portability.v1",
+      "package-scoped exact aliases only",
+      "public_call_recipe: false",
+      "hidden_executor: false",
+      "raw_lua_action_shell_or_ui: false",
+      "executable_entries_exposed: false",
+    ],
+  },
+  {
+    path: "packages/core/src/alpha3-d2-extension-pack-entrypoints-v1.mjs",
+    requiredNeedles: [
+      "alpha3.d2.extension_pack_entrypoints.v1",
+      "alpha3.d2.extension_pack_registry.v1",
+      "local_filesystem_extension_pack_entrypoints",
+      "executable_entries_exposed: false",
+      "package_scoped_aliases_only: true",
+      "public_call_recipe: false",
+      "hidden_executor: false",
+    ],
+  },
+  {
+    path: "scripts/alpha3-d2-extension-pack-entrypoint.mjs",
+    requiredNeedles: [
+      "saveAlpha3D2ExtensionPack",
+      "scrubAlpha3D2ExtensionPack",
+      "shareAlpha3D2ExtensionPack",
+      "installAlpha3D2ExtensionPack",
+      "forkAlpha3D2ExtensionPack",
+      "--operation save|scrub|share|install|fork",
+    ],
+  },
 ];
 
 for (const check of sourceChecks) {
@@ -72,6 +108,11 @@ execFileSync(process.execPath, ["--test", "tests/alpha3/d2-workflow-portability.
 });
 
 execFileSync(process.execPath, ["--test", "tests/alpha3/d2-workflow-entrypoints.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
+execFileSync(process.execPath, ["--test", "tests/alpha3/d2-extension-pack-portability.test.mjs"], {
   cwd: root,
   stdio: "inherit",
 });
