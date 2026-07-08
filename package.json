@@ -7,6 +7,10 @@
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  },
   "scripts": {
     "test": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes && npm run check:alpha3-d1 && npm run check:alpha3-block2 && npm run check:alpha3-c3 && npm run check:alpha3-c4 && npm run check:alpha3-c5 && npm run check:alpha3-block3 && npm run check:alpha3-d2 && npm run check:alpha3-block5 && npm run check:alpha3-e1 && npm run check:alpha3-block6",
     "check:layout": "node scripts/check-repo-layout.mjs",
@@ -35,6 +39,7 @@
     "start:openreaper": "node scripts/start-openreaper-alpha3.mjs",
     "workflow:portability": "node scripts/alpha3-d2-workflow-entrypoint.mjs",
     "pack:portability": "node scripts/alpha3-d2-extension-pack-entrypoint.mjs",
+    "package:openreaper-alpha": "node scripts/package-openreaper-alpha.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
     "build:live-bridge": "node scripts/build-live-bridge.mjs",
     "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes && npm run check:alpha3-d1 && npm run check:alpha3-block2 && npm run check:alpha3-c3 && npm run check:alpha3-c4 && npm run check:alpha3-c5 && npm run check:alpha3-block3 && npm run check:alpha3-d2 && npm run check:alpha3-block5 && npm run check:alpha3-e1 && npm run check:alpha3-block6"

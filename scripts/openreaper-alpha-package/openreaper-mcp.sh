@@ -1,0 +1,13 @@
+#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="${0:A:h}"
+INSTALL_ROOT="${SCRIPT_DIR:h}"
+SERVER_ROOT="${INSTALL_ROOT}/vendor/openreaper-kernel"
+
+export STREETLIGHT_QUEUE_DIR="${STREETLIGHT_QUEUE_DIR:-${HOME}/Library/Application Support/Streetlight/queue}"
+export OPENREAPER_MCP_PACKAGE_ROOT="${INSTALL_ROOT}"
+export OPENREAPER_ARTIFACT_ROOT="${OPENREAPER_ARTIFACT_ROOT:-${OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT:-${INSTALL_ROOT}/session/artifacts}}"
+export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT:-${OPENREAPER_ARTIFACT_ROOT}}"
+
+exec node "${SERVER_ROOT}/packages/mcp-server/src/openreaper-mcp-stdio.mjs" "$@"
