@@ -27,6 +27,8 @@ const transportDir = process.env.OPENREAPER_DOCTOR_TRANSPORT_DIR;
 const artifactRoot = process.env.OPENREAPER_DOCTOR_ARTIFACT_ROOT;
 const mcpCommand = path.join(installRoot, "bin", "openreaper-mcp");
 const vitalAgentMcpCommand = path.join(installRoot, "bin", "vital-agent-mcp");
+const mcpCommandAliases = pathAliases(mcpCommand);
+const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
 const startCommand = path.join(installRoot, "bin", "openreaper-start");
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
@@ -133,8 +135,8 @@ async function scanClientConfigs() {
       entry.has_vital_agent_mcp = config.type === "toml"
         ? /\[mcp_servers\.vital-agent-mcp\]/.test(text)
         : /"vital-agent-mcp"\s*:/.test(text);
-      entry.references_current_mcp = text.includes(mcpCommand);
-      entry.references_current_vital_agent_mcp = text.includes(vitalAgentMcpCommand);
+      entry.references_current_mcp = mcpCommandAliases.some((candidate) => text.includes(candidate));
+      entry.references_current_vital_agent_mcp = vitalAgentMcpCommandAliases.some((candidate) => text.includes(candidate));
       entry.stale_markers = staleMarkers(text);
       for (const marker of entry.stale_markers) {
         report.stale_config_findings.push({
@@ -159,6 +161,16 @@ function staleMarkers(text) {
     if (pattern.test(text)) markers.push(marker);
   }
   return markers;
+}
+
+function pathAliases(filePath) {
+  const aliases = new Set([filePath]);
+  if (filePath.startsWith("/private/tmp/")) {
+    aliases.add(filePath.replace(/^\/private\/tmp\//, "/tmp/"));
+  } else if (filePath.startsWith("/tmp/")) {
+    aliases.add(filePath.replace(/^\/tmp\//, "/private/tmp/"));
+  }
+  return [...aliases];
 }
 
 async function smokeMcp() {
