@@ -14,6 +14,10 @@ import {
 import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
+  ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-l3-project-index-user-flow-v1.mjs";
 
 describe("Alpha3 C3 Project SQLite Index query macros", () => {
   it("registers the project index contract without adding tools or changing truth source", () => {
@@ -160,6 +164,16 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       "template.project.create_project_map_snapshot",
     ]);
     assert.equal(plan.next_actions[0].then, "update_project_index_from_readback_and_rerun_macro");
+    assert.equal(plan.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(plan.user_flow.stage, "needs_refresh");
+    assert.equal(plan.user_flow.primary_next_action, "run_refresh_requests");
+    assert.equal(plan.user_flow.refresh_request_count, 2);
+    assert.equal(plan.user_flow.safe_to_use_rows, true);
+    assert.equal(plan.user_flow.safe_to_write_from_rows, false);
+    assert.equal(plan.user_flow.must_hydrate_or_re_resolve_before_write, false);
+    assert.equal(plan.user_flow.safety.hidden_executor, false);
+    assert.equal(plan.user_flow.safety.raw_sql_exposed, false);
+    assert.equal(plan.user_flow.safety.sqlite_authorizes_writes, false);
   });
 
   it("blocks catalog drift instead of emitting missing refresh requests", () => {
@@ -219,6 +233,33 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
     assert.equal(plan.write_safety_loop.sqlite_may_authorize_write, false);
     assert.equal(plan.page.has_more, false);
+    assert.equal(plan.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(plan.user_flow.stage, "needs_refresh_after_blockers");
+    assert.equal(plan.user_flow.primary_next_action, "run_refresh_requests");
+    assert.deepEqual(plan.user_flow.blocker_codes, ["INDEX_NOT_READY"]);
+    assert.equal(plan.user_flow.safe_to_use_rows, false);
+    assert.equal(plan.user_flow.safe_to_write_from_rows, false);
+    assert.equal(plan.user_flow.safety.live_reaper_called, false);
+    assert.equal(plan.user_flow.safety.hidden_executor, false);
+  });
+
+  it("turns stale project-index sessions into reconnect guidance before cached rows are used", () => {
+    const staleIndex = {
+      ...readyProjectIndex(),
+      lifecycle: "stale_session",
+    };
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
+      limit: 10,
+    }, { projectIndex: staleIndex });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((blocker) => blocker.code === "INDEX_STALE_SESSION"), true);
+    assert.equal(plan.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(plan.user_flow.stage, "stale_session_reconnect");
+    assert.equal(plan.user_flow.primary_next_action, "resolve_blockers");
+    assert.equal(plan.user_flow.safe_to_use_rows, false);
+    assert.equal(plan.user_flow.safe_to_write_from_rows, false);
+    assert.equal(plan.user_flow.agent_next_step.includes("Reconnect"), true);
   });
 
   it("blocks selected context until the task-scoped selection scope is fresh enough", () => {
@@ -484,6 +525,15 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       firstPage.next_actions[2].sequence.includes("re_resolve_targets_in_reaper"),
       true,
     );
+    assert.equal(firstPage.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(firstPage.user_flow.stage, "ready_compact_rows");
+    assert.equal(firstPage.user_flow.row_count, 1);
+    assert.equal(firstPage.user_flow.ref_count, 1);
+    assert.equal(firstPage.user_flow.safe_to_use_rows, true);
+    assert.equal(firstPage.user_flow.safe_to_write_from_rows, false);
+    assert.equal(firstPage.user_flow.must_hydrate_or_re_resolve_before_write, true);
+    assert.equal(firstPage.user_flow.hydrate_available, true);
+    assert.equal(firstPage.user_flow.safety.sqlite_rows_are_candidates_only, true);
 
     const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_tracks", {
       limit: 1,
@@ -1338,7 +1388,24 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     );
+    assert.deepEqual(
+      menu.product_surface.project_index_user_flow,
+      ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
+    );
     assert.equal(menu.product_surface.project_index_queries.tool_surface.added_tools, 0);
+    assert.equal(
+      menu.product_surface.project_index_user_flow_snapshot.contract,
+      ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
+    );
+    assert.deepEqual(menu.product_surface.project_index_user_flow_snapshot.primary_macro_ids, [
+      "macro.index_status",
+      "macro.query_tracks",
+    ]);
+    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.added_tools, 0);
+    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.hidden_executor, false);
+    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.public_call_recipe, false);
+    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed, false);
+    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.sqlite_authorizes_writes, false);
     assert.equal(exact.items[0].id, "macro.query_tracks");
     assert.equal(exact.items[0].capability_truth.kind, "official_macro");
     assert.equal(exact.items[0].current_status, "available_now");
@@ -1382,6 +1449,14 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       response.result.next_actions.map((action) => action.kind),
       ["hydrate_refs", "before_write_or_mutation"],
     );
+    assert.equal(response.result.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(response.result.user_flow.stage, "ready_compact_rows");
+    assert.equal(response.result.user_flow.row_count, 2);
+    assert.equal(response.result.user_flow.ref_count, 2);
+    assert.equal(response.result.user_flow.safe_to_use_rows, true);
+    assert.equal(response.result.user_flow.safe_to_write_from_rows, false);
+    assert.equal(response.result.user_flow.must_hydrate_or_re_resolve_before_write, true);
+    assert.equal(response.result.user_flow.safety.hidden_executor, false);
     assert.equal(runtime.last_evidence().template.id, "macro.query_tracks");
   });
 
@@ -1691,6 +1766,11 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       ["template.automation.list_project_envelopes"],
     );
     assert.equal(response.result.next_actions.some((action) => action.kind === "run_refresh_requests"), true);
+    assert.equal(response.result.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
+    assert.equal(response.result.user_flow.stage, "needs_refresh_after_blockers");
+    assert.equal(response.result.user_flow.primary_next_action, "run_refresh_requests");
+    assert.equal(response.result.user_flow.safe_to_use_rows, false);
+    assert.equal(response.result.user_flow.safe_to_write_from_rows, false);
   });
 });
 

@@ -12,6 +12,9 @@ import {
 import {
   createAlpha3C3ProjectIndexSchemaContract as createAlpha3C3ProjectIndexStoreSchemaContract,
 } from "./alpha3-c3-project-index-store-v1.mjs";
+import {
+  createAlpha3L3ProjectIndexUserFlow,
+} from "./alpha3-l3-project-index-user-flow-v1.mjs";
 
 export const ALPHA3_C3_PROJECT_INDEX_CONTRACT = "alpha3.c3.project_sqlite_index.v1";
 export const ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT = "alpha3.c3.project_index_query_macros.v1";
@@ -659,6 +662,7 @@ export function createAlpha3C3ProjectIndexQueryRuntimeEnvelope({
       refresh_requests: normalizedPlan.refresh_requests,
       hydrate_request: normalizedPlan.hydrate_request,
       next_actions: normalizedPlan.next_actions,
+      user_flow: normalizedPlan.user_flow,
       blockers: normalizedPlan.blockers,
     },
     budget: {
@@ -1299,7 +1303,7 @@ function basePlan({
     blockers: uniquePlanBlockers,
   });
 
-  return {
+  const plan = {
     contract: ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
     ok,
     id: macro.id,
@@ -1325,6 +1329,7 @@ function basePlan({
     refresh_requests,
     hydrate_request,
     next_actions,
+    user_flow: null,
     query_policy: {
       default_output: "decision_summary + canonical refs + freshness + coverage + compact rows",
       deep_detail_requires: ["fields", "detail", "time_range", "hydrate_refs"],
@@ -1336,6 +1341,8 @@ function basePlan({
     index_status,
     blockers: uniquePlanBlockers,
   };
+  plan.user_flow = createAlpha3L3ProjectIndexUserFlow(plan);
+  return plan;
 }
 
 function projectIndexNextActions({
@@ -4145,7 +4152,7 @@ function normalizeSince(value, blockers) {
 function blockedPlan(id, blockers) {
   const uniquePlanBlockers = uniqueBlockers(blockers);
   const page = pageEnvelope(25);
-  return deepFreeze({
+  const plan = {
     contract: ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
     ok: false,
     id,
@@ -4171,8 +4178,11 @@ function blockedPlan(id, blockers) {
     }),
     write_safety_loop: projectIndexWriteSafetyLoop(),
     safety: projectIndexSafety(),
+    user_flow: null,
     blockers: uniquePlanBlockers,
-  });
+  };
+  plan.user_flow = createAlpha3L3ProjectIndexUserFlow(plan);
+  return deepFreeze(plan);
 }
 
 function macroRuntimeError(plan) {

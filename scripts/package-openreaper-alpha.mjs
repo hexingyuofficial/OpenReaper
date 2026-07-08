@@ -41,6 +41,7 @@ const REQUIRED_EXECUTABLE_TEMPLATE_ID = "template.tracks.create_track";
 const REQUIRED_INSTALLED_START_COMMAND = "~/.openreaper/current/bin/openreaper-start";
 const REQUIRED_INSTALLED_PROJECT_START_COMMAND =
   "~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP";
+const REQUIRED_PROJECT_INDEX_USER_FLOW_CONTRACT = "alpha3.1.l3.project_index_user_flow.v1";
 const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
   "create_openreaper_handoff_plan",
   "run_doctor",
@@ -318,6 +319,7 @@ async function smokePackagedOpenReaperMcp() {
       label: "Packaged MCP list_templates startup guidance",
       expectedPackageRoot: null,
     });
+    assertProjectIndexUserFlow(macros.product_surface?.project_index_user_flow_snapshot);
     const fxTemplateResponse = await client.callTool({
       name: "list_templates",
       arguments: {
@@ -339,6 +341,12 @@ async function smokePackagedOpenReaperMcp() {
         current_package_start_reaper_for_mcp: ping.agent_startup_guidance.commands.current_package_start_reaper_for_mcp,
         normal_reaper_launch_supported: ping.agent_startup_guidance.requirements.normal_reaper_launch_supported,
         only_openreaper_startup_supported: ping.agent_startup_guidance.requirements.only_openreaper_startup_supported,
+      },
+      project_index_user_flow: {
+        contract: macros.product_surface.project_index_user_flow_snapshot.contract,
+        primary_macro_ids: macros.product_surface.project_index_user_flow_snapshot.primary_macro_ids,
+        hidden_executor: macros.product_surface.project_index_user_flow_snapshot.safety.hidden_executor,
+        raw_sql_exposed: macros.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed,
       },
       executable_allowlist: executableAllowlistSmoke,
     };
@@ -530,6 +538,23 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   }
   if (guidance.safety?.added_tools !== 0 || guidance.safety?.hidden_executor !== false) {
     throw new Error(`${label} expanded the tool surface or hid an executor`);
+  }
+}
+
+function assertProjectIndexUserFlow(flow) {
+  if (!flow || flow.contract !== REQUIRED_PROJECT_INDEX_USER_FLOW_CONTRACT) {
+    throw new Error("Packaged MCP list_templates missing Project Index user flow");
+  }
+  for (const id of REQUIRED_MACRO_IDS) {
+    if (!flow.primary_macro_ids?.includes(id)) {
+      throw new Error(`Packaged MCP Project Index user flow missing primary macro ${id}`);
+    }
+  }
+  if (flow.safety?.added_tools !== 0 || flow.safety?.hidden_executor !== false) {
+    throw new Error("Packaged MCP Project Index user flow expanded tools or hid an executor");
+  }
+  if (flow.safety?.raw_sql_exposed !== false || flow.safety?.sqlite_authorizes_writes !== false) {
+    throw new Error("Packaged MCP Project Index user flow weakened SQLite safety");
   }
 }
 
