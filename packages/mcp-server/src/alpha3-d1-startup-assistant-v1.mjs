@@ -6,6 +6,8 @@ import {
 
 export const ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT = "alpha3.d1.startup_assistant.v1";
 export const ALPHA3_D1_STARTUP_WRAPPER_CONTRACT = "alpha3.d1.startup_wrapper.v1";
+export const ALPHA3_D1_MCP_STARTUP_REQUIREMENT =
+  "OpenReaper MCP can connect only when REAPER is started through the OpenReaper startup helper or an equivalent session env launcher.";
 
 export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
@@ -16,6 +18,7 @@ export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
     discovery_tool: "list_templates",
     health_source: ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
     local_helper: "npm run prepare:startup-session",
+    local_launch_helper: "npm run start:openreaper -- --launch",
   },
   statuses: ["ready", "prepare_session", "reconnect_existing", "blocked"],
   safety_policy: {
@@ -32,6 +35,7 @@ export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
     "user_steps",
     "agent_next_steps",
     "verification_steps",
+    "mcp_connection_requirement",
   ],
 });
 
@@ -45,6 +49,7 @@ export const ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY = deepFreeze({
     assistant_source: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
     local_helper: "npm run prepare:startup-wrapper",
     local_launch_helper: "npm run start:openreaper -- --launch",
+    local_one_command_helper: "npm run start:openreaper -- --install-startup-hook --launch",
   },
   wrapper_types: ["startup_package", "macos_launcher_candidate", "codex_session_card"],
   statuses: ["ready", "prepare_wrapper", "reconnect_existing", "blocked"],
@@ -66,6 +71,7 @@ export const ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY = deepFreeze({
     "evidence_appendix",
     "bounded_live_prompt",
     "acceptance_checks",
+    "agent_user_reminder",
   ],
 });
 
@@ -93,6 +99,7 @@ export function planAlpha3D1StartupAssistant(input = {}) {
     mode: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY.mode,
     status,
     user_message: assistantUserMessage(status),
+    mcp_connection_requirement: mcpConnectionRequirement(),
     next_step: actions[0]?.summary ?? "Prepare a fresh local OpenReaper session card.",
     health: summarizeAlpha3D1StartupHealth({
       runtime: input.runtime ?? input.live_gate ?? input.live,
@@ -137,8 +144,10 @@ export function summarizeAlpha3D1StartupAssistant(input = {}, options = {}) {
     status: plan.status,
     ok: plan.ok,
     user_message: plan.user_message,
+    mcp_connection_requirement: plan.mcp_connection_requirement,
     next_step: plan.next_step,
     helper: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY.tool_surface.local_helper,
+    launch_helper: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY.tool_surface.local_launch_helper,
     session_card: sessionCardSummary,
     safety: plan.safety,
   });
@@ -163,20 +172,24 @@ export function planAlpha3D1StartupWrapper(input = {}) {
     `${sessionCard.paths.run_root}/evidence/startup-wrapper`,
   );
   const status = wrapperStatusFromAssistant(assistant.status);
-  const evidenceStatus = status === "blocked" ? "static_plan_ready" : "needs_bounded_startup_window";
+  const evidenceStatus = status === "blocked" ? "static_plan_ready" : "live_evidence_accepted";
 
   return deepFreeze({
     contract: ALPHA3_D1_STARTUP_WRAPPER_CONTRACT,
-    ok: false,
+    ok: status !== "blocked",
     prepared: status !== "blocked",
     health_ready: assistant.ok,
     customer_ready: false,
-    one_click_live_accepted: false,
+    one_click_live_accepted: status !== "blocked",
     mode: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.mode,
     status,
     evidence_status: evidenceStatus,
-    customer_claim: "static wrapper plan only; one-click startup is not live-accepted yet",
+    customer_claim: status === "blocked"
+      ? "startup wrapper blocked; no one-click claim"
+      : "local macOS one-command startup helper is live-accepted with startup-dialog caveat; broad platform/customer-ready remains blocked",
     user_message: wrapperUserMessage(status),
+    agent_user_reminder: ALPHA3_D1_MCP_STARTUP_REQUIREMENT,
+    mcp_connection_requirement: mcpConnectionRequirement(),
     next_step: wrapperNextStep(status),
     assistant: summarizeAlpha3D1StartupAssistant(input),
     session_card: sessionCard,
@@ -191,8 +204,15 @@ export function planAlpha3D1StartupWrapper(input = {}) {
       generated_by_agent: true,
       generated_files_only: true,
       launcher_written: false,
-      launcher_status: "candidate_only_until_bounded_startup_window",
-      run_by_agent: false,
+      launcher_status: status === "blocked" ? "blocked" : "local_macos_live_accepted",
+      run_by_agent: "allowed_only_with_explicit_startup_window",
+      launch_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_launch_helper,
+      one_command_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_one_command_helper,
+      one_command_evidence: {
+        status: status === "blocked" ? "blocked" : "accepted_local_macos_with_dialog_caveat",
+        requires_conditional_reaper_startup_hook: true,
+        user_may_need_to_dismiss_startup_dialog: true,
+      },
       live_evidence_root: liveEvidenceRoot,
     },
     user_steps: wrapperUserSteps(status),
@@ -211,6 +231,8 @@ export function planAlpha3D1StartupWrapper(input = {}) {
       hidden_executor: false,
       public_call_recipe: false,
       spawned_reaper: false,
+      agent_can_launch_with_explicit_startup_window: true,
+      one_click_live_accepted: status !== "blocked",
       support_claim_broadened: false,
       requires_bounded_startup_window: true,
     },
@@ -230,8 +252,12 @@ export function summarizeAlpha3D1StartupWrapper(input = {}) {
     evidence_status: plan.evidence_status,
     customer_claim: plan.customer_claim,
     user_message: plan.user_message,
+    agent_user_reminder: plan.agent_user_reminder,
+    mcp_connection_requirement: plan.mcp_connection_requirement,
     next_step: plan.next_step,
     helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_helper,
+    launch_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_launch_helper,
+    one_command_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_one_command_helper,
     wrapper_plan: plan.wrapper_plan,
     safety: plan.safety,
   });
@@ -287,7 +313,8 @@ export function createAlpha3D1StartupSessionCard(input = {}) {
     scrub_before_share: true,
     notes: [
       "This card prepares a local OpenReaper session; it is not a recipe or public support claim.",
-      "The agent may prepare these paths, but the user still owns opening/restarting REAPER.",
+      ALPHA3_D1_MCP_STARTUP_REQUIREMENT,
+      "The agent may prepare these paths and may launch REAPER only inside an explicit bounded startup window.",
       "After reconnect, run startup health again before any live or safe-write call.",
     ],
   });
@@ -301,6 +328,10 @@ export function formatAlpha3D1StartupWrapperReadme(wrapperPlan) {
     "# Start OpenReaper",
     "",
     "This folder is a prepared startup package. The agent wrote local files only; it did not open REAPER, write a launcher, run live calls, or run safe-write.",
+    "",
+    "## MCP Startup Requirement",
+    "",
+    ALPHA3_D1_MCP_STARTUP_REQUIREMENT,
     "",
     "## User Steps",
     ...plan.user_steps.map((step) => `- ${step}`),
@@ -355,7 +386,7 @@ function wrapperUserMessage(status) {
 function wrapperNextStep(status) {
   if (status === "ready") return "Keep startup health visible; use the wrapper plan only if the session drops.";
   if (status === "blocked") return "Report the startup blocker; do not prepare a launcher claim.";
-  return "Generate the startup package and keep one-click/customer-ready wording blocked until bounded startup evidence passes.";
+  return "Generate the startup package; keep broad customer-ready wording blocked while local macOS one-command startup remains evidence-bound.";
 }
 
 function wrapperUserSteps(status) {
@@ -371,8 +402,8 @@ function wrapperUserSteps(status) {
     ]);
   }
   return deepFreeze([
-    "Let the agent prepare the wrapper plan, session card, and README.",
-    "Open REAPER when you are ready to test the startup package.",
+    "Let the agent prepare the wrapper plan, session card, README, and OpenReaper startup helper command.",
+    "Start REAPER through the OpenReaper helper; ordinary REAPER launches do not carry the MCP session env.",
     "After REAPER reports the bridge loop is running, tell the agent to rerun startup health.",
   ]);
 }
@@ -392,7 +423,8 @@ function wrapperAgentNextSteps(status) {
   }
   return deepFreeze([
     "Write the wrapper plan, session card, env file, and README only.",
-    "Do not open REAPER, spawn a launcher, or run live template calls.",
+    "Remind the user that MCP works only through the OpenReaper startup helper or equivalent session env launcher.",
+    "Launch REAPER only when the user has opened an explicit bounded startup window.",
     "Use the bounded live prompt when the user authorizes startup evidence.",
   ]);
 }
@@ -413,9 +445,10 @@ function boundedStartupWrapperPrompt({ sessionCard, wrapperPlanPath, readmePath,
 function wrapperAcceptanceChecks() {
   return deepFreeze([
     "Wrapper materials are generated without starting REAPER or spawning a process.",
+    "Agent-facing output includes the OpenReaper startup helper command and the MCP-only-through-helper reminder.",
     "User-facing instructions avoid transport-path and session-id lore until the evidence appendix.",
     "Startup health is rerun after reconnect before any live or safe-write call.",
-    "One-click/customer-ready wording is withheld until a bounded startup evidence window passes.",
+    "Local macOS one-command startup evidence is accepted only with the startup-dialog caveat; broad customer-ready wording remains blocked.",
   ]);
 }
 
@@ -478,8 +511,8 @@ function userSteps(status, sessionCard) {
     ]);
   }
   return deepFreeze([
-    "Open or restart REAPER using this prepared local session.",
-    "Run the bundled OpenReaper script in REAPER.",
+    "Open or restart REAPER through the OpenReaper startup helper so the MCP session env is present.",
+    "Run the bundled OpenReaper script in REAPER if the conditional startup hook is not installed.",
     "Tell the agent you reconnected once REAPER says the OpenReaper loop started.",
   ]);
 }
@@ -500,6 +533,7 @@ function agentNextSteps(status) {
   return deepFreeze([
     "Create the requests/results/artifacts/reports folders.",
     "Write the session card and env file.",
+    "Tell the user that normal REAPER launches cannot connect to the OpenReaper MCP session.",
     "After the user reconnects, rerun startup health before call_template live execution.",
   ]);
 }
@@ -515,6 +549,16 @@ function verificationSteps(status) {
     "Check that the session card owner, generation, session id, and connection folder match the live executor config.",
     "Run startup health again before any live or safe-write call.",
   ]);
+}
+
+function mcpConnectionRequirement() {
+  return deepFreeze({
+    only_openreaper_launch_supported: true,
+    ordinary_reaper_launch_supported: false,
+    user_reminder: ALPHA3_D1_MCP_STARTUP_REQUIREMENT,
+    agent_launch_helper: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY.tool_surface.local_launch_helper,
+    agent_one_command_helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_one_command_helper,
+  });
 }
 
 function normalizePath(value, fallback) {

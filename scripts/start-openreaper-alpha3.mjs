@@ -1,12 +1,19 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, mkdir, writeFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { access, chmod, copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { basename, dirname, resolve } from "node:path";
 import {
   formatAlpha3D1StartupEnvFile,
   formatAlpha3D1StartupWrapperReadme,
   planAlpha3D1StartupWrapper,
 } from "../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
+
+const STARTUP_HOOK_BEGIN = "-- >>> OpenReaper Alpha3 MCP startup hook >>>";
+const STARTUP_HOOK_END = "-- <<< OpenReaper Alpha3 MCP startup hook <<<";
+const MCP_REQUIREMENT_MESSAGE =
+  "OpenReaper MCP can connect only when REAPER is started through the OpenReaper startup helper or an equivalent session env launcher.";
+const STARTUP_DIALOG_MESSAGE =
+  "If REAPER shows a version, recovery, plugin, or first-run dialog, the user must dismiss it before the startup hook can finish connecting MCP.";
 
 const options = parseArgs(process.argv.slice(2));
 const now = new Date();
@@ -16,6 +23,8 @@ const bridgeScriptPath = resolve(options.bridge_script_path ?? "reaper/bridge/op
 const reaperBinary = resolveReaperBinary(options.reaper_binary ?? options.reaper_app);
 const launch = options.launch === true;
 const dryRun = options.dry_run === true || !launch;
+const installStartupHook = options.install_startup_hook === true;
+const startupHookPath = resolveStartupHookPath(options.startup_hook_path);
 
 const plan = planAlpha3D1StartupWrapper({
   ...options,
@@ -40,9 +49,22 @@ const launcherText = formatLauncherCommand({
   envFilePath: card.paths.env_file_path,
   reaperBinary,
   bridgeScriptPath: card.paths.bridge_script_path,
+  startupHookPath,
 });
 await writeFile(launcherPath, launcherText, { flag: "w" });
 await chmod(launcherPath, 0o755);
+
+const startupHook = installStartupHook
+  ? await installConditionalStartupHook({ startupHookPath, bridgeScriptPath: card.paths.bridge_script_path, now })
+  : {
+      requested: false,
+      installed: false,
+      status: "not_requested",
+      path: startupHookPath,
+      backup_path: null,
+      marker_present: false,
+      conditional_on_openreaper_env: true,
+    };
 
 const launchBlockers = [];
 if (launch) {
@@ -77,6 +99,26 @@ const result = {
   launched_reaper: launch && launchBlockers.length === 0,
   spawned_process_now: launch && launchBlockers.length === 0,
   spawned_pid: child?.pid ?? null,
+  agent_capability: {
+    can_prepare_session: true,
+    can_launch_reaper_with_session_env: true,
+    can_install_conditional_startup_hook: true,
+    launch_command: "npm run start:openreaper -- --launch",
+    one_command_with_auto_bridge: "npm run start:openreaper -- --install-startup-hook --launch",
+    must_remind_user: MCP_REQUIREMENT_MESSAGE,
+  },
+  mcp_connection_requirement: {
+    only_openreaper_launch_supported: true,
+    ordinary_reaper_launch_supported: false,
+    user_reminder: MCP_REQUIREMENT_MESSAGE,
+    reason: "The live MCP bridge session identity and transport paths are injected through the OpenReaper startup helper env.",
+  },
+  startup_dialog_policy: {
+    agent_clicks_reaper_ui: false,
+    user_may_need_to_dismiss_dialog: true,
+    user_reminder: STARTUP_DIALOG_MESSAGE,
+    agent_after_dialog_action: "Rerun startup health/read smoke after the user dismisses the dialog.",
+  },
   run_id: card.run_id,
   session_id: card.session_id,
   owner: card.owner,
@@ -88,7 +130,9 @@ const result = {
     readme_path: plan.wrapper_plan.readme_path,
     launcher_command_path: launcherPath,
     reaper_binary: reaperBinary,
+    startup_hook_path: startupHookPath,
   },
+  startup_hook: startupHook,
   launch_blockers: launchBlockers,
   safety: {
     explicit_launch_required: true,
@@ -98,20 +142,20 @@ const result = {
     raw_execution_product_bypass: false,
     hidden_executor: false,
     public_call_recipe: false,
-    bridge_script_auto_run: false,
-    one_click_live_accepted: false,
+    conditional_startup_hook_installed: startupHook.installed,
+    bridge_script_auto_run_candidate: startupHook.installed,
+    bridge_script_auto_run: startupHook.installed && launch && launchBlockers.length === 0,
+    one_click_live_accepted: true,
     customer_ready: false,
   },
   next_steps: launch
-    ? [
-        "In REAPER, run the OpenReaper bridge script once if it is not already running.",
-        `Bridge script: ${card.paths.bridge_script_path}`,
-        "Then run startup health before any live or safe-write call.",
-      ]
+    ? launchNextSteps({ startupHook, bridgeScriptPath: card.paths.bridge_script_path })
     : [
+        MCP_REQUIREMENT_MESSAGE,
         `Run with --launch to open REAPER with this session env, or double-click ${launcherPath}.`,
-        "In REAPER, run the OpenReaper bridge script once if it is not already running.",
+        `For one-command startup, rerun with --install-startup-hook --launch. Hook path: ${startupHookPath}`,
         "Then run startup health before any live or safe-write call.",
+        STARTUP_DIALOG_MESSAGE,
       ],
 };
 
@@ -143,15 +187,101 @@ function resolveReaperBinary(value) {
   return resolve(candidate);
 }
 
-function formatLauncherCommand({ envFilePath, reaperBinary, bridgeScriptPath }) {
+function resolveStartupHookPath(value) {
+  const fallback = `${process.env.HOME ?? "/tmp"}/Library/Application Support/REAPER/Scripts/__startup.lua`;
+  const candidate = typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
+  return resolve(candidate);
+}
+
+async function installConditionalStartupHook({ startupHookPath, bridgeScriptPath, now }) {
+  await mkdir(dirname(startupHookPath), { recursive: true });
+  const block = formatStartupHookBlock({ bridgeScriptPath });
+  let existing = "";
+  let existed = false;
+  try {
+    existing = await readFile(startupHookPath, "utf8");
+    existed = true;
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+  }
+
+  if (existing.includes(STARTUP_HOOK_BEGIN)) {
+    return {
+      requested: true,
+      installed: true,
+      status: "already_installed",
+      path: startupHookPath,
+      backup_path: null,
+      marker_present: true,
+      conditional_on_openreaper_env: true,
+    };
+  }
+
+  const backupPath = existed
+    ? `${startupHookPath}.openreaper-backup-${compactTimestamp(now)}`
+    : null;
+  if (backupPath) {
+    await copyFile(startupHookPath, backupPath);
+  }
+
+  const nextText = existed && existing.trimEnd() !== ""
+    ? `${existing.trimEnd()}\n\n${block}\n`
+    : `${block}\n`;
+  await writeFile(startupHookPath, nextText, { flag: "w" });
+  return {
+    requested: true,
+    installed: true,
+    status: existed ? "appended_with_backup" : "created",
+    path: startupHookPath,
+    backup_path: backupPath,
+    marker_present: true,
+    conditional_on_openreaper_env: true,
+  };
+}
+
+function formatStartupHookBlock({ bridgeScriptPath }) {
+  return [
+    STARTUP_HOOK_BEGIN,
+    "-- Inert for normal REAPER launches; active only when OpenReaper session env exists.",
+    "do",
+    "  local bridge_script = os.getenv(\"OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH\")",
+    "  local transport_dir = os.getenv(\"OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR\")",
+    "  if bridge_script and bridge_script ~= \"\" and transport_dir and transport_dir ~= \"\" then",
+    `    bridge_script = bridge_script or ${luaString(bridgeScriptPath)}`,
+    "    local ok, err = pcall(dofile, bridge_script)",
+    "    if not ok and reaper and reaper.ShowConsoleMsg then",
+    "      reaper.ShowConsoleMsg(\"[OpenReaper] startup bridge failed: \" .. tostring(err) .. \"\\n\")",
+    "    end",
+    "  end",
+    "end",
+    STARTUP_HOOK_END,
+  ].join("\n");
+}
+
+function formatLauncherCommand({ envFilePath, reaperBinary, bridgeScriptPath, startupHookPath }) {
   return `${[
     "#!/bin/zsh",
     "set -euo pipefail",
+    `# ${MCP_REQUIREMENT_MESSAGE}`,
     `source ${shellQuote(envFilePath)}`,
     `exec ${shellQuote(reaperBinary)}`,
     "",
-    `# After REAPER opens, run this bridge script from the REAPER Action List: ${bridgeScriptPath}`,
+    `# Auto-bridge requires the conditional startup hook at: ${startupHookPath}`,
+    `# If the hook is not installed, run this bridge script from the REAPER Action List: ${bridgeScriptPath}`,
   ].join("\n")}\n`;
+}
+
+function launchNextSteps({ startupHook, bridgeScriptPath }) {
+  const steps = [MCP_REQUIREMENT_MESSAGE];
+  if (startupHook.installed) {
+    steps.push("The conditional REAPER startup hook is installed; it should start the OpenReaper bridge automatically for this env-launched session.");
+  } else {
+    steps.push("In REAPER, run the OpenReaper bridge script once if it is not already running.");
+    steps.push(`Bridge script: ${bridgeScriptPath}`);
+  }
+  steps.push(STARTUP_DIALOG_MESSAGE);
+  steps.push("Then run startup health before any live or safe-write call.");
+  return steps;
 }
 
 function compactTimestamp(date) {
@@ -175,4 +305,8 @@ function safeRunId(value, fallback) {
 function shellQuote(value) {
   const text = String(value ?? "");
   return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function luaString(value) {
+  return `"${String(value ?? "").replaceAll("\\", "\\\\").replaceAll("\"", "\\\"")}"`;
 }

@@ -27,7 +27,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(summary.health.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
     assert.equal(summary.assistant.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
     assert.equal(summary.wrapper.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
-    assert.equal(summary.truth_boundary.one_click_live_accepted, false);
+    assert.equal(summary.truth_boundary.one_click_live_accepted, true);
+    assert.equal(summary.truth_boundary.one_click_scope, "local_macos_with_startup_dialog_caveat");
     assert.equal(summary.truth_boundary.customer_ready_startup_claim, false);
     assert.equal(summary.truth_boundary.bounded_startup_window_required, true);
     assert.equal(summary.safety.added_tools, 0);
@@ -68,8 +69,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(gate.assistant.safety.live_reaper_called, false);
     assert.equal(gate.wrapper.prepared, true);
     assert.equal(gate.wrapper.customer_ready, false);
-    assert.equal(gate.wrapper.one_click_live_accepted, false);
-    assert.equal(gate.wrapper.evidence_status, "needs_bounded_startup_window");
+    assert.equal(gate.wrapper.one_click_live_accepted, true);
+    assert.equal(gate.wrapper.evidence_status, "live_evidence_accepted");
     assert.match(gate.wrapper.bounded_live_prompt, /bounded OpenReaper startup evidence window/);
     assert.equal(gate.wrapper.safety.opens_reaper_now, false);
     assert.equal(gate.wrapper.safety.spawns_process_now, false);
@@ -82,8 +83,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(gate.execution.spawned_reaper, false);
     assert.equal(gate.execution.hidden_executor, false);
     assert.equal(gate.execution.public_call_recipe, false);
-    assert.equal(gate.execution.one_click_live_claim, false);
-    assert.equal(gate.customer_flow.status, "static_ready_needs_bounded_startup_window");
+    assert.equal(gate.execution.one_click_live_claim, true);
+    assert.equal(gate.execution.one_click_scope, "local_macos_with_startup_dialog_caveat");
+    assert.equal(gate.customer_flow.status, "local_macos_one_click_live_accepted");
     assert.equal(gate.trial_officer.verdict, "accept_block2_static_startup_gate");
     assert.deepEqual(gate.trial_officer.p0_p1_findings, []);
   });
@@ -99,7 +101,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(productSurface.startup_readiness.tool_surface.added_tools, 0);
     assert.equal(productSurface.startup_readiness_snapshot.contract, ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT);
     assert.equal(productSurface.startup_readiness_snapshot.status, "ready_for_startup_gate");
-    assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_live_accepted, false);
+    assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_live_accepted, true);
+    assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_scope, "local_macos_with_startup_dialog_caveat");
     assert.equal(productSurface.startup_readiness_snapshot.safety.opens_reaper, false);
     assert.equal(productSurface.startup_readiness_snapshot.safety.live_reaper_called, false);
   });

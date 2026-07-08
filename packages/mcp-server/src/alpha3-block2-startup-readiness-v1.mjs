@@ -36,7 +36,7 @@ export const ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY = deepFreeze({
     "missing startup gives one beginner-readable action without spawning REAPER",
     "stale session stops before live/safe-write calls",
     "startup assistant prepares session card/env guidance without live calls",
-    "wrapper route remains candidate-only until bounded startup evidence passes",
+    "local macOS one-command startup remains evidence-bound and does not broaden customer-ready claims",
   ],
   summary_function: "summarizeAlpha3Block2StartupReadiness",
   gate_function: "runAlpha3Block2StartupReadinessGate",
@@ -57,12 +57,13 @@ export function summarizeAlpha3Block2StartupReadiness(input = {}) {
     assistant,
     wrapper,
     truth_boundary: {
-      one_click_live_accepted: false,
+      one_click_live_accepted: wrapper.one_click_live_accepted === true,
+      one_click_scope: "local_macos_with_startup_dialog_caveat",
       customer_ready_startup_claim: false,
       bounded_startup_window_required: true,
     },
     safety: safetySummary([health.safety, assistant.safety, wrapper.safety]),
-    next_gate: "Run runAlpha3Block2StartupReadinessGate; open a bounded startup window only for true one-click/live evidence.",
+    next_gate: "Run startup health after helper launch; keep broad customer-ready startup claims blocked unless new evidence broadens scope.",
   });
 }
 
@@ -148,12 +149,13 @@ export function runAlpha3Block2StartupReadinessGate(input = {}) {
       hidden_executor: false,
       public_call_recipe: false,
       raw_lua_action_shell_or_ui: false,
-      one_click_live_claim: false,
+      one_click_live_claim: true,
+      one_click_scope: "local_macos_with_startup_dialog_caveat",
     },
     customer_flow: {
-      status: failures.length === 0 ? "static_ready_needs_bounded_startup_window" : "needs_repair",
+      status: failures.length === 0 ? "local_macos_one_click_live_accepted" : "needs_repair",
       promise: "The agent can tell the user whether to continue, start, reconnect, or stop for stale-session safety without exposing connection internals first.",
-      bounded_followup: "True one-click/app-wrapper startup evidence still needs a user-opened bounded startup window.",
+      bounded_followup: "Broad customer-ready startup claims still need a new evidence route; current acceptance is local macOS with startup-dialog caveat.",
     },
     trial_officer: {
       verdict: failures.length === 0 ? "accept_block2_static_startup_gate" : "needs_block2_repair",
@@ -293,8 +295,8 @@ function hardGateFailures({ ready, missingStartup, stale, scopeBlocked, assistan
   if (assistant.status !== "prepare_session") failures.push(failure("ASSISTANT_DID_NOT_PREPARE_SESSION", "Startup assistant should prepare a session when no connection is present."));
   if (assistant.safety.opens_reaper !== false || assistant.safety.live_reaper_called !== false) failures.push(failure("ASSISTANT_SIDE_EFFECT_FAILED", "Startup assistant must not open REAPER or call live."));
   if (!assistant.actions.some((action) => action.id === "prepare_local_session_card")) failures.push(failure("ASSISTANT_SESSION_CARD_ACTION_MISSING", "Startup assistant did not expose the local session-card action."));
-  if (wrapper.prepared !== true || wrapper.customer_ready !== false) failures.push(failure("WRAPPER_EVIDENCE_BOUNDARY_FAILED", "Startup wrapper must be prepared but not customer-ready until bounded evidence passes."));
-  if (wrapper.one_click_live_accepted !== false || wrapper.evidence_status !== "needs_bounded_startup_window") failures.push(failure("ONE_CLICK_EVIDENCE_BOUNDARY_FAILED", "One-click startup must remain evidence-gated."));
+  if (wrapper.prepared !== true || wrapper.customer_ready !== false) failures.push(failure("WRAPPER_EVIDENCE_BOUNDARY_FAILED", "Startup wrapper must be prepared but not broad customer-ready."));
+  if (wrapper.one_click_live_accepted !== true || wrapper.evidence_status !== "live_evidence_accepted") failures.push(failure("ONE_CLICK_EVIDENCE_BOUNDARY_FAILED", "Local macOS one-click startup evidence should be accepted while broad claims remain blocked."));
   if (wrapper.safety.opens_reaper_now !== false || wrapper.safety.spawns_process_now !== false) failures.push(failure("WRAPPER_SPAWN_GUARD_FAILED", "Wrapper route must not open REAPER or spawn processes now."));
   if (sessionCard.shareable !== false || sessionCard.scrub_before_share !== true) failures.push(failure("SESSION_CARD_SHARE_BOUNDARY_FAILED", "Session cards must not be shareable without scrub."));
   if (!envFile.includes("OPENREAPER_LIVE_BRIDGE_SESSION_ID")) failures.push(failure("ENV_FILE_SESSION_ID_MISSING", "Startup env file must preserve session identity."));
