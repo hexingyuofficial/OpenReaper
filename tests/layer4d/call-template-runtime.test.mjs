@@ -25,6 +25,10 @@ import {
   ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-block3-speed-productization-v1.mjs";
 import {
+  ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT,
+  ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-block5-reuse-ecosystem-v1.mjs";
+import {
   ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-c3-project-index-query-v1.mjs";
 import {
@@ -416,6 +420,10 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY,
     );
     assert.deepEqual(
+      runtimeMenu.product_surface.reuse_ecosystem,
+      ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
+    );
+    assert.deepEqual(
       runtimeMenu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     );
@@ -451,6 +459,7 @@ describe("Layer 4D call_template runtime binding", () => {
     );
     assert.equal(runtimeMenu.product_surface.orchestration_policy.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.speed_productization.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.reuse_ecosystem.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.project_index_queries.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.stock_plugin_fluency.tool_surface.added_tools, 0);
@@ -461,6 +470,11 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT,
     );
     assert.equal(runtimeMenu.product_surface.speed_productization_snapshot.ok, true);
+    assert.equal(
+      runtimeMenu.product_surface.reuse_ecosystem_snapshot.contract,
+      ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT,
+    );
+    assert.equal(runtimeMenu.product_surface.reuse_ecosystem_snapshot.status, "ready_for_local_entrypoint_gate");
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);

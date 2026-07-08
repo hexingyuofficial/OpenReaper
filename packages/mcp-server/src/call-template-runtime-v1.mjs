@@ -36,6 +36,10 @@ import {
   summarizeAlpha3Block3SpeedProductization,
 } from "./alpha3-block3-speed-productization-v1.mjs";
 import {
+  ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
+  summarizeAlpha3Block5ReuseEcosystem,
+} from "./alpha3-block5-reuse-ecosystem-v1.mjs";
+import {
   ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexQueryRuntimeEnvelope,
@@ -1278,6 +1282,8 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     orchestration_policy: ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
     speed_productization: ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY,
     speed_productization_snapshot: summarizeAlpha3Block3SpeedProductization(),
+    reuse_ecosystem: ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
+    reuse_ecosystem_snapshot: summarizeAlpha3Block5ReuseEcosystem(),
     project_index_queries: ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
