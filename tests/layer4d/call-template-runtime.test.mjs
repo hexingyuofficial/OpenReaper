@@ -43,6 +43,10 @@ import {
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
 } from "../../packages/mcp-server/src/alpha3-e1-stock-plugin-fluency-v1.mjs";
 import {
+  ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_CONTRACT,
+  ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-block6-stock-plugin-product-gate-v1.mjs";
+import {
   ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
   ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
@@ -444,6 +448,10 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     );
     assert.deepEqual(
+      runtimeMenu.product_surface.stock_plugin_product_gate,
+      ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
+    );
+    assert.deepEqual(
       runtimeMenu.product_surface.startup_health,
       ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
     );
@@ -472,6 +480,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.product_surface.project_index_queries.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.stock_plugin_fluency.tool_surface.added_tools, 0);
+    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_assistant.tool_surface.added_tools, 0);
     assert.equal(
@@ -489,6 +498,13 @@ describe("Layer 4D call_template runtime binding", () => {
       ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT,
     );
     assert.equal(runtimeMenu.product_surface.startup_readiness_snapshot.status, "ready_for_startup_gate");
+    assert.equal(
+      runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.contract,
+      ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_CONTRACT,
+    );
+    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.ok, true);
+    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.coverage.ready_starter_flow_count, 10);
+    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.coverage.broad_live_support, false);
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);

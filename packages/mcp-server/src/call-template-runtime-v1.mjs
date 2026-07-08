@@ -66,6 +66,10 @@ import {
   summarizeAlpha3E1StockPluginLiveEvidenceMatrix,
 } from "./alpha3-e1-stock-plugin-fluency-v1.mjs";
 import {
+  ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
+  summarizeAlpha3Block6StockPluginProductGate,
+} from "./alpha3-block6-stock-plugin-product-gate-v1.mjs";
+import {
   ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
   summarizeAlpha3D1StartupHealth,
 } from "./alpha3-d1-startup-health-v1.mjs";
@@ -1298,6 +1302,8 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     stock_plugin_live_evidence: summarizeAlpha3E1StockPluginLiveEvidenceMatrix(),
+    stock_plugin_product_gate: ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
+    stock_plugin_product_gate_snapshot: summarizeAlpha3Block6StockPluginProductGate(),
     startup_health: ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
     startup_health_snapshot: summarizeAlpha3D1StartupHealth({
       runtime: productSurface.live_gate,
