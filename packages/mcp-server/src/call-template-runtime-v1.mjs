@@ -40,6 +40,10 @@ import {
   summarizeAlpha3Block5ReuseEcosystem,
 } from "./alpha3-block5-reuse-ecosystem-v1.mjs";
 import {
+  ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
+  summarizeAlpha3Block2StartupReadiness,
+} from "./alpha3-block2-startup-readiness-v1.mjs";
+import {
   ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexQueryRuntimeEnvelope,
@@ -1284,6 +1288,12 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     speed_productization_snapshot: summarizeAlpha3Block3SpeedProductization(),
     reuse_ecosystem: ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
     reuse_ecosystem_snapshot: summarizeAlpha3Block5ReuseEcosystem(),
+    startup_readiness: ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
+    startup_readiness_snapshot: summarizeAlpha3Block2StartupReadiness({
+      health: { runtime: productSurface.live_gate },
+      assistant: { runtime: productSurface.live_gate },
+      wrapper: { runtime: productSurface.live_gate },
+    }),
     project_index_queries: ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
