@@ -21,6 +21,7 @@ const runId = safeRunId(options.run_id, `openreaper-alpha3-start-${compactTimest
 const runRoot = resolve(options.run_root ?? `/Users/Shared/${runId}`);
 const bridgeScriptPath = resolve(options.bridge_script_path ?? "reaper/bridge/openreaper-live-bridge.lua");
 const reaperBinary = resolveReaperBinary(options.reaper_binary ?? options.reaper_app);
+const projectPath = resolveOptionalProjectPath(options.project_path ?? options.project ?? options.rpp_path);
 const launch = options.launch === true;
 const dryRun = options.dry_run === true || !launch;
 const installStartupHook = options.install_startup_hook === true;
@@ -48,6 +49,7 @@ const launcherPath = plan.wrapper_plan.candidate_launcher_command_path;
 const launcherText = formatLauncherCommand({
   envFilePath: card.paths.env_file_path,
   reaperBinary,
+  projectPath,
   bridgeScriptPath: card.paths.bridge_script_path,
   startupHookPath,
 });
@@ -76,11 +78,21 @@ if (launch) {
       message: `REAPER binary is not executable: ${reaperBinary}`,
     });
   }
+  if (projectPath) {
+    try {
+      await access(projectPath, fsConstants.R_OK);
+    } catch {
+      launchBlockers.push({
+        code: "PROJECT_PATH_NOT_READABLE",
+        message: `Project path is not readable: ${projectPath}`,
+      });
+    }
+  }
 }
 
 let child = null;
 if (launch && launchBlockers.length === 0) {
-  child = spawn(reaperBinary, [], {
+  child = spawn(reaperBinary, projectPath ? [projectPath] : [], {
     detached: true,
     stdio: "ignore",
     env: {
@@ -102,10 +114,13 @@ const result = {
   agent_capability: {
     can_prepare_session: true,
     can_launch_reaper_with_session_env: true,
+    can_launch_specific_project_with_session_env: true,
     can_install_conditional_startup_hook: true,
     launch_command: "npm run start:openreaper -- --launch",
+    launch_project_command: "npm run start:openreaper -- --install-startup-hook --launch --project-path <path-to-project.RPP>",
     one_command_with_auto_bridge: "npm run start:openreaper -- --install-startup-hook --launch",
     must_remind_user: MCP_REQUIREMENT_MESSAGE,
+    must_not_close_reaper_without_explicit_authorization: true,
   },
   mcp_connection_requirement: {
     only_openreaper_launch_supported: true,
@@ -130,7 +145,13 @@ const result = {
     readme_path: plan.wrapper_plan.readme_path,
     launcher_command_path: launcherPath,
     reaper_binary: reaperBinary,
+    project_path: projectPath,
     startup_hook_path: startupHookPath,
+  },
+  target_project: {
+    requested: projectPath !== null,
+    path: projectPath,
+    launch_argument_used: launch && launchBlockers.length === 0 && projectPath !== null,
   },
   startup_hook: startupHook,
   launch_blockers: launchBlockers,
@@ -142,6 +163,8 @@ const result = {
     raw_execution_product_bypass: false,
     hidden_executor: false,
     public_call_recipe: false,
+    closes_reaper: false,
+    close_reaper_requires_explicit_user_authorization: true,
     conditional_startup_hook_installed: startupHook.installed,
     bridge_script_auto_run_candidate: startupHook.installed,
     bridge_script_auto_run: startupHook.installed && launch && launchBlockers.length === 0,
@@ -185,6 +208,11 @@ function resolveReaperBinary(value) {
   const candidate = typeof value === "string" && value.trim() !== "" ? value.trim() : fallback;
   if (candidate.endsWith(".app")) return resolve(candidate, "Contents/MacOS", basename(candidate, ".app"));
   return resolve(candidate);
+}
+
+function resolveOptionalProjectPath(value) {
+  if (typeof value !== "string" || value.trim() === "") return null;
+  return resolve(value.trim());
 }
 
 function resolveStartupHookPath(value) {
@@ -258,13 +286,13 @@ function formatStartupHookBlock({ bridgeScriptPath }) {
   ].join("\n");
 }
 
-function formatLauncherCommand({ envFilePath, reaperBinary, bridgeScriptPath, startupHookPath }) {
+function formatLauncherCommand({ envFilePath, reaperBinary, projectPath, bridgeScriptPath, startupHookPath }) {
   return `${[
     "#!/bin/zsh",
     "set -euo pipefail",
     `# ${MCP_REQUIREMENT_MESSAGE}`,
     `source ${shellQuote(envFilePath)}`,
-    `exec ${shellQuote(reaperBinary)}`,
+    projectPath ? `exec ${shellQuote(reaperBinary)} ${shellQuote(projectPath)}` : `exec ${shellQuote(reaperBinary)}`,
     "",
     `# Auto-bridge requires the conditional startup hook at: ${startupHookPath}`,
     `# If the hook is not installed, run this bridge script from the REAPER Action List: ${bridgeScriptPath}`,

@@ -516,6 +516,8 @@ describe("Alpha3 D1 startup and connection health", () => {
 
   it("prepares a one-command startup helper in dry-run mode without spawning REAPER", () => {
     const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-start-helper-"));
+    const projectPath = join(root, "test-project.RPP");
+    writeFileSync(projectPath, "<REAPER_PROJECT 0.1 \"7.0/x64\" 0\n>");
     const output = execFileSync(
       process.execPath,
       [
@@ -523,6 +525,7 @@ describe("Alpha3 D1 startup and connection health", () => {
         "--run-id=test-start-openreaper",
         `--run-root=${root}`,
         "--dry-run",
+        `--project-path=${projectPath}`,
         "--reaper-binary=/tmp/not-used-reaper",
       ],
       {
@@ -539,6 +542,8 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(result.launched_reaper, false);
     assert.equal(result.spawned_process_now, false);
     assert.equal(result.agent_capability.can_launch_reaper_with_session_env, true);
+    assert.equal(result.agent_capability.can_launch_specific_project_with_session_env, true);
+    assert.equal(result.agent_capability.must_not_close_reaper_without_explicit_authorization, true);
     assert.equal(result.agent_capability.one_command_with_auto_bridge, "npm run start:openreaper -- --install-startup-hook --launch");
     assert.equal(result.mcp_connection_requirement.user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
     assert.equal(result.mcp_connection_requirement.ordinary_reaper_launch_supported, false);
@@ -548,16 +553,22 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.equal(result.safety.dry_run_default, true);
     assert.equal(result.safety.safe_write_called, false);
     assert.equal(result.safety.project_mutation, false);
+    assert.equal(result.safety.closes_reaper, false);
+    assert.equal(result.safety.close_reaper_requires_explicit_user_authorization, true);
     assert.equal(result.safety.bridge_script_auto_run, false);
     assert.equal(result.safety.bridge_script_auto_run_candidate, false);
     assert.equal(result.safety.one_click_live_accepted, true);
     assert.equal(result.startup_hook.status, "not_requested");
+    assert.equal(result.target_project.requested, true);
+    assert.equal(result.target_project.path, projectPath);
+    assert.equal(result.target_project.launch_argument_used, false);
     assert.equal(existsSync(result.paths.env_file_path), true);
     assert.equal(existsSync(result.paths.launcher_command_path), true);
 
     const launcher = readFileSync(result.paths.launcher_command_path, "utf8");
     assert.match(launcher, /source/);
     assert.match(launcher, /exec/);
+    assert.match(launcher, /test-project\.RPP/);
     assert.match(launcher, /OpenReaper MCP can connect only/);
   });
 
