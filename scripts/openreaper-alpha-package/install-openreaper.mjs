@@ -21,6 +21,7 @@ const skipStartupHook = options.skip_startup_hook === true;
 
 const installedBin = path.join(installRoot, "bin");
 const mcpCommand = path.join(installedBin, "openreaper-mcp");
+const vitalAgentMcpCommand = path.join(installedBin, "vital-agent-mcp");
 const startCommand = path.join(installedBin, "openreaper-start");
 const sessionRoot = path.join(installRoot, "session");
 const transportDir = path.join(sessionRoot, "transport");
@@ -33,6 +34,7 @@ const report = {
   package_root: packageRoot,
   install_root: installRoot,
   mcp_command: mcpCommand,
+  vital_agent_mcp_command: vitalAgentMcpCommand,
   start_command: startCommand,
   transport_dir: transportDir,
   artifact_root: artifactRoot,
@@ -58,6 +60,7 @@ if (!dryRun) {
   await chmod(path.join(installRoot, "install.command"), 0o755).catch(() => {});
   await chmod(path.join(installRoot, "uninstall.command"), 0o755).catch(() => {});
   await chmod(mcpCommand, 0o755);
+  await chmod(vitalAgentMcpCommand, 0o755);
   await chmod(startCommand, 0o755);
   await chmod(path.join(installedBin, "openreaper-doctor"), 0o755);
   await mkdir(path.join(transportDir, "requests"), { recursive: true });
@@ -127,7 +130,7 @@ ${STARTUP_END}
 
 async function configureCodex() {
   const configPath = path.join(home, ".codex", "config.toml");
-  const section = `[mcp_servers.openreaper]
+  const openReaperSection = `[mcp_servers.openreaper]
 command = ${tomlString(mcpCommand)}
 args = []
 
@@ -139,14 +142,20 @@ OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
 OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
 `;
+  const vitalAgentSection = `[mcp_servers.vital-agent-mcp]
+command = ${tomlString(vitalAgentMcpCommand)}
+args = []
+`;
   if (dryRun) {
-    report.skipped.push(`dry run: would upsert Codex MCP config at ${configPath}`);
+    report.skipped.push(`dry run: would upsert Codex MCP config for openreaper and vital-agent-mcp at ${configPath}`);
     return;
   }
   await mkdir(path.dirname(configPath), { recursive: true });
   const existing = await readTextIfExists(configPath);
-  await writeFile(configPath, upsertTomlSection(existing, "mcp_servers.openreaper", section), "utf8");
-  report.changed.push(`registered Codex MCP server openreaper at ${configPath}`);
+  let next = upsertTomlSection(existing, "mcp_servers.openreaper", openReaperSection);
+  next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
+  await writeFile(configPath, next, "utf8");
+  report.changed.push(`registered Codex MCP servers openreaper and vital-agent-mcp at ${configPath}`);
 }
 
 async function configureCursor() {
@@ -190,8 +199,12 @@ async function upsertJsonMcpServer(configPath, label) {
       OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
     },
   };
+  parsed.mcpServers["vital-agent-mcp"] = {
+    command: vitalAgentMcpCommand,
+    args: [],
+  };
   await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  report.changed.push(`registered ${label} MCP server openreaper at ${configPath}`);
+  report.changed.push(`registered ${label} MCP servers openreaper and vital-agent-mcp at ${configPath}`);
 }
 
 async function writeClientSnippets() {
@@ -215,6 +228,10 @@ async function writeClientSnippets() {
           OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
         },
       },
+      "vital-agent-mcp": {
+        command: vitalAgentMcpCommand,
+        args: [],
+      },
     },
   };
   await writeFile(path.join(snippetDir, "mcp.json"), `${JSON.stringify(jsonSnippet, null, 2)}\n`, "utf8");
@@ -229,6 +246,10 @@ OPENREAPER_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
 OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
+
+[mcp_servers.vital-agent-mcp]
+command = ${tomlString(vitalAgentMcpCommand)}
+args = []
 `, "utf8");
   await writeFile(path.join(snippetDir, "trae-mcp.json"), `${JSON.stringify(jsonSnippet, null, 2)}\n`, "utf8");
   report.changed.push(`wrote MCP config snippets at ${snippetDir}`);

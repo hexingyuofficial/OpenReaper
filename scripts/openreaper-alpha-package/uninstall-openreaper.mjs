@@ -34,10 +34,11 @@ async function removeCodexSection() {
   const configPath = path.join(home, ".codex", "config.toml");
   const existing = await readTextIfExists(configPath);
   if (existing === "") return;
-  const next = removeTomlSection(existing, "mcp_servers.openreaper");
+  let next = removeTomlSection(existing, "mcp_servers.openreaper");
+  next = removeTomlSection(next, "mcp_servers.vital-agent-mcp");
   if (next !== existing) {
     await writeFile(configPath, next, "utf8");
-    report.changed.push(`removed Codex openreaper MCP config from ${configPath}`);
+    report.changed.push(`removed Codex openreaper and vital-agent-mcp MCP config from ${configPath}`);
   }
 }
 
@@ -46,10 +47,18 @@ async function removeJsonServer(configPath, label) {
   if (existing.trim() === "") return;
   try {
     const parsed = JSON.parse(existing);
+    let changed = false;
     if (parsed.mcpServers?.openreaper) {
       delete parsed.mcpServers.openreaper;
+      changed = true;
+    }
+    if (parsed.mcpServers?.["vital-agent-mcp"]) {
+      delete parsed.mcpServers["vital-agent-mcp"];
+      changed = true;
+    }
+    if (changed) {
       await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-      report.changed.push(`removed ${label} openreaper MCP config from ${configPath}`);
+      report.changed.push(`removed ${label} openreaper and vital-agent-mcp MCP config from ${configPath}`);
     }
   } catch {
     report.warnings.push(`Skipped ${label} config because it is not valid JSON: ${configPath}`);

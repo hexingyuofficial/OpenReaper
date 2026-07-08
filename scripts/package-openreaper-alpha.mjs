@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 const options = parseArgs(process.argv.slice(2));
+const vitalAgentRoot = path.resolve(options.vital_agent_root ?? path.join(repoRoot, "..", "vital-agent-mcp"));
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
@@ -23,15 +24,25 @@ const EXACT_MCP_TOOLS = Object.freeze([
   "list_templates",
   "ping",
 ]);
+const REQUIRED_MACRO_IDS = Object.freeze([
+  "macro.index_status",
+  "macro.query_tracks",
+]);
 const REQUIRED_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
   "template.fx.set_fx_parameter_normalized",
   "template.fx.read_fx_parameter",
 ]);
+const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
+  "create_openreaper_handoff_plan",
+  "run_doctor",
+]);
 
 await assertReadable(path.join(repoRoot, "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs"));
 await assertReadable(path.join(repoRoot, "reaper", "bridge", "openreaper-live-bridge.lua"));
+await assertReadable(path.join(vitalAgentRoot, "package.json"));
+await assertReadable(path.join(vitalAgentRoot, "src", "mcpServer.ts"));
 
 await rm(outDir, { recursive: true, force: true });
 await mkdir(packageRoot, { recursive: true });
@@ -41,11 +52,16 @@ await mkdir(path.join(packageRoot, "vendor", "openreaper-kernel"), { recursive: 
 
 await copyInstallerTemplates();
 await copyOpenReaperKernel();
+await copyVitalAgentCompanion();
 await installPackageDependencies();
+await installVitalAgentCompanion();
 await writePackageEntrypoints();
 await writeReadme();
 await removeDsStore(packageRoot);
-const smoke = await smokePackagedMcp();
+const smoke = {
+  openreaper: await smokePackagedOpenReaperMcp(),
+  vital_agent_mcp: await smokePackagedVitalAgentMcp(),
+};
 
 let zipPath = null;
 if (!skipZip) {
@@ -64,7 +80,8 @@ console.log(JSON.stringify({
   bundled_runtime: {
     mcp_server: "vendor/openreaper-kernel/packages/mcp-server/src/openreaper-mcp-stdio.mjs",
     bridge: "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua",
-    entrypoints: ["bin/openreaper-mcp", "bin/openreaper-start", "bin/openreaper-doctor"],
+    companion_mcp: "vendor/vital-agent-mcp/dist/src/mcpServer.js",
+    entrypoints: ["bin/openreaper-mcp", "bin/vital-agent-mcp", "bin/openreaper-start", "bin/openreaper-doctor"],
     dependency_source: "package_root_npm_install",
   },
   smoke,
@@ -109,6 +126,14 @@ async function copyOpenReaperKernel() {
   });
 }
 
+async function copyVitalAgentCompanion() {
+  const target = path.join(packageRoot, "vendor", "vital-agent-mcp");
+  await cp(vitalAgentRoot, target, {
+    recursive: true,
+    filter: vitalAgentPackageFilter,
+  });
+}
+
 async function installPackageDependencies() {
   await writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify({
     name: "openreaper-alpha-package",
@@ -125,6 +150,19 @@ async function installPackageDependencies() {
   });
 }
 
+async function installVitalAgentCompanion() {
+  const companionRoot = path.join(packageRoot, "vendor", "vital-agent-mcp");
+  await run("npm", ["install", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: companionRoot,
+  });
+  await run("npm", ["run", "build"], {
+    cwd: companionRoot,
+  });
+  await run("npm", ["prune", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], {
+    cwd: companionRoot,
+  });
+}
+
 async function writePackageEntrypoints() {
   const installCommand = `#!/bin/zsh
 set -euo pipefail
@@ -136,10 +174,24 @@ set -euo pipefail
 cd "\${0:A:h}"
 exec node "./installer/uninstall-openreaper.mjs" "$@"
 `;
+  const vitalAgentMcp = `#!/bin/zsh
+set -euo pipefail
+
+SCRIPT_DIR="\${0:A:h}"
+INSTALL_ROOT="\${SCRIPT_DIR:h}"
+COMPANION_ROOT="\${INSTALL_ROOT}/vendor/vital-agent-mcp"
+
+export VITAL_AGENT_MCP_PACKAGE_ROOT="\${INSTALL_ROOT}"
+
+cd "\${COMPANION_ROOT}"
+exec node "\${COMPANION_ROOT}/dist/src/mcpServer.js" "$@"
+`;
   await writeFile(path.join(packageRoot, "install.command"), installCommand, "utf8");
   await writeFile(path.join(packageRoot, "uninstall.command"), uninstallCommand, "utf8");
+  await writeFile(path.join(packageRoot, "bin", "vital-agent-mcp"), vitalAgentMcp, "utf8");
   await chmod(path.join(packageRoot, "install.command"), 0o755);
   await chmod(path.join(packageRoot, "uninstall.command"), 0o755);
+  await chmod(path.join(packageRoot, "bin", "vital-agent-mcp"), 0o755);
 }
 
 async function writeReadme() {
@@ -151,6 +203,7 @@ What this package does:
 - writes MCP config snippets for other clients, including Trae, under ~/.openreaper/current/config-snippets
 - installs a conditional REAPER startup hook that is inert for normal REAPER launches
 - provides ~/.openreaper/current/bin/openreaper-start for REAPER sessions that MCP can connect to
+- provides companion MCP server "vital-agent-mcp" for Vital planning and OpenReaper handoff plans
 
 Important:
 REAPER must be started through OpenReaper for MCP to connect. Normal double-click REAPER launches are not OpenReaper MCP sessions.
@@ -174,6 +227,7 @@ Uninstall:
 
 Alpha caveat:
 The external product name and MCP server name are OpenReaper. This package uses the OpenReaper alpha stdio MCP kernel from vendor/openreaper-kernel. Some live REAPER execution paths remain evidence-gated; discovery and Alpha3 macro planning are available through list_templates and call_template.
+The companion vital-agent-mcp server is plan-only and does not execute REAPER or Vital writes.
 `;
   await writeFile(path.join(packageRoot, "README.txt"), readme, "utf8");
 }
@@ -185,7 +239,7 @@ async function zipPackage(zipPath) {
   });
 }
 
-async function smokePackagedMcp() {
+async function smokePackagedOpenReaperMcp() {
   if (skipSmoke) {
     return {
       skipped: true,
@@ -241,28 +295,156 @@ async function smokePackagedMcp() {
     if (ping.kernel !== "openreaper-mcp alpha kernel") {
       throw new Error(`Packaged MCP ping kernel mismatch: ${ping.kernel}`);
     }
-    const templatesResponse = await client.callTool({
+    const macroResponse = await client.callTool({
+      name: "list_templates",
+      arguments: {
+        ids: [...REQUIRED_MACRO_IDS],
+      },
+    });
+    const macros = parseJsonToolResult(macroResponse);
+    assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP macro smoke");
+    const fxTemplateResponse = await client.callTool({
       name: "list_templates",
       arguments: {
         ids: [...REQUIRED_FX_TEMPLATE_IDS],
       },
     });
-    const templates = parseJsonToolResult(templatesResponse);
-    const templateIds = new Set((templates.items ?? []).map((item) => item.id));
-    for (const id of REQUIRED_FX_TEMPLATE_IDS) {
-      if (!templateIds.has(id)) {
-        throw new Error(`Packaged MCP list_templates smoke missing ${id}`);
-      }
-    }
+    const fxTemplates = parseJsonToolResult(fxTemplateResponse);
+    assertDiscoveredIds(fxTemplates, REQUIRED_FX_TEMPLATE_IDS, "Packaged MCP FX template smoke");
     return {
       ok: true,
       tool_surface: toolNames,
       kernel: ping.kernel,
+      required_macros: [...REQUIRED_MACRO_IDS],
       required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
     };
   } finally {
     await client.close?.();
   }
+}
+
+async function smokePackagedVitalAgentMcp() {
+  if (skipSmoke) {
+    return {
+      skipped: true,
+      reason: "skip_smoke",
+    };
+  }
+
+  const packagePaths = [packageRoot, path.join(packageRoot, "node_modules")];
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([
+    importPackageModule("@modelcontextprotocol/sdk/client/index.js", packagePaths),
+    importPackageModule("@modelcontextprotocol/sdk/client/stdio.js", packagePaths),
+  ]);
+  const client = new Client({
+    name: "vital-agent-package-smoke",
+    version: "0.0.0",
+  });
+  const transport = new StdioClientTransport({
+    command: path.join(packageRoot, "bin", "vital-agent-mcp"),
+    args: [],
+    env: {
+      ...process.env,
+      VITAL_AGENT_MCP_PACKAGE_ROOT: packageRoot,
+    },
+  });
+
+  try {
+    await client.connect(transport);
+    const toolResponse = await client.listTools();
+    const toolNames = (toolResponse.tools ?? []).map((tool) => tool.name).sort();
+    for (const tool of VITAL_AGENT_REQUIRED_TOOLS) {
+      if (!toolNames.includes(tool)) {
+        throw new Error(`Packaged vital-agent-mcp missing tool ${tool}`);
+      }
+    }
+    const doctor = parseJsonToolResult(await client.callTool({
+      name: "run_doctor",
+      arguments: {},
+    }));
+    if (doctor.ok !== true) {
+      throw new Error("Packaged vital-agent-mcp doctor did not report ok=true");
+    }
+    const handoff = parseJsonToolResult(await client.callTool({
+      name: "create_openreaper_handoff_plan",
+      arguments: {
+        bundle: minimalResolvedVitalBundle(),
+        fx_ref: "track:1/fx:Vital",
+      },
+    }));
+    if (handoff.ok !== true || handoff.mode !== "plan_only_no_live_reaper_calls") {
+      throw new Error("Packaged vital-agent-mcp handoff smoke did not return an ok plan-only handoff");
+    }
+    return {
+      ok: true,
+      required_tools: [...VITAL_AGENT_REQUIRED_TOOLS],
+      doctor_schema: doctor.schema,
+      handoff_schema: handoff.schema,
+      handoff_required_templates: handoff.target?.required_template_ids ?? [],
+    };
+  } finally {
+    await client.close?.();
+  }
+}
+
+function minimalResolvedVitalBundle() {
+  return {
+    schema: "opensynth.resolved_host_actions.v1",
+    transaction_id: "package_smoke_vital_handoff",
+    plugin_target: {
+      plugin: "vital",
+    },
+    actions: [
+      {
+        action: "readback_parameter_snapshot",
+        phase: "before",
+        plugin: "vital",
+        snapshot_id: "package_smoke_before",
+      },
+      {
+        action: "set_plugin_parameter_resolved",
+        plugin: "vital",
+        host_parameter_ref: "param:5",
+        host_parameter_index: 5,
+        host_parameter_name: "Filter 1 Cutoff",
+        host_parameter_current_normalized_value: 0.5,
+        host_parameter_freshness_status: "fresh",
+        change: {
+          stable_id: "vital.filter_1.cutoff",
+          operation: "set",
+          normalized_target: 0.55,
+          rollback: "L1",
+          reason: "Package smoke plan-only handoff.",
+        },
+      },
+      {
+        action: "readback_parameter_snapshot",
+        phase: "after",
+        plugin: "vital",
+      },
+    ],
+    rollback: {
+      required: true,
+      minimum_level: "L1",
+      target_snapshot_id: "package_smoke_before",
+    },
+    readback: {
+      required: true,
+      changed_parameters_only: true,
+    },
+    preview: {
+      required: false,
+      mode: "fake_preview",
+      duration_seconds: 1,
+    },
+    executor_notes: [
+      "Package smoke verifies plan shape only.",
+    ],
+    resolution: {
+      ok: true,
+      blockers: [],
+    },
+  };
 }
 
 async function importPackageModule(specifier, paths) {
@@ -288,10 +470,31 @@ function assertExactArray(actual, expected, label) {
   }
 }
 
+function assertDiscoveredIds(response, expectedIds, label) {
+  const actualIds = new Set((response.items ?? []).map((item) => item.id));
+  for (const id of expectedIds) {
+    if (!actualIds.has(id)) {
+      throw new Error(`${label} missing ${id}`);
+    }
+  }
+}
+
 function packageFilter(src) {
   const base = path.basename(src);
   if (base === ".git" || base === ".DS_Store" || base === "setup-out" || base === "coverage") return false;
   if (src.includes(`${path.sep}.git${path.sep}`)) return false;
+  return true;
+}
+
+function vitalAgentPackageFilter(src) {
+  const base = path.basename(src);
+  if (base === ".git" || base === ".DS_Store" || base === "node_modules" || base === "dist" || base === "coverage") return false;
+  if (base === "tests" || base === "docs") return false;
+  if (src.includes(`${path.sep}.git${path.sep}`)) return false;
+  if (src.includes(`${path.sep}node_modules${path.sep}`)) return false;
+  if (src.includes(`${path.sep}dist${path.sep}`)) return false;
+  if (src.includes(`${path.sep}tests${path.sep}`)) return false;
+  if (src.includes(`${path.sep}docs${path.sep}`)) return false;
   return true;
 }
 
