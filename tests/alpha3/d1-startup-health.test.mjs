@@ -8,10 +8,15 @@ import { describe, it } from "node:test";
 import {
   ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
   ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
+  ALPHA3_D1_STARTUP_WRAPPER_CONTRACT,
+  ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY,
   createAlpha3D1StartupSessionCard,
   formatAlpha3D1StartupEnvFile,
+  formatAlpha3D1StartupWrapperReadme,
   planAlpha3D1StartupAssistant,
+  planAlpha3D1StartupWrapper,
   summarizeAlpha3D1StartupAssistant,
+  summarizeAlpha3D1StartupWrapper,
 } from "../../packages/mcp-server/src/alpha3-d1-startup-assistant-v1.mjs";
 import {
   ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
@@ -363,6 +368,51 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.match(envFile, /OPENREAPER_LIVE_BRIDGE_GENERATION='1'/);
   });
 
+  it("plans a one-click startup wrapper evidence route without live execution", () => {
+    const plan = planAlpha3D1StartupWrapper({
+      run_id: "openreaper-wrapper-test",
+      run_root: "/tmp/openreaper-wrapper-test",
+      owner: "owner-wrapper",
+      generation: "7",
+    });
+
+    assert.equal(plan.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
+    assert.equal(plan.ok, false);
+    assert.equal(plan.prepared, true);
+    assert.equal(plan.customer_ready, false);
+    assert.equal(plan.one_click_live_accepted, false);
+    assert.equal(plan.status, "prepare_wrapper");
+    assert.equal(plan.evidence_status, "needs_bounded_startup_window");
+    assert.match(plan.customer_claim, /static wrapper plan only/);
+    assert.equal(plan.wrapper_plan.wrapper_plan_path, "/tmp/openreaper-wrapper-test/startup-wrapper/openreaper-startup-wrapper-plan.json");
+    assert.equal(plan.wrapper_plan.user_owned_execution, true);
+    assert.equal(plan.wrapper_plan.generated_files_only, true);
+    assert.equal(plan.wrapper_plan.launcher_written, false);
+    assert.equal(plan.wrapper_plan.launcher_status, "candidate_only_until_bounded_startup_window");
+    assert.equal(plan.safety.opens_reaper_now, false);
+    assert.equal(plan.safety.spawns_process_now, false);
+    assert.equal(plan.safety.live_reaper_called, false);
+    assert.equal(plan.safety.safe_write_called, false);
+    assert.equal(plan.safety.requires_bounded_startup_window, true);
+    assert.match(plan.bounded_live_prompt, /Forbidden actions: safe-write/);
+    assert.match(plan.bounded_live_prompt, /startup health returns ready/);
+
+    const summary = summarizeAlpha3D1StartupWrapper({
+      run_id: "openreaper-wrapper-test",
+      run_root: "/tmp/openreaper-wrapper-test",
+    });
+    assert.equal(summary.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
+    assert.equal(summary.ok, false);
+    assert.equal(summary.customer_ready, false);
+    assert.equal(summary.one_click_live_accepted, false);
+    assert.equal(summary.helper, "npm run prepare:startup-wrapper");
+    assert.equal(summary.safety.support_claim_broadened, false);
+
+    const readme = formatAlpha3D1StartupWrapperReadme(plan);
+    assert.match(readme, /Start OpenReaper/);
+    assert.match(readme, /agent wrote local files only; it did not open REAPER, write a launcher/);
+  });
+
   it("prepares a local startup session card without live calls or process spawning", () => {
     const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-d1-"));
     const output = execFileSync(
@@ -403,6 +453,53 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.doesNotMatch(scriptSource, /child_process|spawn\(|execFile|execSync|open -a|REAPER\.app/);
   });
 
+  it("prepares startup wrapper materials without opening REAPER or spawning a process", () => {
+    const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-d1-wrapper-"));
+    const output = execFileSync(
+      process.execPath,
+      [
+        "scripts/prepare-alpha3-startup-wrapper.mjs",
+        "--run-id=test-startup-wrapper",
+        `--run-root=${root}`,
+        "--owner=owner-wrapper",
+        "--generation=5",
+      ],
+      {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+      },
+    ).trim();
+    const result = JSON.parse(output);
+
+    assert.equal(result.contract, "alpha3.d1.startup_wrapper_prepare_result.v1");
+    assert.equal(result.ok, true);
+    assert.equal(result.prepared, true);
+    assert.equal(result.evidence_status, "needs_bounded_startup_window");
+    assert.equal(result.customer_ready, false);
+    assert.equal(result.one_click_live_accepted, false);
+    assert.match(result.customer_claim, /static wrapper plan only/);
+    assert.equal(result.safety.opens_reaper_now, false);
+    assert.equal(result.safety.spawns_process_now, false);
+    assert.equal(result.safety.live_reaper_called, false);
+    assert.equal(result.safety.safe_write_called, false);
+    assert.equal(existsSync(result.paths.requests_dir), true);
+    assert.equal(existsSync(result.paths.results_dir), true);
+    assert.equal(existsSync(result.paths.wrapper_plan_path), true);
+    assert.equal(existsSync(result.paths.readme_path), true);
+
+    const wrapperPlan = JSON.parse(readFileSync(result.paths.wrapper_plan_path, "utf8"));
+    assert.equal(wrapperPlan.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
+    assert.equal(wrapperPlan.session_card.owner, "owner-wrapper");
+    assert.equal(wrapperPlan.session_card.generation, 5);
+    assert.match(readFileSync(result.paths.readme_path, "utf8"), /Agent Evidence Prompt/);
+
+    const scriptSource = readFileSync(
+      new URL("../../scripts/prepare-alpha3-startup-wrapper.mjs", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(scriptSource, /child_process|spawn\(|execFile|execSync|open -a|REAPER\.app/);
+  });
+
   it("exposes D1 startup assistant guidance through the existing list_templates product surface", () => {
     const runtime = createCallTemplateRuntime({
       live: {
@@ -423,5 +520,27 @@ describe("Alpha3 D1 startup and connection health", () => {
     );
     assert.equal(menu.product_surface.startup_assistant_snapshot.safety.opens_reaper, false);
     assert.equal(menu.product_surface.startup_assistant_snapshot.safety.live_reaper_called, false);
+  });
+
+  it("exposes D1 startup wrapper guidance through the existing list_templates product surface", () => {
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: ["template.project.read_summary"],
+      },
+    });
+    const menu = runtime.list_templates({ limit: 5 });
+
+    assert.deepEqual(menu.product_surface.startup_wrapper, ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY);
+    assert.equal(menu.product_surface.startup_wrapper.tool_surface.added_tools, 0);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.ok, false);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.customer_ready, false);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.one_click_live_accepted, false);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.status, "reconnect_existing");
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.evidence_status, "needs_bounded_startup_window");
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.safety.opens_reaper_now, false);
+    assert.equal(menu.product_surface.startup_wrapper_snapshot.safety.spawns_process_now, false);
   });
 });

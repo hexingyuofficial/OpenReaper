@@ -27,6 +27,7 @@
     "check:alpha3-d2": "node scripts/check-alpha3-d2.mjs",
     "check:alpha3-e1": "node --test tests/alpha3/e1-stock-plugin-fluency.test.mjs",
     "prepare:startup-session": "node scripts/prepare-alpha3-startup-session.mjs",
+    "prepare:startup-wrapper": "node scripts/prepare-alpha3-startup-wrapper.mjs",
     "workflow:portability": "node scripts/alpha3-d2-workflow-entrypoint.mjs",
     "pack:portability": "node scripts/alpha3-d2-extension-pack-entrypoint.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",

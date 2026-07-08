@@ -5,6 +5,7 @@ import {
 } from "./alpha3-d1-startup-health-v1.mjs";
 
 export const ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT = "alpha3.d1.startup_assistant.v1";
+export const ALPHA3_D1_STARTUP_WRAPPER_CONTRACT = "alpha3.d1.startup_wrapper.v1";
 
 export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
@@ -31,6 +32,39 @@ export const ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY = deepFreeze({
     "user_steps",
     "agent_next_steps",
     "verification_steps",
+  ],
+});
+
+export const ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY = deepFreeze({
+  contract: ALPHA3_D1_STARTUP_WRAPPER_CONTRACT,
+  mode: "non_spawning_app_wrapper_plan",
+  product_goal: "Prepare a user-owned startup package and future one-click evidence route without starting REAPER from the agent.",
+  tool_surface: {
+    added_tools: 0,
+    discovery_tool: "list_templates",
+    assistant_source: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
+    local_helper: "npm run prepare:startup-wrapper",
+  },
+  wrapper_types: ["startup_package", "macos_launcher_candidate", "codex_session_card"],
+  statuses: ["ready", "prepare_wrapper", "reconnect_existing", "blocked"],
+  evidence_statuses: ["static_plan_ready", "needs_bounded_startup_window", "live_evidence_accepted"],
+  safety_policy: {
+    generated_only: true,
+    opens_reaper_now: false,
+    spawns_process_now: false,
+    live_reaper_called: false,
+    safe_write_called: false,
+    raw_execution: false,
+    hidden_executor: false,
+    public_call_recipe: false,
+  },
+  output: [
+    "wrapper_plan",
+    "session_card",
+    "user_readme",
+    "evidence_appendix",
+    "bounded_live_prompt",
+    "acceptance_checks",
   ],
 });
 
@@ -109,6 +143,99 @@ export function summarizeAlpha3D1StartupAssistant(input = {}, options = {}) {
   });
 }
 
+export function planAlpha3D1StartupWrapper(input = {}) {
+  const assistant = planAlpha3D1StartupAssistant(input);
+  const sessionCard = assistant.session_card;
+  const wrapperDir = normalizePath(input.wrapper_dir ?? input.wrapperDir, `${sessionCard.paths.run_root}/startup-wrapper`);
+  const wrapperPlanPath = normalizePath(
+    input.wrapper_plan_path ?? input.wrapperPlanPath,
+    `${wrapperDir}/openreaper-startup-wrapper-plan.json`,
+  );
+  const readmePath = normalizePath(input.readme_path ?? input.readmePath, `${wrapperDir}/START_OPENREAPER.md`);
+  const launcherName = safeToken(input.launcher_name ?? input.launcherName, "OpenReaper Start");
+  const launcherCommandPath = normalizePath(
+    input.launcher_command_path ?? input.launcherCommandPath,
+    `${wrapperDir}/${launcherName}.command`,
+  );
+  const liveEvidenceRoot = normalizePath(
+    input.live_evidence_root ?? input.liveEvidenceRoot,
+    `${sessionCard.paths.run_root}/evidence/startup-wrapper`,
+  );
+  const status = wrapperStatusFromAssistant(assistant.status);
+  const evidenceStatus = status === "blocked" ? "static_plan_ready" : "needs_bounded_startup_window";
+
+  return deepFreeze({
+    contract: ALPHA3_D1_STARTUP_WRAPPER_CONTRACT,
+    ok: false,
+    prepared: status !== "blocked",
+    health_ready: assistant.ok,
+    customer_ready: false,
+    one_click_live_accepted: false,
+    mode: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.mode,
+    status,
+    evidence_status: evidenceStatus,
+    customer_claim: "static wrapper plan only; one-click startup is not live-accepted yet",
+    user_message: wrapperUserMessage(status),
+    next_step: wrapperNextStep(status),
+    assistant: summarizeAlpha3D1StartupAssistant(input),
+    session_card: sessionCard,
+    wrapper_plan: {
+      wrapper_dir: wrapperDir,
+      wrapper_plan_path: wrapperPlanPath,
+      readme_path: readmePath,
+      candidate_launcher_command_path: launcherCommandPath,
+      launcher_name: launcherName,
+      wrapper_type: "macos_user_owned_launcher_candidate",
+      user_owned_execution: true,
+      generated_by_agent: true,
+      generated_files_only: true,
+      launcher_written: false,
+      launcher_status: "candidate_only_until_bounded_startup_window",
+      run_by_agent: false,
+      live_evidence_root: liveEvidenceRoot,
+    },
+    user_steps: wrapperUserSteps(status),
+    agent_next_steps: wrapperAgentNextSteps(status),
+    bounded_live_prompt: boundedStartupWrapperPrompt({ sessionCard, wrapperPlanPath, readmePath, liveEvidenceRoot }),
+    acceptance_checks: wrapperAcceptanceChecks(),
+    blockers: status === "blocked" ? assistant.health.blockers : [],
+    safety: {
+      plan_only: true,
+      generated_files_only: true,
+      opens_reaper_now: false,
+      spawns_process_now: false,
+      live_reaper_called: false,
+      safe_write_called: false,
+      raw_execution: false,
+      hidden_executor: false,
+      public_call_recipe: false,
+      spawned_reaper: false,
+      support_claim_broadened: false,
+      requires_bounded_startup_window: true,
+    },
+  });
+}
+
+export function summarizeAlpha3D1StartupWrapper(input = {}) {
+  const plan = planAlpha3D1StartupWrapper(input);
+  return deepFreeze({
+    contract: ALPHA3_D1_STARTUP_WRAPPER_CONTRACT,
+    status: plan.status,
+    ok: plan.ok,
+    prepared: plan.prepared,
+    health_ready: plan.health_ready,
+    customer_ready: plan.customer_ready,
+    one_click_live_accepted: plan.one_click_live_accepted,
+    evidence_status: plan.evidence_status,
+    customer_claim: plan.customer_claim,
+    user_message: plan.user_message,
+    next_step: plan.next_step,
+    helper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY.tool_surface.local_helper,
+    wrapper_plan: plan.wrapper_plan,
+    safety: plan.safety,
+  });
+}
+
 export function createAlpha3D1StartupSessionCard(input = {}) {
   const runId = safeToken(input.run_id ?? input.runId ?? input.session_id, DEFAULT_RUN_ID);
   const runRoot = normalizePath(input.run_root ?? input.runRoot, DEFAULT_RUN_ROOT);
@@ -165,6 +292,36 @@ export function createAlpha3D1StartupSessionCard(input = {}) {
   });
 }
 
+export function formatAlpha3D1StartupWrapperReadme(wrapperPlan) {
+  const plan = isPlainObject(wrapperPlan) && wrapperPlan.contract === ALPHA3_D1_STARTUP_WRAPPER_CONTRACT
+    ? wrapperPlan
+    : planAlpha3D1StartupWrapper(wrapperPlan);
+  return `${[
+    "# Start OpenReaper",
+    "",
+    "This folder is a prepared startup package. The agent wrote local files only; it did not open REAPER, write a launcher, run live calls, or run safe-write.",
+    "",
+    "## User Steps",
+    ...plan.user_steps.map((step) => `- ${step}`),
+    "",
+    "## Agent Steps After You Reconnect",
+    ...plan.agent_next_steps.map((step) => `- ${step}`),
+    "",
+    "## Agent Evidence Prompt",
+    "",
+    plan.bounded_live_prompt,
+    "",
+    "## Safety",
+    "",
+    `- opens_reaper_now: ${plan.safety.opens_reaper_now}`,
+    `- spawns_process_now: ${plan.safety.spawns_process_now}`,
+    `- live_reaper_called: ${plan.safety.live_reaper_called}`,
+    `- safe_write_called: ${plan.safety.safe_write_called}`,
+    `- customer_claim: ${plan.customer_claim}`,
+    `- launcher_status: ${plan.wrapper_plan.launcher_status}`,
+  ].join("\n")}\n`;
+}
+
 export function formatAlpha3D1StartupEnvFile(sessionCard) {
   const card = isPlainObject(sessionCard) ? sessionCard : createAlpha3D1StartupSessionCard();
   const env = isPlainObject(card.env) ? card.env : {};
@@ -176,6 +333,89 @@ export function formatAlpha3D1StartupEnvFile(sessionCard) {
     lines.push(`export ${key}=${shellQuote(value)}`);
   }
   return `${lines.join("\n")}\n`;
+}
+
+function wrapperStatusFromAssistant(status) {
+  if (status === "ready") return "ready";
+  if (status === "blocked") return "blocked";
+  if (status === "reconnect_existing") return "reconnect_existing";
+  return "prepare_wrapper";
+}
+
+function wrapperUserMessage(status) {
+  return ({
+    ready: "OpenReaper already looks connected; keep the wrapper plan as recovery evidence.",
+    prepare_wrapper: "I can prepare a one-click startup wrapper plan, but live startup evidence needs your bounded window.",
+    reconnect_existing: "I can prepare a reconnect wrapper plan for the current OpenReaper session.",
+    blocked: "Startup wrapper preparation is blocked by the connection safety check.",
+  })[status] ?? "Startup wrapper needs review.";
+}
+
+function wrapperNextStep(status) {
+  if (status === "ready") return "Keep startup health visible; use the wrapper plan only if the session drops.";
+  if (status === "blocked") return "Report the startup blocker; do not prepare a launcher claim.";
+  return "Generate the startup package and keep one-click/customer-ready wording blocked until bounded startup evidence passes.";
+}
+
+function wrapperUserSteps(status) {
+  if (status === "ready") {
+    return deepFreeze([
+      "No startup action is needed right now.",
+      "Use the wrapper package only if this session needs reconnect later.",
+    ]);
+  }
+  if (status === "blocked") {
+    return deepFreeze([
+      "Review the startup blocker before trying any app wrapper or live connection.",
+    ]);
+  }
+  return deepFreeze([
+    "Let the agent prepare the wrapper plan, session card, and README.",
+    "Open REAPER when you are ready to test the startup package.",
+    "After REAPER reports the bridge loop is running, tell the agent to rerun startup health.",
+  ]);
+}
+
+function wrapperAgentNextSteps(status) {
+  if (status === "ready") {
+    return deepFreeze([
+      "Do not rerun startup work unless health changes.",
+      "Keep readback and startup health in the response.",
+    ]);
+  }
+  if (status === "blocked") {
+    return deepFreeze([
+      "Do not create support wording for one-click startup.",
+      "Report blockers and wait for the smallest needed user decision.",
+    ]);
+  }
+  return deepFreeze([
+    "Write the wrapper plan, session card, env file, and README only.",
+    "Do not open REAPER, spawn a launcher, or run live template calls.",
+    "Use the bounded live prompt when the user authorizes startup evidence.",
+  ]);
+}
+
+function boundedStartupWrapperPrompt({ sessionCard, wrapperPlanPath, readmePath, liveEvidenceRoot }) {
+  return [
+    "Open a bounded OpenReaper startup evidence window.",
+    `Evidence root: ${liveEvidenceRoot}`,
+    `Session card: ${sessionCard.paths.card_path}`,
+    `Wrapper plan: ${wrapperPlanPath}`,
+    `User README: ${readmePath}`,
+    "Allowed actions: prepare the local startup package, let the user open/reconnect REAPER, run startup health, and capture readback evidence.",
+    "Forbidden actions: safe-write, plugin/project mutation, raw Lua/action/shell bypass as product capability, support-matrix promotion, and broad platform claims.",
+    "Acceptance: user can start/reconnect without reasoning about transport paths, owner, generation, session id, or bridge internals; startup health returns ready for the bounded scope.",
+  ].join("\n");
+}
+
+function wrapperAcceptanceChecks() {
+  return deepFreeze([
+    "Wrapper materials are generated without starting REAPER or spawning a process.",
+    "User-facing instructions avoid transport-path and session-id lore until the evidence appendix.",
+    "Startup health is rerun after reconnect before any live or safe-write call.",
+    "One-click/customer-ready wording is withheld until a bounded startup evidence window passes.",
+  ]);
 }
 
 function assistantStatusFromHealth(health) {
