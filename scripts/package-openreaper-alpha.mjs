@@ -38,6 +38,9 @@ const REQUIRED_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.read_fx_parameter",
 ]);
 const REQUIRED_EXECUTABLE_TEMPLATE_ID = "template.tracks.create_track";
+const REQUIRED_INSTALLED_START_COMMAND = "~/.openreaper/current/bin/openreaper-start";
+const REQUIRED_INSTALLED_PROJECT_START_COMMAND =
+  "~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP";
 const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
   "create_openreaper_handoff_plan",
   "run_doctor",
@@ -299,6 +302,10 @@ async function smokePackagedOpenReaperMcp() {
     if (ping.kernel !== "openreaper-mcp alpha kernel") {
       throw new Error(`Packaged MCP ping kernel mismatch: ${ping.kernel}`);
     }
+    assertAgentStartupGuidance(ping.agent_startup_guidance, {
+      label: "Packaged MCP ping startup guidance",
+      expectedPackageRoot: packageRoot,
+    });
     const macroResponse = await client.callTool({
       name: "list_templates",
       arguments: {
@@ -307,6 +314,10 @@ async function smokePackagedOpenReaperMcp() {
     });
     const macros = parseJsonToolResult(macroResponse);
     assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP macro smoke");
+    assertAgentStartupGuidance(macros.product_surface?.agent_startup_guidance_snapshot, {
+      label: "Packaged MCP list_templates startup guidance",
+      expectedPackageRoot: null,
+    });
     const fxTemplateResponse = await client.callTool({
       name: "list_templates",
       arguments: {
@@ -322,6 +333,13 @@ async function smokePackagedOpenReaperMcp() {
       kernel: ping.kernel,
       required_macros: [...REQUIRED_MACRO_IDS],
       required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
+      agent_startup_guidance: {
+        installed_start_reaper_for_mcp: ping.agent_startup_guidance.commands.installed_start_reaper_for_mcp,
+        installed_start_project_for_mcp: ping.agent_startup_guidance.commands.installed_start_project_for_mcp,
+        current_package_start_reaper_for_mcp: ping.agent_startup_guidance.commands.current_package_start_reaper_for_mcp,
+        normal_reaper_launch_supported: ping.agent_startup_guidance.requirements.normal_reaper_launch_supported,
+        only_openreaper_startup_supported: ping.agent_startup_guidance.requirements.only_openreaper_startup_supported,
+      },
       executable_allowlist: executableAllowlistSmoke,
     };
   } finally {
@@ -482,6 +500,36 @@ function assertDiscoveredIds(response, expectedIds, label) {
     if (!actualIds.has(id)) {
       throw new Error(`${label} missing ${id}`);
     }
+  }
+}
+
+function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
+  if (!guidance || guidance.contract !== "openreaper.alpha3_1.agent_startup_guidance.v1") {
+    throw new Error(`${label} missing OpenReaper agent startup guidance`);
+  }
+  if (guidance.commands?.installed_start_reaper_for_mcp !== REQUIRED_INSTALLED_START_COMMAND) {
+    throw new Error(`${label} installed start command mismatch`);
+  }
+  if (guidance.commands?.installed_start_project_for_mcp !== REQUIRED_INSTALLED_PROJECT_START_COMMAND) {
+    throw new Error(`${label} installed project start command mismatch`);
+  }
+  if (expectedPackageRoot !== null) {
+    const expectedCurrentCommand = path.join(expectedPackageRoot, "bin", "openreaper-start");
+    if (guidance.commands?.current_package_start_reaper_for_mcp !== expectedCurrentCommand) {
+      throw new Error(`${label} current package start command mismatch`);
+    }
+  }
+  if (guidance.requirements?.mcp_client_server_name !== "openreaper") {
+    throw new Error(`${label} must name MCP server openreaper`);
+  }
+  if (guidance.requirements?.normal_reaper_launch_supported !== false) {
+    throw new Error(`${label} must say normal REAPER launch is not an OpenReaper MCP session`);
+  }
+  if (guidance.requirements?.only_openreaper_startup_supported !== true) {
+    throw new Error(`${label} must require OpenReaper startup helper`);
+  }
+  if (guidance.safety?.added_tools !== 0 || guidance.safety?.hidden_executor !== false) {
+    throw new Error(`${label} expanded the tool surface or hid an executor`);
   }
 }
 

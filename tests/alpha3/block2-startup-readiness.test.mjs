@@ -16,6 +16,13 @@ import {
 import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT,
+  OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
+  OPENREAPER_INSTALLED_PROJECT_START_COMMAND,
+  OPENREAPER_INSTALLED_START_COMMAND,
+  createOpenReaperAgentStartupGuidance,
+} from "../../packages/mcp-server/src/openreaper-agent-startup-guidance-v1.mjs";
 
 describe("Alpha3 Block2 startup and connection readiness", () => {
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
@@ -95,6 +102,24 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     const productSurface = runtime.list_templates().product_surface;
 
     assert.deepEqual(
+      productSurface.agent_startup_guidance,
+      OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
+    );
+    assert.equal(productSurface.agent_startup_guidance.tool_surface.added_tools, 0);
+    assert.equal(productSurface.agent_startup_guidance_snapshot.contract, OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT);
+    assert.equal(
+      productSurface.agent_startup_guidance_snapshot.commands.installed_start_reaper_for_mcp,
+      OPENREAPER_INSTALLED_START_COMMAND,
+    );
+    assert.equal(
+      productSurface.agent_startup_guidance_snapshot.commands.installed_start_project_for_mcp,
+      OPENREAPER_INSTALLED_PROJECT_START_COMMAND,
+    );
+    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, false);
+    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, true);
+    assert.equal(productSurface.agent_startup_guidance_snapshot.safety.added_tools, 0);
+    assert.equal(productSurface.agent_startup_guidance_snapshot.safety.opens_reaper_from_mcp_tool, false);
+    assert.deepEqual(
       productSurface.startup_readiness,
       ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
     );
@@ -105,5 +130,27 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_scope, "local_macos_with_startup_dialog_caveat");
     assert.equal(productSurface.startup_readiness_snapshot.safety.opens_reaper, false);
     assert.equal(productSurface.startup_readiness_snapshot.safety.live_reaper_called, false);
+  });
+
+  it("formats package-specific agent startup commands without expanding the MCP tool surface", () => {
+    const guidance = createOpenReaperAgentStartupGuidance({
+      package_root: "/tmp/OpenReaper-alpha",
+    });
+
+    assert.equal(guidance.contract, OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT);
+    assert.equal(guidance.commands.installed_start_reaper_for_mcp, "~/.openreaper/current/bin/openreaper-start");
+    assert.equal(guidance.commands.current_package_start_reaper_for_mcp, "/tmp/OpenReaper-alpha/bin/openreaper-start");
+    assert.equal(
+      guidance.commands.current_package_start_project_for_mcp,
+      "/tmp/OpenReaper-alpha/bin/openreaper-start --project-path /path/to/project.RPP",
+    );
+    assert.equal(guidance.requirements.mcp_client_server_name, "openreaper");
+    assert.equal(guidance.requirements.normal_reaper_launch_supported, false);
+    assert.equal(guidance.requirements.reconnect_after_startup, true);
+    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /reconnect/);
+    assert.equal(guidance.safety.added_tools, 0);
+    assert.equal(guidance.safety.hidden_executor, false);
+    assert.equal(guidance.safety.public_call_recipe, false);
+    assert.equal(guidance.safety.raw_lua_action_shell_or_ui_bypass, false);
   });
 });

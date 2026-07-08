@@ -10,6 +10,9 @@ import {
 import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
 import { createGetStateArtifactRuntime } from "./get-state-runtime-v1.mjs";
 import { createLiveBridgeExecutorFromEnv } from "./live-bridge-executor-v1.mjs";
+import {
+  createOpenReaperAgentStartupGuidance,
+} from "./openreaper-agent-startup-guidance-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
@@ -56,6 +59,9 @@ async function main() {
       live_bridge_configured: liveBridge.configured,
       live_bridge: liveBridge.configured ? liveBridge.config : liveBridge,
       user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect.",
+      agent_startup_guidance: createOpenReaperAgentStartupGuidance({
+        package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
+      }),
     }),
   );
 

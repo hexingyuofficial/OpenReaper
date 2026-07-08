@@ -79,6 +79,10 @@ import {
   ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY,
   summarizeAlpha3D1StartupWrapper,
 } from "./alpha3-d1-startup-assistant-v1.mjs";
+import {
+  OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
+  createOpenReaperAgentStartupGuidance,
+} from "./openreaper-agent-startup-guidance-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -1278,6 +1282,8 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
   return {
     contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
     surface,
+    agent_startup_guidance: OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
+    agent_startup_guidance_snapshot: createOpenReaperAgentStartupGuidance(),
     item_schema: {
       fields: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
       status_values: CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
