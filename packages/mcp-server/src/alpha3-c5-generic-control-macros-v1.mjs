@@ -479,7 +479,7 @@ function officialMacroDiscoveryItem(macro) {
         refs: Object.fromEntries(requiredRefs.map((ref) => [ref.name, `${ref.kind}:example`])),
       },
     ],
-    live_runnable_now: true,
+    live_runnable_now: false,
     exists_in_catalog: true,
     evidence_level: "runtime_bound_static_fake",
     support_state: macro.status === "planned_after_c5" ? "blocked" : "supported",

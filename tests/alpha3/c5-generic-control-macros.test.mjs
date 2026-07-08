@@ -54,7 +54,8 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(track.execution_shape, "generic_control_macro_plan");
     assert.equal(track.user_label, "Set track controls");
     assert.equal(track.pack, "core");
-    assert.equal(track.live_runnable_now, true);
+    assert.equal(track.live_runnable_now, false);
+    assert.equal(track.support_status, "plan_only_runtime_bound");
     assert.equal(track.known_blocker, null);
     assert.equal(track.inputSchema.required.includes("fields"), true);
     assert.equal(track.refs.input.some((ref) => ref.name === "track_ref" && ref.required), true);
