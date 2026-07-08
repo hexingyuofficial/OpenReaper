@@ -21,7 +21,7 @@
     "check:user-recipe-authoring": "node scripts/check-user-recipe-authoring.mjs && node --test tests/layer6/user-recipe-authoring.test.mjs",
     "check:official-recipes": "node scripts/check-official-recipes.mjs",
     "check:alpha3-d1": "node --test tests/alpha3/d1-startup-health.test.mjs",
-    "check:alpha3-c3": "node --test tests/alpha3/c3-project-index-query-macros.test.mjs tests/alpha3/c3-project-index-store.test.mjs",
+    "check:alpha3-c3": "node --test tests/alpha3/c3-project-index-query-macros.test.mjs tests/alpha3/c3-project-index-store.test.mjs tests/alpha3/c3-project-index-benchmark.test.mjs",
     "check:alpha3-c4": "node --test tests/alpha3/c4-orchestration-policy.test.mjs",
     "check:alpha3-c5": "node --test tests/alpha3/c5-generic-control-macros.test.mjs",
     "check:alpha3-d2": "node scripts/check-alpha3-d2.mjs",

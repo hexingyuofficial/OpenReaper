@@ -85,7 +85,8 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(status.menu_group, "query");
     assert.equal(status.macro_kind, "project_index_query");
     assert.equal(status.execution_shape, "project_index_query_plan");
-    assert.equal(status.live_runnable_now, true);
+    assert.equal(status.live_runnable_now, false);
+    assert.equal(status.support_status, "plan_only_runtime_bound");
     assert.equal(status.support_state, "supported");
     assert.equal(selected.support_state, "supported");
     assert.equal(selected.known_blocker, null);

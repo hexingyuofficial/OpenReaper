@@ -1375,10 +1375,16 @@ function runtimeActionStatus(item) {
   const blocker = typeof item.known_blocker === "string" ? item.known_blocker : null;
   if (blocker?.startsWith("known_bug:")) return "bug_known";
   if (item.support_state === "blocked") return "blocked";
-  if (item.live_runnable_now !== true) return "blocked";
+  if (item.live_runnable_now !== true && !runtimeActionIsPlanOnlyMacro(item)) return "blocked";
   if (inputRefDeclarations(item).some((ref) => ref.required === true)) return "needs_ref";
   if (runtimeActionNeedsConfirmation(item)) return "needs_confirmation";
   return "available_now";
+}
+
+function runtimeActionIsPlanOnlyMacro(item) {
+  return item.action_kind === "macro"
+    && item.support_status === "plan_only_runtime_bound"
+    && item.execution_shape !== "live_reaper_write";
 }
 
 function runtimeActionUserMessage(item, currentStatus) {

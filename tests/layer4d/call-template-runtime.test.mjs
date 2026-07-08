@@ -598,7 +598,18 @@ describe("Layer 4D call_template runtime binding", () => {
       CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
     );
     assert.equal(liveMenu.applied.surface, "executable");
-    assert.equal(liveMenu.items.every((item) => item.capability_truth.live_runnable_now === true), true);
+    assert.equal(
+      liveMenu.items
+        .filter((item) => item.id.startsWith("template."))
+        .every((item) => item.capability_truth.live_runnable_now === true),
+      true,
+    );
+    assert.equal(
+      liveMenu.items
+        .filter((item) => item.id.startsWith("macro.query") || item.id === "macro.index_status" || item.id === "macro.selected_context")
+        .every((item) => item.capability_truth.live_runnable_now === false && item.current_status === "available_now"),
+      true,
+    );
     assert.equal(
       liveMenu.items
         .filter((item) => item.id.startsWith("template."))
@@ -710,7 +721,9 @@ describe("Layer 4D call_template runtime binding", () => {
       CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
     );
     assert.equal(
-      tempoMenu.items.every((item) => item.capability_truth.live_runnable_now === true),
+      tempoMenu.items
+        .filter((item) => item.id.startsWith("template."))
+        .every((item) => item.capability_truth.live_runnable_now === true),
       true,
     );
     assert.equal(

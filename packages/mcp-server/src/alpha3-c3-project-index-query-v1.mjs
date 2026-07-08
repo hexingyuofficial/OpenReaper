@@ -4032,7 +4032,7 @@ function officialQueryMacroDiscoveryItem(macro) {
         refs: {},
       },
     ],
-    live_runnable_now: true,
+    live_runnable_now: false,
     exists_in_catalog: true,
     evidence_level: implemented ? "runtime_bound_static_fake" : "contract_only",
     support_state: implemented ? "supported" : "blocked",
