@@ -12,6 +12,7 @@ import {
 export const ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT = "alpha3.e1.stock_plugin_fluency.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_CUSTOMER_READBACK_CONTRACT = "alpha3.e1.stock_plugin_customer_readback.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT = "alpha3.e1.stock_plugin_evidence_plan.v1";
+export const ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT = "alpha3.e1.stock_plugin_live_evidence_matrix.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_AGENT_EXECUTION_FLOW_CONTRACT = "alpha3.e1.stock_plugin_agent_execution_flow.v1";
 export const ALPHA3_E1_STOCK_PLUGIN_MACRO_ID = "macro.set_stock_plugin_controls";
 export const ALPHA3_E1_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
@@ -28,6 +29,9 @@ export const ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY = deepFreeze({
   menu_group: "act",
   action_kind: "macro",
   execution_shape: "stock_plugin_semantic_control_plan",
+  live_evidence_contract: ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
+  live_support_status: "bounded_single_plugin_evidence_only",
+  broad_live_support: false,
   macro_ids: [ALPHA3_E1_STOCK_PLUGIN_MACRO_ID],
   plugin_ids: [
     "reaeq",
@@ -79,6 +83,16 @@ const STOCK_PLUGIN_PARAMETER_READBACK_BUDGET = Object.freeze({
   max_response_bytes: 60_000,
   max_items: 200,
   max_inline_value_bytes: 6_000,
+});
+
+const DEFAULT_STOCK_PLUGIN_LIVE_EVIDENCE_BY_PLUGIN = deepFreeze({
+  reacomp: {
+    evidence_ref: "alpha3.e1.4.reacomp.bounded_live_write_readback",
+    status: "bounded_fixture_accepted",
+    scope: "single bounded ReaComp write/readback fixture",
+    claim_allowed: "ReaComp passed one bounded stock-plugin live write/readback smoke.",
+    claim_not_allowed: "Do not promote this to broad stock-plugin live support.",
+  },
 });
 
 const STOCK_PLUGIN_MAPS = deepFreeze([
@@ -230,6 +244,45 @@ export function listAlpha3E1StockPluginMaps(options = {}) {
     },
     plugins: STOCK_PLUGIN_MAPS,
     starter_actions: STOCK_PLUGIN_STARTER_ACTIONS,
+    safety: stockPluginSafety(),
+  });
+}
+
+export function summarizeAlpha3E1StockPluginLiveEvidenceMatrix(options = {}) {
+  const evidenceByPlugin = normalizeLiveEvidenceByPlugin(options.live_evidence_by_plugin)
+    ?? DEFAULT_STOCK_PLUGIN_LIVE_EVIDENCE_BY_PLUGIN;
+  const rows = STOCK_PLUGIN_MAPS.map((pluginMap) => stockPluginEvidenceRow(pluginMap, evidenceByPlugin[pluginMap.id]));
+  const acceptedRows = rows.filter((row) => row.live_evidence_status === "bounded_fixture_accepted");
+  const pendingRows = rows.filter((row) => row.live_evidence_status !== "bounded_fixture_accepted");
+
+  return deepFreeze({
+    contract: ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
+    mode: "static_evidence_gate_for_bounded_live_smoke",
+    generated_live_calls: false,
+    live_reaper_called: false,
+    safe_write_called: false,
+    broad_live_support: false,
+    customer_ready: false,
+    reason: "Static semantic maps and the agent execution flow exist, but broad stock-plugin live support needs per-plugin bounded write/readback evidence.",
+    plugin_count: rows.length,
+    accepted_live_count: acceptedRows.length,
+    pending_live_count: pendingRows.length,
+    accepted_live_plugin_ids: acceptedRows.map((row) => row.plugin_id),
+    pending_live_plugin_ids: pendingRows.map((row) => row.plugin_id),
+    plugins: rows,
+    bounded_live_smoke_plan: stockPluginBoundedLiveSmokePlan(rows),
+    claim_policy: {
+      allowed_now: [
+        "Stock-plugin semantic maps and plan-only macro flow are available.",
+        "ReaComp has one bounded live write/readback fixture if the evidence record is cited.",
+      ],
+      not_allowed_yet: [
+        "All ten stock plugins are live-supported.",
+        "Stock-plugin changes are customer-ready without bounded readback evidence.",
+        "The macro directly executed a live REAPER write.",
+      ],
+      promotion_gate: "Only turn a plugin row green after a bounded live window proves identity hydration, child request execution, readback, and mismatch handling for that plugin.",
+    },
     safety: stockPluginSafety(),
   });
 }
@@ -742,6 +795,85 @@ function createEvidencePlan({ plugin, starter, controls, refs, blockers, fieldPl
     evidence_items: evidenceItems,
     requested_controls: summarizeRequestedControls(plugin, controls),
   });
+}
+
+function stockPluginEvidenceRow(pluginMap, evidence) {
+  const starterActions = STOCK_PLUGIN_STARTER_ACTIONS
+    .filter((action) => action.plugin_id === pluginMap.id)
+    .map((action) => action.id);
+  const accepted = isCompleteBoundedFixtureEvidence(evidence);
+  return deepFreeze({
+    plugin_id: pluginMap.id,
+    display_name: pluginMap.display_name,
+    category: pluginMap.category,
+    semantic_control_count: pluginMap.parameters.length,
+    starter_action_ids: starterActions,
+    static_map_ready: true,
+    plan_only_macro_ready: true,
+    agent_execution_flow_ready: true,
+    live_evidence_status: accepted ? "bounded_fixture_accepted" : "needs_bounded_live_window",
+    evidence_ref: accepted ? evidence.evidence_ref : null,
+    evidence_scope: accepted ? evidence.scope : null,
+    limited_claim_allowed: accepted ? evidence.claim_allowed : null,
+    claim_not_allowed: accepted ? evidence.claim_not_allowed : "Do not claim live support for this plugin until bounded write/readback evidence exists.",
+    customer_claim_status: accepted ? "limited_fixture_claim_only" : "no_live_claim",
+    next_gate: accepted
+      ? "Repeat or broaden evidence before product-wide support wording."
+      : "Open a bounded live REAPER/safe-write window and run identity, parameter metadata, child write, readback, and mismatch gates.",
+  });
+}
+
+function stockPluginBoundedLiveSmokePlan(rows) {
+  const recommendedBatches = createStockPluginRecommendedEvidenceBatches(rows);
+  return deepFreeze({
+    status: "blocked_until_user_opens_bounded_live_window",
+    fixture: "Disposable REAPER project with one throwaway track per plugin under test.",
+    allowed_actions: [
+      "create disposable tracks and insert stock FX for the selected plugin rows",
+      "call list_templates and call_template for macro.set_stock_plugin_controls",
+      "execute only the returned accepted child call_template requests",
+      "run the returned readback requests and compare evidence before success wording",
+    ],
+    hard_stops: [
+      "destructive, export, hardware, privacy, or filesystem-write request",
+      "unresolved or stale fx_ref/plugin identity",
+      "parameter metadata missing or not fresh",
+      "child request blocker or readback mismatch",
+      "request to promote support/live claims beyond the bounded evidence",
+    ],
+    required_sequence: [
+      "verify_fx_identity",
+      "hydrate_fresh_parameter_metadata",
+      "rerun_macro_with_fresh_parameter_metadata",
+      "execute_child_requests",
+      "run_planned_readback",
+      "compare_readback_to_requested_controls",
+      "record_plugin_row_result",
+    ],
+    recommended_batches: recommendedBatches,
+    per_plugin_rows: rows.map((row) => deepFreeze({
+      plugin_id: row.plugin_id,
+      starter_action_ids: row.starter_action_ids,
+      current_status: row.live_evidence_status,
+      pass_updates_to: "live_evidence_status=bounded_fixture_accepted and customer_claim_status=limited_fixture_claim_only",
+    })),
+  });
+}
+
+function createStockPluginRecommendedEvidenceBatches(rows) {
+  const pendingIds = new Set(rows
+    .filter((row) => row.live_evidence_status !== "bounded_fixture_accepted")
+    .map((row) => row.plugin_id));
+  return [
+    {
+      id: "e1.6a_dynamics_and_eq",
+      plugin_ids: ["reaeq", "reacomp", "reagate", "reaxcomp", "realimit"].filter((pluginId) => pendingIds.has(pluginId)),
+    },
+    {
+      id: "e1.6b_time_pitch_instrument",
+      plugin_ids: ["readelay", "reasynth", "rs5k", "reatune", "reapitch"].filter((pluginId) => pendingIds.has(pluginId)),
+    },
+  ].filter((batch) => batch.plugin_ids.length > 0);
 }
 
 function createCustomerReadback({ plugin, starter, controls, blockers, humanReadback, hydrationFlow, evidencePlan }) {
@@ -1365,6 +1497,35 @@ function cloneJson(value) {
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeLiveEvidenceByPlugin(value) {
+  if (!isPlainObject(value)) return null;
+  const output = {};
+  for (const [pluginId, evidence] of Object.entries(value)) {
+    if (!isPlainObject(evidence)) continue;
+    output[pluginId] = {
+      evidence_ref: typeof evidence.evidence_ref === "string" ? evidence.evidence_ref : null,
+      status: typeof evidence.status === "string" ? evidence.status : null,
+      scope: typeof evidence.scope === "string" ? evidence.scope : null,
+      claim_allowed: typeof evidence.claim_allowed === "string" ? evidence.claim_allowed : null,
+      claim_not_allowed: typeof evidence.claim_not_allowed === "string" ? evidence.claim_not_allowed : null,
+    };
+  }
+  return output;
+}
+
+function isCompleteBoundedFixtureEvidence(evidence) {
+  return isPlainObject(evidence)
+    && evidence.status === "bounded_fixture_accepted"
+    && nonEmptyString(evidence.evidence_ref)
+    && nonEmptyString(evidence.scope)
+    && nonEmptyString(evidence.claim_allowed)
+    && nonEmptyString(evidence.claim_not_allowed);
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function uniqueBlockers(blockers) {

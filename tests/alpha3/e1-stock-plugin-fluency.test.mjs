@@ -6,11 +6,13 @@ import {
   ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
   ALPHA3_E1_STOCK_PLUGIN_EVIDENCE_PLAN_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
+  ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
   createAlpha3E1OfficialMacroDiscoveryItems,
   getAlpha3E1StockPluginMap,
   listAlpha3E1StockPluginMaps,
   planAlpha3E1StockPluginMacro,
+  summarizeAlpha3E1StockPluginLiveEvidenceMatrix,
 } from "../../packages/mcp-server/src/alpha3-e1-stock-plugin-fluency-v1.mjs";
 import {
   createCallTemplateRuntime,
@@ -74,6 +76,8 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(registry.safety.hidden_executor, false);
     assert.equal(registry.safety.raw_lua_action_shell_or_ui, false);
     assert.equal(registry.safety.parameter_truth, "fresh_fx_parameter_metadata_required_before_write");
+    assert.equal(ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.broad_live_support, false);
+    assert.equal(ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.live_support_status, "bounded_single_plugin_evidence_only");
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",
       "get_state",
@@ -102,6 +106,71 @@ describe("Alpha3 E1 stock plugin fluency", () => {
 
     assert.equal(getAlpha3E1StockPluginMap("VST: ReaComp (Cockos)").id, "reacomp");
     assert.equal(getAlpha3E1StockPluginMap("RS5k").id, "rs5k");
+  });
+
+  it("keeps the stock plugin live evidence matrix evidence-bound instead of promoting broad support", () => {
+    const matrix = summarizeAlpha3E1StockPluginLiveEvidenceMatrix();
+
+    assert.equal(matrix.contract, ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT);
+    assert.equal(matrix.mode, "static_evidence_gate_for_bounded_live_smoke");
+    assert.equal(matrix.generated_live_calls, false);
+    assert.equal(matrix.live_reaper_called, false);
+    assert.equal(matrix.safe_write_called, false);
+    assert.equal(matrix.broad_live_support, false);
+    assert.equal(matrix.customer_ready, false);
+    assert.equal(matrix.plugin_count, 10);
+    assert.equal(matrix.accepted_live_count, 1);
+    assert.equal(matrix.pending_live_count, 9);
+    assert.deepEqual(matrix.accepted_live_plugin_ids, ["reacomp"]);
+    assert.equal(matrix.pending_live_plugin_ids.includes("reaeq"), true);
+    assert.equal(matrix.pending_live_plugin_ids.includes("realimit"), true);
+
+    const reacomp = matrix.plugins.find((plugin) => plugin.plugin_id === "reacomp");
+    const reaeq = matrix.plugins.find((plugin) => plugin.plugin_id === "reaeq");
+
+    assert.equal(reacomp.live_evidence_status, "bounded_fixture_accepted");
+    assert.equal(reacomp.customer_claim_status, "limited_fixture_claim_only");
+    assert.equal(reacomp.limited_claim_allowed.includes("bounded stock-plugin live write/readback"), true);
+    assert.equal(reaeq.live_evidence_status, "needs_bounded_live_window");
+    assert.equal(reaeq.customer_claim_status, "no_live_claim");
+    assert.equal(reaeq.claim_not_allowed.includes("Do not claim live support"), true);
+    assert.equal(matrix.claim_policy.not_allowed_yet.includes("All ten stock plugins are live-supported."), true);
+    assert.equal(matrix.bounded_live_smoke_plan.status, "blocked_until_user_opens_bounded_live_window");
+    assert.equal(matrix.bounded_live_smoke_plan.hard_stops.includes("child request blocker or readback mismatch"), true);
+    assert.equal(matrix.bounded_live_smoke_plan.recommended_batches[0].plugin_ids.includes("realimit"), true);
+    assert.equal(matrix.bounded_live_smoke_plan.recommended_batches[1].plugin_ids.includes("reapitch"), true);
+    assert.equal(matrix.safety.hidden_executor, false);
+    assert.equal(matrix.safety.public_call_recipe, false);
+    assert.equal(matrix.safety.raw_lua_action_shell_or_ui, false);
+  });
+
+  it("requires complete evidence citations before turning stock plugin rows green", () => {
+    const matrix = summarizeAlpha3E1StockPluginLiveEvidenceMatrix({
+      live_evidence_by_plugin: {
+        reaeq: {
+          evidence_ref: "alpha3.e1.6.reaeq.bounded_live",
+          status: "bounded_fixture_accepted",
+          scope: "single bounded ReaEQ write/readback fixture",
+          claim_allowed: "ReaEQ passed one bounded live fixture.",
+          claim_not_allowed: "Do not promote to broad stock-plugin support.",
+        },
+        realimit: {
+          status: "bounded_fixture_accepted",
+        },
+      },
+    });
+
+    const reaeq = matrix.plugins.find((plugin) => plugin.plugin_id === "reaeq");
+    const realimit = matrix.plugins.find((plugin) => plugin.plugin_id === "realimit");
+    const recommendedIds = matrix.bounded_live_smoke_plan.recommended_batches
+      .flatMap((batch) => batch.plugin_ids);
+
+    assert.equal(reaeq.live_evidence_status, "bounded_fixture_accepted");
+    assert.equal(realimit.live_evidence_status, "needs_bounded_live_window");
+    assert.equal(recommendedIds.includes("reaeq"), false);
+    assert.equal(recommendedIds.includes("realimit"), true);
+    assert.equal(matrix.accepted_live_plugin_ids.includes("reaeq"), true);
+    assert.equal(matrix.accepted_live_plugin_ids.includes("realimit"), false);
   });
 
   it("creates one official macro discovery entry over existing list_templates/call_template", () => {
@@ -452,6 +521,12 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       runtime.list_templates().product_surface.stock_plugin_fluency,
       ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     );
+    assert.equal(
+      runtime.list_templates().product_surface.stock_plugin_live_evidence.contract,
+      ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
+    );
+    assert.equal(runtime.list_templates().product_surface.stock_plugin_live_evidence.broad_live_support, false);
+    assert.deepEqual(runtime.list_templates().product_surface.stock_plugin_live_evidence.accepted_live_plugin_ids, ["reacomp"]);
     assert.equal(menu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     const entry = menu.items.find((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
     assert.equal(entry.action_kind, "macro");
