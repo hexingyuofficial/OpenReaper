@@ -4,6 +4,7 @@ import {
   ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY,
   forkAlpha3D2ExtensionPack,
   installAlpha3D2ExtensionPack,
+  planAlpha3D2ExtensionPackPromotion,
   saveAlpha3D2ExtensionPack,
   scrubAlpha3D2ExtensionPack,
   shareAlpha3D2ExtensionPack,
@@ -15,6 +16,11 @@ const OPERATION_HANDLERS = Object.freeze({
   share: shareAlpha3D2ExtensionPack,
   install: installAlpha3D2ExtensionPack,
   fork: forkAlpha3D2ExtensionPack,
+  enable: planAlpha3D2ExtensionPackPromotion,
+  disable: planAlpha3D2ExtensionPackPromotion,
+  update: planAlpha3D2ExtensionPackPromotion,
+  uninstall: planAlpha3D2ExtensionPackPromotion,
+  promote_global_alias: planAlpha3D2ExtensionPackPromotion,
 });
 
 try {
@@ -28,9 +34,11 @@ try {
     process.exit(0);
   }
 
-  const operation = args.operation;
+  const operation = normalizeOperation(args.operation);
   const handler = OPERATION_HANDLERS[operation];
-  if (!handler) throw new CliUsageError("Pass --operation save|scrub|share|install|fork.");
+  if (!handler) {
+    throw new CliUsageError("Pass --operation save|scrub|share|install|fork|enable|disable|update|uninstall|promote_global_alias.");
+  }
   if (!args.input) throw new CliUsageError("Pass --input <manifest-or-pack-packet.json>.");
 
   const payload = readJsonFile(args.input);
@@ -61,6 +69,10 @@ function buildRequest(operation, payload, args) {
   copyIfPresent(args, request, "new_namespace");
   copyIfPresent(args, request, "display_name");
   copyIfPresent(args, request, "version");
+  if (args.promotion_evidence !== undefined) {
+    request.promotion_evidence = parseJsonFlag(args.promotion_evidence, "--promotion-evidence");
+  }
+  if (args.control_tower_approval === true) request.control_tower_approval = true;
   if (args.overwrite === true) request.overwrite = true;
   if (args.enable === true) request.enable = true;
   return request;
@@ -72,6 +84,14 @@ function readJsonFile(filePath) {
 
 function copyIfPresent(source, target, key) {
   if (source[key] !== undefined) target[key] = source[key];
+}
+
+function parseJsonFlag(value, label) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    throw new CliUsageError(`${label} must be strict JSON: ${error.message}`);
+  }
 }
 
 function parseArgs(argv) {
@@ -93,6 +113,7 @@ function parseArgs(argv) {
     ["new-namespace", "new_namespace"],
     ["display-name", "display_name"],
     ["version", "version"],
+    ["promotion-evidence", "promotion_evidence"],
   ]);
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -111,6 +132,10 @@ function parseArgs(argv) {
     }
     if (arg === "--enable") {
       parsed.enable = true;
+      continue;
+    }
+    if (arg === "--control-tower-approval") {
+      parsed.control_tower_approval = true;
       continue;
     }
     if (!arg.startsWith("--")) {
@@ -133,6 +158,10 @@ function parseArgs(argv) {
   return parsed;
 }
 
+function normalizeOperation(operation) {
+  return typeof operation === "string" ? operation.trim().toLowerCase().replaceAll("-", "_") : operation;
+}
+
 function printHelp() {
   console.error([
     "OpenReaper Alpha3 D2 extension pack entrypoint",
@@ -143,7 +172,7 @@ function printHelp() {
     "  node scripts/alpha3-d2-extension-pack-entrypoint.mjs --operation fork --input packet.json --output-directory ./out --new-namespace my_pack",
     "",
     "Options:",
-    "  --operation save|scrub|share|install|fork",
+    "  --operation save|scrub|share|install|fork|enable|disable|update|uninstall|promote_global_alias",
     "  --input <json>",
     "  --output-directory <dir>",
     "  --pack-root <dir>",
@@ -152,6 +181,8 @@ function printHelp() {
     "  --new-namespace <lower_snake_or_dotted>",
     "  --display-name <name>",
     "  --version <semver-or-label>",
+    "  --promotion-evidence <json-object>  Accepted evidence envelope for plan-only promotion readiness",
+    "  --control-tower-approval           Marks evidence as explicitly control-tower approved",
     "  --overwrite",
     "  --enable                       Always blocked in D2.3 portability gate",
     "  --describe",

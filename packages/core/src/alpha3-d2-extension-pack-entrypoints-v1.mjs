@@ -21,6 +21,14 @@ import {
 
 export const ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_CONTRACT = "alpha3.d2.extension_pack_entrypoints.v1";
 export const ALPHA3_D2_EXTENSION_PACK_REGISTRY_CONTRACT = "alpha3.d2.extension_pack_registry.v1";
+export const ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT = "alpha3.d2.extension_pack_promotion.v1";
+export const ALPHA3_D2_EXTENSION_PACK_PROMOTION_OPERATIONS = deepFreeze([
+  "enable",
+  "disable",
+  "update",
+  "uninstall",
+  "promote_global_alias",
+]);
 
 export const ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_CONTRACT,
@@ -38,6 +46,15 @@ export const ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY = deepFreeze
     enable_default: false,
     executable_entries_exposed: false,
     global_aliases: false,
+  },
+  promotion_gate: {
+    contract: ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT,
+    mode: "plan_only_extension_pack_promotion_gate",
+    operations: ALPHA3_D2_EXTENSION_PACK_PROMOTION_OPERATIONS,
+    registry_write: false,
+    executable_entries_exposed: false,
+    global_alias_execution: false,
+    rule: "Enable, update, uninstall, disable, and global alias promotion are readiness envelopes only until a bounded control-tower window approves mutation.",
   },
   rule: "Installing an extension pack records manifest metadata only. Runtime execution remains authorized through accepted OpenReaper catalog truth.",
 });
@@ -62,6 +79,45 @@ const ENTRYPOINT_LOCAL_FIELD_SET = new Set([
   "source",
   "overwrite",
   "enable",
+  "promotion_evidence",
+  "promotionEvidence",
+  "control_tower_promotion_evidence",
+  "controlTowerPromotionEvidence",
+  "control_tower_approval",
+  "controlTowerApproval",
+  "target_namespace",
+  "targetNamespace",
+  "target_pack_id",
+  "targetPackId",
+]);
+
+const PROMOTION_EVIDENCE_RANK = Object.freeze({
+  declared: 0,
+  schema_validated: 1,
+  fake_smoked: 2,
+  runtime_bound: 3,
+  trial_reviewed: 4,
+  live_smoked: 5,
+  supported: 6,
+});
+const LIVE_EVIDENCE_PERMISSION_SET = new Set([
+  "project_write_reversible",
+  "fx_parameter_control",
+  "media_import",
+  "local_index_write",
+  "microphone_or_voice_query",
+  "cloud_search",
+  "download",
+  "export_or_overwrite",
+  "hardware_io",
+  "privacy_sensitive_scan",
+]);
+const LIVE_EVIDENCE_RISK_SET = new Set([
+  "write",
+  "export",
+  "hardware",
+  "privacy",
+  "destructive",
 ]);
 
 export function saveAlpha3D2ExtensionPack(request = {}, options = {}) {
@@ -310,6 +366,42 @@ export function loadAlpha3D2ExtensionPackRegistry(packRoot) {
   return buildExtensionPackRegistry(packRoot);
 }
 
+export function planAlpha3D2ExtensionPackPromotion(request = {}, options = {}) {
+  const operation = normalizePromotionOperation(request.operation ?? options.operation);
+  const blockers = [];
+  if (!ALPHA3_D2_EXTENSION_PACK_PROMOTION_OPERATIONS.includes(operation)) {
+    blockers.push(blocker(
+      "PROMOTION_OPERATION_UNSUPPORTED",
+      "$.operation",
+      "Promotion gate supports enable, disable, update, uninstall, or promote_global_alias.",
+    ));
+  }
+
+  const plan = planAlpha3D2ExtensionPackPortability(
+    extensionPackPortabilityPlanRequest(request, "install"),
+    options,
+  );
+  if (!plan.ok || !plan.packet) blockers.push(...plan.portability.blockers);
+  const manifest = plan.packet?.manifest ?? null;
+
+  const registry = inspectPromotionRegistry({
+    packRoot: request.pack_root ?? request.packRoot ?? options.packRoot,
+    manifest,
+    request,
+  });
+  blockers.push(...registry.blockers);
+  blockers.push(...promotionOperationBlockers({ operation, manifest, request }));
+
+  return promotionResult({
+    ok: blockers.length === 0,
+    operation,
+    plan,
+    manifest,
+    registry,
+    blockers,
+  });
+}
+
 function writeExtensionPackPacketOperation(operation, request, options) {
   const plan = planAlpha3D2ExtensionPackPortability(
     extensionPackPortabilityPlanRequest(request, operation),
@@ -418,6 +510,268 @@ function entrypointResult({
       ? nextStep(operation)
       : "Resolve blockers and retry the extension pack file entrypoint.",
   });
+}
+
+function promotionResult({
+  ok,
+  operation,
+  plan,
+  manifest,
+  registry,
+  blockers,
+}) {
+  const pack = manifest ? packSummary(manifest) : (registry.installed_pack ?? plan?.pack ?? null);
+  const requirements = promotionEvidenceRequirements({ operation, manifest });
+  return deepFreeze({
+    contract: ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT,
+    ok,
+    operation,
+    status: promotionStatus({ ok, operation }),
+    mode: "plan_only_extension_pack_promotion_gate",
+    user_word: "pack",
+    pack,
+    registry: {
+      checked: registry.checked,
+      pack_root: registry.pack_root,
+      installed: registry.installed,
+      installed_pack: registry.installed_pack,
+      pack_count: registry.pack_count,
+      executable_entries_exposed: false,
+    },
+    required_evidence: requirements,
+    blockers: uniqueBlockers(blockers),
+    planned_effect: {
+      registry_write: false,
+      filesystem_write: false,
+      install_writes_files: false,
+      pack_files_removed: false,
+      pack_files_overwritten: false,
+      executable_entries_exposed: false,
+      installed_pack_enabled: false,
+      global_aliases_promoted: false,
+      runtime_catalog_mutated: false,
+      safe_write: false,
+      live_reaper: false,
+    },
+    safety: {
+      added_tools: 0,
+      public_call_recipe: false,
+      hidden_executor: false,
+      raw_lua_action_shell_or_ui: false,
+      live_reaper: false,
+      safe_write: false,
+      registry_write: false,
+      executable_entries_exposed: false,
+      global_alias_execution: false,
+      broad_support_claim: false,
+      package_scoped_aliases_only: true,
+      execution_path: ["list_templates", "list_recipes", "call_template", "get_state"],
+    },
+    next_step: promotionNextStep({ ok, operation }),
+  });
+}
+
+function inspectPromotionRegistry({ packRoot, manifest, request }) {
+  const blockers = [];
+  const normalizedPackRoot = isNonEmptyString(packRoot) ? path.resolve(packRoot) : null;
+  if (!isNonEmptyString(packRoot)) {
+    blockers.push(blocker("PACK_ROOT_REQUIRED", "$.pack_root", "Promotion readiness needs an installed extension pack root."));
+    return {
+      checked: false,
+      pack_root: normalizedPackRoot,
+      installed: false,
+      installed_pack: null,
+      pack_count: 0,
+      blockers,
+    };
+  }
+
+  let registry = null;
+  try {
+    registry = buildExtensionPackRegistry(packRoot);
+  } catch (error) {
+    blockers.push(blocker("PACK_ROOT_INVALID", "$.pack_root", `Installed pack root is not loadable: ${error.message}`));
+    return {
+      checked: true,
+      pack_root: normalizedPackRoot,
+      installed: false,
+      installed_pack: null,
+      pack_count: 0,
+      blockers,
+    };
+  }
+
+  const namespace = manifest?.namespace ?? request.target_namespace ?? request.targetNamespace;
+  const packId = manifest?.pack_id ?? request.target_pack_id ?? request.targetPackId;
+  const installedPack = registry.packs.find((entry) =>
+    (isNonEmptyString(namespace) && entry.namespace === namespace)
+      || (isNonEmptyString(packId) && entry.pack_id === packId)
+  ) ?? null;
+  if (!installedPack) {
+    blockers.push(blocker("PACK_NOT_INSTALLED", "$.pack_root", "Promotion readiness requires the pack to be installed first."));
+  }
+
+  return {
+    checked: true,
+    pack_root: registry.pack_root,
+    installed: Boolean(installedPack),
+    installed_pack: installedPack,
+    pack_count: registry.packs.length,
+    blockers,
+  };
+}
+
+function promotionOperationBlockers({ operation, manifest, request }) {
+  const blockers = [];
+  if (operation === "enable" || operation === "update") {
+    blockers.push(...promotionEvidenceBlockers({ operation, manifest, request }));
+  }
+  if (operation === "uninstall") {
+    blockers.push(blocker(
+      "UNINSTALL_REQUIRES_BOUNDED_USER_WINDOW",
+      "$.operation",
+      "Uninstall can remove a user's installed pack metadata; keep this static gate plan-only until explicit user confirmation and backup policy are approved.",
+    ));
+  }
+  if (operation === "promote_global_alias") {
+    blockers.push(...promotionEvidenceBlockers({ operation, manifest, request }));
+    blockers.push(blocker(
+      "GLOBAL_ALIAS_EXECUTION_NOT_ENABLED",
+      "$.operation",
+      "Global alias promotion is a control-tower review topic only; D2.4 does not expand alias execution.",
+    ));
+  }
+  return blockers;
+}
+
+function promotionEvidenceBlockers({ operation, manifest, request }) {
+  const blockers = [];
+  const required = minimumPromotionEvidenceTier({ operation, manifest });
+  const evidence = normalizePromotionEvidence(request);
+  if (!evidence.provided) {
+    blockers.push(blocker(
+      "PROMOTION_EVIDENCE_REQUIRED",
+      "$.promotion_evidence",
+      `Pack ${operation} needs non-self-attested ${required} or stronger evidence before user-visible promotion.`,
+    ));
+    return blockers;
+  }
+  if (evidence.rank < PROMOTION_EVIDENCE_RANK[required]) {
+    blockers.push(blocker(
+      "PROMOTION_EVIDENCE_TOO_WEAK",
+      "$.promotion_evidence.tier",
+      `Pack ${operation} needs ${required} or stronger evidence.`,
+    ));
+  }
+  if (evidence.evidence_refs.length === 0) {
+    blockers.push(blocker(
+      "PROMOTION_EVIDENCE_REF_REQUIRED",
+      "$.promotion_evidence.evidence_refs",
+      "Promotion evidence must include at least one report, artifact, or evidence root reference.",
+    ));
+  }
+  if (!isNonEmptyString(evidence.reviewed_by) || evidence.reviewed_by === "self") {
+    blockers.push(blocker(
+      "PROMOTION_REVIEW_REQUIRED",
+      "$.promotion_evidence.reviewed_by",
+      "Promotion evidence must be reviewed by the control tower, trial officer, or an accepted reviewer.",
+    ));
+  }
+  if (operation === "promote_global_alias" && !evidence.control_tower_approved) {
+    blockers.push(blocker(
+      "CONTROL_TOWER_PROMOTION_REQUIRED",
+      "$.promotion_evidence.control_tower_approved",
+      "Global alias promotion needs explicit control-tower approval even after evidence review.",
+    ));
+  }
+  return blockers;
+}
+
+function promotionEvidenceRequirements({ operation, manifest }) {
+  if (operation === "disable") return [];
+  if (operation === "uninstall") {
+    return [
+      {
+        tier: "user_confirmed",
+        reason: "Uninstall may remove installed pack metadata and needs a bounded user window.",
+      },
+    ];
+  }
+  if (operation === "enable" || operation === "update" || operation === "promote_global_alias") {
+    return [
+      {
+        tier: minimumPromotionEvidenceTier({ operation, manifest }),
+        reason: "Promotion must be backed by accepted evidence outside the pack's own manifest.",
+      },
+    ];
+  }
+  return [];
+}
+
+function minimumPromotionEvidenceTier({ operation, manifest }) {
+  if (operation === "promote_global_alias") return "live_smoked";
+  return packNeedsLivePromotionEvidence(manifest) ? "live_smoked" : "trial_reviewed";
+}
+
+function packNeedsLivePromotionEvidence(manifest) {
+  if (!manifest) return true;
+  if ((manifest.risk_classes ?? []).some((risk) => LIVE_EVIDENCE_RISK_SET.has(risk))) return true;
+  if ((manifest.permissions ?? []).some((permission) => LIVE_EVIDENCE_PERMISSION_SET.has(permission))) return true;
+  return manifest.contributed_capabilities.some((capability) =>
+    (capability.permissions ?? []).some((permission) => LIVE_EVIDENCE_PERMISSION_SET.has(permission))
+  );
+}
+
+function normalizePromotionEvidence(request) {
+  const input = request.promotion_evidence
+    ?? request.promotionEvidence
+    ?? request.control_tower_promotion_evidence
+    ?? request.controlTowerPromotionEvidence;
+  if (!isPlainObject(input)) {
+    return {
+      provided: false,
+      tier: null,
+      rank: -1,
+      evidence_refs: [],
+      reviewed_by: null,
+      control_tower_approved: false,
+    };
+  }
+  const tier = isNonEmptyString(input.tier)
+    ? input.tier
+    : input.evidence_tier;
+  const evidenceRefs = normalizeEvidenceRefs(input.evidence_refs ?? input.evidence_ref ?? input.refs ?? input.ref);
+  return {
+    provided: true,
+    tier,
+    rank: PROMOTION_EVIDENCE_RANK[tier] ?? -1,
+    evidence_refs: evidenceRefs,
+    reviewed_by: isNonEmptyString(input.reviewed_by) ? input.reviewed_by : null,
+    control_tower_approved: input.control_tower_approved === true
+      || input.controlTowerApproved === true
+      || request.control_tower_approval === true
+      || request.controlTowerApproval === true,
+  };
+}
+
+function normalizeEvidenceRefs(value) {
+  if (Array.isArray(value)) return value.filter(isNonEmptyString);
+  if (isNonEmptyString(value)) return [value];
+  return [];
+}
+
+function promotionStatus({ ok, operation }) {
+  if (!ok) return "blocked";
+  if (operation === "disable") return "ready_for_disable_plan";
+  return "ready_for_control_tower_review";
+}
+
+function promotionNextStep({ ok, operation }) {
+  if (!ok) return "Resolve promotion blockers without enabling executable entries.";
+  if (operation === "disable") return "Open a bounded metadata-disable window before changing registry state.";
+  if (operation === "update") return "Open a bounded update window with exact manifest diff and accepted evidence.";
+  if (operation === "enable") return "Open a bounded enable window; execution still resolves through accepted OpenReaper catalog truth.";
+  return "Keep global alias promotion in control-tower review; no alias execution expands in this gate.";
 }
 
 function resolveOutputPacketPath({ outputDirectory, filename, namespace }) {
@@ -803,6 +1157,12 @@ function nextStep(operation) {
   if (operation === "share") return "Send the pack packet; the receiver should validate before installing.";
   if (operation === "scrub") return "Use this scrubbed pack packet for share/install/fork.";
   return "Keep or share the saved pack packet.";
+}
+
+function normalizePromotionOperation(operation) {
+  if (typeof operation !== "string") return "enable";
+  const normalized = operation.trim().toLowerCase().replaceAll("-", "_");
+  return normalized;
 }
 
 function isSafeBasename(name) {

@@ -58,7 +58,12 @@ const sourceChecks = [
     requiredNeedles: [
       "alpha3.d2.extension_pack_entrypoints.v1",
       "alpha3.d2.extension_pack_registry.v1",
+      "alpha3.d2.extension_pack_promotion.v1",
       "local_filesystem_extension_pack_entrypoints",
+      "planAlpha3D2ExtensionPackPromotion",
+      "registry_write: false",
+      "global_aliases_promoted: false",
+      "GLOBAL_ALIAS_EXECUTION_NOT_ENABLED",
       "executable_entries_exposed: false",
       "package_scoped_aliases_only: true",
       "public_call_recipe: false",
@@ -73,7 +78,8 @@ const sourceChecks = [
       "shareAlpha3D2ExtensionPack",
       "installAlpha3D2ExtensionPack",
       "forkAlpha3D2ExtensionPack",
-      "--operation save|scrub|share|install|fork",
+      "planAlpha3D2ExtensionPackPromotion",
+      "--operation save|scrub|share|install|fork|enable|disable|update|uninstall|promote_global_alias",
     ],
   },
 ];

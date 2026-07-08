@@ -16,10 +16,13 @@ import {
 } from "../../packages/core/src/alpha3-d2-extension-pack-portability-v1.mjs";
 import {
   ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_CONTRACT,
+  ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY,
+  ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT,
   ALPHA3_D2_EXTENSION_PACK_REGISTRY_CONTRACT,
   forkAlpha3D2ExtensionPack,
   installAlpha3D2ExtensionPack,
   loadAlpha3D2ExtensionPackRegistry,
+  planAlpha3D2ExtensionPackPromotion,
   shareAlpha3D2ExtensionPack,
 } from "../../packages/core/src/alpha3-d2-extension-pack-entrypoints-v1.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
@@ -48,6 +51,9 @@ describe("Alpha3 D2 extension pack portability", () => {
     assert.equal(packet.safety.raw_lua_action_shell_or_ui, false);
     assert.equal(packet.safety.executable_entries_exposed, false);
     assert.equal(packet.safety.package_scoped_aliases_only, true);
+    assert.equal(ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY.promotion_gate.contract, ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT);
+    assert.equal(ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY.promotion_gate.registry_write, false);
+    assert.equal(ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY.promotion_gate.global_alias_execution, false);
     assert.equal(validateAlpha3D2ExtensionPackPacket(packet).ok, true);
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",
@@ -220,6 +226,98 @@ describe("Alpha3 D2 extension pack portability", () => {
     assert.equal(registry.packs[0].enabled, false);
   });
 
+  it("plans extension pack enable, disable, update, uninstall, and global alias promotion without mutating registry state", () => {
+    const manifest = vitalManifest();
+    const temp = mkdtempSync(path.join(tmpdir(), "openreaper-d2-pack-promote-"));
+    const outputDirectory = path.join(temp, "packets");
+    const packRoot = path.join(temp, "extension-packs");
+    const shared = shareAlpha3D2ExtensionPack({
+      manifest,
+      source: "partner",
+      output_directory: outputDirectory,
+    }, fixedClock());
+    const installed = installAlpha3D2ExtensionPack({
+      packet: shared.packet,
+      pack_root: packRoot,
+    }, fixedClock());
+
+    const enableBlocked = planAlpha3D2ExtensionPackPromotion({
+      operation: "enable",
+      packet: shared.packet,
+      pack_root: packRoot,
+    }, fixedClock());
+    const enableReady = planAlpha3D2ExtensionPackPromotion({
+      operation: "enable",
+      packet: shared.packet,
+      pack_root: packRoot,
+      promotion_evidence: acceptedPromotionEvidence(),
+    }, fixedClock());
+    const disableReady = planAlpha3D2ExtensionPackPromotion({
+      operation: "disable",
+      packet: shared.packet,
+      pack_root: packRoot,
+    }, fixedClock());
+    const updateReady = planAlpha3D2ExtensionPackPromotion({
+      operation: "update",
+      packet: shared.packet,
+      pack_root: packRoot,
+      promotion_evidence: acceptedPromotionEvidence(),
+    }, fixedClock());
+    const uninstallBlocked = planAlpha3D2ExtensionPackPromotion({
+      operation: "uninstall",
+      packet: shared.packet,
+      pack_root: packRoot,
+    }, fixedClock());
+    const globalAliasBlocked = planAlpha3D2ExtensionPackPromotion({
+      operation: "promote-global-alias",
+      packet: shared.packet,
+      pack_root: packRoot,
+      promotion_evidence: {
+        ...acceptedPromotionEvidence(),
+        control_tower_approved: true,
+      },
+    }, fixedClock());
+    const registryAfterPlans = loadAlpha3D2ExtensionPackRegistry(packRoot);
+
+    assert.equal(installed.ok, true);
+    assert.equal(enableBlocked.contract, ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT);
+    assert.equal(enableBlocked.ok, false);
+    assert.equal(blockerCodes(enableBlocked).includes("PROMOTION_EVIDENCE_REQUIRED"), true);
+    assert.equal(enableBlocked.registry.installed, true);
+    assert.deepEqual(enableBlocked.required_evidence, [
+      {
+        tier: "live_smoked",
+        reason: "Promotion must be backed by accepted evidence outside the pack's own manifest.",
+      },
+    ]);
+
+    assert.equal(enableReady.ok, true);
+    assert.equal(enableReady.status, "ready_for_control_tower_review");
+    assert.equal(enableReady.planned_effect.registry_write, false);
+    assert.equal(enableReady.planned_effect.installed_pack_enabled, false);
+    assert.equal(enableReady.safety.executable_entries_exposed, false);
+    assert.equal(enableReady.safety.global_alias_execution, false);
+
+    assert.equal(disableReady.ok, true);
+    assert.equal(disableReady.status, "ready_for_disable_plan");
+    assert.deepEqual(disableReady.required_evidence, []);
+
+    assert.equal(updateReady.ok, true);
+    assert.equal(updateReady.planned_effect.pack_files_overwritten, false);
+
+    assert.equal(uninstallBlocked.ok, false);
+    assert.equal(blockerCodes(uninstallBlocked).includes("UNINSTALL_REQUIRES_BOUNDED_USER_WINDOW"), true);
+    assert.equal(uninstallBlocked.planned_effect.pack_files_removed, false);
+
+    assert.equal(globalAliasBlocked.ok, false);
+    assert.equal(blockerCodes(globalAliasBlocked).includes("GLOBAL_ALIAS_EXECUTION_NOT_ENABLED"), true);
+    assert.equal(globalAliasBlocked.planned_effect.global_aliases_promoted, false);
+
+    assert.equal(registryAfterPlans.packs.length, 1);
+    assert.equal(registryAfterPlans.packs[0].enabled, false);
+    assert.equal(registryAfterPlans.executable_entries_exposed, false);
+  });
+
   it("forks sound-library pack namespaces across indexes, capabilities, aliases, and provenance", () => {
     const manifest = soundLibraryManifest();
     const temp = mkdtempSync(path.join(tmpdir(), "openreaper-d2-pack-sound-fork-"));
@@ -356,6 +454,31 @@ describe("Alpha3 D2 extension pack portability", () => {
     assert.equal(installed.ok, true);
     assert.equal(existsSync(installed.paths.manifest_path), true);
     assert.equal(existsSync(installed.paths.registry_path), true);
+
+    const enableOutput = execFileSync(process.execPath, [
+      CLI_PATH,
+      "--operation",
+      "enable",
+      "--input",
+      forkPath,
+      "--pack-root",
+      packRoot,
+      "--promotion-evidence",
+      JSON.stringify(acceptedPromotionEvidence()),
+    ], { cwd: REPO_ROOT, encoding: "utf8" });
+    const enablePlan = JSON.parse(enableOutput);
+    assert.equal(enablePlan.ok, true);
+    assert.equal(enablePlan.status, "ready_for_control_tower_review");
+    assert.equal(enablePlan.planned_effect.registry_write, false);
+    assert.equal(enablePlan.planned_effect.installed_pack_enabled, false);
+
+    const describeOutput = execFileSync(process.execPath, [
+      CLI_PATH,
+      "--describe",
+    ], { cwd: REPO_ROOT, encoding: "utf8" });
+    const described = JSON.parse(describeOutput);
+    assert.equal(described.promotion_gate.contract, ALPHA3_D2_EXTENSION_PACK_PROMOTION_CONTRACT);
+    assert.equal(described.promotion_gate.executable_entries_exposed, false);
   });
 });
 
@@ -572,6 +695,16 @@ function soundLibraryManifest() {
 function fixedClock() {
   return {
     now: () => new Date("2026-07-07T13:56:00.000Z"),
+  };
+}
+
+function acceptedPromotionEvidence() {
+  return {
+    tier: "live_smoked",
+    evidence_refs: [
+      "/Users/Shared/openreaper-alpha3-extension-pack-promotion-fixture",
+    ],
+    reviewed_by: "control_tower",
   };
 }
 
