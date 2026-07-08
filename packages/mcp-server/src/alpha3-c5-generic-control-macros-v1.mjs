@@ -9,6 +9,9 @@ import {
   createTemplateCatalogWave2aTemplates,
   createTemplateCatalogWave3bTemplates,
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
+import {
+  createAlpha3L4MacroExecutionConvenienceFlow,
+} from "./alpha3-l4-macro-execution-convenience-v1.mjs";
 
 export const ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT = "alpha3.c5.generic_control_macros.v1";
 
@@ -284,10 +287,11 @@ export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) 
   const readback = requests.length > 0 && blockers.length === 0
     ? planReadbackRequest(macro, request.refs)
     : null;
+  const ok = blockers.length === 0;
 
   return deepFreeze({
     contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
-    ok: blockers.length === 0,
+    ok,
     id: macro.id,
     mode: "plan_only_call_template_macro",
     action_kind: "macro",
@@ -297,6 +301,15 @@ export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) 
     freshness_requires: macro.freshness_requires,
     requests,
     readback,
+    agent_execution_flow: createAlpha3L4MacroExecutionConvenienceFlow({
+      macro_id: macro.id,
+      macro_family: "c5_generic_control",
+      risk_domain: macro.risk_domain,
+      ok,
+      child_requests: requests,
+      readback,
+      blockers,
+    }),
     blockers,
     policy: "Execute only supplied supported fields through accepted call_template ids, keep writes serial, do not claim an atomic multi-field transaction, then batch-read back the changed target.",
   });
@@ -358,6 +371,7 @@ export function createAlpha3C5MacroRuntimeEnvelope({ request = {}, plan, now = (
       },
       child_requests: normalizedPlan.requests,
       readback: normalizedPlan.readback,
+      agent_execution_flow: normalizedPlan.agent_execution_flow,
       blockers: normalizedPlan.blockers,
     },
     budget: {

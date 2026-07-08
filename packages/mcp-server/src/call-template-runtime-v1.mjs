@@ -62,6 +62,10 @@ import {
   planAlpha3C5GenericControlMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
 import {
+  ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
+  summarizeAlpha3L4MacroExecutionConvenience,
+} from "./alpha3-l4-macro-execution-convenience-v1.mjs";
+import {
   ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
   createAlpha3E1OfficialMacroDiscoveryItems,
   createAlpha3E1StockPluginRuntimeEnvelope,
@@ -1312,6 +1316,8 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     project_index_user_flow: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
     project_index_user_flow_snapshot: summarizeAlpha3L3ProjectIndexUserFlow(),
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
+    macro_execution_convenience: ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
+    macro_execution_convenience_snapshot: summarizeAlpha3L4MacroExecutionConvenience(),
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     stock_plugin_live_evidence: summarizeAlpha3E1StockPluginLiveEvidenceMatrix(),
     stock_plugin_product_gate: ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,

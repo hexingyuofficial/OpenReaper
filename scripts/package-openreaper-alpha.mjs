@@ -42,6 +42,7 @@ const REQUIRED_INSTALLED_START_COMMAND = "~/.openreaper/current/bin/openreaper-s
 const REQUIRED_INSTALLED_PROJECT_START_COMMAND =
   "~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP";
 const REQUIRED_PROJECT_INDEX_USER_FLOW_CONTRACT = "alpha3.1.l3.project_index_user_flow.v1";
+const REQUIRED_MACRO_EXECUTION_CONVENIENCE_CONTRACT = "alpha3.1.l4.macro_execution_convenience.v1";
 const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
   "create_openreaper_handoff_plan",
   "run_doctor",
@@ -320,6 +321,7 @@ async function smokePackagedOpenReaperMcp() {
       expectedPackageRoot: null,
     });
     assertProjectIndexUserFlow(macros.product_surface?.project_index_user_flow_snapshot);
+    assertMacroExecutionConvenience(macros.product_surface?.macro_execution_convenience_snapshot);
     const fxTemplateResponse = await client.callTool({
       name: "list_templates",
       arguments: {
@@ -347,6 +349,13 @@ async function smokePackagedOpenReaperMcp() {
         primary_macro_ids: macros.product_surface.project_index_user_flow_snapshot.primary_macro_ids,
         hidden_executor: macros.product_surface.project_index_user_flow_snapshot.safety.hidden_executor,
         raw_sql_exposed: macros.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed,
+      },
+      macro_execution_convenience: {
+        contract: macros.product_surface.macro_execution_convenience_snapshot.contract,
+        server_executes_children: macros.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children,
+        hidden_executor: macros.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor,
+        success_wording_requires_readback:
+          macros.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback,
       },
       executable_allowlist: executableAllowlistSmoke,
     };
@@ -555,6 +564,24 @@ function assertProjectIndexUserFlow(flow) {
   }
   if (flow.safety?.raw_sql_exposed !== false || flow.safety?.sqlite_authorizes_writes !== false) {
     throw new Error("Packaged MCP Project Index user flow weakened SQLite safety");
+  }
+}
+
+function assertMacroExecutionConvenience(flow) {
+  if (!flow || flow.contract !== REQUIRED_MACRO_EXECUTION_CONVENIENCE_CONTRACT) {
+    throw new Error("Packaged MCP list_templates missing macro execution convenience flow");
+  }
+  if (flow.safety?.added_tools !== 0 || flow.safety?.hidden_executor !== false) {
+    throw new Error("Packaged MCP macro execution convenience expanded tools or hid an executor");
+  }
+  if (flow.safety?.server_executes_children !== false || flow.safety?.public_call_recipe !== false) {
+    throw new Error("Packaged MCP macro execution convenience introduced a hidden execution path");
+  }
+  if (flow.safety?.raw_lua_action_shell_or_ui !== false || flow.safety?.alias_execution !== false) {
+    throw new Error("Packaged MCP macro execution convenience weakened raw/alias execution policy");
+  }
+  if (flow.safety?.success_wording_requires_readback !== true) {
+    throw new Error("Packaged MCP macro execution convenience must require readback before success wording");
   }
 }
 

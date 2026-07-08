@@ -11,6 +11,10 @@ import {
 import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
+  ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
+} from "../../packages/mcp-server/src/alpha3-l4-macro-execution-convenience-v1.mjs";
 
 describe("Alpha3 C5 generic control macro schemas", () => {
   it("registers the planned generic control macro surface without adding tools or an executor", () => {
@@ -115,6 +119,27 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       input: { include_selected: true, limit: 50 },
       expected_evidence: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
     });
+    assert.equal(plan.agent_execution_flow.contract, ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT);
+    assert.equal(plan.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+    assert.equal(plan.agent_execution_flow.execution_authority, "agent_calls_existing_call_template_requests");
+    assert.equal(plan.agent_execution_flow.agent_can_continue_after_task_authorization, true);
+    assert.equal(plan.agent_execution_flow.task_authorization.required, true);
+    assert.equal(plan.agent_execution_flow.request_counts.child, 3);
+    assert.equal(plan.agent_execution_flow.request_counts.readback, 1);
+    assert.deepEqual(plan.agent_execution_flow.steps.map((step) => step.id), [
+      "execute_child_requests",
+      "run_readback_requests",
+      "compare_readback_to_requested_changes",
+    ]);
+    assert.equal(plan.agent_execution_flow.steps[0].request_source, "result.child_requests");
+    assert.equal(plan.agent_execution_flow.steps[0].execution, "serial");
+    assert.equal(plan.agent_execution_flow.steps[0].stop_on_first_blocker, true);
+    assert.equal(plan.agent_execution_flow.steps[1].request_source, "result.readback");
+    assert.equal(plan.agent_execution_flow.success_gate.success_wording_allowed_now, false);
+    assert.equal(plan.agent_execution_flow.safety.server_executes_children, false);
+    assert.equal(plan.agent_execution_flow.safety.hidden_executor, false);
+    assert.equal(plan.agent_execution_flow.safety.public_call_recipe, false);
+    assert.equal(plan.agent_execution_flow.safety.raw_lua_action_shell_or_ui, false);
   });
 
   it("blocks incomplete grouped inputs instead of emitting invalid template calls", () => {
@@ -152,6 +177,9 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(hardStopPlan.requests.length, 0);
     assert.equal(hardStopPlan.blockers[0].field, "hardware_output");
     assert.equal(hardStopPlan.blockers[0].code, "HARD_STOP_DOMAIN");
+    assert.equal(hardStopPlan.agent_execution_flow.status, "blocked_before_agent_execution");
+    assert.equal(hardStopPlan.agent_execution_flow.agent_can_continue_after_task_authorization, false);
+    assert.equal(hardStopPlan.agent_execution_flow.steps[0].id, "resolve_typed_blockers");
 
     assert.equal(typoPlan.ok, false);
     assert.equal(typoPlan.requests.length, 0);
@@ -201,6 +229,19 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     );
     assert.equal(menu.product_surface.generic_control_macros.tool_surface.added_tools, 0);
+    assert.deepEqual(
+      menu.product_surface.macro_execution_convenience,
+      ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
+    );
+    assert.equal(
+      menu.product_surface.macro_execution_convenience_snapshot.contract,
+      ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
+    );
+    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.added_tools, 0);
+    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children, false);
+    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor, false);
+    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.public_call_recipe, false);
+    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback, true);
     assert.deepEqual(
       menu.product_surface.generic_control_macros.macro_ids.slice(0, 5),
       [
@@ -262,6 +303,14 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       ["template.tracks.set_volume", "template.tracks.set_pan"],
     );
     assert.equal(response.result.readback.id, "template.tracks.read_mixer_controls");
+    assert.equal(response.result.agent_execution_flow.contract, ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT);
+    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+    assert.equal(response.result.agent_execution_flow.request_counts.child, 2);
+    assert.equal(response.result.agent_execution_flow.request_counts.readback, 1);
+    assert.equal(response.result.agent_execution_flow.steps[0].request_source, "result.child_requests");
+    assert.equal(response.result.agent_execution_flow.steps[1].request_source, "result.readback");
+    assert.equal(response.result.agent_execution_flow.success_gate.success_wording_allowed_now, false);
+    assert.equal(response.result.agent_execution_flow.safety.server_executes_children, false);
     assert.equal(runtime.last_evidence().template.id, "macro.set_track_controls");
   });
 
@@ -283,6 +332,8 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(response.result.plan.ok, false);
     assert.equal(response.result.child_requests.length, 0);
     assert.equal(response.result.readback, null);
+    assert.equal(response.result.agent_execution_flow.status, "blocked_before_agent_execution");
+    assert.equal(response.result.agent_execution_flow.safety.hidden_executor, false);
     assert.equal(response.result.blockers[0].field, "hardware_output");
     assert.equal(response.result.blockers[0].code, "HARD_STOP_DOMAIN");
   });
