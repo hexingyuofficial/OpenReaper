@@ -44,6 +44,7 @@ export const ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY = deepFreeze({
     discovery_tool: "list_templates",
     assistant_source: ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
     local_helper: "npm run prepare:startup-wrapper",
+    local_launch_helper: "npm run start:openreaper -- --launch",
   },
   wrapper_types: ["startup_package", "macos_launcher_candidate", "codex_session_card"],
   statuses: ["ready", "prepare_wrapper", "reconnect_existing", "blocked"],

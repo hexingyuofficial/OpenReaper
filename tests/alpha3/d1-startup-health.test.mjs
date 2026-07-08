@@ -500,6 +500,45 @@ describe("Alpha3 D1 startup and connection health", () => {
     assert.doesNotMatch(scriptSource, /child_process|spawn\(|execFile|execSync|open -a|REAPER\.app/);
   });
 
+  it("prepares a one-command startup helper in dry-run mode without spawning REAPER", () => {
+    const root = mkdtempSync(join(tmpdir(), "openreaper-alpha3-start-helper-"));
+    const output = execFileSync(
+      process.execPath,
+      [
+        "scripts/start-openreaper-alpha3.mjs",
+        "--run-id=test-start-openreaper",
+        `--run-root=${root}`,
+        "--dry-run",
+        "--reaper-binary=/tmp/not-used-reaper",
+      ],
+      {
+        cwd: new URL("../..", import.meta.url),
+        encoding: "utf8",
+      },
+    ).trim();
+    const result = JSON.parse(output);
+
+    assert.equal(result.contract, "alpha3.d1.start_openreaper_helper_result.v1");
+    assert.equal(result.ok, true);
+    assert.equal(result.mode, "prepare_only");
+    assert.equal(result.dry_run, true);
+    assert.equal(result.launched_reaper, false);
+    assert.equal(result.spawned_process_now, false);
+    assert.equal(result.safety.explicit_launch_required, true);
+    assert.equal(result.safety.dry_run_default, true);
+    assert.equal(result.safety.safe_write_called, false);
+    assert.equal(result.safety.project_mutation, false);
+    assert.equal(result.safety.bridge_script_auto_run, false);
+    assert.equal(result.safety.one_click_live_accepted, false);
+    assert.equal(existsSync(result.paths.env_file_path), true);
+    assert.equal(existsSync(result.paths.launcher_command_path), true);
+
+    const launcher = readFileSync(result.paths.launcher_command_path, "utf8");
+    assert.match(launcher, /source/);
+    assert.match(launcher, /exec/);
+    assert.match(launcher, /Action List/);
+  });
+
   it("exposes D1 startup assistant guidance through the existing list_templates product surface", () => {
     const runtime = createCallTemplateRuntime({
       live: {
