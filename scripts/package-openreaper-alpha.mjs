@@ -23,9 +23,11 @@ const EXACT_MCP_TOOLS = Object.freeze([
   "list_templates",
   "ping",
 ]);
-const REQUIRED_MACRO_IDS = Object.freeze([
-  "macro.index_status",
-  "macro.query_tracks",
+const REQUIRED_FX_TEMPLATE_IDS = Object.freeze([
+  "template.fx.read_fx_summary",
+  "template.fx.list_fx_parameters",
+  "template.fx.set_fx_parameter_normalized",
+  "template.fx.read_fx_parameter",
 ]);
 
 await assertReadable(path.join(repoRoot, "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs"));
@@ -242,12 +244,12 @@ async function smokePackagedMcp() {
     const templatesResponse = await client.callTool({
       name: "list_templates",
       arguments: {
-        ids: [...REQUIRED_MACRO_IDS],
+        ids: [...REQUIRED_FX_TEMPLATE_IDS],
       },
     });
     const templates = parseJsonToolResult(templatesResponse);
     const templateIds = new Set((templates.items ?? []).map((item) => item.id));
-    for (const id of REQUIRED_MACRO_IDS) {
+    for (const id of REQUIRED_FX_TEMPLATE_IDS) {
       if (!templateIds.has(id)) {
         throw new Error(`Packaged MCP list_templates smoke missing ${id}`);
       }
@@ -256,7 +258,7 @@ async function smokePackagedMcp() {
       ok: true,
       tool_surface: toolNames,
       kernel: ping.kernel,
-      required_macros: [...REQUIRED_MACRO_IDS],
+      required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
     };
   } finally {
     await client.close?.();
