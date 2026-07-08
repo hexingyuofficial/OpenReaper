@@ -3,6 +3,7 @@ import {
 } from "../../core/src/template-catalog-v1.mjs";
 import {
   createTemplateCatalogCriticalFillTemplates,
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
@@ -58,6 +59,7 @@ export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
     "macro.query_takes",
     "macro.query_fx",
     "macro.query_routing",
+    "macro.query_automation",
     "macro.query_markers",
     "macro.query_media",
     "macro.hydrate_refs",
@@ -133,6 +135,7 @@ const REQUIRED_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.routing.read_project_routing_graph",
   "template.routing.read_track_routing",
   "template.routing.resolve_send_ref",
+  "template.automation.list_project_envelopes",
   "template.project.list_markers_regions",
 ]);
 
@@ -239,6 +242,26 @@ const ROUTING_ROW_FIELDS = deepFreeze([
   "midi_channels",
   "phase_inverted",
   "mono",
+  "freshness_status",
+  "coverage_status",
+  "observed_at",
+  "payload_ref",
+  "summary",
+]);
+
+const AUTOMATION_ROW_FIELDS = deepFreeze([
+  "ref",
+  "owner_ref",
+  "target_ref",
+  "parent_kind",
+  "name",
+  "lane_kind",
+  "active",
+  "armed",
+  "visible",
+  "show_lane",
+  "point_count",
+  "automation_item_count",
   "freshness_status",
   "coverage_status",
   "observed_at",
@@ -394,7 +417,19 @@ const QUERY_MACRO_DEFINITIONS = deepFreeze([
       "template.routing.resolve_send_ref",
     ],
   }),
-  queryMacro({ id: "macro.query_automation", user_label: "Query automation", query_kind: "automation" }),
+  queryMacro({
+    id: "macro.query_automation",
+    user_label: "Query automation",
+    summary: "Query compact automation envelope rows from the Project SQLite Index by owner refs, parent kind, envelope name, lane state, and point/automation-item presence.",
+    status: "implemented",
+    query_kind: "automation",
+    task_intents: ["find automation", "find envelopes", "visible automation", "armed envelopes", "large project automation query"],
+    tags: ["project_index", "sqlite", "query", "automation", "envelopes", "alpha3_c3"],
+    required_templates: [
+      "template.automation.list_project_envelopes",
+      "template.automation.read_envelope_summary",
+    ],
+  }),
   queryMacro({
     id: "macro.query_markers",
     user_label: "Query markers",
@@ -526,6 +561,9 @@ export function planAlpha3C3ProjectIndexQueryMacro(id, request = {}, options = {
   }
   if (macro.id === "macro.query_routing") {
     return queryRoutingPlan({ macro, normalized, indexState, blockers, catalog });
+  }
+  if (macro.id === "macro.query_automation") {
+    return queryAutomationPlan({ macro, normalized, indexState, blockers, catalog });
   }
   if (macro.id === "macro.query_markers") {
     return queryMarkersPlan({ macro, normalized, indexState, blockers, catalog });
@@ -924,6 +962,60 @@ function queryRoutingPlan({ macro, normalized, indexState, blockers, catalog }) 
       source_scope: "routing",
       row_count: rows.rows.length,
       complete: routingScope.coverage_status === "complete",
+    },
+    page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
+    refresh_requests: refreshPlan.requests,
+    hydrate_request: rows.refs.length > 0
+      ? hydrateRefsNextStep(rows.refs, normalized.query, catalog)
+      : null,
+    blockers: finalBlockers,
+    index_status: summarizeIndexStatus(indexState),
+  }));
+}
+
+function queryAutomationPlan({ macro, normalized, indexState, blockers, catalog }) {
+  const automationScope = freshnessScope(indexState, "automation");
+  const indexReadinessBlockers = queryReadinessBlockers(indexState, automationScope, normalized.query.freshness);
+  const allBlockers = [
+    ...blockers,
+    ...validateAutomationScope(normalized.query.scope),
+    ...validateAutomationFields(normalized.query.fields),
+    ...indexReadinessBlockers,
+  ];
+  const rows = allBlockers.length === 0
+    ? queryAutomationRows(indexState.rows.envelopes, normalized.query)
+    : { rows: [], next_cursor: null, refs: [] };
+  const refreshPlan = allBlockers.some((entry) =>
+    entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
+  )
+    ? catalogBoundRequestPlans(queryAutomationRefreshRequests(normalized.query), catalog)
+    : { requests: [], blockers: [] };
+  const finalBlockers = [
+    ...allBlockers,
+    ...refreshPlan.blockers,
+  ];
+
+  return deepFreeze(basePlan({
+    macro,
+    normalized,
+    indexState,
+    ok: finalBlockers.length === 0,
+    decision_summary: queryAutomationDecisionSummary({ blockers: finalBlockers, rows, automationScope }),
+    rows: rows.rows,
+    refs: rows.refs,
+    freshness: {
+      scope: "automation",
+      status: automationScope.status,
+      coverage_status: automationScope.coverage_status,
+      observed_at: automationScope.observed_at,
+      required: normalized.query.freshness.require,
+      refresh_policy: normalized.query.freshness.refresh,
+    },
+    coverage: {
+      status: automationScope.coverage_status,
+      source_scope: "automation",
+      row_count: rows.rows.length,
+      complete: automationScope.coverage_status === "complete",
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshPlan.requests,
@@ -1521,6 +1613,9 @@ function readProjectIndexState(projectIndex) {
       sends: Array.isArray(raw.rows?.sends)
         ? raw.rows.sends.map(normalizeRoutingRow).filter(Boolean)
         : [],
+      envelopes: Array.isArray(raw.rows?.envelopes)
+        ? raw.rows.envelopes.map(normalizeAutomationRow).filter(Boolean)
+        : [],
       markers_regions: Array.isArray(raw.rows?.markers_regions)
         ? raw.rows.markers_regions.map(normalizeMarkerRegionRow).filter(Boolean)
         : [],
@@ -1735,6 +1830,81 @@ function normalizeRoutingRow(row) {
         : null,
     phase_inverted: Boolean(source.phase_inverted ?? summary.phase_inverted),
     mono: Boolean(source.mono ?? summary.mono),
+    freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
+    coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
+    summary,
+  };
+}
+
+function normalizeAutomationRow(row) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.envelope_ref === "string" && source.envelope_ref
+      ? source.envelope_ref
+      : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const ownerRef = typeof source.owner_ref === "string"
+    ? source.owner_ref
+    : typeof source.parent_ref === "string"
+      ? source.parent_ref
+      : typeof source.track_ref === "string"
+        ? source.track_ref
+        : typeof summary.owner_ref === "string"
+          ? summary.owner_ref
+          : typeof summary.parent_ref === "string"
+            ? summary.parent_ref
+            : null;
+  return {
+    ref,
+    owner_ref: ownerRef,
+    target_ref: typeof source.target_ref === "string"
+      ? source.target_ref
+      : typeof source.fx_ref === "string"
+        ? source.fx_ref
+        : typeof source.send_ref === "string"
+          ? source.send_ref
+          : typeof summary.target_ref === "string"
+            ? summary.target_ref
+            : null,
+    parent_kind: typeof source.parent_kind === "string"
+      ? source.parent_kind
+      : typeof summary.parent_kind === "string"
+        ? summary.parent_kind
+        : ownerRef === null
+          ? "unknown"
+          : refKind(ownerRef),
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof summary.name === "string"
+        ? summary.name
+        : "",
+    lane_kind: typeof source.lane_kind === "string"
+      ? source.lane_kind
+      : typeof source.envelope_kind === "string"
+        ? source.envelope_kind
+        : typeof summary.lane_kind === "string"
+          ? summary.lane_kind
+          : typeof summary.envelope_kind === "string"
+            ? summary.envelope_kind
+            : null,
+    active: nullableBoolean(source.active, summary.active),
+    armed: nullableBoolean(source.armed, summary.armed),
+    visible: nullableBoolean(source.visible, summary.visible),
+    show_lane: nullableBoolean(source.show_lane, summary.show_lane),
+    point_count: Number.isInteger(source.point_count)
+      ? source.point_count
+      : Number.isInteger(summary.point_count)
+        ? summary.point_count
+        : 0,
+    automation_item_count: Number.isInteger(source.automation_item_count)
+      ? source.automation_item_count
+      : Number.isInteger(summary.automation_item_count)
+        ? summary.automation_item_count
+        : 0,
     freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
     coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
@@ -2075,6 +2245,20 @@ function queryRoutingRows(routingRows, query) {
   };
 }
 
+function queryAutomationRows(automationRows, query) {
+  const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
+  const filtered = automationRows
+    .filter((row) => row.ref)
+    .filter((row) => automationRowMatches(row, query));
+  const pageRows = filtered.slice(offset, offset + query.limit);
+  const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
+  return {
+    rows: pageRows.map((row) => projectAutomationRow(row, query.fields)),
+    refs: pageRows.map((row) => row.ref),
+    next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+  };
+}
+
 function queryMarkerRows(markerRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
   const filtered = markerRows
@@ -2201,6 +2385,28 @@ function routingRowMatches(row, query) {
   return true;
 }
 
+function automationRowMatches(row, query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  if (query.refs.length > 0 && !automationRefsMatch(row, query.refs)) return false;
+  const ownerRefs = normalizeFilterRefs(filters, "owner_ref", "owner_refs");
+  if (ownerRefs.length > 0 && !ownerRefs.includes(row.owner_ref)) return false;
+  const targetRefs = normalizeFilterRefs(filters, "target_ref", "target_refs");
+  if (targetRefs.length > 0 && !targetRefs.includes(row.target_ref)) return false;
+  if (typeof filters.parent_kind === "string" && filters.parent_kind !== row.parent_kind) return false;
+  if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
+  if (typeof filters.lane_kind === "string" && String(row.lane_kind ?? "").toLocaleLowerCase() !== filters.lane_kind.toLocaleLowerCase()) return false;
+  if (typeof filters.envelope_kind === "string" && String(row.lane_kind ?? "").toLocaleLowerCase() !== filters.envelope_kind.toLocaleLowerCase()) return false;
+  if (filters.active !== undefined && (row.active === null || Boolean(filters.active) !== row.active)) return false;
+  if (filters.armed !== undefined && (row.armed === null || Boolean(filters.armed) !== row.armed)) return false;
+  if (filters.visible !== undefined && (row.visible === null || Boolean(filters.visible) !== row.visible)) return false;
+  if (filters.show_lane !== undefined && (row.show_lane === null || Boolean(filters.show_lane) !== row.show_lane)) return false;
+  if (filters.has_points !== undefined && Boolean(filters.has_points) !== (row.point_count > 0)) return false;
+  if (filters.has_automation_items !== undefined && Boolean(filters.has_automation_items) !== (row.automation_item_count > 0)) return false;
+  if (Number.isFinite(filters.min_point_count) && row.point_count < filters.min_point_count) return false;
+  if (Number.isFinite(filters.max_point_count) && row.point_count > filters.max_point_count) return false;
+  return true;
+}
+
 function markerRowMatches(row, query) {
   const filters = isPlainObject(query.filters) ? query.filters : {};
   if (query.refs.length > 0 && !markerRefsMatch(row, query.refs)) return false;
@@ -2265,6 +2471,10 @@ function routingRefsMatch(row, refs) {
     || refs.includes(row.owner_ref)
     || refs.includes(row.source_track_ref)
     || refs.includes(row.destination_track_ref);
+}
+
+function automationRefsMatch(row, refs) {
+  return refs.includes(row.ref) || refs.includes(row.owner_ref) || refs.includes(row.target_ref);
 }
 
 function markerRefsMatch(row, refs) {
@@ -2492,6 +2702,28 @@ function projectRoutingRow(row, fields) {
   return projected;
 }
 
+function projectAutomationRow(row, fields) {
+  const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
+    "ref",
+    "owner_ref",
+    "parent_kind",
+    "name",
+    "lane_kind",
+    "active",
+    "armed",
+    "visible",
+    "point_count",
+    "automation_item_count",
+    "freshness_status",
+    "coverage_status",
+  ];
+  const projected = {};
+  for (const field of selectedFields) {
+    if (AUTOMATION_ROW_FIELDS.includes(field)) projected[field] = row[field];
+  }
+  return projected;
+}
+
 function projectMarkerRegionRow(row, fields) {
   const selectedFields = fields.length > 0 ? unique(["ref", ...fields]) : [
     "ref",
@@ -2593,6 +2825,17 @@ function validateRoutingFields(fields) {
   return fields
     .filter((field) => !ROUTING_ROW_FIELDS.includes(field))
     .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_routing does not expose field ${field}.`));
+}
+
+function validateAutomationScope(scope) {
+  if (["project", "automation", "tracks", "takes", "fx", "routing"].includes(scope)) return [];
+  return [blocker("scope", "QUERY_SCOPE_UNSUPPORTED", "query_automation supports project, automation, tracks, takes, fx, or routing scope.")];
+}
+
+function validateAutomationFields(fields) {
+  return fields
+    .filter((field) => !AUTOMATION_ROW_FIELDS.includes(field))
+    .map((field) => blocker("fields", "QUERY_FIELD_NOT_SUPPORTED", `query_automation does not expose field ${field}.`));
 }
 
 function validateMarkerScope(scope) {
@@ -2943,6 +3186,41 @@ function queryRoutingRefreshRequests(query) {
       refs: {},
       input: { send_ref: sendRef },
       purpose: "Re-resolve an exact send ref from REAPER truth before using indexed routing rows.",
+    });
+  }
+
+  return dedupeRequestPlans(requests);
+}
+
+function queryAutomationRefreshRequests(query) {
+  const filters = isPlainObject(query.filters) ? query.filters : {};
+  const parentKinds = typeof filters.parent_kind === "string"
+    ? [filters.parent_kind]
+    : Array.isArray(filters.parent_kinds)
+      ? filters.parent_kinds.filter((entry) => typeof entry === "string" && entry.trim())
+      : ["track", "take", "send", "fx"];
+  const requests = [
+    {
+      tool: "call_template",
+      id: "template.automation.list_project_envelopes",
+      refs: {},
+      input: {
+        parent_kinds: unique(parentKinds),
+        only_visible: typeof filters.visible === "boolean" ? filters.visible : undefined,
+        only_armed: typeof filters.armed === "boolean" ? filters.armed : undefined,
+        limit: query.limit,
+      },
+      purpose: "Refresh compact project automation envelope candidates from REAPER truth before using Project SQLite Index automation rows.",
+    },
+  ];
+
+  for (const envelopeRef of query.refs.filter((ref) => ref.startsWith("envelope:"))) {
+    requests.push({
+      tool: "call_template",
+      id: "template.automation.read_envelope_summary",
+      refs: { envelope_ref: envelopeRef },
+      input: {},
+      purpose: "Re-read an exact envelope ref from REAPER truth before using indexed automation rows.",
     });
   }
 
@@ -3586,6 +3864,13 @@ function queryRoutingDecisionSummary({ blockers, rows, routingScope }) {
   return `Routing query returned ${rows.rows.length} compact send rows with ${routingScope.status} freshness and ${routingScope.coverage_status} coverage.`;
 }
 
+function queryAutomationDecisionSummary({ blockers, rows, automationScope }) {
+  if (blockers.length > 0) {
+    return "Automation query needs a task-scoped automation envelope refresh before rows are safe to use.";
+  }
+  return `Automation query returned ${rows.rows.length} compact envelope rows with ${automationScope.status} freshness and ${automationScope.coverage_status} coverage.`;
+}
+
 function queryMarkersDecisionSummary({ blockers, rows, markersScope }) {
   if (blockers.length > 0) {
     return "Marker query needs a task-scoped marker/region refresh before rows are safe to use.";
@@ -3762,6 +4047,7 @@ function queryMacroExampleInput(id) {
   if (id === "macro.query_takes") return { scope: "selection", filters: { active: true }, limit: 25 };
   if (id === "macro.query_fx") return { filters: { stock_plugin: true }, limit: 25 };
   if (id === "macro.query_routing") return { scope: "tracks", filters: { source_track_ref: "track:guid:{TRACK-GUID}" }, limit: 25 };
+  if (id === "macro.query_automation") return { filters: { visible: true, has_points: true }, fields: ["owner_ref", "name", "point_count"], limit: 25 };
   if (id === "macro.query_markers") return { filters: { marker_kind: "region" }, time_range: { start_seconds: 0, end_seconds: 120 }, limit: 25 };
   if (id === "macro.query_media") return { filters: { media_type: "audio", offline: false }, limit: 25 };
   if (id === "macro.selected_context") return { scope: "selection", limit: 25 };
@@ -3916,11 +4202,12 @@ function createAlpha3C3AcceptedCatalog() {
     templates: [
       ...createTemplateCatalogWave1aTemplates(),
       ...createTemplateCatalogWave2aTemplates(),
-      ...createTemplateCatalogWave3bTemplates(),
-      ...createTemplateCatalogCriticalFillTemplates(),
-      ...createTemplateCatalogP1Templates(),
-    ],
-  });
+    ...createTemplateCatalogWave3bTemplates(),
+    ...createTemplateCatalogCriticalFillTemplates(),
+    ...createTemplateCatalogP1Templates(),
+    ...createTemplateCatalogAlpha3C3Templates(),
+  ],
+});
 }
 
 function encodeCursor(offset) {

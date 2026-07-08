@@ -49,11 +49,11 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_takes").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_fx").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_routing").status, "implemented");
+    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_automation").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_markers").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.query_media").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.hydrate_refs").status, "implemented");
     assert.equal(registry.macros.find((macro) => macro.id === "macro.changed_since").status, "implemented");
-    assert.equal(registry.macros.find((macro) => macro.id === "macro.query_automation").status, "planned");
     assert.equal(
       registry.macros.find((macro) => macro.id === "macro.hydrate_refs").required_templates.includes("template.media.probe_file"),
       true,
@@ -75,6 +75,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const takes = entries.find((entry) => entry.id === "macro.query_takes");
     const fx = entries.find((entry) => entry.id === "macro.query_fx");
     const routing = entries.find((entry) => entry.id === "macro.query_routing");
+    const automation = entries.find((entry) => entry.id === "macro.query_automation");
     const markers = entries.find((entry) => entry.id === "macro.query_markers");
     const media = entries.find((entry) => entry.id === "macro.query_media");
 
@@ -109,6 +110,13 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.deepEqual(routing.examples[0].input, {
       scope: "tracks",
       filters: { source_track_ref: "track:guid:{TRACK-GUID}" },
+      limit: 25,
+    });
+    assert.equal(automation.support_state, "supported");
+    assert.equal(automation.known_blocker, null);
+    assert.deepEqual(automation.examples[0].input, {
+      filters: { visible: true, has_points: true },
+      fields: ["owner_ref", "name", "point_count"],
       limit: 25,
     });
     assert.equal(markers.support_state, "supported");
@@ -841,6 +849,108 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
   });
 
+  it("queries compact automation envelope rows from a fresh resident project index", () => {
+    const projectIndex = automationProjectIndex();
+    const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "automation",
+      filters: {
+        visible: true,
+        has_points: true,
+      },
+      limit: 1,
+      fields: ["owner_ref", "parent_kind", "name", "point_count", "automation_item_count", "payload_ref"],
+    }, { projectIndex });
+    const secondPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "automation",
+      filters: {
+        visible: true,
+        has_points: true,
+      },
+      limit: 1,
+      cursor: firstPage.page.next_cursor,
+      fields: ["name", "lane_kind", "armed"],
+    }, { projectIndex });
+    const trackScoped = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "tracks",
+      refs: ["track:guid:{TRACK-1}"],
+      filters: {
+        owner_ref: "track:guid:{TRACK-1}",
+        name: "volume",
+        min_point_count: 1,
+      },
+      limit: 10,
+      fields: ["owner_ref", "name", "visible", "point_count"],
+    }, { projectIndex });
+    const defaultCompact = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      filters: { armed: true },
+      limit: 1,
+    }, { projectIndex });
+    const unsupportedScope = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "markers",
+      limit: 10,
+    }, { projectIndex });
+    const visibleOnly = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "automation",
+      filters: { visible: true },
+      limit: 10,
+      fields: ["name", "visible"],
+    }, { projectIndex });
+
+    assert.equal(firstPage.ok, true);
+    assert.deepEqual(firstPage.refs, ["envelope:track:guid:{TRACK-1}:volume"]);
+    assert.deepEqual(firstPage.rows[0], {
+      ref: "envelope:track:guid:{TRACK-1}:volume",
+      owner_ref: "track:guid:{TRACK-1}",
+      parent_kind: "track",
+      name: "Volume",
+      point_count: 8,
+      automation_item_count: 1,
+      payload_ref: "artifact:automation:envelopes",
+    });
+    assert.equal(firstPage.freshness.status, "fresh");
+    assert.equal(firstPage.coverage.status, "paged");
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.hydrate_request.callable_now, true);
+    assert.equal(firstPage.hydrate_request.id, "macro.hydrate_refs");
+    assert.deepEqual(firstPage.hydrate_request.input.refs, ["envelope:track:guid:{TRACK-1}:volume"]);
+    assert.equal(secondPage.ok, true);
+    assert.deepEqual(secondPage.refs, ["envelope:fx:track:guid:{TRACK-1}:0:wet"]);
+    assert.equal(secondPage.page.has_more, false);
+    assert.equal(trackScoped.ok, true);
+    assert.deepEqual(trackScoped.refs, ["envelope:track:guid:{TRACK-1}:volume"]);
+    assert.deepEqual(trackScoped.rows[0], {
+      ref: "envelope:track:guid:{TRACK-1}:volume",
+      owner_ref: "track:guid:{TRACK-1}",
+      name: "Volume",
+      visible: true,
+      point_count: 8,
+    });
+    assert.deepEqual(defaultCompact.rows[0], {
+      ref: "envelope:track:guid:{TRACK-1}:volume",
+      owner_ref: "track:guid:{TRACK-1}",
+      parent_kind: "track",
+      name: "Volume",
+      lane_kind: "volume",
+      active: true,
+      armed: true,
+      visible: true,
+      point_count: 8,
+      automation_item_count: 1,
+      freshness_status: "fresh",
+      coverage_status: "paged",
+    });
+    assert.equal("summary" in defaultCompact.rows[0], false);
+    assert.equal("payload_ref" in defaultCompact.rows[0], false);
+    assert.equal(visibleOnly.ok, true);
+    assert.deepEqual(visibleOnly.refs, [
+      "envelope:track:guid:{TRACK-1}:volume",
+      "envelope:fx:track:guid:{TRACK-1}:0:wet",
+    ]);
+    assert.equal(visibleOnly.rows.some((row) => row.name === "Unknown Visible"), false);
+    assert.equal(unsupportedScope.ok, false);
+    assert.equal(unsupportedScope.blockers.some((blocker) => blocker.code === "QUERY_SCOPE_UNSUPPORTED"), true);
+  });
+
   it("queries compact marker/region rows from a fresh resident project index", () => {
     const projectIndex = markersProjectIndex();
     const firstPage = planAlpha3C3ProjectIndexQueryMacro("macro.query_markers", {
@@ -1422,6 +1532,36 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(runtime.last_evidence().template.id, "macro.query_routing");
   });
 
+  it("calls query_automation through call_template as a plan-only envelope", async () => {
+    const runtime = createCallTemplateRuntime({
+      now: () => new Date("2026-07-07T19:20:00.000Z"),
+      projectIndex: automationProjectIndex(),
+    });
+    const response = await runtime.call_template({
+      id: "macro.query_automation",
+      input: {
+        limit: 2,
+        filters: { visible: true, has_points: true },
+        fields: ["owner_ref", "name", "point_count"],
+      },
+    });
+
+    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.ok, true);
+    assert.equal(response.template.id, "macro.query_automation");
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.execution.added_tools, 0);
+    assert.equal(response.result.execution.hidden_executor, false);
+    assert.equal(response.result.execution.live_reaper, false);
+    assert.deepEqual(response.result.refs, [
+      "envelope:track:guid:{TRACK-1}:volume",
+      "envelope:fx:track:guid:{TRACK-1}:0:wet",
+    ]);
+    assert.equal(response.result.rows.length, 2);
+    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(runtime.last_evidence().template.id, "macro.query_automation");
+  });
+
   it("calls query_markers through call_template as a plan-only envelope", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T19:30:00.000Z"),
@@ -1531,7 +1671,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.deepEqual(changed.result.refs, ["track:guid:{TRACK-1}", "item:guid:{ITEM-1}"]);
   });
 
-  it("returns typed planned blockers for future query macros through call_template", async () => {
+  it("plans automation refresh through accepted template requests when index is not fresh", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
       id: "macro.query_automation",
@@ -1540,13 +1680,16 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
 
     assert.equal(response.ok, false);
     assert.equal(response.error.source, "macro");
-    assert.equal(response.error.code, "MACRO_PLANNED");
+    assert.equal(response.error.code, "INDEX_NOT_READY");
     assert.equal(response.result.plan.ok, false);
     assert.equal(response.result.rows.length, 0);
     assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.blockers[0].code, "MACRO_PLANNED");
-    assert.equal(response.result.next_actions[0].kind, "resolve_blockers");
-    assert.deepEqual(response.result.next_actions[0].blocker_codes, ["MACRO_PLANNED"]);
+    assert.equal(response.result.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
+    assert.deepEqual(
+      response.result.refresh_requests.map((request) => request.id),
+      ["template.automation.list_project_envelopes"],
+    );
+    assert.equal(response.result.next_actions.some((action) => action.kind === "run_refresh_requests"), true);
   });
 });
 
@@ -1883,6 +2026,74 @@ function routingProjectIndex() {
         muted: true,
         volume_db: -18,
         pan: -0.25,
+      },
+    ],
+  });
+  return index;
+}
+
+function automationProjectIndex() {
+  const index = createAlpha3C3ProjectIndex({
+    now: () => new Date("2026-07-07T19:18:00.000Z"),
+    projectRef: "project:active",
+    bridgeOwner: "openreaper-alpha3-local",
+    bridgeGeneration: 1,
+    sessionId: "session:c3-automation",
+  });
+  index.replaceEnvelopes({
+    snapshot_id: "snapshot:c3-automation:envelopes",
+    observed_at: "2026-07-07T19:16:00.000Z",
+    payload_ref: "artifact:automation:envelopes",
+    rows: [
+      {
+        ref: "envelope:track:guid:{TRACK-1}:volume",
+        owner_ref: "track:guid:{TRACK-1}",
+        parent_kind: "track",
+        name: "Volume",
+        lane_kind: "volume",
+        active: true,
+        armed: true,
+        visible: true,
+        show_lane: true,
+        point_count: 8,
+        automation_item_count: 1,
+        summary: {
+          points_preview: Array.from({ length: 16 }, (_, index) => ({ index, value: index / 16 })),
+        },
+      },
+      {
+        ref: "envelope:fx:track:guid:{TRACK-1}:0:wet",
+        owner_ref: "track:guid:{TRACK-1}",
+        target_ref: "fx:track:guid:{TRACK-1}:0",
+        parent_kind: "fx",
+        name: "Wet",
+        lane_kind: "fx_parameter",
+        active: true,
+        armed: false,
+        visible: true,
+        point_count: 4,
+      },
+      {
+        ref: "envelope:track:guid:{TRACK-2}:pan",
+        owner_ref: "track:guid:{TRACK-2}",
+        parent_kind: "track",
+        name: "Pan",
+        lane_kind: "pan",
+        active: true,
+        armed: false,
+        visible: false,
+        point_count: 0,
+      },
+      {
+        ref: "envelope:track:guid:{TRACK-3}:trim",
+        owner_ref: "track:guid:{TRACK-3}",
+        parent_kind: "track",
+        name: "Unknown Visible",
+        lane_kind: "trim",
+        active: true,
+        armed: false,
+        visible: null,
+        point_count: 2,
       },
     ],
   });

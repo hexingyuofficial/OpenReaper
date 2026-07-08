@@ -13,6 +13,7 @@ import {
   TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS,
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
+  TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
 } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import {
@@ -70,7 +71,7 @@ import {
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
 describe("Layer 4D call_template runtime binding", () => {
-  it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, and P1 official catalog", () => {
+  it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, and Alpha3 C3 official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
 
     assert.equal(catalog.size, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length);
@@ -81,6 +82,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "wave3b",
       "critical_fill",
       "p1",
+      "alpha3_c3",
     ]);
 
     assert.equal(catalog.get("template.tracks.create_track") !== null, true);
@@ -90,6 +92,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(catalog.get("template.project.create_cleanup_report") !== null, true);
     assert.equal(catalog.get("template.render.create_delivery_report") !== null, true);
     for (const id of TEMPLATE_CATALOG_P1_TEMPLATE_IDS) {
+      assert.equal(catalog.get(id) !== null, true, id);
+    }
+    for (const id of TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS) {
       assert.equal(catalog.get(id) !== null, true, id);
     }
     assert.deepEqual([...CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS].sort(), [
@@ -376,7 +381,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 17);
+    assert.equal(runtimeMenu.items.length, 18);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -698,7 +703,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,
       },
     });
-    const tempoMenu = tempoRuntime.list_templates({ limit: 21 });
+    const tempoMenu = tempoRuntime.list_templates({ limit: 22 });
     assert.equal(tempoMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.deepEqual(
       tempoMenu.items.map((item) => item.id).filter((id) => id.startsWith("template.")),
@@ -948,6 +953,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.routing.set_send_midi_channels",
       "template.routing.read_fx_pin_mapping",
       "template.automation.resolve_envelope_ref",
+      "template.automation.list_project_envelopes",
       "template.automation.read_envelope_summary",
       "template.automation.read_envelope_points",
       "template.automation.evaluate_envelope_at_time",
@@ -989,11 +995,11 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 36);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 13);
+    assert.equal(bridge.seen.length, 37);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 14);
     assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 23);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 19);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 17);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 18);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
@@ -1027,9 +1033,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(fake.spawned_reaper, false);
     assert.equal(fake.live_pass_claimed, false);
     assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS);
-    assert.equal(fake.executions.length, 36);
+    assert.equal(fake.executions.length, 37);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
-    assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 13);
+    assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 14);
     assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 23);
     assert.equal(fake.executions.filter((execution) => execution.artifacts_allowed === true).length, 0);
     assert.deepEqual(fake.preflight_blockers_covered, [
@@ -1042,7 +1048,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "e5_automation_point_value_invalid",
     ]);
     assert.equal(fake.routing_template_ids.length, 19);
-    assert.equal(fake.automation_template_ids.length, 17);
+    assert.equal(fake.automation_template_ids.length, 18);
 
     const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
     const transportDir = join(root, "transport");
@@ -1726,6 +1732,7 @@ function e5RouteInput(id) {
     "template.routing.read_fx_pin_mapping": { direction: "input", pin_index: 0 },
     "template.routing.list_available_audio_outputs": { include_unavailable: false, max_outputs: 32 },
     "template.automation.resolve_envelope_ref": { parent_kind: "track", envelope_name: "Volume" },
+    "template.automation.list_project_envelopes": { parent_kinds: ["track", "take", "send", "fx"], only_visible: true, limit: 32 },
     "template.automation.read_envelope_points": { limit: 16 },
     "template.automation.evaluate_envelope_at_time": { time_seconds: 1 },
     "template.automation.set_envelope_lane_state": { active: true, visible: true, show_lane: true, armed: false },
@@ -1809,6 +1816,7 @@ function e5RouteRefs(id) {
   }
   if (id.startsWith("template.automation.")
     && id !== "template.automation.resolve_envelope_ref"
+    && id !== "template.automation.list_project_envelopes"
     && id !== "template.automation.set_track_automation_mode"
     && id !== "template.automation.read_track_automation_mode"
     && id !== "template.automation.resolve_send_envelope"

@@ -14,6 +14,7 @@ import {
   loadUserRecipeAuthoringCatalog,
 } from "../../packages/core/src/user-recipe-authoring-v1.mjs";
 import {
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -73,6 +74,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
     ...createTemplateCatalogP1Templates(),
+    ...createTemplateCatalogAlpha3C3Templates(),
   ],
 });
 

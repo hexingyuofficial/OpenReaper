@@ -14,6 +14,7 @@ import {
   parseArtifactRef,
 } from "./artifact-state-store-v1.mjs";
 import {
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
   createTemplateCatalogWave2aTemplates,
@@ -80,6 +81,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave2aTemplates(),
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogP1Templates(),
+    ...createTemplateCatalogAlpha3C3Templates(),
   ],
 });
 const ACCEPTED_TEMPLATE_BY_ID = new Map(

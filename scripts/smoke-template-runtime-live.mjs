@@ -429,6 +429,7 @@ const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.routing.set_send_midi_channels", "run_command:template.execute", "routing", "write", "routing.send.midi_channels.set", "send", "routing_write", true),
   routeSpec("template.routing.read_fx_pin_mapping", "query_state:routing.fx_pin_mapping.read", "routing", "read", "routing.fx_pin_mapping.read", "track_fx", "routing_read"),
   routeSpec("template.automation.resolve_envelope_ref", "query_state:automation.resolve_envelope_ref", "automation", "read", "automation.resolve_envelope_ref", "automation_parent", "automation_read"),
+  routeSpec("template.automation.list_project_envelopes", "query_state:automation.project_envelopes.list", "automation", "read", "automation.project_envelopes.list", "none", "automation_read"),
   routeSpec("template.automation.read_envelope_summary", "query_state:automation.read_envelope_summary", "automation", "read", "automation.read_envelope_summary", "envelope", "automation_read"),
   routeSpec("template.automation.read_envelope_points", "query_state:automation.read_envelope_points", "automation", "read", "automation.read_envelope_points", "envelope", "automation_read"),
   routeSpec("template.automation.evaluate_envelope_at_time", "query_state:automation.evaluate_envelope_at_time", "automation", "read", "automation.evaluate_envelope_at_time", "envelope", "automation_read"),
@@ -3800,6 +3801,11 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
     "template.automation.resolve_envelope_ref": {
       parent_kind: "track",
       envelope_name: "Volume",
+    },
+    "template.automation.list_project_envelopes": {
+      parent_kinds: ["track", "take", "send", "fx"],
+      only_visible: true,
+      limit: 32,
     },
     "template.automation.read_envelope_points": {
       limit: 16,

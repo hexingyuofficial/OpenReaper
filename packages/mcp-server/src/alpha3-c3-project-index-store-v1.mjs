@@ -579,6 +579,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       takes: [],
       fx: [],
       sends: [],
+      envelopes: [],
       markers_regions: [],
       media_sources: [],
       selection_state: [],
@@ -745,6 +746,34 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.routing = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_sends", observedAt);
+    },
+    replaceEnvelopes(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_envelopes", observedAt);
+      state.snapshot_id = snapshotId;
+      state.rows.envelopes = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeEnvelopeRow(row, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      updateScope(state, {
+        scope_kind: "automation",
+        scope_ref: input.scope_ref ?? "project",
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "paged"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.automation.list_project_envelopes",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.automation = normalizeCoverageStatus(input.coverage_status, "paged");
+      return lifecycleResult(state, "replace_envelopes", observedAt);
     },
     replaceMarkersRegions(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -1259,6 +1288,7 @@ function snapshotState(state) {
       fx: cloneJson(state.rows.fx),
       takes: cloneJson(state.rows.takes),
       sends: cloneJson(state.rows.sends),
+      envelopes: cloneJson(state.rows.envelopes),
       markers_regions: cloneJson(state.rows.markers_regions),
       media_sources: cloneJson(state.rows.media_sources),
       selection_state: cloneJson(state.rows.selection_state),
@@ -1481,6 +1511,82 @@ function normalizeSendRow(row, defaults) {
         : null,
     phase_inverted: Boolean(source.phase_inverted ?? summary.phase_inverted),
     mono: Boolean(source.mono ?? summary.mono),
+    freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
+    coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
+    observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
+    payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : defaults.payload_ref ?? null,
+    summary,
+  };
+}
+
+function normalizeEnvelopeRow(row, defaults) {
+  const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref
+    ? source.ref
+    : typeof source.envelope_ref === "string" && source.envelope_ref
+      ? source.envelope_ref
+      : null;
+  if (ref === null) return null;
+  const summary = isPlainObject(source.summary) ? cloneJson(source.summary) : {};
+  const ownerRef = typeof source.owner_ref === "string"
+    ? source.owner_ref
+    : typeof source.parent_ref === "string"
+      ? source.parent_ref
+      : typeof source.track_ref === "string"
+        ? source.track_ref
+        : typeof summary.owner_ref === "string"
+          ? summary.owner_ref
+          : typeof summary.parent_ref === "string"
+            ? summary.parent_ref
+            : null;
+  return {
+    snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
+    ref,
+    owner_ref: ownerRef,
+    target_ref: typeof source.target_ref === "string"
+      ? source.target_ref
+      : typeof source.fx_ref === "string"
+        ? source.fx_ref
+        : typeof source.send_ref === "string"
+          ? source.send_ref
+          : typeof summary.target_ref === "string"
+            ? summary.target_ref
+            : null,
+    parent_kind: typeof source.parent_kind === "string"
+      ? source.parent_kind
+      : typeof summary.parent_kind === "string"
+        ? summary.parent_kind
+        : ownerRef === null
+          ? "unknown"
+          : refKind(ownerRef),
+    name: typeof source.name === "string"
+      ? source.name
+      : typeof summary.name === "string"
+        ? summary.name
+        : "",
+    lane_kind: typeof source.lane_kind === "string"
+      ? source.lane_kind
+      : typeof source.envelope_kind === "string"
+        ? source.envelope_kind
+        : typeof summary.lane_kind === "string"
+          ? summary.lane_kind
+          : typeof summary.envelope_kind === "string"
+            ? summary.envelope_kind
+            : null,
+    active: nullableBoolean(source.active, summary.active),
+    armed: nullableBoolean(source.armed, summary.armed),
+    visible: nullableBoolean(source.visible, summary.visible),
+    show_lane: nullableBoolean(source.show_lane, summary.show_lane),
+    point_count: Number.isInteger(source.point_count)
+      ? source.point_count
+      : Number.isInteger(summary.point_count)
+        ? summary.point_count
+        : 0,
+    automation_item_count: Number.isInteger(source.automation_item_count)
+      ? source.automation_item_count
+      : Number.isInteger(summary.automation_item_count)
+        ? summary.automation_item_count
+        : 0,
     freshness_status: normalizeFreshnessStatus(source.freshness_status, defaults.freshness_status ?? "fresh"),
     coverage_status: normalizeCoverageStatus(source.coverage_status, defaults.coverage_status ?? "paged"),
     observed_at: typeof source.observed_at === "string" ? source.observed_at : defaults.observed_at,
@@ -1862,7 +1968,7 @@ function projectIndexLifecycleBlocker(state) {
 
 function normalizeRefreshScopes(scopes) {
   const raw = Array.isArray(scopes) ? scopes : ["project_head", "tracks"];
-  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "markers", "media"]);
+  const allowed = new Set(["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"]);
   const result = [];
   for (const entry of raw) {
     if (typeof entry !== "string" || !allowed.has(entry) || result.includes(entry)) continue;
@@ -2000,6 +2106,7 @@ function createSqliteBackedProjectIndexAdapter({ resident, database, now }) {
     replaceTakes: persistAfter("replaceTakes"),
     replaceFx: persistAfter("replaceFx"),
     replaceSends: persistAfter("replaceSends"),
+    replaceEnvelopes: persistAfter("replaceEnvelopes"),
     replaceMarkersRegions: persistAfter("replaceMarkersRegions"),
     replaceMediaSources: persistAfter("replaceMediaSources"),
     replaceSelection: persistAfter("replaceSelection"),
@@ -2099,6 +2206,7 @@ function persistProjectIndexSnapshot(database, snapshot, observedAt) {
     replaceTableRows(database, "takes", snapshot.rows.takes, insertTakeRow);
     replaceTableRows(database, "fx", snapshot.rows.fx, insertFxRow);
     replaceTableRows(database, "sends", snapshot.rows.sends, insertSendRow);
+    replaceTableRows(database, "envelopes", snapshot.rows.envelopes, insertEnvelopeRow);
     replaceTableRows(database, "markers_regions", snapshot.rows.markers_regions, insertMarkerRegionRow);
     replaceTableRows(database, "media_sources", snapshot.rows.media_sources, insertMediaSourceRow);
     replaceTableRows(database, "selection_state", snapshot.rows.selection_state, insertSelectionRow);
@@ -2164,6 +2272,12 @@ function insertSendRow(database, row) {
   database
     .prepare("INSERT OR REPLACE INTO sends (snapshot_id, ref, owner_ref, source_track_ref, destination_track_ref, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
     .run(row.snapshot_id, row.ref, row.owner_ref, row.source_track_ref, row.destination_track_ref, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
+}
+
+function insertEnvelopeRow(database, row) {
+  database
+    .prepare("INSERT OR REPLACE INTO envelopes (snapshot_id, ref, owner_ref, target_ref, freshness_status, coverage_status, observed_at, payload_ref, summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(row.snapshot_id, row.ref, row.owner_ref, row.target_ref, row.freshness_status, row.coverage_status, row.observed_at, row.payload_ref, summaryJson(row));
 }
 
 function insertMarkerRegionRow(database, row) {
@@ -2242,6 +2356,7 @@ function readSqliteProjectIndexSnapshot(database, defaults = {}) {
       takes: readSnapshotRows(database, "takes", snapshotIdForScope(freshnessScopes, "takes", snapshotId), mapTakeSqliteRow),
       fx: readSnapshotRows(database, "fx", snapshotIdForScope(freshnessScopes, "fx", snapshotId), mapFxSqliteRow),
       sends: readSnapshotRows(database, "sends", snapshotIdForScope(freshnessScopes, "routing", snapshotId), mapSendSqliteRow),
+      envelopes: readSnapshotRows(database, "envelopes", snapshotIdForScope(freshnessScopes, "automation", snapshotId), mapEnvelopeSqliteRow),
       markers_regions: readSnapshotRows(database, "markers_regions", snapshotIdForScope(freshnessScopes, "markers", snapshotId), mapMarkerRegionSqliteRow),
       media_sources: readSnapshotRows(database, "media_sources", snapshotIdForScope(freshnessScopes, "media", snapshotId), mapMediaSourceSqliteRow),
       selection_state: readSnapshotRows(database, "selection_state", snapshotIdForScope(freshnessScopes, "selection", snapshotId), mapSelectionSqliteRow),
@@ -2489,6 +2604,23 @@ function mapSendSqliteRow(row) {
   };
 }
 
+function mapEnvelopeSqliteRow(row) {
+  const stored = parseStoredRowSummary(row.summary_json);
+  const summary = stored.summary;
+  return {
+    ...stored.row,
+    snapshot_id: row.snapshot_id,
+    ref: row.ref,
+    owner_ref: row.owner_ref,
+    target_ref: row.target_ref,
+    freshness_status: row.freshness_status,
+    coverage_status: row.coverage_status,
+    observed_at: row.observed_at,
+    payload_ref: row.payload_ref,
+    summary,
+  };
+}
+
 function mapMarkerRegionSqliteRow(row) {
   const stored = parseStoredRowSummary(row.summary_json);
   const summary = stored.summary;
@@ -2588,6 +2720,7 @@ function mergeSnapshotIntoState(state, snapshot) {
   state.rows.takes = normalizeLoadedRows(snapshot.rows?.takes, normalizeTakeRow, defaults);
   state.rows.fx = normalizeLoadedRows(snapshot.rows?.fx, normalizeFxRow, defaults);
   state.rows.sends = normalizeLoadedRows(snapshot.rows?.sends, normalizeSendRow, defaults);
+  state.rows.envelopes = normalizeLoadedRows(snapshot.rows?.envelopes, normalizeEnvelopeRow, defaults);
   state.rows.markers_regions = normalizeLoadedRows(snapshot.rows?.markers_regions, normalizeMarkerRegionRow, defaults);
   state.rows.media_sources = normalizeLoadedRows(snapshot.rows?.media_sources, normalizeMediaSourceRow, defaults);
   state.rows.selection_state = normalizeLoadedRows(snapshot.rows?.selection_state, normalizeSelectionRow, defaults);

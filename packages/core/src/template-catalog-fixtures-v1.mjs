@@ -99,6 +99,11 @@ import {
   P1_TEMPLATE_FILL_TEMPLATES,
   createP1TemplateFillTemplates,
 } from "./template-packs/p1-template-fill-v1.mjs";
+import {
+  ALPHA3_C3_TEMPLATE_FILL_TEMPLATE_IDS,
+  ALPHA3_C3_TEMPLATE_FILL_TEMPLATES,
+  createAlpha3C3TemplateFillTemplates,
+} from "./template-packs/alpha3-c3-template-fill-v1.mjs";
 
 export const TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS = deepFreeze([
   ...Object.values(WAVE1A_PROJECT_TEMPLATE_IDS),
@@ -176,6 +181,14 @@ export const TEMPLATE_CATALOG_P1_TEMPLATE_IDS = deepFreeze([
 
 export const TEMPLATE_CATALOG_P1_TEMPLATES = deepFreeze([
   ...P1_TEMPLATE_FILL_TEMPLATES,
+]);
+
+export const TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS = deepFreeze([
+  ...ALPHA3_C3_TEMPLATE_FILL_TEMPLATE_IDS,
+]);
+
+export const TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATES = deepFreeze([
+  ...ALPHA3_C3_TEMPLATE_FILL_TEMPLATES,
 ]);
 
 export const TEMPLATE_CATALOG_SEED_TEMPLATE_IDS = Object.freeze({
@@ -457,6 +470,12 @@ export function createTemplateCatalogCriticalFillTemplates() {
 export function createTemplateCatalogP1Templates() {
   return [
     ...createP1TemplateFillTemplates(),
+  ];
+}
+
+export function createTemplateCatalogAlpha3C3Templates() {
+  return [
+    ...createAlpha3C3TemplateFillTemplates(),
   ];
 }
 

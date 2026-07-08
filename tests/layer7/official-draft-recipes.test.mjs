@@ -16,6 +16,7 @@ import {
   listUserRecipes,
 } from "../../packages/mcp-server/src/user-recipe-discovery-v1.mjs";
 import {
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -169,6 +170,7 @@ const ACCEPTED_TEMPLATE_CATALOG = createTemplateCatalog({
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
     ...createTemplateCatalogP1Templates(),
+    ...createTemplateCatalogAlpha3C3Templates(),
   ],
 });
 

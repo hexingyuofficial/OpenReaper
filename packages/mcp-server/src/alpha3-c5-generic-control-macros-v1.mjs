@@ -2,6 +2,7 @@ import {
   createTemplateCatalog,
 } from "../../core/src/template-catalog-v1.mjs";
 import {
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -675,6 +676,7 @@ function createAlpha3C5AcceptedCatalog() {
       ...createTemplateCatalogWave3bTemplates(),
       ...createTemplateCatalogCriticalFillTemplates(),
       ...createTemplateCatalogP1Templates(),
+      ...createTemplateCatalogAlpha3C3Templates(),
     ],
   });
 }

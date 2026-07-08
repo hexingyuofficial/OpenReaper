@@ -191,6 +191,24 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
           },
         ],
       });
+      first.adapter.replaceEnvelopes({
+        snapshot_id: "snapshot:c3-sqlite:automation",
+        observed_at: "2026-07-08T00:06:45.000Z",
+        payload_ref: "artifact:sqlite:automation",
+        rows: [
+          {
+            ref: "envelope:track:guid:{SQLITE-A}:volume",
+            owner_ref: "track:guid:{SQLITE-A}",
+            parent_kind: "track",
+            name: "Volume",
+            lane_kind: "volume",
+            visible: true,
+            armed: true,
+            point_count: 3,
+            summary: { preview_omitted: true },
+          },
+        ],
+      });
       first.adapter.recordObjectChanges({
         observed_at: "2026-07-08T00:07:00.000Z",
         changes: [
@@ -272,7 +290,9 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       assert.equal(snapshot.bridge_generation, 4);
       assert.equal(snapshot.rows.tracks.length, 1);
       assert.equal(snapshot.rows.items.length, 1);
+      assert.equal(snapshot.rows.envelopes.length, 1);
       assert.equal(snapshot.rows.tracks[0].name, "SQLite Kick");
+      assert.equal(snapshot.rows.envelopes[0].payload_ref, "artifact:sqlite:automation");
       assert.equal(snapshot.rows.tracks[0].payload_ref, "artifact:sqlite:tracks");
       assert.deepEqual(snapshot.rows.tracks[0].summary, { role: "drums" });
       assert.equal("name" in snapshot.rows.tracks[0].summary, false);
@@ -293,6 +313,11 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         fields: ["track_ref", "start_seconds", "length_seconds", "payload_ref"],
         limit: 10,
       }, { projectIndex: second.adapter });
+      const reopenedAutomationPlan = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+        filters: { owner_ref: "track:guid:{SQLITE-A}", has_points: true },
+        fields: ["owner_ref", "name", "point_count", "payload_ref"],
+        limit: 10,
+      }, { projectIndex: second.adapter });
       assert.equal(reopenedPlan.ok, true);
       assert.deepEqual(reopenedPlan.refs, ["track:guid:{SQLITE-A}"]);
       assert.deepEqual(reopenedPlan.rows[0], {
@@ -310,6 +335,15 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
         start_seconds: 1,
         length_seconds: 1.5,
         payload_ref: "artifact:sqlite:items",
+      });
+      assert.equal(reopenedAutomationPlan.ok, true);
+      assert.deepEqual(reopenedAutomationPlan.refs, ["envelope:track:guid:{SQLITE-A}:volume"]);
+      assert.deepEqual(reopenedAutomationPlan.rows[0], {
+        ref: "envelope:track:guid:{SQLITE-A}:volume",
+        owner_ref: "track:guid:{SQLITE-A}",
+        name: "Volume",
+        point_count: 3,
+        payload_ref: "artifact:sqlite:automation",
       });
       const reopenedChanged = second.adapter.changedSince({
         since: "2026-07-08T00:06:30.000Z",
@@ -865,6 +899,73 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
       send_mode: "post_fader",
       volume_db: -6,
       payload_ref: "artifact:routing:graph",
+    });
+  });
+
+  it("maintains automation envelope rows with task-scoped freshness and compact query fields", () => {
+    const index = createAlpha3C3ProjectIndex({
+      now: fixedNow,
+      projectRef: "project:active",
+      bridgeOwner: "openreaper-alpha3-local",
+      bridgeGeneration: 3,
+      sessionId: "session:c3-automation",
+    });
+
+    const result = index.replaceEnvelopes({
+      snapshot_id: "snapshot:c3-automation",
+      observed_at: "2026-07-07T19:15:00.000Z",
+      payload_ref: "artifact:automation:envelopes",
+      rows: [
+        {
+          envelope_ref: "envelope:track:guid:{A}:volume",
+          owner_ref: "track:guid:{A}",
+          parent_kind: "track",
+          name: "Volume",
+          lane_kind: "volume",
+          visible: true,
+          armed: true,
+          point_count: 5,
+        },
+        {
+          ref: "envelope:fx:track:guid:{A}:0:wet",
+          owner_ref: "track:guid:{A}",
+          target_ref: "fx:track:guid:{A}:0",
+          parent_kind: "fx",
+          name: "Wet",
+          lane_kind: "fx_parameter",
+          visible: true,
+          point_count: 2,
+        },
+      ],
+    });
+    const snapshot = index.snapshot();
+    const plan = planAlpha3C3ProjectIndexQueryMacro("macro.query_automation", {
+      scope: "automation",
+      limit: 10,
+      filters: { owner_ref: "track:guid:{A}", visible: true, has_points: true },
+      fields: ["owner_ref", "parent_kind", "name", "point_count", "payload_ref"],
+    }, { projectIndex: index });
+
+    assert.equal(result.operation, "replace_envelopes");
+    assert.equal(snapshot.rows.envelopes.length, 2);
+    assert.equal(snapshot.rows.envelopes[0].ref, "envelope:track:guid:{A}:volume");
+    assert.equal(snapshot.rows.envelopes[0].payload_ref, "artifact:automation:envelopes");
+    assert.equal(snapshot.freshness_scopes.automation.status, "fresh");
+    assert.equal(snapshot.freshness_scopes.automation.coverage_status, "paged");
+    assert.equal(snapshot.freshness_scopes.automation.source_template_id, "template.automation.list_project_envelopes");
+    assert.equal(projectIndexScopeIsFreshEnough(snapshot, "automation"), true);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.refs, [
+      "envelope:track:guid:{A}:volume",
+      "envelope:fx:track:guid:{A}:0:wet",
+    ]);
+    assert.deepEqual(plan.rows[0], {
+      ref: "envelope:track:guid:{A}:volume",
+      owner_ref: "track:guid:{A}",
+      parent_kind: "track",
+      name: "Volume",
+      point_count: 5,
+      payload_ref: "artifact:automation:envelopes",
     });
   });
 

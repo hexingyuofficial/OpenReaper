@@ -22,6 +22,7 @@ import {
   validateTemplateCatalog,
 } from "../../packages/core/src/template-catalog-v1.mjs";
 import {
+  TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
@@ -312,6 +313,7 @@ describe("P1 template fill descriptors", () => {
       ...TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
       ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
       ...TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
+      ...TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
     ];
 
     assert.deepEqual(currentSharedIds, CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);

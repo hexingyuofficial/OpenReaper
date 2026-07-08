@@ -10,11 +10,13 @@ import {
 } from "../../core/src/template-catalog-v1.mjs";
 import {
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
+  createTemplateCatalogAlpha3C3Templates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -208,7 +210,7 @@ export const CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE = deepFreeze([
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE = Object.freeze({
   kind: "accepted_official_template_catalog",
-  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1"]),
+  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1", "alpha3_c3"]),
 });
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
@@ -217,6 +219,7 @@ export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
   ...TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
+  ...TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
 ]);
 
 const ACCEPTED_TEMPLATE_ID_SET = new Set(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
@@ -374,6 +377,7 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.routing.set_send_midi_channels",
   "template.routing.read_fx_pin_mapping",
   "template.automation.resolve_envelope_ref",
+  "template.automation.list_project_envelopes",
   "template.automation.read_envelope_summary",
   "template.automation.read_envelope_points",
   "template.automation.evaluate_envelope_at_time",
@@ -580,6 +584,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
+  "template.automation.list_project_envelopes",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -691,6 +696,7 @@ export function createAcceptedOfficialTemplateCatalogTemplates() {
     ...createTemplateCatalogWave3bTemplates(),
     ...createTemplateCatalogCriticalFillTemplates(),
     ...createTemplateCatalogP1Templates(),
+    ...createTemplateCatalogAlpha3C3Templates(),
   ];
 }
 
