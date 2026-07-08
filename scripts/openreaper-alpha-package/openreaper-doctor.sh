@@ -287,7 +287,7 @@ function migrationActions() {
   return [
     "Run the current OpenReaper alpha install.command again, then restart the MCP client.",
     "Remove or disable legacy streetlight MCP server entries so agents choose server name openreaper.",
-    "Do not register packages that start with [streetlight-mcp] v0.1 kernel.",
+    "Do not register legacy Streetlight v0.1 kernel packages.",
   ];
 }
 

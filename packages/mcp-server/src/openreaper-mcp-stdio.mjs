@@ -3,7 +3,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { createCallTemplateRuntime } from "./call-template-runtime-v1.mjs";
+import {
+  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  createCallTemplateRuntime,
+} from "./call-template-runtime-v1.mjs";
 import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
 import { createGetStateArtifactRuntime } from "./get-state-runtime-v1.mjs";
 import { createLiveBridgeExecutorFromEnv } from "./live-bridge-executor-v1.mjs";
@@ -19,6 +22,7 @@ async function main() {
           opted_in: true,
           executor: liveBridge.executor,
           executor_config: liveBridge.config,
+          allowed_template_ids: CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
           evidence: { route: "openreaper_mcp_stdio" },
         }
       : { opted_in: false },

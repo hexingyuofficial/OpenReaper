@@ -7,6 +7,9 @@ import { access, chmod, cp, mkdir, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
+import {
+  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+} from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -34,6 +37,7 @@ const REQUIRED_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.set_fx_parameter_normalized",
   "template.fx.read_fx_parameter",
 ]);
+const REQUIRED_EXECUTABLE_TEMPLATE_ID = "template.tracks.create_track";
 const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
   "create_openreaper_handoff_plan",
   "run_doctor",
@@ -311,12 +315,14 @@ async function smokePackagedOpenReaperMcp() {
     });
     const fxTemplates = parseJsonToolResult(fxTemplateResponse);
     assertDiscoveredIds(fxTemplates, REQUIRED_FX_TEMPLATE_IDS, "Packaged MCP FX template smoke");
+    const executableAllowlistSmoke = await smokeExecutableLiveAllowlist(client);
     return {
       ok: true,
       tool_surface: toolNames,
       kernel: ping.kernel,
       required_macros: [...REQUIRED_MACRO_IDS],
       required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
+      executable_allowlist: executableAllowlistSmoke,
     };
   } finally {
     await client.close?.();
@@ -477,6 +483,94 @@ function assertDiscoveredIds(response, expectedIds, label) {
       throw new Error(`${label} missing ${id}`);
     }
   }
+}
+
+async function smokeExecutableLiveAllowlist(client) {
+  const executableItems = await listAllExecutableTemplateItems(client);
+  const acceptedLiveIds = new Set(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS);
+  const callableTemplateItems = executableItems.filter((item) =>
+    String(item.id ?? "").startsWith("template.")
+    && item.action_kind !== "macro"
+    && item.current_status !== "blocked"
+    && item.current_status !== "bug_known"
+  );
+  const missingFromAllowlist = callableTemplateItems
+    .map((item) => item.id)
+    .filter((id) => !acceptedLiveIds.has(id));
+  if (missingFromAllowlist.length > 0) {
+    throw new Error(`Executable surface includes ids outside accepted live allowlist: ${missingFromAllowlist.join(", ")}`);
+  }
+
+  const createTrackExact = parseJsonToolResult(await client.callTool({
+    name: "list_templates",
+    arguments: {
+      surface: "executable",
+      ids: [REQUIRED_EXECUTABLE_TEMPLATE_ID],
+      fields: ["summary"],
+    },
+  }));
+  assertDiscoveredIds(createTrackExact, [REQUIRED_EXECUTABLE_TEMPLATE_ID], "Packaged MCP create_track exact executable smoke");
+  const createTrack = createTrackExact.items[0];
+  if (createTrack.current_status === "blocked" || createTrack.current_status === "bug_known") {
+    throw new Error(`Packaged MCP ${REQUIRED_EXECUTABLE_TEMPLATE_ID} status regression: ${createTrack.current_status}`);
+  }
+  if (createTrack.capability_truth?.known_blocker !== null) {
+    throw new Error(`Packaged MCP ${REQUIRED_EXECUTABLE_TEMPLATE_ID} has unexpected blocker: ${createTrack.capability_truth?.known_blocker}`);
+  }
+  if (createTrack.capability_truth?.live_runnable_now !== true) {
+    throw new Error(`Packaged MCP ${REQUIRED_EXECUTABLE_TEMPLATE_ID} is not live-runnable in executable surface`);
+  }
+  if (!acceptedLiveIds.has(REQUIRED_EXECUTABLE_TEMPLATE_ID)) {
+    throw new Error(`${REQUIRED_EXECUTABLE_TEMPLATE_ID} is missing from accepted live allowlist`);
+  }
+
+  const createTrackProbe = parseJsonToolResult(await client.callTool({
+    name: "call_template",
+    arguments: {
+      id: REQUIRED_EXECUTABLE_TEMPLATE_ID,
+      input: {},
+      refs: [],
+    },
+  }));
+  const probeCode = createTrackProbe?.error?.code ?? createTrackProbe?.error_code ?? null;
+  if (probeCode === "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED") {
+    throw new Error(`${REQUIRED_EXECUTABLE_TEMPLATE_ID} call_template probe still hit CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED`);
+  }
+
+  return {
+    ok: true,
+    accepted_live_allowlist_count: CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length,
+    executable_template_count: callableTemplateItems.length,
+    pages_scanned: Math.ceil(executableItems.length / 100),
+    required_template: {
+      id: REQUIRED_EXECUTABLE_TEMPLATE_ID,
+      current_status: createTrack.current_status,
+      beginner_label: createTrack.beginner_label,
+      live_runnable_now: createTrack.capability_truth?.live_runnable_now,
+      known_blocker: createTrack.capability_truth?.known_blocker,
+      probe_ok: createTrackProbe?.ok === true,
+      probe_error_code: probeCode,
+    },
+  };
+}
+
+async function listAllExecutableTemplateItems(client) {
+  const items = [];
+  let cursor = null;
+  for (let pageIndex = 0; pageIndex < 20; pageIndex += 1) {
+    const response = parseJsonToolResult(await client.callTool({
+      name: "list_templates",
+      arguments: {
+        surface: "executable",
+        limit: 1000,
+        ...(cursor === null ? {} : { cursor }),
+      },
+    }));
+    items.push(...(response.items ?? []));
+    cursor = response.page?.next_cursor ?? null;
+    if (!response.page?.has_more) return items;
+  }
+  throw new Error("Executable surface pagination did not finish within 20 pages");
 }
 
 function packageFilter(src) {
