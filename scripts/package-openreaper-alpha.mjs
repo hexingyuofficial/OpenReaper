@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, cp, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
@@ -68,6 +68,7 @@ await writePackageEntrypoints();
 await writeReadme();
 await removeDsStore(packageRoot);
 const smoke = {
+  openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
   openreaper: await smokePackagedOpenReaperMcp(),
   vital_agent_mcp: await smokePackagedVitalAgentMcp(),
 };
@@ -362,6 +363,28 @@ async function smokePackagedOpenReaperMcp() {
   } finally {
     await client.close?.();
   }
+}
+
+async function smokePackagedOpenReaperStartHelper() {
+  const startHelperPath = path.join(packageRoot, "bin", "openreaper-start");
+  const source = await readFile(startHelperPath, "utf8");
+  if (source.includes("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR:-")) {
+    throw new Error("openreaper-start must not inherit stale OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR by default");
+  }
+  if (source.includes("OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT:-")) {
+    throw new Error("openreaper-start must not inherit stale OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT by default");
+  }
+  for (const required of ["--session-root", "--transport-dir", "--artifact-root"]) {
+    if (!source.includes(required)) {
+      throw new Error(`openreaper-start missing explicit bounded evidence option ${required}`);
+    }
+  }
+  return {
+    ok: true,
+    default_session_root: "package_root/session",
+    ignores_stale_low_level_env: true,
+    explicit_override_options: ["--session-root", "--transport-dir", "--artifact-root"],
+  };
 }
 
 async function smokePackagedVitalAgentMcp() {

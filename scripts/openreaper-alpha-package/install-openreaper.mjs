@@ -2,7 +2,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +51,7 @@ await requireNode20();
 
 if (!dryRun) {
   await mkdir(path.dirname(installRoot), { recursive: true });
-  await rm(installRoot, { recursive: true, force: true });
+  await replaceInstallRoot();
   await cp(packageRoot, installRoot, {
     recursive: true,
     filter: (src) => !src.includes(`${path.sep}.DS_Store`),
@@ -93,6 +93,23 @@ async function requireNode20() {
   if (!Number.isFinite(major) || major < 20) {
     throw new Error(`OpenReaper alpha needs Node >= 20. Current node: ${process.version}`);
   }
+}
+
+async function replaceInstallRoot() {
+  if (!existsSync(installRoot)) return;
+  const backupRoot = `${installRoot}.previous-${compactTimestamp(new Date())}`;
+  try {
+    await rename(installRoot, backupRoot);
+    report.changed.push(`moved previous install to ${backupRoot}`);
+  } catch (error) {
+    report.warnings.push(
+      `Could not move previous install out of the way. Close running MCP clients that use OpenReaper and retry. ${error.code ?? "ERROR"}: ${error.message}`,
+    );
+    throw error;
+  }
+  await rm(backupRoot, { recursive: true, force: true }).catch((error) => {
+    report.warnings.push(`Previous install cleanup deferred: ${backupRoot}; ${error.code ?? "ERROR"}: ${error.message}`);
+  });
 }
 
 async function installStartupHook() {
@@ -152,7 +169,8 @@ args = []
   }
   await mkdir(path.dirname(configPath), { recursive: true });
   const existing = await readTextIfExists(configPath);
-  let next = upsertTomlSection(existing, "mcp_servers.openreaper", openReaperSection);
+  let next = removeLegacyOpenReaperTomlSections(existing);
+  next = upsertTomlSection(next, "mcp_servers.openreaper", openReaperSection);
   next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
   await writeFile(configPath, next, "utf8");
   report.changed.push(`registered Codex MCP servers openreaper and vital-agent-mcp at ${configPath}`);
@@ -187,6 +205,10 @@ async function upsertJsonMcpServer(configPath, label) {
     }
   }
   parsed.mcpServers = parsed.mcpServers && typeof parsed.mcpServers === "object" ? parsed.mcpServers : {};
+  if (parsed.mcpServers.streetlight) {
+    delete parsed.mcpServers.streetlight;
+    report.changed.push(`removed legacy Streetlight MCP server from ${label} config at ${configPath}`);
+  }
   parsed.mcpServers.openreaper = {
     command: mcpCommand,
     args: [],
@@ -337,6 +359,47 @@ function upsertTomlSection(existing, sectionName, sectionText) {
   }
   const nextLines = [...lines.slice(0, start), ...sectionText.trimEnd().split("\n"), ...lines.slice(end)];
   return `${nextLines.join("\n").trimEnd()}\n`;
+}
+
+function removeLegacyOpenReaperTomlSections(existing) {
+  const lines = existing.split(/\r?\n/);
+  const sections = [];
+  let current = { header: null, lines: [] };
+  for (const line of lines) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
+      sections.push(current);
+      current = { header: line.trim(), lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  sections.push(current);
+  const kept = sections.filter((section) => {
+    if (section.header === "[mcp_servers.streetlight]") {
+      report.changed.push("removed legacy Codex MCP server streetlight");
+      return false;
+    }
+    if (section.header === "[mcp_servers.streetlight.env]") return false;
+    if (section.header === "[mcp_servers.openreaper.env]" && section.lines.join("\n").includes("STREETLIGHT_")) {
+      report.changed.push("removed stale STREETLIGHT_* env block from Codex openreaper server");
+      return false;
+    }
+    return true;
+  });
+  return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+function compactTimestamp(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return [
+    date.getUTCFullYear(),
+    pad(date.getUTCMonth() + 1),
+    pad(date.getUTCDate()),
+    "-",
+    pad(date.getUTCHours()),
+    pad(date.getUTCMinutes()),
+    pad(date.getUTCSeconds()),
+  ].join("");
 }
 
 function tomlString(value) {
