@@ -403,6 +403,7 @@ async function smokePackagedInstallerUpgradeMigration() {
   const requiredSnippets = [
     "replaceInstallRoot",
     "removeLegacyOpenReaperTomlSections",
+    "isLegacyOpenReaperTomlSection",
     "LEGACY_STARTUP_BLOCKS",
     "OpenReaper Alpha3 MCP startup hook",
     "Streetlight MCP startup hook",
@@ -413,12 +414,74 @@ async function smokePackagedInstallerUpgradeMigration() {
       throw new Error(`Packaged installer missing upgrade migration guard: ${snippet}`);
     }
   }
+  const codexLegacyFixture = `[mcp_servers.streetlight]
+command = "node"
+args = ["/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
+
+[mcp_servers.streetlight.env]
+STREETLIGHT_QUEUE_DIR = "/Users/Zhuanz/Library/Application Support/Streetlight/queue"
+
+[mcp_servers.openreaper]
+command = "node"
+args = ["/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
+
+[mcp_servers.openreaper.env]
+STREETLIGHT_QUEUE_DIR = "/Users/Zhuanz/Library/Application Support/Streetlight/queue"
+
+[mcp_servers.other]
+command = "node"
+args = ["/tmp/other.js"]
+`;
+  const migrated = simulateLegacyOpenReaperTomlCleanup(codexLegacyFixture);
+  const forbidden = [
+    "[mcp_servers.streetlight]",
+    "[mcp_servers.streetlight.env]",
+    "/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js",
+    "STREETLIGHT_QUEUE_DIR",
+  ];
+  for (const marker of forbidden) {
+    if (migrated.includes(marker)) {
+      throw new Error(`Packaged installer migration fixture still contains stale Codex marker: ${marker}`);
+    }
+  }
+  if (!migrated.includes("[mcp_servers.other]")) {
+    throw new Error("Packaged installer migration fixture removed unrelated Codex MCP config");
+  }
   return {
     ok: true,
     running_install_root_replacement: "rename_first",
     removes_legacy_mcp_config: true,
+    removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
   };
+}
+
+function simulateLegacyOpenReaperTomlCleanup(existing) {
+  const lines = existing.split(/\r?\n/);
+  const sections = [];
+  let current = { header: null, lines: [] };
+  for (const line of lines) {
+    if (/^\s*\[[^\]]+\]\s*$/.test(line)) {
+      sections.push(current);
+      current = { header: line.trim(), lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  sections.push(current);
+  const kept = sections.filter((section) => {
+    const body = section.lines.join("\n");
+    if (section.header === "[mcp_servers.streetlight]") return false;
+    if (section.header === "[mcp_servers.streetlight.env]") return false;
+    if (section.header === "[mcp_servers.openreaper]" && isLegacyOpenReaperTomlSectionForPackageSmoke(body)) return false;
+    if (section.header === "[mcp_servers.openreaper.env]" && isLegacyOpenReaperTomlSectionForPackageSmoke(body)) return false;
+    return true;
+  });
+  return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+function isLegacyOpenReaperTomlSectionForPackageSmoke(text) {
+  return /streetlight-reaper-mcp|packages\/mcp-server\/dist\/index\.js|STREETLIGHT_/i.test(text);
 }
 
 async function smokePackagedVitalAgentMcp() {

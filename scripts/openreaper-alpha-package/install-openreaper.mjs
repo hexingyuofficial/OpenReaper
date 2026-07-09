@@ -411,18 +411,27 @@ function removeLegacyOpenReaperTomlSections(existing) {
   }
   sections.push(current);
   const kept = sections.filter((section) => {
+    const body = section.lines.join("\n");
     if (section.header === "[mcp_servers.streetlight]") {
       report.changed.push("removed legacy Codex MCP server streetlight");
       return false;
     }
     if (section.header === "[mcp_servers.streetlight.env]") return false;
-    if (section.header === "[mcp_servers.openreaper.env]" && section.lines.join("\n").includes("STREETLIGHT_")) {
+    if (section.header === "[mcp_servers.openreaper]" && isLegacyOpenReaperTomlSection(body)) {
+      report.changed.push("removed stale Codex MCP server openreaper that pointed at the legacy Streetlight kernel");
+      return false;
+    }
+    if (section.header === "[mcp_servers.openreaper.env]" && isLegacyOpenReaperTomlSection(body)) {
       report.changed.push("removed stale STREETLIGHT_* env block from Codex openreaper server");
       return false;
     }
     return true;
   });
   return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+function isLegacyOpenReaperTomlSection(text) {
+  return /streetlight-reaper-mcp|packages\/mcp-server\/dist\/index\.js|STREETLIGHT_/i.test(text);
 }
 
 function compactTimestamp(date) {
