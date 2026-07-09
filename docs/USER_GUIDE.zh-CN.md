@@ -33,21 +33,32 @@ OpenReaper 的支持声明必须绑定证据。当前有些 Alpha3 能力已经�
 
 ```text
 打开 OpenReaper。
+用 OpenReaper 打开 REAPER。
 重新连接我的 REAPER 会话。
 检查 OpenReaper 现在是否健康。
 ```
 
-当前 Alpha3 状态：
+对于可安装的 macOS alpha 包，启动应该由代理协助完成：
 
-- 连接健康检查和 stale-session 规划已接受；
-- 本地 startup assistant 和静态 wrapper 准备流程已接受；
-- 真正 customer-ready 的一键/app-wrapper live 证据仍需要一个有边界的启动证据窗口；
-- 当前支持措辞仍绑定到本地 macOS manual-bridge 证据行。
+1. 代理运行 `~/.openreaper/current/bin/openreaper-start`。
+2. 等 REAPER 进程稳定，并读取命令输出里的 pid、log 和下一步 Action 名称。
+3. 代理优先尝试运行 REAPER Action：`OpenReaper: Start MCP bridge`。
+4. 如果代理没法操作 REAPER UI，再请你帮一个小忙：打开 Actions，搜索
+   `OpenReaper: Start MCP bridge`，点击 Run。
+5. 代理重连名为 `openreaper` 的 MCP server。
+6. 代理运行一个有边界的 live probe，例如
+   `call_template(template.transport.read_state)`，确认 bridge 真的连上后
+   才继续说“已连接”。
+
+你不应该需要自己找 bridge 文件，也不需要理解 bridge 路径。这个启动路线不要求安装 SWS，也不会接管 SWS 的 startup action。
+
+启动窗口处理会刻意收窄：OpenReaper 只可以自动关闭已知的
+`Project Settings` / `Notes` 里的 "show notes on project load" 窗口。license/evaluation、recovery、plugin/FX、version 或未知 REAPER 窗口都属于用户选择窗口，不应自动关闭。如果 live probe 没连上，代理应该先检查 REAPER 是否有等待处理的窗口，或者请你处理这个窗口；然后再运行 bridge Action、重连、重新 probe。
 
 如果启动被阻塞，代理应该用普通语言解释，而不是让你理解 transport root、owner/generation、请求目录或 session id。典型恢复提示应该像这样：
 
 ```text
-现在无法连接 REAPER。请打开 REAPER，按需加载 OpenReaper bridge，然后让我重新连接。
+现在无法连接 REAPER。我会先用 openreaper-start 启动；如果 REAPER 有窗口挡住，请处理它。然后运行 OpenReaper: Start MCP bridge，重连并检查 live probe。
 ```
 
 如果会话已经过期或身份不匹配，先重连再允许写操作。这可以避免把动作发到错误的 REAPER bridge/session。
@@ -204,7 +215,7 @@ fork 这个工作流，并改成鼓组版本。
 
 | 阻塞 | 含义 | 怎么做 |
 |---|---|---|
-| REAPER not ready | 代理无法连接 live REAPER 会话。 | 打开 REAPER，按需加载 bridge，然后重连。 |
+| REAPER not ready | 代理无法连接 live REAPER 会话。 | 让代理运行 `openreaper-start`；如果 REAPER 有窗口等待处理，先处理它，再运行 `OpenReaper: Start MCP bridge`、重连并 probe。 |
 | Stale session | 当前 bridge/session 身份不可信。 | 写操作前先重连。 |
 | Wrong selection | 任务需要选中的轨道、item、take 或 FX。 | 选中目标后再问一次。 |
 | Needs refresh | 缓存状态可能过期。 | 允许代理从 REAPER 刷新。 |

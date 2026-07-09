@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -10,6 +11,11 @@ import { fileURLToPath } from "node:url";
 const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
 const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
 const LEGACY_STARTUP_BLOCKS = Object.freeze([
+  Object.freeze({
+    begin: STARTUP_BEGIN,
+    end: STARTUP_END,
+    label: "prior OpenReaper alpha startup hook",
+  }),
   Object.freeze({
     begin: "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
     end: "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
@@ -24,6 +30,10 @@ const LEGACY_STARTUP_BLOCKS = Object.freeze([
 const DEFAULT_PACKS = "core,cleanup,delivery,analysis,loop,pack_contract_fixture";
 const SWS_MISC_SECTION = "[Misc]";
 const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
+const REAPER_RESOURCE_ROOT = path.join(os.homedir(), "Library", "Application Support", "REAPER");
+const BRIDGE_ACTION_TITLE = "OpenReaper: Start MCP bridge";
+const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lua";
+const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const options = parseArgs(process.argv.slice(2));
@@ -41,6 +51,8 @@ const sessionRoot = path.join(installRoot, "session");
 const transportDir = path.join(sessionRoot, "transport");
 const artifactRoot = path.join(sessionRoot, "artifacts");
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
+const bridgeActionScript = path.join(REAPER_RESOURCE_ROOT, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
+const bridgeActionCommand = `_${BRIDGE_ACTION_COMMAND_ID}`;
 
 const report = {
   product: "OpenReaper alpha",
@@ -50,6 +62,15 @@ const report = {
   mcp_command: mcpCommand,
   vital_agent_mcp_command: vitalAgentMcpCommand,
   start_command: startCommand,
+  bridge_action: {
+    title: BRIDGE_ACTION_TITLE,
+    command_id: bridgeActionCommand,
+    script: bridgeActionScript,
+  },
+  startup_dialog_assist: {
+    auto_dismisses: ["Project Settings / Notes show notes on project load"],
+    does_not_dismiss: ["license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
+  },
   transport_dir: transportDir,
   artifact_root: artifactRoot,
   changed: [],
@@ -85,9 +106,11 @@ if (!dryRun) {
 }
 
 if (!skipStartupHook) {
+  await installBridgeAction();
+  await removeOptionalStartupHook();
   await inspectOptionalStartupCompatibility();
 } else {
-  report.skipped.push("startup compatibility inspection skipped because --skip-startup-hook was set");
+  report.skipped.push("REAPER bridge action installation skipped because --skip-startup-hook was set");
 }
 
 if (!skipClientConfig) {
@@ -127,53 +150,89 @@ async function replaceInstallRoot() {
 }
 
 async function inspectOptionalStartupCompatibility() {
-  const swsPath = path.join(home, "Library", "Application Support", "REAPER", "S&M.ini");
+  const swsPath = path.join(REAPER_RESOURCE_ROOT, "S&M.ini");
   const swsConfig = await readTextIfExists(swsPath);
   if (!swsConfig.trim()) {
-    report.skipped.push("SWS startup compatibility not configured because S&M.ini was not found; openreaper-start uses the no-SWS launcher path.");
+    report.skipped.push("SWS/S&M was not found; OpenReaper bridge startup does not require SWS.");
     return;
   }
-  report.changed.push(`detected SWS/S&M startup config at ${swsPath}; OpenReaper remains usable without SWS through openreaper-start`);
+  report.changed.push(`detected SWS/S&M startup config at ${swsPath}; OpenReaper does not require or take over SWS startup actions`);
   const globalStartupAction = readIniValue(swsConfig, SWS_MISC_SECTION, SWS_GLOBAL_STARTUP_KEY);
   if (globalStartupAction) {
-    report.skipped.push(`preserved existing SWS GlobalStartupAction=${globalStartupAction}; no OpenReaper startup action takeover was needed`);
+    report.skipped.push(`preserved existing SWS GlobalStartupAction=${globalStartupAction}; OpenReaper bridge action is user/agent-run, not SWS-run`);
   } else {
-    report.skipped.push("SWS is installed but has no GlobalStartupAction; no OpenReaper startup action takeover was needed");
+    report.skipped.push("SWS is installed but has no GlobalStartupAction; OpenReaper did not add one");
   }
-  await installStartupHook();
 }
 
-async function installStartupHook() {
-  const hookPath = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "__startup.lua");
-  const block = startupHookBlock();
+async function installBridgeAction() {
   if (dryRun) {
-    report.skipped.push(`dry run: would upsert optional REAPER startup hook at ${hookPath}`);
+    report.skipped.push(`dry run: would install REAPER action ${BRIDGE_ACTION_TITLE} at ${bridgeActionScript}`);
     return;
   }
-  await mkdir(path.dirname(hookPath), { recursive: true });
-  const existing = await readTextIfExists(hookPath);
-  const cleaned = removeMarkedBlocks(existing, LEGACY_STARTUP_BLOCKS);
-  const next = upsertMarkedBlock(cleaned, STARTUP_BEGIN, STARTUP_END, block);
-  if (existing !== next) {
-    await writeFile(hookPath, next, "utf8");
-    report.changed.push(`upserted optional conditional REAPER startup hook at ${hookPath}`);
+  await mkdir(path.dirname(bridgeActionScript), { recursive: true });
+  const script = bridgeActionScriptSource();
+  const existingScript = await readTextIfExists(bridgeActionScript);
+  if (existingScript !== script) {
+    await writeFile(bridgeActionScript, script, "utf8");
+    report.changed.push(`installed REAPER action script ${BRIDGE_ACTION_TITLE} at ${bridgeActionScript}`);
+  }
+  await upsertBridgeActionInReaperKb();
+}
+
+async function upsertBridgeActionInReaperKb() {
+  const kbPath = path.join(REAPER_RESOURCE_ROOT, "reaper-kb.ini");
+  const existing = await readTextIfExists(kbPath);
+  const actionLine = `SCR 4 0 ${BRIDGE_ACTION_COMMAND_ID} "Custom: ${BRIDGE_ACTION_TITLE}" "${BRIDGE_ACTION_RELATIVE_SCRIPT}"`;
+  const withoutOldOpenReaperAction = existing
+    .split(/\r?\n/)
+    .filter((line) =>
+      !line.includes(`Custom: ${BRIDGE_ACTION_TITLE}`) &&
+      !line.includes(BRIDGE_ACTION_RELATIVE_SCRIPT),
+    )
+    .join("\n")
+    .trimEnd();
+  const next = withoutOldOpenReaperAction === "" ? `${actionLine}\n` : `${withoutOldOpenReaperAction}\n${actionLine}\n`;
+  if (next !== existing) {
+    await mkdir(path.dirname(kbPath), { recursive: true });
+    await writeFile(kbPath, next, "utf8");
+    report.changed.push(`registered REAPER action ${BRIDGE_ACTION_TITLE} (${bridgeActionCommand}) at ${kbPath}`);
   }
 }
 
-function startupHookBlock() {
-  return `${STARTUP_BEGIN}
--- Inert for normal REAPER launches; active only when openreaper-start sets env.
-do
-  local bridge = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
-  local transport = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
-  if bridge and bridge ~= "" and transport and transport ~= "" then
-    local ok, err = pcall(dofile, bridge)
-    if not ok and reaper and reaper.ShowConsoleMsg then
-      reaper.ShowConsoleMsg("[OpenReaper] startup bridge failed: " .. tostring(err) .. "\\n")
-    end
+async function removeOptionalStartupHook() {
+  const hookPath = path.join(REAPER_RESOURCE_ROOT, "Scripts", "__startup.lua");
+  const existing = await readTextIfExists(hookPath);
+  if (existing === "") {
+    report.skipped.push("no REAPER __startup.lua hook found; no OpenReaper startup hook cleanup needed");
+    return;
+  }
+  const next = removeMarkedBlocks(existing, LEGACY_STARTUP_BLOCKS).trimEnd();
+  if (!dryRun && next !== existing.trimEnd()) {
+    await writeFile(hookPath, next === "" ? "" : `${next}\n`, "utf8");
+    report.changed.push(`removed prior OpenReaper/Streetlight startup hook from ${hookPath}`);
+  } else if (next === existing.trimEnd()) {
+    report.skipped.push(`no prior OpenReaper/Streetlight startup hook found in ${hookPath}`);
+  }
+}
+
+function bridgeActionScriptSource() {
+  return `-- OpenReaper: Start MCP bridge
+-- Installed by OpenReaper alpha. Run this action after openreaper-start opens REAPER.
+local bridge = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
+local transport = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
+
+if not bridge or bridge == "" or not transport or transport == "" then
+  if reaper and reaper.MB then
+    reaper.MB("Start REAPER through openreaper-start first, then run this action again.", "OpenReaper", 0)
   end
+  return
 end
-${STARTUP_END}
+
+local ok, err = pcall(dofile, bridge)
+if not ok and reaper and reaper.MB then
+  reaper.MB("OpenReaper MCP bridge failed: " .. tostring(err), "OpenReaper", 0)
+end
 `;
 }
 
@@ -360,7 +419,23 @@ Restart Codex/Cursor/Claude so they reload MCP config, then ask:
 Important: OpenReaper MCP connects only when REAPER is started through:
   ${startCommand}
 
-If REAPER shows a startup/version/recovery/plugin dialog, dismiss it and ask the agent to reconnect.
+Startup lifetime: openreaper-start launches REAPER detached from the agent
+shell, waits for the REAPER process to stay alive, and returns the pid/log
+path for recovery.
+
+Startup window assist: openreaper-start only tries to close the known Project
+Settings / Notes "show notes on project load" window. It does not close
+license/evaluation, recovery, plugin/FX, version, or unknown REAPER windows.
+If bridge connection fails, check for a REAPER window waiting for action,
+resolve it, run the bridge action, reconnect, and run the live read probe:
+  call_template(template.transport.read_state)
+
+After openreaper-start opens REAPER, run the REAPER action:
+  ${BRIDGE_ACTION_TITLE}
+
+The agent should try to run that REAPER action for you. If it cannot operate
+the REAPER UI, open REAPER's Actions list, search the exact action name above,
+click Run, and then ask the agent to reconnect to MCP server openreaper.
 `);
 }
 

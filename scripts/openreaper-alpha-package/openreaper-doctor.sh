@@ -33,6 +33,9 @@ const startCommand = path.join(installRoot, "bin", "openreaper-start");
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
+const bridgeActionName = "OpenReaper: Start MCP bridge";
+const bridgeActionScript = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "OpenReaper", "openreaper-start-mcp-bridge.lua");
+const reaperKbPath = path.join(home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
 const exactTools = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const vitalAgentRequiredTools = ["create_openreaper_handoff_plan", "run_doctor"];
 const requiredMacros = ["macro.index_status", "macro.query_tracks"];
@@ -53,6 +56,19 @@ const report = {
     vital_agent_mcp: vitalAgentMcpCommand,
     start_reaper_for_mcp: startCommand,
   },
+  bridge_action: {
+    name: bridgeActionName,
+    script: bridgeActionScript,
+    agent_should_try_to_run_action: true,
+    user_fallback: `In REAPER, open Actions, search "${bridgeActionName}", click Run, then ask the agent to reconnect.`,
+    verification_probe: "call_template(template.transport.read_state)",
+    sws_required: false,
+  },
+  startup_dialog_assist: {
+    auto_dismisses: ["Project Settings / Notes show notes on project load"],
+    does_not_dismiss: ["license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
+    if_not_connected: "Check whether REAPER has a window waiting for agent/user action; resolve it, run the bridge action, reconnect, then run the live read probe.",
+  },
   checks: {},
   client_configs: [],
   stale_config_findings: [],
@@ -70,6 +86,8 @@ report.checks.vital_agent_mcp_command = await pathCheck(vitalAgentMcpCommand);
 report.checks.server_script = await pathCheck(serverScript);
 report.checks.vital_agent_server_script = await pathCheck(vitalAgentServerScript);
 report.checks.bridge_script = await pathCheck(bridgeScript);
+report.checks.bridge_action_script = await pathCheck(bridgeActionScript);
+report.checks.bridge_action_registration = await bridgeActionRegistrationCheck();
 report.checks.sdk = await pathCheck(path.join(installRoot, "node_modules", "@modelcontextprotocol", "sdk", "package.json"));
 report.checks.zod = await pathCheck(path.join(installRoot, "node_modules", "zod", "package.json"));
 
@@ -86,7 +104,12 @@ console.log("mcp_server_names=openreaper,vital-agent-mcp");
 console.log(`mcp_command=${mcpCommand}`);
 console.log(`vital_agent_mcp_command=${vitalAgentMcpCommand}`);
 console.log(`start_reaper_for_mcp=${startCommand}`);
+console.log(`bridge_action=${bridgeActionName}`);
+console.log(`bridge_action_script=${bridgeActionScript}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
+console.log("startup_lifetime=openreaper-start launches REAPER detached from the agent shell and returns a pid/log path.");
+console.log("startup_dialog_assist=only Project Settings / Notes show-notes-on-load is auto-dismissed; license/evaluation, recovery, plugin/FX, version, and unknown windows require agent/user action.");
+console.log("connection_probe=after the bridge action and MCP reconnect, run call_template(template.transport.read_state) before claiming live bridge connection.");
 if (report.smoke?.ok) {
   console.log(`kernel=${report.smoke.openreaper.kernel}`);
   console.log(`tools=${report.smoke.openreaper.tool_surface.join(",")}`);
@@ -100,7 +123,7 @@ if (report.stale_config_findings.length > 0) {
 } else {
   console.log("migration_needed=no");
 }
-console.log("next_agent_step=If live REAPER work is requested, run the start_reaper_for_mcp command, dismiss any REAPER startup/version/recovery/plugin dialog, then reconnect through MCP server openreaper.");
+console.log(`next_agent_step=If live REAPER work is requested, run the start_reaper_for_mcp command. After REAPER opens, try to run the REAPER action "${bridgeActionName}". If the agent cannot operate the REAPER UI, ask the user to open Actions, search "${bridgeActionName}", click Run, then reconnect through MCP server openreaper and run call_template(template.transport.read_state). If the probe does not return, check for REAPER windows waiting for action and ask the user to resolve them.`);
 
 async function pathCheck(filePath) {
   try {
@@ -109,6 +132,16 @@ async function pathCheck(filePath) {
   } catch {
     return { ok: false, path: filePath };
   }
+}
+
+async function bridgeActionRegistrationCheck() {
+  const text = await readTextIfExists(reaperKbPath);
+  const source = text ?? "";
+  return {
+    ok: source.includes(`Custom: ${bridgeActionName}`) && source.includes("OpenReaper/openreaper-start-mcp-bridge.lua"),
+    path: reaperKbPath,
+    action_name: bridgeActionName,
+  };
 }
 
 async function scanClientConfigs() {

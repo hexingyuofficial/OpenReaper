@@ -34,14 +34,38 @@ You should be able to ask:
 
 ```text
 Open OpenReaper.
+Open REAPER with OpenReaper.
 Reconnect to my REAPER session.
 Check whether OpenReaper is healthy.
 ```
+
+For the installable macOS alpha package, the agent should help with startup:
+
+1. Run `~/.openreaper/current/bin/openreaper-start` for you.
+2. Wait for REAPER to stay alive and read the printed pid/log/action guidance.
+3. Try to run the REAPER Action `OpenReaper: Start MCP bridge`.
+4. If the agent cannot operate the REAPER UI, ask you for one small assist:
+   open REAPER Actions, search `OpenReaper: Start MCP bridge`, and click Run.
+5. Reconnect the MCP server named `openreaper`.
+6. Run a bounded live probe, such as
+   `call_template(template.transport.read_state)`, before saying the bridge is
+   connected.
+
+You should not need to find a bridge file or understand bridge paths. SWS is
+not required for this startup route.
+
+Startup window handling is intentionally narrow. OpenReaper may automatically
+close only the known Project Settings / Notes "show notes on project load"
+window. License/evaluation, recovery, plugin/FX, version, and unknown REAPER
+windows are user-choice blockers. If the live probe does not connect, the
+agent should check whether REAPER has a waiting window or ask you to resolve it,
+then run the bridge Action and reconnect again.
 
 The product should explain blockers in plain language:
 
 - REAPER is not open.
 - The bridge is not ready.
+- A REAPER startup window is waiting for user or agent action.
 - The session is stale.
 - The project or selection is not what the agent expected.
 
@@ -155,7 +179,7 @@ A pack should clearly report:
 
 | Blocker | What It Means | What To Do |
 |---|---|---|
-| REAPER not ready | The agent cannot reach the live session. | Open or reconnect REAPER. |
+| REAPER not ready | The agent cannot reach the live session. | Ask the agent to run `openreaper-start`; if a REAPER window is waiting, resolve it, run `OpenReaper: Start MCP bridge`, reconnect, and probe. |
 | Stale session | The bridge/session does not match the current run. | Reconnect or restart the session. |
 | Wrong selection | The action needs selected tracks/items/takes. | Select the intended target and retry. |
 | Missing plugin | A requested plugin is not installed or not found. | Install it or choose a supported stock tool. |

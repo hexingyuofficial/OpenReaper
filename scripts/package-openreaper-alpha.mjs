@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, cp, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
@@ -70,6 +70,7 @@ await removeDsStore(packageRoot);
 const smoke = {
   installer_upgrade_migration: await smokePackagedInstallerUpgradeMigration(),
   openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
+  portable_paths: await smokePackagedPortablePaths(),
   openreaper: await smokePackagedOpenReaperMcp(),
   vital_agent_mcp: await smokePackagedVitalAgentMcp(),
 };
@@ -212,7 +213,7 @@ What this package does:
 - installs OpenReaper alpha to ~/.openreaper/current
 - registers MCP server name "openreaper" for Codex, Cursor, and Claude Desktop where their config files live at standard macOS paths
 - writes MCP config snippets for other clients, including Trae, under ~/.openreaper/current/config-snippets
-- installs a conditional REAPER startup hook that is inert for normal REAPER launches
+- registers a REAPER action named "OpenReaper: Start MCP bridge"
 - provides ~/.openreaper/current/bin/openreaper-start for REAPER sessions that MCP can connect to
 - provides companion MCP server "vital-agent-mcp" for Vital planning and OpenReaper handoff plans
 
@@ -227,11 +228,34 @@ Start REAPER:
   ~/.openreaper/current/bin/openreaper-start
   ~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP
 
+After REAPER opens:
+Run the REAPER action:
+  OpenReaper: Start MCP bridge
+
+The agent should try to run that action for you. If the agent cannot operate
+the REAPER UI on your machine, it should ask you for one small assist:
+Actions > Show action list, search "OpenReaper: Start MCP bridge", click Run,
+then ask the agent to reconnect.
+
+After reconnect:
+The agent should run a bounded live probe before saying the bridge is connected:
+  call_template(template.transport.read_state)
+
 After install:
 Restart Codex, Cursor, Claude, or your MCP client so it reloads MCP config. Then ask:
   Open REAPER with OpenReaper and inspect the current project.
 
-If REAPER shows a startup/version/recovery/plugin dialog, dismiss it and ask the agent to reconnect.
+Startup lifetime: openreaper-start launches REAPER detached from the agent
+shell, with the OpenReaper bridge environment prepared, waits for the REAPER
+process to stay alive, and then returns with a pid/log path. This keeps REAPER
+open if a terminal, MCP client, or agent command session ends.
+
+Startup dialogs: openreaper-start only tries to clear the known Project Settings / Notes
+"show notes on project load" window. license/evaluation, recovery, plugin,
+version, and other windows are user-choice dialogs. If MCP does not connect
+after REAPER opens, check whether a REAPER window is waiting for agent or user
+action, resolve it, run the bridge action, reconnect, and run the live probe
+again.
 
 Uninstall:
   ./uninstall.command
@@ -345,6 +369,19 @@ async function smokePackagedOpenReaperMcp() {
         current_package_start_reaper_for_mcp: ping.agent_startup_guidance.commands.current_package_start_reaper_for_mcp,
         normal_reaper_launch_supported: ping.agent_startup_guidance.requirements.normal_reaper_launch_supported,
         only_openreaper_startup_supported: ping.agent_startup_guidance.requirements.only_openreaper_startup_supported,
+        bridge_action_required_after_start: ping.agent_startup_guidance.requirements.bridge_action_required_after_start,
+        live_probe_required_before_success_claim: ping.agent_startup_guidance.requirements.live_probe_required_before_success_claim,
+        bridge_action: {
+          installed_action_name: ping.agent_startup_guidance.bridge_action.installed_action_name,
+          agent_should_try_to_run_action: ping.agent_startup_guidance.bridge_action.agent_should_try_to_run_action,
+          sws_required: ping.agent_startup_guidance.bridge_action.sws_required,
+          command_line_reascript_bridge: ping.agent_startup_guidance.bridge_action.command_line_reascript_bridge,
+          verification_probe: ping.agent_startup_guidance.bridge_action.verification_probe,
+        },
+        startup_dialog_assist: {
+          auto_dismisses: ping.agent_startup_guidance.startup_dialog_assist.auto_dismisses,
+          does_not_dismiss: ping.agent_startup_guidance.startup_dialog_assist.does_not_dismiss,
+        },
       },
       project_index_user_flow: {
         contract: macros.product_surface.project_index_user_flow_snapshot.contract,
@@ -384,33 +421,109 @@ async function smokePackagedOpenReaperStartHelper() {
   if (source.includes("OPENREAPER_LIVE_BRIDGE_GENERATION:-")) {
     throw new Error("openreaper-start must not inherit stale OPENREAPER_LIVE_BRIDGE_GENERATION by default");
   }
-  for (const required of ["--session-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation"]) {
+  for (const required of ["--session-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app"]) {
     if (!source.includes(required)) {
       throw new Error(`openreaper-start missing explicit bounded evidence option ${required}`);
     }
   }
-  if (!source.includes("LAUNCHER_SCRIPT=")) {
-    throw new Error("openreaper-start must create a session-local OpenReaper bridge launcher script.");
+  for (const required of [
+    "launch_reaper()",
+    'reaper_args=("-newinst")',
+    'reaper_args+=("${PROJECT_PATH}")',
+    'USE_LAUNCHSERVICES=true',
+    "REAPER_APP",
+    "/usr/bin/mdfind",
+    '/usr/bin/open -na "${REAPER_APP}" --args "${reaper_args[@]}"',
+    "/bin/launchctl setenv OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
+    "/bin/launchctl unsetenv",
+    "wait_for_new_reaper_pid",
+    "launch-method=macos_launchservices",
+    "reaper-pid=",
+    "reaper-pid-file=",
+    "reaper-log=",
+    "bridge-action=OpenReaper: Start MCP bridge",
+    "bridge-status=needs_reaper_action",
+    "startup-dialog-assist=project_notes_only",
+    "Project Settings / Notes",
+    "Show notes on project load",
+    "license/evaluation, recovery, plugin, or other user-choice",
+    "agent-next-step=Try to run REAPER action",
+    "user-fallback=In REAPER: Actions",
+    "wait_for_reaper_process()",
+    "REAPER process stayed alive",
+    "OPENREAPER_START_WAIT_SECONDS",
+  ]) {
+    if (!source.includes(required)) {
+      throw new Error(`openreaper-start missing detached startup requirement: ${required}`);
+    }
   }
-  if (!source.includes("pcall(dofile, bridge)")) {
-    throw new Error("openreaper-start launcher must load the configured OpenReaper bridge inside REAPER.");
+  if (source.includes('exec "${REAPER_BIN}"')) {
+    throw new Error("openreaper-start must not exec into REAPER; agent shell lifetime must not own the REAPER process.");
   }
-  if (!source.includes('"-newinst" "${PROJECT_PATH}" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"')) {
-    throw new Error("openreaper-start must launch project sessions through a new REAPER instance and bridge launcher.");
+  if (source.includes("LAUNCHER_SCRIPT=") || source.includes('reaper_args+=("${LAUNCHER_SCRIPT}")')) {
+    throw new Error("openreaper-start must not pass a generated bridge launcher script to REAPER.");
   }
-  if (!source.includes('"-newinst" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"')) {
-    throw new Error("openreaper-start must launch blank sessions through a new REAPER instance and bridge launcher.");
+  if (source.includes("pcall(dofile, bridge)")) {
+    throw new Error("openreaper-start must not rely on command-line ReaScript to keep the bridge alive.");
+  }
+  if (source.includes("--no-dialog-guard") || source.includes("dialog guard")) {
+    throw new Error("openreaper-start must use the narrow startup dialog assist wording, not the old dialog guard route.");
   }
   if (source.includes('"${PROJECT_PATH}" "${BRIDGE_SCRIPT}"') || source.includes('"${BRIDGE_SCRIPT}" "${ARGS[@]}"')) {
     throw new Error("openreaper-start must not rely on passing the bridge script directly to REAPER.");
+  }
+  if (source.includes('wt contains "License"') || source.includes('wt contains "license"')) {
+    throw new Error("openreaper-start must not treat an already-licensed REAPER main window title as a blocking license dialog.");
+  }
+  const installerSource = await readFile(path.join(packageRoot, "installer", "install-openreaper.mjs"), "utf8");
+  const doctorSource = await readFile(path.join(packageRoot, "bin", "openreaper-doctor"), "utf8");
+  const readmeSource = await readFile(path.join(packageRoot, "README.txt"), "utf8");
+  for (const [label, text] of [
+    ["installer", installerSource],
+    ["doctor", doctorSource],
+    ["readme", readmeSource],
+  ]) {
+    if (!text.includes("OpenReaper: Start MCP bridge")) {
+      throw new Error(`${label} must name the installed OpenReaper bridge action.`);
+    }
+    if (!text.includes("call_template(template.transport.read_state)")) {
+      throw new Error(`${label} must tell the agent to run the live read probe after reconnect.`);
+    }
+    if (!text.includes("Project Settings") || !text.includes("Notes") || !text.includes("license/evaluation")) {
+      throw new Error(`${label} must explain the narrow Project Notes assist and user-choice blocker windows.`);
+    }
+    if (!text.includes("agent") || !text.includes("Actions")) {
+      throw new Error(`${label} must explain agent-first action launch and user fallback through REAPER Actions.`);
+    }
+    if (!text.includes("detached") || !text.includes("pid/log")) {
+      throw new Error(`${label} must explain detached startup lifetime and pid/log recovery.`);
+    }
+    if (text.includes("dismiss any REAPER startup/version/recovery/plugin dialog")) {
+      throw new Error(`${label} must not regress to manual-only startup dialog wording.`);
+    }
+    if (text.includes("version notifications and project notes may be cleared")) {
+      throw new Error(`${label} must not promise automatic version-notification dismissal.`);
+    }
   }
   return {
     ok: true,
     default_session_root: "package_root/session",
     ignores_stale_low_level_env: true,
-    launches_session_bridge_launcher: true,
+    starts_reaper_with_openreaper_env: true,
+    macos_launchservices: true,
+    bridge_action_required: true,
+    bridge_action_name: "OpenReaper: Start MCP bridge",
+    agent_should_try_to_run_action: true,
+    startup_dialog_assist: "project_notes_only",
+    connection_probe: "call_template(template.transport.read_state)",
+    user_fallback: "Actions search Run",
+    command_line_reascript_bridge: false,
+    detached_from_agent_shell: true,
+    waits_for_reaper_process: true,
+    pid_file: "package_root/session/reaper.pid",
+    log_dir: "package_root/session/logs",
     sws_required: false,
-    explicit_override_options: ["--session-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation"],
+    explicit_override_options: ["--session-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation", "--reaper-app"],
   };
 }
 
@@ -421,13 +534,23 @@ async function smokePackagedInstallerUpgradeMigration() {
     "replaceInstallRoot",
     "removeLegacyOpenReaperTomlSections",
     "isLegacyOpenReaperTomlSection",
+    "installBridgeAction",
+    "bridgeActionScriptSource",
+    "upsertBridgeActionInReaperKb",
+    "BRIDGE_ACTION_TITLE",
+    "BRIDGE_ACTION_COMMAND_ID",
+    "OpenReaper: Start MCP bridge",
+    "openreaper-start-mcp-bridge.lua",
+    "reaper.MB",
     "LEGACY_STARTUP_BLOCKS",
-    "OpenReaper Alpha3 MCP startup hook",
-    "Streetlight MCP startup hook",
+    "prior OpenReaper alpha startup hook",
+    "legacy OpenReaper Alpha3 startup hook",
+    "legacy Streetlight startup hook",
     "removeMarkedBlocks",
+    "removeOptionalStartupHook",
     "inspectOptionalStartupCompatibility",
     "readIniValue",
-    "openreaper-start uses the no-SWS launcher path",
+    "OpenReaper does not require or take over SWS startup actions",
     "preserved existing SWS GlobalStartupAction",
   ];
   for (const snippet of requiredSnippets) {
@@ -435,19 +558,22 @@ async function smokePackagedInstallerUpgradeMigration() {
       throw new Error(`Packaged installer missing upgrade migration guard: ${snippet}`);
     }
   }
-  const codexLegacyFixture = `[mcp_servers.streetlight]
+  if (source.includes("ShowConsoleMsg")) {
+    throw new Error("Packaged bridge action must not open the ReaScript console on successful startup.");
+  }
+const codexLegacyFixture = `[mcp_servers.streetlight]
 command = "node"
-args = ["/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
+args = ["/tmp/legacy-streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
 
 [mcp_servers.streetlight.env]
-STREETLIGHT_QUEUE_DIR = "/Users/Zhuanz/Library/Application Support/Streetlight/queue"
+STREETLIGHT_QUEUE_DIR = "/tmp/legacy-streetlight-queue"
 
 [mcp_servers.openreaper]
 command = "node"
-args = ["/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
+args = ["/tmp/legacy-streetlight-reaper-mcp/packages/mcp-server/dist/index.js"]
 
 [mcp_servers.openreaper.env]
-STREETLIGHT_QUEUE_DIR = "/Users/Zhuanz/Library/Application Support/Streetlight/queue"
+STREETLIGHT_QUEUE_DIR = "/tmp/legacy-streetlight-queue"
 
 [mcp_servers.other]
 command = "node"
@@ -457,7 +583,7 @@ args = ["/tmp/other.js"]
   const forbidden = [
     "[mcp_servers.streetlight]",
     "[mcp_servers.streetlight.env]",
-    "/Users/Zhuanz/Documents/streetlight-reaper-mcp/packages/mcp-server/dist/index.js",
+    "/tmp/legacy-streetlight-reaper-mcp/packages/mcp-server/dist/index.js",
     "STREETLIGHT_QUEUE_DIR",
   ];
   for (const marker of forbidden) {
@@ -474,9 +600,77 @@ args = ["/tmp/other.js"]
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
+    installs_reaper_bridge_action: true,
+    bridge_action_name: "OpenReaper: Start MCP bridge",
+    agent_or_user_runs_bridge_action: true,
     sws_startup_optional: true,
-    no_sws_launcher_supported: true,
+    sws_required: false,
   };
+}
+
+async function smokePackagedPortablePaths() {
+  const forbiddenMarkers = [
+    process.env.HOME,
+    repoRoot,
+    vitalAgentRoot,
+  ]
+    .filter((value) => typeof value === "string" && value.trim() !== "")
+    .map((value) => path.resolve(value));
+  const hits = [];
+  let scannedFiles = 0;
+  for (const filePath of await collectPackageTextFiles(packageRoot)) {
+    scannedFiles += 1;
+    const text = await readFile(filePath, "utf8");
+    for (const marker of forbiddenMarkers) {
+      if (text.includes(marker)) {
+        hits.push({
+          file: path.relative(packageRoot, filePath),
+          marker,
+        });
+      }
+    }
+  }
+  if (hits.length > 0) {
+    throw new Error(`Packaged zip would contain developer-machine absolute paths: ${JSON.stringify(hits)}`);
+  }
+  return {
+    ok: true,
+    scanned_text_files: scannedFiles,
+    forbids_developer_home_paths: true,
+    install_paths_are_computed_on_target_machine: true,
+    mcp_client_configs_use_target_machine_absolute_commands: true,
+  };
+}
+
+async function collectPackageTextFiles(root) {
+  const files = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === ".git") continue;
+      files.push(...await collectPackageTextFiles(fullPath));
+      continue;
+    }
+    if (entry.isFile() && shouldScanPackageTextFile(fullPath)) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+function shouldScanPackageTextFile(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  return new Set([
+    "",
+    ".command",
+    ".json",
+    ".js",
+    ".lua",
+    ".mjs",
+    ".sh",
+    ".txt",
+  ]).has(extension);
 }
 
 function simulateLegacyOpenReaperTomlCleanup(existing) {
@@ -687,6 +881,35 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   }
   if (guidance.requirements?.only_openreaper_startup_supported !== true) {
     throw new Error(`${label} must require OpenReaper startup helper`);
+  }
+  if (guidance.requirements?.bridge_action_required_after_start !== true) {
+    throw new Error(`${label} must require the bridge action after openreaper-start`);
+  }
+  if (guidance.requirements?.live_probe_required_before_success_claim !== true) {
+    throw new Error(`${label} must require a live read probe before claiming the bridge is connected`);
+  }
+  if (guidance.bridge_action?.installed_action_name !== "OpenReaper: Start MCP bridge") {
+    throw new Error(`${label} must name the installed bridge action`);
+  }
+  if (guidance.bridge_action?.agent_should_try_to_run_action !== true) {
+    throw new Error(`${label} must tell the agent to try running the bridge action first`);
+  }
+  if (guidance.bridge_action?.sws_required !== false) {
+    throw new Error(`${label} must not require SWS for bridge startup`);
+  }
+  if (guidance.bridge_action?.command_line_reascript_bridge !== false) {
+    throw new Error(`${label} must not claim command-line ReaScript can own bridge startup`);
+  }
+  if (guidance.bridge_action?.verification_probe !== "call_template(template.transport.read_state)") {
+    throw new Error(`${label} must name the bridge connection verification probe`);
+  }
+  if (!guidance.startup_dialog_assist?.auto_dismisses?.includes("project_settings_notes_show_notes_on_project_load")) {
+    throw new Error(`${label} must limit automatic startup dialog assist to Project Settings / Notes`);
+  }
+  for (const blocker of ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"]) {
+    if (!guidance.startup_dialog_assist?.does_not_dismiss?.includes(blocker)) {
+      throw new Error(`${label} must not auto-dismiss ${blocker}`);
+    }
   }
   if (guidance.safety?.added_tools !== 0 || guidance.safety?.hidden_executor !== false) {
     throw new Error(`${label} expanded the tool surface or hid an executor`);
