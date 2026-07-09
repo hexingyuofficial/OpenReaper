@@ -389,10 +389,27 @@ async function smokePackagedOpenReaperStartHelper() {
       throw new Error(`openreaper-start missing explicit bounded evidence option ${required}`);
     }
   }
+  if (!source.includes("LAUNCHER_SCRIPT=")) {
+    throw new Error("openreaper-start must create a session-local OpenReaper bridge launcher script.");
+  }
+  if (!source.includes("pcall(dofile, bridge)")) {
+    throw new Error("openreaper-start launcher must load the configured OpenReaper bridge inside REAPER.");
+  }
+  if (!source.includes('"-newinst" "${PROJECT_PATH}" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"')) {
+    throw new Error("openreaper-start must launch project sessions through a new REAPER instance and bridge launcher.");
+  }
+  if (!source.includes('"-newinst" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"')) {
+    throw new Error("openreaper-start must launch blank sessions through a new REAPER instance and bridge launcher.");
+  }
+  if (source.includes('"${PROJECT_PATH}" "${BRIDGE_SCRIPT}"') || source.includes('"${BRIDGE_SCRIPT}" "${ARGS[@]}"')) {
+    throw new Error("openreaper-start must not rely on passing the bridge script directly to REAPER.");
+  }
   return {
     ok: true,
     default_session_root: "package_root/session",
     ignores_stale_low_level_env: true,
+    launches_session_bridge_launcher: true,
+    sws_required: false,
     explicit_override_options: ["--session-root", "--transport-dir", "--artifact-root", "--bridge-owner", "--bridge-generation"],
   };
 }
@@ -408,6 +425,10 @@ async function smokePackagedInstallerUpgradeMigration() {
     "OpenReaper Alpha3 MCP startup hook",
     "Streetlight MCP startup hook",
     "removeMarkedBlocks",
+    "inspectOptionalStartupCompatibility",
+    "readIniValue",
+    "openreaper-start uses the no-SWS launcher path",
+    "preserved existing SWS GlobalStartupAction",
   ];
   for (const snippet of requiredSnippets) {
     if (!source.includes(snippet)) {
@@ -453,6 +474,8 @@ args = ["/tmp/other.js"]
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
+    sws_startup_optional: true,
+    no_sws_launcher_supported: true,
   };
 }
 

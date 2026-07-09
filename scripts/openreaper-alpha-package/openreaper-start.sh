@@ -85,6 +85,8 @@ if [[ -z "${BRIDGE_GENERATION}" ]]; then
   BRIDGE_GENERATION="1"
 fi
 
+LAUNCHER_SCRIPT="${SESSION_ROOT}/openreaper-bridge-launcher.lua"
+
 if [[ ! -x "${REAPER_BIN}" ]]; then
   echo "[OpenReaper] REAPER binary is not executable: ${REAPER_BIN}" >&2
   echo "[OpenReaper] Set REAPER_BINARY or pass --reaper-binary." >&2
@@ -92,6 +94,21 @@ if [[ ! -x "${REAPER_BIN}" ]]; then
 fi
 
 mkdir -p "${TRANSPORT_DIR}/requests" "${TRANSPORT_DIR}/results" "${ARTIFACT_ROOT}"
+mkdir -p "${SESSION_ROOT}"
+
+cat > "${LAUNCHER_SCRIPT}" <<'LUA'
+local bridge = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
+local transport = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
+
+if bridge and bridge ~= "" and transport and transport ~= "" then
+  local ok, err = pcall(dofile, bridge)
+  if not ok and reaper and reaper.ShowConsoleMsg then
+    reaper.ShowConsoleMsg("[OpenReaper] bridge launcher failed: " .. tostring(err) .. "\n")
+  end
+elseif reaper and reaper.ShowConsoleMsg then
+  reaper.ShowConsoleMsg("[OpenReaper] bridge launcher did not start: missing OpenReaper startup environment.\n")
+end
+LUA
 
 export OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}"
 export OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}"
@@ -103,10 +120,12 @@ export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
 echo "[OpenReaper] Starting REAPER through OpenReaper."
 echo "[OpenReaper] MCP can connect only to REAPER sessions started this way."
 echo "[OpenReaper] transport=${TRANSPORT_DIR}"
+echo "[OpenReaper] bridge=${BRIDGE_SCRIPT}"
+echo "[OpenReaper] launcher=${LAUNCHER_SCRIPT}"
 echo "[OpenReaper] If REAPER shows a startup/version/recovery/plugin dialog, dismiss it and ask the agent to reconnect."
 
 if [[ -n "${PROJECT_PATH}" ]]; then
-  exec "${REAPER_BIN}" "${PROJECT_PATH}" "${ARGS[@]}"
+  exec "${REAPER_BIN}" "-newinst" "${PROJECT_PATH}" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"
 fi
 
-exec "${REAPER_BIN}" "${ARGS[@]}"
+exec "${REAPER_BIN}" "-newinst" "${LAUNCHER_SCRIPT}" "${ARGS[@]}"

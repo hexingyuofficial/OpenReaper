@@ -22,6 +22,8 @@ const LEGACY_STARTUP_BLOCKS = Object.freeze([
   }),
 ]);
 const DEFAULT_PACKS = "core,cleanup,delivery,analysis,loop,pack_contract_fixture";
+const SWS_MISC_SECTION = "[Misc]";
+const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const options = parseArgs(process.argv.slice(2));
@@ -83,9 +85,9 @@ if (!dryRun) {
 }
 
 if (!skipStartupHook) {
-  await installStartupHook();
+  await inspectOptionalStartupCompatibility();
 } else {
-  report.skipped.push("startup hook not installed because --skip-startup-hook was set");
+  report.skipped.push("startup compatibility inspection skipped because --skip-startup-hook was set");
 }
 
 if (!skipClientConfig) {
@@ -124,11 +126,28 @@ async function replaceInstallRoot() {
   });
 }
 
+async function inspectOptionalStartupCompatibility() {
+  const swsPath = path.join(home, "Library", "Application Support", "REAPER", "S&M.ini");
+  const swsConfig = await readTextIfExists(swsPath);
+  if (!swsConfig.trim()) {
+    report.skipped.push("SWS startup compatibility not configured because S&M.ini was not found; openreaper-start uses the no-SWS launcher path.");
+    return;
+  }
+  report.changed.push(`detected SWS/S&M startup config at ${swsPath}; OpenReaper remains usable without SWS through openreaper-start`);
+  const globalStartupAction = readIniValue(swsConfig, SWS_MISC_SECTION, SWS_GLOBAL_STARTUP_KEY);
+  if (globalStartupAction) {
+    report.skipped.push(`preserved existing SWS GlobalStartupAction=${globalStartupAction}; no OpenReaper startup action takeover was needed`);
+  } else {
+    report.skipped.push("SWS is installed but has no GlobalStartupAction; no OpenReaper startup action takeover was needed");
+  }
+  await installStartupHook();
+}
+
 async function installStartupHook() {
   const hookPath = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "__startup.lua");
   const block = startupHookBlock();
   if (dryRun) {
-    report.skipped.push(`dry run: would upsert REAPER startup hook at ${hookPath}`);
+    report.skipped.push(`dry run: would upsert optional REAPER startup hook at ${hookPath}`);
     return;
   }
   await mkdir(path.dirname(hookPath), { recursive: true });
@@ -137,7 +156,7 @@ async function installStartupHook() {
   const next = upsertMarkedBlock(cleaned, STARTUP_BEGIN, STARTUP_END, block);
   if (existing !== next) {
     await writeFile(hookPath, next, "utf8");
-    report.changed.push(`upserted conditional REAPER startup hook at ${hookPath}`);
+    report.changed.push(`upserted optional conditional REAPER startup hook at ${hookPath}`);
   }
 }
 
@@ -428,6 +447,24 @@ function removeLegacyOpenReaperTomlSections(existing) {
     return true;
   });
   return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+function readIniValue(source, sectionName, keyName) {
+  let inSection = false;
+  for (const line of source.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      inSection = trimmed === sectionName;
+      continue;
+    }
+    if (!inSection || trimmed.startsWith(";") || trimmed === "") continue;
+    const equals = trimmed.indexOf("=");
+    if (equals === -1) continue;
+    if (trimmed.slice(0, equals).trim() === keyName) {
+      return trimmed.slice(equals + 1).split(";")[0].trim();
+    }
+  }
+  return null;
 }
 
 function isLegacyOpenReaperTomlSection(text) {
