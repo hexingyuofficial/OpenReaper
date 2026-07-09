@@ -9,6 +9,18 @@ import { fileURLToPath } from "node:url";
 
 const STARTUP_BEGIN = "-- >>> OpenReaper alpha MCP startup hook >>>";
 const STARTUP_END = "-- <<< OpenReaper alpha MCP startup hook <<<";
+const LEGACY_STARTUP_BLOCKS = Object.freeze([
+  Object.freeze({
+    begin: "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
+    end: "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
+    label: "legacy OpenReaper Alpha3 startup hook",
+  }),
+  Object.freeze({
+    begin: "-- >>> Streetlight MCP startup hook >>>",
+    end: "-- <<< Streetlight MCP startup hook <<<",
+    label: "legacy Streetlight startup hook",
+  }),
+]);
 const DEFAULT_PACKS = "core,cleanup,delivery,analysis,loop,pack_contract_fixture";
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -121,7 +133,8 @@ async function installStartupHook() {
   }
   await mkdir(path.dirname(hookPath), { recursive: true });
   const existing = await readTextIfExists(hookPath);
-  const next = upsertMarkedBlock(existing, STARTUP_BEGIN, STARTUP_END, block);
+  const cleaned = removeMarkedBlocks(existing, LEGACY_STARTUP_BLOCKS);
+  const next = upsertMarkedBlock(cleaned, STARTUP_BEGIN, STARTUP_END, block);
   if (existing !== next) {
     await writeFile(hookPath, next, "utf8");
     report.changed.push(`upserted conditional REAPER startup hook at ${hookPath}`);
@@ -340,6 +353,29 @@ function upsertMarkedBlock(existing, begin, end, block) {
     return `${existing.slice(0, start).trimEnd()}\n\n${block.trimEnd()}\n${existing.slice(after).trimStart()}`;
   }
   return existing.trimEnd() === "" ? block : `${existing.trimEnd()}\n\n${block}`;
+}
+
+function removeMarkedBlocks(existing, blocks) {
+  let next = existing;
+  for (const block of blocks) {
+    const before = next;
+    next = removeMarkedBlock(next, block.begin, block.end);
+    if (next !== before) {
+      report.changed.push(`removed ${block.label} from REAPER startup hook`);
+    }
+  }
+  return next;
+}
+
+function removeMarkedBlock(existing, begin, end) {
+  let next = existing;
+  while (true) {
+    const start = next.indexOf(begin);
+    const finish = next.indexOf(end);
+    if (start === -1 || finish === -1 || finish <= start) return next;
+    const after = finish + end.length;
+    next = `${next.slice(0, start).trimEnd()}\n\n${next.slice(after).trimStart()}`;
+  }
 }
 
 function upsertTomlSection(existing, sectionName, sectionText) {

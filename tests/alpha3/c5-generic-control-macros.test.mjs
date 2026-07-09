@@ -314,6 +314,37 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(runtime.last_evidence().template.id, "macro.set_track_controls");
   });
 
+  it("accepts MCP object-ref arrays for C5 macros and maps them to named refs", async () => {
+    const runtime = createCallTemplateRuntime();
+    const trackRef = {
+      kind: "track",
+      ref: "track:guid:{TRACK-A}",
+      identity: { scheme: "guid", value: "{TRACK-A}" },
+      display: { name: "Track A" },
+    };
+    const response = await runtime.call_template({
+      id: "macro.set_track_controls",
+      input: {
+        fields: {
+          volume: 0.75,
+          pan: -0.2,
+        },
+      },
+      refs: [trackRef],
+    });
+
+    assert.equal(response.ok, true);
+    assert.deepEqual(
+      response.result.child_requests.map((request) => request.refs),
+      [
+        { track_ref: "track:guid:{TRACK-A}" },
+        { track_ref: "track:guid:{TRACK-A}" },
+      ],
+    );
+    assert.deepEqual(response.result.readback.refs, { track_ref: "track:guid:{TRACK-A}" });
+    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+  });
+
   it("returns typed macro blockers through call_template without child mutation requests", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({

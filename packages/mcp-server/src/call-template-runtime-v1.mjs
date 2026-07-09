@@ -782,7 +782,7 @@ export function createCallTemplateRuntime(options = {}) {
       }
       if (isAlpha3C5OfficialMacroId(id)) {
         const plan = planAlpha3C5GenericControlMacro(id, {
-          refs: normalized.refs,
+          refs: normalized.input?.refs ?? normalizeAlpha3C5MacroRefs(id, normalized.refs),
           fields: normalized.input?.fields,
         });
         const envelope = createAlpha3C5MacroRuntimeEnvelope({
@@ -1602,6 +1602,36 @@ function compactRefDeclarations(refs) {
     required: ref.required,
     summary: ref.summary,
   }));
+}
+
+function normalizeAlpha3C5MacroRefs(id, refs) {
+  if (isPlainObject(refs)) return refs;
+  const refArray = Array.isArray(refs) ? refs : [];
+  if (id === "macro.set_track_controls") {
+    const trackRef = firstObjectRef(refArray, "track");
+    return trackRef === null ? {} : { track_ref: trackRef.ref };
+  }
+  if (id === "macro.set_send_controls") {
+    const sendRef = firstObjectRef(refArray, "send");
+    const trackRef = firstObjectRef(refArray, "track");
+    return pruneUndefined({
+      send_ref: sendRef?.ref,
+      track_ref: trackRef?.ref,
+    });
+  }
+  if (id === "macro.set_item_controls" || id === "macro.set_take_controls") {
+    const itemRef = firstObjectRef(refArray, "item");
+    return itemRef === null ? {} : { item_ref: itemRef.ref };
+  }
+  if (id === "macro.set_midi_take_controls") {
+    const takeRef = firstObjectRef(refArray, "take");
+    return takeRef === null ? {} : { take_ref: takeRef.ref };
+  }
+  return {};
+}
+
+function firstObjectRef(refs, kind) {
+  return refs.find((ref) => isPlainObject(ref) && ref.kind === kind && typeof ref.ref === "string") ?? null;
 }
 
 function inputRefDeclarations(item) {

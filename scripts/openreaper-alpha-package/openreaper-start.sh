@@ -5,9 +5,11 @@ SCRIPT_DIR="${0:A:h}"
 INSTALL_ROOT="${SCRIPT_DIR:h}"
 BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
 REAPER_BIN="${REAPER_BINARY:-/Applications/REAPER.app/Contents/MacOS/REAPER}"
-SESSION_ROOT="${OPENREAPER_SESSION_ROOT:-${INSTALL_ROOT}/session}"
+SESSION_ROOT="${INSTALL_ROOT}/session"
 TRANSPORT_DIR=""
 ARTIFACT_ROOT=""
+BRIDGE_OWNER=""
+BRIDGE_GENERATION=""
 
 PROJECT_PATH=""
 ARGS=()
@@ -33,6 +35,14 @@ while [[ $# -gt 0 ]]; do
       ARTIFACT_ROOT="${2:-}"
       shift 2
       ;;
+    --bridge-owner|--owner)
+      BRIDGE_OWNER="${2:-}"
+      shift 2
+      ;;
+    --bridge-generation|--generation)
+      BRIDGE_GENERATION="${2:-}"
+      shift 2
+      ;;
     --help|-h)
       cat <<'HELP'
 OpenReaper start helper
@@ -44,9 +54,11 @@ Usage:
 
 REAPER must be started through this helper for OpenReaper MCP to connect.
 The helper defaults to its installed session directory and ignores stale
-OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR / OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT
-values from the parent shell. Use --transport-dir/--artifact-root only for a
-bounded evidence window.
+OPENREAPER_SESSION_ROOT / OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR /
+OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT / OPENREAPER_LIVE_BRIDGE_OWNER /
+OPENREAPER_LIVE_BRIDGE_GENERATION values from the parent shell. Use explicit
+--session-root/--transport-dir/--artifact-root/--bridge-owner/--bridge-generation
+only for a bounded evidence window.
 HELP
       exit 0
       ;;
@@ -65,6 +77,14 @@ if [[ -z "${ARTIFACT_ROOT}" ]]; then
   ARTIFACT_ROOT="${SESSION_ROOT}/artifacts"
 fi
 
+if [[ -z "${BRIDGE_OWNER}" ]]; then
+  BRIDGE_OWNER="openreaper-alpha"
+fi
+
+if [[ -z "${BRIDGE_GENERATION}" ]]; then
+  BRIDGE_GENERATION="1"
+fi
+
 if [[ ! -x "${REAPER_BIN}" ]]; then
   echo "[OpenReaper] REAPER binary is not executable: ${REAPER_BIN}" >&2
   echo "[OpenReaper] Set REAPER_BINARY or pass --reaper-binary." >&2
@@ -77,8 +97,8 @@ export OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR="${TRANSPORT_DIR}"
 export OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH="${BRIDGE_SCRIPT}"
 export OPENREAPER_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
-export OPENREAPER_LIVE_BRIDGE_OWNER="${OPENREAPER_LIVE_BRIDGE_OWNER:-openreaper-alpha}"
-export OPENREAPER_LIVE_BRIDGE_GENERATION="${OPENREAPER_LIVE_BRIDGE_GENERATION:-1}"
+export OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}"
+export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
 
 echo "[OpenReaper] Starting REAPER through OpenReaper."
 echo "[OpenReaper] MCP can connect only to REAPER sessions started this way."
