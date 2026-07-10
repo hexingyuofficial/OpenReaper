@@ -1461,3 +1461,141 @@ Next gate: Alpha3.2-B2 Managed Render Root. B2 may prepare a deterministic
 managed render directory and package/start environment wiring, but must not
 consume the liveness probe into `ping`/doctor or make live-readiness claims;
 that integration and the authorized REAPER smoke remain B3.
+
+### Alpha3.2-B2 Managed Render Root Implementation Window
+
+Status: in_progress; normal product slice, no lower-layer reopen required.
+
+Control-tower decision: 2026-07-10.
+
+Concrete product blocker:
+
+- the accepted render handlers already consume
+  `OPENREAPER_LIVE_SMOKE_RENDER_ROOT`, but the installable product does not
+  create a default render directory or propagate that env through installer,
+  MCP wrapper, or `openreaper-start`;
+- the installed default session currently has transport and artifact roots but
+  no `session/renders` directory;
+- adding a default root inside `~/.openreaper/current` without bounded upgrade
+  and uninstall handling would delete user render outputs during replacement or
+  removal, so preservation is part of B2 rather than a later cleanup.
+
+B2 product contract:
+
+```text
+default root: <install-root>/session/renders
+installed default: ~/.openreaper/current/session/renders
+existing env only: OPENREAPER_LIVE_SMOKE_RENDER_ROOT
+persisted selection: <install-root>/session/managed-render-root.path
+```
+
+Required precedence:
+
+```text
+installer:
+  explicit --render-root
+  > prior persisted selection during reinstall/upgrade
+  > <install-root>/session/renders
+
+normal installed openreaper-start:
+  explicit --render-root
+  > persisted selection
+  > <install-root>/session/renders
+
+openreaper-start with explicit --session-root and no --render-root:
+  <explicit-session-root>/renders
+
+openreaper-mcp:
+  explicit process env
+  > persisted selection
+  > <install-root>/session/renders
+```
+
+Approved tracked write scope:
+
+```text
+scripts/openreaper-alpha-package/install-openreaper.mjs
+scripts/openreaper-alpha-package/openreaper-start.sh
+scripts/openreaper-alpha-package/openreaper-mcp.sh
+scripts/openreaper-alpha-package/uninstall-openreaper.mjs
+scripts/package-openreaper-alpha.mjs
+tests/alpha3/alpha3-2b-managed-render-root.test.mjs
+package.json
+```
+
+Required behavior:
+
+- fresh install creates the selected root as a real writable directory and
+  stores the same absolute selection for MCP/start reuse;
+- installer config for Codex, Cursor, Claude, `mcp.json`, TOML snippets, and
+  Trae carries the same existing render-root env;
+- installer MCP smoke, direct startup, and macOS LaunchServices startup receive
+  the selected root; stale parent render env is ignored by default;
+- `--render-root` is an explicit bounded override; an explicit evidence
+  `--session-root` derives its own `renders` child unless render root is also
+  supplied;
+- root preparation rejects relative/file-URI/control-character paths,
+  filesystem root, home, reserved install/session/transport/artifact overlap,
+  regular files, final symlinks, and directories that fail an exclusive bounded
+  write probe;
+- `/tmp/...` remains usable on macOS even though it canonically aliases
+  `/private/tmp`; only the final candidate component is rejected for being a
+  symlink, while canonical paths are used for overlap checks;
+- validation happens before destructive install-root replacement; existing
+  custom directory permissions are not recursively changed;
+- default-root outputs survive upgrade/reinstall. External custom roots are
+  never deleted. A non-empty default root is preserved outside the install tree
+  before uninstall and its recovery path is reported;
+- installer/start output may name the selected render root but must not claim
+  `ready_for_render`, doctor readiness, bridge readiness, render success, codec
+  support, or live product support.
+
+Forbidden/deferred:
+
+- do not edit doctor, `ping`, stdio product metadata, B1 liveness, bridge Lua,
+  render handlers/templates, recipes, ABI/taxonomy, startup-assistant metadata,
+  support docs, or `macro.render.targets`;
+- do not add another render-root env, MCP tool, operation family, public
+  `call_recipe`, hidden executor, raw Lua/action/shell/UI bypass, or new REAPER
+  process control;
+- do not run REAPER or render. B3 owns liveness/doctor integration and authorized
+  live evidence; 3.2-E owns render macro/product orchestration;
+- workers do not commit and must stop on any need for an unlisted file.
+
+Required fixture matrix:
+
+```text
+fresh default install
+default-root upgrade with an existing output file
+prior custom-root reinstall without repeating the override
+explicit custom-root startup through a fake executable
+explicit session-root -> session/renders
+stale parent env ignored
+relative/file URI/root/home/reserved overlap rejection
+regular file/final symlink/unwritable root rejection
+/tmp versus /private/tmp alias acceptance
+non-empty default-root uninstall preservation
+packaged MCP/start/installer smoke and portability scan
+```
+
+Required gates:
+
+```text
+git diff --check
+node --check scripts/openreaper-alpha-package/install-openreaper.mjs
+node --check scripts/openreaper-alpha-package/uninstall-openreaper.mjs
+node --check scripts/package-openreaper-alpha.mjs
+zsh -n scripts/openreaper-alpha-package/openreaper-start.sh
+zsh -n scripts/openreaper-alpha-package/openreaper-mcp.sh
+node --test tests/alpha3/alpha3-2b-managed-render-root.test.mjs
+npm run check:alpha3-2b
+npm run check:template-runtime
+npm run check:alpha3-d1
+npm run check:alpha3-block2
+npm test
+npm run build
+```
+
+The worker must also build the alpha package into a fresh `/tmp` output root
+with package smoke enabled and without launching REAPER. Independent review is
+required before B2 acceptance.
