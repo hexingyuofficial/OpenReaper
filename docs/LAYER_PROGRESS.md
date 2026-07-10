@@ -1050,7 +1050,7 @@ Acceptance direction:
 
 ## Ratchet Governance
 
-Status: planned governance model.
+Status: active governance model.
 
 Record marker: `RATCHET-GOVERNANCE-V0-2026-07-03`.
 
@@ -1061,3 +1061,65 @@ control-tower governance model, not a user-facing REAPER feature.
 Near-term use: Wave/template/catalog work may continue in parallel only within
 assigned routes. Status promotion to runtime/live/stable must wait for the
 proper gate evidence and control-tower acceptance.
+
+## Post-V1 Productization Control-Tower Status
+
+Status: Alpha3.2 active; Alpha3.1 L6/L7 evidence queues deferred.
+
+Control-tower checkpoint: 2026-07-10.
+
+Accepted post-V1 base:
+
+- V1 public closure docs accepted at `ad1c228 docs: publish v1 public docs`;
+- Alpha2 graduated the accepted 213-template bounded live fixture matrix;
+- Alpha3 Phase 3 first-product closeout is accepted with evidence-bound claims;
+- Alpha3.1 installable-product work is accepted through
+  `2ded9ff package: stabilize agent-assisted startup`.
+
+Active phase:
+
+```text
+Alpha3.2 Trial Feedback Hardening
+/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/reports/alpha3.2-trial-feedback-hardening-plan.md
+```
+
+The Alpha3.1 L6 broader C5 macro live-canary queue and L7 stock-plugin evidence
+queue remain valid future evidence work, but they are deferred and must not run
+in parallel as a competing active phase unless the control tower explicitly
+reopens them.
+
+Control-tower delegation authorization:
+
+- the control tower may create subagents, worktrees, reviewers, and smoke
+  windows with disjoint path ownership;
+- workers do not commit and return changed files, tests, evidence, blockers,
+  and known risks;
+- the control tower owns acceptance, exact-path staging, and commits.
+
+Live fixture authorization:
+
+```text
+/Users/Zhuanz/Untitled/Untitled.RPP
+```
+
+The project is authorized as a disposable project-local fixture. The control
+tower and delegated smoke workers may start/stop/restart REAPER, save or
+overwrite the project, create/edit/delete project objects, exercise internal
+routing, place media, refresh/query SQLite state, run controls/readback, and
+render outputs when required by an accepted slice. Source-media deletion,
+hardware/device I/O, and raw Lua/action/shell/UI bypass product paths remain out
+of scope. Live authorization is not support evidence by itself; each run needs a
+fresh evidence root, changed-state report, rendered-file list, recovery posture,
+and control-tower review.
+
+Current unaccepted dirty-tree candidates are split into two independent scopes:
+
+1. C5 MIDI note-insertion exposure through `macro.set_midi_controls`;
+2. Alpha3.1 installer TOML-tree replacement and upgrade/doctor guidance.
+
+They must be reviewed and accepted, deferred, or rejected separately. They must
+not be combined in one commit, and Alpha3.2-A must not begin on top of an
+unclassified mixed dirty tree.
+
+Next gate: complete dirty-tree reconciliation, then open Alpha3.2-A Agent
+Context And Macro Guide without REAPER.

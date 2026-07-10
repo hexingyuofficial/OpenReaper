@@ -136,58 +136,59 @@ Layer order:
 
 ## Current Next Task
 
-Layer 1: Tool ABI v1 is frozen.
-Layer 1.5: Discovery / Menu Contract v1 is frozen.
-Layer 2: Foundation / Bridge ABI v1 is frozen.
-Layer 3: Pack Taxonomy v1 is frozen.
-Layer 4A: Template Descriptor Contract is frozen.
-Layer 4B: Template Execution Harness is frozen.
-Layer 4C: Template Catalog / Smoke Gate is frozen.
-Wave 1A official descriptor catalog is accepted.
-Wave 2A descriptor-only 70-template catalog is accepted.
-Wave 3A critical research-only scout is accepted.
-Wave 3B critical descriptor-only catalog is accepted.
-Layer 4D Template Runtime Binding / Live Smoke Gate is accepted.
-Layer 4D.1 Live Bridge Executor Binding / Wave 0 Canary Enablement is accepted.
-Layer 4D.2 REAPER-side Bridge Script / Wave 0 Handshake is accepted.
-4D.x Wave 1A Read-Handler Expansion is accepted.
-Layer 4.5A Artifact / State Store Contract + Core Helpers is accepted.
-Layer 4.5B get_state Artifact Projection / Runtime Binding is accepted.
-Layer 4.5C Lua Artifact Helper + Live Artifact Smoke is accepted.
-Layer 5 Recipe Contract v1 is frozen.
-Layer 6 Narrow User Recipe Authoring v1 is accepted.
-Critical Fill Render / Analysis and R3 report P0 descriptors are accepted and
-merged into the official catalog as `critical_fill`; accepted runtime/recipe
-template ids now total 126.
+The V1 foundation and public closure docs are accepted. The post-V1 product
+sequence has also advanced through the Alpha2 213-template bounded live baseline,
+Alpha3 first-product closeout, and Alpha3.1 installable-product work.
 
-Layer 4D.R bridge handler registry/split is structurally closed for the current
-accepted V1 handler set. The accepted runtime commit is
-`57540d4 runtime: link isolated bridge handler exports`; all 60 registered
-bridge rows are handler modules and zero rows remain `legacy_monolith`.
+Current accepted product base:
 
-Separate old-control live evidence has passed for Wave 0, all nine scoped Wave
-1A read rows, First-Real-Fixture-A A1/A2/A3, Read-B, and Safe-Write-A. Layer
-4.5C artifact helper canary also passed, but it is helper evidence, not a
-template matrix row. Do not update the old live matrix from recipe-level
-portability evidence.
+- V1 public docs accepted at `ad1c228 docs: publish v1 public docs`;
+- Alpha2 bounded live evidence covers the accepted 213-template fixture matrix;
+- Alpha3 Phase 3 first-product closeout is accepted with evidence-bound claims;
+- Alpha3.1 startup/package stabilization is accepted at
+  `2ded9ff package: stabilize agent-assisted startup`.
 
-Layer 7 has six lifecycle-`draft` recipe atoms with no-REAPER fake-smoke
-coverage. R1 live recipe evidence and local clean-source live portability are
-accepted only for `recipe.project.cleanup_fingerprint_report`, using the
-`57540d4` clean source and evidence root:
+As of 2026-07-10, Alpha3.2 Trial Feedback Hardening is the only active product
+implementation phase. Alpha3.1 L6 broader C5 live canaries and L7 stock-plugin
+evidence are deferred evidence backlog, not concurrent active slices.
+
+Authoritative active plan:
 
 ```text
-/Users/Shared/openreaper-portability-live/layer7-r1-portability-live-20260704-222001
+/Users/Zhuanz/Documents/streetlight-reaper-mcp/docs/agent-routing/reports/alpha3.2-trial-feedback-hardening-plan.md
 ```
 
-The accepted R1 path used `call_template(template.project.create_cleanup_report)`
-and `get_state(scope:"artifact")` summary/payload readback with
-`spawned_reaper:false`. It does not promote the other five Layer 7 draft atoms,
-does not add a public `call_recipe`, does not update template matrix rows, and
-does not prove remote-clone/new-machine portability.
+Current work order:
 
-Current next task: finish V1 closure docs. Public wording must stay bound to
-the local macOS manual-bridge, R1-only recipe-level live/local portability
-claim unless a new evidence route explicitly broadens it. Final V1 closure
-still needs public `README.md`, `docs/ARCHITECTURE.md`, `docs/RUNBOOK.md`,
-`docs/SUPPORT_MATRIX.md`, final docs review, and final V1 declaration.
+1. reconcile and separately accept, defer, or reject the existing dirty-tree
+   candidates;
+2. run Alpha3.2-A Agent Context And Macro Guide without REAPER;
+3. run Alpha3.2-B Startup, Bridge Health, And Render Root;
+4. continue through bounded 3.2-C/D/E/F slices, trial rerun, then manual closeout.
+
+## Active Control-Tower Authorization
+
+The user authorized the current control-tower window on 2026-07-10 to create and
+coordinate subagents, worktrees, and additional worker/reviewer/smoke windows.
+Workers receive disjoint path ownership, do not commit, and return changed files,
+checks, evidence, blockers, and risks. The control tower reviews and owns accepted
+commits.
+
+The user also authorized project-local REAPER testing against:
+
+```text
+/Users/Zhuanz/Untitled/Untitled.RPP
+```
+
+The control tower and its delegated smoke workers may start, stop, and restart
+REAPER; open, save, overwrite, or save-as this authorized project; and perform
+project-local create/edit/delete, layout, internal routing, media placement,
+control/readback, SQLite, and render tests needed by the accepted slice. The
+project is a disposable live fixture for those tests.
+
+The authorization does not change product boundaries: use OpenReaper
+MCP/start/doctor paths; do not add raw Lua/action/shell/UI bypass capabilities;
+do not delete source media files from disk by default; keep hardware/device I/O
+hard-stopped; and do not promote support wording or matrices without reviewed
+evidence. Every live run must use a fresh evidence root and report project
+changes, rendered files, recovery/backup posture, and exact results.
