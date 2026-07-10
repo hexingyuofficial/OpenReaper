@@ -1357,3 +1357,107 @@ heartbeat from the real deferred loop source. Independent review is required.
 Live REAPER proof is deferred to B3, which must use a fresh evidence root and the
 authorized `/Users/Zhuanz/Untitled/Untitled.RPP` fixture before any live startup
 or doctor claim is accepted.
+
+### Alpha3.2-B1 Bridge Liveness Accepted
+
+Status: accepted; lower-layer implementation re-frozen at static evidence level.
+
+Control-tower acceptance: 2026-07-10.
+
+Accepted implementation commit:
+
+```text
+434edf1e466578c5a5ece076cfe0c546bd7051a9
+runtime: add bounded bridge liveness
+```
+
+Accepted internal transport contract:
+
+```text
+heartbeat contract: openreaper.bridge_liveness.v1
+probe contract: live_bridge.liveness_probe.v1
+fixed sidecar: <transport-root>/openreaper-bridge-liveness-v1.json
+heartbeat interval: 500 ms
+default stale threshold: 2,000 ms
+heartbeat read ceiling: 2,048 bytes
+```
+
+The heartbeat contains exactly contract, active owner, active generation,
+sequence, refreshed Unix seconds, and interval metadata. It is written
+atomically once before the deferred loop starts and refreshed independently of
+request polling. It contains no project state, refs, media paths, request/result
+payload, template data, or new execution authority.
+
+The Node live-bridge layer now provides an internal read-only liveness probe and
+executor method that classify:
+
+```text
+bridge_probe_input_invalid
+bridge_config_absent
+bridge_transport_absent
+bridge_action_not_running
+bridge_heartbeat_invalid
+bridge_loop_unresponsive
+bridge_owner_mismatch
+bridge_generation_mismatch
+bridge_ready
+```
+
+Accepted safety properties:
+
+- the probe constructs only the fixed heartbeat path and does not write a
+  request, call a template, or spawn REAPER;
+- heartbeat reads use one FileHandle with
+  `O_RDONLY | O_NOFOLLOW | O_NONBLOCK`, pre/post `fstat`, a hard `MAX+1` read
+  ceiling, link/type/size/snapshot checks, and guaranteed close containment;
+- symlinks, hardlinks, directories, FIFO/socket/open failures, empty/oversized
+  files, read races, malformed or extra fields, and future timestamps fail
+  closed as bounded non-ready results;
+- expected owner/generation distinguish absent, valid, and explicitly invalid
+  inputs; invalid identities cannot silently disable comparison or echo
+  unbounded data;
+- filesystem mtime remains the freshness source, with an explicit 1,000 ms
+  future-skew tolerance; age equal to the threshold is ready and threshold plus
+  one millisecond is unresponsive;
+- stale state precedes identity mismatch, and owner mismatch precedes generation
+  mismatch;
+- ordinary dispatch is not heartbeat-gated: missing heartbeat still permits the
+  existing request write and preserves `BRIDGE_TIMEOUT` plus
+  `live_bridge_handshake_failed` when no result arrives;
+- `foundation.bridge.v1`, the five operation families, five MCP tools, template
+  allowlists, pack routes, and default execution semantics are unchanged.
+
+Independent review initially found three P1 findings (symlink/TOCTOU/unbounded
+read, future-mtime false readiness, and invalid expected-identity bypass) plus
+one P2 timing/test-coverage gap. The bounded security fix closed all four;
+focused rereview returned `PASS` with no remaining P0-P3 findings.
+
+Control-tower gates passed:
+
+```text
+git diff --check
+node scripts/build-live-bridge.mjs --check
+node --test tests/layer4d1/live-bridge-executor.test.mjs  # 13/13
+node --test tests/layer4d2/openreaper-live-bridge.test.mjs  # 7/7
+npm run check:template-runtime
+npm run check:tool-abi
+npm run check:foundation-bridge
+npm test
+npm run build
+```
+
+Final control-tower logs:
+
+```text
+/tmp/openreaper-alpha32b1-r2-final-T1ZcaM
+```
+
+No REAPER ran. B1 proves only the internal static liveness contract and source/
+bundle behavior. It does not prove that the real REAPER loop refreshes the
+heartbeat, that startup/doctor reports are correct, or that any platform beyond
+the reviewed local macOS filesystem behavior is supported.
+
+Next gate: Alpha3.2-B2 Managed Render Root. B2 may prepare a deterministic
+managed render directory and package/start environment wiring, but must not
+consume the liveness probe into `ping`/doctor or make live-readiness claims;
+that integration and the authorized REAPER smoke remain B3.
