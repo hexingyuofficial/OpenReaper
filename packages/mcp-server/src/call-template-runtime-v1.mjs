@@ -1623,7 +1623,7 @@ function normalizeAlpha3C5MacroRefs(id, refs) {
     const itemRef = firstObjectRef(refArray, "item");
     return itemRef === null ? {} : { item_ref: itemRef.ref };
   }
-  if (id === "macro.set_midi_take_controls") {
+  if (id === "macro.set_midi_controls") {
     const takeRef = firstObjectRef(refArray, "take");
     return takeRef === null ? {} : { take_ref: takeRef.ref };
   }

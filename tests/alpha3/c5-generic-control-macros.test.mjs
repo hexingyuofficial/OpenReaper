@@ -345,6 +345,78 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
   });
 
+  it("normalizes take refs for the planned MIDI macro without promoting or executing it", async () => {
+    const midiDiscovery = createAlpha3C5OfficialMacroDiscoveryItems()
+      .find((entry) => entry.id === "macro.set_midi_controls");
+    const runtime = createCallTemplateRuntime();
+    const wrongKindRef = {
+      kind: "track",
+      ref: "track:guid:{TRACK-A}",
+    };
+    const firstTakeRef = {
+      kind: "take",
+      ref: "take:guid:{TAKE-A}",
+    };
+    const secondTakeRef = {
+      kind: "take",
+      ref: "take:guid:{TAKE-B}",
+    };
+    const response = await runtime.call_template({
+      id: "macro.set_midi_controls",
+      input: {
+        fields: {
+          arbitrary_cc_batch_edit: true,
+        },
+      },
+      refs: [wrongKindRef, firstTakeRef, secondTakeRef],
+    });
+    const wrongKindOnly = await runtime.call_template({
+      id: "macro.set_midi_controls",
+      input: {
+        fields: {
+          arbitrary_cc_batch_edit: true,
+        },
+      },
+      refs: [wrongKindRef],
+    });
+
+    assert.deepEqual(
+      {
+        lifecycle: midiDiscovery.lifecycle,
+        support_status: midiDiscovery.support_status,
+        support_state: midiDiscovery.support_state,
+        known_blocker: midiDiscovery.known_blocker,
+        live_runnable_now: midiDiscovery.live_runnable_now,
+      },
+      {
+        lifecycle: "draft",
+        support_status: "planned",
+        support_state: "blocked",
+        known_blocker: "planned_after_c5",
+        live_runnable_now: false,
+      },
+    );
+    assert.equal(runtime.list_templates().items.some((item) => item.id === "macro.set_midi_controls"), false);
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "COMPLEX_SCHEMA_DEFERRED");
+    assert.deepEqual(
+      response.result.blockers.map((blocker) => ({ field: blocker.field, code: blocker.code })),
+      [{ field: "arbitrary_cc_batch_edit", code: "COMPLEX_SCHEMA_DEFERRED" }],
+    );
+    assert.deepEqual(response.result.child_requests, []);
+    assert.equal(response.result.readback, null);
+    assert.equal(response.result.execution.executed, false);
+    assert.equal(response.result.agent_execution_flow.status, "blocked_before_agent_execution");
+    assert.equal(wrongKindOnly.ok, false);
+    assert.equal(
+      wrongKindOnly.result.blockers.some((blocker) =>
+        blocker.field === "take_ref" && blocker.code === "REQUIRED_REF_MISSING"
+      ),
+      true,
+    );
+    assert.deepEqual(wrongKindOnly.result.child_requests, []);
+  });
+
   it("returns typed macro blockers through call_template without child mutation requests", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
