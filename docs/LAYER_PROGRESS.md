@@ -1128,7 +1128,9 @@ Dirty-tree reconciliation accepted:
 
 The OpenReaper worktree is clean after these exact-path commits.
 
-Next gate: open Alpha3.2-A Agent Context And Macro Guide without REAPER.
+Alpha3.2-A is accepted at `759c403 product: add compact alpha3.2 macro guide`.
+Next gate: open Alpha3.2-B1 Bridge Liveness as a bounded lower-layer fix
+before B2 managed render root and B3 runtime/doctor live readiness.
 
 ### Alpha3.2-A Bounded Product-Surface Compaction Fix Window
 
@@ -1192,3 +1194,85 @@ Those tests must keep their original snapshot content assertions but obtain the
 detail through existing exact-id mode. The preview must preserve its prior
 startup detail by using one bounded exact-id metadata read; it must not teach a
 new tool or request field. No other scope is reopened.
+
+### Alpha3.2-A Agent Context And Macro Guide Accepted
+
+Status: accepted.
+
+Control-tower acceptance: 2026-07-10.
+
+Accepted implementation commit:
+
+```text
+759c4035dc8e47d24ad8faf27e13820d648aa634
+product: add compact alpha3.2 macro guide
+```
+
+Accepted behavior:
+
+- `ping`, `list_templates`, and `list_recipes` expose
+  `alpha3.2.agent_context_macro_guide.v1` without adding a sixth MCP tool,
+  public `call_recipe`, hidden executor, or raw Lua/action/shell/UI bypass;
+- default product metadata includes complete 13-field manuals for the seven
+  ordered primary macro ids: inspect, query, scoped delete, layout, routing,
+  media placement, and render;
+- those new primary ids plus `macro.project.file` remain
+  `candidate` / `in_review` / `contract_only_non_runnable`, report
+  `live_runnable_now:false`, and return `CALL_TEMPLATE_ID_HELD` rather than
+  executing REAPER; accepted legacy macro dispatch remains unchanged;
+- `macro.project.query` uses the approved twelve-value entity vocabulary, and
+  project path/dirty/save/save-as ids remain exactly `planned_not_accepted`
+  with no accepted mutation route;
+- default `list_templates` is `detail_level:"compact"`; all eleven heavyweight
+  snapshot/live-evidence fields are absent by default and available only through
+  existing exact-id expansion;
+- Layer 1.5 field selection remains authoritative: an exact request with
+  `fields:["id"]` returns only `id` plus `capability_truth` in item rows;
+- the product preview retains startup-health and startup-assistant detail through
+  one bounded existing exact-id metadata read.
+
+Accepted budget evidence:
+
+```text
+default runtime JSON: 80,159 bytes
+default stdio text payload: 80,160 bytes
+accepted ceiling: 98,304 bytes
+remaining margin: 18,144 bytes
+baseline: 56,925 <= 73,728 bytes
+guide: 23,205 bytes
+guide delta: 23,234 <= 24,576 bytes
+primary manuals: 7
+heavyweight fields: default 0; exact-id 11
+```
+
+The exported total ceiling is the single 98,304-byte source of truth. The
+independent final reviewer first found and then verified closure of a split-
+brain 128 KiB test/export constant; focused rereview returned `PASS` with no
+remaining P0-P3 findings.
+
+Control-tower gates passed:
+
+```text
+git diff --check
+npm run check:alpha3-2a
+npm run check:tool-abi
+npm run check:discovery-menu
+npm run check:template-runtime
+npm run check:alpha3-c3
+npm run check:alpha3-c5
+npm run check:alpha3-d1
+npm run check:alpha3-e1
+npm run check:alpha3-block2
+npm run check:alpha3-block3
+npm run check:alpha3-block5
+npm run check:alpha3-block6
+node scripts/preview-alpha2-product-surface.mjs --limit=5
+npm test
+npm run build
+```
+
+No REAPER smoke ran because Alpha3.2-A changes discovery/manual/product metadata
+only and makes no live-readiness or support claim. The next active gate is
+Alpha3.2-B1: add bounded bridge heartbeat/liveness evidence so startup health can
+distinguish an unstarted bridge action from an unresponsive bridge loop before
+B2/B3 package, render-root, doctor, and live-smoke work.
