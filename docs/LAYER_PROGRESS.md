@@ -1112,14 +1112,20 @@ of scope. Live authorization is not support evidence by itself; each run needs a
 fresh evidence root, changed-state report, rendered-file list, recovery posture,
 and control-tower review.
 
-Current unaccepted dirty-tree candidates are split into two independent scopes:
+Dirty-tree reconciliation accepted:
 
-1. C5 MIDI note-insertion exposure through `macro.set_midi_controls`;
-2. Alpha3.1 installer TOML-tree replacement and upgrade/doctor guidance.
+- the broad C5 MIDI note-insertion promotion is deferred because note rows,
+  response budgets, lifecycle/support promotion, exact readback, and action
+  manuals are not yet bounded; the original candidate patch is preserved outside
+  the repo for future scoped work;
+- `c672906 test: scope catalog discovery field scan` fixes an unrelated Layer 4D
+  test false positive without changing runtime behavior;
+- `774efd1 runtime: fix planned midi macro take refs` accepts only the narrow ref
+  name correction and proves the MIDI macro remains draft/planned/blocked and
+  non-executing;
+- `1b3ef5d package: harden alpha installer upgrade config` accepts TOML parent/
+  descendant replacement, upgrade/doctor guidance, fixtures, and package smoke.
 
-They must be reviewed and accepted, deferred, or rejected separately. They must
-not be combined in one commit, and Alpha3.2-A must not begin on top of an
-unclassified mixed dirty tree.
+The OpenReaper worktree is clean after these exact-path commits.
 
-Next gate: complete dirty-tree reconciliation, then open Alpha3.2-A Agent
-Context And Macro Guide without REAPER.
+Next gate: open Alpha3.2-A Agent Context And Macro Guide without REAPER.

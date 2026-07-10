@@ -146,7 +146,9 @@ Current accepted product base:
 - Alpha2 bounded live evidence covers the accepted 213-template fixture matrix;
 - Alpha3 Phase 3 first-product closeout is accepted with evidence-bound claims;
 - Alpha3.1 startup/package stabilization is accepted at
-  `2ded9ff package: stabilize agent-assisted startup`.
+  `2ded9ff package: stabilize agent-assisted startup`;
+- the control-tower reconciliation follow-up is accepted through
+  `1b3ef5d package: harden alpha installer upgrade config`.
 
 As of 2026-07-10, Alpha3.2 Trial Feedback Hardening is the only active product
 implementation phase. Alpha3.1 L6 broader C5 live canaries and L7 stock-plugin
@@ -160,11 +162,14 @@ Authoritative active plan:
 
 Current work order:
 
-1. reconcile and separately accept, defer, or reject the existing dirty-tree
-   candidates;
-2. run Alpha3.2-A Agent Context And Macro Guide without REAPER;
-3. run Alpha3.2-B Startup, Bridge Health, And Render Root;
-4. continue through bounded 3.2-C/D/E/F slices, trial rerun, then manual closeout.
+1. run Alpha3.2-A Agent Context And Macro Guide without REAPER;
+2. run Alpha3.2-B Startup, Bridge Health, And Render Root;
+3. continue through bounded 3.2-C/D/E/F slices, trial rerun, then manual closeout.
+
+The mixed dirty tree is closed: the broad MIDI note-insertion promotion was
+deferred, the narrow planned-MIDI take-ref fix was accepted at `774efd1`, the
+Layer 4D discovery-test scope correction at `c672906`, and the installer
+TOML/upgrade follow-up at `1b3ef5d`.
 
 ## Active Control-Tower Authorization
 
