@@ -116,16 +116,30 @@ describe("Alpha3 Block5 workflow and extension-pack reuse ecosystem", () => {
 
   it("exposes Block5 reuse status through the existing runtime product surface", () => {
     const runtime = createCallTemplateRuntime();
-    const productSurface = runtime.list_templates().product_surface;
+    const menu = runtime.list_templates();
+    const productSurface = menu.product_surface;
 
+    assert.equal(menu.mode, "menu");
+    assert.equal(productSurface.detail_level, "compact");
     assert.deepEqual(
       productSurface.reuse_ecosystem,
       ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
     );
     assert.equal(productSurface.reuse_ecosystem.tool_surface.added_tools, 0);
-    assert.equal(productSurface.reuse_ecosystem_snapshot.contract, ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT);
-    assert.equal(productSurface.reuse_ecosystem_snapshot.status, "ready_for_local_entrypoint_gate");
-    assert.equal(productSurface.reuse_ecosystem_snapshot.safety.public_call_recipe, false);
-    assert.equal(productSurface.reuse_ecosystem_snapshot.safety.hidden_executor, false);
+    assert.equal(Object.hasOwn(productSurface, "reuse_ecosystem_snapshot"), false);
+
+    const expandedMenu = runtime.list_templates({
+      ids: ["template.transport.read_state"],
+      fields: ["id"],
+    });
+    const expandedProductSurface = expandedMenu.product_surface;
+
+    assert.equal(expandedMenu.mode, "ids");
+    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["template.transport.read_state"]);
+    assert.equal(expandedProductSurface.detail_level, "expanded");
+    assert.equal(expandedProductSurface.reuse_ecosystem_snapshot.contract, ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT);
+    assert.equal(expandedProductSurface.reuse_ecosystem_snapshot.status, "ready_for_local_entrypoint_gate");
+    assert.equal(expandedProductSurface.reuse_ecosystem_snapshot.safety.public_call_recipe, false);
+    assert.equal(expandedProductSurface.reuse_ecosystem_snapshot.safety.hidden_executor, false);
   });
 });

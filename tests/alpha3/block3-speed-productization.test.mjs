@@ -79,16 +79,30 @@ describe("Alpha3 Block3 speed and generic controls productization", () => {
 
   it("exposes Block3 speed status through the existing runtime product surface", () => {
     const runtime = createCallTemplateRuntime();
-    const productSurface = runtime.list_templates().product_surface;
+    const menu = runtime.list_templates();
+    const productSurface = menu.product_surface;
 
+    assert.equal(menu.mode, "menu");
+    assert.equal(productSurface.detail_level, "compact");
     assert.deepEqual(
       productSurface.speed_productization,
       ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY,
     );
     assert.equal(productSurface.speed_productization.tool_surface.added_tools, 0);
-    assert.equal(productSurface.speed_productization_snapshot.contract, ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT);
-    assert.equal(productSurface.speed_productization_snapshot.ok, true);
-    assert.equal(productSurface.speed_productization_snapshot.hard_gate.accepted, true);
-    assert.equal(productSurface.speed_productization_snapshot.customer_flow.status, "static_ready_no_live_claim");
+    assert.equal(Object.hasOwn(productSurface, "speed_productization_snapshot"), false);
+
+    const expandedMenu = runtime.list_templates({
+      ids: ["macro.set_track_controls"],
+      fields: ["id"],
+    });
+    const expandedProductSurface = expandedMenu.product_surface;
+
+    assert.equal(expandedMenu.mode, "ids");
+    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["macro.set_track_controls"]);
+    assert.equal(expandedProductSurface.detail_level, "expanded");
+    assert.equal(expandedProductSurface.speed_productization_snapshot.contract, ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT);
+    assert.equal(expandedProductSurface.speed_productization_snapshot.ok, true);
+    assert.equal(expandedProductSurface.speed_productization_snapshot.hard_gate.accepted, true);
+    assert.equal(expandedProductSurface.speed_productization_snapshot.customer_flow.status, "static_ready_no_live_claim");
   });
 });

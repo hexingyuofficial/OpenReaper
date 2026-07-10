@@ -86,6 +86,20 @@ import {
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
+const EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS = [
+  "agent_startup_guidance_snapshot",
+  "speed_productization_snapshot",
+  "reuse_ecosystem_snapshot",
+  "startup_readiness_snapshot",
+  "project_index_user_flow_snapshot",
+  "macro_execution_convenience_snapshot",
+  "stock_plugin_live_evidence",
+  "stock_plugin_product_gate_snapshot",
+  "startup_health_snapshot",
+  "startup_assistant_snapshot",
+  "startup_wrapper_snapshot",
+];
+
 describe("Layer 4D call_template runtime binding", () => {
   it("binds only the accepted Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, and Alpha3 C3 official catalog", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -459,16 +473,13 @@ describe("Layer 4D call_template runtime binding", () => {
       runtimeMenu.product_surface.startup_assistant,
       ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
     );
-    assert.equal(
-      runtimeMenu.product_surface.startup_health_snapshot.contract,
-      ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
+    assert.equal(runtimeMenu.product_surface.detail_level, "compact");
+    assert.equal(runtimeMenu.product_surface.expanded_via, "exact_ids");
+    assert.deepEqual(
+      runtimeMenu.product_surface.expanded_detail_fields,
+      EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS,
     );
-    assert.equal(
-      runtimeMenu.product_surface.startup_assistant_snapshot.contract,
-      ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
-    );
-    assert.equal(runtimeMenu.product_surface.startup_health_snapshot.status, "needs_startup");
-    assert.equal(runtimeMenu.product_surface.startup_assistant_snapshot.status, "prepare_session");
+    assert.deepEqual(expandedProductSurfaceFieldsPresent(runtimeMenu.product_surface), []);
     assert.equal(
       runtimeMenu.product_surface.orchestration_policy.contract,
       ALPHA3_C4_ORCHESTRATION_POLICY_CONTRACT,
@@ -483,28 +494,6 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_assistant.tool_surface.added_tools, 0);
-    assert.equal(
-      runtimeMenu.product_surface.speed_productization_snapshot.contract,
-      ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT,
-    );
-    assert.equal(runtimeMenu.product_surface.speed_productization_snapshot.ok, true);
-    assert.equal(
-      runtimeMenu.product_surface.reuse_ecosystem_snapshot.contract,
-      ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT,
-    );
-    assert.equal(runtimeMenu.product_surface.reuse_ecosystem_snapshot.status, "ready_for_local_entrypoint_gate");
-    assert.equal(
-      runtimeMenu.product_surface.startup_readiness_snapshot.contract,
-      ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT,
-    );
-    assert.equal(runtimeMenu.product_surface.startup_readiness_snapshot.status, "ready_for_startup_gate");
-    assert.equal(
-      runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.contract,
-      ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_CONTRACT,
-    );
-    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.ok, true);
-    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.coverage.ready_starter_flow_count, 10);
-    assert.equal(runtimeMenu.product_surface.stock_plugin_product_gate_snapshot.coverage.broad_live_support, false);
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
@@ -590,6 +579,48 @@ describe("Layer 4D call_template runtime binding", () => {
       ids: ["template.tracks.create_track"],
       fields: ["summary", "inputSchema", "expectedDelta"],
     });
+    assert.equal(exact.product_surface.detail_level, "expanded");
+    assert.equal(exact.product_surface.expanded_via, "exact_ids");
+    assert.deepEqual(
+      exact.product_surface.expanded_detail_fields,
+      EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS,
+    );
+    assert.deepEqual(
+      expandedProductSurfaceFieldsPresent(exact.product_surface),
+      EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS,
+    );
+    assert.equal(
+      exact.product_surface.startup_health_snapshot.contract,
+      ALPHA3_D1_STARTUP_HEALTH_CONTRACT,
+    );
+    assert.equal(
+      exact.product_surface.startup_assistant_snapshot.contract,
+      ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT,
+    );
+    assert.equal(exact.product_surface.startup_health_snapshot.status, "needs_startup");
+    assert.equal(exact.product_surface.startup_assistant_snapshot.status, "prepare_session");
+    assert.equal(
+      exact.product_surface.speed_productization_snapshot.contract,
+      ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT,
+    );
+    assert.equal(exact.product_surface.speed_productization_snapshot.ok, true);
+    assert.equal(
+      exact.product_surface.reuse_ecosystem_snapshot.contract,
+      ALPHA3_BLOCK5_REUSE_ECOSYSTEM_CONTRACT,
+    );
+    assert.equal(exact.product_surface.reuse_ecosystem_snapshot.status, "ready_for_local_entrypoint_gate");
+    assert.equal(
+      exact.product_surface.startup_readiness_snapshot.contract,
+      ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT,
+    );
+    assert.equal(exact.product_surface.startup_readiness_snapshot.status, "ready_for_startup_gate");
+    assert.equal(
+      exact.product_surface.stock_plugin_product_gate_snapshot.contract,
+      ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_CONTRACT,
+    );
+    assert.equal(exact.product_surface.stock_plugin_product_gate_snapshot.ok, true);
+    assert.equal(exact.product_surface.stock_plugin_product_gate_snapshot.coverage.ready_starter_flow_count, 10);
+    assert.equal(exact.product_surface.stock_plugin_product_gate_snapshot.coverage.broad_live_support, false);
     assert.deepEqual(Object.keys(exact.items[0]).sort(), [
       "action_name",
       "beginner_label",
@@ -1947,6 +1978,10 @@ function runE5RouteSmokeExpectingFailure(args, env = {}) {
 
 function sampleArtifactId(index, refIndex) {
   return `art_20260703000000000_${String((index % 999) + 1).padStart(3, "0")}_${String(refIndex).padStart(6, "0")}`;
+}
+
+function expandedProductSurfaceFieldsPresent(surface) {
+  return EXPECTED_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS.filter((field) => Object.hasOwn(surface, field));
 }
 
 function context(overrides = {}) {

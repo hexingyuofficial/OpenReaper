@@ -13,6 +13,10 @@ import { createLiveBridgeExecutorFromEnv } from "./live-bridge-executor-v1.mjs";
 import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
+import {
+  attachAlpha3_2AAgentContextProductMetadata,
+  createAlpha3_2AAgentContextMacroGuide,
+} from "./alpha3-2a-agent-context-macro-guide-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
@@ -62,12 +66,15 @@ async function main() {
       agent_startup_guidance: createOpenReaperAgentStartupGuidance({
         package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
       }),
+      product_surface: {
+        agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide(),
+      },
     }),
   );
 
   server.tool(
     "list_templates",
-    "List OpenReaper executable templates and Alpha3 macros. Use this before call_template.",
+    "List OpenReaper runtime actions plus exact-id Alpha3.2 contract manuals. Check capability truth before call_template.",
     {
       surface: z.enum(["executable", "catalog"]).optional(),
       ids: z.array(z.string()).optional(),
@@ -98,12 +105,14 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
     },
-    async (request) => jsonToolResult(recipeDiscovery.list_recipes(request ?? {})),
+    async (request) => jsonToolResult(attachAlpha3_2AAgentContextProductMetadata(
+      recipeDiscovery.list_recipes(request ?? {}),
+    )),
   );
 
   server.tool(
     "call_template",
-    "Run one OpenReaper template id or Alpha3 macro id. Macros return plans and typed blockers; no hidden recipe executor is exposed.",
+    "Run one accepted runtime-bound template or legacy plan macro. Alpha3.2 contract-only guide ids are rejected; no hidden recipe executor is exposed.",
     {
       id: z.string().optional(),
       name: z.string().optional(),
@@ -169,7 +178,7 @@ function jsonToolResult(value, isError = false) {
     content: [
       {
         type: "text",
-        text: `${JSON.stringify(value, null, 2)}\n`,
+        text: `${JSON.stringify(value)}\n`,
       },
     ],
     isError,

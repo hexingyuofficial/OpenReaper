@@ -99,61 +99,76 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
 
   it("exposes Block2 startup readiness through the existing runtime product surface", () => {
     const runtime = createCallTemplateRuntime();
-    const productSurface = runtime.list_templates().product_surface;
+    const menu = runtime.list_templates();
+    const productSurface = menu.product_surface;
 
+    assert.equal(menu.mode, "menu");
+    assert.equal(productSurface.detail_level, "compact");
     assert.deepEqual(
       productSurface.agent_startup_guidance,
       OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
     );
     assert.equal(productSurface.agent_startup_guidance.tool_surface.added_tools, 0);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.contract, OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT);
-    assert.equal(
-      productSurface.agent_startup_guidance_snapshot.commands.installed_start_reaper_for_mcp,
-      OPENREAPER_INSTALLED_START_COMMAND,
-    );
-    assert.equal(
-      productSurface.agent_startup_guidance_snapshot.commands.installed_start_project_for_mcp,
-      OPENREAPER_INSTALLED_PROJECT_START_COMMAND,
-    );
-    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, false);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, true);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.bridge_action_required_after_start, true);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.requirements.live_probe_required_before_success_claim, true);
-    assert.equal(
-      productSurface.agent_startup_guidance_snapshot.bridge_action.installed_action_name,
-      "OpenReaper: Start MCP bridge",
-    );
-    assert.equal(productSurface.agent_startup_guidance_snapshot.bridge_action.agent_should_try_to_run_action, true);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.bridge_action.sws_required, false);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.bridge_action.command_line_reascript_bridge, false);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.bridge_action.verification_probe, "call_template(template.transport.read_state)");
-    assert.deepEqual(
-      productSurface.agent_startup_guidance_snapshot.startup_dialog_assist.auto_dismisses,
-      ["project_settings_notes_show_notes_on_project_load"],
-    );
-    assert.deepEqual(
-      productSurface.agent_startup_guidance_snapshot.startup_dialog_assist.does_not_dismiss,
-      ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
-    );
-    assert.equal(productSurface.agent_startup_guidance_snapshot.startup_lifetime.starts_reaper_with_openreaper_env, true);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.startup_lifetime.waits_for_reaper_process, true);
-    assert.equal(
-      productSurface.agent_startup_guidance_snapshot.startup_lifetime.configurable_wait_env,
-      "OPENREAPER_START_WAIT_SECONDS",
-    );
-    assert.equal(productSurface.agent_startup_guidance_snapshot.safety.added_tools, 0);
-    assert.equal(productSurface.agent_startup_guidance_snapshot.safety.opens_reaper_from_mcp_tool, false);
     assert.deepEqual(
       productSurface.startup_readiness,
       ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
     );
     assert.equal(productSurface.startup_readiness.tool_surface.added_tools, 0);
-    assert.equal(productSurface.startup_readiness_snapshot.contract, ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT);
-    assert.equal(productSurface.startup_readiness_snapshot.status, "ready_for_startup_gate");
-    assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_live_accepted, true);
-    assert.equal(productSurface.startup_readiness_snapshot.truth_boundary.one_click_scope, "local_macos_with_startup_dialog_caveat");
-    assert.equal(productSurface.startup_readiness_snapshot.safety.opens_reaper, false);
-    assert.equal(productSurface.startup_readiness_snapshot.safety.live_reaper_called, false);
+    assert.equal(Object.hasOwn(productSurface, "agent_startup_guidance_snapshot"), false);
+    assert.equal(Object.hasOwn(productSurface, "startup_readiness_snapshot"), false);
+
+    const expandedMenu = runtime.list_templates({
+      ids: ["template.transport.read_state"],
+      fields: ["id"],
+    });
+    const expandedProductSurface = expandedMenu.product_surface;
+
+    assert.equal(expandedMenu.mode, "ids");
+    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["template.transport.read_state"]);
+    assert.equal(expandedProductSurface.detail_level, "expanded");
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.contract, OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT);
+    assert.equal(
+      expandedProductSurface.agent_startup_guidance_snapshot.commands.installed_start_reaper_for_mcp,
+      OPENREAPER_INSTALLED_START_COMMAND,
+    );
+    assert.equal(
+      expandedProductSurface.agent_startup_guidance_snapshot.commands.installed_start_project_for_mcp,
+      OPENREAPER_INSTALLED_PROJECT_START_COMMAND,
+    );
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, false);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.bridge_action_required_after_start, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.live_probe_required_before_success_claim, true);
+    assert.equal(
+      expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.installed_action_name,
+      "OpenReaper: Start MCP bridge",
+    );
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.agent_should_try_to_run_action, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.sws_required, false);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.command_line_reascript_bridge, false);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.verification_probe, "call_template(template.transport.read_state)");
+    assert.deepEqual(
+      expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.auto_dismisses,
+      ["project_settings_notes_show_notes_on_project_load"],
+    );
+    assert.deepEqual(
+      expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.does_not_dismiss,
+      ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
+    );
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.starts_reaper_with_openreaper_env, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.waits_for_reaper_process, true);
+    assert.equal(
+      expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.configurable_wait_env,
+      "OPENREAPER_START_WAIT_SECONDS",
+    );
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.safety.added_tools, 0);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.safety.opens_reaper_from_mcp_tool, false);
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.contract, ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT);
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.status, "ready_for_startup_gate");
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.truth_boundary.one_click_live_accepted, true);
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.truth_boundary.one_click_scope, "local_macos_with_startup_dialog_caveat");
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.safety.opens_reaper, false);
+    assert.equal(expandedProductSurface.startup_readiness_snapshot.safety.live_reaper_called, false);
   });
 
   it("formats package-specific agent startup commands without expanding the MCP tool surface", () => {

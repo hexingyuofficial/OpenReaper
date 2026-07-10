@@ -1393,19 +1393,23 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
     );
     assert.equal(menu.product_surface.project_index_queries.tool_surface.added_tools, 0);
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "project_index_user_flow_snapshot"), false);
+    assert.equal(exact.product_surface.detail_level, "expanded");
+    assert.equal(exact.product_surface.expanded_via, "exact_ids");
     assert.equal(
-      menu.product_surface.project_index_user_flow_snapshot.contract,
+      exact.product_surface.project_index_user_flow_snapshot.contract,
       ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
     );
-    assert.deepEqual(menu.product_surface.project_index_user_flow_snapshot.primary_macro_ids, [
+    assert.deepEqual(exact.product_surface.project_index_user_flow_snapshot.primary_macro_ids, [
       "macro.index_status",
       "macro.query_tracks",
     ]);
-    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.added_tools, 0);
-    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.hidden_executor, false);
-    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.public_call_recipe, false);
-    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed, false);
-    assert.equal(menu.product_surface.project_index_user_flow_snapshot.safety.sqlite_authorizes_writes, false);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.added_tools, 0);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.hidden_executor, false);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.public_call_recipe, false);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed, false);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.sqlite_authorizes_writes, false);
     assert.equal(exact.items[0].id, "macro.query_tracks");
     assert.equal(exact.items[0].capability_truth.kind, "official_macro");
     assert.equal(exact.items[0].current_status, "available_now");

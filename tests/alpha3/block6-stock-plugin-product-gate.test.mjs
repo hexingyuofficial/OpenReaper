@@ -108,21 +108,36 @@ describe("Alpha3 Block6 stock plugin product gate", () => {
 
   it("exposes Block6 stock plugin status through the existing runtime product surface", () => {
     const runtime = createCallTemplateRuntime();
-    const productSurface = runtime.list_templates().product_surface;
+    const menu = runtime.list_templates();
+    const productSurface = menu.product_surface;
 
+    assert.equal(menu.mode, "menu");
+    assert.equal(productSurface.detail_level, "compact");
     assert.deepEqual(
       productSurface.stock_plugin_product_gate,
       ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
     );
     assert.equal(productSurface.stock_plugin_product_gate.tool_surface.added_tools, 0);
+    assert.equal(Object.hasOwn(productSurface, "stock_plugin_live_evidence"), false);
+    assert.equal(Object.hasOwn(productSurface, "stock_plugin_product_gate_snapshot"), false);
+
+    const expandedMenu = runtime.list_templates({
+      ids: ["template.fx.read_fx_parameter"],
+      fields: ["id"],
+    });
+    const expandedProductSurface = expandedMenu.product_surface;
+
+    assert.equal(expandedMenu.mode, "ids");
+    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["template.fx.read_fx_parameter"]);
+    assert.equal(expandedProductSurface.detail_level, "expanded");
     assert.equal(
-      productSurface.stock_plugin_product_gate_snapshot.contract,
+      expandedProductSurface.stock_plugin_product_gate_snapshot.contract,
       ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_CONTRACT,
     );
-    assert.equal(productSurface.stock_plugin_product_gate_snapshot.ok, true);
-    assert.equal(productSurface.stock_plugin_product_gate_snapshot.hard_gate.accepted, true);
-    assert.equal(productSurface.stock_plugin_product_gate_snapshot.coverage.ready_starter_flow_count, 10);
-    assert.equal(productSurface.stock_plugin_product_gate_snapshot.coverage.broad_live_support, false);
-    assert.equal(productSurface.stock_plugin_product_gate_snapshot.customer_flow.status, "static_ready_no_broad_live_claim");
+    assert.equal(expandedProductSurface.stock_plugin_product_gate_snapshot.ok, true);
+    assert.equal(expandedProductSurface.stock_plugin_product_gate_snapshot.hard_gate.accepted, true);
+    assert.equal(expandedProductSurface.stock_plugin_product_gate_snapshot.coverage.ready_starter_flow_count, 10);
+    assert.equal(expandedProductSurface.stock_plugin_product_gate_snapshot.coverage.broad_live_support, false);
+    assert.equal(expandedProductSurface.stock_plugin_product_gate_snapshot.customer_flow.status, "static_ready_no_broad_live_claim");
   });
 });

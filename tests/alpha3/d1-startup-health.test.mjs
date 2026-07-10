@@ -252,13 +252,17 @@ describe("Alpha3 D1 startup and connection health", () => {
       },
     });
     const menu = runtime.list_templates({ limit: 5 });
+    const expanded = runtime.list_templates({ ids: ["macro.index_status"], fields: ["id"] }).product_surface;
 
     assert.deepEqual(menu.product_surface.startup_health, ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY);
     assert.equal(menu.product_surface.startup_health.tool_surface.added_tools, 0);
-    assert.equal(menu.product_surface.startup_health_snapshot.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
-    assert.equal(menu.product_surface.startup_health_snapshot.status, "needs_reconnect");
-    assert.equal(menu.product_surface.startup_health_snapshot.safety.spawned_reaper, false);
-    assert.equal(menu.product_surface.startup_health_snapshot.safety.live_reaper_called, false);
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "startup_health_snapshot"), false);
+    assert.equal(expanded.detail_level, "expanded");
+    assert.equal(expanded.startup_health_snapshot.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);
+    assert.equal(expanded.startup_health_snapshot.status, "needs_reconnect");
+    assert.equal(expanded.startup_health_snapshot.safety.spawned_reaper, false);
+    assert.equal(expanded.startup_health_snapshot.safety.live_reaper_called, false);
   });
 
   it("plans a beginner startup assistant package without starting REAPER", () => {
@@ -620,21 +624,25 @@ describe("Alpha3 D1 startup and connection health", () => {
       },
     });
     const menu = runtime.list_templates({ limit: 5 });
+    const expanded = runtime.list_templates({ ids: ["macro.index_status"], fields: ["id"] }).product_surface;
 
     assert.deepEqual(menu.product_surface.startup_assistant, ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY);
     assert.equal(menu.product_surface.startup_assistant.tool_surface.added_tools, 0);
-    assert.equal(menu.product_surface.startup_assistant_snapshot.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
-    assert.equal(menu.product_surface.startup_assistant_snapshot.status, "reconnect_existing");
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "startup_assistant_snapshot"), false);
+    assert.equal(expanded.detail_level, "expanded");
+    assert.equal(expanded.startup_assistant_snapshot.contract, ALPHA3_D1_STARTUP_ASSISTANT_CONTRACT);
+    assert.equal(expanded.startup_assistant_snapshot.status, "reconnect_existing");
     assert.equal(
-      menu.product_surface.startup_assistant_snapshot.mcp_connection_requirement.user_reminder,
+      expanded.startup_assistant_snapshot.mcp_connection_requirement.user_reminder,
       ALPHA3_D1_MCP_STARTUP_REQUIREMENT,
     );
     assert.equal(
-      menu.product_surface.startup_assistant_snapshot.session_card.env_file_path,
+      expanded.startup_assistant_snapshot.session_card.env_file_path,
       "/tmp/openreaper-alpha3-session/reports/openreaper-session.env",
     );
-    assert.equal(menu.product_surface.startup_assistant_snapshot.safety.opens_reaper, false);
-    assert.equal(menu.product_surface.startup_assistant_snapshot.safety.live_reaper_called, false);
+    assert.equal(expanded.startup_assistant_snapshot.safety.opens_reaper, false);
+    assert.equal(expanded.startup_assistant_snapshot.safety.live_reaper_called, false);
   });
 
   it("exposes D1 startup wrapper guidance through the existing list_templates product surface", () => {
@@ -646,19 +654,23 @@ describe("Alpha3 D1 startup and connection health", () => {
       },
     });
     const menu = runtime.list_templates({ limit: 5 });
+    const expanded = runtime.list_templates({ ids: ["macro.index_status"], fields: ["id"] }).product_surface;
 
     assert.deepEqual(menu.product_surface.startup_wrapper, ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY);
     assert.equal(menu.product_surface.startup_wrapper.tool_surface.added_tools, 0);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.ok, true);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.customer_ready, false);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.one_click_live_accepted, true);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.status, "reconnect_existing");
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.evidence_status, "live_evidence_accepted");
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.agent_user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.one_command_helper, "npm run start:openreaper -- --install-startup-hook --launch");
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.safety.opens_reaper_now, false);
-    assert.equal(menu.product_surface.startup_wrapper_snapshot.safety.spawns_process_now, false);
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "startup_wrapper_snapshot"), false);
+    assert.equal(expanded.detail_level, "expanded");
+    assert.equal(expanded.startup_wrapper_snapshot.contract, ALPHA3_D1_STARTUP_WRAPPER_CONTRACT);
+    assert.equal(expanded.startup_wrapper_snapshot.ok, true);
+    assert.equal(expanded.startup_wrapper_snapshot.customer_ready, false);
+    assert.equal(expanded.startup_wrapper_snapshot.one_click_live_accepted, true);
+    assert.equal(expanded.startup_wrapper_snapshot.status, "reconnect_existing");
+    assert.equal(expanded.startup_wrapper_snapshot.evidence_status, "live_evidence_accepted");
+    assert.equal(expanded.startup_wrapper_snapshot.agent_user_reminder, ALPHA3_D1_MCP_STARTUP_REQUIREMENT);
+    assert.equal(expanded.startup_wrapper_snapshot.one_command_helper, "npm run start:openreaper -- --install-startup-hook --launch");
+    assert.equal(expanded.startup_wrapper_snapshot.safety.opens_reaper_now, false);
+    assert.equal(expanded.startup_wrapper_snapshot.safety.spawns_process_now, false);
   });
 });
 

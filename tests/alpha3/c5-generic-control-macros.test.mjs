@@ -219,9 +219,10 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     });
   });
 
-  it("exposes the C5 schema summary through the existing list_templates product surface", () => {
+  it("exposes the compact C5 summary and exact-id convenience detail through list_templates", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates();
+    const exact = runtime.list_templates({ ids: ["macro.set_track_controls"], fields: ["id"] });
 
     assert.equal(menu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.deepEqual(
@@ -233,15 +234,19 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       menu.product_surface.macro_execution_convenience,
       ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
     );
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "macro_execution_convenience_snapshot"), false);
+    assert.equal(exact.product_surface.detail_level, "expanded");
+    assert.equal(exact.product_surface.expanded_via, "exact_ids");
     assert.equal(
-      menu.product_surface.macro_execution_convenience_snapshot.contract,
+      exact.product_surface.macro_execution_convenience_snapshot.contract,
       ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
     );
-    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.added_tools, 0);
-    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children, false);
-    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor, false);
-    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.public_call_recipe, false);
-    assert.equal(menu.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback, true);
+    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.added_tools, 0);
+    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children, false);
+    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor, false);
+    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.public_call_recipe, false);
+    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback, true);
     assert.deepEqual(
       menu.product_surface.generic_control_macros.macro_ids.slice(0, 5),
       [

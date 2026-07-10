@@ -16,6 +16,11 @@ const runtime = createCallTemplateRuntime({
   },
 });
 const menu = runtime.list_templates({ surface: "executable", limit });
+const expandedMetadata = runtime.list_templates({
+  surface: "executable",
+  ids: ["template.transport.read_state"],
+  fields: ["id"],
+});
 
 console.log(JSON.stringify({
   contract: menu.product_surface.contract,
@@ -31,8 +36,8 @@ console.log(JSON.stringify({
     id: entry.id,
     check: entry.check,
   })),
-  startup_health: menu.product_surface.startup_health_snapshot,
-  startup_assistant: menu.product_surface.startup_assistant_snapshot,
+  startup_health: expandedMetadata.product_surface.startup_health_snapshot,
+  startup_assistant: expandedMetadata.product_surface.startup_assistant_snapshot,
   counts: {
     by_status: countBy(menu.items, "current_status"),
     by_label: countBy(menu.items, "beginner_label"),

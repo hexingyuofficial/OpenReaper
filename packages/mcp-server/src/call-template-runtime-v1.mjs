@@ -91,10 +91,32 @@ import {
   OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
+import {
+  ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+  ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+  alpha3_2AContractOnlyBlockerForId,
+  createAlpha3_2AAgentContextMacroGuide,
+  createAlpha3_2AContractMacroDiscoveryItems,
+  isAlpha3_2AContractOnlyMacroId,
+} from "./alpha3-2a-agent-context-macro-guide-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
 export const CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT = "alpha2.product_action_surface.v1";
+
+const CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS = deepFreeze([
+  "agent_startup_guidance_snapshot",
+  "speed_productization_snapshot",
+  "reuse_ecosystem_snapshot",
+  "startup_readiness_snapshot",
+  "project_index_user_flow_snapshot",
+  "macro_execution_convenience_snapshot",
+  "stock_plugin_live_evidence",
+  "stock_plugin_product_gate_snapshot",
+  "startup_health_snapshot",
+  "startup_assistant_snapshot",
+  "startup_wrapper_snapshot",
+]);
 
 export const CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS = deepFreeze([
   "template_id",
@@ -754,6 +776,7 @@ export function createCallTemplateRuntime(options = {}) {
   const projectIndex = options.projectIndex ?? null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
   const executableDiscoveryTemplates = [
+    ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog }),
     ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
     ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
@@ -765,6 +788,24 @@ export function createCallTemplateRuntime(options = {}) {
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (isAlpha3_2AContractOnlyMacroId(id)) {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_HELD",
+          "This Alpha3.2 macro id is a contract/manual discovery entry and is not runtime-callable before its bounded implementation slice is accepted.",
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              implementation_status: "contract_only_non_runnable",
+              blocker: alpha3_2AContractOnlyBlockerForId(id),
+              guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+              guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+              recovery: "Expand this exact id through list_templates for its action_manual, then use only currently accepted atomic templates or compatibility macros.",
+            },
+          },
+        );
+      }
       if (isAlpha3C3OfficialQueryMacroId(id)) {
         const plan = planAlpha3C3ProjectIndexQueryMacro(id, {
           ...normalized.input,
@@ -1223,6 +1264,7 @@ function runtimeTemplateDiscoveryFacade({ catalogTemplates, executableTemplates,
         normalized.surface,
         templatesById,
         productSurface,
+        normalized.request,
       );
     },
   });
@@ -1268,11 +1310,17 @@ function runtimeDiscoveryRequestHasIds(request) {
   return typeof request.ids === "string" && request.ids.trim() !== "";
 }
 
-function runtimeActionDiscoveryResponse(response, surface, templatesById, productSurface = {}) {
+function runtimeActionDiscoveryResponse(response, surface, templatesById, productSurface = {}, request = {}) {
+  const attachActionMetadata = runtimeShouldAttachActionMetadata(request);
   return deepFreeze({
     ...response,
-    product_surface: runtimeProductSurfaceMetadata(surface, productSurface),
+    product_surface: runtimeProductSurfaceMetadata(surface, productSurface, {
+      detail_level: response.mode === "ids" ? "expanded" : "compact",
+      requested_ids: response.mode === "ids" ? response.applied.ids : [],
+      missing_ids: response.missing_ids,
+    }),
     items: response.items.map((item) => {
+      if (!attachActionMetadata) return item;
       const descriptor = templatesById.get(item.id) ?? item;
       return {
         ...item,
@@ -1286,12 +1334,25 @@ function runtimeActionDiscoveryResponse(response, surface, templatesById, produc
   });
 }
 
-function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
+function runtimeShouldAttachActionMetadata(request) {
+  if (!isPlainObject(request) || !Array.isArray(request.fields)) return true;
+  return !(request.fields.length === 1 && request.fields[0] === "id");
+}
+
+function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideRequest = {}) {
+  const expanded = guideRequest.detail_level === "expanded";
   return {
     contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
     surface,
+    detail_level: expanded ? "expanded" : "compact",
+    expanded_via: "exact_ids",
+    expanded_detail_fields: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS,
     agent_startup_guidance: OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
-    agent_startup_guidance_snapshot: createOpenReaperAgentStartupGuidance(),
+    ...(expanded ? { agent_startup_guidance_snapshot: createOpenReaperAgentStartupGuidance() } : {}),
+    agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide({
+      requested_ids: guideRequest.requested_ids,
+      missing_ids: guideRequest.missing_ids,
+    }),
     item_schema: {
       fields: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
       status_values: CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,
@@ -1303,39 +1364,47 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}) {
     blocker_guidance: CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE,
     orchestration_policy: ALPHA3_C4_ORCHESTRATION_POLICY_DISCOVERY_SUMMARY,
     speed_productization: ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY,
-    speed_productization_snapshot: summarizeAlpha3Block3SpeedProductization(),
+    ...(expanded ? { speed_productization_snapshot: summarizeAlpha3Block3SpeedProductization() } : {}),
     reuse_ecosystem: ALPHA3_BLOCK5_REUSE_ECOSYSTEM_DISCOVERY_SUMMARY,
-    reuse_ecosystem_snapshot: summarizeAlpha3Block5ReuseEcosystem(),
+    ...(expanded ? { reuse_ecosystem_snapshot: summarizeAlpha3Block5ReuseEcosystem() } : {}),
     startup_readiness: ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
-    startup_readiness_snapshot: summarizeAlpha3Block2StartupReadiness({
-      health: { runtime: productSurface.live_gate },
-      assistant: { runtime: productSurface.live_gate },
-      wrapper: { runtime: productSurface.live_gate },
-    }),
+    ...(expanded ? {
+      startup_readiness_snapshot: summarizeAlpha3Block2StartupReadiness({
+        health: { runtime: productSurface.live_gate },
+        assistant: { runtime: productSurface.live_gate },
+        wrapper: { runtime: productSurface.live_gate },
+      }),
+    } : {}),
     project_index_queries: ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
     project_index_user_flow: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
-    project_index_user_flow_snapshot: summarizeAlpha3L3ProjectIndexUserFlow(),
+    ...(expanded ? { project_index_user_flow_snapshot: summarizeAlpha3L3ProjectIndexUserFlow() } : {}),
     generic_control_macros: ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
     macro_execution_convenience: ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
-    macro_execution_convenience_snapshot: summarizeAlpha3L4MacroExecutionConvenience(),
+    ...(expanded ? { macro_execution_convenience_snapshot: summarizeAlpha3L4MacroExecutionConvenience() } : {}),
     stock_plugin_fluency: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
-    stock_plugin_live_evidence: summarizeAlpha3E1StockPluginLiveEvidenceMatrix(),
+    ...(expanded ? { stock_plugin_live_evidence: summarizeAlpha3E1StockPluginLiveEvidenceMatrix() } : {}),
     stock_plugin_product_gate: ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY,
-    stock_plugin_product_gate_snapshot: summarizeAlpha3Block6StockPluginProductGate(),
+    ...(expanded ? { stock_plugin_product_gate_snapshot: summarizeAlpha3Block6StockPluginProductGate() } : {}),
     startup_health: ALPHA3_D1_STARTUP_HEALTH_DISCOVERY_SUMMARY,
-    startup_health_snapshot: summarizeAlpha3D1StartupHealth({
-      runtime: productSurface.live_gate,
-    }),
+    ...(expanded ? {
+      startup_health_snapshot: summarizeAlpha3D1StartupHealth({
+        runtime: productSurface.live_gate,
+      }),
+    } : {}),
     startup_assistant: ALPHA3_D1_STARTUP_ASSISTANT_DISCOVERY_SUMMARY,
-    startup_assistant_snapshot: summarizeAlpha3D1StartupAssistant({
-      runtime: productSurface.live_gate,
-    }, {
-      include_openreaper_script_path: surface === "executable",
-    }),
+    ...(expanded ? {
+      startup_assistant_snapshot: summarizeAlpha3D1StartupAssistant({
+        runtime: productSurface.live_gate,
+      }, {
+        include_openreaper_script_path: surface === "executable",
+      }),
+    } : {}),
     startup_wrapper: ALPHA3_D1_STARTUP_WRAPPER_DISCOVERY_SUMMARY,
-    startup_wrapper_snapshot: summarizeAlpha3D1StartupWrapper({
-      runtime: productSurface.live_gate,
-    }),
+    ...(expanded ? {
+      startup_wrapper_snapshot: summarizeAlpha3D1StartupWrapper({
+        runtime: productSurface.live_gate,
+      }),
+    } : {}),
   };
 }
 
@@ -1433,7 +1502,16 @@ function runtimeActionIsPlanOnlyMacro(item) {
     && item.execution_shape !== "live_reaper_write";
 }
 
+function runtimeActionIsContractOnlyGuideMacro(item) {
+  return item.action_kind === "macro"
+    && item.execution_shape === "contract_only_non_runnable"
+    && item.guide_contract === ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT;
+}
+
 function runtimeActionUserMessage(item, currentStatus) {
+  if (runtimeActionIsContractOnlyGuideMacro(item)) {
+    return "Contract/manual discovery entry only. It is not executable or live-runnable until its named Alpha3.2 implementation slice is accepted.";
+  }
   if (item.action_kind === "macro" && currentStatus === "available_now") {
     return "Ready to return a plan-only macro bundle through call_template; child actions still run as accepted template calls.";
   }
@@ -1482,6 +1560,9 @@ function runtimeUserActionCategory(item) {
 }
 
 function runtimeNextStep(item, currentStatus) {
+  if (runtimeActionIsContractOnlyGuideMacro(item)) {
+    return "Use list_templates exact-id expansion to read action_manual; do not call_template this id before the later bounded implementation is accepted.";
+  }
   if (item.action_kind === "macro" && currentStatus === "available_now") {
     return "Call this macro id through call_template to get child call_template requests, typed blockers, and readback requirements.";
   }
@@ -1504,6 +1585,9 @@ function runtimeNextStep(item, currentStatus) {
 }
 
 function runtimeSafetyNote(item) {
+  if (runtimeActionIsContractOnlyGuideMacro(item)) {
+    return "Discovery contract only: no call_template execution, REAPER mutation, live claim, raw action/Lua/shell/UI path, or hidden executor.";
+  }
   if (item.action_kind === "macro") {
     return "Macro planner only: no direct REAPER mutation, no alias execution, and no hidden executor.";
   }

@@ -513,20 +513,28 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(missingFreshness.blockers[0].code, "PARAMETER_METADATA_NOT_FRESH");
   });
 
-  it("exposes stock plugin fluency through the existing runtime product surface", () => {
+  it("exposes compact stock plugin fluency and exact-id live evidence", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates({ query: "stock plugin controls", limit: 10 });
+    const expanded = runtime.list_templates({
+      ids: [ALPHA3_E1_STOCK_PLUGIN_MACRO_ID],
+      fields: ["id"],
+    }).product_surface;
 
     assert.deepEqual(
-      runtime.list_templates().product_surface.stock_plugin_fluency,
+      menu.product_surface.stock_plugin_fluency,
       ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
     );
+    assert.equal(menu.product_surface.detail_level, "compact");
+    assert.equal(Object.hasOwn(menu.product_surface, "stock_plugin_live_evidence"), false);
+    assert.equal(expanded.detail_level, "expanded");
+    assert.equal(expanded.expanded_via, "exact_ids");
     assert.equal(
-      runtime.list_templates().product_surface.stock_plugin_live_evidence.contract,
+      expanded.stock_plugin_live_evidence.contract,
       ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
     );
-    assert.equal(runtime.list_templates().product_surface.stock_plugin_live_evidence.broad_live_support, false);
-    assert.deepEqual(runtime.list_templates().product_surface.stock_plugin_live_evidence.accepted_live_plugin_ids, ["reacomp"]);
+    assert.equal(expanded.stock_plugin_live_evidence.broad_live_support, false);
+    assert.deepEqual(expanded.stock_plugin_live_evidence.accepted_live_plugin_ids, ["reacomp"]);
     assert.equal(menu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     const entry = menu.items.find((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
     assert.equal(entry.action_kind, "macro");
