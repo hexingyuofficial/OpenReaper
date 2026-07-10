@@ -1066,7 +1066,7 @@ proper gate evidence and control-tower acceptance.
 
 Status: Alpha3.2 active; Alpha3.1 L6/L7 evidence queues deferred.
 
-Control-tower checkpoint: 2026-07-10.
+Control-tower checkpoint: 2026-07-11.
 
 Accepted post-V1 base:
 
@@ -1129,8 +1129,12 @@ Dirty-tree reconciliation accepted:
 The OpenReaper worktree is clean after these exact-path commits.
 
 Alpha3.2-A is accepted at `759c403 product: add compact alpha3.2 macro guide`.
-Next gate: open Alpha3.2-B1 Bridge Liveness as a bounded lower-layer fix
-before B2 managed render root and B3 runtime/doctor live readiness.
+Alpha3.2-B1 is accepted at `434edf1 runtime: add bounded bridge liveness`.
+Alpha3.2-B2 is accepted at `bb1b469 package: add managed render root`.
+Next gate: Alpha3.2-B3 integrates the accepted B1 liveness probe and B2 managed
+render root into bounded startup/doctor readiness, then runs the authorized live
+REAPER smoke against `/Users/Zhuanz/Untitled/Untitled.RPP` with a fresh evidence
+root.
 
 ### Alpha3.2-A Bounded Product-Surface Compaction Fix Window
 
@@ -1599,3 +1603,116 @@ npm run build
 The worker must also build the alpha package into a fresh `/tmp` output root
 with package smoke enabled and without launching REAPER. Independent review is
 required before B2 acceptance.
+
+### Alpha3.2-B2 Managed Render Root Accepted
+
+Status: accepted at package/static/fake-process evidence level.
+
+Control-tower acceptance: 2026-07-11.
+
+Accepted implementation commit:
+
+```text
+bb1b469a2ef4e0fea20ce2fa370fe845843dc46b
+package: add managed render root
+```
+
+Accepted product contract:
+
+```text
+default root: <install-root>/session/renders
+installed default: ~/.openreaper/current/session/renders
+environment: OPENREAPER_LIVE_SMOKE_RENDER_ROOT
+persisted selection: <install-root>/session/managed-render-root.path
+```
+
+Installer, installed MCP, direct startup, and macOS LaunchServices startup now
+select, validate, prepare, persist, and propagate the same managed render root.
+The accepted precedence is the B2 implementation-window contract: explicit
+`--render-root` wins; reinstall reuses a valid prior persisted selection;
+normal installed startup and MCP fall back to the installed default; and an
+explicit `--session-root` without a render override derives its own `renders`
+child.
+
+Accepted safety and lifecycle properties:
+
+- root text and persisted records are bounded, absolute, single-line valid UTF-8
+  and reject file URIs, C0/DEL controls, filesystem root, user home, unsafe
+  final symlinks/types, reserved install/session/effective transport/artifact
+  overlap, and failed exclusive write probes;
+- canonical overlap checks preserve `/tmp` versus `/private/tmp` usability while
+  rejecting aliases of reserved roots;
+- validation happens before destructive install replacement, custom directory
+  permissions are not recursively changed, and missing option values fail with
+  exit code 2;
+- default-root outputs survive reinstall/upgrade; external custom roots are not
+  deleted; non-empty default outputs are atomically preserved outside the
+  install tree before uninstall and their recovery path is reported;
+- LaunchServices propagation uses one stable installed-scope cooperative lock,
+  bounded owner metadata and recovery snapshot, exact presence/value restore,
+  signal/exit cleanup, and fail-closed retained recovery evidence when safe
+  restore or ownership validation cannot complete;
+- package and test fakes use bounded PID/launch/exit markers, active cleanup
+  registries, owned POSIX process-group cleanup for timeout descendants, and
+  TERM-to-KILL escalation before fixture roots are removed;
+- installer/start output may report the selected root but does not claim doctor,
+  bridge, codec, render, or live-product readiness.
+
+Independent review found three P1 process-cleanup gaps: mutation-marker timeout
+could orphan descendants, delayed fake PID creation could race fixture removal,
+and package exit-marker timeout could bypass termination. After those fixes,
+focused rereview found one final P1 duplicate `ENOENT` rejection channel. The
+formal regressions now cover all four paths, and final independent rereview
+returned `FINAL PASS` with P0-P3 all zero.
+
+Control-tower gates passed on the accepted tree:
+
+```text
+git diff --check
+node --check scripts/openreaper-alpha-package/install-openreaper.mjs
+node --check scripts/openreaper-alpha-package/uninstall-openreaper.mjs
+node --check scripts/package-openreaper-alpha.mjs
+node --check tests/alpha3/alpha3-2b-managed-render-root.test.mjs
+zsh -n scripts/openreaper-alpha-package/openreaper-start.sh
+zsh -n scripts/openreaper-alpha-package/openreaper-mcp.sh
+node --test --test-name-pattern='<five cleanup/readiness regressions>' \
+  tests/alpha3/alpha3-2b-managed-render-root.test.mjs  # 5/5
+node --test tests/alpha3/alpha3-2b-managed-render-root.test.mjs  # 37/37
+npm run check:alpha3-2b
+npm run check:template-runtime
+npm run check:alpha3-d1
+npm run check:alpha3-block2
+npm test
+npm run build  # isolated pass 1, B2 37/37
+npm run build  # isolated pass 2, B2 37/37
+```
+
+Final control-tower evidence:
+
+```text
+/tmp/openreaper-alpha32b2-ct-acceptance-ptq9MW
+```
+
+Fresh package smoke ran with smoke enabled and without `--skip-smoke`:
+
+```text
+/tmp/openreaper-alpha32b2-accepted-package-pYH520/OpenReaper-alpha
+```
+
+The smoke passed installer upgrade/preservation, MCP/start propagation,
+LaunchServices lock/restore, package portability over 252 text files, OpenReaper
+MCP, and Vital Agent MCP. It reported `fake_process_reaped:true`; the deliberate
+missing-exit-marker fixture preserved the original timeout while proving TERM,
+KILL, process reap, and post-exit marker cleanup. Immediate and delayed process
+audits after directed tests, both full builds, and package smoke were empty.
+
+No real REAPER process or render ran. B2 proves deterministic managed-root
+selection, preservation, propagation, package behavior, and fake-process
+cleanup on the reviewed local macOS/POSIX paths. It does not prove live bridge,
+doctor readiness, codec support, or render success.
+
+Next gate: Alpha3.2-B3 Runtime / Doctor Live Readiness. B3 may consume the
+accepted B1 liveness probe and B2 root into startup health and doctor output,
+then must use a fresh evidence root and the authorized
+`/Users/Zhuanz/Untitled/Untitled.RPP` fixture before any live-readiness claim is
+accepted.
