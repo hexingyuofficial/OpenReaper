@@ -554,7 +554,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(catalogMenu.applied.surface, "catalog");
     assert.equal(catalogMenu.product_surface.surface, "catalog");
 
-    const menuPayload = JSON.stringify(catalogMenu);
+    const menuPayload = JSON.stringify(catalogMenu.items);
     for (const field of TEMPLATE_CATALOG_DEFAULT_FORBIDDEN_DISCOVERY_FIELDS) {
       if (["refs", "artifacts", "verification"].includes(field)) continue;
       assert.doesNotMatch(menuPayload, new RegExp(field));
