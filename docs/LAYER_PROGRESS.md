@@ -1129,3 +1129,47 @@ Dirty-tree reconciliation accepted:
 The OpenReaper worktree is clean after these exact-path commits.
 
 Next gate: open Alpha3.2-A Agent Context And Macro Guide without REAPER.
+
+### Alpha3.2-A Bounded Product-Surface Compaction Fix Window
+
+Status: reopened_for_fix; Alpha3.2-A acceptance paused.
+
+Control-tower decision: 2026-07-10.
+
+The first Alpha3.2-A candidate passed its implementation tests but independent
+review found a concrete acceptance blocker: after adding the required seven
+primary action-manual cards, default `list_templates` measured 129,970 bytes,
+with only 1,102 bytes of margin under a self-imposed 128 KiB ceiling. The
+pre-existing product surface contributes 106,735 bytes, mainly from duplicated
+`*_snapshot` and stock-plugin live-evidence objects. Raising the ceiling is not
+an acceptable substitute for compact first-screen discovery.
+
+The control tower opens a bounded product-surface fix window. Allowed behavior:
+
+- default menu mode keeps compact product summaries and the complete concise
+  Alpha3.2-A primary manual cards;
+- heavyweight existing `*_snapshot` and stock-plugin live-evidence objects move
+  to existing exact-id (`mode:"ids"`) on-demand responses;
+- exact-id expansion remains the only expansion trigger; no new MCP tool,
+  request field, Layer 1.5 selectable field, ABI change, or hidden executor;
+- default metadata reports compact vs expanded detail level and how to use exact
+  ids;
+- target default `list_templates` serialized size is at most 96 KiB while
+  preserving the seven required primary manuals.
+
+Approved implementation write scope:
+
+```text
+packages/mcp-server/src/call-template-runtime-v1.mjs
+tests/layer4d/call-template-runtime.test.mjs
+tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs
+tests/alpha3/c3-project-index-query-macros.test.mjs
+tests/alpha3/c5-generic-control-macros.test.mjs
+tests/alpha3/d1-startup-health.test.mjs
+tests/alpha3/e1-stock-plugin-fluency.test.mjs
+```
+
+Do not change `docs/abi/**`, discovery request fields, tool count, bridge,
+installer, recipes, macro execution, lifecycle, support claims, or REAPER live
+behavior. Alpha3.2-A remains paused until this fix passes independent review and
+all repository gates.
