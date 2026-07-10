@@ -1716,3 +1716,220 @@ accepted B1 liveness probe and B2 root into startup health and doctor output,
 then must use a fresh evidence root and the authorized
 `/Users/Zhuanz/Untitled/Untitled.RPP` fixture before any live-readiness claim is
 accepted.
+
+### Alpha3.2-B3 Runtime / Doctor Live Readiness Implementation Window
+
+Status: in_progress; normal product integration, no lower-layer reopen required.
+
+Control-tower decision: 2026-07-11.
+
+Accepted dependencies:
+
+```text
+B1 liveness: 434edf1 runtime: add bounded bridge liveness
+B2 render root: bb1b469 package: add managed render root
+```
+
+Concrete product blocker:
+
+- `ping.ok:true` currently proves only that the MCP stdio server answered;
+- default doctor `status:ready` currently proves package/config/MCP smoke only;
+- `openreaper-start` `startup-status=ready` proves only that the REAPER process
+  stayed alive and already prints a separate bridge-action wait state;
+- the accepted B1 heartbeat and B2 managed root are not yet projected into
+  bounded product readiness, and no installed doctor mode performs the accepted
+  request/response read probe before claiming live connection.
+
+B3 integration contract:
+
+```text
+runtime readiness contract: alpha3.2.b3.runtime_doctor_readiness.v1
+bridge liveness source: accepted live_bridge.liveness_probe.v1 only
+render-root source in MCP: effective OPENREAPER_LIVE_SMOKE_RENDER_ROOT
+live request/response proof: call_template(template.transport.read_state)
+doctor modes:
+  openreaper-doctor --for live-edit
+  openreaper-doctor --for render
+  openreaper-doctor --for media-import
+  openreaper-doctor --for project-query
+optional bounded wait:
+  openreaper-doctor --wait-bridge[=SECONDS]
+```
+
+Required public separation:
+
+- MCP reachability, package/config readiness, REAPER process readiness, bridge
+  heartbeat liveness, request/response proof, managed-root readiness, and task
+  readiness must remain separately named facts;
+- `ping` may call the accepted read-only heartbeat probe and inspect the already
+  selected render root, but it must not dispatch a template, write a direct
+  bridge request, start REAPER, or claim request/response proof;
+- the public ping projection must be bounded and omit raw heartbeat/transport
+  filesystem paths and unbounded low-level error text;
+- B1 status vocabulary remains unchanged:
+  `bridge_config_absent`, `bridge_transport_absent`,
+  `bridge_action_not_running`, `bridge_loop_unresponsive`,
+  `bridge_heartbeat_invalid`, `bridge_owner_mismatch`,
+  `bridge_generation_mismatch`, `bridge_probe_input_invalid`, and
+  `bridge_ready`;
+- doctor may add product diagnoses such as `reaper_not_running`,
+  `transport_permission_error`, and combined `owner_generation_mismatch`, but
+  must preserve the underlying B1 status in structured evidence;
+- expected generation is strictly parsed to a safe non-negative integer before
+  calling B1; absent identity fields are omitted, not forwarded as `undefined`;
+- normal installed doctor identity must match the accepted installed/start
+  defaults `openreaper-alpha` / generation `1`, unless an explicit bounded test
+  environment supplies another valid identity.
+
+Required doctor behavior:
+
+- default doctor preserves its package/config result and exit behavior while
+  adding observed runtime readiness; a healthy package with no heartbeat is not
+  a package failure;
+- `--for` supports exactly `live-edit`, `render`, `media-import`, and
+  `project-query`; invalid/missing option values fail with exit code 2;
+- `--wait-bridge` is bounded to an explicit safe range, polls only MCP `ping`,
+  and never runs the REAPER Action itself;
+- after heartbeat status becomes `bridge_ready`, a task-mode/wait doctor runs
+  the existing MCP `call_template(template.transport.read_state)` with the
+  matching owner/generation and a bounded timeout before reporting live
+  request/response readiness;
+- task results use `ready`, `blocked`, or `degraded` and include the missing
+  precondition, `failure_layer`, recoverability, next action, whether user
+  action/restart is required, and a copy-paste fix when safe;
+- `live-edit` requires matching heartbeat plus successful read probe;
+- `render` additionally requires the effective managed root to exist as a real
+  writable directory. `ready_for_render:true` means preflight only and must be
+  paired with `render_execution_proven:false`,
+  `codec_support_assessed:false`, and `scope:preflight_only`;
+- `media-import` and `project-query` may prove the shared bridge/read preflight,
+  but remain `degraded` with their task-specific source/index readiness marked
+  `not_assessed` until their owning later slices provide evidence;
+- render-root missing/invalid/unwritable output includes a bounded copy-paste
+  directory fix and says whether MCP/REAPER restart is required;
+- doctor must not silently create missing transport, artifact, or render roots
+  while diagnosing them. A B3-owned read-only doctor resolver may inspect the
+  B2 environment/persisted/default selection, but must not refactor or change
+  accepted B2 precedence/validation.
+
+Approved tracked write scope:
+
+```text
+packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs
+packages/mcp-server/src/openreaper-mcp-stdio.mjs
+packages/mcp-server/src/openreaper-agent-startup-guidance-v1.mjs
+scripts/openreaper-alpha-package/openreaper-doctor.sh
+scripts/package-openreaper-alpha.mjs
+tests/alpha3/alpha3-2b3-runtime-doctor-readiness.test.mjs
+tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs
+tests/alpha3/block2-startup-readiness.test.mjs
+package.json
+```
+
+The startup-guidance and existing tests are conditional: touch them only if
+needed to point agents at the accepted doctor modes or to preserve actual stdio
+coverage. A worker must stop and report before editing any unlisted path.
+
+Forbidden/deferred:
+
+- do not edit `live-bridge-executor-v1.mjs`, bridge Lua/generated bundle, the B1
+  sidecar contract/status/timing, or ordinary dispatch semantics;
+- do not edit B2 installer/start/MCP-wrapper/uninstaller root selection,
+  persistence, preservation, or LaunchServices behavior;
+- do not change Tool ABI, Foundation Bridge ABI, taxonomy, templates, handlers,
+  recipes, `call_template` context ergonomics, SQLite runtime, render runtime,
+  `macro.render.targets`, support matrices, or public platform claims;
+- do not add a sixth MCP tool, doctor MCP tool, bridge operation family, public
+  `call_recipe`, direct request-file protocol, hidden executor, raw Lua/action/
+  shell/UI product bypass, `--auto-bridge`, `--restart-bridge`, or new REAPER
+  process-control capability;
+- do not render in B3. Render execution and codec evidence remain 3.2-E/G.
+
+Required fake/runtime matrix:
+
+```text
+bridge config absent
+transport directory or requests/results absent
+transport permission failure
+complete transport with no heartbeat
+stale heartbeat
+malformed/unsafe heartbeat
+fresh owner mismatch
+fresh generation mismatch
+fresh matching heartbeat
+valid, missing, non-directory, symlink, and unwritable render root
+strict invalid expected-generation input
+REAPER pid missing/dead versus alive with action absent
+```
+
+Assertions:
+
+- `ping` leaves the requests directory empty and labels request/response proof
+  `not_run`;
+- package/config status does not become false merely because the bridge action
+  is not running;
+- task-mode doctor dispatches the read probe only after `bridge_ready`;
+- fake matching-heartbeat plus fake read result can reach live-edit ready;
+- render mode cannot reach ready unless both live read and root checks pass;
+- query/media modes never overclaim their later task-specific gates;
+- all payloads, waits, paths, error strings, and recovery lists remain bounded;
+- exact five-tool MCP surface remains unchanged.
+
+Required static/package gates:
+
+```text
+git diff --check
+node --check packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs
+node --check packages/mcp-server/src/openreaper-mcp-stdio.mjs
+zsh -n scripts/openreaper-alpha-package/openreaper-doctor.sh
+node --check scripts/package-openreaper-alpha.mjs
+node --test tests/alpha3/alpha3-2b3-runtime-doctor-readiness.test.mjs
+node --test tests/layer4d1/live-bridge-executor.test.mjs
+node --test tests/layer4d2/openreaper-live-bridge.test.mjs
+node --test tests/alpha3/alpha3-2b-managed-render-root.test.mjs
+node --test tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs
+node --test tests/alpha3/block2-startup-readiness.test.mjs
+npm run check:tool-abi
+npm run check:template-runtime
+npm test
+npm run build
+```
+
+A fresh alpha package must run smoke with no REAPER. Actual packaged stdio ping
+and the actual packaged doctor must be exercised against no-heartbeat, stale,
+fresh matching, and missing/valid render-root fixtures. Package smoke must treat
+`bridge_action_not_running` as a valid observed non-ready state and leave no
+fake child or probe files.
+
+Required authorized live acceptance:
+
+```text
+project: /Users/Zhuanz/Untitled/Untitled.RPP
+fresh evidence/session/render root: required
+start path: packaged OpenReaper openreaper-start only
+bridge action: OpenReaper: Start MCP bridge
+health paths: packaged openreaper-doctor and MCP ping/call_template only
+render: forbidden in B3
+```
+
+The live sequence must record the process baseline and project backup/recovery
+posture, then prove:
+
+1. before the bridge Action, managed-root readiness is true while bridge status
+   is exactly `bridge_action_not_running` and live-edit/render task readiness is
+   false;
+2. after the existing REAPER Action, bounded polling reaches `bridge_ready` with
+   matching owner/generation and heartbeat age within the accepted 2,000 ms
+   threshold;
+3. `call_template(template.transport.read_state)` succeeds before any request/
+   response or task-ready claim;
+4. doctor `--for live-edit` becomes ready and `--for render` reports
+   preflight-only `ready_for_render:true` without claiming a render or codec;
+5. no project mutation or render output is expected; any actual project change,
+   file output, dialog, process, backup, and cleanup result is reported exactly;
+6. REAPER is cleanly stopped after evidence and immediate/delayed process audits
+   show no smoke-owned MCP, fake, or REAPER process.
+
+Independent review is required before implementation acceptance and again after
+live evidence. B3 remains unaccepted until static, package, reviewer, and live
+gates all pass.
