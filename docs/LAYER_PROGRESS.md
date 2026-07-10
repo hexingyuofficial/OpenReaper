@@ -1173,3 +1173,22 @@ Do not change `docs/abi/**`, discovery request fields, tool count, bridge,
 installer, recipes, macro execution, lifecycle, support claims, or REAPER live
 behavior. Alpha3.2-A remains paused until this fix passes independent review and
 all repository gates.
+
+Compaction fix scope amendment: the first implementation reduced default
+`list_templates` from 129,970 to 80,160 bytes and passed all in-scope gates, but
+full `npm test`/`build` exposed four legacy tests that still required heavyweight
+snapshots from default menu mode. The user-facing preview script also silently
+lost startup detail. The control tower expands the bounded fix scope only to:
+
+```text
+scripts/preview-alpha2-product-surface.mjs
+tests/alpha3/block2-startup-readiness.test.mjs
+tests/alpha3/block3-speed-productization.test.mjs
+tests/alpha3/block5-reuse-ecosystem.test.mjs
+tests/alpha3/block6-stock-plugin-product-gate.test.mjs
+```
+
+Those tests must keep their original snapshot content assertions but obtain the
+detail through existing exact-id mode. The preview must preserve its prior
+startup detail by using one bounded exact-id metadata read; it must not teach a
+new tool or request field. No other scope is reopened.
