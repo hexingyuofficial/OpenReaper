@@ -66,6 +66,12 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(sourceModules["10-file-transport.lua"], /write_file_atomic/);
     assert.match(sourceModules["10-file-transport.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
     assert.match(sourceModules["10-file-transport.lua"], /os\.rename\(temp_path, path\)/);
+    assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_CONTRACT = "openreaper\.bridge_liveness\.v1"/);
+    assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_FILENAME = "openreaper-bridge-liveness-v1\.json"/);
+    assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_PATH = TRANSPORT_DIR and path_join\(TRANSPORT_DIR, HEARTBEAT_FILENAME\) or nil/);
+    assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_INTERVAL_SECONDS = 0\.50/);
+    assert.match(sourceModules["10-file-transport.lua"], /local HEARTBEAT_INTERVAL_MS = 500/);
+    assert.match(sourceModules["10-file-transport.lua"], /return write_file_atomic\(HEARTBEAT_PATH, json\.encode\(heartbeat\) \.\. "\\n"\)/);
     assert.match(sourceModules["30-artifact-helper.lua"], /artifact\.state_store\.v1/);
     assert.match(sourceModules["30-artifact-helper.lua"], /A1_ARTIFACT_OPERATIONS/);
     assert.match(sourceModules["35-route-policy.lua"], /local SAFE_WRITE_A_CAPABILITIES = \{/);
@@ -87,6 +93,10 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       /template_count = 129/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /current_time >= next_heartbeat_at/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /next_heartbeat_at = current_time \+ HEARTBEAT_INTERVAL_SECONDS/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /heartbeat refresh failed/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /startup heartbeat failed/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.defer\(bridge_loop\)/);
   });
 
@@ -98,6 +108,11 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.match(BRIDGE_SOURCE, /reaper\.defer\(bridge_loop\)/);
     assert.match(BRIDGE_SOURCE, /write_file_atomic/);
     assert.match(BRIDGE_SOURCE, /os\.rename\(temp_path, path\)/);
+    assert.match(BRIDGE_SOURCE, /openreaper\.bridge_liveness\.v1/);
+    assert.match(BRIDGE_SOURCE, /openreaper-bridge-liveness-v1\.json/);
+    assert.match(BRIDGE_SOURCE, /write_file_atomic\(HEARTBEAT_PATH, json\.encode\(heartbeat\) \.\. "\\n"\)/);
+    assert.match(BRIDGE_SOURCE, /next_heartbeat_at = monotonic_time\(\) \+ HEARTBEAT_INTERVAL_SECONDS/);
+    assert.match(BRIDGE_SOURCE, /reaper\.defer\(bridge_loop\)/);
     assert.match(BRIDGE_SOURCE, /spawned_reaper = false/);
     assert.match(BRIDGE_SOURCE, /D12_TRANSPORT_FIXED_ACTION_IDS = \{/);
     assert.match(BRIDGE_SOURCE, /play = 1007/);
@@ -111,6 +126,35 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app)\b/,
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /open -a/);
+  });
+
+  it("keeps the heartbeat sidecar bounded to internal transport liveness metadata", () => {
+    const transportSource = readFileSync(
+      new URL("../../reaper/bridge/src/10-file-transport.lua", import.meta.url),
+      "utf8",
+    );
+    const heartbeatMatch = transportSource.match(/local heartbeat = \{([\s\S]*?)\n  \}/);
+    assert.ok(heartbeatMatch, "heartbeat table must remain explicit and bounded");
+    const heartbeatTable = heartbeatMatch[1];
+    const fields = [...heartbeatTable.matchAll(/^    ([a-z_]+)\s*=/gm)].map((match) => match[1]).sort();
+    assert.deepEqual(fields, [
+      "active_generation",
+      "active_owner",
+      "contract",
+      "interval_ms",
+      "refreshed_at_unix_s",
+      "sequence",
+    ]);
+    assert.doesNotMatch(heartbeatTable, /project|refs|media|path|payload|params|request|result/i);
+
+    const loopSource = readFileSync(
+      new URL("../../reaper/bridge/src/90-file-transport-loop.lua", import.meta.url),
+      "utf8",
+    );
+    assert.match(loopSource, /local heartbeat_ok, heartbeat_error = write_bridge_heartbeat\(\)[\s\S]*next_heartbeat_at = monotonic_time\(\) \+ HEARTBEAT_INTERVAL_SECONDS[\s\S]*bridge_loop\(\)/);
+    assert.match(loopSource, /if current_time >= next_heartbeat_at then[\s\S]*write_bridge_heartbeat\(\)[\s\S]*if current_time >= next_poll_at then/);
+    assert.match(loopSource, /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
+    assert.match(loopSource, /reaper\.defer\(bridge_loop\)/);
   });
 
   it("keeps the approved Wave 0, Wave 1A, Read-B, D9 tracks mixer, D10 read overview/actions, D13 items core reads, E3 media, E5 routing/automation, and E2-FX-L1 read query operations exact", () => {

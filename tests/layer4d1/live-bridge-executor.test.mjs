@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { link, mkdir, mkdtemp, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -13,9 +15,15 @@ import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
+  LIVE_BRIDGE_HEARTBEAT_FILENAME,
   LIVE_BRIDGE_EXECUTOR_ENV,
+  LIVE_BRIDGE_LIVENESS_CONTRACT,
+  LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS,
+  LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT,
+  LIVE_BRIDGE_LIVENESS_STATUS,
   createLiveBridgeExecutor,
   createLiveBridgeExecutorFromEnv,
+  probeLiveBridgeLiveness,
 } from "../../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
 describe("Layer 4D.1 live bridge executor binding", () => {
@@ -133,6 +141,451 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(timeout.error.source, "bridge");
     assert.equal(timeout.error.code, "BRIDGE_TIMEOUT");
     assert.equal(timeout.error.details.blocker, "live_bridge_handshake_failed");
+    assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
+  });
+
+  it("probes basic liveness states without dispatching and recursively freezes results", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const expected = {
+      expectedOwner: "owner-test",
+      expectedGeneration: 3,
+      maxAgeMs: 2_000,
+      now: () => now,
+    };
+
+    const configAbsent = await probeLiveBridgeLiveness(expected);
+    assert.equal(configAbsent.contract, LIVE_BRIDGE_LIVENESS_PROBE_CONTRACT);
+    assert.equal(configAbsent.status, LIVE_BRIDGE_LIVENESS_STATUS.CONFIG_ABSENT);
+    assert.equal(configAbsent.ready, false);
+    assert.equal(configAbsent.configured, false);
+    assert.equal(configAbsent.spawned_reaper, false);
+
+    const absentRoot = await mkdtemp(join(tmpdir(), "openreaper-liveness-absent-root-"));
+    const transportAbsent = await probeLiveBridgeLiveness({
+      ...expected,
+      transportDir: join(absentRoot, "missing"),
+    });
+    assert.equal(transportAbsent.status, LIVE_BRIDGE_LIVENESS_STATUS.TRANSPORT_ABSENT);
+    assert.equal(transportAbsent.details.missing, "transport_dir");
+
+    const transport = await makeTransport();
+    const actionNotRunning = await probeLiveBridgeLiveness({
+      ...expected,
+      transportDir: transport.root,
+    });
+    assert.equal(actionNotRunning.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+    assert.equal(actionNotRunning.heartbeat.filename, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+    assert.deepEqual(await readdir(join(transport.root, "requests")), []);
+
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 3,
+      mtime: new Date(now.getTime() - 500),
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      heartbeatMaxAgeMs: 2_000,
+      now: () => now,
+    });
+    const readyWithoutExpectedIdentity = await executor.probeLiveness();
+    assert.equal(readyWithoutExpectedIdentity.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(readyWithoutExpectedIdentity.expected.owner_provided, false);
+    assert.equal(readyWithoutExpectedIdentity.expected.generation_provided, false);
+
+    const ready = await executor.probeLiveness({
+      expectedOwner: "owner-test",
+      expectedGeneration: 3,
+    });
+    assert.equal(ready.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(ready.ready, true);
+    assert.equal(ready.heartbeat.observed.contract, LIVE_BRIDGE_LIVENESS_CONTRACT);
+    assert.equal(ready.heartbeat.observed.age_ms, 500);
+    assert.deepEqual(await readdir(join(transport.root, "requests")), []);
+    for (const nested of [
+      ready,
+      ready.heartbeat,
+      ready.heartbeat.observed,
+      ready.expected,
+      ready.details,
+    ]) {
+      assert.equal(Object.isFrozen(nested), true);
+    }
+  });
+
+  it("opens only the fixed heartbeat entry with nofollow and rejects links and non-regular files", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const heartbeatPath = join(transport.root, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+    const externalRoot = await mkdtemp(join(tmpdir(), "openreaper-liveness-external-"));
+    const externalPath = await writeHeartbeat(externalRoot, { mtime: now });
+
+    await symlink(externalPath, heartbeatPath);
+    const symlinkResult = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(symlinkResult.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(symlinkResult.details.reason, "heartbeat_open_failed");
+    assert.equal(symlinkResult.heartbeat.observed, null);
+    assert.equal(JSON.stringify(symlinkResult).includes(externalPath), false);
+
+    await rm(heartbeatPath, { force: true });
+    await link(externalPath, heartbeatPath);
+    const hardlinkResult = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(hardlinkResult.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(hardlinkResult.details.reason, "heartbeat_link_count_invalid");
+
+    await rm(heartbeatPath, { force: true });
+    await mkdir(heartbeatPath);
+    const directoryResult = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(directoryResult.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(directoryResult.details.reason, "heartbeat_not_regular_file");
+
+    await rm(heartbeatPath, { recursive: true, force: true });
+    execFileSync("mkfifo", [heartbeatPath]);
+    const fifoResult = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+    });
+    assert.equal(fifoResult.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(fifoResult.details.reason, "heartbeat_not_regular_file");
+    await rm(heartbeatPath, { force: true });
+
+    const socketTransportRoot = await mkdtemp("/tmp/orls-");
+    await mkdir(join(socketTransportRoot, "requests"));
+    await mkdir(join(socketTransportRoot, "results"));
+    const socketHeartbeatPath = join(socketTransportRoot, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+    const socketServer = createServer();
+    await new Promise((resolveListen, rejectListen) => {
+      socketServer.once("error", rejectListen);
+      socketServer.listen(socketHeartbeatPath, resolveListen);
+    });
+    try {
+      const socketResult = await probeLiveBridgeLiveness({
+        transportDir: socketTransportRoot,
+        now: () => now,
+      });
+      assert.equal(socketResult.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+      assert.equal(socketResult.details.reason, "heartbeat_open_failed");
+      assert.equal(JSON.stringify(socketResult).length < 4_096, true);
+    } finally {
+      await new Promise((resolveClose) => socketServer.close(resolveClose));
+      await rm(socketTransportRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces initial and actual heartbeat byte budgets from one closed FileHandle", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const heartbeatPath = join(transport.root, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+
+    await writeFile(heartbeatPath, "");
+    const empty = await probeLiveBridgeLiveness({ transportDir: transport.root, now: () => now });
+    assert.equal(empty.details.reason, "heartbeat_size_invalid");
+    assert.equal(empty.details.heartbeat_bytes, 0);
+
+    await writeFile(heartbeatPath, "x".repeat(2_048));
+    await utimes(heartbeatPath, now, now);
+    const exactBudget = await probeLiveBridgeLiveness({ transportDir: transport.root, now: () => now });
+    assert.equal(exactBudget.details.reason, "heartbeat_json_invalid");
+
+    await writeFile(heartbeatPath, "x".repeat(2_049));
+    const maxPlusOne = await probeLiveBridgeLiveness({ transportDir: transport.root, now: () => now });
+    assert.equal(maxPlusOne.details.reason, "heartbeat_size_invalid");
+    assert.equal(maxPlusOne.details.heartbeat_bytes, 2_049);
+
+    await writeFile(heartbeatPath, "x".repeat(4_096));
+    const oversize = await probeLiveBridgeLiveness({ transportDir: transport.root, now: () => now });
+    assert.equal(oversize.details.reason, "heartbeat_size_invalid");
+    assert.equal(oversize.details.heartbeat_bytes, 4_096);
+
+    let openedPath = null;
+    let openedFlags = null;
+    let closed = false;
+    let readCount = 0;
+    const boundedStat = fakeFileStat({ size: 2_048, mtimeMs: now.getTime() });
+    const raced = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+      __openHeartbeatFileForTest: async (path, flags) => {
+        openedPath = path;
+        openedFlags = flags;
+        return {
+          stat: async () => boundedStat,
+          read: async (buffer) => {
+            readCount += 1;
+            buffer.fill(0x78);
+            return { bytesRead: buffer.length };
+          },
+          close: async () => {
+            closed = true;
+          },
+        };
+      },
+    });
+    assert.equal(raced.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(raced.details.reason, "heartbeat_size_invalid");
+    assert.equal(raced.details.heartbeat_bytes, 2_049);
+    assert.equal(openedPath, heartbeatPath);
+    assert.equal((openedFlags & fsConstants.O_NOFOLLOW) !== 0, true);
+    assert.equal((openedFlags & fsConstants.O_NONBLOCK) !== 0, true);
+    assert.equal(readCount, 1);
+    assert.equal(closed, true);
+
+    let statCount = 0;
+    let changedReadCount = 0;
+    let changedHandleClosed = false;
+    const changedDuringRead = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => now,
+      __openHeartbeatFileForTest: async () => ({
+        stat: async () => {
+          statCount += 1;
+          return fakeFileStat({
+            size: 2,
+            mtimeMs: now.getTime() + (statCount === 1 ? 0 : 1),
+          });
+        },
+        read: async (buffer) => {
+          changedReadCount += 1;
+          if (changedReadCount > 1) return { bytesRead: 0 };
+          buffer.write("{}", 0, "utf8");
+          return { bytesRead: 2 };
+        },
+        close: async () => {
+          changedHandleClosed = true;
+        },
+      }),
+    });
+    assert.equal(changedDuringRead.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(changedDuringRead.details.reason, "heartbeat_changed_during_read");
+    assert.equal(statCount, 2);
+    assert.equal(changedHandleClosed, true);
+  });
+
+  it("uses exact max-age boundaries and rejects clearly future filesystem or heartbeat times", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const base = {
+      transportDir: transport.root,
+      maxAgeMs: 2_000,
+      now: () => now,
+    };
+
+    await writeHeartbeat(transport.root, { mtime: new Date(now.getTime() - 2_000) });
+    const exactThreshold = await probeLiveBridgeLiveness(base);
+    assert.equal(exactThreshold.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(exactThreshold.heartbeat.observed.age_ms, 2_000);
+
+    await writeHeartbeat(transport.root, { mtime: new Date(now.getTime() - 2_001) });
+    const thresholdPlusOne = await probeLiveBridgeLiveness(base);
+    assert.equal(thresholdPlusOne.status, LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE);
+    assert.equal(thresholdPlusOne.heartbeat.observed.age_ms, 2_001);
+
+    await writeHeartbeat(transport.root, {
+      mtime: new Date(now.getTime() + Math.floor(LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS / 2)),
+    });
+    const slightFutureSkew = await probeLiveBridgeLiveness(base);
+    assert.equal(slightFutureSkew.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    assert.equal(slightFutureSkew.heartbeat.observed.age_ms, 0);
+
+    await writeHeartbeat(transport.root, {
+      mtime: new Date(now.getTime() + LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS + 1_000),
+    });
+    const futureMtime = await probeLiveBridgeLiveness(base);
+    assert.equal(futureMtime.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(futureMtime.details.reason, "heartbeat_mtime_in_future");
+
+    await writeHeartbeat(transport.root, {
+      mtime: now,
+      refreshed_at_unix_s: Math.floor(
+        (now.getTime() + LIVE_BRIDGE_LIVENESS_FUTURE_SKEW_MS + 1_000) / 1_000,
+      ),
+    });
+    const futureHeartbeatTime = await probeLiveBridgeLiveness(base);
+    assert.equal(futureHeartbeatTime.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(futureHeartbeatTime.details.reason, "heartbeat_time_in_future");
+
+    await writeHeartbeat(transport.root, {
+      mtime: new Date(now.getTime() - 5_000),
+      refreshed_at_unix_s: Math.floor(now.getTime() / 1_000),
+    });
+    const timeAfterMtime = await probeLiveBridgeLiveness(base);
+    assert.equal(timeAfterMtime.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(timeAfterMtime.details.reason, "heartbeat_time_after_file_mtime");
+  });
+
+  it("validates every heartbeat field type, boundary, and exact field set", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const probe = () => probeLiveBridgeLiveness({ transportDir: transport.root, now: () => now });
+
+    for (const valid of [
+      {
+        active_owner: "a",
+        active_generation: 0,
+        sequence: 1,
+        refreshed_at_unix_s: 0,
+        interval_ms: 50,
+      },
+      {
+        active_owner: "o".repeat(256),
+        active_generation: Number.MAX_SAFE_INTEGER,
+        sequence: 999_999_999,
+        refreshed_at_unix_s: Math.floor(now.getTime() / 1_000),
+        interval_ms: 5_000,
+      },
+    ]) {
+      await writeHeartbeat(transport.root, { ...valid, mtime: now });
+      assert.equal((await probe()).status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+    }
+
+    const invalidCases = [
+      ["heartbeat_contract_invalid", { contract: "wrong.contract" }],
+      ["heartbeat_owner_invalid", { active_owner: "" }],
+      ["heartbeat_owner_invalid", { active_owner: "x".repeat(257) }],
+      ["heartbeat_owner_invalid", { active_owner: "owner\ncontrol" }],
+      ["heartbeat_owner_invalid", { active_owner: 3 }],
+      ["heartbeat_generation_invalid", { active_generation: -1 }],
+      ["heartbeat_generation_invalid", { active_generation: 3.5 }],
+      ["heartbeat_generation_invalid", { active_generation: "3" }],
+      ["heartbeat_generation_invalid", { active_generation: Number.MAX_SAFE_INTEGER + 1 }],
+      ["heartbeat_sequence_invalid", { sequence: 0 }],
+      ["heartbeat_sequence_invalid", { sequence: 1_000_000_000 }],
+      ["heartbeat_sequence_invalid", { sequence: "1" }],
+      ["heartbeat_time_invalid", { refreshed_at_unix_s: -1 }],
+      ["heartbeat_time_invalid", { refreshed_at_unix_s: "1" }],
+      ["heartbeat_time_invalid", { refreshed_at_unix_s: Math.floor(Number.MAX_SAFE_INTEGER / 1_000) + 1 }],
+      ["heartbeat_interval_invalid", { interval_ms: 49 }],
+      ["heartbeat_interval_invalid", { interval_ms: 5_001 }],
+      ["heartbeat_interval_invalid", { interval_ms: "500" }],
+      ["heartbeat_fields_invalid", { extra: { payload: "forbidden" } }],
+      ["heartbeat_fields_invalid", { contract: undefined }],
+    ];
+    for (const [reason, overrides] of invalidCases) {
+      await writeHeartbeat(transport.root, { ...overrides, mtime: now });
+      const result = await probe();
+      assert.equal(result.status, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID, reason);
+      assert.equal(result.details.reason, reason);
+    }
+  });
+
+  it("rejects explicitly invalid expected identities without echoing unbounded input", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    await writeHeartbeat(transport.root, { mtime: now });
+    const base = { transportDir: transport.root, now: () => now };
+
+    for (const expectedOwner of [
+      "",
+      "owner\ncontrol",
+      "x".repeat(257),
+      "x".repeat(100_000),
+      3,
+      null,
+      undefined,
+    ]) {
+      const result = await probeLiveBridgeLiveness({ ...base, expectedOwner });
+      assert.equal(result.status, LIVE_BRIDGE_LIVENESS_STATUS.PROBE_INPUT_INVALID);
+      assert.equal(result.ready, false);
+      assert.deepEqual(result.details.invalid_fields, ["expected_owner"]);
+      assert.equal(result.expected.owner, null);
+      assert.equal(result.expected.owner_provided, true);
+      assert.equal(JSON.stringify(result).length < 4_096, true);
+    }
+
+    for (const expectedGeneration of ["3", -1, 3.5, Number.MAX_SAFE_INTEGER + 1, null, undefined]) {
+      const result = await probeLiveBridgeLiveness({ ...base, expectedGeneration });
+      assert.equal(result.status, LIVE_BRIDGE_LIVENESS_STATUS.PROBE_INPUT_INVALID);
+      assert.deepEqual(result.details.invalid_fields, ["expected_generation"]);
+      assert.equal(result.expected.generation, null);
+      assert.equal(result.expected.generation_provided, true);
+    }
+
+    const bothInvalid = await probeLiveBridgeLiveness({
+      ...base,
+      expectedOwner: "x".repeat(100_000),
+      expectedGeneration: "3",
+    });
+    assert.deepEqual(bothInvalid.details.invalid_fields, ["expected_owner", "expected_generation"]);
+    assert.equal(JSON.stringify(bothInvalid).includes("x".repeat(1_000)), false);
+
+    await writeHeartbeat(transport.root, {
+      active_owner: "o".repeat(256),
+      active_generation: Number.MAX_SAFE_INTEGER,
+      mtime: now,
+    });
+    const validBoundaries = await probeLiveBridgeLiveness({
+      ...base,
+      expectedOwner: "o".repeat(256),
+      expectedGeneration: Number.MAX_SAFE_INTEGER,
+    });
+    assert.equal(validBoundaries.status, LIVE_BRIDGE_LIVENESS_STATUS.READY);
+  });
+
+  it("keeps stale and owner mismatch precedence deterministic", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const transport = await makeTransport();
+    const expected = {
+      transportDir: transport.root,
+      expectedOwner: "owner-test",
+      expectedGeneration: 3,
+      maxAgeMs: 2_000,
+      now: () => now,
+    };
+
+    await writeHeartbeat(transport.root, {
+      active_owner: "other-owner",
+      active_generation: 4,
+      mtime: new Date(now.getTime() - 5_000),
+    });
+    assert.equal(
+      (await probeLiveBridgeLiveness(expected)).status,
+      LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE,
+    );
+
+    await writeHeartbeat(transport.root, {
+      active_owner: "other-owner",
+      active_generation: 4,
+      mtime: new Date(now.getTime() - 500),
+    });
+    assert.equal(
+      (await probeLiveBridgeLiveness(expected)).status,
+      LIVE_BRIDGE_LIVENESS_STATUS.OWNER_MISMATCH,
+    );
+
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 4,
+      mtime: new Date(now.getTime() - 500),
+    });
+    assert.equal(
+      (await probeLiveBridgeLiveness(expected)).status,
+      LIVE_BRIDGE_LIVENESS_STATUS.GENERATION_MISMATCH,
+    );
+  });
+
+  it("contains throwing or invalid injected clocks without throwing the probe", async () => {
+    const transport = await makeTransport();
+    const throwingNow = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => {
+        throw new Error("clock failed");
+      },
+    });
+    assert.equal(throwingNow.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+
+    const invalidNow = await probeLiveBridgeLiveness({
+      transportDir: transport.root,
+      now: () => new Date("invalid"),
+    });
+    assert.equal(invalidNow.status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
   });
 
   it("live smoke script skips by default and stays on the Wave 1A read-handler allowlist", async () => {
@@ -196,6 +649,37 @@ async function makeTransport() {
   await mkdir(join(root, "requests"));
   await mkdir(join(root, "results"));
   return { root };
+}
+
+async function writeHeartbeat(root, overrides = {}) {
+  const { mtime = new Date(), extra = {}, ...heartbeatOverrides } = overrides;
+  const path = join(root, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+  const heartbeat = {
+    contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+    active_owner: "owner-test",
+    active_generation: 3,
+    sequence: 1,
+    refreshed_at_unix_s: Math.floor(mtime.getTime() / 1_000),
+    interval_ms: 500,
+    ...heartbeatOverrides,
+    ...extra,
+  };
+  await rm(path, { recursive: true, force: true });
+  await writeFile(path, `${JSON.stringify(heartbeat)}\n`);
+  await utimes(path, mtime, mtime);
+  return path;
+}
+
+function fakeFileStat({ size, mtimeMs }) {
+  return {
+    dev: 1,
+    ino: 1,
+    size,
+    nlink: 1,
+    mtimeMs,
+    ctimeMs: mtimeMs,
+    isFile: () => true,
+  };
 }
 
 function runLiveSmokeExpectingFailure(env) {

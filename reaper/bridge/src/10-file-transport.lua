@@ -13,6 +13,13 @@ end
 local TRANSPORT_DIR = non_empty(os.getenv(TRANSPORT_ENV))
 local REQUESTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "requests") or nil
 local RESULTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "results") or nil
+local HEARTBEAT_CONTRACT = "openreaper.bridge_liveness.v1"
+local HEARTBEAT_FILENAME = "openreaper-bridge-liveness-v1.json"
+local HEARTBEAT_PATH = TRANSPORT_DIR and path_join(TRANSPORT_DIR, HEARTBEAT_FILENAME) or nil
+local HEARTBEAT_INTERVAL_SECONDS = 0.50
+local HEARTBEAT_INTERVAL_MS = 500
+local HEARTBEAT_SEQUENCE_MAX = 999999999
+local heartbeat_sequence = 0
 
 local function dirname(path)
   if type(path) ~= "string" then
@@ -60,6 +67,25 @@ local function write_file_atomic(path, content)
     return false, tostring(rename_error or "rename_failed")
   end
   return true
+end
+
+local function write_bridge_heartbeat()
+  if not HEARTBEAT_PATH then
+    return false, "heartbeat_path_unavailable"
+  end
+  heartbeat_sequence = heartbeat_sequence + 1
+  if heartbeat_sequence > HEARTBEAT_SEQUENCE_MAX then
+    heartbeat_sequence = 1
+  end
+  local heartbeat = {
+    contract = HEARTBEAT_CONTRACT,
+    active_owner = ACTIVE_OWNER,
+    active_generation = ACTIVE_GENERATION,
+    sequence = heartbeat_sequence,
+    refreshed_at_unix_s = math.floor(os.time() or 0),
+    interval_ms = HEARTBEAT_INTERVAL_MS,
+  }
+  return write_file_atomic(HEARTBEAT_PATH, json.encode(heartbeat) .. "\n")
 end
 
 local function log(message)

@@ -58,6 +58,7 @@ local function poll_once()
 end
 
 local next_poll_at = 0
+local next_heartbeat_at = 0
 
 local function monotonic_time()
   if reaper and type(reaper.time_precise) == "function" then
@@ -68,6 +69,13 @@ end
 
 local function bridge_loop()
   local current_time = monotonic_time()
+  if current_time >= next_heartbeat_at then
+    next_heartbeat_at = current_time + HEARTBEAT_INTERVAL_SECONDS
+    local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
+    if not heartbeat_ok then
+      log("heartbeat refresh failed: " .. tostring(heartbeat_error))
+    end
+  end
   if current_time >= next_poll_at then
     next_poll_at = current_time + POLL_INTERVAL_SECONDS
     local ok, error_message = pcall(poll_once)
@@ -85,6 +93,11 @@ if not TRANSPORT_DIR then
 elseif not reaper or type(reaper.defer) ~= "function" or type(reaper.EnumerateFiles) ~= "function" then
   log("required REAPER defer/file APIs are unavailable; bridge loop not started.")
 else
+  local heartbeat_ok, heartbeat_error = write_bridge_heartbeat()
+  if not heartbeat_ok then
+    log("startup heartbeat failed: " .. tostring(heartbeat_error))
+  end
+  next_heartbeat_at = monotonic_time() + HEARTBEAT_INTERVAL_SECONDS
   log("started manual bridge loop at " .. TRANSPORT_DIR .. " owner=" .. ACTIVE_OWNER .. " generation=" .. tostring(ACTIVE_GENERATION))
   bridge_loop()
 end
