@@ -224,6 +224,14 @@ Install:
 Double-click install.command, or run:
   ./install.command
 
+Upgrade from an older OpenReaper alpha:
+Run the newer downloaded package's install.command directly.
+Do not manually delete the old ~/.openreaper/current folder first; the installer handles the
+rename-first replacement, rewrites MCP client config, and then runs a startup
+smoke. After install, run:
+  ~/.openreaper/current/bin/openreaper-doctor
+Then restart Codex, Cursor, Claude, or your MCP client so it reloads config.
+
 Start REAPER:
   ~/.openreaper/current/bin/openreaper-start
   ~/.openreaper/current/bin/openreaper-start --project-path /path/to/project.RPP
@@ -498,12 +506,31 @@ async function smokePackagedOpenReaperStartHelper() {
     if (!text.includes("detached") || !text.includes("pid/log")) {
       throw new Error(`${label} must explain detached startup lifetime and pid/log recovery.`);
     }
+    if (!text.includes("install.command") || !text.includes("openreaper-doctor")) {
+      throw new Error(`${label} must explain agent-assisted upgrade/install and doctor verification.`);
+    }
+    if (!text.includes("Do not manually delete") && !text.includes("Do not delete")) {
+      throw new Error(`${label} must tell agents not to manually delete an older install before upgrade.`);
+    }
     if (text.includes("dismiss any REAPER startup/version/recovery/plugin dialog")) {
       throw new Error(`${label} must not regress to manual-only startup dialog wording.`);
     }
     if (text.includes("version notifications and project notes may be cleared")) {
       throw new Error(`${label} must not promise automatic version-notification dismissal.`);
     }
+  }
+  for (const required of [
+    "needsClientConfigRefresh",
+    "report.migration_actions.length > 0",
+    "const doctorCommand = path.join(installRoot",
+    "newer downloaded OpenReaper package's install.command",
+  ]) {
+    if (!doctorSource.includes(required)) {
+      throw new Error(`doctor must keep upgrade/config-refresh guidance wired to the active install: ${required}`);
+    }
+  }
+  if (doctorSource.includes("Run the current OpenReaper alpha install.command")) {
+    throw new Error("doctor must not tell agents to run the installed package as the upgrade source.");
   }
   return {
     ok: true,
@@ -532,6 +559,9 @@ async function smokePackagedInstallerUpgradeMigration() {
   const source = await readFile(installerPath, "utf8");
   const requiredSnippets = [
     "replaceInstallRoot",
+    "upsertTomlSectionTree",
+    "splitTomlSections",
+    "tomlSectionName",
     "removeLegacyOpenReaperTomlSections",
     "isLegacyOpenReaperTomlSection",
     "installBridgeAction",
@@ -594,9 +624,85 @@ args = ["/tmp/other.js"]
   if (!migrated.includes("[mcp_servers.other]")) {
     throw new Error("Packaged installer migration fixture removed unrelated Codex MCP config");
   }
+  const openReaperSection = `[mcp_servers.openreaper]
+command = "/Users/example/.openreaper/current/bin/openreaper-mcp"
+args = []
+
+[mcp_servers.openreaper.env]
+OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = "/Users/example/.openreaper/current/session/transport"
+OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH = "/Users/example/.openreaper/current/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
+OPENREAPER_ARTIFACT_ROOT = "/Users/example/.openreaper/current/session/artifacts"
+OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = "/Users/example/.openreaper/current/session/artifacts"
+OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
+OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
+`;
+  const once = simulateTomlSectionTreeUpsert(migrated, "mcp_servers.openreaper", openReaperSection);
+  const twice = simulateTomlSectionTreeUpsert(once, "mcp_servers.openreaper", openReaperSection);
+  if ((twice.match(/\[mcp_servers\.openreaper\.env\]/g) ?? []).length !== 1) {
+    throw new Error("Packaged installer Codex upsert must be idempotent and keep exactly one openreaper env section.");
+  }
+  if (!twice.includes("[mcp_servers.other]")) {
+    throw new Error("Packaged installer Codex upsert removed unrelated MCP config.");
+  }
+  const interleavedTreeFixture = `[mcp_servers.openreaper] # prior package entry
+command = "/tmp/old-openreaper-mcp"
+args = []
+
+[mcp_servers.other]
+command = "node"
+args = ["/tmp/other.js"]
+
+[mcp_servers.openreaper.env] # child may legally appear after another table
+STALE_OPENREAPER_ENV = "1"
+
+[mcp_servers.openreaper.experimental]
+STALE_OPENREAPER_CHILD = "1"
+
+[mcp_servers.tail]
+command = "node"
+args = ["/tmp/tail.js"]
+`;
+  const replacedTree = simulateTomlSectionTreeUpsert(
+    interleavedTreeFixture,
+    "mcp_servers.openreaper",
+    openReaperSection,
+  );
+  const replacedTreeTwice = simulateTomlSectionTreeUpsert(
+    replacedTree,
+    "mcp_servers.openreaper",
+    openReaperSection,
+  );
+  assertSingleTomlSection(replacedTreeTwice, "mcp_servers.openreaper");
+  assertSingleTomlSection(replacedTreeTwice, "mcp_servers.openreaper.env");
+  if (replacedTreeTwice.includes("STALE_OPENREAPER_")) {
+    throw new Error("Packaged installer Codex upsert left stale non-contiguous openreaper child sections.");
+  }
+  for (const unrelated of ["[mcp_servers.other]", "[mcp_servers.tail]"]) {
+    if (!replacedTreeTwice.includes(unrelated)) {
+      throw new Error(`Packaged installer Codex tree upsert removed unrelated section ${unrelated}.`);
+    }
+  }
+  const childOnlyFixture = `[mcp_servers.openreaper.env]
+STALE_CHILD_ONLY = "1"
+
+[mcp_servers.other]
+command = "node"
+args = ["/tmp/other.js"]
+`;
+  const replacedChildOnly = simulateTomlSectionTreeUpsert(
+    childOnlyFixture,
+    "mcp_servers.openreaper",
+    openReaperSection,
+  );
+  assertSingleTomlSection(replacedChildOnly, "mcp_servers.openreaper");
+  assertSingleTomlSection(replacedChildOnly, "mcp_servers.openreaper.env");
+  if (replacedChildOnly.includes("STALE_CHILD_ONLY")) {
+    throw new Error("Packaged installer Codex upsert left an orphaned child-only openreaper section.");
+  }
   return {
     ok: true,
     running_install_root_replacement: "rename_first",
+    replaces_codex_parent_and_children: true,
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
@@ -695,6 +801,72 @@ function simulateLegacyOpenReaperTomlCleanup(existing) {
     return true;
   });
   return `${kept.map((section) => section.lines.join("\n").trimEnd()).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
+}
+
+function simulateTomlSectionTreeUpsert(existing, sectionName, sectionText) {
+  const sections = splitTomlSectionsForPackageSmoke(existing);
+  const matchesTree = (section) =>
+    section.name === sectionName || section.name?.startsWith(`${sectionName}.`);
+  if (!sections.some(matchesTree)) {
+    const prefix = existing.trimEnd();
+    return prefix === "" ? `${sectionText.trimEnd()}\n` : `${prefix}\n\n${sectionText.trimEnd()}\n`;
+  }
+
+  const replacement = {
+    name: sectionName,
+    lines: sectionText.trimEnd().split("\n"),
+  };
+  const nextSections = [];
+  let inserted = false;
+  for (const section of sections) {
+    if (matchesTree(section)) {
+      if (!inserted) {
+        nextSections.push(replacement);
+        inserted = true;
+      }
+      continue;
+    }
+    nextSections.push(section);
+  }
+
+  const nextLines = nextSections.flatMap((section) => section.lines);
+  return `${nextLines.join("\n").trimEnd()}\n`;
+}
+
+function splitTomlSectionsForPackageSmoke(existing) {
+  const sections = [];
+  let current = { name: null, lines: [] };
+  for (const line of existing.split(/\r?\n/)) {
+    const name = tomlSectionNameForPackageSmoke(line);
+    if (name !== null) {
+      if (current.name !== null || current.lines.some((currentLine) => currentLine !== "")) {
+        sections.push(current);
+      }
+      current = { name, lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.name !== null || current.lines.some((line) => line !== "")) {
+    sections.push(current);
+  }
+  return sections;
+}
+
+function tomlSectionNameForPackageSmoke(line) {
+  const arrayTable = line.match(/^\s*\[\[([^\[\]]+)\]\]\s*(?:#.*)?$/);
+  if (arrayTable) return arrayTable[1].trim();
+  const table = line.match(/^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/);
+  return table ? table[1].trim() : null;
+}
+
+function assertSingleTomlSection(source, sectionName) {
+  const count = splitTomlSectionsForPackageSmoke(source)
+    .filter((section) => section.name === sectionName)
+    .length;
+  if (count !== 1) {
+    throw new Error(`Packaged installer Codex upsert expected one [${sectionName}] section, found ${count}.`);
+  }
 }
 
 function isLegacyOpenReaperTomlSectionForPackageSmoke(text) {

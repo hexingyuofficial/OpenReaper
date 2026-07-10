@@ -47,6 +47,7 @@ const installedBin = path.join(installRoot, "bin");
 const mcpCommand = path.join(installedBin, "openreaper-mcp");
 const vitalAgentMcpCommand = path.join(installedBin, "vital-agent-mcp");
 const startCommand = path.join(installedBin, "openreaper-start");
+const doctorCommand = path.join(installedBin, "openreaper-doctor");
 const sessionRoot = path.join(installRoot, "session");
 const transportDir = path.join(sessionRoot, "transport");
 const artifactRoot = path.join(sessionRoot, "artifacts");
@@ -97,7 +98,7 @@ if (!dryRun) {
   await chmod(mcpCommand, 0o755);
   await chmod(vitalAgentMcpCommand, 0o755);
   await chmod(startCommand, 0o755);
-  await chmod(path.join(installedBin, "openreaper-doctor"), 0o755);
+  await chmod(doctorCommand, 0o755);
   await mkdir(path.join(transportDir, "requests"), { recursive: true });
   await mkdir(path.join(transportDir, "results"), { recursive: true });
   await mkdir(artifactRoot, { recursive: true });
@@ -261,7 +262,7 @@ args = []
   await mkdir(path.dirname(configPath), { recursive: true });
   const existing = await readTextIfExists(configPath);
   let next = removeLegacyOpenReaperTomlSections(existing);
-  next = upsertTomlSection(next, "mcp_servers.openreaper", openReaperSection);
+  next = upsertTomlSectionTree(next, "mcp_servers.openreaper", openReaperSection);
   next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
   await writeFile(configPath, next, "utf8");
   report.changed.push(`registered Codex MCP servers openreaper and vital-agent-mcp at ${configPath}`);
@@ -413,6 +414,13 @@ function printReport() {
   process.stdout.write(`
 OpenReaper alpha ${dryRun ? "dry run complete" : "installed"}.
 
+Upgrade/install rule for agents:
+If an older OpenReaper alpha is already installed, run this new package's
+install.command directly. Do not manually delete the existing install at
+${installRoot} first; the installer handles the rename-first replacement and
+rewrites MCP client config. After install, verify with:
+  ${doctorCommand}
+
 Restart Codex/Cursor/Claude so they reload MCP config, then ask:
   "Open REAPER with OpenReaper and inspect the current project."
 
@@ -489,6 +497,63 @@ function upsertTomlSection(existing, sectionName, sectionText) {
   }
   const nextLines = [...lines.slice(0, start), ...sectionText.trimEnd().split("\n"), ...lines.slice(end)];
   return `${nextLines.join("\n").trimEnd()}\n`;
+}
+
+function upsertTomlSectionTree(existing, sectionName, sectionText) {
+  const sections = splitTomlSections(existing);
+  const matchesTree = (section) =>
+    section.name === sectionName || section.name?.startsWith(`${sectionName}.`);
+  if (!sections.some(matchesTree)) {
+    const prefix = existing.trimEnd();
+    return prefix === "" ? `${sectionText.trimEnd()}\n` : `${prefix}\n\n${sectionText.trimEnd()}\n`;
+  }
+
+  const replacement = {
+    name: sectionName,
+    lines: sectionText.trimEnd().split("\n"),
+  };
+  const nextSections = [];
+  let inserted = false;
+  for (const section of sections) {
+    if (matchesTree(section)) {
+      if (!inserted) {
+        nextSections.push(replacement);
+        inserted = true;
+      }
+      continue;
+    }
+    nextSections.push(section);
+  }
+
+  const nextLines = nextSections.flatMap((section) => section.lines);
+  return `${nextLines.join("\n").trimEnd()}\n`;
+}
+
+function splitTomlSections(existing) {
+  const sections = [];
+  let current = { name: null, lines: [] };
+  for (const line of existing.split(/\r?\n/)) {
+    const name = tomlSectionName(line);
+    if (name !== null) {
+      if (current.name !== null || current.lines.some((currentLine) => currentLine !== "")) {
+        sections.push(current);
+      }
+      current = { name, lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  if (current.name !== null || current.lines.some((line) => line !== "")) {
+    sections.push(current);
+  }
+  return sections;
+}
+
+function tomlSectionName(line) {
+  const arrayTable = line.match(/^\s*\[\[([^\[\]]+)\]\]\s*(?:#.*)?$/);
+  if (arrayTable) return arrayTable[1].trim();
+  const table = line.match(/^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/);
+  return table ? table[1].trim() : null;
 }
 
 function removeLegacyOpenReaperTomlSections(existing) {

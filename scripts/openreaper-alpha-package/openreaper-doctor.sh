@@ -30,6 +30,7 @@ const vitalAgentMcpCommand = path.join(installRoot, "bin", "vital-agent-mcp");
 const mcpCommandAliases = pathAliases(mcpCommand);
 const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
 const startCommand = path.join(installRoot, "bin", "openreaper-start");
+const doctorCommand = path.join(installRoot, "bin", "openreaper-doctor");
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
@@ -117,7 +118,7 @@ if (report.smoke?.ok) {
   console.log(`fx_templates=${report.smoke.openreaper.required_fx_templates.join(",")}`);
   console.log(`vital_agent_tools=${report.smoke.vital_agent_mcp.required_tools.join(",")}`);
 }
-if (report.stale_config_findings.length > 0) {
+if (report.migration_actions.length > 0) {
   console.log("migration_needed=yes");
   for (const action of report.migration_actions) console.log(`migration_action=${action}`);
 } else {
@@ -316,23 +317,32 @@ async function smokeVitalAgentMcpInner() {
 }
 
 function migrationActions() {
-  if (report.stale_config_findings.length === 0) return [];
-  return [
-    "Run the current OpenReaper alpha install.command again, then restart the MCP client.",
-    "Remove or disable legacy streetlight MCP server entries so agents choose server name openreaper.",
-    "Do not register legacy Streetlight v0.1 kernel packages.",
+  const configRefreshNeeded = needsClientConfigRefresh();
+  const legacyConfigFound = report.stale_config_findings.length > 0;
+  if (!configRefreshNeeded && !legacyConfigFound) return [];
+  const actions = [
+    "Run the newer downloaded OpenReaper package's install.command directly to upgrade. Do not manually delete the existing OpenReaper install first.",
+    `After install.command completes, run ${doctorCommand} and then restart the MCP client.`,
   ];
+  if (legacyConfigFound) {
+    actions.push(
+      "Remove or disable legacy streetlight MCP server entries so agents choose server name openreaper.",
+      "Do not register legacy Streetlight v0.1 kernel packages.",
+    );
+  }
+  return actions;
+}
+
+function needsClientConfigRefresh() {
+  return report.client_configs.some((config) =>
+    (config.exists && config.has_openreaper && !config.references_current_mcp) ||
+    (config.exists && config.has_vital_agent_mcp && !config.references_current_vital_agent_mcp));
 }
 
 function computeStatus() {
   if (!report.checks.node.ok) return "not_ready_node_too_old";
   if (!report.smoke?.ok) return "not_ready_mcp_smoke_failed";
-  if (report.client_configs.some((config) => config.exists && config.has_openreaper && !config.references_current_mcp)) {
-    return "needs_client_config_refresh";
-  }
-  if (report.client_configs.some((config) => config.exists && config.has_vital_agent_mcp && !config.references_current_vital_agent_mcp)) {
-    return "needs_client_config_refresh";
-  }
+  if (needsClientConfigRefresh()) return "needs_client_config_refresh";
   if (report.stale_config_findings.length > 0) return "ready_with_legacy_config_warning";
   return "ready";
 }
