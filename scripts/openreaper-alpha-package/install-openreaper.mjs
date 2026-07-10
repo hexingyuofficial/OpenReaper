@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { constants as fsConstants, existsSync } from "node:fs";
+import { chmod, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +28,11 @@ const LEGACY_STARTUP_BLOCKS = Object.freeze([
   }),
 ]);
 const DEFAULT_PACKS = "core,cleanup,delivery,analysis,loop,pack_contract_fixture";
+const RENDER_ROOT_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
+const MANAGED_RENDER_ROOT_RECORD = "managed-render-root.path";
+const WRITE_PROBE_ATTEMPTS = 4;
+const MANAGED_RENDER_ROOT_RECORD_MAX_BYTES = 4096;
+const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
 const SWS_MISC_SECTION = "[Misc]";
 const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
 const REAPER_RESOURCE_ROOT = path.join(os.homedir(), "Library", "Application Support", "REAPER");
@@ -36,7 +41,13 @@ const BRIDGE_ACTION_RELATIVE_SCRIPT = "OpenReaper/openreaper-start-mcp-bridge.lu
 const BRIDGE_ACTION_COMMAND_ID = `RS${createHash("sha1").update("openreaper.alpha.start_mcp_bridge.v1").digest("hex")}`;
 
 const packageRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
-const options = parseArgs(process.argv.slice(2));
+let options;
+try {
+  options = parseArgs(process.argv.slice(2));
+} catch (error) {
+  process.stderr.write(`[OpenReaper] ${String(error?.message ?? "invalid option").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320)}\n`);
+  process.exit(2);
+}
 const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
 const dryRun = options.dry_run === true;
@@ -51,6 +62,16 @@ const doctorCommand = path.join(installedBin, "openreaper-doctor");
 const sessionRoot = path.join(installRoot, "session");
 const transportDir = path.join(sessionRoot, "transport");
 const artifactRoot = path.join(sessionRoot, "artifacts");
+const defaultRenderRoot = path.join(sessionRoot, "renders");
+const managedRenderRootRecord = path.join(sessionRoot, MANAGED_RENDER_ROOT_RECORD);
+const installRootExisted = existsSync(installRoot);
+const priorPersistedRenderRoot = await readManagedRenderRootRecord(managedRenderRootRecord);
+const renderRootSelection = selectInstallerRenderRoot({
+  explicit: options.render_root,
+  persisted: priorPersistedRenderRoot,
+  fallback: defaultRenderRoot,
+});
+const renderRoot = renderRootSelection.path;
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
 const bridgeActionScript = path.join(REAPER_RESOURCE_ROOT, "Scripts", ...BRIDGE_ACTION_RELATIVE_SCRIPT.split("/"));
 const bridgeActionCommand = `_${BRIDGE_ACTION_COMMAND_ID}`;
@@ -74,6 +95,21 @@ const report = {
   },
   transport_dir: transportDir,
   artifact_root: artifactRoot,
+  render_root: {
+    path: renderRoot,
+    source: renderRootSelection.source,
+    created: false,
+    writable: false,
+    persisted_record: managedRenderRootRecord,
+    previous_selection: priorPersistedRenderRoot,
+    previous_default_nonempty: false,
+    preserved_previous_default_at: null,
+  },
+  recovery: {
+    replacement: "rename-first with rollback before previous-install cleanup",
+    previous_install_backup: null,
+    rollback_performed: false,
+  },
   changed: [],
   skipped: [],
   warnings: [],
@@ -83,48 +119,100 @@ if (process.platform !== "darwin") {
   report.warnings.push("This alpha installer is macOS-first. Other platforms need a manual REAPER resource path and client config check.");
 }
 
-await requireNode20();
+await runInstall();
 
-if (!dryRun) {
-  await mkdir(path.dirname(installRoot), { recursive: true });
-  await replaceInstallRoot();
-  await cp(packageRoot, installRoot, {
-    recursive: true,
-    filter: (src) => !src.includes(`${path.sep}.DS_Store`),
-  });
-  report.changed.push(`installed package at ${installRoot}`);
-  await chmod(path.join(installRoot, "install.command"), 0o755).catch(() => {});
-  await chmod(path.join(installRoot, "uninstall.command"), 0o755).catch(() => {});
-  await chmod(mcpCommand, 0o755);
-  await chmod(vitalAgentMcpCommand, 0o755);
-  await chmod(startCommand, 0o755);
-  await chmod(doctorCommand, 0o755);
-  await mkdir(path.join(transportDir, "requests"), { recursive: true });
-  await mkdir(path.join(transportDir, "results"), { recursive: true });
-  await mkdir(artifactRoot, { recursive: true });
-} else {
-  report.skipped.push("dry run: did not copy package or create queue directories");
+async function runInstall() {
+  let freshInstallRootOwned = false;
+  try {
+    await requireNode20();
+    await prepareManagedRenderRoot(renderRoot, { mutate: false });
+    if (!dryRun && !installRootExisted) {
+      await mkdir(path.dirname(installRoot), { recursive: true });
+      try {
+        await mkdir(installRoot);
+        freshInstallRootOwned = true;
+      } catch (error) {
+        if (error?.code === "EEXIST") {
+          throw new Error(`Fresh install root appeared concurrently; refusing to replace it: ${installRoot}`);
+        }
+        throw error;
+      }
+    }
+
+    const preparedRenderRoot = await prepareManagedRenderRoot(renderRoot, { mutate: !dryRun });
+    report.render_root.created = preparedRenderRoot.created;
+    report.render_root.writable = preparedRenderRoot.writable;
+    const previousDefaultState = await inspectPreviousDefaultRenderRoot();
+    report.render_root.previous_default_nonempty = previousDefaultState.nonempty;
+
+    let replacement = null;
+    let preReplacementPreservation = null;
+    if (!dryRun) {
+      await mkdir(path.dirname(installRoot), { recursive: true });
+      try {
+        preReplacementPreservation = await preservePreviousDefaultBeforeReplacement(previousDefaultState);
+        replacement = await replaceInstallRoot();
+        if (replacement) replacement.preservedDefault = preReplacementPreservation;
+        report.recovery.previous_install_backup = replacement?.backupRoot ?? null;
+        await cp(packageRoot, installRoot, {
+          recursive: true,
+          filter: (src) => !src.includes(`${path.sep}.DS_Store`),
+        });
+        report.changed.push(`installed package at ${installRoot}`);
+        await chmod(path.join(installRoot, "install.command"), 0o755).catch(() => {});
+        await chmod(path.join(installRoot, "uninstall.command"), 0o755).catch(() => {});
+        await chmod(mcpCommand, 0o755);
+        await chmod(vitalAgentMcpCommand, 0o755);
+        await chmod(startCommand, 0o755);
+        await chmod(doctorCommand, 0o755);
+        await mkdir(path.join(transportDir, "requests"), { recursive: true });
+        await mkdir(path.join(transportDir, "results"), { recursive: true });
+        await mkdir(artifactRoot, { recursive: true });
+        await finalizeManagedRenderRoot(replacement);
+        await writeFile(managedRenderRootRecord, `${renderRoot}\n`, { encoding: "utf8", mode: 0o600 });
+        report.changed.push(`persisted managed render root at ${managedRenderRootRecord}`);
+        await cleanupPreviousInstall(replacement);
+      } catch (error) {
+        await rollbackInstallReplacement(replacement).catch((rollbackError) => {
+          report.warnings.push(`Install rollback needs manual recovery: ${rollbackError.code ?? "ERROR"}: ${rollbackError.message}`);
+        });
+        if (!replacement && preReplacementPreservation) {
+          await restorePreReplacementPreservation(preReplacementPreservation).catch((restoreError) => {
+            report.warnings.push(`Previous render outputs remain preserved at ${preReplacementPreservation.path}; restore failed: ${restoreError.message}`);
+          });
+        }
+        throw error;
+      }
+    } else {
+      report.skipped.push("dry run: did not copy package, create queue directories, or persist the managed render root");
+    }
+
+    if (!skipStartupHook) {
+      await installBridgeAction();
+      await removeOptionalStartupHook();
+      await inspectOptionalStartupCompatibility();
+    } else {
+      report.skipped.push("REAPER bridge action installation skipped because --skip-startup-hook was set");
+    }
+
+    if (!skipClientConfig) {
+      await configureCodex();
+      await configureCursor();
+      await configureClaudeDesktop();
+      await writeClientSnippets();
+    } else {
+      report.skipped.push("client configs not changed because --skip-client-config was set");
+    }
+
+    await smokeMcpServer();
+    printReport();
+  } catch (error) {
+    if (freshInstallRootOwned) {
+      await rm(installRoot, { recursive: true, force: true }).catch(() => {});
+    }
+    throw error;
+  }
 }
-
-if (!skipStartupHook) {
-  await installBridgeAction();
-  await removeOptionalStartupHook();
-  await inspectOptionalStartupCompatibility();
-} else {
-  report.skipped.push("REAPER bridge action installation skipped because --skip-startup-hook was set");
-}
-
-if (!skipClientConfig) {
-  await configureCodex();
-  await configureCursor();
-  await configureClaudeDesktop();
-  await writeClientSnippets();
-} else {
-  report.skipped.push("client configs not changed because --skip-client-config was set");
-}
-
-await smokeMcpServer();
-printReport();
 
 async function requireNode20() {
   const major = Number(process.versions.node.split(".")[0]);
@@ -134,20 +222,109 @@ async function requireNode20() {
 }
 
 async function replaceInstallRoot() {
-  if (!existsSync(installRoot)) return;
-  const backupRoot = `${installRoot}.previous-${compactTimestamp(new Date())}`;
+  if (!installRootExisted) return null;
+  const backupContainer = await allocateSiblingContainer(".openreaper-install-backup-");
+  const backupRoot = path.join(backupContainer, "previous-install");
   try {
     await rename(installRoot, backupRoot);
     report.changed.push(`moved previous install to ${backupRoot}`);
+    return {
+      backupContainer,
+      backupRoot,
+      previousDefaultRoot: path.join(backupRoot, "session", "renders"),
+      movedDefaultIntoInstall: false,
+      preservedDefault: null,
+    };
   } catch (error) {
+    await rm(backupContainer, { recursive: true, force: true }).catch(() => {});
     report.warnings.push(
-      `Could not move previous install out of the way. Close running MCP clients that use OpenReaper and retry. ${error.code ?? "ERROR"}: ${error.message}`,
+      `Could not move previous install into its allocated backup container. Source was left in place. ${error.code ?? "ERROR"}: ${error.message}`,
     );
     throw error;
   }
-  await rm(backupRoot, { recursive: true, force: true }).catch((error) => {
-    report.warnings.push(`Previous install cleanup deferred: ${backupRoot}; ${error.code ?? "ERROR"}: ${error.message}`);
+}
+
+async function cleanupPreviousInstall(replacement) {
+  if (!replacement?.backupContainer) return;
+  await rm(replacement.backupContainer, { recursive: true, force: true }).catch((error) => {
+    report.warnings.push(`Previous install cleanup deferred: ${replacement.backupContainer}; ${error.code ?? "ERROR"}: ${error.message}`);
   });
+}
+
+async function rollbackInstallReplacement(replacement) {
+  if (!replacement?.backupRoot || !existsSync(replacement.backupRoot)) return;
+  if (replacement.movedDefaultIntoInstall && existsSync(renderRoot)) {
+    await mkdir(path.dirname(replacement.previousDefaultRoot), { recursive: true });
+    await rename(renderRoot, replacement.previousDefaultRoot);
+  }
+  if (replacement.preservedDefault?.path && existsSync(replacement.preservedDefault.path)) {
+    await mkdir(path.dirname(replacement.previousDefaultRoot), { recursive: true });
+    await rename(replacement.preservedDefault.path, replacement.previousDefaultRoot);
+    await rm(replacement.preservedDefault.container, { recursive: true, force: true });
+  }
+  await rm(installRoot, { recursive: true, force: true });
+  await rename(replacement.backupRoot, installRoot);
+  await rm(replacement.backupContainer, { recursive: true, force: true });
+  report.recovery.rollback_performed = true;
+  report.warnings.push(`restored previous install after failed replacement: ${installRoot}`);
+}
+
+async function finalizeManagedRenderRoot(replacement) {
+  if (replacement && await sameCanonicalPath(renderRoot, defaultRenderRoot)) {
+    const priorDefault = replacement.previousDefaultRoot;
+    const priorDefaultStatus = await safeLstat(priorDefault);
+    if (priorDefaultStatus?.isDirectory() && !priorDefaultStatus.isSymbolicLink()) {
+      await rm(defaultRenderRoot, { recursive: true, force: true });
+      await mkdir(path.dirname(defaultRenderRoot), { recursive: true });
+      await rename(priorDefault, defaultRenderRoot);
+      replacement.movedDefaultIntoInstall = true;
+      report.changed.push(`restored previous default render root into ${defaultRenderRoot}`);
+    } else {
+      await mkdir(defaultRenderRoot, { recursive: true });
+    }
+  } else {
+    await mkdir(renderRoot, { recursive: true });
+  }
+  const verified = await prepareManagedRenderRoot(renderRoot, { mutate: true });
+  report.render_root.writable = verified.writable;
+}
+
+async function preservePreviousDefaultBeforeReplacement(previousDefaultState) {
+  if (!previousDefaultState.nonempty || await sameCanonicalPath(renderRoot, defaultRenderRoot)) return null;
+  const container = await allocateSiblingContainer(".openreaper-render-preservation-");
+  const preservationRoot = path.join(container, "renders");
+  try {
+    await rename(defaultRenderRoot, preservationRoot);
+  } catch (error) {
+    await rm(container, { recursive: true, force: true }).catch(() => {});
+    throw new Error(`Could not preserve previous default render outputs; source was left in place. ${error.code ?? "ERROR"}: ${error.message}`);
+  }
+  report.render_root.preserved_previous_default_at = preservationRoot;
+  report.changed.push(`preserved previous default render outputs before replacement at ${preservationRoot}`);
+  return { container, path: preservationRoot };
+}
+
+async function restorePreReplacementPreservation(preservation) {
+  if (!preservation?.path || !existsSync(preservation.path) || existsSync(defaultRenderRoot)) return;
+  await mkdir(path.dirname(defaultRenderRoot), { recursive: true });
+  await rename(preservation.path, defaultRenderRoot);
+  await rm(preservation.container, { recursive: true, force: true });
+}
+
+
+async function inspectPreviousDefaultRenderRoot() {
+  if (!installRootExisted) return { exists: false, nonempty: false, symlink: false };
+  const status = await safeLstat(defaultRenderRoot);
+  if (!status) return { exists: false, nonempty: false, symlink: false };
+  if (status.isSymbolicLink()) {
+    report.warnings.push(`previous default render root is a symlink and will not be followed: ${defaultRenderRoot}`);
+    return { exists: true, nonempty: false, symlink: true };
+  }
+  if (!status.isDirectory()) {
+    throw new Error(`Previous default render root is not a directory: ${defaultRenderRoot}`);
+  }
+  const entries = await readdir(defaultRenderRoot);
+  return { exists: true, nonempty: entries.length > 0, symlink: false };
 }
 
 async function inspectOptionalStartupCompatibility() {
@@ -248,6 +425,7 @@ OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = ${tomlString(transportDir)}
 OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH = ${tomlString(bridgeScript)}
 OPENREAPER_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
+OPENREAPER_LIVE_SMOKE_RENDER_ROOT = ${tomlString(renderRoot)}
 OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
 OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
 `;
@@ -309,6 +487,7 @@ async function upsertJsonMcpServer(configPath, label) {
       OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
       OPENREAPER_ARTIFACT_ROOT: artifactRoot,
       OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+      [RENDER_ROOT_ENV]: renderRoot,
       OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha",
       OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
     },
@@ -338,6 +517,7 @@ async function writeClientSnippets() {
           OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
           OPENREAPER_ARTIFACT_ROOT: artifactRoot,
           OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+          [RENDER_ROOT_ENV]: renderRoot,
           OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha",
           OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
         },
@@ -358,6 +538,7 @@ OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR = ${tomlString(transportDir)}
 OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH = ${tomlString(bridgeScript)}
 OPENREAPER_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
+OPENREAPER_LIVE_SMOKE_RENDER_ROOT = ${tomlString(renderRoot)}
 OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
 OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
 
@@ -382,6 +563,7 @@ async function smokeMcpServer() {
         OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
         OPENREAPER_ARTIFACT_ROOT: artifactRoot,
         OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+        [RENDER_ROOT_ENV]: renderRoot,
         OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha",
         OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
       },
@@ -628,6 +810,227 @@ function tomlString(value) {
   return JSON.stringify(String(value));
 }
 
+function selectInstallerRenderRoot({ explicit, persisted, fallback }) {
+  if (explicit !== undefined) {
+    if (explicit === true || String(explicit) === "") {
+      throw new Error("--render-root requires a non-empty absolute path.");
+    }
+    return { path: String(explicit), source: "explicit" };
+  }
+  if (persisted) return { path: persisted, source: "persisted" };
+  return { path: fallback, source: "default" };
+}
+
+async function readManagedRenderRootRecord(recordPath) {
+  const status = await safeLstat(recordPath);
+  if (!status) return null;
+  if (status.isSymbolicLink() || !status.isFile()) {
+    throw new Error(`Managed render root record must be a regular file, not a symlink or non-file: ${recordPath}`);
+  }
+  if (status.size > MANAGED_RENDER_ROOT_RECORD_MAX_BYTES) {
+    throw new Error(`Managed render root record exceeds ${MANAGED_RENDER_ROOT_RECORD_MAX_BYTES} bytes: ${recordPath}`);
+  }
+  const handle = await open(
+    recordPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const openedStatus = await handle.stat();
+    if (!openedStatus.isFile() || openedStatus.size > MANAGED_RENDER_ROOT_RECORD_MAX_BYTES) {
+      throw new Error(`Managed render root record changed or is oversized: ${recordPath}`);
+    }
+    const buffer = Buffer.alloc(MANAGED_RENDER_ROOT_RECORD_MAX_BYTES + 1);
+    const bytesRead = await readBoundedBytes(handle, buffer);
+    if (bytesRead > MANAGED_RENDER_ROOT_RECORD_MAX_BYTES) {
+      throw new Error(`Managed render root record exceeds ${MANAGED_RENDER_ROOT_RECORD_MAX_BYTES} bytes: ${recordPath}`);
+    }
+    let text;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true }).decode(buffer.subarray(0, bytesRead));
+    } catch {
+      throw new Error(`Managed render root record is not valid UTF-8: ${recordPath}`);
+    }
+    const value = parseManagedRenderRootRecordText(text, recordPath);
+    validateRenderRootText(value);
+    return value;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readBoundedBytes(handle, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, offset);
+    if (bytesRead === 0) break;
+    offset += bytesRead;
+  }
+  return offset;
+}
+
+function parseManagedRenderRootRecordText(text, recordPath) {
+  if (text === "") throw new Error(`Managed render root record is empty: ${recordPath}`);
+  const value = text.endsWith("\n") ? text.slice(0, -1) : text;
+  if (value === "" || value.includes("\n")) {
+    throw new Error(`Managed render root record must contain exactly one path line: ${recordPath}`);
+  }
+  return value;
+}
+
+async function prepareManagedRenderRoot(candidate, { mutate }) {
+  validateRenderRootText(candidate);
+  const absolute = path.normalize(candidate);
+  const statusBefore = await safeLstat(absolute);
+  if (statusBefore?.isSymbolicLink()) {
+    throw new Error(`Managed render root final component must not be a symlink: ${absolute}`);
+  }
+  if (statusBefore && !statusBefore.isDirectory()) {
+    throw new Error(`Managed render root must be a directory, not ${describeFileType(statusBefore)}: ${absolute}`);
+  }
+  await assertManagedRenderRootDoesNotOverlapReservedPaths(absolute);
+  let created = false;
+  if (!statusBefore && mutate) {
+    await mkdir(absolute, { recursive: true, mode: 0o700 });
+    created = true;
+  }
+  if (!mutate) {
+    return { path: absolute, created: false, writable: statusBefore ? null : null };
+  }
+  const statusAfter = await safeLstat(absolute);
+  if (!statusAfter) throw new Error(`Managed render root was not created: ${absolute}`);
+  if (statusAfter.isSymbolicLink()) {
+    throw new Error(`Managed render root final component must not be a symlink: ${absolute}`);
+  }
+  if (!statusAfter.isDirectory()) {
+    throw new Error(`Managed render root must be a directory, not ${describeFileType(statusAfter)}: ${absolute}`);
+  }
+  await assertManagedRenderRootDoesNotOverlapReservedPaths(absolute);
+  await boundedWriteProbe(absolute);
+  return { path: absolute, created, writable: true };
+}
+
+function validateRenderRootText(candidate) {
+  if (typeof candidate !== "string" || candidate === "") {
+    throw new Error("Managed render root must be a non-empty absolute path.");
+  }
+  if (Buffer.byteLength(candidate, "utf8") > MANAGED_RENDER_ROOT_PATH_MAX_BYTES) {
+    throw new Error(`Managed render root exceeds ${MANAGED_RENDER_ROOT_PATH_MAX_BYTES} UTF-8 bytes.`);
+  }
+  if (/^file:/i.test(candidate)) {
+    throw new Error(`Managed render root must be a filesystem path, not a file URI: ${candidate}`);
+  }
+  if (/[\u0000-\u001f\u007f]/u.test(candidate)) {
+    throw new Error("Managed render root must not contain NUL or control characters.");
+  }
+  if (!path.isAbsolute(candidate)) {
+    throw new Error(`Managed render root must be absolute: ${candidate}`);
+  }
+  const normalized = path.normalize(candidate);
+  if (normalized === path.parse(normalized).root) {
+    throw new Error(`Managed render root must not be the filesystem root: ${candidate}`);
+  }
+}
+
+async function assertManagedRenderRootDoesNotOverlapReservedPaths(candidate) {
+  const candidateCanonical = await canonicalPath(candidate);
+  const homeCanonical = await canonicalPath(home);
+  if (candidateCanonical === homeCanonical) {
+    throw new Error(`Managed render root must not be the user home directory: ${candidate}`);
+  }
+  const defaultCanonical = await canonicalPath(defaultRenderRoot);
+  if (candidateCanonical === defaultCanonical) return;
+  for (const [label, reserved] of [
+    ["install root", installRoot],
+    ["session root", sessionRoot],
+    ["transport root", transportDir],
+    ["artifact root", artifactRoot],
+  ]) {
+    const reservedCanonical = await canonicalPath(reserved);
+    if (pathsOverlap(candidateCanonical, reservedCanonical)) {
+      throw new Error(`Managed render root must not overlap the OpenReaper ${label}: ${candidate}`);
+    }
+  }
+}
+
+async function boundedWriteProbe(directory) {
+  let lastCollision = null;
+  for (let attempt = 0; attempt < WRITE_PROBE_ATTEMPTS; attempt += 1) {
+    const probePath = path.join(
+      directory,
+      `.openreaper-write-probe-${process.pid}-${randomBytes(8).toString("hex")}`,
+    );
+    let handle = null;
+    try {
+      handle = await open(probePath, "wx", 0o600);
+      await handle.writeFile("openreaper-managed-render-root-probe\n", "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await unlink(probePath);
+      return;
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      await unlink(probePath).catch(() => {});
+      if (error?.code === "EEXIST") {
+        lastCollision = error;
+        continue;
+      }
+      throw new Error(`Managed render root write probe failed for ${directory}: ${error.code ?? "ERROR"}: ${error.message}`);
+    }
+  }
+  throw new Error(`Managed render root write probe exhausted ${WRITE_PROBE_ATTEMPTS} exclusive attempts for ${directory}: ${lastCollision?.message ?? "collision"}`);
+}
+
+async function canonicalPath(candidate) {
+  const normalized = path.resolve(candidate);
+  let cursor = normalized;
+  const suffix = [];
+  while (true) {
+    try {
+      const resolved = await realpath(cursor);
+      return path.join(resolved, ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.join(cursor, ...suffix.reverse());
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function pathsOverlap(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+async function sameCanonicalPath(left, right) {
+  return await canonicalPath(left) === await canonicalPath(right);
+}
+
+async function safeLstat(filePath) {
+  try {
+    return await lstat(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function describeFileType(status) {
+  if (status.isFile()) return "a regular file";
+  if (status.isFIFO()) return "a FIFO";
+  if (status.isSocket()) return "a socket";
+  if (status.isBlockDevice()) return "a block device";
+  if (status.isCharacterDevice()) return "a character device";
+  return "a non-directory filesystem object";
+}
+
+async function allocateSiblingContainer(prefix) {
+  const parent = path.dirname(installRoot);
+  await mkdir(parent, { recursive: true });
+  return mkdtemp(path.join(parent, prefix));
+}
+
 async function readTextIfExists(filePath) {
   try {
     return await readFile(filePath, "utf8");
@@ -639,20 +1042,30 @@ async function readTextIfExists(filePath) {
 
 function parseArgs(args) {
   const parsed = {};
+  const requiredValueOptions = new Set(["install-root", "render-root"]);
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (!arg.startsWith("--")) continue;
-    const key = arg.slice(2).replaceAll("-", "_");
-    if (key.startsWith("no_")) {
-      parsed[`skip_${key.slice(3)}`] = true;
-      continue;
-    }
-    const equals = key.indexOf("=");
+    const raw = arg.slice(2);
+    const equals = raw.indexOf("=");
     if (equals !== -1) {
-      parsed[key.slice(0, equals)] = parseArgValue(key.slice(equals + 1));
+      const rawKey = raw.slice(0, equals);
+      const rawValue = raw.slice(equals + 1);
+      if (requiredValueOptions.has(rawKey) && rawValue === "") {
+        throw new Error(`--${rawKey} requires a non-empty value.`);
+      }
+      parsed[rawKey.replaceAll("-", "_")] = parseArgValue(rawValue);
       continue;
     }
+    if (raw.startsWith("no-")) {
+      parsed[`skip_${raw.slice(3).replaceAll("-", "_")}`] = true;
+      continue;
+    }
+    const key = raw.replaceAll("-", "_");
     const next = args[i + 1];
+    if (requiredValueOptions.has(raw) && (!next || next.startsWith("--"))) {
+      throw new Error(`--${raw} requires a non-empty value.`);
+    }
     if (next && !next.startsWith("--")) {
       parsed[key] = parseArgValue(next);
       i += 1;
