@@ -1276,3 +1276,84 @@ only and makes no live-readiness or support claim. The next active gate is
 Alpha3.2-B1: add bounded bridge heartbeat/liveness evidence so startup health can
 distinguish an unstarted bridge action from an unresponsive bridge loop before
 B2/B3 package, render-root, doctor, and live-smoke work.
+
+### Alpha3.2-B1 Bridge Liveness Bounded Lower-Layer Fix Window
+
+Status: reopened_for_fix; Alpha3.2-B product integration paused.
+
+Control-tower decision: 2026-07-10.
+
+Concrete blocker:
+
+- the existing live executor can prove that transport directories and the bridge
+  script exist, then it writes a request and waits for a result;
+- when no result arrives, it reports the same
+  `live_bridge_handshake_failed` / `BRIDGE_TIMEOUT` path whether the REAPER
+  bridge action was never run or the deferred bridge loop started and later
+  stopped responding;
+- therefore B3 startup health and doctor cannot truthfully distinguish
+  configuration readiness, `bridge_action_not_running`, and
+  `bridge_loop_unresponsive` without reopening the frozen live-bridge transport
+  implementation for a bounded internal liveness signal.
+
+Approved lower-layer behavior:
+
+- add one fixed internal heartbeat sidecar under the configured transport root;
+- the REAPER bridge loop writes it atomically on startup and refreshes it at a
+  bounded interval even when no command is waiting;
+- heartbeat metadata is transport-only and bounded to contract id, active owner,
+  active generation, sequence/timing fields, and loop interval; it contains no
+  project state, refs, media paths, arbitrary payload, or new execution power;
+- the Node live-bridge layer may read that sidecar without dispatching a template
+  and classify at least: transport/config absent, bridge action not running
+  (heartbeat absent), bridge loop unresponsive (heartbeat stale), bridge ready,
+  owner mismatch, generation mismatch, and invalid heartbeat;
+- staleness is determined from a bounded explicit threshold and filesystem
+  freshness, not from an untrusted project response;
+- B1 exposes only an internal liveness/probe contract for later B3 integration.
+  It does not change `ping`, doctor output, product wording, support matrices, or
+  default template execution in this window.
+
+Approved implementation write scope:
+
+```text
+packages/mcp-server/src/live-bridge-executor-v1.mjs
+reaper/bridge/src/10-file-transport.lua
+reaper/bridge/src/90-file-transport-loop.lua
+reaper/bridge/openreaper-live-bridge.lua  # generated only
+
+tests/layer4d1/live-bridge-executor.test.mjs
+tests/layer4d2/openreaper-live-bridge.test.mjs
+```
+
+Forbidden in B1:
+
+- no edits to frozen ABI/taxonomy docs, tool registrations, discovery/menu,
+  template catalog, recipe behavior, pack routes, handler registry, installer,
+  render root, startup product metadata, or support wording;
+- no sixth MCP tool, new Foundation Bridge operation family, public
+  `call_recipe`, hidden executor, direct request-file user workflow, raw Lua/
+  action/shell/UI bypass, project mutation, hardware/device I/O, or REAPER
+  process spawning;
+- no worker commits and no drive-by lower-layer changes outside the listed files.
+
+Required static acceptance:
+
+```text
+git diff --check
+npm run build:live-bridge
+npm run check:live-bridge
+node --test tests/layer4d1/live-bridge-executor.test.mjs
+node --test tests/layer4d2/openreaper-live-bridge.test.mjs
+npm run check:template-runtime
+npm test
+npm run build
+```
+
+Tests must use temporary transport fixtures to prove absent, fresh, stale,
+malformed, owner-mismatch, and generation-mismatch heartbeat states without
+starting REAPER. The generated bridge must remain deterministic and must refresh
+heartbeat from the real deferred loop source. Independent review is required.
+Live REAPER proof is deferred to B3, which must use a fresh evidence root and the
+authorized `/Users/Zhuanz/Untitled/Untitled.RPP` fixture before any live startup
+or doctor claim is accepted.
