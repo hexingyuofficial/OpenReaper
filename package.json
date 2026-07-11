@@ -53,7 +53,7 @@
     "check:alpha3-2c3d": "node --test tests/alpha3/alpha3-2c3d-project-file-macro.test.mjs",
     "check:alpha3-2d": "node --test tests/alpha3/alpha3-2d-generic-project-query.test.mjs tests/alpha3/alpha3-2d-project-index-runtime.test.mjs tests/alpha3/alpha3-2d-runtime-stdio-integration.test.mjs",
     "package:openreaper-alpha:project-index-smoke": "node scripts/package-openreaper-alpha.mjs --project-index-smoke-only --skip-zip",
-    "check:alpha3-2e": "node --test tests/alpha3/alpha3-2e-small-macro-spine.test.mjs tests/alpha3/alpha3-2e-project-delete-targets.test.mjs"
+    "check:alpha3-2e": "node --test tests/alpha3/alpha3-2e-small-macro-spine.test.mjs tests/alpha3/alpha3-2e-project-delete-targets.test.mjs tests/alpha3/alpha3-2e-project-layout.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"
