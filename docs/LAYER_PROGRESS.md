@@ -2087,3 +2087,82 @@ codec support, broader startup environments, customer-ready support, or the
 later media-import/project-query task-specific gates.
 
 Next gate: Alpha3.2-C Context, Refs, Project File Templates.
+
+### Alpha3.2-C Context, Refs, Project File Umbrella / C1 Implementation Window
+
+Status: in_progress; C1 only. C2 and C3 remain paused pending their own bounded
+lower-layer fix windows.
+
+Control-tower decision: 2026-07-11.
+
+Alpha3.2-C is divided into ordered, separately reviewed slices:
+
+```text
+C1  server-managed call context and request sequence
+C2  repairable ref examples and TEMPLATE_REFS_INVALID guidance
+C3A current project path and dirty-state read templates
+C3B save-current-project template
+C3C audited save-as template
+C3D secondary macro.project.file binding after audited templates exist
+```
+
+This window authorizes only C1. Normal product `call_template` calls must work
+without caller-authored execution context while the frozen Template Authoring
+ABI harness remains strict internally. The MCP server owns bounded session
+identity, `created_at`, and `request_sequence`; it allocates each sequence
+synchronously before dispatch, rotates the server session before the frozen
+999-sequence limit, and preserves explicit expected owner/generation checking.
+Environment-provided bridge identity must be strictly validated. Direct harness
+callers and lower-level tests may continue supplying explicit context.
+
+The Layer 1 five-tool surface remains exact. C1 must not add a sixth tool,
+`resolve_ref`, `make_ref`, a hidden executor, raw bridge-request access, raw Lua,
+raw action, shell, or UI escape paths. It must not weaken request-id,
+idempotency, owner, generation, timeout, input, ref, or result validation.
+
+Concrete lower-layer correction approved for this window: the compact discovery
+example emitted by `packages/mcp-server/src/discovery-menu-v1.mjs` may be changed
+only to stop teaching callers to author server-owned context and to demonstrate
+the normal omission path. The frozen discovery pagination, field-selection,
+budget, menu, and detail contracts remain unchanged. No ABI or taxonomy
+document change is approved.
+
+Approved tracked write scope:
+
+```text
+packages/mcp-server/src/alpha3-2c1-call-context-v1.mjs       # optional new helper
+packages/mcp-server/src/openreaper-mcp-stdio.mjs
+packages/mcp-server/src/discovery-menu-v1.mjs               # bounded example-only fix
+scripts/package-openreaper-alpha.mjs                        # package inclusion/smoke only
+scripts/openreaper-alpha-package/**                         # only if actual package smoke needs it
+tests/alpha3/alpha3-2c1-auto-context.test.mjs               # new focused tests
+tests/layer4d/call-template-runtime.test.mjs                # bounded regression only
+package.json                                                # test/check wiring only
+```
+
+Any need to change the core execution harness, Foundation / Bridge ABI,
+Template Authoring ABI, discovery contract beyond the example correction,
+bridge Lua, template descriptors/handlers, project-file behavior, refs error
+shape, or architecture/process files is a blocker and must return to the
+control tower. C2 and C3 implementation paths are not implicitly authorized by
+this umbrella entry.
+
+Required C1 evidence:
+
+- omitted-context `call_template` succeeds through the actual stdio server;
+- strict invalid owner/generation environment cases fail closed;
+- concurrent calls receive unique request ids and sequences allocated before
+  asynchronous dispatch;
+- sequence 999 causes a bounded session rotation before sequence reuse;
+- the chosen explicit-context compatibility behavior is tested and documented
+  in code-facing discovery without making the caller own request sequence;
+- package output runs an actual stdio omitted-context smoke;
+- the public tool list remains exactly five and direct raw requests remain
+  unavailable;
+- focused tests, existing Layer 4D runtime regressions, `npm test`, package
+  smoke, and `npm run build` pass.
+
+C1 does not require REAPER because it changes server-side request construction
+and discovery examples only. A later live read canary may reuse the authorized
+fixture, but no live-product claim depends on it in this slice. Workers do not
+commit. The control tower owns review, acceptance, ledger updates, and commits.
