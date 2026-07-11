@@ -2820,3 +2820,34 @@ Local REAPER 7.71 API truth confirms direct
 new project filename for a non-template save. This approval does not itself
 promote either route; focused implementation, final review, package gate, and
 combined live evidence remain required.
+
+#### Alpha3.2-C3B+C3C Final-Review Safety Amendment
+
+Status: approved bounded finding-fix window; 2026-07-11.
+
+The single final review rejected the first candidate with P0 0 / P1 2 / P2 3.
+The P1 findings were a real no-overwrite TOCTOU window between server preflight
+and REAPER save-as dispatch, and mutation-before-complete-response-budget
+validation. P2 findings covered ineffective root/home-parent checks, regex-only
+Lua write-path coverage, and incomplete backup/`.DS_Store`/process evidence in
+the combined live runner.
+
+Control-tower safety decision: this phase does not claim atomic no-clobber
+save-as. `template.project.save_project_as` must require explicit
+`overwrite=true` before dispatch even when the target is absent. A false or
+omitted overwrite intent returns a typed recoverable preflight blocker and no
+bridge request. Existing targets still must be non-symlink regular files; all
+parent and target safety checks remain. This explicit intent acknowledges that
+a target may appear between preflight and the direct REAPER API call. Atomic
+`overwrite=false` semantics remain held for a future separately designed
+filesystem transaction primitive.
+
+The worker must also reject filesystem-root and home-directory top-level target
+parents; conservatively prove before either mutation that the complete success
+envelope fits `max_response_bytes`; add executable fake-REAPER Lua handler
+behavior tests for unsaved/API/pcall/void/single-call/readback cases; and expand
+the combined runner to record adjacent backup inventories, source/target
+`.DS_Store` metadata, external control-tower REAPER ownership/exit responsibility,
+and candidate MCP immediate/delayed exit audit. It may strengthen package write
+request metadata assertions. No other capability, ABI, architecture, macro, or
+new-project scope is opened.
