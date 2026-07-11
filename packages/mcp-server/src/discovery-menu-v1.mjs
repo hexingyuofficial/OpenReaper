@@ -1,3 +1,8 @@
+import {
+  templateRefExample,
+  templateRefExampleGuidance,
+} from "../../core/src/template-ref-guidance-v1.mjs";
+
 export const DISCOVERY_MENU_CONTRACT = "discovery.menu.v1";
 
 export const DEFAULT_DISCOVERY_LIMIT = 25;
@@ -520,6 +525,7 @@ function exampleCallShape(item, kind) {
       input: firstExampleInput(item),
       refs: exampleRefs(item),
     },
+    ref_example_guidance: exampleRefGuidance(item),
     context_policy: {
       normal_call: "omit_context_server_managed",
       optional_logical_hints: [
@@ -567,12 +573,21 @@ function firstExampleInput(item) {
 }
 
 function exampleRefs(item) {
-  return requiredRefDeclarations(item).map((ref) => ({
-    name: ref.name,
-    kind: ref.kind,
-    required: true,
-    shape: `${ref.kind}:...`,
-  }));
+  return Object.fromEntries(
+    requiredRefDeclarations(item).map((ref) => [ref.name, templateRefExample(ref.kind)]),
+  );
+}
+
+function exampleRefGuidance(item) {
+  return Object.fromEntries(
+    requiredRefDeclarations(item).map((ref) => [
+      ref.name,
+      {
+        kind: ref.kind,
+        ...templateRefExampleGuidance(ref.kind),
+      },
+    ]),
+  );
 }
 
 function requiredRefDeclarations(item) {

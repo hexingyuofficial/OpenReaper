@@ -193,7 +193,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     contract: TEMPLATE_DESCRIPTOR_CONTRACT,
     id: WAVE1A_PROJECT_TEMPLATE_IDS.listMarkersRegions,
     title: "List markers and regions",
-    summary: "List ordinary project markers and regions with GUID-backed references when available.",
+    summary: "List ordinary project markers and regions with current index-number references.",
     pack: "project",
     lifecycle: "experimental",
     risk: "read",
@@ -218,8 +218,8 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     }, ["items", "marker_count", "region_count", "truncated"]),
     refs: refs({
       output: [
-        ref("marker_ref", "marker", false, "Marker refs use GUID identity when available."),
-        ref("region_ref", "region", false, "Region refs use GUID identity when available."),
+        ref("marker_ref", "marker", false, "Marker refs use the current handler index_number identity."),
+        ref("region_ref", "region", false, "Region refs use the current handler index_number identity."),
       ],
     }),
     artifacts: artifacts(),
@@ -274,7 +274,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       marker_ref: { type: "string" },
     }, ["marker_ref"]),
     refs: refs({
-      output: [ref("marker_ref", "marker", true, "Created marker GUID-backed ref.")],
+      output: [ref("marker_ref", "marker", true, "Created marker index-number ref.")],
     }),
     artifacts: artifacts(),
     expectedDelta: expectedDelta({
@@ -294,7 +294,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
         {
           name: "marker_ref_returned",
           kind: "state_delta",
-          summary: "A GUID-backed marker ref is returned after creation.",
+          summary: "An index-number marker ref is returned after creation.",
         },
       ],
     }),
@@ -310,7 +310,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     contract: TEMPLATE_DESCRIPTOR_CONTRACT,
     id: WAVE1A_PROJECT_TEMPLATE_IDS.createRegion,
     title: "Create region",
-    summary: "Create one explicit-bounds ordinary project region with a GUID-backed reference.",
+    summary: "Create one explicit-bounds ordinary project region with an index-number reference.",
     pack: "project",
     lifecycle: "experimental",
     risk: "write",
@@ -332,7 +332,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       region_ref: { type: "string" },
     }, ["region_ref"]),
     refs: refs({
-      output: [ref("region_ref", "region", true, "Created region GUID-backed ref.")],
+      output: [ref("region_ref", "region", true, "Created region index-number ref.")],
     }),
     artifacts: artifacts(),
     expectedDelta: expectedDelta({

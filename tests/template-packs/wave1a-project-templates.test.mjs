@@ -89,7 +89,7 @@ describe("Wave 1A project template descriptors", () => {
     }
   });
 
-  it("keeps marker and region descriptors GUID-ref oriented and explicit", () => {
+  it("keeps marker and region descriptors index-number oriented and explicit", () => {
     const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
     const list = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.listMarkersRegions);
     const createMarker = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createMarker);
@@ -103,14 +103,14 @@ describe("Wave 1A project template descriptors", () => {
     const overview = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.readTrackItemOverview);
 
     assert.deepEqual(list.refs.output.map(({ kind }) => kind), ["marker", "region"]);
-    assert.match(list.refs.output[0].summary, /GUID/);
-    assert.match(list.refs.output[1].summary, /GUID/);
+    assert.match(list.refs.output[0].summary, /index_number/);
+    assert.match(list.refs.output[1].summary, /index_number/);
     assert.deepEqual(createMarker.refs.output, [
       {
         name: "marker_ref",
         kind: "marker",
         required: true,
-        summary: "Created marker GUID-backed ref.",
+        summary: "Created marker index-number ref.",
       },
     ]);
     assert.deepEqual(createRegion.refs.output, [
@@ -118,7 +118,7 @@ describe("Wave 1A project template descriptors", () => {
         name: "region_ref",
         kind: "region",
         required: true,
-        summary: "Created region GUID-backed ref.",
+        summary: "Created region index-number ref.",
       },
     ]);
     assert.equal(Object.hasOwn(createRegion.inputSchema.properties, "item_ref"), false);

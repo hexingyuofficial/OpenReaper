@@ -433,6 +433,56 @@ async function smokePackagedOpenReaperMcp() {
     ) {
       throw new Error("Packaged MCP omitted-context call_template smoke failed");
     }
+    await clearDirectoryEntries(path.join(transportDir, "requests"));
+    await clearDirectoryEntries(path.join(transportDir, "results"));
+    const keyedRefResponse = client.callTool({
+      name: "call_template",
+      arguments: {
+        id: "template.tracks.rename_track",
+        input: { name: "Package keyed-ref smoke" },
+        refs: {
+          track_ref: {
+            kind: "track",
+            ref: "track:index:0",
+            identity: { scheme: "index", value: "0" },
+          },
+        },
+      },
+    });
+    const observedKeyedRefRequest = respondToPackagedBridgeRequest({
+      transportDir,
+      bridge: packageBridge,
+    });
+    const [keyedRefCall, keyedRefRequest] = await Promise.all([
+      keyedRefResponse.then(parseJsonToolResult),
+      observedKeyedRefRequest,
+    ]);
+    if (
+      keyedRefCall.ok !== true ||
+      keyedRefCall.template?.id !== "template.tracks.rename_track" ||
+      keyedRefRequest.refs?.length !== 1 ||
+      keyedRefRequest.refs[0]?.ref !== "track:index:0"
+    ) {
+      throw new Error("Packaged MCP keyed-ref call_template smoke failed");
+    }
+    const repairableRefCall = parseJsonToolResult(await client.callTool({
+      name: "call_template",
+      arguments: {
+        id: "template.tracks.rename_track",
+        input: { name: "Package repair guidance smoke" },
+        refs: {},
+      },
+    }));
+    if (
+      repairableRefCall.ok !== false ||
+      repairableRefCall.error?.code !== "TEMPLATE_REFS_INVALID" ||
+      !repairableRefCall.error?.details?.errors?.includes("refs.track_ref is required.") ||
+      repairableRefCall.error?.details?.missing_refs?.[0] !== "track_ref" ||
+      repairableRefCall.error?.details?.expected_refs?.[0]?.example?.kind !== "track" ||
+      repairableRefCall.error?.details?.accepted_input_forms?.length !== 2
+    ) {
+      throw new Error("Packaged MCP repairable ref error smoke failed");
+    }
     const executableAllowlistSmoke = await smokeExecutableLiveAllowlist(client);
     return {
       ok: true,
@@ -448,6 +498,23 @@ async function smokePackagedOpenReaperMcp() {
         request_sequence: 1,
         expected_owner: omittedContextRequest.bridge.expected_owner,
         expected_generation: omittedContextRequest.bridge.expected_generation,
+      },
+      keyed_ref_call_template: {
+        ok: true,
+        template_id: keyedRefCall.template.id,
+        actual_stdio: true,
+        input_form: "descriptor_keyed_object",
+        observed_ref: keyedRefRequest.refs[0],
+      },
+      repairable_ref_error: {
+        ok: true,
+        actual_stdio: true,
+        code: repairableRefCall.error.code,
+        errors: repairableRefCall.error.details.errors,
+        missing_refs: repairableRefCall.error.details.missing_refs,
+        accepted_input_forms: repairableRefCall.error.details.accepted_input_forms,
+        expected_ref: repairableRefCall.error.details.expected_refs[0],
+        next_action: repairableRefCall.error.details.next_action,
       },
       agent_startup_guidance: {
         installed_start_reaper_for_mcp: ping.agent_startup_guidance.commands.installed_start_reaper_for_mcp,

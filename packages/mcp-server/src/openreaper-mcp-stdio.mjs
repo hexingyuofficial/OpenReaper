@@ -133,7 +133,7 @@ async function main() {
       name: z.string().optional(),
       input: z.record(z.unknown()).optional(),
       params: z.record(z.unknown()).optional(),
-      refs: z.array(z.unknown()).optional(),
+      refs: z.union([z.array(z.unknown()), z.record(z.unknown())]).optional(),
       context: z.record(z.unknown()).optional(),
       budget: z.record(z.unknown()).optional(),
       idempotency_key: z.string().optional(),

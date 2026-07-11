@@ -8,6 +8,7 @@ import {
   normalizeFoundationBridgeRequest,
   validateFoundationBridgeResult,
 } from "./foundation-bridge-v1.mjs";
+import { buildTemplateRefGuidance } from "./template-ref-guidance-v1.mjs";
 import {
   TemplateDescriptorValidationError,
   normalizeTemplateDescriptor,
@@ -258,15 +259,23 @@ function normalizeExecutionRefs(refs, declaration) {
   if (Array.isArray(refs)) {
     const errors = validateRefObjects(refs, "refs");
     errors.push(...requiredRefKindErrors(refs, declaration.input));
-    if (errors.length > 0) throw refsValidationError(errors);
+    if (errors.length > 0) throw refsValidationError(errors, declaration.input, refs);
     return cloneJson(refs);
   }
 
   if (!isPlainObject(refs)) {
+    const message = "refs must be an array of object refs or an object keyed by descriptor ref name.";
     throw new TemplateExecutionHarnessError(
       "TEMPLATE_REFS_INVALID",
-      "refs must be an array of object refs or an object keyed by descriptor ref name.",
-      { recoverable: true },
+      message,
+      {
+        recoverable: true,
+        details: buildTemplateRefGuidance({
+          declarations: declaration.input,
+          refs,
+          errors: [message],
+        }),
+      },
     );
   }
 
@@ -301,7 +310,7 @@ function normalizeExecutionRefs(refs, declaration) {
   }
 
   if (errors.length > 0) {
-    throw refsValidationError(errors);
+    throw refsValidationError(errors, declaration.input, refs);
   }
 
   return cloneJson(normalized);
@@ -363,13 +372,13 @@ function validateRefObject(ref, label) {
   return errors;
 }
 
-function refsValidationError(errors) {
+function refsValidationError(errors, declarations, refs) {
   return new TemplateExecutionHarnessError(
     "TEMPLATE_REFS_INVALID",
     "Template refs failed validation.",
     {
       recoverable: true,
-      details: { errors },
+      details: buildTemplateRefGuidance({ declarations, refs, errors }),
     },
   );
 }
@@ -681,7 +690,7 @@ function objectRefFromCanonicalString(value) {
   const secondSeparator = remainder.indexOf(":");
   if (secondSeparator < 0) {
     if (kind === "project" && remainder === "current") {
-      return safeObjectRef(kind, { scheme: "alias", value: remainder }, { ref: value });
+      return safeObjectRef(kind, { scheme: "current", value: remainder }, { ref: value });
     }
     return null;
   }
