@@ -28,6 +28,26 @@ The intended first-product experience is:
 - let the agent carry out ordinary reversible work;
 - receive concise readback and recovery guidance.
 
+## How The Agent Chooses Common Operations
+
+You can stay task-first. For ordinary project work, the agent mainly uses a
+small macro spine:
+
+- inspect the current project;
+- query project targets;
+- delete confirmed project targets;
+- apply track and folder layout;
+- apply internal routing;
+- place or import media.
+
+Render is still contract-only/deferred. Seeing a render contract in discovery
+does not mean that complete current-project WAV/OGG rendering is supported.
+When a task needs project-file work or more detailed controls, the agent can
+expand secondary/on-demand capabilities. Audited save/save-as flows are
+available there; new/open/create remain held until their own evidence closes.
+Existing track, item, take, transport, send, MIDI, and stock-plugin controls are
+also expanded only when needed.
+
 ## Starting Or Reconnecting
 
 You should be able to ask:
@@ -88,6 +108,11 @@ Give me a compact project map.
 For large projects, OpenReaper should summarize first and hydrate details only
 when needed. It should not dump every FX parameter, automation point, media
 analysis result, or routing graph by default.
+
+Project Index rows are compact candidate search results for the agent. They are
+not a second project database that you need to maintain. Before any write, the
+agent must refresh or live re-resolve the candidate in REAPER, then read back the
+result. You do not need to edit SQLite, refs, or artifacts.
 
 ## Asking For Creative Work
 
@@ -190,10 +215,12 @@ A pack should clearly report:
 
 OpenReaper support is evidence-bound.
 
-The current repo contains V1 and Alpha2 evidence, plus Alpha3 draft product
-work. Phase 3 completion requires customer-usable startup, large-project query,
-fast readback/actions, workflow portability, packs, stock plugin fluency, and
-trial-officer acceptance.
+The current repo contains V1 and Alpha2 evidence plus the accepted Alpha3.2
+query, inspect, delete, layout, routing, media, startup, and recovery work.
+Project-file and detailed control capabilities remain secondary/on-demand.
+Render remains contract-only/deferred pending truthful current-project and
+time-selection behavior, deterministic naming/collision handling, and bounded
+WAV/OGG live evidence. Broad stock-plugin live support is not implied.
 
 If the guide, README, agent, or pack claims a feature is supported, that
 claim should point to matching evidence.

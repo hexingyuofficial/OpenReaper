@@ -115,6 +115,33 @@ REAPER handler -> template -> macro -> recipe -> agent/user
 
 如果 macro 或 recipe 需要缺失能力，不要用 raw Lua、raw action、shell、UI automation 或私有 executor 隐藏它。应打开有边界的 handler/template 窗口，添加经过审查的能力，运行相关 gate，然后再连接更高层产品面。
 
+### Primary / Secondary Macro 分层
+
+默认 agent context 分成两层：
+
+- **Primary macro spine：** `macro.project.inspect`、`macro.project.query`、
+  `macro.project.delete_targets`、`macro.project.apply_layout`、
+  `macro.routing.apply`、`macro.media.place_assets`。
+  `macro.render.targets` 仍是 contract-only/deferred 条目，不代表完整 render 已支持。
+- **Secondary/on-demand menu：** 已审查的 project-file save/save-as，以及现有
+  track、item、take、transport、send、MIDI 和 stock-plugin controls。project
+  new/open/create 在各自证据闭合前仍保持 held。默认只展示紧凑的用途/安全等级行，
+  需要时再展开完整 manual。
+
+每个 public macro 都必须有 action manual，说明 inputs、preflights、child
+requests、readback、blockers 和 recovery。plan-only macro 只能返回有边界的
+child template requests，由 agent 在授权后通过现有 `call_template` 路径执行；
+不得借此创建 hidden executor，也不得把 plan 说成已经执行。
+
+保留的 macro portfolio 目标是覆盖约 80% 的普通 agent REAPER 操作。其余能力
+应放在经过审查的 templates、recipes 或 extension packs 中，而不是继续增加
+狭窄的 public macro。
+
+Covered-legacy 规则：当 primary macro 完整替代旧 macro 且 replacement tests
+通过后，从 public discovery 移除被覆盖的旧 id。temporary alias 只能作为已接受
+package/test gate 的有边界迁移手段，不能作为推荐的 agent-facing macro；只有仍有
+独立行为的旧 id 才可暂留 secondary。
+
 ### 4. Discovery / Search
 
 Discovery 使用 `list_templates`、`list_recipes` 和 `CapabilitySearchIndex`。
@@ -148,6 +175,12 @@ Project SQLite Index：
 - 支持 selected context、changed-since、paging 和轻量 searchable fields；
 - 只有完整匹配 project/session/bridge identity 时，持久化 rows 才可用。
 
+`macro.project.query` 是唯一的 primary Project SQLite Index query/navigation
+surface。它返回带 entity fields、freshness、coverage 和 canonical refs 的紧凑候选
+rows；不是 raw SQL、write executor、render 或 save surface。refresh 由 OpenReaper
+负责；写操作前 agent 必须按需 hydrate，并在 REAPER 中 live re-resolve 候选。
+SQLite rows 本身永远不能授权写操作。
+
 常见 SQLite row 形状：
 
 ```text
@@ -172,7 +205,7 @@ Orchestration Layer 组织安全、快速的工作：
 - batch readback；
 - safe parallel reads；
 - serial authorized mutations；
-- generic control macros；
+- secondary/on-demand controls；
 - recovery 和 cleanup planning；
 - risk gates 和 typed blockers。
 
@@ -305,6 +338,14 @@ Artifacts 是保留证据和大 payload。它们通过 refs 寻址，不是文�
 
 已接受的 Alpha3 orchestration 当前是 execution scheduling 的 plan-only 能力：它可以组织 safe parallel reads、serial authorized mutations、batch readback、hard stops、recovery 和 concise reporting。它本身不扩大 live support，也不创建新 executor。
 
+当前有两个明确 defer，不是邀请开发 escape hatch：
+
+- `macro.render.targets` 仍是 contract-only/deferred，因为 current-project 和
+  time-selection mix render、explicit-region/OGG 覆盖、确定性命名/冲突处理，以及
+  WAV/OGG 的有边界 live 输出证据尚未全部闭合。
+- 统一的 `macro.controls.set` 仍 defer，因为跨 target kind 的 inputs、refs 和
+  verification 尚未形成一个高置信度契约；现有 controls macro 继续留在 secondary/on-demand。
+
 Risk policy 应支持 scoped authorization，例如：
 
 ```text
@@ -407,4 +448,4 @@ Support wording 必须绑定匹配证据。Static docs、fake smoke、draft reci
 - 是否避免没有证据的 broad support wording？
 - 是否报告未 commit 和剩余风险？
 
-对 docs，还要检查 `docs/USER_GUIDE.md` 是否保持 task-first 和 beginner-readable，而本指南是否承载 architecture 和 extension 规则。
+对 docs，还要检查 `docs/USER_GUIDE.md` 是否保持 task-first 和 beginner-readable，而本指南是否承载 architecture 和 extension 规则。Alpha3.2 不得用 raw SQL、直接 SQLite 写入、raw Lua/action、shell/UI bypass、hidden executor 或公开 `call_recipe` 绕过缺失 macro 或 defer 的 render/control 证据。

@@ -27,6 +27,19 @@ OpenReaper 的支持声明必须绑定证据。当前有些 Alpha3 能力已经�
 
 代理应该自己选择合适的 OpenReaper 能力。你不需要知道任务内部用的是工作流、查询、artifact、宏还是模板。
 
+## 代理如何选择常见操作
+
+你只需要描述任务。对于普通项目操作，代理主要使用一条小型 macro spine：
+
+- inspect 当前项目；
+- query 项目目标；
+- 删除已确认的项目目标；
+- 应用轨道和文件夹 layout；
+- 应用内部 routing；
+- 放置或导入 media。
+
+render 目前仍是 contract-only/deferred。发现里出现 render contract，不等于已经支持完整的当前项目 WAV/OGG 渲染。需要项目文件操作或更细的 controls 时，代理再按需展开 secondary 能力。已审查的 save/save-as 路径可以使用；new/open/create 在各自证据闭合前仍保持 held。track、item、take、transport、send、MIDI 或 stock-plugin controls 也只在需要时展开。
+
 ## 启动或重连
 
 可以这样说：
@@ -79,6 +92,8 @@ OpenReaper 的支持声明必须绑定证据。当前有些 Alpha3 能力已经�
 ```
 
 对于大项目，OpenReaper 应该先总结，再按需分页、查询或 hydrate 细节。默认不应该一次性倾倒整个项目、每个 FX 参数、每条 routing、每个 automation 点或所有媒体分析结果。
+
+Project Index rows 是代理用来快速筛选目标的紧凑候选搜索结果，不是需要你维护的第二个项目数据库。任何写操作前，代理都必须先在 REAPER 中 refresh 或 live re-resolve 候选目标，再执行并读回。你不需要编辑 SQLite、refs 或 artifacts。
 
 如果代理说需要 refresh，就让它 refresh。这表示缓存中的项目状态可能已经过期，OpenReaper 正在重新向 REAPER 确认后再做决定。
 
@@ -250,8 +265,11 @@ OpenReaper 当前拥有：
 - compact discovery；
 - 已审查的 template 和 recipe contracts；
 - Alpha2 在声明的本地 manual-bridge fixture 上的广泛 template live 证据；
-- Alpha3 已接受的项目查询、startup health planning、workflow/pack portability gates、orchestration planning、generic controls 和 stock plugin fluency；
+- Alpha3.2 已接受的 query、inspect、delete、layout、routing、media、startup 和 recovery 工作；
+- project-file 与详细 controls 的 secondary/on-demand 能力；
 - ReaComp stock-plugin 的有边界 live 证据；
 - 仅针对 `recipe.project.cleanup_fingerprint_report` 的 recipe-level live/local portability 证据。
+
+render 仍是 contract-only/deferred：当前项目和 time-selection 行为、确定性命名/冲突处理，以及 WAV/OGG 的有边界 live 证据尚未闭合。不要据此声称完整 render WAV/OGG 或 broad stock-plugin live support。
 
 除非后续证据路线明确扩大范围，不要假设 broad live support、自动 REAPER 启动、真实 extension-pack enablement、global alias execution、公开 `call_recipe`、隐藏执行器，或任意机器支持。

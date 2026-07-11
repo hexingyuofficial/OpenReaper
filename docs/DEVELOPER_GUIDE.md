@@ -106,6 +106,37 @@ fix the handler/template first in a bounded window.
 Recipes compose known powers. They must not define raw Lua, raw actions, shell
 commands, unreviewed templates, or bypass paths.
 
+### Primary and secondary macro tiers
+
+The default agent context has two tiers:
+
+- **Primary macro spine:** `macro.project.inspect`,
+  `macro.project.query`, `macro.project.delete_targets`,
+  `macro.project.apply_layout`, `macro.routing.apply`, and
+  `macro.media.place_assets`. `macro.render.targets` remains visible as a
+  contract-only/deferred entry, not as a claim of complete rendering.
+- **Secondary/on-demand menu:** audited project-file save/save-as operations
+  and the existing track, item, take, transport, send, MIDI, and stock-plugin
+  controls. Project new/open/create remain held pending their own evidence. Show
+  compact purpose/safety rows by default and expand full manuals only when
+  needed.
+
+A public macro must have an action manual covering inputs, preflights, child
+requests, readback, blockers, and recovery. Where the macro is plan-only, it
+returns bounded child template requests for the agent to execute through the
+existing `call_template` path after authorization; it must not create a hidden
+executor or imply that a plan already ran.
+
+The retained macro portfolio targets roughly 80% of ordinary agent REAPER
+operations. The remaining work belongs in audited templates, recipes, or
+extension packs rather than a growing list of narrow public macros.
+
+Covered-legacy rule: when a primary macro fully replaces a legacy macro and
+replacement tests pass, remove the covered legacy id from public discovery. A
+temporary alias is only a bounded migration aid for an accepted package/test
+gate and is not a recommended agent-facing macro. Keep a legacy id secondary
+only while it still has distinct behavior.
+
 ## 4. Discovery / Search
 
 Discovery uses:
@@ -164,6 +195,13 @@ payload_ref
 `payload_ref` points to Artifact Store evidence. Do not copy full payloads into
 SQLite by default.
 
+`macro.project.query` is the single primary Project SQLite Index query and
+navigation surface. It returns compact candidate rows with entity fields,
+freshness, coverage, and canonical refs; it is not raw SQL, a write executor,
+or a render/save surface. Refresh ownership stays with OpenReaper. Before a
+write, the agent must hydrate as needed and live re-resolve the candidate in
+REAPER. SQLite rows never authorize a write by themselves.
+
 ## 6. Orchestration Layer
 
 This layer organizes safe, fast work:
@@ -172,9 +210,19 @@ This layer organizes safe, fast work:
 - readback;
 - batch readback;
 - safe parallel reads;
-- generic controls;
+- secondary/on-demand controls;
 - risk gates;
 - recovery and cleanup.
+
+Two current deferrals are product constraints, not escape-hatch invitations:
+
+- `macro.render.targets` remains contract-only/deferred because current-project
+  and time-selection mix rendering, explicit-region/OGG coverage, deterministic
+  naming/collision behavior, and bounded WAV/OGG live output evidence are not
+  all closed.
+- A consolidated `macro.controls.set` remains deferred because one
+  high-confidence cross-target-kind contract for inputs, refs, and verification
+  has not been established; existing control macros stay secondary/on-demand.
 
 Write path:
 
@@ -276,3 +324,7 @@ notes.
 
 Do not turn the user guide into an architecture manual, and do not hide
 architecture rules in the user guide.
+
+For Alpha3.2, do not publish raw SQL, direct SQLite writes, raw Lua/actions,
+shell or UI bypasses, a hidden executor, or public `call_recipe` as a workaround
+for a missing macro or deferred render/control evidence.
