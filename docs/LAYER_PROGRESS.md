@@ -2622,3 +2622,24 @@ not save, save-as, render, or claim broader project-file support.
 
 Workers do not commit. The control tower owns review, live smoke, acceptance,
 ledger updates, and commits.
+
+#### Alpha3.2-C3A Recipe-Contract Count Truth Amendment
+
+Status: approved and applied by the control tower; 2026-07-11.
+
+The C3A candidate adds two accepted Wave1A project descriptors, increasing the
+accepted official catalog from 216 to 218 while preserving the historical
+Alpha2 live-graduated count at 213. The dynamic Recipe Contract gate correctly
+rejected the stale literal `216 templates total` in the frozen ABI document.
+
+Exact architecture write scope:
+
+```text
+docs/abi/RECIPE_CONTRACT_V1.md
+```
+
+Only the accepted dependency-count literal may change from 216 to 218. This
+amendment does not change recipe shape, dependency rules, lifecycle, execution,
+Tool ABI, accepted catalog composition, or any other ABI semantics. The C3A
+worker remains forbidden from editing architecture files and must resume only
+after this control-tower correction is committed.
