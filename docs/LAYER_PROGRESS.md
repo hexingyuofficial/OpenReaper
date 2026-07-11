@@ -2166,3 +2166,91 @@ C1 does not require REAPER because it changes server-side request construction
 and discovery examples only. A later live read canary may reuse the authorized
 fixture, but no live-product claim depends on it in this slice. Workers do not
 commit. The control tower owns review, acceptance, ledger updates, and commits.
+
+### Alpha3.2-C1 Server-Managed Call Context Accepted
+
+Status: accepted.
+
+Accepted implementation commit:
+
+```text
+c8ded67 runtime: add server-managed call context
+```
+
+Accepted contract:
+
+```text
+alpha3.2.c1.call_context.v1
+```
+
+Normal MCP stdio `call_template` calls now omit caller-authored execution
+context. The product wrapper strictly resolves installed bridge owner and
+generation, generates a bounded process-local session, synchronously allocates
+sequence `1..999` before dispatch, rotates the session before sequence reuse,
+and supplies `created_at` plus the complete strict context to the unchanged
+frozen Template Authoring ABI harness. A per-sequence timestamp ratchet prevents
+request-id collisions across same-millisecond or fixed-clock session rollover.
+
+Caller context remains an optional compatibility hint only. A bounded
+`client_id` may be retained; caller `session_id` is validated but not adopted;
+caller `created_at` and `request_sequence` cannot replace server values; and
+owner/generation conflicts fail with a typed error. Present-but-invalid
+`OPENREAPER_LIVE_BRIDGE_OWNER` or `OPENREAPER_LIVE_BRIDGE_GENERATION` values
+fail server initialization closed rather than falling back to defaults.
+
+The approved discovery correction now teaches the normal omission path and
+labels session, timestamp, and request sequence as server-owned. The public MCP
+surface remains exactly five tools. No raw request, Lua, action, shell, UI,
+`resolve_ref`, `make_ref`, recipe executor, or hidden executor surface was
+added. No core harness, bridge Lua, descriptor, handler, ABI, or taxonomy file
+changed.
+
+Independent final review: PASS with P0-P3 all zero. It verified actual frozen-
+harness entry, invalid-environment shutdown, installed-identity conflict
+rejection, synchronous allocation, 999 rollover, fixed-clock request-id
+uniqueness, bounded client/session input, exact five tools, discovery scope,
+actual packaged stdio execution, fake bridge cleanup, and exact file ownership.
+
+Control-tower gates passed:
+
+```text
+git diff --check
+node --check packages/mcp-server/src/alpha3-2c1-call-context-v1.mjs
+node --check packages/mcp-server/src/openreaper-mcp-stdio.mjs
+npm run check:alpha3-2c1                                      # 6/6
+npm run check:discovery-menu                                  # 11/11
+npm run check:tool-abi                                        # exact 5
+npm run check:template-runtime
+npm test
+npm run build
+```
+
+Control-tower gate evidence:
+
+```text
+/tmp/openreaper-alpha32c1-ct-20260711T045207Z
+```
+
+Fresh package smoke passed without `--skip-smoke` and used the packaged
+`OpenReaper-alpha/bin/openreaper-mcp` plus a fake Foundation file bridge to run
+`template.transport.read_state` with context omitted:
+
+```text
+/tmp/openreaper-alpha32c1-package-20260711T044253Z/OpenReaper-alpha
+/tmp/openreaper-alpha32c1-package-20260711T044253Z.package.log
+```
+
+The observed request used sequence `1`, a server-managed session,
+`openreaper-alpha-package-smoke` owner, and generation `1`. Package cleanup left
+no fake child, request, result, or probe residue. No REAPER process was started;
+C1 proves server construction, frozen-harness entry, packaged stdio transport,
+and fake bridge dispatch, not live REAPER execution.
+
+Next gate: Alpha3.2-C2 repairable refs. C2 remains paused until the control tower
+opens a separate bounded lower-layer fix window. The C2 scout found that stdio
+currently exposes only array refs while the harness already accepts keyed refs,
+that discovery examples are declarations rather than valid object refs, and
+that `TEMPLATE_REFS_INVALID` lacks expected names/shapes/examples. It also found
+marker/region descriptor wording that conflicts with index-based handler truth
+and a `project:current` result-normalization scheme mismatch; neither issue was
+changed in C1 and each requires an explicit C2 control-tower decision.
