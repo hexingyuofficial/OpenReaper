@@ -57,7 +57,10 @@ describe("Alpha3.2-E media place_assets planner", () => {
       "template.project.create_region",
     ]);
     assert.equal(plan.mutation_requests[1].refs.track_ref, "track:planned:kick");
+    assert.equal(plan.mutation_requests[1].refs.source_file_ref, "file:planned:kick");
+    assert.equal(Object.hasOwn(plan.mutation_requests[1].refs, "file_ref"), false);
     assert.equal(plan.mutation_requests[2].refs.track_ref, "track:guid:{DRUMS}");
+    assert.equal(plan.mutation_requests[2].refs.source_file_ref, "file:planned:loop");
     assert.equal(plan.readback_requests.filter((request) => request.id === "template.items.read_item_summary").length, 2);
     assert.equal(plan.readback_requests.some((request) => request.id === "macro.project.query"), true);
     assert.equal(plan.child_requests.length, plan.preflight_requests.length + plan.mutation_requests.length + plan.readback_requests.length);

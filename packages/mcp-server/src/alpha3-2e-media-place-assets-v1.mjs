@@ -267,7 +267,7 @@ function buildMutationRequests(assets) {
     const input = asset.start_percent === null
       ? { position_seconds: asset.position_seconds, preserve_selection: asset.preserve_selection }
       : { position_seconds: asset.position_seconds, start_percent: asset.start_percent, end_percent: asset.end_percent, preserve_selection: asset.preserve_selection };
-    requests.push(childRequest(sequence++, "mutation", importId, { track_ref: plannedTrackRef(asset), file_ref: plannedFileRef(asset) }, input, `Import media asset ${asset.id} to its planned target track.`));
+    requests.push(childRequest(sequence++, "mutation", importId, { track_ref: plannedTrackRef(asset), source_file_ref: plannedFileRef(asset) }, input, `Import media asset ${asset.id} to its planned target track.`));
     if (asset.region) requests.push(childRequest(sequence++, "mutation", CREATE_REGION_ID, {}, compactObject({ name: asset.region.name, start_seconds: asset.region.start_seconds, end_seconds: asset.region.end_seconds, color: asset.region.color }), `Create optional project region for media asset ${asset.id}.`));
   }
   return deepFreeze(requests);
