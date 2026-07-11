@@ -2355,3 +2355,26 @@ Required C2 evidence:
 C2 does not require REAPER because it aligns product schema, discovery,
 validation guidance, and already accepted handler truth. Workers do not commit.
 The control tower owns review, acceptance, ledger updates, and commits.
+
+#### Alpha3.2-C2 Exact Legacy Regression-Test Scope Amendment
+
+Status: approved; 2026-07-11.
+
+The first C2 full `npm test` reached one stale regression assertion after all
+focused C2, Layer 4B, Layer 1.5, Layer 4D, Tool ABI, discovery, template runtime,
+and diff-hygiene checks passed. The accepted descriptor truth correction from
+GUID wording to current marker/region index-number handler behavior necessarily
+requires the matching historical descriptor test to change.
+
+Additional exact write scope:
+
+```text
+tests/template-packs/wave1a-project-templates.test.mjs
+```
+
+The amendment permits only replacing marker/region GUID-wording expectations
+with index-number handler truth. It does not authorize descriptor schema
+changes, GUID handler implementation, Lua/resolver edits, broader fixture
+rewrites, or any C2 contract expansion. After the single-file correction the
+same worker must rerun the failed full gate, build, package smoke, and return for
+independent review without committing.
