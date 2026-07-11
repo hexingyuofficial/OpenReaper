@@ -2254,3 +2254,104 @@ that `TEMPLATE_REFS_INVALID` lacks expected names/shapes/examples. It also found
 marker/region descriptor wording that conflicts with index-based handler truth
 and a `project:current` result-normalization scheme mismatch; neither issue was
 changed in C1 and each requires an explicit C2 control-tower decision.
+
+### Alpha3.2-C2 Repairable Refs Bounded Lower-Layer Fix Window
+
+Status: reopened_for_fix; Alpha3.2-C3 remains paused.
+
+Control-tower decision: 2026-07-11.
+
+Accepted dependency:
+
+```text
+C1 implementation: c8ded67 runtime: add server-managed call context
+C1 acceptance ledger: 2992126 docs: accept alpha3.2c1 call context
+```
+
+Concrete product blockers:
+
+- discovery `exampleRefs()` emits declaration notes such as `shape:track:...`
+  rather than valid Foundation object-ref shapes, so copying the example fails;
+- `TEMPLATE_REFS_INVALID` normally returns only bounded error strings and omits
+  descriptor ref names, required/missing roles, accepted input forms, complete
+  examples, and executable recovery guidance;
+- the frozen harness already accepts either an object-ref array or an object
+  keyed by descriptor ref name, but stdio currently exposes only the array form,
+  losing role identity for multiple refs of the same kind;
+- accepted marker/region descriptors claim GUID-backed identity while current
+  list/create/mutation handlers produce and consume index identity;
+- structured result normalization maps `project:current` to `scheme:alias` while
+  Foundation tests and project handlers use `scheme:current`.
+
+C2 contract:
+
+```text
+alpha3.2.c2.ref_guidance.v1
+```
+
+Required behavior:
+
+- preserve the frozen ref-kind set and Foundation request shape;
+- preserve every existing `details.errors` string for compatibility while
+  enriching all `TEMPLATE_REFS_INVALID` paths with bounded `expected_refs`,
+  `missing_refs`, `accepted_input_forms`, kind-correct complete object examples,
+  replacement guidance, and a safe next action;
+- examples distinguish a structurally valid shape from a live-resolved object;
+  GUID/path placeholders must explicitly say which field values require
+  replacement from resolver/query/template output or a real absolute path;
+- discovery examples retain descriptor ref names by using the already accepted
+  descriptor-keyed object form and must be copyable JSON shapes;
+- stdio accepts both the existing object-ref array and the existing harness
+  descriptor-keyed object form without adding tools or execution powers;
+- common guidance covers project, track, item, take, fx, marker, region, and
+  file. Handler-proven schemes are authoritative: project `current`, stable
+  track/item/take GUID with explicit index fallback, owner-qualified FX,
+  marker/region index number, and absolute file path;
+- make the exact marker/region descriptor summaries truthful to current
+  index-based handlers. Do not add GUID support or change handler behavior;
+- normalize only the canonical string `project:current` to
+  `identity:{scheme:"current",value:"current"}`. Do not broadly change alias or
+  result-ref inference behavior;
+- do not introduce `resolve_ref`, `make_ref`, a sixth MCP tool, raw request,
+  Lua/action/shell/UI access, hidden execution, or stricter semantic ref
+  validation that rejects previously structurally accepted refs.
+
+Approved tracked write scope:
+
+```text
+packages/core/src/template-ref-guidance-v1.mjs               # optional shared bounded guidance
+packages/core/src/template-execution-harness-v1.mjs          # error enrichment + project:current only
+packages/core/src/template-packs/wave1a-project-templates-v1.mjs # exact marker/region wording only
+packages/mcp-server/src/discovery-menu-v1.mjs                # ref examples only
+packages/mcp-server/src/openreaper-mcp-stdio.mjs              # array|keyed refs schema only
+scripts/package-openreaper-alpha.mjs                         # packaged keyed/error smoke only
+tests/alpha3/alpha3-2c2-ref-guidance.test.mjs                # new focused coverage
+tests/layer4b/template-execution-harness.test.mjs            # bounded error/result regression
+tests/layer1_5/discovery-menu.test.mjs                       # bounded discovery regression
+tests/layer4d/call-template-runtime.test.mjs                 # bounded runtime regression
+package.json                                                 # test/check wiring only
+```
+
+Any need to change Foundation ref kinds, descriptor ABI/schema, handler Lua,
+resolver behavior, bridge request/result envelopes, tool ABI, docs/ABI,
+taxonomy, C3 project-file behavior, or other architecture/process files is a
+blocker and must return to the control tower.
+
+Required C2 evidence:
+
+- all common kind examples match handler-tested canonical semantics;
+- discovery keyed examples pass the unchanged harness structural validation;
+- actual stdio accepts keyed refs and still reports exactly five tools;
+- missing, malformed, wrong-kind, unknown-name, array, and keyed-ref failures
+  retain existing errors and add bounded repair data;
+- two same-kind descriptor roles remain distinguishable by name;
+- `project:current` result inference returns `scheme:current` only for that
+  canonical token;
+- marker/region descriptor text matches current index handler truth;
+- package actual stdio smoke covers keyed refs and a repairable ref failure;
+- focused Layer 4B/1.5/4D regressions, full `npm test`, package smoke, and
+  `npm run build` pass.
+
+C2 does not require REAPER because it aligns product schema, discovery,
+validation guidance, and already accepted handler truth. Workers do not commit.
+The control tower owns review, acceptance, ledger updates, and commits.
