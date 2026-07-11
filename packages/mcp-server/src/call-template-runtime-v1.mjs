@@ -116,6 +116,12 @@ import {
   planAlpha3_2EProjectDeleteTargetsMacro,
 } from "./alpha3-2e-project-delete-targets-v1.mjs";
 import {
+  createAlpha3_2EProjectLayoutMacroDiscoveryItems,
+  createAlpha3_2EProjectLayoutMacroRuntimeEnvelope,
+  isAlpha3_2EProjectLayoutMacroId,
+  planAlpha3_2EProjectLayoutMacro,
+} from "./alpha3-2e-project-layout-v1.mjs";
+import {
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
   createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
   isAlpha3_2C3DProjectFileMacroId,
@@ -845,6 +851,7 @@ export function createCallTemplateRuntime(options = {}) {
   const executableDiscoveryTemplates = [
     ...createAlpha3_2EProjectInspectMacroDiscoveryItems(),
     ...createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(),
+    ...createAlpha3_2EProjectLayoutMacroDiscoveryItems(),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
     ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
@@ -881,6 +888,18 @@ export function createCallTemplateRuntime(options = {}) {
           idempotency_key_present: normalized.idempotency_key !== undefined,
         });
         const envelope = createAlpha3_2EProjectDeleteTargetsMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2EProjectLayoutMacroId(id)) {
+        const plan = planAlpha3_2EProjectLayoutMacro(normalized.input, {
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2EProjectLayoutMacroRuntimeEnvelope({
           request: normalized,
           plan,
           now,

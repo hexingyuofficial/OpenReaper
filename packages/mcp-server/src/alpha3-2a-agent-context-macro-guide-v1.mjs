@@ -345,6 +345,9 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     entity_kind: "macro.project.apply_layout",
     task_intents: ["build folder layout", "create tracks", "organize track order", "apply colors"],
     rollout_slice: "3.2-E",
+    known_blocker: null,
+    implementation_status: "plan_only_runtime_bound_preview_first",
+    runnable: true,
     manual: actionManual({
       when_to_use: [
         "Apply an explicit JSON layout of folder tracks and child tracks to the current project.",
@@ -732,7 +735,7 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets"]);
+const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout"]);
 const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => !RUNTIME_BOUND_PRIMARY_MACRO_IDS.has(entry.id));
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
 const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
@@ -782,7 +785,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; macro.project.inspect, macro.project.query, and macro.project.delete_targets are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
+    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, and macro.project.apply_layout are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
     recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
   },
   primary_spine: {
