@@ -7,22 +7,24 @@ SESSION_ROOT="${OPENREAPER_SESSION_ROOT:-${INSTALL_ROOT}/session}"
 TRANSPORT_DIR="${OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR:-${SESSION_ROOT}/transport}"
 ARTIFACT_ROOT="${OPENREAPER_ARTIFACT_ROOT:-${OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT:-${SESSION_ROOT}/artifacts}}"
 
-mkdir -p "${TRANSPORT_DIR}/requests" "${TRANSPORT_DIR}/results" "${ARTIFACT_ROOT}"
-
 export OPENREAPER_DOCTOR_INSTALL_ROOT="${INSTALL_ROOT}"
+export OPENREAPER_DOCTOR_SESSION_ROOT="${SESSION_ROOT}"
 export OPENREAPER_DOCTOR_TRANSPORT_DIR="${TRANSPORT_DIR}"
 export OPENREAPER_DOCTOR_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 
-node --input-type=module <<'NODE'
+exec node --input-type=module - "$@" <<'NODE'
+import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { access, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { PassThrough } from "node:stream";
 
 const require = createRequire(import.meta.url);
 const home = os.homedir();
 const installRoot = process.env.OPENREAPER_DOCTOR_INSTALL_ROOT;
+const sessionRoot = process.env.OPENREAPER_DOCTOR_SESSION_ROOT;
 const transportDir = process.env.OPENREAPER_DOCTOR_TRANSPORT_DIR;
 const artifactRoot = process.env.OPENREAPER_DOCTOR_ARTIFACT_ROOT;
 const mcpCommand = path.join(installRoot, "bin", "openreaper-mcp");
@@ -32,6 +34,7 @@ const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
 const startCommand = path.join(installRoot, "bin", "openreaper-start");
 const doctorCommand = path.join(installRoot, "bin", "openreaper-doctor");
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
+const readinessModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
 const bridgeActionName = "OpenReaper: Start MCP bridge";
@@ -46,10 +49,79 @@ const requiredFxTemplates = [
   "template.fx.set_fx_parameter_normalized",
   "template.fx.read_fx_parameter",
 ];
+const activeMcpLifecycles = new Set();
+let signalShutdownPromise = null;
+for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
+  process.once(signal, () => {
+    signalShutdownPromise ??= (async () => {
+      await cleanupAllMcpLifecycles(`doctor_${signal.toLowerCase()}`).catch(() => {});
+      process.exit(exitCode);
+    })();
+  });
+}
+
+const readinessModule = await import(pathToFileURL(readinessModulePath));
+const {
+  ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
+  alpha3_2B3ReadProbeTimeoutMs,
+  createAlpha3_2B3DoctorTaskResult,
+  inspectAlpha3_2B3ReaperProcess,
+  inspectAlpha3_2B3RenderRoot,
+  normalizeAlpha3_2B3RequestResponseProof,
+  parseAlpha3_2B3DoctorArgs,
+  parseAlpha3_2B3ExpectedIdentity,
+  resolveAlpha3_2B3DoctorRenderRoot,
+} = readinessModule;
+
+const cli = parseAlpha3_2B3DoctorArgs(process.argv.slice(2));
+if (!cli.ok) {
+  process.stderr.write(`[OpenReaper] ${cli.error}\n`);
+  process.stderr.write("usage: openreaper-doctor [--for live-edit|render|media-import|project-query] [--wait-bridge[=SECONDS]]\n");
+  process.exit(2);
+}
+
+const renderSelection = await resolveAlpha3_2B3DoctorRenderRoot({
+  env: process.env,
+  installRoot,
+  sessionRoot,
+});
+const effectiveRenderRoot = renderSelection.selection_status === "selected"
+  ? renderSelection.path
+  : "openreaper-invalid-render-root-selection";
+const expectedOwner = Object.prototype.hasOwnProperty.call(process.env, "OPENREAPER_LIVE_BRIDGE_OWNER")
+  ? process.env.OPENREAPER_LIVE_BRIDGE_OWNER
+  : "openreaper-alpha";
+const expectedGeneration = Object.prototype.hasOwnProperty.call(process.env, "OPENREAPER_LIVE_BRIDGE_GENERATION")
+  ? process.env.OPENREAPER_LIVE_BRIDGE_GENERATION
+  : "1";
+const mcpEnv = {
+  ...process.env,
+  OPENREAPER_MCP_PACKAGE_ROOT: installRoot,
+  OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
+  OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
+  OPENREAPER_ARTIFACT_ROOT: artifactRoot,
+  OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+  OPENREAPER_LIVE_SMOKE_RENDER_ROOT: effectiveRenderRoot,
+  OPENREAPER_LIVE_BRIDGE_OWNER: expectedOwner,
+  OPENREAPER_LIVE_BRIDGE_GENERATION: expectedGeneration,
+  OPENREAPER_LIVE_BRIDGE_TIMEOUT_MS: String(alpha3_2B3ReadProbeTimeoutMs(process.env)),
+};
+const identity = parseAlpha3_2B3ExpectedIdentity(mcpEnv);
+const reaperProcess = await inspectAlpha3_2B3ReaperProcess({ sessionRoot });
+const renderInspection = renderSelection.selection_status === "selected"
+  ? await inspectAlpha3_2B3RenderRoot(renderSelection.path)
+  : Object.freeze({
+      status: "render_root_path_invalid",
+      ready: false,
+      configured: true,
+      path: null,
+      reason: renderSelection.reason ?? "managed_render_root_selection_invalid",
+    });
 
 const report = {
   product: "OpenReaper alpha",
   contract: "openreaper.alpha.doctor_report.v1",
+  runtime_contract: readinessModule.ALPHA3_2B3_RUNTIME_DOCTOR_READINESS_CONTRACT,
   install_root: installRoot,
   mcp_server_names: ["openreaper", "vital-agent-mcp"],
   commands: {
@@ -75,7 +147,32 @@ const report = {
   stale_config_findings: [],
   migration_actions: [],
   smoke: null,
+  package_status: "unknown",
   status: "unknown",
+  runtime_readiness: null,
+  runtime_diagnosis: null,
+  reaper_process: reaperProcess,
+  render_root_selection: {
+    source: renderSelection.source,
+    selection_status: renderSelection.selection_status,
+    ...(renderSelection.path ? { path: renderSelection.path } : {}),
+    ...(renderSelection.reason ? { reason: renderSelection.reason } : {}),
+  },
+  render_root_inspection: renderInspection,
+  request_response: {
+    status: "not_run",
+    ready: false,
+    template_id: ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
+  },
+  wait_bridge: cli.wait_bridge_seconds === null
+    ? null
+    : {
+        requested: true,
+        seconds: cli.wait_bridge_seconds,
+        polls: 0,
+        reached_bridge_ready: false,
+      },
+  task: null,
 };
 
 report.checks.node = {
@@ -85,6 +182,7 @@ report.checks.node = {
 report.checks.mcp_command = await pathCheck(mcpCommand);
 report.checks.vital_agent_mcp_command = await pathCheck(vitalAgentMcpCommand);
 report.checks.server_script = await pathCheck(serverScript);
+report.checks.readiness_module = await pathCheck(readinessModulePath);
 report.checks.vital_agent_server_script = await pathCheck(vitalAgentServerScript);
 report.checks.bridge_script = await pathCheck(bridgeScript);
 report.checks.bridge_action_script = await pathCheck(bridgeActionScript);
@@ -94,23 +192,51 @@ report.checks.zod = await pathCheck(path.join(installRoot, "node_modules", "zod"
 
 await scanClientConfigs();
 report.smoke = await smokeMcp();
+report.runtime_readiness = report.smoke?.openreaper?.runtime_readiness ?? null;
+report.request_response = report.smoke?.openreaper?.request_response ?? report.request_response;
+if (report.wait_bridge) {
+  report.wait_bridge.polls = report.smoke?.openreaper?.wait_bridge_polls ?? 0;
+  report.wait_bridge.reached_bridge_ready = report.runtime_readiness?.bridge?.status === "bridge_ready";
+}
+report.runtime_diagnosis = runtimeDiagnosis(report.runtime_readiness?.bridge, reaperProcess);
 report.migration_actions = migrationActions();
-report.status = computeStatus();
+report.package_status = computePackageStatus();
+report.status = report.package_status;
+
+if (cli.mode !== null) {
+  report.task = createAlpha3_2B3DoctorTaskResult({
+    mode: cli.mode,
+    runtimeReadiness: report.runtime_readiness,
+    requestResponse: report.request_response,
+    reaperProcess,
+    renderInspection,
+    installRoot,
+    startCommand,
+    bridgeActionName,
+    transportDir,
+  });
+}
 
 console.log(JSON.stringify(report, null, 2));
 console.log("");
 console.log("OpenReaper doctor agent report");
 console.log(`status=${report.status}`);
+console.log(`package_status=${report.package_status}`);
 console.log("mcp_server_names=openreaper,vital-agent-mcp");
 console.log(`mcp_command=${mcpCommand}`);
 console.log(`vital_agent_mcp_command=${vitalAgentMcpCommand}`);
 console.log(`start_reaper_for_mcp=${startCommand}`);
 console.log(`bridge_action=${bridgeActionName}`);
 console.log(`bridge_action_script=${bridgeActionScript}`);
+console.log(`bridge_status=${report.runtime_readiness?.bridge?.status ?? "not_observed"}`);
+console.log(`bridge_diagnosis=${report.runtime_diagnosis ?? "not_observed"}`);
+console.log(`reaper_process_status=${reaperProcess.status}`);
+console.log(`render_root_status=${renderInspection.status}`);
+console.log(`request_response_status=${report.request_response.status}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
 console.log("startup_lifetime=openreaper-start launches REAPER detached from the agent shell and returns a pid/log path.");
 console.log("startup_dialog_assist=only Project Settings / Notes show-notes-on-load is auto-dismissed; license/evaluation, recovery, plugin/FX, version, and unknown windows require agent/user action.");
-console.log("connection_probe=after the bridge action and MCP reconnect, run call_template(template.transport.read_state) before claiming live bridge connection.");
+console.log("connection_probe=after bridge_ready, doctor uses MCP call_template(template.transport.read_state) before claiming request/response readiness.");
 if (report.smoke?.ok) {
   console.log(`kernel=${report.smoke.openreaper.kernel}`);
   console.log(`tools=${report.smoke.openreaper.tool_surface.join(",")}`);
@@ -118,13 +244,26 @@ if (report.smoke?.ok) {
   console.log(`fx_templates=${report.smoke.openreaper.required_fx_templates.join(",")}`);
   console.log(`vital_agent_tools=${report.smoke.vital_agent_mcp.required_tools.join(",")}`);
 }
+if (report.task) {
+  console.log(`task_mode=${report.task.mode}`);
+  console.log(`task_status=${report.task.status}`);
+  console.log(`task_failure_layer=${report.task.failure_layer ?? "none"}`);
+  console.log(`task_next_action=${report.task.next_action.instruction}`);
+  if (report.task.safe_copy_paste_fix) console.log(`task_safe_fix=${report.task.safe_copy_paste_fix}`);
+}
 if (report.migration_actions.length > 0) {
   console.log("migration_needed=yes");
   for (const action of report.migration_actions) console.log(`migration_action=${action}`);
 } else {
   console.log("migration_needed=no");
 }
-console.log(`next_agent_step=If live REAPER work is requested, run the start_reaper_for_mcp command. After REAPER opens, try to run the REAPER action "${bridgeActionName}". If the agent cannot operate the REAPER UI, ask the user to open Actions, search "${bridgeActionName}", click Run, then reconnect through MCP server openreaper and run call_template(template.transport.read_state). If the probe does not return, check for REAPER windows waiting for action and ask the user to resolve them.`);
+console.log(`next_agent_step=If live REAPER work is requested, run ${startCommand}. After REAPER opens, run the REAPER action "${bridgeActionName}". Then use openreaper-doctor --wait-bridge --for live-edit or the requested exact task mode. Doctor never runs the REAPER Action itself.`);
+
+if (cli.mode !== null && report.task?.status !== "ready") {
+  process.exitCode = 1;
+} else if (cli.wait_bridge_seconds !== null && report.request_response.ready !== true) {
+  process.exitCode = 1;
+}
 
 async function pathCheck(filePath) {
   try {
@@ -214,49 +353,92 @@ async function smokeMcp() {
   if (missing.length > 0) {
     return { ok: false, reason: "required_path_missing", missing };
   }
+  const smokeTimeoutMs = doctorSmokeTimeoutMs();
   try {
-    return await withTimeout(smokeMcpInner(), 8000, "MCP doctor smoke timed out");
+    return await withTimeout(smokeMcpInner(), smokeTimeoutMs, "MCP doctor smoke timed out", {
+      onTimeout: () => cleanupAllMcpLifecycles("doctor_smoke_timeout"),
+    });
   } catch (error) {
-    return { ok: false, reason: "mcp_smoke_failed", error: error.message };
+    return {
+      ok: false,
+      reason: "mcp_smoke_failed",
+      error_code: boundedErrorCode(error),
+    };
   }
 }
 
 async function smokeMcpInner() {
   const openreaper = await smokeOpenReaperMcpInner();
+  const packageMcpCommand = await smokeOpenReaperMcpCommandInner();
   const vitalAgent = await smokeVitalAgentMcpInner();
   return {
-    ok: true,
+    ok: packageMcpCommand.ok === true,
     openreaper,
+    package_mcp_command: packageMcpCommand,
     vital_agent_mcp: vitalAgent,
   };
 }
 
-async function smokeOpenReaperMcpInner() {
+async function smokeOpenReaperMcpCommandInner() {
   const packagePaths = [installRoot, path.join(installRoot, "node_modules")];
-  const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/client/index.js", { paths: packagePaths }))),
-    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/client/stdio.js", { paths: packagePaths }))),
-  ]);
-  const client = new Client({ name: "openreaper-alpha-doctor", version: "0.0.0" });
-  const transport = new StdioClientTransport({
+  const { Client, OwnedStdioClientTransport } = await loadOwnedMcpClientBindings(packagePaths);
+  const client = new Client({ name: "openreaper-alpha-doctor-package-command", version: "0.0.0" });
+  const transport = new OwnedStdioClientTransport({
     command: mcpCommand,
     args: [],
     env: {
-      ...process.env,
-      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
-      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
-      OPENREAPER_ARTIFACT_ROOT: artifactRoot,
-      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
-      OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha-doctor",
-      OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      ...mcpEnv,
+      // Package-command reachability is independent of the selected task render
+      // root. The installed B2 default is the bounded wrapper-validation input;
+      // the direct MCP ping above retains the actual selected-root diagnosis.
+      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: path.join(installRoot, "session", "renders"),
     },
     stderr: "pipe",
   });
+  const lifecycle = createMcpLifecycle(client, transport, "packaged MCP command");
+  try {
+    await client.connect(transport);
+    const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assertExactArray(toolNames, exactTools, "packaged MCP command tool surface");
+    const ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
+    if (ping.kernel !== "openreaper-mcp alpha kernel") {
+      throw new Error(`expected packaged MCP command kernel, got ${ping.kernel}`);
+    }
+    return {
+      ok: true,
+      kernel: ping.kernel,
+      tool_surface: toolNames,
+      render_root_status: ping.runtime_readiness?.render_root?.status ?? "not_observed",
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: "package_mcp_command_failed",
+      error_code: boundedErrorCode(error),
+    };
+  } finally {
+    await lifecycle.close("normal_finish");
+  }
+}
+
+async function smokeOpenReaperMcpInner() {
+  const packagePaths = [installRoot, path.join(installRoot, "node_modules")];
+  const { Client, OwnedStdioClientTransport } = await loadOwnedMcpClientBindings(packagePaths);
+  const client = new Client({ name: "openreaper-alpha-doctor", version: "0.0.0" });
+  const transport = new OwnedStdioClientTransport({
+    command: process.execPath,
+    args: [serverScript],
+    cwd: installRoot,
+    env: mcpEnv,
+    stderr: "pipe",
+  });
+  const lifecycle = createMcpLifecycle(client, transport, "OpenReaper MCP stdio");
   try {
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assertExactArray(toolNames, exactTools, "MCP tool surface");
-    const ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
+    let ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
+    let waitPolls = 1;
     if (ping.kernel !== "openreaper-mcp alpha kernel") {
       throw new Error(`expected openreaper-mcp alpha kernel, got ${ping.kernel}`);
     }
@@ -270,25 +452,75 @@ async function smokeOpenReaperMcpInner() {
       requiredFxTemplates,
       "FX template discovery",
     );
+
+    if (cli.wait_bridge_seconds !== null && ping.runtime_readiness?.bridge?.status !== "bridge_ready") {
+      const deadline = Date.now() + cli.wait_bridge_seconds * 1_000;
+      while (Date.now() < deadline) {
+        await sleep(200);
+        ping = parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
+        waitPolls += 1;
+        if (ping.runtime_readiness?.bridge?.status === "bridge_ready") break;
+      }
+    }
+
+    let requestResponse = {
+      status: "not_run",
+      ready: false,
+      template_id: ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
+    };
+    if (
+      (cli.mode !== null || cli.wait_bridge_seconds !== null) &&
+      ping.runtime_readiness?.bridge?.status === "bridge_ready"
+    ) {
+      try {
+        const probeResult = parseJsonToolResult(await withTimeout(
+          client.callTool({
+            name: "call_template",
+            arguments: {
+              id: ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
+              input: {},
+              refs: [],
+              context: {
+                session_id: "openreaper-doctor",
+                expected_owner: identity.owner.value,
+                expected_generation: identity.generation.value,
+                request_sequence: 1,
+              },
+            },
+          }),
+          alpha3_2B3ReadProbeTimeoutMs(process.env) + 1_000,
+          "OpenReaper read probe timed out",
+        ));
+        requestResponse = normalizeAlpha3_2B3RequestResponseProof(probeResult, identity);
+      } catch (error) {
+        requestResponse = {
+          status: /timed out/i.test(String(error?.message ?? "")) ? "timeout" : "failed",
+          ready: false,
+          template_id: ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
+          error_code: boundedErrorCode(error),
+        };
+      }
+    }
+
     return {
       kernel: ping.kernel,
       tool_surface: toolNames,
       required_macros: requiredMacros,
       required_fx_templates: requiredFxTemplates,
+      runtime_readiness: ping.runtime_readiness,
+      request_response: requestResponse,
+      wait_bridge_polls: waitPolls,
     };
   } finally {
-    await client.close?.();
+    await lifecycle.close("normal_finish");
   }
 }
 
 async function smokeVitalAgentMcpInner() {
   const packagePaths = [installRoot, path.join(installRoot, "node_modules")];
-  const [{ Client }, { StdioClientTransport }] = await Promise.all([
-    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/client/index.js", { paths: packagePaths }))),
-    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/client/stdio.js", { paths: packagePaths }))),
-  ]);
+  const { Client, OwnedStdioClientTransport } = await loadOwnedMcpClientBindings(packagePaths);
   const client = new Client({ name: "vital-agent-mcp-doctor", version: "0.0.0" });
-  const transport = new StdioClientTransport({
+  const transport = new OwnedStdioClientTransport({
     command: vitalAgentMcpCommand,
     args: [],
     env: {
@@ -297,6 +529,7 @@ async function smokeVitalAgentMcpInner() {
     },
     stderr: "pipe",
   });
+  const lifecycle = createMcpLifecycle(client, transport, "vital-agent-mcp stdio");
   try {
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
@@ -312,7 +545,7 @@ async function smokeVitalAgentMcpInner() {
       doctor_schema: doctor.schema,
     };
   } finally {
-    await client.close?.();
+    await lifecycle.close("normal_finish");
   }
 }
 
@@ -339,12 +572,19 @@ function needsClientConfigRefresh() {
     (config.exists && config.has_vital_agent_mcp && !config.references_current_vital_agent_mcp));
 }
 
-function computeStatus() {
+function computePackageStatus() {
   if (!report.checks.node.ok) return "not_ready_node_too_old";
   if (!report.smoke?.ok) return "not_ready_mcp_smoke_failed";
   if (needsClientConfigRefresh()) return "needs_client_config_refresh";
   if (report.stale_config_findings.length > 0) return "ready_with_legacy_config_warning";
   return "ready";
+}
+
+function runtimeDiagnosis(bridge, processEvidence) {
+  if (bridge?.diagnosis === "bridge_action_not_running" && processEvidence?.running !== true) {
+    return "reaper_not_running";
+  }
+  return bridge?.diagnosis ?? "not_observed";
 }
 
 function parseJsonToolResult(response) {
@@ -376,19 +616,347 @@ async function readTextIfExists(filePath) {
   }
 }
 
-function withTimeout(promise, ms, message) {
+async function loadOwnedMcpClientBindings(packagePaths) {
+  const [{ Client }, { ReadBuffer, serializeMessage }] = await Promise.all([
+    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/client/index.js", { paths: packagePaths }))),
+    import(pathToFileURL(require.resolve("@modelcontextprotocol/sdk/shared/stdio.js", { paths: packagePaths }))),
+  ]);
+  return {
+    Client,
+    OwnedStdioClientTransport: createOwnedStdioClientTransport({ ReadBuffer, serializeMessage }),
+  };
+}
+
+function createOwnedStdioClientTransport({ ReadBuffer, serializeMessage }) {
+  return class OwnedStdioClientTransport {
+    constructor(server) {
+      this._serverParams = server;
+      this._readBuffer = new ReadBuffer();
+      this._stderrStream = server.stderr === "pipe" || server.stderr === "overlapped"
+        ? new PassThrough()
+        : null;
+      this._process = undefined;
+      this._ownedProcess = undefined;
+      this._ownedPgid = null;
+      this._closePromise = null;
+      this.onerror = undefined;
+      this.onclose = undefined;
+      this.onmessage = undefined;
+    }
+
+    get pid() {
+      return this._process?.pid ?? this._ownedProcess?.pid ?? null;
+    }
+
+    get ownedPgid() {
+      return this._ownedPgid;
+    }
+
+    get ownsProcessGroup() {
+      return process.platform !== "win32" && this._ownedPgid !== null;
+    }
+
+    get stderr() {
+      return this._stderrStream ?? this._process?.stderr ?? this._ownedProcess?.stderr ?? null;
+    }
+
+    async start() {
+      if (this._process || this._ownedProcess) {
+        throw new Error("OwnedStdioClientTransport already started! Client.connect() starts the transport automatically.");
+      }
+      const ownsProcessGroup = process.platform !== "win32";
+      return new Promise((resolve, reject) => {
+        let startSettled = false;
+        const child = spawn(this._serverParams.command, this._serverParams.args ?? [], {
+          env: this._serverParams.env ?? process.env,
+          stdio: ["pipe", "pipe", this._serverParams.stderr ?? "inherit"],
+          shell: false,
+          detached: ownsProcessGroup,
+          windowsHide: process.platform === "win32",
+          cwd: this._serverParams.cwd,
+        });
+        this._process = child;
+        this._ownedProcess = child;
+        child.once("error", (error) => {
+          if (!startSettled) {
+            startSettled = true;
+            reject(error);
+          }
+          this.onerror?.(error);
+        });
+        child.once("spawn", () => {
+          if (ownsProcessGroup) {
+            if (!Number.isSafeInteger(child.pid) || child.pid <= 0 || child.pid === process.pid) {
+              const error = new Error("Owned MCP transport did not receive a safe detached process-group leader");
+              if (!startSettled) {
+                startSettled = true;
+                reject(error);
+              }
+              this.onerror?.(error);
+              return;
+            }
+            // POSIX detached children lead their own process group. Keep this durable
+            // identity after the direct child closes so descendants are still reaped.
+            this._ownedPgid = child.pid;
+          }
+          if (!startSettled) {
+            startSettled = true;
+            resolve();
+          }
+        });
+        child.once("close", () => {
+          if (this._process === child) this._process = undefined;
+          this.onclose?.();
+        });
+        child.stdin?.on("error", (error) => this.onerror?.(error));
+        child.stdout?.on("data", (chunk) => {
+          this._readBuffer.append(chunk);
+          this.processReadBuffer();
+        });
+        child.stdout?.on("error", (error) => this.onerror?.(error));
+        if (this._stderrStream && child.stderr) child.stderr.pipe(this._stderrStream);
+      });
+    }
+
+    processReadBuffer() {
+      while (true) {
+        try {
+          const message = this._readBuffer.readMessage();
+          if (message === null) break;
+          this.onmessage?.(message);
+        } catch (error) {
+          this.onerror?.(error);
+        }
+      }
+    }
+
+    async close() {
+      this._closePromise ??= this.closeProtocolStreams();
+      return this._closePromise;
+    }
+
+    async closeProtocolStreams() {
+      const child = this._process;
+      this._process = undefined;
+      this._readBuffer.clear();
+      if (!child) return;
+      try {
+        child.stdin?.end();
+      } catch {
+        // Best effort only; lifecycle group cleanup follows.
+      }
+      try {
+        child.stdout?.destroy();
+      } catch {
+        // Best effort only; lifecycle group cleanup follows.
+      }
+      try {
+        child.stderr?.unpipe?.(this._stderrStream);
+      } catch {
+        // Best effort only; lifecycle group cleanup follows.
+      }
+      await settleWithin(new Promise((resolve) => child.once("close", resolve)), 200);
+    }
+
+    async terminateWindowsFallback(label) {
+      if (process.platform !== "win32") {
+        throw new Error(`${label} Windows direct-child fallback is unavailable on POSIX`);
+      }
+      const child = this._ownedProcess;
+      if (!child || child.exitCode !== null) return;
+      const waitForClose = () => settleWithin(new Promise((resolve) => child.once("close", resolve)), 750);
+      try {
+        child.kill("SIGTERM");
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+      if (await waitForClose()) return;
+      try {
+        child.kill("SIGKILL");
+      } catch (error) {
+        if (error?.code !== "ESRCH") throw error;
+      }
+      if (await settleWithin(new Promise((resolve) => child.once("close", resolve)), 1_000)) return;
+      throw new Error(`${label} direct child did not exit after bounded Windows fallback cleanup`);
+    }
+
+    send(message) {
+      return new Promise((resolve, reject) => {
+        const stdin = this._process?.stdin;
+        if (!stdin) {
+          reject(new Error("Not connected"));
+          return;
+        }
+        let json;
+        try {
+          json = serializeMessage(message);
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        const onError = (error) => {
+          stdin.removeListener("drain", onDrain);
+          reject(error);
+        };
+        const onDrain = () => {
+          stdin.removeListener("error", onError);
+          resolve();
+        };
+        stdin.once("error", onError);
+        if (stdin.write(json)) onDrain();
+        else stdin.once("drain", onDrain);
+      });
+    }
+  };
+}
+
+function doctorSmokeTimeoutMs() {
+  const configured = process.env.OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS;
+  if (configured !== undefined && /^[1-9]\d{2,5}$/.test(configured)) {
+    return Math.min(120_000, Math.max(1_000, Number(configured)));
+  }
+  return Math.max(
+    10_000,
+    (cli.wait_bridge_seconds ?? 0) * 1_000 + alpha3_2B3ReadProbeTimeoutMs(process.env) + 5_000,
+  );
+}
+
+function createMcpLifecycle(client, transport, label) {
+  let closePromise = null;
+  const lifecycle = {
+    async close(reason) {
+      closePromise ??= closeMcpLifecycle({ client, transport, label, reason })
+        .finally(() => activeMcpLifecycles.delete(lifecycle));
+      return closePromise;
+    },
+  };
+  activeMcpLifecycles.add(lifecycle);
+  return lifecycle;
+}
+
+async function closeMcpLifecycle({ client, transport, label, reason }) {
+  const clientClose = Promise.resolve().then(() => client.close?.());
+  await settleWithin(clientClose, 500);
+  const transportClose = Promise.resolve().then(() => transport.close?.());
+  await settleWithin(transportClose, 250);
+  await terminateOwnedMcpLifecycle(transport, `${label} (${reason})`);
+  await settleWithin(Promise.allSettled([clientClose, transportClose]), 250);
+}
+
+async function cleanupAllMcpLifecycles(reason) {
+  const cleanups = [...activeMcpLifecycles].map((lifecycle) => lifecycle.close(reason));
+  const results = await Promise.allSettled(cleanups);
+  const failures = results.filter((result) => result.status === "rejected").map((result) => result.reason);
+  if (failures.length > 0) throw new AggregateError(failures, `MCP cleanup failed during ${reason}`);
+}
+
+async function terminateOwnedMcpLifecycle(transport, label) {
+  if (transport.ownsProcessGroup === true) {
+    const pgid = transport.ownedPgid;
+    if (!Number.isSafeInteger(pgid) || pgid <= 0 || pgid === process.pid) {
+      throw new Error(`${label} did not retain a safe owned MCP process group`);
+    }
+    await terminateOwnedProcessGroup(pgid, label);
+    return;
+  }
+  if (process.platform !== "win32") {
+    if (!Number.isSafeInteger(transport.pid) || transport.pid <= 0) return;
+    throw new Error(`${label} did not start in an owned POSIX process group`);
+  }
+  await transport.terminateWindowsFallback(label);
+}
+
+async function terminateOwnedProcessGroup(pgid, label) {
+  const target = -pgid;
+  if (await waitForProcessGroupExit(target, 100)) return;
+  signalOwnedProcessGroup(target, "SIGTERM");
+  if (await waitForProcessGroupExit(target, 750)) return;
+  signalOwnedProcessGroup(target, "SIGKILL");
+  if (await waitForProcessGroupExit(target, 1_500)) return;
+  throw new Error(`${label} owned process group ${pgid} did not exit after bounded TERM/KILL cleanup`);
+}
+
+function signalOwnedProcessGroup(target, signal) {
+  try {
+    process.kill(target, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") throw error;
+  }
+}
+
+async function waitForProcessGroupExit(target, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    try {
+      process.kill(target, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return true;
+      throw error;
+    }
+    await sleep(20);
+  } while (Date.now() < deadline);
+  try {
+    process.kill(target, 0);
+    return false;
+  } catch (error) {
+    if (error?.code === "ESRCH") return true;
+    throw error;
+  }
+}
+
+async function settleWithin(promise, timeoutMs) {
+  let timer;
+  try {
+    return await Promise.race([
+      promise.then(() => true, () => true),
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function withTimeout(promise, ms, message, { onTimeout = null } = {}) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      callback(value);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void (async () => {
+        let cleanupError = null;
+        try {
+          await onTimeout?.();
+        } catch (error) {
+          cleanupError = error;
+        }
+        const timeoutError = new Error(message, cleanupError === null ? undefined : { cause: cleanupError });
+        timeoutError.code = "OPENREAPER_DOCTOR_TIMEOUT";
+        reject(timeoutError);
+      })();
+    }, ms);
     promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      },
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
     );
   });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function boundedErrorCode(error) {
+  const value = error?.code ?? error?.name ?? "ERROR";
+  return String(value).replace(/[^A-Za-z0-9_.:-]/gu, "_").slice(0, 64);
 }
 NODE

@@ -4,6 +4,9 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  composeAlpha3_2B3RuntimeDoctorReadiness,
+} from "./alpha3-2b3-runtime-doctor-readiness-v1.mjs";
+import {
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "./call-template-runtime-v1.mjs";
@@ -54,22 +57,29 @@ async function main() {
     "ping",
     "Check whether the OpenReaper MCP server is loaded and whether a live bridge is configured.",
     {},
-    async () => jsonToolResult({
-      ok: true,
-      product: "OpenReaper",
-      kernel: KERNEL,
-      version: VERSION,
-      tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
-      live_bridge_configured: liveBridge.configured,
-      live_bridge: liveBridge.configured ? liveBridge.config : liveBridge,
-      user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect.",
-      agent_startup_guidance: createOpenReaperAgentStartupGuidance({
-        package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
-      }),
-      product_surface: {
-        agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide(),
-      },
-    }),
+    async () => {
+      const runtimeReadiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
+        liveBridge,
+        env: process.env,
+      });
+      return jsonToolResult({
+        ok: true,
+        product: "OpenReaper",
+        kernel: KERNEL,
+        version: VERSION,
+        tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
+        live_bridge_configured: liveBridge.configured,
+        live_bridge: runtimeReadiness.bridge,
+        runtime_readiness: runtimeReadiness,
+        user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect.",
+        agent_startup_guidance: createOpenReaperAgentStartupGuidance({
+          package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
+        }),
+        product_surface: {
+          agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide(),
+        },
+      });
+    },
   );
 
   server.tool(

@@ -3,13 +3,18 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
-import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import {
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
+import {
+  LIVE_BRIDGE_HEARTBEAT_FILENAME,
+  LIVE_BRIDGE_LIVENESS_CONTRACT,
+} from "../packages/mcp-server/src/live-bridge-executor-v1.mjs";
 
 const repoRoot = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -84,6 +89,7 @@ async function buildPackage() {
     openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
     portable_paths: await smokePackagedPortablePaths(),
     openreaper: await smokePackagedOpenReaperMcp(),
+    runtime_doctor_readiness: await smokePackagedRuntimeDoctorReadiness(),
     vital_agent_mcp: await smokePackagedVitalAgentMcp(),
   };
 
@@ -441,7 +447,976 @@ async function smokePackagedOpenReaperMcp() {
     };
   } finally {
     await client.close?.();
+    await clearDirectoryEntries(path.join(transportDir, "requests"));
+    await clearDirectoryEntries(path.join(transportDir, "results"));
   }
+}
+
+async function smokePackagedRuntimeDoctorReadiness() {
+  if (skipSmoke) {
+    return {
+      skipped: true,
+      reason: "skip_smoke",
+    };
+  }
+
+  const fixtureRoot = await mkdtemp("/tmp/openreaper-alpha-b3-package-");
+  const homeRoot = path.join(fixtureRoot, "home");
+  const actionScript = path.join(
+    homeRoot,
+    "Library",
+    "Application Support",
+    "REAPER",
+    "Scripts",
+    "OpenReaper",
+    "openreaper-start-mcp-bridge.lua",
+  );
+  const reaperKb = path.join(
+    homeRoot,
+    "Library",
+    "Application Support",
+    "REAPER",
+    "reaper-kb.ini",
+  );
+  await mkdir(path.dirname(actionScript), { recursive: true });
+  await writeFile(actionScript, "-- package smoke bridge action fixture\n", "utf8");
+  await writeFile(
+    reaperKb,
+    'SCR 4 0 "OpenReaper/openreaper-start-mcp-bridge.lua" "Custom: OpenReaper: Start MCP bridge"\n',
+    "utf8",
+  );
+
+  const bridgeScript = path.join(
+    packageRoot,
+    "vendor",
+    "openreaper-kernel",
+    "reaper",
+    "bridge",
+    "openreaper-live-bridge.lua",
+  );
+  const serverScript = path.join(
+    packageRoot,
+    "vendor",
+    "openreaper-kernel",
+    "packages",
+    "mcp-server",
+    "src",
+    "openreaper-mcp-stdio.mjs",
+  );
+  const doctorPath = path.join(packageRoot, "bin", "openreaper-doctor");
+  const owner = "openreaper-alpha";
+  const generation = 1;
+  const cases = {};
+
+  try {
+    const pingRoot = path.join(fixtureRoot, "stdio-ping");
+    const pingRenderRoot = path.join(pingRoot, "renders");
+    await mkdir(pingRenderRoot, { recursive: true });
+
+    for (const fixture of [
+      { name: "no_heartbeat", heartbeat: "absent", render: "valid", bridge_status: "bridge_action_not_running", render_status: "render_root_ready" },
+      { name: "stale", heartbeat: "stale", render: "valid", bridge_status: "bridge_loop_unresponsive", render_status: "render_root_ready" },
+      { name: "fresh_matching", heartbeat: "fresh", render: "valid", bridge_status: "bridge_ready", render_status: "render_root_ready" },
+      { name: "missing_root", heartbeat: "fresh", render: "missing", bridge_status: "bridge_ready", render_status: "render_root_missing" },
+    ]) {
+      const transportDir = path.join(pingRoot, fixture.name, "transport");
+      const requestsDir = path.join(transportDir, "requests");
+      const resultsDir = path.join(transportDir, "results");
+      await mkdir(requestsDir, { recursive: true });
+      await mkdir(resultsDir, { recursive: true });
+      if (fixture.heartbeat === "fresh") {
+        await writePackageHeartbeat(transportDir, { owner, generation });
+      } else if (fixture.heartbeat === "stale") {
+        await writePackageHeartbeat(transportDir, {
+          owner,
+          generation,
+          mtime: new Date(Date.now() - 5_000),
+        });
+      }
+      const selectedRenderRoot = fixture.render === "valid"
+        ? pingRenderRoot
+        : path.join(pingRoot, fixture.name, "missing-renders");
+      const ping = await callActualPackagedStdioPing({
+        serverScript,
+        transportDir,
+        renderRoot: selectedRenderRoot,
+        bridgeScript,
+        owner,
+        generation,
+      });
+      if (ping.runtime_readiness?.bridge?.status !== fixture.bridge_status) {
+        throw new Error(`Packaged stdio ${fixture.name} bridge status mismatch: ${ping.runtime_readiness?.bridge?.status}`);
+      }
+      if (ping.runtime_readiness?.render_root?.status !== fixture.render_status) {
+        throw new Error(`Packaged stdio ${fixture.name} render status mismatch: ${ping.runtime_readiness?.render_root?.status}`);
+      }
+      if (ping.runtime_readiness?.request_response?.status !== "not_run") {
+        throw new Error(`Packaged stdio ${fixture.name} unexpectedly ran request/response proof`);
+      }
+      assertDirectoryEmpty(await readdir(requestsDir), `Packaged stdio ${fixture.name} requests`);
+      cases[`stdio_${fixture.name}`] = {
+        bridge_status: fixture.bridge_status,
+        render_root_status: fixture.render_status,
+        request_response_status: "not_run",
+        requests_after_ping: 0,
+      };
+    }
+
+    const doctorRoot = path.join(fixtureRoot, "doctor");
+    const validRenderRoot = path.join(doctorRoot, "renders");
+    const artifactRoot = path.join(doctorRoot, "artifacts");
+    await mkdir(validRenderRoot, { recursive: true });
+    await mkdir(artifactRoot, { recursive: true });
+
+    const noHeartbeat = await makeDoctorFixture(doctorRoot, "no-heartbeat");
+    const noHeartbeatResult = await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot: noHeartbeat.sessionRoot,
+      transportDir: noHeartbeat.transportDir,
+      artifactRoot,
+      renderRoot: validRenderRoot,
+      owner,
+      generation,
+      args: [],
+    });
+    if (noHeartbeatResult.code !== 0) {
+      throw new Error(`Packaged doctor no-heartbeat default failed: ${noHeartbeatResult.stderr || noHeartbeatResult.stdout}`);
+    }
+    if (noHeartbeatResult.report.package_status !== "ready") {
+      throw new Error(`Packaged doctor no-heartbeat changed package status: ${noHeartbeatResult.report.package_status}`);
+    }
+    if (noHeartbeatResult.report.runtime_readiness?.bridge?.status !== "bridge_action_not_running") {
+      throw new Error("Packaged doctor no-heartbeat did not preserve bridge_action_not_running");
+    }
+    if (noHeartbeatResult.report.runtime_diagnosis !== "reaper_not_running") {
+      throw new Error(`Packaged doctor no-heartbeat diagnosis mismatch: ${noHeartbeatResult.report.runtime_diagnosis}`);
+    }
+    cases.doctor_no_heartbeat = {
+      exit_code: noHeartbeatResult.code,
+      package_status: noHeartbeatResult.report.package_status,
+      bridge_status: noHeartbeatResult.report.runtime_readiness.bridge.status,
+      diagnosis: noHeartbeatResult.report.runtime_diagnosis,
+      request_response_status: noHeartbeatResult.report.request_response.status,
+    };
+
+    const waitNoHeartbeatResult = await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot: noHeartbeat.sessionRoot,
+      transportDir: noHeartbeat.transportDir,
+      artifactRoot,
+      renderRoot: validRenderRoot,
+      owner,
+      generation,
+      args: ["--wait-bridge=1"],
+    });
+    if (
+      waitNoHeartbeatResult.code !== 1 ||
+      waitNoHeartbeatResult.report.wait_bridge?.polls < 2 ||
+      waitNoHeartbeatResult.report.request_response?.status !== "not_run"
+    ) {
+      throw new Error(`Packaged doctor bounded wait fixture mismatch: ${waitNoHeartbeatResult.stderr || waitNoHeartbeatResult.stdout}`);
+    }
+    cases.doctor_wait_no_heartbeat = {
+      exit_code: waitNoHeartbeatResult.code,
+      bridge_status: waitNoHeartbeatResult.report.runtime_readiness.bridge.status,
+      polls: waitNoHeartbeatResult.report.wait_bridge.polls,
+      request_response_status: waitNoHeartbeatResult.report.request_response.status,
+    };
+
+    const stale = await makeDoctorFixture(doctorRoot, "stale");
+    await writePackageHeartbeat(stale.transportDir, {
+      owner,
+      generation,
+      mtime: new Date(Date.now() - 5_000),
+    });
+    const staleResult = await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot: stale.sessionRoot,
+      transportDir: stale.transportDir,
+      artifactRoot,
+      renderRoot: validRenderRoot,
+      owner,
+      generation,
+      args: ["--for", "live-edit"],
+    });
+    if (staleResult.code !== 1 || staleResult.report.task?.status !== "blocked") {
+      throw new Error(`Packaged doctor stale fixture did not block: ${staleResult.stderr || staleResult.stdout}`);
+    }
+    if (staleResult.report.runtime_readiness?.bridge?.status !== "bridge_loop_unresponsive") {
+      throw new Error("Packaged doctor stale fixture lost bridge_loop_unresponsive");
+    }
+    cases.doctor_stale = {
+      exit_code: staleResult.code,
+      bridge_status: staleResult.report.runtime_readiness.bridge.status,
+      task_status: staleResult.report.task.status,
+      request_response_status: staleResult.report.request_response.status,
+    };
+
+    const freshLive = await makeDoctorFixture(doctorRoot, "fresh-live-edit");
+    await writePackageHeartbeat(freshLive.transportDir, { owner, generation });
+    const freshLiveResult = await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot: freshLive.sessionRoot,
+      transportDir: freshLive.transportDir,
+      artifactRoot,
+      renderRoot: validRenderRoot,
+      owner,
+      generation,
+      args: ["--for", "live-edit"],
+      provideReadResult: true,
+    });
+    if (freshLiveResult.code !== 0 || freshLiveResult.report.task?.status !== "ready") {
+      throw new Error(`Packaged doctor fresh live-edit did not become ready: ${freshLiveResult.stderr || freshLiveResult.stdout}`);
+    }
+    cases.doctor_fresh_matching = {
+      exit_code: freshLiveResult.code,
+      bridge_status: freshLiveResult.report.runtime_readiness.bridge.status,
+      request_response_status: freshLiveResult.report.request_response.status,
+      task_status: freshLiveResult.report.task.status,
+    };
+
+    const missingRenderRoot = path.join(doctorRoot, "missing-render-root");
+    const regularFileRenderRoot = path.join(doctorRoot, "regular-file-render-root");
+    const symlinkRenderRoot = path.join(doctorRoot, "symlink-render-root");
+    const permissionRenderRoot = path.join(doctorRoot, "permission-render-root");
+    await writeFile(regularFileRenderRoot, "not a directory\n", "utf8");
+    await symlink(validRenderRoot, symlinkRenderRoot);
+    await mkdir(permissionRenderRoot, { recursive: true });
+    await chmod(permissionRenderRoot, 0o500);
+    const nonReadyRenderRoots = [
+      { name: "missing", path: missingRenderRoot, status: "render_root_missing" },
+      { name: "regular_file", path: regularFileRenderRoot, status: "render_root_not_directory" },
+      { name: "final_symlink", path: symlinkRenderRoot, status: "render_root_symlink" },
+      { name: "permission_unready", path: permissionRenderRoot, status: "render_root_not_writable" },
+    ];
+
+    try {
+      for (const fixture of nonReadyRenderRoots) {
+        const defaultDoctor = await makeDoctorFixture(doctorRoot, `${fixture.name}-default`);
+        const defaultResult = await runPackagedDoctorFixture({
+          doctorPath,
+          homeRoot,
+          sessionRoot: defaultDoctor.sessionRoot,
+          transportDir: defaultDoctor.transportDir,
+          artifactRoot,
+          renderRoot: fixture.path,
+          owner,
+          generation,
+          args: [],
+        });
+        const commandSmoke = defaultResult.report.smoke?.package_mcp_command;
+        if (
+          defaultResult.code !== 0 ||
+          defaultResult.report.status !== "ready" ||
+          defaultResult.report.package_status !== "ready" ||
+          commandSmoke?.ok !== true ||
+          commandSmoke?.kernel !== "openreaper-mcp alpha kernel"
+        ) {
+          throw new Error(`Packaged default doctor coupled ${fixture.name} render readiness to package health: ${defaultResult.stderr || defaultResult.stdout}`);
+        }
+        assertExactArray(commandSmoke.tool_surface, EXACT_MCP_TOOLS, `Packaged default doctor ${fixture.name} package command tool surface`);
+        if (
+          defaultResult.report.render_root_inspection?.status !== fixture.status ||
+          defaultResult.report.runtime_readiness?.render_root?.status !== fixture.status ||
+          defaultResult.report.runtime_readiness?.bridge?.status !== "bridge_action_not_running" ||
+          defaultResult.report.request_response?.status !== "not_run"
+        ) {
+          throw new Error(`Packaged default doctor lost separated ${fixture.name} evidence: ${defaultResult.stderr || defaultResult.stdout}`);
+        }
+
+        const renderDoctor = await makeDoctorFixture(doctorRoot, `${fixture.name}-render`);
+        await writePackageHeartbeat(renderDoctor.transportDir, { owner, generation });
+        const renderResult = await runPackagedDoctorFixture({
+          doctorPath,
+          homeRoot,
+          sessionRoot: renderDoctor.sessionRoot,
+          transportDir: renderDoctor.transportDir,
+          artifactRoot,
+          renderRoot: fixture.path,
+          owner,
+          generation,
+          args: ["--for", "render"],
+          provideReadResult: true,
+        });
+        const renderTask = renderResult.report.task;
+        if (
+          renderResult.code !== 1 ||
+          renderResult.report.package_status !== "ready" ||
+          renderResult.report.smoke?.package_mcp_command?.ok !== true ||
+          renderResult.report.render_root_inspection?.status !== fixture.status ||
+          renderResult.report.request_response?.status !== "ready" ||
+          renderTask?.status !== "blocked" ||
+          renderTask?.missing_precondition !== fixture.status ||
+          renderTask?.failure_layer !== "render_root" ||
+          renderTask?.ready_for_render !== false ||
+          renderTask?.next_action?.code !== "repair_managed_render_root" ||
+          typeof renderTask?.safe_copy_paste_fix !== "string" ||
+          !renderTask.safe_copy_paste_fix.includes('--render-root "$ROOT"')
+        ) {
+          throw new Error(`Packaged render doctor ${fixture.name} separation/recovery mismatch: ${renderResult.stderr || renderResult.stdout}`);
+        }
+
+        cases[`doctor_${fixture.name}_root_separation`] = {
+          default: {
+            exit_code: defaultResult.code,
+            status: defaultResult.report.status,
+            package_status: defaultResult.report.package_status,
+            package_mcp_command_ok: commandSmoke.ok,
+            render_root_status: defaultResult.report.render_root_inspection.status,
+            bridge_status: defaultResult.report.runtime_readiness.bridge.status,
+            request_response_status: defaultResult.report.request_response.status,
+          },
+          render_task: {
+            exit_code: renderResult.code,
+            package_status: renderResult.report.package_status,
+            package_mcp_command_ok: renderResult.report.smoke.package_mcp_command.ok,
+            render_root_status: renderResult.report.render_root_inspection.status,
+            request_response_status: renderResult.report.request_response.status,
+            task_status: renderTask.status,
+            failure_layer: renderTask.failure_layer,
+            fresh_root_recovery: true,
+            ready_for_render: renderTask.ready_for_render,
+          },
+        };
+      }
+
+      const missingLiveEdit = await makeDoctorFixture(doctorRoot, "missing-root-live-edit");
+      await writePackageHeartbeat(missingLiveEdit.transportDir, { owner, generation });
+      const missingLiveEditResult = await runPackagedDoctorFixture({
+        doctorPath,
+        homeRoot,
+        sessionRoot: missingLiveEdit.sessionRoot,
+        transportDir: missingLiveEdit.transportDir,
+        artifactRoot,
+        renderRoot: missingRenderRoot,
+        owner,
+        generation,
+        args: ["--for", "live-edit"],
+        provideReadResult: true,
+      });
+      if (
+        missingLiveEditResult.code !== 0 ||
+        missingLiveEditResult.report.package_status !== "ready" ||
+        missingLiveEditResult.report.render_root_inspection?.status !== "render_root_missing" ||
+        missingLiveEditResult.report.request_response?.status !== "ready" ||
+        missingLiveEditResult.report.task?.status !== "ready"
+      ) {
+        throw new Error(`Packaged live-edit incorrectly depended on render-root readiness: ${missingLiveEditResult.stderr || missingLiveEditResult.stdout}`);
+      }
+      cases.doctor_missing_root_live_edit_independent = {
+        exit_code: missingLiveEditResult.code,
+        package_status: missingLiveEditResult.report.package_status,
+        render_root_status: missingLiveEditResult.report.render_root_inspection.status,
+        request_response_status: missingLiveEditResult.report.request_response.status,
+        task_status: missingLiveEditResult.report.task.status,
+      };
+    } finally {
+      await chmod(permissionRenderRoot, 0o700).catch(() => {});
+    }
+
+    const readyRender = await makeDoctorFixture(doctorRoot, "ready-render");
+    await writePackageHeartbeat(readyRender.transportDir, { owner, generation });
+    const readyRenderResult = await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot: readyRender.sessionRoot,
+      transportDir: readyRender.transportDir,
+      artifactRoot,
+      renderRoot: validRenderRoot,
+      owner,
+      generation,
+      args: ["--for", "render"],
+      provideReadResult: true,
+    });
+    const renderTask = readyRenderResult.report.task;
+    if (
+      readyRenderResult.code !== 0 ||
+      renderTask?.status !== "ready" ||
+      renderTask?.ready_for_render !== true ||
+      renderTask?.render_execution_proven !== false ||
+      renderTask?.codec_support_assessed !== false ||
+      renderTask?.scope !== "preflight_only"
+    ) {
+      throw new Error(`Packaged doctor valid render preflight mismatch: ${readyRenderResult.stderr || readyRenderResult.stdout}`);
+    }
+    cases.doctor_valid_root = {
+      exit_code: readyRenderResult.code,
+      render_root_status: readyRenderResult.report.render_root_inspection.status,
+      request_response_status: readyRenderResult.report.request_response.status,
+      task_status: renderTask.status,
+      ready_for_render: renderTask.ready_for_render,
+      render_execution_proven: renderTask.render_execution_proven,
+      codec_support_assessed: renderTask.codec_support_assessed,
+      scope: renderTask.scope,
+    };
+
+    cases.doctor_never_settling_ping_cleanup = await smokePackagedDoctorNeverSettlingPing({
+      fixtureRoot,
+      homeRoot,
+      sourceDoctorPath: doctorPath,
+      owner,
+      generation,
+    });
+    cases.doctor_fixture_timeout_cleanup = await smokePackagedDoctorFixtureTimeoutCleanup({
+      fixtureRoot,
+      homeRoot,
+      owner,
+      generation,
+    });
+
+    const probeFiles = await collectNamedFiles(fixtureRoot, (name) =>
+      name.startsWith(".openreaper-write-probe-") || name.endsWith(".probe"));
+    if (probeFiles.length > 0) {
+      throw new Error(`Packaged B3 smoke left probe files: ${probeFiles.join(", ")}`);
+    }
+    await assertNoActivePackageFixtureProcesses(fixtureRoot);
+
+    return {
+      ok: true,
+      no_reaper_started: true,
+      exact_tool_count: EXACT_MCP_TOOLS.length,
+      cases,
+      audit: {
+        active_fake_children: 0,
+        request_files_after_cleanup: 0,
+        result_files_after_cleanup: 0,
+        probe_files_after_cleanup: 0,
+      },
+    };
+  } finally {
+    await assertNoActivePackageFixtureProcesses(fixtureRoot).catch(() => {});
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+}
+
+async function smokePackagedDoctorNeverSettlingPing({
+  fixtureRoot,
+  homeRoot,
+  sourceDoctorPath,
+  owner,
+  generation,
+}) {
+  const candidateRoot = path.join(fixtureRoot, "never-settling-ping-package");
+  const candidateDoctor = path.join(candidateRoot, "bin", "openreaper-doctor");
+  const candidateServer = path.join(
+    candidateRoot,
+    "vendor",
+    "openreaper-kernel",
+    "packages",
+    "mcp-server",
+    "src",
+    "openreaper-mcp-stdio.mjs",
+  );
+  const candidateReadiness = path.join(path.dirname(candidateServer), "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
+  const sourceReadiness = path.join(
+    packageRoot,
+    "vendor",
+    "openreaper-kernel",
+    "packages",
+    "mcp-server",
+    "src",
+    "alpha3-2b3-runtime-doctor-readiness-v1.mjs",
+  );
+  const candidateBridge = path.join(
+    candidateRoot,
+    "vendor",
+    "openreaper-kernel",
+    "reaper",
+    "bridge",
+    "openreaper-live-bridge.lua",
+  );
+  const candidateVitalServer = path.join(candidateRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
+  const sessionRoot = path.join(candidateRoot, "session-fixture");
+  const transportDir = path.join(sessionRoot, "transport");
+  const artifactRoot = path.join(sessionRoot, "artifacts");
+  const renderRoot = path.join(sessionRoot, "renders");
+
+  await mkdir(path.dirname(candidateDoctor), { recursive: true });
+  await mkdir(path.dirname(candidateServer), { recursive: true });
+  await mkdir(path.dirname(candidateBridge), { recursive: true });
+  await mkdir(path.dirname(candidateVitalServer), { recursive: true });
+  await mkdir(path.join(transportDir, "requests"), { recursive: true });
+  await mkdir(path.join(transportDir, "results"), { recursive: true });
+  await mkdir(artifactRoot, { recursive: true });
+  await mkdir(renderRoot, { recursive: true });
+  await cp(sourceDoctorPath, candidateDoctor);
+  await chmod(candidateDoctor, 0o755);
+  await cp(sourceReadiness, candidateReadiness);
+  await cp(
+    path.join(path.dirname(sourceReadiness), "live-bridge-executor-v1.mjs"),
+    path.join(path.dirname(candidateReadiness), "live-bridge-executor-v1.mjs"),
+  );
+  await cp(
+    path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua"),
+    candidateBridge,
+  );
+  await symlink(path.join(packageRoot, "node_modules"), path.join(candidateRoot, "node_modules"));
+  await symlink(
+    path.join(packageRoot, "vendor", "openreaper-kernel", "packages", "core"),
+    path.join(candidateRoot, "vendor", "openreaper-kernel", "packages", "core"),
+  );
+
+  const fakeServerSource = `import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+const exactTools = ${JSON.stringify(EXACT_MCP_TOOLS)};
+const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});process.on('SIGINT',()=>{});setInterval(()=>{},1000)"], {
+  detached: false,
+  shell: false,
+  stdio: "ignore",
+});
+writeFileSync(process.env.OPENREAPER_NEVER_PING_SERVER_PID_MARKER, String(process.pid) + "\\n", "utf8");
+writeFileSync(process.env.OPENREAPER_NEVER_PING_GRANDCHILD_PID_MARKER, String(grandchild.pid) + "\\n", "utf8");
+process.on("SIGTERM", () => {});
+process.on("SIGINT", () => {});
+const server = new Server({ name: "openreaper-never-ping-fixture", version: "0.0.0" }, { capabilities: { tools: {} } });
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: exactTools.map((name) => ({ name, inputSchema: { type: "object" } })) }));
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name === "ping") await new Promise(() => {});
+  return { content: [{ type: "text", text: JSON.stringify({ items: [] }) }] };
+});
+await server.connect(new StdioServerTransport());
+`;
+  await writeFile(candidateServer, fakeServerSource, "utf8");
+  await writeFile(candidateVitalServer, "export {};\n", "utf8");
+  for (const name of ["openreaper-mcp", "vital-agent-mcp", "openreaper-start"]) {
+    const commandPath = path.join(candidateRoot, "bin", name);
+    const command = name === "openreaper-mcp"
+      ? `#!/bin/zsh\nexec ${shellQuote(process.execPath)} ${shellQuote(candidateServer)}\n`
+      : "#!/bin/zsh\nexit 0\n";
+    await writeFile(commandPath, command, "utf8");
+    await chmod(commandPath, 0o755);
+  }
+
+  const timeoutServerPidMarker = path.join(candidateRoot, "never-ping-timeout-server.pid");
+  const timeoutGrandchildPidMarker = path.join(candidateRoot, "never-ping-timeout-grandchild.pid");
+  const startedAt = Date.now();
+  const timeoutResult = await runPackagedDoctorFixture({
+    doctorPath: candidateDoctor,
+    homeRoot,
+    sessionRoot,
+    transportDir,
+    artifactRoot,
+    renderRoot,
+    owner,
+    generation,
+    args: ["--wait-bridge=1"],
+    timeoutMs: 7_000,
+    extraEnv: {
+      OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS: "1200",
+      OPENREAPER_NEVER_PING_SERVER_PID_MARKER: timeoutServerPidMarker,
+      OPENREAPER_NEVER_PING_GRANDCHILD_PID_MARKER: timeoutGrandchildPidMarker,
+    },
+    onSpawn: () => assertAdversarialMcpProcessGroupPresent({
+      serverPidMarker: timeoutServerPidMarker,
+      grandchildPidMarker: timeoutGrandchildPidMarker,
+      label: "never-settling timeout MCP",
+    }),
+  });
+  const elapsedMs = Date.now() - startedAt;
+  if (timeoutResult.code !== 1 || timeoutResult.report.package_status !== "not_ready_mcp_smoke_failed") {
+    throw new Error(`Never-settling ping doctor result mismatch: ${timeoutResult.stderr || timeoutResult.stdout}`);
+  }
+  if (timeoutResult.report.smoke?.error_code !== "OPENREAPER_DOCTOR_TIMEOUT") {
+    throw new Error(`Never-settling ping doctor lost timeout code: ${timeoutResult.report.smoke?.error_code}`);
+  }
+  if (elapsedMs >= 7_000) {
+    throw new Error(`Never-settling ping doctor exceeded clear bound: ${elapsedMs}ms`);
+  }
+  const timeoutPids = await readAdversarialMcpPids({
+    serverPidMarker: timeoutServerPidMarker,
+    grandchildPidMarker: timeoutGrandchildPidMarker,
+    label: "never-settling timeout MCP",
+  });
+  await assertAdversarialMcpGroupGone(timeoutPids, "never-settling timeout MCP");
+
+  const signalServerPidMarker = path.join(candidateRoot, "never-ping-signal-server.pid");
+  const signalGrandchildPidMarker = path.join(candidateRoot, "never-ping-signal-grandchild.pid");
+  const signalResult = await runPackagedDoctorFixture({
+    doctorPath: candidateDoctor,
+    homeRoot,
+    sessionRoot,
+    transportDir,
+    artifactRoot,
+    renderRoot,
+    owner,
+    generation,
+    args: ["--wait-bridge=1"],
+    timeoutMs: 7_000,
+    expectMachineReport: false,
+    extraEnv: {
+      OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS: "5000",
+      OPENREAPER_NEVER_PING_SERVER_PID_MARKER: signalServerPidMarker,
+      OPENREAPER_NEVER_PING_GRANDCHILD_PID_MARKER: signalGrandchildPidMarker,
+    },
+    onSpawn: async (doctorChild) => {
+      await assertAdversarialMcpProcessGroupPresent({
+        serverPidMarker: signalServerPidMarker,
+        grandchildPidMarker: signalGrandchildPidMarker,
+        label: "SIGTERM MCP",
+      });
+      process.kill(doctorChild.pid, "SIGTERM");
+    },
+  });
+  if (signalResult.code !== 143 || signalResult.signal !== null) {
+    throw new Error(`External SIGTERM doctor result mismatch: ${signalResult.stderr || signalResult.stdout}`);
+  }
+  const signalPids = await readAdversarialMcpPids({
+    serverPidMarker: signalServerPidMarker,
+    grandchildPidMarker: signalGrandchildPidMarker,
+    label: "SIGTERM MCP",
+  });
+  await assertAdversarialMcpGroupGone(signalPids, "SIGTERM MCP");
+
+  return {
+    timeout: {
+      exit_code: timeoutResult.code,
+      package_status: timeoutResult.report.package_status,
+      error_code: timeoutResult.report.smoke.error_code,
+      elapsed_ms: elapsedMs,
+      direct_child_exited: true,
+      grandchild_exited: true,
+      owned_process_group_exited: true,
+    },
+    external_sigterm: {
+      exit_code: signalResult.code,
+      direct_child_exited: true,
+      grandchild_exited: true,
+      owned_process_group_exited: true,
+    },
+  };
+}
+
+async function readAdversarialMcpPids({ serverPidMarker, grandchildPidMarker, label }) {
+  await Promise.all([
+    waitForFile(serverPidMarker, { attempts: 100, delayMs: 20 }),
+    waitForFile(grandchildPidMarker, { attempts: 100, delayMs: 20 }),
+  ]);
+  const [serverPidText, grandchildPidText] = await Promise.all([
+    readFile(serverPidMarker, "utf8"),
+    readFile(grandchildPidMarker, "utf8"),
+  ]);
+  const serverPid = Number(serverPidText.trim());
+  const grandchildPid = Number(grandchildPidText.trim());
+  for (const [kind, pid] of [["server", serverPid], ["grandchild", grandchildPid]]) {
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new Error(`${label} recorded invalid ${kind} PID: ${pid}`);
+    }
+  }
+  return { serverPid, grandchildPid };
+}
+
+async function assertAdversarialMcpProcessGroupPresent({ serverPidMarker, grandchildPidMarker, label }) {
+  const pids = await readAdversarialMcpPids({ serverPidMarker, grandchildPidMarker, label });
+  if (!isProcessAlive(pids.serverPid) || !isProcessAlive(pids.grandchildPid)) {
+    throw new Error(`${label} process exited before the doctor cleanup probe`);
+  }
+  if (process.platform !== "win32" && !isProcessGroupAlive(pids.serverPid)) {
+    throw new Error(`${label} direct MCP child ${pids.serverPid} was not an owned process-group leader`);
+  }
+}
+
+async function assertAdversarialMcpGroupGone({ serverPid, grandchildPid }, label) {
+  const assertAbsent = () => {
+    if (isProcessAlive(serverPid)) throw new Error(`${label} direct MCP child remained alive: ${serverPid}`);
+    if (isProcessAlive(grandchildPid)) throw new Error(`${label} SIGTERM-ignoring grandchild remained alive: ${grandchildPid}`);
+    if (process.platform !== "win32" && isProcessGroupAlive(serverPid)) {
+      throw new Error(`${label} owned MCP process group remained alive: ${serverPid}`);
+    }
+  };
+  assertAbsent();
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assertAbsent();
+  }
+}
+
+function isProcessGroupAlive(pgid) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function smokePackagedDoctorFixtureTimeoutCleanup({ fixtureRoot, homeRoot, owner, generation }) {
+  const root = path.join(fixtureRoot, "fixture-timeout-cleanup");
+  const doctorPath = path.join(root, "fake-doctor.mjs");
+  const childPidMarker = path.join(root, "stubborn-child.pid");
+  const sessionRoot = path.join(root, "session");
+  const transportDir = path.join(sessionRoot, "transport");
+  const artifactRoot = path.join(sessionRoot, "artifacts");
+  const renderRoot = path.join(sessionRoot, "renders");
+  await mkdir(path.join(transportDir, "requests"), { recursive: true });
+  await mkdir(path.join(transportDir, "results"), { recursive: true });
+  await mkdir(artifactRoot, { recursive: true });
+  await mkdir(renderRoot, { recursive: true });
+  await writeFile(doctorPath, `#!/usr/bin/env node
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => {});
+const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: "ignore" });
+writeFileSync(process.env.OPENREAPER_STUBBORN_CHILD_PID_MARKER, String(child.pid) + "\\n", "utf8");
+setInterval(() => {}, 1000);
+`, "utf8");
+  await chmod(doctorPath, 0o755);
+
+  let timeoutError = null;
+  try {
+    await runPackagedDoctorFixture({
+      doctorPath,
+      homeRoot,
+      sessionRoot,
+      transportDir,
+      artifactRoot,
+      renderRoot,
+      owner,
+      generation,
+      args: [],
+      timeoutMs: 1_000,
+      extraEnv: {
+        OPENREAPER_STUBBORN_CHILD_PID_MARKER: childPidMarker,
+      },
+    });
+  } catch (error) {
+    timeoutError = error;
+  }
+  if (timeoutError?.code !== "OPENREAPER_FIXTURE_TIMEOUT") {
+    throw timeoutError ?? new Error("Packaged doctor fixture timeout cleanup unexpectedly succeeded");
+  }
+  await waitForFile(childPidMarker, { attempts: 100, delayMs: 20 });
+  const childPid = Number((await readFile(childPidMarker, "utf8")).trim());
+  if (!Number.isSafeInteger(childPid) || childPid <= 0 || isProcessAlive(childPid)) {
+    throw new Error(`Packaged doctor fixture timeout left stubborn child alive: ${childPid}`);
+  }
+  if (
+    timeoutError.cleanup?.term_sent !== true ||
+    timeoutError.cleanup?.kill_sent !== true ||
+    timeoutError.cleanup?.process_group_exited !== true
+  ) {
+    throw new Error(`Packaged doctor fixture timeout cleanup evidence incomplete: ${JSON.stringify(timeoutError.cleanup)}`);
+  }
+  return {
+    timeout_code: timeoutError.code,
+    term_sent: true,
+    kill_sent: true,
+    child_exited: true,
+    process_group_exited: true,
+  };
+}
+
+async function callActualPackagedStdioPing({
+  serverScript,
+  transportDir,
+  renderRoot,
+  bridgeScript,
+  owner,
+  generation,
+}) {
+  const packagePaths = [packageRoot, path.join(packageRoot, "node_modules")];
+  const [{ Client }, { StdioClientTransport }] = await Promise.all([
+    importPackageModule("@modelcontextprotocol/sdk/client/index.js", packagePaths),
+    importPackageModule("@modelcontextprotocol/sdk/client/stdio.js", packagePaths),
+  ]);
+  const client = new Client({ name: "openreaper-alpha-b3-stdio-smoke", version: "0.0.0" });
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: [serverScript],
+    cwd: packageRoot,
+    env: {
+      ...process.env,
+      OPENREAPER_MCP_PACKAGE_ROOT: packageRoot,
+      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
+      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
+      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: renderRoot,
+      OPENREAPER_LIVE_BRIDGE_OWNER: owner,
+      OPENREAPER_LIVE_BRIDGE_GENERATION: String(generation),
+    },
+    stderr: "pipe",
+  });
+  try {
+    await client.connect(transport);
+    const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
+    assertExactArray(toolNames, EXACT_MCP_TOOLS, "Packaged B3 stdio tool surface");
+    return parseJsonToolResult(await client.callTool({ name: "ping", arguments: {} }));
+  } finally {
+    await client.close?.();
+  }
+}
+
+async function makeDoctorFixture(root, name) {
+  const sessionRoot = path.join(root, name, "session");
+  const transportDir = path.join(sessionRoot, "transport");
+  await mkdir(path.join(transportDir, "requests"), { recursive: true });
+  await mkdir(path.join(transportDir, "results"), { recursive: true });
+  return { sessionRoot, transportDir };
+}
+
+async function runPackagedDoctorFixture({
+  doctorPath,
+  homeRoot,
+  sessionRoot,
+  transportDir,
+  artifactRoot,
+  renderRoot,
+  owner,
+  generation,
+  args,
+  provideReadResult = false,
+  timeoutMs = 20_000,
+  extraEnv = {},
+  onSpawn = null,
+  expectMachineReport = true,
+}) {
+  const requestsDir = path.join(transportDir, "requests");
+  const resultsDir = path.join(transportDir, "results");
+  await clearDirectoryEntries(requestsDir);
+  await clearDirectoryEntries(resultsDir);
+  const env = {
+    ...process.env,
+    HOME: homeRoot,
+    OPENREAPER_SESSION_ROOT: sessionRoot,
+    OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
+    OPENREAPER_ARTIFACT_ROOT: artifactRoot,
+    OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+    OPENREAPER_LIVE_SMOKE_RENDER_ROOT: renderRoot,
+    OPENREAPER_LIVE_BRIDGE_OWNER: owner,
+    OPENREAPER_LIVE_BRIDGE_GENERATION: String(generation),
+    OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS: "1000",
+    ...extraEnv,
+  };
+  const abortController = new AbortController();
+  const runPromise = runCaptured(doctorPath, args, {
+    cwd: path.dirname(doctorPath),
+    env,
+    timeoutMs,
+    cleanupProcessGroup: true,
+    signal: abortController.signal,
+    label: "packaged openreaper-doctor fixture",
+    onSpawn,
+  });
+
+  try {
+    if (provideReadResult) {
+      let requestPath;
+      try {
+        requestPath = await waitForFirstJsonFile(requestsDir, { attempts: 200, delayMs: 20 });
+      } catch (error) {
+        const early = await runPromise;
+        throw new Error(`Packaged doctor exited before read request: ${early.stderr || early.stdout || error.message}`);
+      }
+      const request = JSON.parse(await readFile(requestPath, "utf8"));
+      const bridge = new FakeFoundationBridge({ owner, generation });
+      const result = bridge.dispatch(request);
+      await writeFile(path.join(resultsDir, path.basename(requestPath)), `${JSON.stringify(result)}\n`, "utf8");
+    }
+
+    const outcome = await runPromise;
+    if (expectMachineReport !== true) return outcome;
+    let report;
+    try {
+      report = parseLeadingJsonObject(outcome.stdout);
+    } catch (error) {
+      throw new Error(`Packaged doctor output was not machine-readable: ${outcome.stderr || outcome.stdout || error.message}`, { cause: error });
+    }
+    return { ...outcome, report };
+  } finally {
+    abortController.abort(new Error("packaged doctor fixture cleanup"));
+    await runPromise.catch(() => {});
+    await clearDirectoryEntries(requestsDir);
+    await clearDirectoryEntries(resultsDir);
+    assertDirectoryEmpty(await readdir(requestsDir), "Packaged doctor requests after cleanup");
+    assertDirectoryEmpty(await readdir(resultsDir), "Packaged doctor results after cleanup");
+  }
+}
+
+async function writePackageHeartbeat(transportDir, options = {}) {
+  const mtime = options.mtime ?? new Date();
+  const heartbeat = {
+    contract: LIVE_BRIDGE_LIVENESS_CONTRACT,
+    active_owner: options.owner ?? "openreaper-alpha",
+    active_generation: options.generation ?? 1,
+    sequence: 1,
+    refreshed_at_unix_s: Math.floor(mtime.getTime() / 1_000),
+    interval_ms: 500,
+  };
+  const heartbeatPath = path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME);
+  await writeFile(heartbeatPath, `${JSON.stringify(heartbeat)}\n`, "utf8");
+  await utimes(heartbeatPath, mtime, mtime);
+  return heartbeatPath;
+}
+
+async function waitForFirstJsonFile(directory, { attempts = 200, delayMs = 20 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const entries = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+    if (entries.length > 0) return path.join(directory, entries[0]);
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`Timed out waiting for JSON request in ${directory}`);
+}
+
+async function clearDirectoryEntries(directory) {
+  let entries;
+  try {
+    entries = await readdir(directory);
+  } catch (error) {
+    if (error?.code === "ENOENT") return;
+    throw error;
+  }
+  await Promise.all(entries.map((entry) => rm(path.join(directory, entry), { recursive: true, force: true })));
+}
+
+function assertDirectoryEmpty(entries, label) {
+  if (entries.length !== 0) throw new Error(`${label} expected empty, found: ${entries.join(", ")}`);
+}
+
+async function collectNamedFiles(root, predicate) {
+  const matches = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      matches.push(...await collectNamedFiles(fullPath, predicate));
+    } else if (entry.isFile() && predicate(entry.name)) {
+      matches.push(fullPath);
+    }
+  }
+  return matches;
+}
+
+function parseLeadingJsonObject(text) {
+  const start = text.indexOf("{");
+  if (start === -1) throw new Error("Doctor output did not include a JSON object");
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const character = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') inString = false;
+      continue;
+    }
+    if (character === '"') {
+      inString = true;
+      continue;
+    }
+    if (character === "{") depth += 1;
+    if (character === "}") {
+      depth -= 1;
+      if (depth === 0) return JSON.parse(text.slice(start, index + 1));
+    }
+  }
+  throw new Error("Doctor JSON object was incomplete");
 }
 
 async function smokePackagedOpenReaperStartHelper() {
@@ -2105,20 +3080,179 @@ async function assertNoActivePackageFixtureProcesses(fixtureRoot) {
   }
 }
 
-function runCaptured(command, args, { cwd, env }) {
+function runCaptured(command, args, {
+  cwd,
+  env,
+  timeoutMs = null,
+  cleanupProcessGroup = false,
+  signal = null,
+  label = command,
+  onSpawn = null,
+}) {
   return new Promise((resolve, reject) => {
+    const ownsProcessGroup = cleanupProcessGroup === true && process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
       env,
+      detached: ownsProcessGroup,
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    let cleanupPromise = null;
+    let timer = null;
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
-    child.on("exit", (code, signal) => resolve({ code, signal, stdout, stderr }));
+
+    const clearWatchers = () => {
+      if (timer !== null) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const cleanup = (reason) => {
+      cleanupPromise ??= cleanupCapturedChild(child, {
+        ownsProcessGroup,
+        label,
+        reason,
+      });
+      return cleanupPromise;
+    };
+    const failAfterCleanup = async (code, message, reason) => {
+      if (settled) return;
+      settled = true;
+      clearWatchers();
+      let cleanupEvidence;
+      try {
+        cleanupEvidence = await cleanup(reason);
+      } catch (cleanupError) {
+        const error = new AggregateError([new Error(message), cleanupError], message);
+        error.code = code;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      const error = new Error(message);
+      error.code = code;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      error.cleanup = cleanupEvidence;
+      reject(error);
+    };
+    const onAbort = () => {
+      void failAfterCleanup(
+        "OPENREAPER_FIXTURE_ABORTED",
+        `${label} aborted`,
+        "abort",
+      );
+    };
+
+    child.once("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearWatchers();
+      reject(error);
+    });
+    child.once("spawn", () => {
+      if (onSpawn === null) return;
+      void Promise.resolve(onSpawn(child)).catch((error) => {
+        void failAfterCleanup(
+          "OPENREAPER_FIXTURE_SPAWN_HOOK_FAILED",
+          `${label} spawn hook failed: ${String(error?.message ?? error)}`,
+          "spawn_hook_failure",
+        );
+      });
+    });
+
+    child.once("close", (code, closeSignal) => {
+      if (settled) return;
+      settled = true;
+      clearWatchers();
+      void (async () => {
+        try {
+          const cleanupEvidence = cleanupProcessGroup
+            ? await cleanup("normal_finish")
+            : null;
+          resolve({ code, signal: closeSignal, stdout, stderr, cleanup: cleanupEvidence });
+        } catch (error) {
+          reject(error);
+        }
+      })();
+    });
+
+    if (signal !== null) {
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        void failAfterCleanup(
+          "OPENREAPER_FIXTURE_TIMEOUT",
+          `${label} exceeded bounded timeout ${timeoutMs}ms`,
+          "timeout",
+        );
+      }, timeoutMs);
+    }
   });
+}
+
+async function cleanupCapturedChild(child, { ownsProcessGroup, label, reason }) {
+  const pid = child.pid;
+  const evidence = {
+    reason,
+    pid: Number.isSafeInteger(pid) ? pid : null,
+    process_group_owned: ownsProcessGroup,
+    term_sent: false,
+    kill_sent: false,
+    process_group_exited: false,
+  };
+  if (!Number.isSafeInteger(pid) || pid <= 0) return evidence;
+  const target = ownsProcessGroup ? -pid : pid;
+  if (await waitForSignalTargetExit(target, 100)) {
+    evidence.process_group_exited = true;
+    return evidence;
+  }
+  evidence.term_sent = signalProcessTarget(target, "SIGTERM");
+  if (await waitForSignalTargetExit(target, 750)) {
+    evidence.process_group_exited = true;
+    return evidence;
+  }
+  evidence.kill_sent = signalProcessTarget(target, "SIGKILL");
+  if (await waitForSignalTargetExit(target, 1_500)) {
+    evidence.process_group_exited = true;
+    return evidence;
+  }
+  throw new Error(`${label} ${pid} remained alive after bounded ${reason} TERM/KILL cleanup`);
+}
+
+function signalProcessTarget(target, signal) {
+  try {
+    process.kill(target, signal);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return false;
+    throw error;
+  }
+}
+
+async function waitForSignalTargetExit(target, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  do {
+    try {
+      process.kill(target, 0);
+    } catch (error) {
+      if (error?.code === "ESRCH") return true;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } while (Date.now() < deadline);
+  try {
+    process.kill(target, 0);
+    return false;
+  } catch (error) {
+    if (error?.code === "ESRCH") return true;
+    throw error;
+  }
 }
 
 async function waitForFile(filePath, { attempts = 400, delayMs = 25 } = {}) {
