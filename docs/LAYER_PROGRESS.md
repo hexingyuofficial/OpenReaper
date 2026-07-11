@@ -3090,7 +3090,7 @@ later macro-spine or trial-rerun slice may add richer non-empty live evidence.
 
 ### Alpha3.2-E Small Macro Spine
 
-Status: in_progress; bounded slices accepted through E-L layout at `8c77347` (`product: bind alpha3.2e project layout macro`); 2026-07-11.
+Status: in_progress; bounded slices accepted through E-MR media/routing at `fd2c7af` (`product: bind alpha3.2e media routing macros`); 2026-07-11.
 
 E0 accepted surface:
 
@@ -3099,10 +3099,9 @@ E0 accepted surface:
   dirty-state, metadata/summary, render-settings, and `macro.project.query`
   scopes; the server does not execute children.
 - `macro.project.query` remains accepted from Alpha3.2-D.
-- Write-side spine entries (`macro.project.delete_targets`,
-  `macro.project.apply_layout`, `macro.routing.apply`,
-  `macro.media.place_assets`, and `macro.render.targets`) remain contract-only
-  until their bounded planner slices are accepted.
+- Write-side spine entries are now runtime-bound through delete/layout/routing/
+  media placement. `macro.render.targets` remains contract-only pending the
+  render-template blocker decision.
 
 E0 evidence:
 
@@ -3176,9 +3175,41 @@ Full gate: npm run build -> exit 0
 Whitespace: git diff --check -> exit 0
 ```
 
-Remaining E slices: `macro.routing.apply` and `macro.media.place_assets` still
-need planner modules and runtime/guide integration. `macro.render.targets`
-remains blocked pending the render-template fix decision above.
+E-MR accepted surface:
+
+- `macro.media.place_assets` is now runtime-bound as a preview-first,
+  plan-only media placement macro.
+- It emits bounded agent-executed child requests for media probe, track
+  resolve/create, full-file or source-section import, optional project region,
+  item/source readback, and media-source index query. It blocks unsafe paths,
+  source-media deletion, ambiguous selectors, duplicate rows, unsupported take
+  rename, and unsupported idempotency keys.
+- `macro.routing.apply` is now runtime-bound as a preview-first, plan-only
+  internal routing macro.
+- It emits bounded agent-executed child requests for internal track-send
+  creation/update, send volume/pan/mute, master-parent state, track channel
+  count, project routing preflight, and affected-track readback. Hardware/device
+  endpoints and ordinary send deletion remain hard-stop blockers.
+- The server still does not execute child requests and no sixth MCP tool,
+  public `call_recipe`, raw Lua/action/shell/UI bypass, or hardware/device I/O
+  surface was added.
+
+E-MR evidence:
+
+```text
+Standalone planner prep commit: 1cdf5af
+Runtime/guide integration commit: fd2c7af
+Focused E gate: npm run check:alpha3-2e -> 26/26 pass
+Adjacent guide gate: npm run check:alpha3-2a -> pass
+Runtime/discovery gates: npm run check:template-runtime; npm run check:discovery-menu; npm run check:tool-abi -> pass
+Regression gate: npm run check:alpha3-2d -> pass
+Full gate: npm run build -> exit 0
+Whitespace: git diff --check -> exit 0
+```
+
+Remaining E implementation blocker: `macro.render.targets` remains blocked
+pending the render-template fix decision above. A neutral live fixture can now
+smoke delete/layout/routing/media together without expanding the public surface.
 
 Accepted dependency baseline:
 
