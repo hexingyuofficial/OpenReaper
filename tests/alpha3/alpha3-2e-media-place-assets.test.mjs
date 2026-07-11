@@ -62,6 +62,8 @@ describe("Alpha3.2-E media place_assets planner", () => {
     assert.equal(plan.mutation_requests[2].refs.track_ref, "track:guid:{DRUMS}");
     assert.equal(plan.mutation_requests[2].refs.source_file_ref, "file:planned:loop");
     assert.equal(plan.readback_requests.filter((request) => request.id === "template.items.read_item_summary").length, 2);
+    assert.equal(plan.readback_requests.some((request) => request.id === "template.media.read_take_source"), false);
+    assert.equal(plan.preview.local_ref_map.kick.take_ref, undefined);
     assert.equal(plan.readback_requests.some((request) => request.id === "macro.project.query"), true);
     assert.equal(plan.child_requests.length, plan.preflight_requests.length + plan.mutation_requests.length + plan.readback_requests.length);
   });

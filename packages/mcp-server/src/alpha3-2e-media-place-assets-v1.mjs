@@ -17,7 +17,6 @@ const CREATE_TRACK_ID = "template.tracks.create_track";
 const IMPORT_FILE_ID = "template.media.import_file_to_track";
 const IMPORT_SECTION_ID = "template.media.import_file_section_to_track";
 const READ_ITEM_ID = "template.items.read_item_summary";
-const READ_TAKE_SOURCE_ID = "template.media.read_take_source";
 const CREATE_REGION_ID = "template.project.create_region";
 const LIST_MARKERS_REGIONS_ID = "template.project.list_markers_regions";
 const QUERY_PROJECT_ID = "macro.project.query";
@@ -246,7 +245,7 @@ function buildPreview(assets) {
       regions: assets.filter((asset) => asset.region).length,
     },
     rows: assets.map((asset) => ({ id: asset.id, path: asset.path, track_ref: plannedTrackRef(asset), track_name: asset.track_name, position_seconds: asset.position_seconds, section: asset.start_percent === null ? null : { start_percent: asset.start_percent, end_percent: asset.end_percent }, region: asset.region })),
-    local_ref_map: Object.fromEntries(assets.map((asset) => [asset.id, { file_ref: plannedFileRef(asset), track_ref: plannedTrackRef(asset), item_ref: plannedItemRef(asset), take_ref: plannedTakeRef(asset) }])),
+    local_ref_map: Object.fromEntries(assets.map((asset) => [asset.id, { file_ref: plannedFileRef(asset), track_ref: plannedTrackRef(asset), item_ref: plannedItemRef(asset) }])),
   });
 }
 
@@ -278,7 +277,6 @@ function readbackRequests(assets) {
   let sequence = 1;
   for (const asset of assets) {
     requests.push(childRequest(sequence++, "readback", READ_ITEM_ID, { item_ref: plannedItemRef(asset) }, { include_take_summary: true }, `Read imported item summary for asset ${asset.id}.`));
-    requests.push(childRequest(sequence++, "readback", READ_TAKE_SOURCE_ID, { take_ref: plannedTakeRef(asset) }, { include_metadata_keys: false, include_parent_source: false }, `Read imported take source for asset ${asset.id}.`));
   }
   if (assets.some((asset) => asset.region)) requests.push(childRequest(sequence++, "readback", LIST_MARKERS_REGIONS_ID, {}, { include_markers: false, include_regions: true, limit: MAX_ASSETS }, "Read regions after optional region creation."));
   requests.push(childRequest(sequence++, "readback", QUERY_PROJECT_ID, {}, { entity: "media_sources", limit: Math.min(MAX_ASSETS, assets.length * 2), refresh: "if_stale" }, "Refresh/query project media-source index after placement."));
@@ -334,7 +332,7 @@ function successCriteriaFor(preview) {
   return deepFreeze([
     `All ${preview.target_counts.probes} media probe request(s) succeed before import.`,
     `All ${preview.target_counts.imports} import request(s) return item/take refs.`,
-    "Readback item/source and media index requests must match the planned assets before success wording.",
+    "Readback item and media index requests must match the planned assets before success wording.",
   ]);
 }
 
@@ -342,7 +340,7 @@ function agentExecutionFlow(preview) {
   return deepFreeze([
     { step: "run_preflight", request_count: preview.target_counts.probes + preview.target_counts.resolve_tracks, stop_on_error: true },
     { step: "run_mutations", request_count: preview.target_counts.imports + preview.target_counts.create_tracks + preview.target_counts.regions, stop_on_error: true },
-    { step: "run_readback", request_count: preview.target_counts.assets * 2 + 1 + (preview.target_counts.regions > 0 ? 1 : 0), stop_on_mismatch: true },
+    { step: "run_readback", request_count: preview.target_counts.assets + 1 + (preview.target_counts.regions > 0 ? 1 : 0), stop_on_mismatch: true },
   ]);
 }
 
@@ -363,7 +361,6 @@ function noExecutorSafetyPosture() {
 function plannedFileRef(asset) { return `file:planned:${asset.id}`; }
 function plannedTrackRef(asset) { return asset.track_ref ?? `track:planned:${asset.id}`; }
 function plannedItemRef(asset) { return `item:planned:${asset.id}`; }
-function plannedTakeRef(asset) { return `take:planned:${asset.id}`; }
 
 function childRequest(sequence, stage, id, refs, input, purpose) {
   return deepFreeze({ sequence, stage, tool: "call_template", id, refs: deepFreeze(refs), input: deepFreeze(input), purpose });
