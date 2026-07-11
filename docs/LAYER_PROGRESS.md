@@ -3046,3 +3046,86 @@ explicit-overwrite save-as are accepted/live-smoked; and the secondary
 resolver tools or an execution bypass.
 
 Next product gate: Alpha3.2-D SQLite Practical Query Gate.
+
+### Alpha3.2-D SQLite Practical Query Gate
+
+Status: in_progress; two bounded implementation slices opened; 2026-07-11.
+
+Accepted dependency baseline:
+
+```text
+Alpha3.2-C final ledger: 44e1314
+OpenReaper clean main at D opening
+```
+
+Control-tower audit found the existing C3 Project Index foundation helper-rich
+but product-unbound. `macro.project.query` remains contract-only and returns
+`CALL_TEMPLATE_ID_HELD`; normal stdio does not open or inject the resident/
+SQLite adapter; successful refresh child readbacks are not ingested into the
+index; `duplicates` has no query implementation; package smoke does not prove
+missing→refresh→ingest→query; and covered legacy query macro ids remain public.
+Existing C3 focused checks pass only with injected adapters and do not prove the
+Alpha3.2-D product gate.
+
+D acceptance requires one public `macro.project.query` with exactly these entity
+modes:
+
+```text
+status
+selected_context
+tracks
+items
+takes
+fx
+routing
+automation
+markers_regions
+media_sources
+duplicates
+changed_since
+```
+
+It must support bounded filters, fields, paging, freshness/coverage, refresh
+policy, optional hydration planning, and candidate canonical refs. SQLite rows
+remain navigation candidates, never write authorization. The agent executes
+returned atomic read child requests; the server must not execute children. The
+server may observe successful accepted atomic readbacks and update its internal
+resident/SQLite cache only after readback. No raw SQL, sixth MCP tool,
+`call_recipe`, hidden recipe/child executor, direct SQLite write authorization,
+or bridge/REAPER write capability is opened.
+
+The work is split into disjoint parallel slices:
+
+#### D-Q Generic Query Surface
+
+Owns the query planner/public discovery and guide surface. It must bind the
+single generic entity vocabulary, implement bounded media-source duplicate
+grouping, make refresh policy control behavior, bind cursors to entity plus
+snapshot/freshness and query fingerprint, propagate changed-since adapter
+blockers, retain old planners as internal helpers, and remove covered old ids
+from public discovery/normal dispatch replacement metadata. `macro.selected_context`
+may remain a folded compatibility entry only until the later E inspect gate if
+its immediate removal would violate accepted sequencing.
+
+#### D-S Product Store / Readback Ingest
+
+Owns stdio Product Index lifecycle and readback projection. It must open a
+managed resident/SQLite adapter under an explicit package/session state root,
+bind owner/generation/session/project identity, expose truthful ready/degraded/
+stale posture, close cleanly, and provide a bounded internal observer that maps
+successful accepted refresh-template readbacks into store replace methods only
+after validated readback. It must never execute refresh child calls itself.
+
+Architecture/process files remain control-tower owned. The two workers do not
+commit, do not start REAPER, do not edit each other's files, and report exact
+changed paths, checks, blockers, and risks. The control tower owns the later
+`call-template-runtime`, package smoke, final review, commits, and live evidence.
+
+Final package/live acceptance must prove actual stdio missing→returned refresh
+requests→agent-executed atomic reads→automatic readback ingest→query rows,
+SQLite persistence with matching identity, stale-session rejection on identity
+mismatch, bounded duplicates, old public surface replacement, exact five tools,
+no raw SQLite access, and read-only live evidence against the authorized
+disposable project. Marker/region rows must state `exact_hydration_unavailable`
+and require target-template live resolution unless a separately approved lower-
+layer hydration template exists; D must not add that template as a drive-by.
