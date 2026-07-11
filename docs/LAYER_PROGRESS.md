@@ -3088,6 +3088,40 @@ Node/SQLite/runtime tests and Lua handler code review, not a new non-empty
 REAPER canary. This is accepted for D under the user-approved fast closeout; a
 later macro-spine or trial-rerun slice may add richer non-empty live evidence.
 
+### Alpha3.2-E Small Macro Spine
+
+Status: in_progress; first bounded slice accepted at `826db6f` (`product: bind alpha3.2e project inspect macro`); 2026-07-11.
+
+E0 accepted surface:
+
+- `macro.project.inspect` is now runtime-bound as a read-only, plan-only macro.
+- It returns ordered agent-executed child requests over accepted project path,
+  dirty-state, metadata/summary, render-settings, and `macro.project.query`
+  scopes; the server does not execute children.
+- `macro.project.query` remains accepted from Alpha3.2-D.
+- Write-side spine entries (`macro.project.delete_targets`,
+  `macro.project.apply_layout`, `macro.routing.apply`,
+  `macro.media.place_assets`, and `macro.render.targets`) remain contract-only
+  until their bounded planner slices are accepted.
+
+E0 evidence:
+
+```text
+Focused E0 gate: npm run check:alpha3-2e -> 5/5 pass
+Adjacent guide/query gates: npm run check:alpha3-2a; npm run check:alpha3-2d -> pass
+Runtime/discovery gates: npm run check:template-runtime; npm run check:discovery-menu; npm run check:tool-abi -> pass
+Full gate: npm run build -> exit 0
+Whitespace: git diff --check -> exit 0
+Implementation commit: 826db6f
+```
+
+E scoping notes from the control-tower scout: delete/layout/routing/media have
+usable accepted atomic templates and should be implemented as independent
+planner modules before shared dispatch/guide integration. Render remains a
+bounded lower-layer blocker because current templates do not fully express
+whole-project WAV, region-ref OGG with names, selected-item OGG naming, and
+preview-to-execution output naming/collision guarantees.
+
 Accepted dependency baseline:
 
 ```text
