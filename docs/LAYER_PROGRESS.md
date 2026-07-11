@@ -3090,7 +3090,7 @@ later macro-spine or trial-rerun slice may add richer non-empty live evidence.
 
 ### Alpha3.2-E Small Macro Spine
 
-Status: in_progress; bounded slices accepted through E-MR media/routing at `fd2c7af` (`product: bind alpha3.2e media routing macros`); 2026-07-11.
+Status: in_progress; E-MR media/routing static and neutral-live acceptance completed through `fa84b27` (`product: fix alpha3.2e media readback chain`); 2026-07-11.
 
 E0 accepted surface:
 
@@ -3199,17 +3199,36 @@ E-MR evidence:
 ```text
 Standalone planner prep commit: 1cdf5af
 Runtime/guide integration commit: fd2c7af
+Live blocker fix commits: bc10c9e (source_file_ref); fa84b27 (item-only readback chain)
 Focused E gate: npm run check:alpha3-2e -> 26/26 pass
 Adjacent guide gate: npm run check:alpha3-2a -> pass
 Runtime/discovery gates: npm run check:template-runtime; npm run check:discovery-menu; npm run check:tool-abi -> pass
 Regression gate: npm run check:alpha3-2d -> pass
-Full gate: npm run build -> exit 0
+Post-fix full gate: npm run build -> exit 0
 Whitespace: git diff --check -> exit 0
+Live-configured read canary: /tmp/openreaper-alpha32e-live-20260711T140022Z/alpha3-2e-live-configured-canary.json -> bridge ready; metadata/tracks pass
+Neutral live smoke: /tmp/openreaper-alpha32e-neutral-live-20260711T141449Z/alpha3-2e-neutral-live-smoke.json -> 30 calls, 0 failed
 ```
 
+Neutral live fixture used `/Users/Zhuanz/Untitled/Untitled.RPP`: it created two
+tracks through the layout plan, created and updated one internal send through
+the routing plan, probed/imported one generated 0.1-second WAV through the media
+plan, read the imported item, deleted the item and both tracks through confirmed
+`macro.project.delete_targets` plans, then executed the accepted
+`macro.project.file` save-current child flow. Final readback was exactly zero
+tracks and clean/raw dirty state 0. The run retained a pre-mutation project
+backup, produced no renders, deleted no source media, and opened no
+hardware/device or raw Lua/action/shell/UI path.
+
+The live run found two same-layer planner contract mismatches before final pass:
+`file_ref` needed to be `source_file_ref`, and import guaranteed item refs but
+not take refs. Both were fixed in the bounded follow-up commits above; failed
+attempts were recovered through accepted delete/save paths and left the project
+clean.
+
 Remaining E implementation blocker: `macro.render.targets` remains blocked
-pending the render-template fix decision above. A neutral live fixture can now
-smoke delete/layout/routing/media together without expanding the public surface.
+pending the render-template fix decision above. Delete/layout/routing/media now
+have one neutral live fixture without expanding the public surface.
 
 Accepted dependency baseline:
 
