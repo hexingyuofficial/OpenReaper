@@ -1933,3 +1933,157 @@ posture, then prove:
 Independent review is required before implementation acceptance and again after
 live evidence. B3 remains unaccepted until static, package, reviewer, and live
 gates all pass.
+
+### Alpha3.2-B3 Runtime / Doctor Live Readiness Accepted
+
+Status: accepted at static, package-smoke, authorized live-read, and independent
+review evidence level.
+
+Control-tower acceptance: 2026-07-11.
+
+Accepted implementation commit:
+
+```text
+1f9a836030f0b98cd19f4bdc6b40e52e1e8d912d
+runtime: add alpha3.2b3 doctor readiness
+```
+
+Accepted runtime contract:
+
+```text
+alpha3.2.b3.runtime_doctor_readiness.v1
+```
+
+The accepted implementation keeps the public MCP surface at exactly five tools
+and projects the accepted B1 heartbeat plus B2 managed root through read-only
+`ping` readiness. Package/config readiness, exact REAPER-process evidence,
+bridge heartbeat, request/response proof, selected render-root readiness, and
+task readiness remain separately named facts. `ping` does not dispatch a
+template, create a direct bridge request, start REAPER, create a root, or claim
+request/response proof.
+
+Accepted doctor behavior:
+
+- exact task modes are `live-edit`, `render`, `media-import`, and
+  `project-query`; `--wait-bridge[=SECONDS]` is bounded and polls only `ping`;
+- after `bridge_ready`, doctor proves the existing
+  `call_template(template.transport.read_state)` request/response path before
+  reporting live-edit or shared task readiness;
+- render readiness additionally requires the selected managed root and remains
+  strictly preflight-only with `render_execution_proven:false`,
+  `codec_support_assessed:false`, and `scope:preflight_only`;
+- default package/MCP command smoke is independent of a non-ready selected task
+  render root; selected root failures remain render/task evidence rather than
+  becoming a package failure;
+- exact REAPER PID evidence is fail-closed and binds the nofollow PID record to
+  bounded exact-PID `ps` state/start data, kernel-observed `lsof` executable
+  identity, and the Cockos `com.cockos.reaper` / `Y3T58622SG` code-sign
+  requirement;
+- transport permission recovery is manual-only rather than publishing an
+  unsafe pathname chmod; render recovery creates a fresh unique root beneath
+  canonical system temporary storage and routes the user through the accepted
+  `openreaper-start --render-root` path without mutating the rejected root;
+- doctor-owned MCP clients use bounded detached POSIX process groups so normal
+  completion, timeout, SIGINT, and SIGTERM clean direct children and stubborn
+  descendants with TERM-to-KILL escalation and group-exit verification.
+
+Independent review exercised timeout/orphan cleanup, render-root symlink and
+TOCTOU swaps, PID reuse and argv0/basename spoofing, exact directional
+transport permissions, restart truthfulness, BSD chmod incompatibility,
+ancestor-symlink recovery, package/render status separation, and actual
+packaged doctor behavior. The final implementation review and the final live
+evidence review both returned PASS with P0-P3 all zero.
+
+Control-tower full gates passed:
+
+```text
+git diff --check
+node --check packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs
+node --check packages/mcp-server/src/openreaper-mcp-stdio.mjs
+zsh -n scripts/openreaper-alpha-package/openreaper-doctor.sh
+node --check scripts/package-openreaper-alpha.mjs
+node --test tests/alpha3/alpha3-2b3-runtime-doctor-readiness.test.mjs  # 12/12
+node --test tests/layer4d1/live-bridge-executor.test.mjs               # 13/13
+node --test tests/layer4d2/openreaper-live-bridge.test.mjs             # 7/7
+node --test tests/alpha3/alpha3-2b-managed-render-root.test.mjs        # 37/37
+node --test tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs  # 12/12
+node --test tests/alpha3/block2-startup-readiness.test.mjs             # 4/4
+npm run check:tool-abi
+npm run check:template-runtime
+npm test
+npm run build
+```
+
+Control-tower gate evidence:
+
+```text
+/tmp/openreaper-alpha32b3-ct-full-20260711T032515Z
+```
+
+Fresh package smoke ran with smoke enabled and without `--skip-smoke`:
+
+```text
+/tmp/openreaper-alpha32b3-ct-package-20260711T033050Z/OpenReaper-alpha
+/tmp/openreaper-alpha32b3-ct-package-20260711T033050Z.package.log
+```
+
+It passed actual packaged stdio/doctor no-heartbeat, stale, matching-read,
+missing/file/symlink/unwritable/valid selected-root, live-edit independence,
+render preflight, never-settling ping, external SIGTERM, stubborn grandchild,
+and independent fixture-timeout cases. It reported exact tool count five, no
+REAPER startup, no fake children, and no leftover fake request/result/probe
+files.
+
+Authorized live acceptance used the disposable project and a fresh evidence
+root:
+
+```text
+project: /Users/Zhuanz/Untitled/Untitled.RPP
+evidence: /tmp/openreaper-alpha32b3-live-20260711T033242Z
+candidate: /tmp/openreaper-alpha32b3-ct-package-20260711T033050Z/OpenReaper-alpha
+```
+
+Before the Action, candidate `openreaper-start` launched PID `74665`; doctor
+verified the signed Cockos REAPER identity and launch record, selected root
+`render_root_ready`, exact `bridge_action_not_running`, request proof `not_run`,
+and blocked live-edit/render task results. After the registered
+`OpenReaper: Start MCP bridge` Action, bounded doctor polls observed matching
+`openreaper-alpha` / generation `1`, heartbeat ages of 7 ms, 75 ms, and 402 ms,
+`bridge_ready`, and successful live read proof. Doctor reported live-edit ready
+and render `ready_for_render:true` with the accepted preflight-only negatives.
+An independent actual MCP client proved `ping` left the request count unchanged
+and a subsequent explicit `call_template(template.transport.read_state)`
+succeeded with stopped transport state.
+
+The candidate was not installed over the accepted installed product, so its
+overall doctor status accurately remained `needs_client_config_refresh` while
+`smoke.ok:true` and all live task exits were zero. This is not evidence that
+current client configurations point at the candidate and is not promoted as an
+installed-product claim.
+
+The main project remained byte-identical and mtime-identical before, during,
+and after the smoke:
+
+```text
+SHA256 ad67bf20622b3afb449082653564e0d7fc6d12623e306d0fac3b3ef93f478f37
+```
+
+No render or artifact output was created, and immediate plus delayed audits
+found no REAPER or smoke-owned process. Real observed side effects are retained:
+REAPER showed the project modified in memory, quit exposed Project
+Settings/Notes and then an unsaved project before the second quit completed,
+`/Users/Zhuanz/Untitled/Backups/Untitled-2026-07-11_1137.rpp-bak` was created,
+and `/Users/Zhuanz/Untitled/.DS_Store` mtime changed. Request/result evidence
+files remain intentionally under the fresh `/tmp` evidence root.
+
+A separate earlier control-tower version probe accidentally launched REAPER PID
+`23776` via `REAPER -version`; it was immediately interrupted with Ctrl-C, did
+not load or modify the authorized project, is not contained in the B3 evidence
+root, and is explicitly excluded from B3 acceptance evidence.
+
+B3 proves bounded startup/bridge/read readiness and managed-root render
+preflight on the reviewed local macOS path. It does not prove render execution,
+codec support, broader startup environments, customer-ready support, or the
+later media-import/project-query task-specific gates.
+
+Next gate: Alpha3.2-C Context, Refs, Project File Templates.
