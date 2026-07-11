@@ -3090,7 +3090,7 @@ later macro-spine or trial-rerun slice may add richer non-empty live evidence.
 
 ### Alpha3.2-E Small Macro Spine
 
-Status: in_progress; first bounded slice accepted at `826db6f` (`product: bind alpha3.2e project inspect macro`); 2026-07-11.
+Status: in_progress; bounded slices accepted through E-L layout at `8c77347` (`product: bind alpha3.2e project layout macro`); 2026-07-11.
 
 E0 accepted surface:
 
@@ -3150,10 +3150,35 @@ Full gate: npm run build -> exit 0
 Whitespace: git diff --check -> exit 0
 ```
 
-Remaining E slices: `macro.project.apply_layout`, `macro.routing.apply`, and
-`macro.media.place_assets` still need planner modules and runtime/guide
-integration. `macro.render.targets` remains blocked pending the render-template
-fix decision above.
+E-L accepted surface:
+
+- `macro.project.apply_layout` is now runtime-bound as a preview-first,
+  plan-only project layout macro.
+- Dry-run returns a read-only preflight preview with target counts and planned
+  track/folder/color/order operations; mutation plans are emitted only through
+  accepted track organization templates for create/rename/color/move/folder
+  depth/nesting.
+- The planner fails closed for duplicate ids, invalid row kinds, invalid colors,
+  cycles, unresolved match/conflict policy, and unsupported idempotency keys.
+  It does not delete existing tracks and the server still does not execute child
+  requests.
+
+E-L evidence:
+
+```text
+Standalone planner prep commit: f8bdd5e
+Runtime/guide integration commit: 8c77347
+Focused E gate: npm run check:alpha3-2e -> 16/16 pass
+Adjacent guide gate: npm run check:alpha3-2a -> pass
+Runtime/discovery gates: npm run check:template-runtime; npm run check:discovery-menu; npm run check:tool-abi -> pass
+Regression gate: npm run check:alpha3-2d -> pass
+Full gate: npm run build -> exit 0
+Whitespace: git diff --check -> exit 0
+```
+
+Remaining E slices: `macro.routing.apply` and `macro.media.place_assets` still
+need planner modules and runtime/guide integration. `macro.render.targets`
+remains blocked pending the render-template fix decision above.
 
 Accepted dependency baseline:
 
