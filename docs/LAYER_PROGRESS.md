@@ -2643,3 +2643,87 @@ amendment does not change recipe shape, dependency rules, lifecycle, execution,
 Tool ABI, accepted catalog composition, or any other ABI semantics. The C3A
 worker remains forbidden from editing architecture files and must resume only
 after this control-tower correction is committed.
+
+#### Alpha3.2-C3A Current Project Path / Dirty-State Read Acceptance
+
+Status: accepted; 2026-07-11.
+
+Accepted implementation commit:
+
+```text
+ab0cfb9 runtime: add live-smoked project file reads
+```
+
+Accepted contract:
+
+```text
+alpha3.2.c3a.project_file_read.v1
+```
+
+C3A adds exactly two read-only project templates:
+
+```text
+template.project.read_current_project_path
+template.project.read_dirty_state
+```
+
+The accepted official catalog is 218 templates; the historical Alpha2 live
+fixture remains 213; the exact C3A group is 2; and the composed current-product
+live allowlist is 215. The MCP surface remains exactly five tools. Save-current,
+save-as, new-project, and `macro.project.file` execution remain unproven and
+were not opened by this acceptance.
+
+Independent final review returned PASS with P0-P3 all zero. Control-tower gates
+passed after live promotion and bounded late-result settle hardening:
+
+```text
+npm run check:alpha3-2c3a                                  # 12/12
+npm run build:live-bridge -- --check
+npm test
+npm run build
+fresh npm package smoke without --skip-smoke
+```
+
+Final static/package evidence:
+
+```text
+/tmp/openreaper-alpha32c3a-ct-final-20260711T082024Z
+/tmp/openreaper-alpha32c3a-ct-final-package-20260711T082419Z/OpenReaper-alpha
+```
+
+The package smoke used packaged actual stdio with omitted context and verified
+both complete summaries, canonical `project:current` refs, no artifacts/jobs,
+and the exact five-tool surface.
+
+Authorized live evidence:
+
+```text
+/tmp/openreaper-alpha32c3a-live-20260711T081207Z
+/Users/Zhuanz/Untitled/Untitled.RPP
+```
+
+Observed path state was `saved_project` with exact path
+`/Users/Zhuanz/Untitled/Untitled.RPP`, name `Untitled.RPP`, no truncation, and
+canonical current-project identity. Observed dirty state was `clean`, `dirty:
+false`, and raw state `0`. The main RPP remained byte-for-byte and metadata
+stable at SHA256
+`ad67bf20622b3afb449082653564e0d7fc6d12623e306d0fac3b3ef93f478f37`,
+size 2287, and mtime_ns 1783523293134876339 before and after. No new backup,
+`.DS_Store` mutation, render, or artifact occurred.
+
+The candidate bridge used owner `openreaper-alpha32c3a`, generation 1. REAPER
+was quit through the app menu with no prompt; immediate and delayed REAPER
+process audits and candidate MCP process audit were zero. One pre-existing
+`~/.openreaper/current` MCP process was observed and left untouched.
+
+Live disclosure: after the runner's initial exact-owned cleanup, the REAPER
+defer loop late-wrote two results for the same owned request ids with
+`REQUEST_INVALID` / `reason=open_failed`. After REAPER exit the control tower
+validated exact ids, contract, owner, and generation; removed only those two
+owned result files; and confirmed stable empty request/result directories. The
+runner was then hardened with bounded settle/re-clean coverage. This disclosure
+does not expand C3A claims beyond the two accepted reads.
+
+Next gate: combined Alpha3.2-C3B save-current and C3C save-as implementation,
+with separate safety assertions but one final review, one full static/package
+gate, and one combined authorized REAPER live acceptance.
