@@ -164,7 +164,10 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     risk: "read",
     entity_kind: "macro.project.query",
     task_intents: ["query project", "find tracks or items", "find duplicates", "changed since"],
-    rollout_slice: "3.2-D/E",
+    rollout_slice: "3.2-D",
+    implementation_status: "supported_runtime_bound_plan_only",
+    runnable: false,
+    known_blocker: null,
     manual: actionManual({
       when_to_use: [
         "Query exactly one supported entity: status, selected_context, tracks, items, takes, fx, routing, automation, markers_regions, media_sources, duplicates, or changed_since.",
@@ -192,7 +195,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Validate entity against the exact Alpha3.2 vocabulary, then validate filters, selectors, fields, cursor, and limit without accepting raw SQL.",
         "Read index status, session identity, freshness, and entity coverage.",
-        "Apply refresh_policy and run only accepted read templates when refresh is required.",
+        "Apply refresh_policy; the agent explicitly runs only the returned accepted read templates, and the server observes successful readback into the managed index.",
       ],
       underlying_actions: [
         "macro.index_status",
@@ -220,13 +223,11 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "No raw SQL, direct database write, REAPER mutation, or hidden executor was used.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The consolidated query macro is not callable until 3.2-D/E."),
         blocker("INDEX_NOT_READY", "The project index is missing, stale, or bound to another session."),
         blocker("ENTITY_NOT_SUPPORTED", "The selected entity or field set is not in the bounded query schema."),
         blocker("REF_HYDRATION_UNAVAILABLE", "Live read support is unavailable for requested ref hydration."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, use the exact existing macro.index_status/query_*/changed_since/hydrate_refs compatibility ids.",
         "For INDEX_NOT_READY, run the returned read-only refresh requests and retry with the new freshness token.",
         "For unsupported fields, request a smaller allowlisted projection instead of raw SQL.",
         "For hydration failure, keep candidate rows, disable hydrate_refs, or restore bridge readiness before retrying.",
@@ -714,18 +715,7 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
 
 export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
   secondaryRow("macro.project.file", "Plan-only save-current/save-as macro; new/open/create remain held.", "write_confirmed", "plan_only_runtime_bound", "Expand for exact child order, gates, readback, and blockers."),
-  secondaryRow("macro.index_status", "Read Project Index readiness, freshness, and refresh needs.", "read", "compatibility_plan_only", "Expand when diagnosing INDEX_NOT_READY before macro.project.query is implemented."),
   secondaryRow("macro.selected_context", "Read current selected project context and candidate refs.", "read", "compatibility_plan_only", "Expand when selected context is needed before macro.project.inspect is implemented."),
-  secondaryRow("macro.query_tracks", "Query indexed track rows.", "read", "compatibility_plan_only", "Expand for current track-index behavior or migration compatibility."),
-  secondaryRow("macro.query_items", "Query indexed item rows.", "read", "compatibility_plan_only", "Expand for current item-index behavior or migration compatibility."),
-  secondaryRow("macro.query_takes", "Query indexed take rows.", "read", "compatibility_plan_only", "Expand for current take-index behavior or migration compatibility."),
-  secondaryRow("macro.query_fx", "Query indexed FX rows.", "read", "compatibility_plan_only", "Expand for current FX-index behavior or migration compatibility."),
-  secondaryRow("macro.query_routing", "Query indexed routing rows.", "read", "compatibility_plan_only", "Expand for current routing-index behavior or routing readback."),
-  secondaryRow("macro.query_automation", "Query indexed automation rows.", "read", "compatibility_plan_only", "Expand for current automation-index behavior."),
-  secondaryRow("macro.query_markers", "Query indexed marker and region rows.", "read", "compatibility_plan_only", "Expand for current marker/region-index behavior."),
-  secondaryRow("macro.query_media", "Query indexed project media rows.", "read", "compatibility_plan_only", "Expand for current media-index behavior."),
-  secondaryRow("macro.hydrate_refs", "Hydrate selected index candidates into canonical live refs.", "read", "compatibility_plan_only", "Expand only when a later action needs canonical refs."),
-  secondaryRow("macro.changed_since", "Query bounded project-index changes since a checkpoint.", "read", "compatibility_plan_only", "Expand for incremental change inspection."),
   secondaryRow("macro.set_track_controls", "Plan reversible common track control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed track volume/pan/mute/name/color controls."),
   secondaryRow("macro.set_item_controls", "Plan reversible common item control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed item move/trim/gain/pan/fade controls."),
   secondaryRow("macro.set_take_controls", "Plan reversible common take control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed take name/gain/pan/pitch/playrate controls."),
@@ -736,7 +726,7 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS;
+const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => entry.id !== "macro.project.query");
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
 const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
 const GUIDE_BY_ID = new Map(GUIDE_DEFINITIONS.map((entry) => [entry.id, entry]));
@@ -785,13 +775,13 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; seven primary entries are non-runnable pending 3.2-C/D/E.",
+    macro: "Small product operation; macro.project.query is supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
     recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
   },
   primary_spine: {
     ordered_ids: ALPHA3_2A_PRIMARY_MACRO_IDS,
     rows: PRIMARY_DEFINITIONS.map((entry) => compactPrimaryRow(entry)),
-    current_posture: "candidate_in_review_non_runnable",
+    current_posture: "candidate_in_review_mixed_runtime_posture",
   },
   project_query_entities: ALPHA3_2A_PROJECT_QUERY_ENTITIES,
   project_file_posture: ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE,
@@ -809,7 +799,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   common_task_routing: [
     route("inspect project", "macro.project.inspect", "Use accepted reads now, including the exact path and dirty-state templates."),
-    route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Use mapped compatibility query macros until 3.2-D."),
+    route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Use the generic bounded planner; agent runs refresh children and runtime must observe readback."),
     route("delete scoped objects", "macro.project.delete_targets", "Use one accepted delete template with confirmation/readback; never delete source files."),
     route("apply track/folder layout", "macro.project.apply_layout", "Use bounded track/folder templates and structural readback until 3.2-E."),
     route("apply internal routing", "macro.routing.apply", "Use accepted internal routing templates; hardware/device I/O is blocked."),
@@ -823,7 +813,13 @@ const COMPACT_GUIDE = deepFreeze({
     secondary_ids: ALPHA3_2A_SECONDARY_MACRO_IDS,
     covered_legacy_ids: ALPHA3_2A_COVERED_LEGACY_IDS,
     legacy_to_primary_mapping: ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING,
-    removed_legacy_ids: [],
+    removed_legacy_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
+    legacy_query_posture: {
+      public_generic_id: "macro.project.query",
+      internal_covered_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
+      temporary_compatibility_ids: ["macro.selected_context"],
+      generic_status: "supported_runtime_bound_plan_only_not_live_runnable",
+    },
     distinct_legacy: {
       ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
       blockers: [
@@ -935,8 +931,8 @@ export function createAlpha3_2AExactMacroExpansion(id) {
     guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
     guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
     guide_tier: contractEntry.guide_tier,
-    implementation_status: id === "macro.project.file" ? "plan_only_runtime_bound" : "contract_only_non_runnable",
-    runnable: id === "macro.project.file",
+    implementation_status: id === "macro.project.file" ? "plan_only_runtime_bound" : contractEntry.implementation_status,
+    runnable: id === "macro.project.file" ? true : contractEntry.runnable,
     rollout_slice: contractEntry.rollout_slice,
     action_manual: contractEntry.manual,
   });
@@ -977,6 +973,8 @@ function primaryDefinition({
   manual,
   guide_tier = "primary",
   known_blocker = CONTRACT_ONLY_BLOCKER,
+  implementation_status = "contract_only_non_runnable",
+  runnable = false,
 }) {
   return {
     id,
@@ -990,6 +988,8 @@ function primaryDefinition({
     manual,
     guide_tier,
     known_blocker,
+    implementation_status,
+    runnable,
   };
 }
 
@@ -1002,7 +1002,7 @@ function compactPrimaryRow(entry) {
     id: entry.id,
     purpose: entry.summary,
     safety_tier: entry.risk,
-    implementation_status: "contract_only_non_runnable",
+    implementation_status: entry.implementation_status,
     rollout_slice: entry.rollout_slice,
     action_manual: compactActionManual(entry.id, entry.manual),
     expand: { tool: "list_templates", ids: [entry.id], result: "requested_expansions" },

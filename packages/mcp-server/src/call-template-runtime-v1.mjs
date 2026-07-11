@@ -49,11 +49,19 @@ import {
 } from "./alpha3-block2-startup-readiness-v1.mjs";
 import {
   ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
+  ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+  ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS,
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexQueryRuntimeEnvelope,
+  createAlpha3_2DGenericProjectQueryDiscoveryItems,
+  createAlpha3_2DGenericProjectQueryRuntimeEnvelope,
   isAlpha3C3OfficialQueryMacroId,
   planAlpha3C3ProjectIndexQueryMacro,
+  planAlpha3_2DGenericProjectQuery,
 } from "./alpha3-c3-project-index-query-v1.mjs";
+import {
+  ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
+} from "./alpha3-2d-project-index-runtime-v1.mjs";
 import {
   ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
   summarizeAlpha3L3ProjectIndexUserFlow,
@@ -668,10 +676,17 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFree
   ),
 );
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS = deepFreeze(
+  ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.filter((id) =>
+    !CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id),
+  ),
+);
+
 export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
 ]);
 
 // Alpha3.2-C3A reads and C3B+C3C saves have control-tower live evidence accepted on 2026-07-11.
@@ -719,6 +734,7 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_ID_WORKFLOW_SHAPED",
   "CALL_TEMPLATE_ID_SEED_ONLY",
   "CALL_TEMPLATE_ID_HELD",
+  "CALL_TEMPLATE_ID_REPLACED",
   "CALL_TEMPLATE_ID_UNKNOWN",
   "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
   "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
@@ -809,12 +825,16 @@ export function createCallTemplateRuntime(options = {}) {
   const evidenceLimit = normalizeEvidenceLimit(options.evidenceLimit);
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const live = normalizeLiveRuntimeOptions(options.live);
-  const projectIndex = options.projectIndex ?? null;
+  const projectIndexRuntime = options.projectIndexRuntime ?? null;
+  const projectIndex = projectIndexRuntime?.adapter ?? options.projectIndex ?? null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
+  const legacyProjectIndexCompatibilityDiscovery = createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog })
+    .filter((item) => item.id === "macro.selected_context");
   const executableDiscoveryTemplates = [
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
-    ...createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog }),
+    ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
+    ...legacyProjectIndexCompatibilityDiscovery,
     ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
     ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
     ...catalogDiscoveryTemplates,
@@ -842,6 +862,18 @@ export function createCallTemplateRuntime(options = {}) {
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
+      if (id === ALPHA3_2D_GENERIC_PROJECT_QUERY_ID) {
+        const plan = planAlpha3_2DGenericProjectQuery(normalized.input, { projectIndex, catalog });
+        const envelope = createAlpha3_2DGenericProjectQueryRuntimeEnvelope({
+          request: normalized,
+          plan,
+          projectIndex,
+          catalog,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       if (isAlpha3_2AContractOnlyMacroId(id)) {
         throw new CallTemplateRuntimeError(
           "CALL_TEMPLATE_ID_HELD",
@@ -857,6 +889,17 @@ export function createCallTemplateRuntime(options = {}) {
               guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
               recovery: "Expand this exact id through list_templates for its action_manual, then use only currently accepted atomic templates or compatibility macros.",
             },
+          },
+        );
+      }
+      if (ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS.includes(id)) {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_REPLACED",
+          "This legacy Project Index query macro is internal-only after Alpha3.2-D; use macro.project.query with the mapped entity.",
+          {
+            recoverable: true,
+            id,
+            details: { id, replacement: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID },
           },
         );
       }
@@ -919,8 +962,13 @@ export function createCallTemplateRuntime(options = {}) {
         idempotency_key: normalized.idempotency_key,
         executor: live.enabled ? live.executor : options.executor,
       });
-      retainEvidence(retainedEvidence, evidenceFromExecution(execution, live.evidence), evidenceLimit);
-      return execution;
+      const observedExecution = observeProjectIndexExecution({
+        execution,
+        id,
+        projectIndexRuntime,
+      });
+      retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
+      return observedExecution;
     } catch (error) {
       const envelope = runtimeErrorEnvelope({
         id,
@@ -951,6 +999,26 @@ export function createCallTemplateRuntime(options = {}) {
     },
     last_evidence() {
       return cloneJson(retainedEvidence.at(-1) ?? null);
+    },
+  });
+}
+
+function observeProjectIndexExecution({ execution, id, projectIndexRuntime }) {
+  if (!projectIndexRuntime || !ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.includes(id) || execution?.ok !== true) {
+    return execution;
+  }
+  const observation = projectIndexRuntime.observeSuccessfulTemplateExecution({
+    ...execution,
+    identity: {
+      ...projectIndexRuntime.identity,
+      session_id: projectIndexRuntime.session_id,
+    },
+  });
+  return deepFreeze({
+    ...execution,
+    result: {
+      ...execution.result,
+      project_index_observation: observation,
     },
   });
 }
@@ -1707,7 +1775,7 @@ function runtimeActionStatus(item) {
 
 function runtimeActionIsPlanOnlyMacro(item) {
   return item.action_kind === "macro"
-    && item.support_status === "plan_only_runtime_bound"
+    && ["plan_only_runtime_bound", "supported_runtime_bound"].includes(item.support_status)
     && item.execution_shape !== "live_reaper_write";
 }
 

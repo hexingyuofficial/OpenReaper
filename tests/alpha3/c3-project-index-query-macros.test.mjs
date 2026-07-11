@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ALPHA3_2D_COVERED_LEGACY_QUERY_IDS,
+  ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT,
+  ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS,
   ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
   ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
+  createAlpha3_2DGenericProjectQueryDiscoveryItems,
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexSchemaContract,
   listAlpha3C3ProjectIndexQueryMacros,
@@ -66,6 +70,17 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       registry.macros.find((macro) => macro.id === "macro.hydrate_refs").required_templates.includes("template.routing.read_track_routing"),
       false,
     );
+  });
+
+  it("exposes one generic public replacement while retaining C3 ids as internal covered helpers", () => {
+    const generic = createAlpha3_2DGenericProjectQueryDiscoveryItems();
+    assert.equal(generic.length, 1);
+    assert.equal(generic[0].id, "macro.project.query");
+    assert.equal(generic[0].support_status, "supported_runtime_bound");
+    assert.equal(generic[0].live_runnable_now, false);
+    assert.deepEqual(generic[0].replacement, ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT);
+    assert.deepEqual(ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT.covers_legacy_ids, ALPHA3_2D_COVERED_LEGACY_QUERY_IDS);
+    assert.equal(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.macro_ids.every((id) => id !== "macro.project.query"), true);
   });
 
   it("creates official query macro discovery entries over list_templates/call_template", () => {
@@ -1367,23 +1382,18 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     );
   });
 
-  it("exposes C3 query macros and metadata through the existing executable surface", () => {
+  it("exposes the generic public query and selected_context compatibility without public legacy query ids", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates();
     const exact = runtime.list_templates({
-      ids: ["macro.query_tracks"],
+      ids: ["macro.project.query"],
       fields: ["summary", "inputSchema", "expectedDelta", "task_intents", "capability_truth"],
     });
 
-    assert.equal(menu.items.some((item) => item.id === "macro.index_status"), true);
     assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_tracks"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_items"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_takes"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_fx"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_routing"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_markers"), true);
-    assert.equal(menu.items.some((item) => item.id === "macro.query_media"), true);
+    for (const id of ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS) {
+      assert.equal(menu.items.some((item) => item.id === id), false, id);
+    }
     assert.deepEqual(
       menu.product_surface.project_index_queries,
       ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY,
@@ -1402,28 +1412,44 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
     );
     assert.deepEqual(exact.product_surface.project_index_user_flow_snapshot.primary_macro_ids, [
-      "macro.index_status",
-      "macro.query_tracks",
+      "macro.project.query",
     ]);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.added_tools, 0);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.hidden_executor, false);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.public_call_recipe, false);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed, false);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.sqlite_authorizes_writes, false);
-    assert.equal(exact.items[0].id, "macro.query_tracks");
-    assert.equal(exact.items[0].capability_truth.kind, "official_macro");
-    assert.equal(exact.items[0].current_status, "available_now");
-    assert.equal(exact.items[0].inputSchema.properties.filters.type, "object");
+    assert.equal(exact.items[0].id, "macro.project.query");
+    assert.equal(exact.items[0].capability_truth.kind, "macro");
+    assert.equal(exact.items[0].support_status, "supported_runtime_bound");
+    assert.deepEqual(
+      exact.items[0].inputSchema.properties.entity.enum,
+      [
+        "status",
+        "selected_context",
+        "tracks",
+        "items",
+        "takes",
+        "fx",
+        "routing",
+        "automation",
+        "markers_regions",
+        "media_sources",
+        "duplicates",
+        "changed_since",
+      ],
+    );
   });
 
-  it("calls C3 query macro ids through call_template as plan-only envelopes", async () => {
+  it("calls the generic public query through call_template as a plan-only envelope", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T16:28:15.000Z"),
       projectIndex: readyProjectIndex(),
     });
     const response = await runtime.call_template({
-      id: "macro.query_tracks",
+      id: "macro.project.query",
       input: {
+        entity: "tracks",
         limit: 2,
         filters: { selected: true },
         fields: ["name", "selected", "fx_count"],
@@ -1433,35 +1459,16 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.contract, "template.execution.v1");
     assert.equal(response.ok, true);
     assert.equal(response.error, null);
-    assert.equal(response.template.id, "macro.query_tracks");
+    assert.equal(response.template.id, "macro.project.query");
     assert.equal(response.template.action_kind, "macro");
-    assert.equal(response.request.macro.contract, ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT);
+    assert.equal(response.result.contract, "alpha3.2.generic_project_query.v1");
+    assert.equal(response.result.plan.id, "macro.project.query");
+    assert.equal(response.result.plan.entity, "tracks");
     assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.alias_execution, false);
+    assert.equal(response.result.plan.safety.hidden_executor, false);
     assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "track:guid:{TRACK-1}",
-      "track:guid:{TRACK-3}",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.refresh_requests.length, 0);
-    assert.equal(response.result.hydrate_request.callable_now, true);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.deepEqual(
-      response.result.next_actions.map((action) => action.kind),
-      ["hydrate_refs", "before_write_or_mutation"],
-    );
-    assert.equal(response.result.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
-    assert.equal(response.result.user_flow.stage, "ready_compact_rows");
-    assert.equal(response.result.user_flow.row_count, 2);
-    assert.equal(response.result.user_flow.ref_count, 2);
-    assert.equal(response.result.user_flow.safe_to_use_rows, true);
-    assert.equal(response.result.user_flow.safe_to_write_from_rows, false);
-    assert.equal(response.result.user_flow.must_hydrate_or_re_resolve_before_write, true);
-    assert.equal(response.result.user_flow.safety.hidden_executor, false);
-    assert.equal(runtime.last_evidence().template.id, "macro.query_tracks");
+    assert.equal(response.result.plan.legacy_implementation.id, "macro.query_tracks");
+    assert.equal(response.result.plan.replacement.id, "macro.project.query");
   });
 
   it("calls selected_context through call_template as a plan-only envelope", async () => {
@@ -1492,291 +1499,77 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
   });
 
-  it("calls query_items through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T18:10:00.000Z"),
-      projectIndex: itemsProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_items",
-      input: {
-        scope: "selection",
-        limit: 2,
-        fields: ["track_ref", "length_seconds", "selected"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_items");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "item:guid:{ITEM-1}",
-      "item:guid:{ITEM-2}",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_items");
+  it("replaces macro.query_items through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_items", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_items");
   });
 
-  it("calls query_fx through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T18:35:00.000Z"),
-      projectIndex: fxProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_fx",
-      input: {
-        limit: 2,
-        filters: { stock_plugin: true },
-        fields: ["owner_ref", "plugin_name", "slot_index", "stock_plugin"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_fx");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "fx:track:guid:{TRACK-1}:0",
-      "fx:track:guid:{TRACK-1}:2",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_fx");
+  it("replaces macro.query_fx through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_fx", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_fx");
   });
 
-  it("calls query_takes through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T18:45:00.000Z"),
-      projectIndex: takesProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_takes",
-      input: {
-        limit: 2,
-        filters: { active: true },
-        fields: ["item_ref", "source_kind", "reverse", "has_take_fx"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_takes");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "take:guid:{TAKE-1}",
-      "take:guid:{TAKE-2}",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_takes");
+  it("replaces macro.query_takes through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_takes", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_takes");
   });
 
-  it("calls query_routing through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T19:10:00.000Z"),
-      projectIndex: routingProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_routing",
-      input: {
-        limit: 2,
-        filters: { source_track_ref: "track:guid:{TRACK-1}" },
-        fields: ["destination_track_ref", "send_mode", "volume_db"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_routing");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "send:track:guid:{TRACK-1}:0",
-      "send:track:guid:{TRACK-1}:1",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_routing");
+  it("replaces macro.query_routing through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_routing", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_routing");
   });
 
-  it("calls query_automation through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T19:20:00.000Z"),
-      projectIndex: automationProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_automation",
-      input: {
-        limit: 2,
-        filters: { visible: true, has_points: true },
-        fields: ["owner_ref", "name", "point_count"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_automation");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "envelope:track:guid:{TRACK-1}:volume",
-      "envelope:fx:track:guid:{TRACK-1}:0:wet",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_automation");
+  it("replaces macro.query_automation through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_automation", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_automation");
   });
 
-  it("calls query_markers through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T19:30:00.000Z"),
-      projectIndex: markersProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_markers",
-      input: {
-        limit: 2,
-        filters: { marker_kind: "region" },
-        fields: ["marker_kind", "name", "position_seconds", "end_seconds"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_markers");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "region:guid:{REGION-1}",
-      "region:guid:{REGION-2}",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.callable_now, false);
-    assert.equal(response.result.hydrate_request.status, "no_supported_exact_hydration");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_markers");
+  it("replaces macro.query_markers through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_markers", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_markers");
   });
 
-  it("calls query_media through call_template as a plan-only envelope", async () => {
-    const runtime = createCallTemplateRuntime({
-      now: () => new Date("2026-07-07T19:45:00.000Z"),
-      projectIndex: mediaProjectIndex(),
-    });
-    const response = await runtime.call_template({
-      id: "macro.query_media",
-      input: {
-        limit: 2,
-        filters: { media_type: "audio", offline: false },
-        fields: ["name", "media_type", "extension", "offline"],
-      },
-    });
-
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.query_media");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "file:path:/tmp/openreaper/Kick.wav",
-      "file:path:/tmp/openreaper/Pad.flac",
-    ]);
-    assert.equal(response.result.rows.length, 2);
-    assert.equal(response.result.hydrate_request.callable_now, true);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
-    assert.equal(runtime.last_evidence().template.id, "macro.query_media");
+  it("replaces macro.query_media through call_template after Alpha3.2-D", async () => {
+    const runtime = createCallTemplateRuntime();
+    const response = await runtime.call_template({ id: "macro.query_media", input: {} });
+    assertLegacyQueryReplacement(response, "macro.query_media");
   });
 
-  it("calls hydrate_refs and changed_since through call_template without executing child requests", async () => {
+  it("replaces internal legacy query ids through call_template while retaining selected_context compatibility", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T17:25:00.000Z"),
       projectIndex: changedProjectIndex(),
     });
-    const hydrate = await runtime.call_template({
-      id: "macro.hydrate_refs",
-      input: {
-        refs: ["item:guid:{ITEM-1}"],
-        limit: 10,
-      },
-    });
-    const changed = await runtime.call_template({
-      id: "macro.changed_since",
-      input: {
-        since: "2026-07-07T17:05:00.000Z",
-        limit: 2,
-      },
-    });
 
-    assert.equal(hydrate.ok, true);
-    assert.equal(hydrate.result.execution.executed, false);
-    assert.equal(hydrate.result.execution.hidden_executor, false);
-    assert.deepEqual(
-      hydrate.result.hydrate_request.requests.map((request) => request.id),
-      ["template.items.read_item_summary"],
-    );
-    const blockedHydrate = await runtime.call_template({
-      id: "macro.hydrate_refs",
-      input: {
-        refs: ["fx:track:{TRACK-1}:0"],
-        fields: ["pin_mapping"],
-        limit: 10,
-      },
-    });
-    assert.equal(blockedHydrate.ok, false);
-    assert.equal(blockedHydrate.result.hydrate_request.status, "blocked");
-    assert.equal(blockedHydrate.result.hydrate_request.callable_now, false);
-    assert.equal(blockedHydrate.result.hydrate_request.blocker.code, "HYDRATE_FIELD_UNSUPPORTED");
-    assert.equal(blockedHydrate.result.hydrate_request.requests.length, 0);
-    assert.equal(changed.ok, true);
-    assert.equal(changed.result.execution.executed, false);
-    assert.equal(changed.result.execution.hidden_executor, false);
-    assert.equal(changed.result.rows.length, 2);
-    assert.deepEqual(changed.result.refs, ["track:guid:{TRACK-1}", "item:guid:{ITEM-1}"]);
+    for (const id of ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS) {
+      const response = await runtime.call_template({ id, input: {} });
+      assert.equal(response.contract, "call_template.runtime.v1");
+      assert.equal(response.ok, false, id);
+      assert.equal(response.template.id, id);
+      assert.equal(response.error.code, "CALL_TEMPLATE_ID_REPLACED");
+      assert.equal(response.error.details.id, id);
+      assert.equal(response.error.details.replacement, "macro.project.query");
+      assert.equal(Object.hasOwn(response, "result"), false);
+    }
   });
 
-  it("plans automation refresh through accepted template requests when index is not fresh", async () => {
-    const runtime = createCallTemplateRuntime();
-    const response = await runtime.call_template({
-      id: "macro.query_automation",
-      input: { limit: 10 },
-    });
-
-    assert.equal(response.ok, false);
-    assert.equal(response.error.source, "macro");
-    assert.equal(response.error.code, "INDEX_NOT_READY");
-    assert.equal(response.result.plan.ok, false);
-    assert.equal(response.result.rows.length, 0);
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.blockers.some((blocker) => blocker.code === "INDEX_NOT_READY"), true);
-    assert.deepEqual(
-      response.result.refresh_requests.map((request) => request.id),
-      ["template.automation.list_project_envelopes"],
-    );
-    assert.equal(response.result.next_actions.some((action) => action.kind === "run_refresh_requests"), true);
-    assert.equal(response.result.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
-    assert.equal(response.result.user_flow.stage, "needs_refresh_after_blockers");
-    assert.equal(response.result.user_flow.primary_next_action, "run_refresh_requests");
-    assert.equal(response.result.user_flow.safe_to_use_rows, false);
-    assert.equal(response.result.user_flow.safe_to_write_from_rows, false);
-  });
 });
+
+function assertLegacyQueryReplacement(response, id) {
+  assert.equal(response.contract, "call_template.runtime.v1");
+  assert.equal(response.ok, false);
+  assert.equal(response.template.id, id);
+  assert.equal(response.error.code, "CALL_TEMPLATE_ID_REPLACED");
+  assert.equal(response.error.details.id, id);
+  assert.equal(response.error.details.replacement, "macro.project.query");
+  assert.equal(Object.hasOwn(response, "result"), false);
+}
 
 function readyProjectIndex() {
   return {

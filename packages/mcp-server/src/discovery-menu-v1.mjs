@@ -505,6 +505,7 @@ function knownBlocker(item, support, liveRunnableNow) {
   if (typeof item.known_blocker === "string") return item.known_blocker;
   if (support === "blocked") return "not_supported";
   if (capabilityKind(item) === "recipe") return "no_public_call_recipe_executor";
+  if (item.action_kind === "macro" && ["plan_only_runtime_bound", "supported_runtime_bound"].includes(item.support_status)) return null;
   if (!liveRunnableNow) return "live_executor_not_configured_or_not_in_allowed_group";
   return null;
 }

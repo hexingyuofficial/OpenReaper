@@ -31,6 +31,7 @@ const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `open
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
 const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;
+const projectIndexSmokeOnly = options.project_index_smoke_only === true;
 const EXACT_MCP_TOOLS = Object.freeze([
   "call_template",
   "get_state",
@@ -39,6 +40,9 @@ const EXACT_MCP_TOOLS = Object.freeze([
   "ping",
 ]);
 const REQUIRED_MACRO_IDS = Object.freeze([
+  "macro.project.query",
+]);
+const FORMER_PUBLIC_MACRO_IDS = Object.freeze([
   "macro.index_status",
   "macro.query_tracks",
 ]);
@@ -84,14 +88,18 @@ async function buildPackage() {
   await writePackageEntrypoints();
   await writeReadme();
   await removeDsStore(packageRoot);
-  const smoke = {
-    installer_upgrade_migration: await smokePackagedInstallerUpgradeMigration(),
-    openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
-    portable_paths: await smokePackagedPortablePaths(),
-    openreaper: await smokePackagedOpenReaperMcp(),
-    runtime_doctor_readiness: await smokePackagedRuntimeDoctorReadiness(),
-    vital_agent_mcp: await smokePackagedVitalAgentMcp(),
-  };
+  const smoke = projectIndexSmokeOnly
+    ? {
+        project_index: await smokePackagedOpenReaperMcp(),
+      }
+    : {
+        installer_upgrade_migration: await smokePackagedInstallerUpgradeMigration(),
+        openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
+        portable_paths: await smokePackagedPortablePaths(),
+        openreaper: await smokePackagedOpenReaperMcp(),
+        runtime_doctor_readiness: await smokePackagedRuntimeDoctorReadiness(),
+        vital_agent_mcp: await smokePackagedVitalAgentMcp(),
+      };
 
   let zipPath = null;
   if (!skipZip) {
@@ -334,6 +342,12 @@ async function smokePackagedOpenReaperMcp() {
   const artifactRoot = path.join(packageRoot, "session", "artifacts");
   const renderRoot = path.join(packageRoot, "session", "renders");
   const transportDir = path.join(packageRoot, "session", "transport");
+  const projectIndexStateRoot = path.join(packageRoot, "session", "project-index-state");
+  const projectPath = path.join(packageRoot, "session", "OpenReaper Package Smoke.RPP");
+  await mkdir(projectIndexStateRoot, { recursive: true });
+  await writeFile(projectPath, "<REAPER_PROJECT 0.1>\n", "utf8");
+  const canonicalProjectIndexStateRoot = await realpath(projectIndexStateRoot);
+  const canonicalProjectPath = await realpath(projectPath);
   await mkdir(path.join(transportDir, "requests"), { recursive: true });
   await mkdir(path.join(transportDir, "results"), { recursive: true });
   await mkdir(artifactRoot, { recursive: true });
@@ -362,11 +376,39 @@ async function smokePackagedOpenReaperMcp() {
       ),
       OPENREAPER_LIVE_BRIDGE_OWNER: "openreaper-alpha-package-smoke",
       OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      OPENREAPER_PROJECT_INDEX_STATE_ROOT: canonicalProjectIndexStateRoot,
+      OPENREAPER_CURRENT_PROJECT_PATH: canonicalProjectPath,
+      OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "openreaper-alpha-package-smoke",
     },
   });
 
   try {
     await client.connect(transport);
+    if (projectIndexSmokeOnly) {
+      const toolResponse = await client.listTools();
+      const toolNames = (toolResponse.tools ?? []).map((tool) => tool.name).sort();
+      assertExactArray(toolNames, EXACT_MCP_TOOLS, "MCP tool surface");
+      const macroResponse = await client.callTool({
+        name: "list_templates",
+        arguments: { ids: [...REQUIRED_MACRO_IDS, ...FORMER_PUBLIC_MACRO_IDS] },
+      });
+      const macros = parseJsonToolResult(macroResponse);
+      assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP project-index macro smoke");
+      assertNotDiscoveredIds(macros, FORMER_PUBLIC_MACRO_IDS, "Packaged MCP former public macro smoke");
+      const projectIndexLifecycle = await smokePackagedProjectIndexLifecycle({
+        client,
+        transportDir,
+        owner: "openreaper-alpha-package-smoke",
+        generation: 1,
+      });
+      return {
+        ok: true,
+        tool_surface: toolNames,
+        required_macros: [...REQUIRED_MACRO_IDS],
+        former_public_macros: [...FORMER_PUBLIC_MACRO_IDS],
+        project_index_lifecycle: projectIndexLifecycle,
+      };
+    }
     const toolResponse = await client.listTools();
     const toolNames = (toolResponse.tools ?? []).map((tool) => tool.name).sort();
     assertExactArray(toolNames, EXACT_MCP_TOOLS, "MCP tool surface");
@@ -389,6 +431,7 @@ async function smokePackagedOpenReaperMcp() {
     });
     const macros = parseJsonToolResult(macroResponse);
     assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP macro smoke");
+    assertNotDiscoveredIds(macros, FORMER_PUBLIC_MACRO_IDS, "Packaged MCP former public macro smoke");
     assertAgentStartupGuidance(macros.product_surface?.agent_startup_guidance_snapshot, {
       label: "Packaged MCP list_templates startup guidance",
       expectedPackageRoot: null,
@@ -612,11 +655,18 @@ async function smokePackagedOpenReaperMcp() {
       throw new Error("Packaged MCP repairable ref error smoke failed");
     }
     const executableAllowlistSmoke = await smokeExecutableLiveAllowlist(client);
+    const projectIndexLifecycle = await smokePackagedProjectIndexLifecycle({
+      client,
+      transportDir,
+      owner: "openreaper-alpha-package-smoke",
+      generation: 1,
+    });
     return {
       ok: true,
       tool_surface: toolNames,
       kernel: ping.kernel,
       required_macros: [...REQUIRED_MACRO_IDS],
+      former_public_macros: [...FORMER_PUBLIC_MACRO_IDS],
       required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
       omitted_context_call_template: {
         ok: true,
@@ -688,12 +738,120 @@ async function smokePackagedOpenReaperMcp() {
           macros.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback,
       },
       executable_allowlist: executableAllowlistSmoke,
+      project_index_lifecycle: projectIndexLifecycle,
     };
   } finally {
     await client.close?.();
     await clearDirectoryEntries(path.join(transportDir, "requests"));
     await clearDirectoryEntries(path.join(transportDir, "results"));
   }
+}
+
+async function smokePackagedProjectIndexLifecycle({
+  client,
+  transportDir,
+  owner,
+  generation,
+}) {
+  const packageBridge = createOperationAwarePackageSmokeBridge({ owner, generation });
+  const queryInput = {
+    entity: "tracks",
+    fields: ["ref", "name", "index"],
+    limit: 10,
+    refresh_policy: "if_stale",
+  };
+  await clearDirectoryEntries(path.join(transportDir, "requests"));
+  await clearDirectoryEntries(path.join(transportDir, "results"));
+  const missing = parseJsonToolResult(await client.callTool({
+    name: "call_template",
+    arguments: { id: "macro.project.query", input: queryInput },
+  }));
+  const refreshRequests = missing.result?.refresh_requests ?? [];
+  if (
+    missing.template?.id !== "macro.project.query" ||
+    refreshRequests.length === 0 ||
+    missing.result?.execution?.child_executor !== false ||
+    missing.result?.plan?.refresh_execution?.server_executes_children !== false
+  ) {
+    throw new Error("Packaged MCP Project Index missing-state smoke did not return explicit refresh children without hidden execution");
+  }
+
+  const executableRefreshRequests = refreshRequests.filter((child) => child.id === "template.tracks.list_tracks");
+  if (executableRefreshRequests.length !== 1) {
+    throw new Error("Packaged MCP Project Index smoke did not return the required tracks.list_tracks refresh child");
+  }
+  const skippedRefreshRequestIds = refreshRequests
+    .filter((child) => !executableRefreshRequests.includes(child))
+    .map((child) => child.id);
+  const childCalls = [];
+  for (const child of executableRefreshRequests) {
+    if (child?.tool !== "call_template" || typeof child.id !== "string") {
+      throw new Error("Packaged MCP Project Index refresh child was not an explicit call_template request");
+    }
+    const responsePromise = client.callTool({
+      name: "call_template",
+      arguments: {
+        id: child.id,
+        input: child.input ?? {},
+        refs: child.refs ?? {},
+      },
+    });
+    const requestPromise = respondToPackagedBridgeRequest({
+      transportDir,
+      bridge: packageBridge,
+    });
+    const [childCall, bridgeRequest] = await Promise.all([
+      responsePromise.then(parseJsonToolResult),
+      requestPromise,
+    ]);
+    if (
+      childCall.ok !== true ||
+      childCall.template?.id !== child.id ||
+      childCall.result?.project_index_observation?.status !== "observed" ||
+      bridgeRequest.pack?.risk !== "read"
+    ) {
+      throw new Error(`Packaged MCP Project Index child execution/auto-ingest smoke failed: ${child.id}`);
+    }
+    childCalls.push({
+      id: child.id,
+      request_id: bridgeRequest.id,
+      observed: childCall.result.project_index_observation,
+    });
+    await clearDirectoryEntries(path.join(transportDir, "requests"));
+    await clearDirectoryEntries(path.join(transportDir, "results"));
+  }
+
+  const refreshed = parseJsonToolResult(await client.callTool({
+    name: "call_template",
+    arguments: { id: "macro.project.query", input: queryInput },
+  }));
+  const refreshedRows = refreshed.result?.rows ?? [];
+  if (
+    refreshed.ok !== true ||
+    refreshedRows.length < 1 ||
+    refreshedRows[0]?.name !== "OpenReaper Package Smoke Track" ||
+    refreshed.result?.refresh_requests?.length !== 0
+  ) {
+    throw new Error("Packaged MCP Project Index refresh did not produce query rows");
+  }
+
+  return {
+    ok: true,
+    contract: "alpha3.2d.package_project_index_stdio_smoke.v1",
+    public_macro: "macro.project.query",
+    former_public_macros: [...FORMER_PUBLIC_MACRO_IDS],
+    missing_to_refresh: {
+      refresh_request_count: refreshRequests.length,
+      child_calls: childCalls,
+      skipped_refresh_request_ids: skippedRefreshRequestIds,
+      server_executes_children: false,
+    },
+    refreshed_query: {
+      row_count: refreshedRows.length,
+      first_row: refreshedRows[0],
+    },
+    persistence_generation_followup: "deferred_in_fast_worker_smoke",
+  };
 }
 
 function packageProjectFileReadSummary(operationName) {
@@ -750,6 +908,35 @@ function packageProjectFileSaveSummary(capability, targetPath) {
   return null;
 }
 
+function packageProjectIndexReadback(request) {
+  const operationName = request?.operation?.name;
+  const track = {
+    ref: "track:guid:{PACKAGE-SMOKE}",
+    track_ref: "track:guid:{PACKAGE-SMOKE}",
+    name: "OpenReaper Package Smoke Track",
+    index: 0,
+    display_number: "1",
+    selected: true,
+    item_count: 0,
+    fx_count: 0,
+    send_count: 0,
+  };
+  if (operationName === "project.create_project_map_snapshot") {
+    return {
+      overview: { tracks: [track], project_ref: "project:current" },
+      coverage: { tracks: "complete", track_items: "partial", selected_items: "selected_only" },
+    };
+  }
+  if (operationName === "tracks.list_tracks" || operationName === "tracks.read_mixer_controls") {
+    return {
+      tracks: [track],
+      coverage_status: "complete",
+      truncated: false,
+    };
+  }
+  return null;
+}
+
 function createOperationAwarePackageSmokeBridge({ owner, generation }) {
   const fake = new FakeFoundationBridge({ owner, generation });
   return {
@@ -757,9 +944,11 @@ function createOperationAwarePackageSmokeBridge({ owner, generation }) {
       const result = fake.dispatch(request);
       const summary = packageProjectFileReadSummary(request?.operation?.name)
         ?? packageProjectFileSaveSummary(request?.pack?.capability, request?.params?.target_path);
-      if (!summary || result?.ok !== true) return result;
+      const projectIndexReadback = packageProjectIndexReadback(request);
+      if ((!summary && !projectIndexReadback) || result?.ok !== true) return result;
       const scripted = structuredClone(result);
-      scripted.result.summary = summary;
+      if (summary) scripted.result.summary = summary;
+      if (projectIndexReadback) scripted.result.readback = projectIndexReadback;
       if (request?.pack?.capability === "project.save_current_project" || request?.pack?.capability === "project.save_project_as") {
         scripted.result.refs = [{
           kind: "project",
@@ -2953,6 +3142,15 @@ function assertExactArray(actual, expected, label) {
     actual.some((value, index) => value !== expectedSorted[index])
   ) {
     throw new Error(`${label} mismatch: expected ${expectedSorted.join(",")}; got ${actual.join(",")}`);
+  }
+}
+
+function assertNotDiscoveredIds(response, forbiddenIds, label) {
+  const actualIds = new Set((response.items ?? []).map((item) => item.id));
+  for (const id of forbiddenIds) {
+    if (actualIds.has(id)) {
+      throw new Error(`${label} unexpectedly exposed ${id}`);
+    }
   }
 }
 

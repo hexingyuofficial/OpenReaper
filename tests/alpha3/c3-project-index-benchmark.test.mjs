@@ -7,6 +7,7 @@ import {
 } from "../../packages/mcp-server/src/alpha3-c3-project-index-benchmark-v1.mjs";
 import {
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
+  createAlpha3_2DGenericProjectQueryDiscoveryItems,
 } from "../../packages/mcp-server/src/alpha3-c3-project-index-query-v1.mjs";
 import {
   createCallTemplateRuntime,
@@ -67,16 +68,23 @@ describe("Alpha3 C3 Project SQLite Index Block 4 benchmark", () => {
       true,
     );
 
+    const genericEntries = createAlpha3_2DGenericProjectQueryDiscoveryItems();
+    assert.equal(genericEntries.length, 1);
+    assert.equal(genericEntries[0].id, "macro.project.query");
+    assert.equal(genericEntries[0].live_runnable_now, false);
+    assert.equal(genericEntries[0].support_status, "supported_runtime_bound");
+
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates({
-      ids: ["macro.query_tracks"],
+      ids: ["macro.project.query", "macro.query_tracks"],
       fields: ["summary", "capability_truth"],
     });
 
-    assert.equal(menu.items[0].id, "macro.query_tracks");
+    assert.deepEqual(menu.items.map((item) => item.id), ["macro.project.query"]);
     assert.equal(menu.items[0].current_status, "available_now");
     assert.equal(menu.items[0].capability_truth.live_runnable_now, false);
     assert.equal(menu.items[0].capability_truth.support_state, "supported");
+    assert.equal(menu.items[0].capability_truth.known_blocker, null);
     assert.equal(menu.items[0].user_message.includes("plan-only macro bundle"), true);
   });
 });

@@ -424,7 +424,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 19);
+    assert.equal(runtimeMenu.items.length, 9);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
     assert.equal(runtimeMenu.applied.surface, "executable");
@@ -512,17 +514,15 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
     assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.file"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.index_status"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.selected_context"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_items"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_takes"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_fx"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_routing"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_markers"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_media"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.hydrate_refs"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.changed_since"), true);
+    for (const removedId of [
+      "macro.index_status", "macro.query_tracks", "macro.query_items", "macro.query_takes",
+      "macro.query_fx", "macro.query_routing", "macro.query_markers", "macro.query_media",
+      "macro.hydrate_refs", "macro.changed_since",
+    ]) {
+      assert.equal(runtimeMenu.items.some((item) => item.id === removedId), false, removedId);
+    }
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
@@ -754,7 +754,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 217);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 220);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -762,7 +762,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 217);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 220);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,

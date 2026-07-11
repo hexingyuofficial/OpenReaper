@@ -217,8 +217,10 @@ describe("Alpha3.2-C1 server-managed call context", () => {
       });
       const result = parseToolJson(response);
       assert.equal(response.isError, false);
-      assert.equal(result.ok, true);
+      assert.equal(result.ok, false);
       assert.equal(result.template.id, "macro.index_status");
+      assert.equal(result.error.code, "CALL_TEMPLATE_ID_REPLACED");
+      assert.equal(result.error.details.replacement, "macro.project.query");
 
       const conflictResponse = await client.callTool({
         name: "call_template",

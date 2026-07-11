@@ -1376,6 +1376,22 @@ describe("Alpha3 C3 Project SQLite Index store helpers", () => {
     assert.equal(projectIndexScopeIsFreshEnough(index.snapshot(), "tracks"), false);
   });
 
+  it("filters invalid track rows before resident or SQLite persistence", () => {
+    const index = createAlpha3C3ProjectIndex({ now: fixedNow });
+    const result = index.replaceTracks({
+      snapshot_id: "snapshot:c3:invalid-track-filter",
+      observed_at: "2026-07-07T16:58:00.000Z",
+      rows: [
+        { name: "Missing ref" },
+        { ref: "", name: "Empty ref" },
+        { ref: "track:guid:{VALID}", name: "Valid" },
+      ],
+    });
+
+    assert.equal(result.ok, true);
+    assert.deepEqual(index.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{VALID}"]);
+  });
+
   it("keeps background job rows as status ledger, not project truth", () => {
     const index = createAlpha3C3ProjectIndex({ now: fixedNow });
     index.recordBackgroundJob({

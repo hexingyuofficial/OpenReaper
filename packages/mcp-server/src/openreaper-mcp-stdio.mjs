@@ -11,6 +11,9 @@ import {
   composeAlpha3_2B3RuntimeDoctorReadiness,
 } from "./alpha3-2b3-runtime-doctor-readiness-v1.mjs";
 import {
+  openAlpha3_2DProjectIndexRuntime,
+} from "./alpha3-2d-project-index-runtime-v1.mjs";
+import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "./call-template-runtime-v1.mjs";
@@ -31,7 +34,12 @@ const VERSION = "0.3.0-alpha";
 async function main() {
   const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
   const liveBridge = createLiveBridgeExecutorFromEnv(process.env);
+  const projectIndexRuntime = await openConfiguredProjectIndexRuntime({
+    env: process.env,
+    callContext,
+  });
   const runtime = createCallTemplateRuntime({
+    projectIndexRuntime,
     live: liveBridge.configured
       ? {
           opted_in: true,
@@ -50,7 +58,8 @@ async function main() {
   process.stderr.write(
     `[openreaper-mcp] ${KERNEL}\n` +
       `[openreaper-mcp] tools=ping,get_state,list_templates,list_recipes,call_template\n` +
-      `[openreaper-mcp] live_bridge_configured=${liveBridge.configured}\n`,
+      `[openreaper-mcp] live_bridge_configured=${liveBridge.configured}\n` +
+      `[openreaper-mcp] project_index=${projectIndexRuntime?.status?.().lifecycle ?? "not_configured"}\n`,
   );
 
   const server = new McpServer({
@@ -76,6 +85,13 @@ async function main() {
         live_bridge_configured: liveBridge.configured,
         live_bridge: runtimeReadiness.bridge,
         runtime_readiness: runtimeReadiness,
+        project_index: projectIndexRuntime?.status?.() ?? {
+          ok: false,
+          lifecycle: "not_configured",
+          rows_available: false,
+          sqlite_is_truth: false,
+          blockers: [{ code: "PROJECT_INDEX_NOT_CONFIGURED", message: "Use the managed package wrapper to configure the Project Index state root." }],
+        },
         user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect.",
         agent_startup_guidance: createOpenReaperAgentStartupGuidance({
           package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
@@ -147,7 +163,12 @@ async function main() {
         if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
         return jsonToolResult(callContextErrorResult(request, error), true);
       }
-      const result = await runtime.call_template(normalized);
+      const called = await runtime.call_template(normalized);
+      const result = await observeProjectIndexArtifactPayload({
+        execution: called,
+        artifactRuntime,
+        projectIndexRuntime,
+      });
       return jsonToolResult(result, !result?.ok && isHardToolError(result));
     },
   );
@@ -183,8 +204,98 @@ async function main() {
   );
 
   const transport = new StdioServerTransport();
+  const previousOnClose = transport.onclose;
+  transport.onclose = () => {
+    try { projectIndexRuntime?.close?.(); } catch {}
+    previousOnClose?.();
+  };
+  process.once("beforeExit", () => {
+    try { projectIndexRuntime?.close?.(); } catch {}
+  });
   await server.connect(transport);
   process.stderr.write("[openreaper-mcp] stdio server ready\n");
+}
+
+
+async function observeProjectIndexArtifactPayload({ execution, artifactRuntime, projectIndexRuntime }) {
+  const initial = execution?.result?.project_index_observation;
+  const artifactRequired = initial?.blockers?.find((entry) => entry?.code === "ARTIFACT_PAYLOAD_REQUIRED");
+  const artifactRef = artifactRequired?.details?.artifact_refs?.find((ref) => typeof ref === "string");
+  if (!artifactRuntime || !projectIndexRuntime || !artifactRef) return execution;
+
+  const artifactRead = await artifactRuntime.get_state({
+    scope: "artifact",
+    artifact_ref: artifactRef,
+    view: "payload",
+    budget: { max_response_bytes: 1_048_576 },
+  });
+  if (artifactRead?.ok !== true || !artifactRead?.result?.artifact?.payload) {
+    return {
+      ...execution,
+      result: {
+        ...execution.result,
+        project_index_initial_observation: initial,
+        project_index_artifact_read: artifactRead,
+      },
+    };
+  }
+
+  const observation = projectIndexRuntime.observeArtifactPayload({
+    templateId: execution?.template?.id,
+    artifactRef,
+    payload: artifactRead.result.artifact.payload,
+    validated: true,
+    identity: {
+      ...projectIndexRuntime.identity,
+      session_id: projectIndexRuntime.session_id,
+    },
+  });
+  return {
+    ...execution,
+    result: {
+      ...execution.result,
+      project_index_initial_observation: initial,
+      project_index_observation: observation,
+      project_index_artifact_read: {
+        ok: true,
+        artifact_ref: artifactRef,
+        view: "payload",
+      },
+    },
+  };
+}
+
+async function openConfiguredProjectIndexRuntime({ env, callContext }) {
+  const stateRoot = env.OPENREAPER_PROJECT_INDEX_STATE_ROOT;
+  if (typeof stateRoot !== "string" || stateRoot === "") return null;
+  const generationText = env.OPENREAPER_LIVE_BRIDGE_GENERATION;
+  const generation = typeof generationText === "string" && /^(?:0|[1-9][0-9]*)$/u.test(generationText)
+    ? Number(generationText)
+    : null;
+  const projectPath = typeof env.OPENREAPER_CURRENT_PROJECT_PATH === "string" && env.OPENREAPER_CURRENT_PROJECT_PATH
+    ? env.OPENREAPER_CURRENT_PROJECT_PATH
+    : undefined;
+  const projectRef = projectPath
+    ? undefined
+    : typeof env.OPENREAPER_CURRENT_PROJECT_REF === "string" && env.OPENREAPER_CURRENT_PROJECT_REF
+      ? env.OPENREAPER_CURRENT_PROJECT_REF
+      : "project:current";
+  return openAlpha3_2DProjectIndexRuntime({
+    stateRoot,
+    projectPath,
+    projectRef,
+    bridgeOwner: env.OPENREAPER_LIVE_BRIDGE_OWNER,
+    bridgeGeneration: generation,
+    logicalSessionKey: env.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY
+      ?? env.OPENREAPER_MCP_PACKAGE_ROOT
+      ?? callContext?.contract
+      ?? "openreaper-stdio",
+    reservedRoots: [
+      env.OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR,
+      env.OPENREAPER_ARTIFACT_ROOT,
+      env.OPENREAPER_LIVE_SMOKE_RENDER_ROOT,
+    ].filter((value) => typeof value === "string" && value !== ""),
+  });
 }
 
 function normalizeCallTemplateToolRequest(request, context) {

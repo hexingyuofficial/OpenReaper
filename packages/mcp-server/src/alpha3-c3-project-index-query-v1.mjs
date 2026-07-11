@@ -22,6 +22,48 @@ export const ALPHA3_C3_PROJECT_INDEX_SCHEMA_CONTRACT = "alpha3.c3.project_index_
 
 export const ALPHA3_C3_PROJECT_INDEX_DB_PATH = "run_root/state/openreaper-project-index.sqlite";
 
+export const ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT = "alpha3.2.generic_project_query.v1";
+export const ALPHA3_2D_GENERIC_PROJECT_QUERY_ID = "macro.project.query";
+export const ALPHA3_2D_GENERIC_PROJECT_QUERY_ENTITIES = deepFreeze([
+  "status",
+  "selected_context",
+  "tracks",
+  "items",
+  "takes",
+  "fx",
+  "routing",
+  "automation",
+  "markers_regions",
+  "media_sources",
+  "duplicates",
+  "changed_since",
+]);
+export const ALPHA3_2D_COVERED_LEGACY_QUERY_IDS = deepFreeze([
+  "macro.index_status",
+  "macro.selected_context",
+  "macro.query_tracks",
+  "macro.query_items",
+  "macro.query_takes",
+  "macro.query_fx",
+  "macro.query_routing",
+  "macro.query_automation",
+  "macro.query_markers",
+  "macro.query_media",
+  "macro.hydrate_refs",
+  "macro.changed_since",
+]);
+export const ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS = deepFreeze(
+  ALPHA3_2D_COVERED_LEGACY_QUERY_IDS.filter((id) => id !== "macro.selected_context"),
+);
+export const ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT = deepFreeze({
+  id: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+  covers_legacy_ids: ALPHA3_2D_COVERED_LEGACY_QUERY_IDS,
+  replaces_public_ids: ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS,
+  temporary_compatibility_ids: ["macro.selected_context"],
+  legacy_posture: "internal_covered_not_public",
+  runtime_posture: "supported_runtime_bound_plan_only_not_live_runnable",
+});
+
 export const ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_C3_PROJECT_INDEX_QUERY_MACROS_CONTRACT,
   mode: "plan_only_project_index_query_macros",
@@ -830,7 +872,7 @@ function queryTakesPlan({ macro, normalized, indexState, blockers, catalog }) {
   const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? catalogBoundRequestPlans(queryTakeRefreshRequests(normalized.query), catalog)
+    ? catalogBoundRequestPlans(queryTakeRefreshRequests(normalized.query, indexState), catalog)
     : { requests: [], blockers: [] };
   const finalBlockers = [
     ...allBlockers,
@@ -884,7 +926,7 @@ function queryFxPlan({ macro, normalized, indexState, blockers, catalog }) {
   const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
-    ? catalogBoundRequestPlans(queryFxRefreshRequests(normalized.query), catalog)
+    ? catalogBoundRequestPlans(queryFxRefreshRequests(normalized.query, indexState), catalog)
     : { requests: [], blockers: [] };
   const finalBlockers = [
     ...allBlockers,
@@ -1238,6 +1280,8 @@ function changedSincePlan({ macro, normalized, indexState, projectIndex, blocker
   const changes = allBlockers.length === 0
     ? readChangedSinceRows({ projectIndex, indexState, query: normalized.query })
     : {
+        ok: false,
+        blockers: [],
         refs: [],
         rows: [],
         page: pageEnvelope(normalized.query.limit, normalized.query.cursor),
@@ -1246,13 +1290,17 @@ function changedSincePlan({ macro, normalized, indexState, projectIndex, blocker
           sqlite_is_truth: false,
         },
       };
+  const finalBlockers = [
+    ...allBlockers,
+    ...(Array.isArray(changes.blockers) ? changes.blockers : []),
+  ];
 
   return deepFreeze(basePlan({
     macro,
     normalized,
     indexState,
-    ok: allBlockers.length === 0,
-    decision_summary: changedSinceDecisionSummary({ blockers: allBlockers, changes, since: normalized.query.since }),
+    ok: finalBlockers.length === 0 && changes.ok !== false,
+    decision_summary: changedSinceDecisionSummary({ blockers: finalBlockers, changes, since: normalized.query.since }),
     rows: changes.rows,
     refs: changes.refs,
     freshness: {
@@ -1261,17 +1309,17 @@ function changedSincePlan({ macro, normalized, indexState, projectIndex, blocker
       since: normalized.query.since,
     },
     coverage: {
-      status: "complete",
+      status: finalBlockers.length === 0 ? "complete" : "failed",
       source_scope: "object_changes",
       row_count: changes.rows.length,
-      complete: true,
+      complete: finalBlockers.length === 0,
     },
     page: changes.page,
     refresh_requests: [],
     hydrate_request: changes.refs.length > 0
       ? hydrateRefsNextStep(changes.refs, normalized.query, catalog)
       : null,
-    blockers: allBlockers,
+    blockers: finalBlockers,
     index_status: summarizeIndexStatus(indexState),
   }));
 }
@@ -2142,11 +2190,31 @@ function readChangedSinceRows({ projectIndex, indexState, query }) {
       limit: query.limit,
       cursor: query.cursor,
     });
+    const adapterBlockers = Array.isArray(result?.blockers)
+      ? result.blockers.map((entry) => normalizeAdapterBlocker(entry, "CHANGED_SINCE_ADAPTER_BLOCKED"))
+      : [];
+    if (result?.ok === false || adapterBlockers.length > 0) {
+      return {
+        ok: false,
+        blockers: adapterBlockers.length > 0
+          ? adapterBlockers
+          : [blocker("changed_since", "CHANGED_SINCE_ADAPTER_BLOCKED", "Project Index changed-since adapter reported a blocked result.")],
+        refs: [],
+        rows: [],
+        page: pageEnvelope(query.limit, query.cursor),
+        freshness: result?.freshness ?? {
+          source: "project_index_object_changes",
+          sqlite_is_truth: false,
+        },
+      };
+    }
     return {
-      refs: Array.isArray(result.refs) ? result.refs : [],
-      rows: Array.isArray(result.rows) ? result.rows.map(projectObjectChangeRow) : [],
-      page: result.page ?? pageEnvelope(query.limit, query.cursor),
-      freshness: result.freshness ?? {
+      ok: true,
+      blockers: [],
+      refs: Array.isArray(result?.refs) ? result.refs : [],
+      rows: Array.isArray(result?.rows) ? result.rows.map(projectObjectChangeRow) : [],
+      page: result?.page ?? pageEnvelope(query.limit, query.cursor),
+      freshness: result?.freshness ?? {
         source: "project_index_object_changes",
         sqlite_is_truth: false,
       },
@@ -2160,6 +2228,8 @@ function readChangedSinceRows({ projectIndex, indexState, query }) {
   const pageRows = rows.slice(offset, offset + query.limit);
   const nextOffset = offset + pageRows.length < rows.length ? offset + pageRows.length : null;
   return {
+    ok: true,
+    blockers: [],
     refs: pageRows.map((row) => row.ref),
     rows: pageRows.map(projectObjectChangeRow),
     page: pageEnvelope(query.limit, query.cursor, nextOffset === null ? null : encodeCursor(nextOffset)),
@@ -2168,6 +2238,20 @@ function readChangedSinceRows({ projectIndex, indexState, query }) {
       sqlite_is_truth: false,
     },
   };
+}
+
+function normalizeAdapterBlocker(entry, fallbackCode) {
+  if (!isPlainObject(entry)) {
+    return blocker("adapter", fallbackCode, "Project Index adapter reported an unstructured blocker.");
+  }
+  return deepFreeze({
+    field: typeof entry.field === "string" ? entry.field : "adapter",
+    code: typeof entry.code === "string" && entry.code ? entry.code : fallbackCode,
+    message: typeof entry.message === "string" && entry.message
+      ? entry.message
+      : "Project Index adapter reported a blocked result.",
+    recoverable: entry.recoverable !== false,
+  });
 }
 
 function projectObjectChangeRow(row) {
@@ -2999,9 +3083,12 @@ function queryItemRefreshRequests(query) {
   return dedupeRequestPlans(requests);
 }
 
-function queryTakeRefreshRequests(query) {
+function queryTakeRefreshRequests(query, indexState = null) {
   const trackRefs = queryTakeTrackRefs(query);
-  const itemRefs = queryTakeItemRefs(query);
+  const indexedItemRefs = trackRefs.length === 0
+    ? (Array.isArray(indexState?.rows?.items) ? indexState.rows.items : []).map((row) => row.ref).filter(Boolean).slice(0, query.limit)
+    : [];
+  const itemRefs = unique([...queryTakeItemRefs(query), ...indexedItemRefs]);
   const takeRefs = query.refs.filter((ref) => ref.startsWith("take:"));
   const requests = [
     {
@@ -3089,8 +3176,12 @@ function queryTakeRefreshRequests(query) {
   return dedupeRequestPlans(requests);
 }
 
-function queryFxRefreshRequests(query) {
-  const ownerRefs = queryFxOwnerRefs(query);
+function queryFxRefreshRequests(query, indexState = null) {
+  const explicitOwnerRefs = queryFxOwnerRefs(query);
+  const indexedTrackRefs = explicitOwnerRefs.length === 0
+    ? (Array.isArray(indexState?.rows?.tracks) ? indexState.rows.tracks : []).map((row) => row.ref).filter(Boolean).slice(0, query.limit)
+    : [];
+  const ownerRefs = unique([...explicitOwnerRefs, ...indexedTrackRefs]);
   const fxRefs = query.refs.filter((ref) => ref.startsWith("fx:"));
   const requests = [
     {
@@ -4113,6 +4204,761 @@ function sharedQueryInputSchema() {
     },
   };
 }
+
+const GENERIC_QUERY_REFRESH_POLICIES = new Set(["never", "if_stale", "required", "force_read_only_refresh"]);
+const GENERIC_QUERY_TOP_LEVEL_KEYS = new Set([
+  "entity", "filters", "fields", "selectors", "refresh_policy", "hydrate_refs", "cursor", "limit",
+]);
+const GENERIC_QUERY_SELECTOR_KEYS = new Set([
+  "refs", "ref", "selected", "name", "track_ref", "track_refs", "item_ref", "item_refs",
+  "owner_ref", "owner_refs", "source_ref", "source_path", "path_fingerprint", "time_range", "since",
+]);
+const GENERIC_QUERY_MAX_OBJECT_KEYS = 32;
+const GENERIC_QUERY_MAX_ARRAY_VALUES = 100;
+const GENERIC_QUERY_MAX_STRING_BYTES = 512;
+const GENERIC_QUERY_MAX_NESTING_DEPTH = 8;
+const GENERIC_QUERY_MAX_NORMALIZED_NODES = 512;
+const GENERIC_QUERY_CURSOR_VERSION = 2;
+const GENERIC_QUERY_DUPLICATE_FIELDS = new Set([
+  "duplicate_key", "count", "refs", "owner_refs", "source_path", "path_fingerprint", "freshness", "coverage",
+]);
+const GENERIC_QUERY_ENTITY_TO_LEGACY_ID = deepFreeze({
+  status: "macro.index_status",
+  selected_context: "macro.selected_context",
+  tracks: "macro.query_tracks",
+  items: "macro.query_items",
+  takes: "macro.query_takes",
+  fx: "macro.query_fx",
+  routing: "macro.query_routing",
+  automation: "macro.query_automation",
+  markers_regions: "macro.query_markers",
+  media_sources: "macro.query_media",
+  changed_since: "macro.changed_since",
+});
+
+export function createAlpha3_2DGenericProjectQueryDiscoveryItems() {
+  return [deepFreeze({
+    id: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+    title: "Query current project index",
+    summary: "Plan one bounded generic Project SQLite Index read across the accepted twelve entity modes.",
+    pack: "core",
+    lifecycle: "draft",
+    risk: "read",
+    entity_kind: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+    tags: ["macro", "project_index", "sqlite", "query", "alpha3_2d"],
+    kind: "macro",
+    action_kind: "macro",
+    macro_kind: "generic_project_query",
+    menu_group: "primary_query",
+    execution_shape: "plan_only_generic_project_query",
+    support_status: "supported_runtime_bound",
+    support_state: "supported",
+    exists_in_catalog: true,
+    live_runnable_now: false,
+    evidence_level: "runtime_bound_product_store",
+    known_blocker: null,
+    allowed_live_group: null,
+    contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
+    entities: ALPHA3_2D_GENERIC_PROJECT_QUERY_ENTITIES,
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["entity"],
+      properties: {
+        entity: { type: "string", enum: ALPHA3_2D_GENERIC_PROJECT_QUERY_ENTITIES },
+        filters: { type: "object", description: "Bounded structured filters; raw SQL is rejected." },
+        fields: { type: "array", items: { type: "string" }, maxItems: GENERIC_QUERY_MAX_OBJECT_KEYS },
+        selectors: { type: "object", description: "Bounded safe selectors only." },
+        refresh_policy: { type: "string", enum: [...GENERIC_QUERY_REFRESH_POLICIES] },
+        hydrate_refs: { type: "boolean" },
+        cursor: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 100 },
+      },
+    },
+    output_summary_shape: {
+      mode: "plan_only_generic_project_query",
+      fields: ["rows", "refs", "freshness", "coverage", "page", "refresh_requests", "hydrate_request", "blockers"],
+      rows_are_candidate_facts: true,
+      sqlite_authorizes_writes: false,
+    },
+    replacement: ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT,
+  })];
+}
+
+export function planAlpha3_2DGenericProjectQuery(request = {}, options = {}) {
+  const indexState = readProjectIndexState(options.projectIndex);
+  const normalized = normalizeGenericProjectQueryInput(request, indexState);
+  if (normalized.blockers.length > 0) {
+    return genericProjectQueryBlockedPlan(normalized, indexState);
+  }
+
+  const { query } = normalized;
+  const internalCursor = query.cursor_offset > 0 ? encodeCursor(query.cursor_offset) : null;
+  const legacyRequest = genericLegacyRequest(query, internalCursor);
+  const legacyId = query.entity === "duplicates" ? "macro.query_media" : GENERIC_QUERY_ENTITY_TO_LEGACY_ID[query.entity];
+  let legacyPlan = planAlpha3C3ProjectIndexQueryMacro(legacyId, legacyRequest, options);
+
+  if (query.entity === "duplicates") {
+    legacyPlan = genericDuplicatePlanFromMedia({ query, indexState, legacyPlan });
+  } else if (query.entity === "status" && legacyPlan.blockers.length === 0) {
+    legacyPlan = {
+      ...legacyPlan,
+      rows: [genericStatusRow(legacyPlan.index_status)],
+      coverage: {
+        ...(isPlainObject(legacyPlan.coverage) ? legacyPlan.coverage : {}),
+        row_count: 1,
+      },
+    };
+  }
+
+  const refreshDecision = genericRefreshDecision({ query, indexState, legacyPlan, options });
+  const forcedRefreshPending = refreshDecision.forced;
+  const legacyBlockers = Array.isArray(legacyPlan.blockers) ? legacyPlan.blockers : [];
+  const blockers = uniqueBlockers([
+    ...legacyBlockers,
+    ...(forcedRefreshPending
+      ? [blocker("refresh_policy", "GENERIC_QUERY_REFRESH_REQUIRED", `${query.refresh_policy} requires the returned read-only refresh plan to complete before rows are usable.`)]
+      : []),
+  ]);
+  const rows = forcedRefreshPending ? [] : boundedCloneRows(legacyPlan.rows, query.limit);
+  const refs = forcedRefreshPending ? [] : unique(rows.flatMap(genericRowRefs)).slice(0, GENERIC_QUERY_MAX_ARRAY_VALUES);
+  const nextOffset = !forcedRefreshPending && legacyPlan.page?.next_cursor
+    ? query.cursor_offset + rows.length
+    : null;
+  const nextCursor = nextOffset === null
+    ? null
+    : encodeGenericQueryCursor({
+        entity: query.entity,
+        identity: normalized.identity,
+        fingerprint: normalized.fingerprint,
+        offset: nextOffset,
+      });
+  const hydrate = genericHydrationPosture({ query, legacyPlan, refs });
+  const plan = {
+    contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
+    ok: blockers.length === 0,
+    id: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+    mode: "plan_only_generic_project_query",
+    action_kind: "macro",
+    execution_shape: "generic_project_index_query_plan",
+    entity: query.entity,
+    input: genericInputSummary(query),
+    rows,
+    refs,
+    refs_truth: {
+      posture: "candidate_refs_from_project_index",
+      sqlite_authorizes_writes: false,
+      write_requires_live_re_resolution: refs.length > 0,
+    },
+    freshness: {
+      ...(isPlainObject(legacyPlan.freshness) ? cloneJson(legacyPlan.freshness) : {}),
+      identity_token: normalized.identity,
+      refresh_policy: query.refresh_policy,
+      refresh_pending: refreshDecision.requests.length > 0,
+    },
+    coverage: {
+      ...(isPlainObject(legacyPlan.coverage) ? cloneJson(legacyPlan.coverage) : {}),
+      row_count: rows.length,
+      complete: blockers.length === 0 && legacyPlan.coverage?.complete === true,
+    },
+    page: {
+      limit: query.limit,
+      cursor: query.cursor,
+      next_cursor: nextCursor,
+      has_more: nextCursor !== null,
+      offset: query.cursor_offset,
+      cursor_contract: "snapshot_and_query_bound_v2",
+    },
+    refresh_requests: refreshDecision.requests,
+    refresh_execution: {
+      owner: "agent",
+      server_executes_children: false,
+      read_only: true,
+      required_behavior: "Agent executes returned call_template refresh children; runtime integration must automatically observe accepted readback into the Project Index before rerun.",
+    },
+    hydrate_request: hydrate.request,
+    hydration_truth: hydrate.truth,
+    blockers,
+    legacy_implementation: {
+      id: legacyId,
+      posture: "internal_covered_helper",
+      public_discovery: false,
+    },
+    replacement: ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT,
+    execution: {
+      executed: false,
+      executor_call_count: 0,
+      child_executor: false,
+      live_reaper: false,
+      raw_sql: false,
+      sqlite_write: false,
+    },
+    safety: projectIndexSafety(),
+  };
+  plan.user_flow = createAlpha3L3ProjectIndexUserFlow(plan);
+  return deepFreeze(plan);
+}
+
+export function createAlpha3_2DGenericProjectQueryRuntimeEnvelope({
+  request = {},
+  plan,
+  projectIndex,
+  catalog,
+  now = () => new Date(),
+} = {}) {
+  const normalizedPlan = plan ?? planAlpha3_2DGenericProjectQuery(request.input ?? request, { projectIndex, catalog });
+  return deepFreeze({
+    contract: "template.execution.v1",
+    ok: normalizedPlan.ok,
+    template: {
+      id: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+      pack: "core",
+      risk: "read",
+      action_kind: "macro",
+    },
+    completed_at: safeNowIso(now),
+    error: normalizedPlan.ok ? null : macroRuntimeError(normalizedPlan),
+    result: {
+      contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
+      mode: "plan_only_generic_project_query",
+      plan: normalizedPlan,
+      rows: normalizedPlan.rows,
+      refs: normalizedPlan.refs,
+      freshness: normalizedPlan.freshness,
+      coverage: normalizedPlan.coverage,
+      page: normalizedPlan.page,
+      refresh_requests: normalizedPlan.refresh_requests,
+      hydrate_request: normalizedPlan.hydrate_request,
+      blockers: normalizedPlan.blockers,
+      execution: normalizedPlan.execution,
+    },
+  });
+}
+
+function normalizeGenericProjectQueryInput(request, indexState) {
+  const source = isPlainObject(request) ? request : {};
+  const blockers = [];
+  if (!isPlainObject(request)) {
+    blockers.push(blocker("input", "GENERIC_QUERY_INPUT_INVALID", "macro.project.query input must be an object."));
+  }
+  const keys = Object.keys(source);
+  if (keys.length > GENERIC_QUERY_MAX_OBJECT_KEYS) {
+    blockers.push(blocker("input", "GENERIC_QUERY_INPUT_TOO_LARGE", `macro.project.query accepts at most ${GENERIC_QUERY_MAX_OBJECT_KEYS} top-level fields.`));
+  }
+  for (const key of keys.slice(0, GENERIC_QUERY_MAX_OBJECT_KEYS + 1)) {
+    const fieldLabel = genericFieldLabel("input", key);
+    if (byteLength(key) > 128) {
+      blockers.push(blocker(fieldLabel, "GENERIC_QUERY_KEY_TOO_LARGE", "macro.project.query field names must stay within the bounded key budget."));
+      continue;
+    }
+    if (!GENERIC_QUERY_TOP_LEVEL_KEYS.has(key)) {
+      blockers.push(blocker(fieldLabel, "GENERIC_QUERY_UNKNOWN_FIELD", "macro.project.query rejects unknown top-level fields."));
+    }
+    if (RAW_SQL_INPUT_FIELDS.has(key.toLowerCase())) {
+      blockers.push(blocker(fieldLabel, "RAW_SQL_NOT_ALLOWED", "macro.project.query never accepts raw SQL or SQL-shaped fields."));
+    }
+  }
+
+  const entity = typeof source.entity === "string" ? source.entity.trim() : "";
+  if (!ALPHA3_2D_GENERIC_PROJECT_QUERY_ENTITIES.includes(entity)) {
+    blockers.push(blocker("entity", "GENERIC_QUERY_ENTITY_REQUIRED", "entity is required and must be one of the exact twelve supported values."));
+  }
+  const refreshPolicy = source.refresh_policy ?? "if_stale";
+  if (!GENERIC_QUERY_REFRESH_POLICIES.has(refreshPolicy)) {
+    blockers.push(blocker("refresh_policy", "GENERIC_QUERY_REFRESH_POLICY_INVALID", "refresh_policy must be never, if_stale, required, or force_read_only_refresh."));
+  }
+  if (source.hydrate_refs !== undefined && typeof source.hydrate_refs !== "boolean") {
+    blockers.push(blocker("hydrate_refs", "GENERIC_QUERY_HYDRATE_REFS_INVALID", "hydrate_refs must be boolean."));
+  }
+
+  const fields = normalizeGenericStringArray(source.fields, "fields", blockers, GENERIC_QUERY_MAX_OBJECT_KEYS);
+  const filters = normalizeGenericBoundedObject(source.filters, "filters", blockers, { allowUnknown: true });
+  const selectors = normalizeGenericBoundedObject(source.selectors, "selectors", blockers, { allowUnknown: false });
+  const limit = normalizeLimit(source.limit, blockers);
+  if (entity === "duplicates") {
+    for (const field of fields) {
+      if (!GENERIC_QUERY_DUPLICATE_FIELDS.has(field)) {
+        blockers.push(blocker("fields", "GENERIC_QUERY_FIELD_UNSUPPORTED", `duplicates does not support field ${field}.`));
+      }
+    }
+  }
+
+  const fingerprint = genericQueryFingerprint({ entity, fields, filters, selectors });
+  const identity = genericQueryIdentity(indexState, entity);
+  const cursorResult = decodeGenericQueryCursor(source.cursor, { entity, identity, fingerprint });
+  blockers.push(...cursorResult.blockers);
+  return {
+    blockers: uniqueBlockers(blockers),
+    identity,
+    fingerprint,
+    query: {
+      entity,
+      filters,
+      fields,
+      selectors,
+      refresh_policy: GENERIC_QUERY_REFRESH_POLICIES.has(refreshPolicy) ? refreshPolicy : "if_stale",
+      hydrate_refs: source.hydrate_refs === true,
+      cursor: typeof source.cursor === "string" ? source.cursor : null,
+      cursor_offset: cursorResult.offset,
+      limit,
+    },
+  };
+}
+
+function normalizeGenericBoundedObject(value, field, blockers, { allowUnknown }) {
+  if (value === undefined) return {};
+  if (!isPlainObject(value)) {
+    blockers.push(blocker(field, "GENERIC_QUERY_OBJECT_INVALID", `${field} must be an object.`));
+    return {};
+  }
+  const entries = Object.entries(value);
+  if (entries.length > GENERIC_QUERY_MAX_OBJECT_KEYS) {
+    blockers.push(blocker(field, "GENERIC_QUERY_OBJECT_TOO_LARGE", `${field} accepts at most ${GENERIC_QUERY_MAX_OBJECT_KEYS} keys.`));
+  }
+  const output = {};
+  const budget = { nodes: 0, depth_blocked: false, node_blocked: false };
+  for (const [key, raw] of entries.slice(0, GENERIC_QUERY_MAX_OBJECT_KEYS)) {
+    const fieldLabel = genericFieldLabel(field, key);
+    if (byteLength(key) > 128) {
+      blockers.push(blocker(fieldLabel, "GENERIC_QUERY_KEY_TOO_LARGE", `${field} keys must stay within the bounded key budget.`));
+      continue;
+    }
+    if (RAW_SQL_INPUT_FIELDS.has(key.toLowerCase())) {
+      blockers.push(blocker(fieldLabel, "RAW_SQL_NOT_ALLOWED", "macro.project.query never accepts raw SQL or SQL-shaped fields."));
+      continue;
+    }
+    if (!allowUnknown && !GENERIC_QUERY_SELECTOR_KEYS.has(key)) {
+      blockers.push(blocker(fieldLabel, "GENERIC_QUERY_SELECTOR_UNSUPPORTED", "selectors accepts only bounded common selector keys."));
+      continue;
+    }
+    const valueResult = normalizeGenericValue(raw, fieldLabel, blockers, { depth: 1, budget });
+    if (valueResult !== undefined) output[key] = valueResult;
+  }
+  return output;
+}
+
+function normalizeGenericValue(value, field, blockers, state = { depth: 0, budget: { nodes: 0 } }) {
+  const budget = state.budget ?? { nodes: 0 };
+  budget.nodes += 1;
+  if (budget.nodes > GENERIC_QUERY_MAX_NORMALIZED_NODES) {
+    if (!budget.node_blocked) {
+      blockers.push(blocker(field, "GENERIC_QUERY_VALUE_BUDGET_EXCEEDED", `filters/selectors accept at most ${GENERIC_QUERY_MAX_NORMALIZED_NODES} normalized nodes.`));
+      budget.node_blocked = true;
+    }
+    return undefined;
+  }
+  if (state.depth > GENERIC_QUERY_MAX_NESTING_DEPTH) {
+    if (!budget.depth_blocked) {
+      blockers.push(blocker(field, "GENERIC_QUERY_VALUE_DEPTH_EXCEEDED", `filters/selectors nesting depth may not exceed ${GENERIC_QUERY_MAX_NESTING_DEPTH}.`));
+      budget.depth_blocked = true;
+    }
+    return undefined;
+  }
+  if (value === null || typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value))) return value;
+  if (typeof value === "string") {
+    if (byteLength(value) > GENERIC_QUERY_MAX_STRING_BYTES) {
+      blockers.push(blocker(field, "GENERIC_QUERY_VALUE_TOO_LARGE", `${field} exceeds the bounded string budget.`));
+      return undefined;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    if (value.length > GENERIC_QUERY_MAX_ARRAY_VALUES) {
+      blockers.push(blocker(field, "GENERIC_QUERY_ARRAY_TOO_LARGE", `${field} accepts at most ${GENERIC_QUERY_MAX_ARRAY_VALUES} values.`));
+      return undefined;
+    }
+    const output = [];
+    for (const entry of value) {
+      const normalized = normalizeGenericValue(entry, field, blockers, { depth: state.depth + 1, budget });
+      if (normalized !== undefined && !isPlainObject(normalized)) output.push(normalized);
+    }
+    return output;
+  }
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    if (entries.length > GENERIC_QUERY_MAX_OBJECT_KEYS) {
+      blockers.push(blocker(field, "GENERIC_QUERY_OBJECT_TOO_LARGE", `${field} accepts at most ${GENERIC_QUERY_MAX_OBJECT_KEYS} nested keys.`));
+      return undefined;
+    }
+    const output = {};
+    for (const [key, entry] of entries) {
+      const fieldLabel = genericFieldLabel(field, key);
+      if (byteLength(key) > 128) {
+        blockers.push(blocker(fieldLabel, "GENERIC_QUERY_KEY_TOO_LARGE", "Nested filter keys must stay within the bounded key budget."));
+        continue;
+      }
+      if (RAW_SQL_INPUT_FIELDS.has(key.toLowerCase())) {
+        blockers.push(blocker(fieldLabel, "RAW_SQL_NOT_ALLOWED", "macro.project.query never accepts nested raw SQL or SQL-shaped fields."));
+        continue;
+      }
+      const normalized = normalizeGenericValue(entry, fieldLabel, blockers, { depth: state.depth + 1, budget });
+      if (normalized !== undefined) output[key] = normalized;
+    }
+    return output;
+  }
+  blockers.push(blocker(field, "GENERIC_QUERY_VALUE_INVALID", `${field} contains an unsupported value type.`));
+  return undefined;
+}
+
+function genericFieldLabel(parent, key) {
+  const safeKey = typeof key === "string" && key.length <= 64 ? key : "oversized_key";
+  return parent ? `${parent}.${safeKey}` : safeKey;
+}
+
+function normalizeGenericStringArray(value, field, blockers, maxItems) {
+  if (value === undefined) return [];
+  const raw = Array.isArray(value) ? value : [value];
+  if (raw.length > maxItems) {
+    blockers.push(blocker(field, "GENERIC_QUERY_ARRAY_TOO_LARGE", `${field} accepts at most ${maxItems} values.`));
+  }
+  const output = [];
+  for (const entry of raw.slice(0, maxItems)) {
+    if (typeof entry !== "string" || entry.trim() === "" || byteLength(entry) > 128) {
+      blockers.push(blocker(field, "GENERIC_QUERY_FIELDS_INVALID", `${field} must contain short non-empty strings.`));
+      continue;
+    }
+    if (RAW_SQL_INPUT_FIELDS.has(entry.trim().toLowerCase())) {
+      blockers.push(blocker(field, "RAW_SQL_NOT_ALLOWED", "macro.project.query fields never accept raw SQL tokens."));
+      continue;
+    }
+    output.push(entry.trim());
+  }
+  return unique(output);
+}
+
+function genericLegacyRequest(query, internalCursor) {
+  const selectors = query.selectors;
+  const refs = unique([
+    ...normalizeRefs(selectors.refs),
+    ...normalizeRefs(selectors.ref),
+    ...normalizeRefs(selectors.track_refs),
+    ...normalizeRefs(selectors.track_ref),
+    ...normalizeRefs(selectors.item_refs),
+    ...normalizeRefs(selectors.item_ref),
+    ...normalizeRefs(selectors.owner_refs),
+    ...normalizeRefs(selectors.owner_ref),
+  ]).slice(0, GENERIC_QUERY_MAX_ARRAY_VALUES);
+  const filters = {
+    ...cloneJson(query.filters),
+  };
+  for (const key of ["selected", "name", "track_ref", "item_ref", "owner_ref", "source_ref", "source_path", "path_fingerprint"]) {
+    if (selectors[key] !== undefined && filters[key] === undefined) filters[key] = cloneJson(selectors[key]);
+  }
+  const scope = selectors.selected === true ? "selection" : genericLegacyScope(query.entity);
+  return {
+    scope,
+    refs,
+    filters,
+    fields: query.entity === "duplicates" ? [] : query.fields,
+    detail: query.hydrate_refs ? "hydrated" : "compact",
+    since: query.entity === "changed_since" ? (selectors.since ?? filters.since ?? null) : null,
+    time_range: selectors.time_range ?? filters.time_range ?? null,
+    limit: query.limit,
+    cursor: internalCursor,
+    freshness: { require: "fresh_enough", refresh: "if_stale" },
+  };
+}
+
+function genericLegacyScope(entity) {
+  return ({
+    selected_context: "selection",
+    markers_regions: "markers",
+    media_sources: "media",
+    duplicates: "media",
+  })[entity] ?? (QUERY_SCOPE_VALUES.has(entity) ? entity : "project");
+}
+
+function genericRefreshDecision({ query, indexState, legacyPlan, options }) {
+  if (query.refresh_policy === "never") return { requests: [], forced: false };
+  if (query.refresh_policy === "if_stale") {
+    if (!genericIndexOrScopeNeedsRefresh(indexState, query.entity)) return { requests: [], forced: false };
+    return { requests: boundedReadOnlyRefreshRequests(legacyPlan.refresh_requests), forced: false };
+  }
+  const refreshSourceId = query.entity === "duplicates"
+    ? "macro.query_media"
+    : (GENERIC_QUERY_ENTITY_TO_LEGACY_ID[query.entity] ?? "macro.index_status");
+  let forcedPlan = planAlpha3C3ProjectIndexQueryMacro(refreshSourceId, genericLegacyRequest(query, null), {
+    ...options,
+    projectIndex: genericMissingIndexProjection(indexState),
+  });
+  let requests = boundedReadOnlyRefreshRequests(forcedPlan.refresh_requests);
+  if (requests.length === 0) {
+    forcedPlan = planAlpha3C3ProjectIndexQueryMacro("macro.index_status", { limit: query.limit }, {
+      ...options,
+      projectIndex: genericMissingIndexProjection(indexState),
+    });
+    requests = boundedReadOnlyRefreshRequests(forcedPlan.refresh_requests);
+  }
+  return { requests, forced: true };
+}
+
+function genericIndexOrScopeNeedsRefresh(indexState, entity) {
+  if (indexState.lifecycle !== "ready" && indexState.lifecycle !== "degraded") return true;
+  const scopeName = ({ selected_context: "selection", markers_regions: "markers", media_sources: "media", duplicates: "media" })[entity] ?? entity;
+  if (entity === "status" || entity === "changed_since") return false;
+  const scope = freshnessScope(indexState, scopeName);
+  return !freshnessStatusSatisfies(scope.status, "fresh_enough");
+}
+
+function genericMissingIndexProjection(indexState) {
+  return {
+    lifecycle: "missing",
+    schema_version: indexState.schema_version,
+    db_path: indexState.db_path,
+    project_ref: indexState.project_ref,
+    session_id: indexState.session_id,
+    snapshot_id: indexState.snapshot_id,
+    freshness_scopes: {},
+    rows: {},
+  };
+}
+
+function boundedReadOnlyRefreshRequests(requests) {
+  if (!Array.isArray(requests)) return [];
+  return requests.slice(0, 24).map((request) => deepFreeze({
+    ...cloneJson(request),
+    risk: "read",
+    read_only: true,
+  }));
+}
+
+function genericDuplicatePlanFromMedia({ query, indexState, legacyPlan }) {
+  if (!legacyPlan.ok) return legacyPlan;
+  const groups = new Map();
+  for (const row of indexState.rows.media_sources.slice(0, 10_000)) {
+    if (!row.ref) continue;
+    const sourcePath = filePathFromRef(row.ref);
+    const pathFingerprint = row.path_fingerprint || (sourcePath ? stableFingerprint(sourcePath.toLocaleLowerCase()) : null);
+    const identity = row.path_fingerprint
+      ? `fingerprint:${row.path_fingerprint}`
+      : sourcePath
+        ? `path:${sourcePath.toLocaleLowerCase()}`
+        : null;
+    if (!identity) continue;
+    if (typeof query.filters.path_fingerprint === "string" && pathFingerprint !== query.filters.path_fingerprint) continue;
+    if (typeof query.filters.source_path === "string" && !String(sourcePath ?? "").toLocaleLowerCase().includes(query.filters.source_path.toLocaleLowerCase())) continue;
+    const group = groups.get(identity) ?? { identity, pathFingerprint, sourcePath, rows: [] };
+    group.rows.push(row);
+    groups.set(identity, group);
+  }
+  const minimumCount = Number.isInteger(query.filters.minimum_count) && query.filters.minimum_count >= 2
+    ? Math.min(query.filters.minimum_count, 100)
+    : 2;
+  const duplicateRows = [...groups.values()]
+    .filter((group) => group.rows.length >= minimumCount)
+    .sort((a, b) => b.rows.length - a.rows.length || a.identity.localeCompare(b.identity));
+  const pageRows = duplicateRows.slice(query.cursor_offset, query.cursor_offset + query.limit);
+  const projected = pageRows.map((group) => projectGenericDuplicateRow(group));
+  const hasMore = query.cursor_offset + pageRows.length < duplicateRows.length;
+  return {
+    ...legacyPlan,
+    rows: projected,
+    refs: unique(projected.flatMap((row) => row.refs ?? [])),
+    freshness: {
+      ...(isPlainObject(legacyPlan.freshness) ? legacyPlan.freshness : {}),
+      source: "derived_media_source_identity_groups",
+    },
+    coverage: {
+      ...(isPlainObject(legacyPlan.coverage) ? legacyPlan.coverage : {}),
+      source_scope: "media_sources",
+      row_count: projected.length,
+      duplicate_group_count: duplicateRows.length,
+      complete: legacyPlan.coverage?.complete === true,
+    },
+    page: pageEnvelope(query.limit, query.cursor, hasMore ? "internal_has_more" : null),
+  };
+}
+
+function projectGenericDuplicateRow(group) {
+  const rows = group.rows;
+  const complete = rows.every((row) => row.coverage_status === "complete");
+  const freshness = rows.every((row) => row.freshness_status === "fresh")
+    ? "fresh"
+    : rows.every((row) => freshnessStatusSatisfies(row.freshness_status, "fresh_enough"))
+      ? "fresh_enough"
+      : "stale_or_unknown";
+  const distinctSourcePaths = unique(rows.map((row) => filePathFromRef(row.ref)).filter(Boolean));
+  const full = {
+    duplicate_key: group.identity,
+    count: rows.length,
+    refs: unique(rows.map((row) => row.ref)).slice(0, GENERIC_QUERY_MAX_ARRAY_VALUES),
+    owner_refs: unique(rows.map((row) => row.owner_ref).filter(Boolean)).slice(0, GENERIC_QUERY_MAX_ARRAY_VALUES),
+    source_path: distinctSourcePaths.length === 1 ? distinctSourcePaths[0] : null,
+    path_fingerprint: group.pathFingerprint,
+    freshness,
+    coverage: complete ? "complete" : "partial_or_unknown",
+  };
+  return full;
+}
+
+function genericStatusRow(status) {
+  return {
+    lifecycle: status?.lifecycle ?? "missing",
+    project_ref: status?.project_ref ?? null,
+    session_id: status?.session_id ?? null,
+    snapshot_id: status?.snapshot_id ?? null,
+    freshness_scopes: status?.freshness_scopes ?? {},
+    coverage: status?.coverage ?? {},
+  };
+}
+
+function genericHydrationPosture({ query, legacyPlan, refs }) {
+  if (query.entity === "markers_regions" && query.hydrate_refs) {
+    return {
+      request: null,
+      truth: {
+        status: "exact_hydration_unavailable",
+        write_posture: "write_requires_target_template_live_resolution",
+        reason: "No new atomic marker/region hydration route is introduced by macro.project.query.",
+      },
+    };
+  }
+  if (!query.hydrate_refs || refs.length === 0) {
+    return {
+      request: null,
+      truth: {
+        status: query.hydrate_refs ? "no_candidate_refs" : "not_requested",
+        write_posture: refs.length > 0 ? "write_requires_live_re_resolution" : "no_write_target",
+      },
+    };
+  }
+  return {
+    request: legacyPlan.hydrate_request ?? null,
+    truth: {
+      status: legacyPlan.hydrate_request?.callable_now === true ? "planned_exact_read" : "exact_hydration_unavailable",
+      write_posture: "write_requires_target_template_live_resolution",
+    },
+  };
+}
+
+function genericRowRefs(row) {
+  if (!isPlainObject(row)) return [];
+  return unique([
+    typeof row.ref === "string" ? row.ref : null,
+    ...(Array.isArray(row.refs) ? row.refs : []),
+  ].filter(Boolean));
+}
+
+function boundedCloneRows(rows, limit) {
+  if (!Array.isArray(rows)) return [];
+  return rows.slice(0, limit).map((row) => cloneJson(row));
+}
+
+function genericInputSummary(query) {
+  return {
+    entity: query.entity,
+    filter_keys: Object.keys(query.filters).slice(0, GENERIC_QUERY_MAX_OBJECT_KEYS),
+    fields: query.fields.slice(0, GENERIC_QUERY_MAX_OBJECT_KEYS),
+    selector_keys: Object.keys(query.selectors).slice(0, GENERIC_QUERY_MAX_OBJECT_KEYS),
+    refresh_policy: query.refresh_policy,
+    hydrate_refs: query.hydrate_refs,
+    limit: query.limit,
+    cursor_present: query.cursor !== null,
+  };
+}
+
+function genericProjectQueryBlockedPlan(normalized, indexState) {
+  const plan = {
+    contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
+    ok: false,
+    id: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+    mode: "plan_only_generic_project_query",
+    action_kind: "macro",
+    execution_shape: "generic_project_index_query_plan",
+    entity: normalized.query.entity || null,
+    input: genericInputSummary(normalized.query),
+    rows: [],
+    refs: [],
+    refs_truth: {
+      posture: "no_candidate_refs",
+      sqlite_authorizes_writes: false,
+      write_requires_live_re_resolution: false,
+    },
+    freshness: { identity_token: normalized.identity },
+    coverage: { status: "failed", row_count: 0, complete: false },
+    page: { limit: normalized.query.limit, cursor: null, next_cursor: null, has_more: false, offset: 0, cursor_contract: "snapshot_and_query_bound_v2" },
+    refresh_requests: [],
+    hydrate_request: null,
+    hydration_truth: { status: "not_available_while_blocked", write_posture: "no_write_target" },
+    blockers: normalized.blockers,
+    replacement: ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT,
+    execution: { executed: false, executor_call_count: 0, child_executor: false, live_reaper: false, raw_sql: false, sqlite_write: false },
+    safety: projectIndexSafety(),
+  };
+  plan.user_flow = createAlpha3L3ProjectIndexUserFlow(plan);
+  return deepFreeze(plan);
+}
+
+function genericQueryIdentity(indexState, entity) {
+  const scopeName = ({ selected_context: "selection", markers_regions: "markers", media_sources: "media", duplicates: "media" })[entity] ?? entity;
+  const scope = freshnessScope(indexState, scopeName);
+  return [
+    `snapshot:${indexState.snapshot_id ?? "none"}`,
+    `session:${indexState.session_id ?? "none"}`,
+    `scope_snapshot:${scope.snapshot_id ?? "none"}`,
+    `observed:${scope.observed_at ?? "none"}`,
+    `status:${scope.status}`,
+  ].join("|");
+}
+
+function genericQueryFingerprint(value) {
+  return stableFingerprint(stableJson(value));
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function stableFingerprint(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `fnv1a32:${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function encodeGenericQueryCursor({ entity, identity, fingerprint, offset }) {
+  return Buffer.from(JSON.stringify({
+    v: GENERIC_QUERY_CURSOR_VERSION,
+    contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
+    entity,
+    identity,
+    fingerprint,
+    offset,
+  }), "utf8").toString("base64url");
+}
+
+function decodeGenericQueryCursor(cursor, expected) {
+  if (cursor === undefined || cursor === null) return { offset: 0, blockers: [] };
+  if (typeof cursor !== "string" || cursor.trim() === "" || byteLength(cursor) > 2048) {
+    return { offset: 0, blockers: [blocker("cursor", "GENERIC_QUERY_CURSOR_INVALID", "cursor must be a bounded non-empty opaque string.")] };
+  }
+  try {
+    const decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (
+      decoded?.v !== GENERIC_QUERY_CURSOR_VERSION
+      || decoded.contract !== ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT
+      || !Number.isInteger(decoded.offset)
+      || decoded.offset < 0
+      || decoded.entity !== expected.entity
+      || decoded.fingerprint !== expected.fingerprint
+    ) {
+      return { offset: 0, blockers: [blocker("cursor", "GENERIC_QUERY_CURSOR_INVALID", "cursor does not match this entity or bounded query shape.")] };
+    }
+    if (decoded.identity !== expected.identity) {
+      return { offset: 0, blockers: [blocker("cursor", "GENERIC_QUERY_CURSOR_STALE", "cursor belongs to a different Project Index snapshot or freshness identity.")] };
+    }
+    return { offset: decoded.offset, blockers: [] };
+  } catch {
+    return { offset: 0, blockers: [blocker("cursor", "GENERIC_QUERY_CURSOR_INVALID", "cursor is not a valid macro.project.query cursor.")] };
+  }
+}
+
 
 function queryMacro({
   id,

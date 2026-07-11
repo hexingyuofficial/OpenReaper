@@ -3,19 +3,19 @@ export const ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT = "alpha3.1.l3.project_i
 export const ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
   mode: "project_index_user_flow_gate",
-  product_goal: "Make Project SQLite Index query macros feel like a user flow: check status, refresh if needed, query compact rows, hydrate only when needed.",
+  product_goal: "Teach one public macro.project.query flow: choose an entity, refresh read-only index scopes when required, then use compact candidate rows.",
   tool_surface: {
     added_tools: 0,
     discovery_tool: "list_templates",
     execution_tool: "call_template",
     state_tool: "get_state",
   },
-  primary_macro_ids: ["macro.index_status", "macro.query_tracks"],
+  primary_macro_ids: ["macro.project.query"],
   user_path: [
-    "Call macro.index_status before relying on index rows.",
-    "If refresh_requests are returned, run those existing call_template requests and update the Project Index from readback.",
-    "Rerun the intended query macro, such as macro.query_tracks.",
-    "Use compact rows for scan decisions; hydrate or re-resolve refs before writes.",
+    "Call macro.project.query with exactly one supported entity and bounded fields/filters/selectors.",
+    "If refresh_requests are returned, the agent runs those accepted read-only call_template children; the integrated server runtime must automatically observe successful readback into the Project Index.",
+    "Rerun macro.project.query with the same entity/query after refresh observation completes.",
+    "Use compact rows as candidate facts; hydrate where available or resolve through the target write template before mutation.",
   ],
   safety_policy: {
     sqlite_is_truth: false,
@@ -33,31 +33,31 @@ export function summarizeAlpha3L3ProjectIndexUserFlow() {
     contract: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
     mode: "static_product_surface_summary",
     status: "ready_for_project_index_flow_gate",
-    primary_macro_ids: ["macro.index_status", "macro.query_tracks"],
+    primary_macro_ids: ["macro.project.query"],
     default_agent_flow: [
       {
-        id: "check_index_status",
+        id: "plan_generic_query",
         tool: "call_template",
-        template_id: "macro.index_status",
-        purpose: "Tell the user whether the Project Index is ready, missing, stale, or blocked.",
+        template_id: "macro.project.query",
+        purpose: "Choose one of the twelve entities and receive compact rows or a typed read-only refresh path.",
       },
       {
-        id: "refresh_from_readback",
+        id: "agent_executes_refresh_children",
         tool: "call_template",
         template_id: "returned_refresh_requests",
-        purpose: "Run only the returned accepted read requests, then update the Project Index from readback.",
+        purpose: "The agent runs only returned accepted read requests; no server child executor is implied.",
       },
       {
-        id: "query_tracks",
+        id: "runtime_observes_readback",
         tool: "call_template",
-        template_id: "macro.query_tracks",
-        purpose: "Return compact track rows and canonical refs without dumping the whole project.",
+        template_id: "macro.project.query",
+        purpose: "Required integrated runtime behavior: automatically observe successful refresh readback into the Project Index, then rerun the same generic query.",
       },
       {
-        id: "hydrate_or_re_resolve",
+        id: "hydrate_or_target_resolve",
         tool: "call_template",
-        template_id: "macro.hydrate_refs",
-        purpose: "Fetch deeper detail only when needed; re-resolve in REAPER before any write.",
+        template_id: "target_specific_read_or_write_template",
+        purpose: "Hydrate where supported; markers/regions and all writes require target-template live resolution rather than fabricated atomic hydration.",
       },
     ],
     user_copy: {
@@ -144,7 +144,7 @@ function projectIndexFlowStage({ ok, blockers, refreshRequests, rows }) {
 
 function projectIndexFlowUserMessage(stage, { rows, refs, refreshRequests, blockerCodes }) {
   if (stage === "needs_refresh") {
-    return `Project Index needs a read-only refresh first; run ${refreshRequests.length} returned call_template request(s), update the index from readback, then rerun the macro.`;
+    return `Project Index needs a read-only refresh first; the agent runs ${refreshRequests.length} returned call_template request(s), the integrated runtime observes successful readback, then macro.project.query is rerun.`;
   }
   if (stage === "needs_refresh_after_blockers") {
     return `Project Index refresh is partially available, but blocker(s) ${blockerCodes.join(", ")} must be resolved first.`;
@@ -159,20 +159,20 @@ function projectIndexFlowUserMessage(stage, { rows, refs, refreshRequests, block
     return `Project Index returned ${rows.length} compact row(s) and ${refs.length} canonical ref(s); hydrate only if deeper detail is needed.`;
   }
   if (stage === "ready_no_rows") {
-    return "Project Index is ready, but this query returned no rows; adjust filters or try another query macro.";
+    return "Project Index is ready, but this entity query returned no rows; adjust macro.project.query filters/selectors or choose another entity.";
   }
   return "Project Index flow is complete; use compact rows first and hydrate only when needed.";
 }
 
 function projectIndexFlowAgentNextStep(stage, { primaryNextAction }) {
   if (stage === "needs_refresh") {
-    return "Run the returned refresh_requests with call_template, update the Project Index from readback, then rerun the same macro.";
+    return "Run the returned refresh_requests with call_template; require the integrated runtime to observe successful readback into the Project Index, then rerun macro.project.query.";
   }
   if (stage === "needs_refresh_after_blockers" || stage === "blocked") {
     return "Resolve typed blockers before using Project Index rows or child requests.";
   }
   if (stage === "stale_session_reconnect") {
-    return "Reconnect to the current OpenReaper session, refresh index status, then rerun the query.";
+    return "Reconnect to the current OpenReaper session, call macro.project.query with entity status, then rerun the intended entity query.";
   }
   if (stage === "ready_compact_rows") {
     return primaryNextAction === "page_next"
@@ -180,14 +180,14 @@ function projectIndexFlowAgentNextStep(stage, { primaryNextAction }) {
       : "Use compact rows for scan decisions; hydrate/re-resolve before any write.";
   }
   if (stage === "ready_no_rows") {
-    return "Try different filters, query selected context, or refresh a narrower scope if the user expected matches.";
+    return "Try different macro.project.query filters/selectors, entity selected_context, or a policy-permitted narrower refresh if matches were expected.";
   }
   return "No additional Project Index action is required.";
 }
 
 function projectIndexFlowCopyableSummary(stage, details) {
   if (stage === "needs_refresh") {
-    return "I need to refresh OpenReaper's project index first, using the returned read-only call_template requests.";
+    return "I need to run macro.project.query's returned read-only refresh requests; the integrated runtime must observe their readback before I rerun the query.";
   }
   if (stage === "ready_compact_rows") {
     return `I found ${details.rows.length} compact project-index row(s); I will hydrate exact refs only if the task needs detail or a write target.`;

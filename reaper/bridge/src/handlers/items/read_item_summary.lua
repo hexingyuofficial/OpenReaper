@@ -66,6 +66,42 @@ local function read_item_summary_item_ref_string(item)
   return "item:unknown"
 end
 
+local function read_item_summary_take_guid(take)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemTakeGUID", take)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function read_item_summary_take_ref_string(take)
+  local guid = read_item_summary_take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, candidate = call_reaper("GetTake", item, index)
+        if ok_take and candidate == take then
+          return "take:index:" .. tostring(take_index)
+        end
+        take_index = take_index + 1
+      end
+    end
+  end
+  return "take:unknown"
+end
+
 local function read_item_summary_find_item_by_guid(guid)
   local ok_count, count = call_reaper("CountMediaItems", 0)
   local total = ok_count and first_number(count) or 0
@@ -149,6 +185,7 @@ local function read_item_summary_value(item, include_take_summary)
       ok_name, take_name = call_reaper("GetTakeName", take)
     end
     summary.take_count = ok_take_count and first_number(take_count) or 0
+    summary.active_take_ref = ok_take and take and read_item_summary_take_ref_string(take) or JSON_NULL
     summary.active_take_name = bounded_string(ok_name and first_string(take_name) or "", 160)
   end
   return summary

@@ -402,6 +402,42 @@ local function d13_items_take_name(take)
   return bounded_string(ok and first_string(name) or "", 160)
 end
 
+local function d13_items_take_guid(take)
+  local ok_sws, guid = call_reaper("BR_GetMediaItemTakeGUID", take)
+  if ok_sws and type(guid) == "string" and guid ~= "" then
+    return guid
+  end
+  local ok_native, _, native_guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  if ok_native and type(native_guid) == "string" and native_guid ~= "" then
+    return native_guid
+  end
+  return nil
+end
+
+local function d13_items_take_ref_string(take)
+  local guid = d13_items_take_guid(take)
+  if guid then
+    return "take:guid:" .. guid
+  end
+  local ok_count, item_count = call_reaper("CountMediaItems", 0)
+  local total_items = ok_count and first_number(item_count) or 0
+  local take_index = 0
+  for item_index = 0, total_items - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      for index = 0, (ok_takes and first_number(take_count) or 0) - 1 do
+        local ok_take, candidate = call_reaper("GetTake", item, index)
+        if ok_take and candidate == take then
+          return "take:index:" .. tostring(take_index)
+        end
+        take_index = take_index + 1
+      end
+    end
+  end
+  return "take:unknown"
+end
+
 local function d13_items_item_summary(item, include_take_summary)
   local track = d13_items_item_track(item)
   local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", item, "B_UISEL")
@@ -427,6 +463,7 @@ local function d13_items_item_summary(item, include_take_summary)
     local take = d13_items_active_take(item)
     summary.take_count = ok_take_count and first_number(take_count) or 0
     if take then
+      summary.active_take_ref = d13_items_take_ref_string(take)
       summary.active_take_name = d13_items_take_name(take)
       summary.take_volume_db = d13_items_linear_to_db(d13_items_take_number(take, "D_VOL"))
       summary.take_pan = d13_items_take_number(take, "D_PAN")
@@ -436,6 +473,7 @@ local function d13_items_item_summary(item, include_take_summary)
       summary.pitch_shift_mode = d13_items_pitch_mode_label(d13_items_take_number(take, "I_PITCHMODE"))
       summary.stretch_marker_fade_size_ms = d13_items_take_number(take, "F_STRETCHFADESIZE") * 1000
     else
+      summary.active_take_ref = JSON_NULL
       summary.active_take_name = ""
     end
   end

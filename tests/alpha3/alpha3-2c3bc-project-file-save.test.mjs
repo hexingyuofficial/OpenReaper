@@ -78,7 +78,7 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
     ]);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS, IDS);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 217);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 220);
 
     const [saveCurrent, saveAs] = IDS.map((id) => catalog.get(id));
     for (const descriptor of [saveCurrent, saveAs]) {
@@ -122,16 +122,17 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
       "accepted_live_smoked",
     ]);
     const guide = createAlpha3_2AAgentContextMacroGuide();
-    assert.match(guide.project_file_posture.current_write_boundary, /macro\.project\.file and new-project creation remain held/);
+    assert.match(guide.project_file_posture.current_write_boundary, /macro\.project\.file is plan-only.*new\/open\/create.*remain held/);
     const projectFileManual = runtime.list_templates({ ids: ["macro.project.file"], fields: ["id"] })
       .product_surface.agent_context_macro_guide.requested_expansions.items[0].action_manual;
-    assert.match(projectFileManual.required_readiness.join(" "), /explicit overwrite=true race authorization/);
-    assert.match(projectFileManual.success_criteria.join(" "), /atomic overwrite=false remains held future/);
-    const held = runtime.call_template({ id: "macro.project.file", input: {} });
-    return held.then((result) => {
+    assert.match(projectFileManual.required_readiness.join(" "), /accepted\/live-smoked.*explicitly and serially/);
+    assert.match(projectFileManual.input_shape.overwrite, /atomic overwrite=false remains held/);
+    const invalidPlan = runtime.call_template({ id: "macro.project.file", input: {} });
+    return invalidPlan.then((result) => {
       assert.equal(result.ok, false);
-      assert.equal(result.error.code, "CALL_TEMPLATE_ID_HELD");
-      assert.match(result.error.details.blocker, /macro_held_new_project_unimplemented/);
+      assert.equal(result.error.code, "PROJECT_FILE_OPERATION_REQUIRED");
+      assert.equal(result.result.executed, false);
+      assert.equal(result.result.execution.executor_call_count, 0);
     });
   });
 

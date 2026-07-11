@@ -620,7 +620,7 @@ export function createAlpha3C3ProjectIndex(options = {}) {
             freshness_status: input.freshness_status,
             coverage_status: input.coverage_status,
             payload_ref: input.payload_ref,
-          }))
+          })).filter(Boolean)
         : [];
       updateScope(state, {
         scope_kind: "tracks",
@@ -691,6 +691,68 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       state.coverage.takes = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_takes", observedAt);
     },
+    replaceItemsAndTakesForTrack(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      const trackRef = typeof input.track_ref === "string" ? input.track_ref : null;
+      if (!trackRef) return { ok: false, blockers: [{ code: "TRACK_REF_REQUIRED", message: "replaceItemsAndTakesForTrack requires track_ref.", recoverable: true }] };
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_items_takes_for_track", observedAt);
+      state.snapshot_id = snapshotId;
+      const items = Array.isArray(input.items) ? input.items : Array.isArray(input.rows) ? input.rows : [];
+      const takes = Array.isArray(input.takes) ? input.takes : [];
+      const nextItems = items.map((row) => normalizeItemRow({ ...row, track_ref: row.track_ref ?? trackRef }, {
+        snapshot_id: snapshotId,
+        observed_at: observedAt,
+        freshness_status: input.freshness_status,
+        coverage_status: input.coverage_status,
+        payload_ref: input.payload_ref,
+      })).filter(Boolean);
+      const nextTakes = takes.map((row) => normalizeTakeRow({ ...row, track_ref: row.track_ref ?? trackRef }, {
+        snapshot_id: snapshotId,
+        observed_at: observedAt,
+        freshness_status: input.freshness_status,
+        coverage_status: input.coverage_status,
+        payload_ref: input.payload_ref,
+      })).filter(Boolean);
+      state.rows.items = [...state.rows.items.filter((row) => row.track_ref !== trackRef), ...nextItems];
+      state.rows.takes = [...state.rows.takes.filter((row) => row.track_ref !== trackRef), ...nextTakes];
+      for (const [scopeKind, sourceTemplateId] of [["items", "template.items.list_items_on_track"], ["takes", "template.items.list_items_on_track"]]) {
+        updateScope(state, {
+          scope_kind: scopeKind,
+          scope_ref: input.scope_ref ?? trackRef,
+          snapshot_id: snapshotId,
+          status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+          coverage_status: normalizeCoverageStatus(input.coverage_status, "partial"),
+          observed_at: observedAt,
+          source_template_id: input.source_template_id ?? sourceTemplateId,
+          payload_ref: input.payload_ref,
+        });
+      }
+      state.coverage.items = normalizeCoverageStatus(input.coverage_status, "partial");
+      state.coverage.takes = normalizeCoverageStatus(input.coverage_status, "partial");
+      return lifecycleResult(state, "replace_items_takes_for_track", observedAt);
+    },
+    upsertItemsAndTakes(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "upsert_items_takes", observedAt);
+      state.snapshot_id = snapshotId;
+      const items = Array.isArray(input.items) ? input.items : Array.isArray(input.rows) ? input.rows : [];
+      const takes = Array.isArray(input.takes) ? input.takes : [];
+      for (const row of items) {
+        const normalized = normalizeItemRow(row, { snapshot_id: snapshotId, observed_at: observedAt, freshness_status: input.freshness_status, coverage_status: input.coverage_status, payload_ref: input.payload_ref });
+        if (normalized) upsertByKey(state.rows.items, normalized, "ref");
+      }
+      for (const row of takes) {
+        const normalized = normalizeTakeRow(row, { snapshot_id: snapshotId, observed_at: observedAt, freshness_status: input.freshness_status, coverage_status: input.coverage_status, payload_ref: input.payload_ref });
+        if (normalized) upsertByKey(state.rows.takes, normalized, "ref");
+      }
+      updateScope(state, { scope_kind: "items", scope_ref: input.scope_ref ?? "partial", snapshot_id: snapshotId, status: normalizeFreshnessStatus(input.freshness_status, "fresh"), coverage_status: normalizeCoverageStatus(input.coverage_status, "partial"), observed_at: observedAt, source_template_id: input.source_template_id ?? "template.items.read_item_summary", payload_ref: input.payload_ref });
+      updateScope(state, { scope_kind: "takes", scope_ref: input.scope_ref ?? "partial", snapshot_id: snapshotId, status: normalizeFreshnessStatus(input.freshness_status, "fresh"), coverage_status: normalizeCoverageStatus(input.coverage_status, "partial"), observed_at: observedAt, source_template_id: input.source_template_id ?? "template.items.read_item_summary", payload_ref: input.payload_ref });
+      return lifecycleResult(state, "upsert_items_takes", observedAt);
+    },
     replaceFx(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
       const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
@@ -718,6 +780,40 @@ export function createAlpha3C3ProjectIndex(options = {}) {
       });
       state.coverage.fx = normalizeCoverageStatus(input.coverage_status, "paged");
       return lifecycleResult(state, "replace_fx", observedAt);
+    },
+    replaceFxForOwner(input = {}) {
+      const observedAt = safeInputIso(input.observed_at, now);
+      const snapshotId = normalizeSnapshotId(input.snapshot_id ?? state.snapshot_id, observedAt);
+      const ownerRef = typeof input.owner_ref === "string" ? input.owner_ref : null;
+      if (!ownerRef) return { ok: false, blockers: [{ code: "OWNER_REF_REQUIRED", message: "replaceFxForOwner requires owner_ref.", recoverable: true }] };
+      applyRefreshLifecycleAndSessionMetadata(state, input);
+      if (state.lifecycle === "stale_session") return staleSessionRefreshRejectedResult(state, "replace_fx_for_owner", observedAt);
+      state.snapshot_id = snapshotId;
+      const nextRows = Array.isArray(input.rows)
+        ? input.rows.map((row) => normalizeFxRow({ ...row, owner_ref: row.owner_ref ?? ownerRef }, {
+            snapshot_id: snapshotId,
+            observed_at: observedAt,
+            freshness_status: input.freshness_status,
+            coverage_status: input.coverage_status,
+            payload_ref: input.payload_ref,
+          })).filter(Boolean)
+        : [];
+      state.rows.fx = [
+        ...state.rows.fx.filter((row) => row.owner_ref !== ownerRef),
+        ...nextRows,
+      ];
+      updateScope(state, {
+        scope_kind: "fx",
+        scope_ref: input.scope_ref ?? ownerRef,
+        snapshot_id: snapshotId,
+        status: normalizeFreshnessStatus(input.freshness_status, "fresh"),
+        coverage_status: normalizeCoverageStatus(input.coverage_status, "partial"),
+        observed_at: observedAt,
+        source_template_id: input.source_template_id ?? "template.fx.list_track_fx_chain",
+        payload_ref: input.payload_ref,
+      });
+      state.coverage.fx = normalizeCoverageStatus(input.coverage_status, "partial");
+      return lifecycleResult(state, "replace_fx_for_owner", observedAt);
     },
     replaceSends(input = {}) {
       const observedAt = safeInputIso(input.observed_at, now);
@@ -1319,9 +1415,11 @@ function updateScope(state, input) {
 
 function normalizeTrackRow(row, defaults) {
   const source = isPlainObject(row) ? row : {};
+  const ref = typeof source.ref === "string" && source.ref ? source.ref : null;
+  if (ref === null) return null;
   return {
     snapshot_id: typeof source.snapshot_id === "string" ? source.snapshot_id : defaults.snapshot_id,
-    ref: typeof source.ref === "string" ? source.ref : null,
+    ref,
     owner_ref: typeof source.owner_ref === "string" ? source.owner_ref : null,
     name: typeof source.name === "string" ? source.name : "",
     index: Number.isInteger(source.index)
@@ -2104,7 +2202,10 @@ function createSqliteBackedProjectIndexAdapter({ resident, database, now }) {
     replaceTracks: persistAfter("replaceTracks"),
     replaceItems: persistAfter("replaceItems"),
     replaceTakes: persistAfter("replaceTakes"),
+    replaceItemsAndTakesForTrack: persistAfter("replaceItemsAndTakesForTrack"),
+    upsertItemsAndTakes: persistAfter("upsertItemsAndTakes"),
     replaceFx: persistAfter("replaceFx"),
+    replaceFxForOwner: persistAfter("replaceFxForOwner"),
     replaceSends: persistAfter("replaceSends"),
     replaceEnvelopes: persistAfter("replaceEnvelopes"),
     replaceMarkersRegions: persistAfter("replaceMarkersRegions"),
