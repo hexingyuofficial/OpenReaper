@@ -2727,3 +2727,66 @@ does not expand C3A claims beyond the two accepted reads.
 Next gate: combined Alpha3.2-C3B save-current and C3C save-as implementation,
 with separate safety assertions but one final review, one full static/package
 gate, and one combined authorized REAPER live acceptance.
+
+### Alpha3.2-C3B+C3C Combined Project Save Window
+
+Status: reopened_for_fix; implementation worker active; 2026-07-11.
+
+Accepted dependencies:
+
+```text
+C1 context: c8ded67 / 2992126
+C2 refs: 1d3afa0 / 8cfa397
+C3A reads: ab0cfb9 / 4a0a5d4
+```
+
+Control-tower acceleration decision: C3B save-current and C3C save-as share one
+implementation window, one final independent review, one full static/package
+gate, and one combined authorized REAPER live run. Their safety assertions and
+claims remain separately auditable. Focused fixes do not repeat full gates.
+
+Authorized templates:
+
+```text
+template.project.save_current_project
+template.project.save_project_as
+```
+
+Save-current must reject an unsaved current project without opening UI, call the
+direct `Main_SaveProject(project,false)` API, preserve the exact current path,
+and verify a clean post-save dirty state. Save-as must use a direct audited
+REAPER API only, accept a strictly preflighted absolute `.RPP` target, reject
+unsafe/symlink/non-directory/non-writable/implicit-overwrite cases, and verify
+the exact post-save path plus clean dirty state. Neither route may add raw Lua,
+action-id, shell, UI, filesystem cleanup, source-media deletion, hardware I/O,
+or a sixth MCP tool.
+
+The implementation worker may change only the exact project template/runtime,
+project bridge handler/registry/generated bridge, package/smoke, and related
+focused test paths named in its control-tower prompt. It may not edit docs,
+architecture/process files, unrelated handlers, or frozen ABI/taxonomy. It does
+not commit and does not run final live acceptance.
+
+Catalog truth must preserve historical Alpha2 at 213 and exact C3A at 2. Any
+new accepted/current-product count must follow actual descriptor composition;
+any frozen ABI literal mismatch is a control-tower blocker, not a worker edit.
+Before combined live evidence, the new write routes must not be labeled
+`live_smoked`. `macro.project.file` and new-project execution remain held.
+
+Final combined live uses the standing disposable fixture authorization:
+
+```text
+/Users/Zhuanz/Untitled/Untitled.RPP
+```
+
+The run must use a fresh evidence root and candidate package/runtime. It will
+exercise save-current and save-as to a fresh evidence-owned `.RPP` target,
+record source and target hashes/mtime/type, overwrite and backup posture,
+current-project path/dirty readback, bridge owner/generation, exact-owned
+transport cleanup including bounded late-result settle, and immediate/delayed
+REAPER plus candidate MCP exit. It must plainly report the final disposable
+fixture state and must not delete recovery evidence.
+
+After both writes pass, the control tower may open the small
+`macro.project.file` wrapper binding as the final C implementation slice; the
+macro remains held until that separate binding and evidence are accepted.
