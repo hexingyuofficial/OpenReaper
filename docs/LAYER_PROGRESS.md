@@ -2851,3 +2851,125 @@ the combined runner to record adjacent backup inventories, source/target
 and candidate MCP immediate/delayed exit audit. It may strengthen package write
 request metadata assertions. No other capability, ABI, architecture, macro, or
 new-project scope is opened.
+
+#### Alpha3.2-C3B+C3C Combined Project Save Acceptance
+
+Status: accepted; 2026-07-11.
+
+Accepted implementation commit:
+
+```text
+070fecd runtime: add live-smoked project file saves
+```
+
+Architecture/process control-tower commits for this window:
+
+```text
+3139351 docs: open combined alpha3.2c3bc save window
+0b240ab docs: approve alpha3.2c3bc route policy fix
+bb1fb38 docs: reconcile alpha3.2c3bc catalog count
+01a62a1 docs: narrow alpha3.2c3bc save-as safety
+```
+
+Accepted templates:
+
+```text
+template.project.save_current_project
+template.project.save_project_as
+```
+
+Catalog/runtime truth is 220 accepted official templates, 213 historical Alpha2
+live templates, 2 exact C3A reads, 2 exact C3B+C3C saves, and 217 composed
+current-product live template ids. Both save templates are accepted/live-smoked.
+The MCP surface remains exactly five tools. `macro.project.file`, new-project,
+and atomic `overwrite=false` save-as remain held.
+
+`save_current_project` refuses an unnamed current project before calling the
+direct API, never opens Save As UI, calls `Main_SaveProject(project,false)`,
+and requires exact unchanged path plus clean/raw-zero dirty readback.
+`save_project_as` calls `Main_SaveProjectEx(project,target,8)` only after bounded
+server and bridge validation. This phase requires explicit `overwrite=true` even
+when the target appears absent; that authorization truthfully covers the
+preflight-to-REAPER dispatch race and does not claim atomic no-clobber. Root,
+home-top-level, non-canonical, symlink, non-directory, non-writable, reserved,
+non-`.RPP`, and non-regular existing targets fail closed. Both writes prove a
+complete-success response budget before mutation.
+
+Executable Fengari handler tests cover unsaved/API/binding/pcall/void-return,
+single direct API call, option bit 8, exact path and dirty mismatch, low-budget
+pre-mutation rejection, and bridge-side overwrite rejection. Final independent
+review closed 2 P1 and 3 P2 findings, then returned PASS with P0-P3 all zero.
+
+Control-tower final gates:
+
+```text
+npm test
+npm run build
+npm run check:recipe-contract
+npm run check:alpha3-2a
+npm run check:alpha3-2c3bc                         # 18/18
+git diff --check
+```
+
+All passed. Static/full-gate evidence:
+
+```text
+/tmp/openreaper-alpha32c3bc-ct-final-20260711T094358Z
+```
+
+The first package attempt hit a transient pre-existing doctor-fixture cleanup
+failure after its package-owned child had already exited. The control tower
+audited that exact PID, did not terminate any unrelated process, and reran only
+the package. The retry passed without `--skip-smoke`; after live promotion a
+fresh accepted package also passed without `--skip-smoke`:
+
+```text
+/tmp/openreaper-alpha32c3bc-ct-final-package-20260711T094358Z/OpenReaper-alpha
+/tmp/openreaper-alpha32c3bc-accepted-package-20260711T095730Z/OpenReaper-alpha
+```
+
+Combined authorized live evidence:
+
+```text
+/tmp/openreaper-alpha32c3bc-live-20260711T095005Z
+/tmp/openreaper-alpha32c3bc-live-20260711T095005Z/evidence-retry2/alpha3-2c3bc-project-file-save.json
+/tmp/openreaper-alpha32c3bc-live-20260711T095005Z/control-tower-live-acceptance.json
+```
+
+The live bridge used owner `openreaper-alpha32c3bc`, generation 1, and the exact
+five-tool surface. Initial path was `/Users/Zhuanz/Untitled/Untitled.RPP` and
+initial dirty state was clean/raw 0. Save-current succeeded with the same exact
+path and clean/raw-zero readback. Save-as succeeded at the canonical target:
+
+```text
+/private/tmp/openreaper-alpha32c3bc-live-20260711T095005Z/targets/Untitled-C3BC-SaveAs.RPP
+```
+
+Final current-project path matched that exact target and remained clean/raw 0.
+The original source was intentionally rewritten by save-current: SHA256 changed
+from `ad67bf20622b3afb449082653564e0d7fc6d12623e306d0fac3b3ef93f478f37`
+to `966e4f6ed6a6124fe3ebe749ebb9e5fd7d8915d2e6bf50a31f77bb0c4208d107`;
+size remained 2287. The retained save-as target is size 2287 with SHA256
+`7dce95aedafd5832979cf0e3194e4036f89e45489db6bffb71309911e3213cfe`.
+No new sibling or `Backups/` backup appeared, source `.DS_Store` metadata/hash
+was unchanged, target `.DS_Store` remained absent, and no render or artifact was
+created. Both source and target are retained as recovery evidence.
+
+The runner removed only its six exact request/result pairs with bounded late
+settle and confirmed empty transport. REAPER was quit through the app menu with
+no prompt; immediate and delayed exact process audits found no REAPER or
+candidate MCP process. One pre-existing `~/.openreaper/current` MCP process was
+observed and left untouched.
+
+Live disclosure: attempt 1 failed before MCP connection or mutation because the
+runner read obsolete heartbeat identity field names; the source hash remained
+unchanged and the target absent. The runner was corrected to
+`active_owner/active_generation` with focused regression. Attempt 2 failed
+before MCP connection or mutation because `/tmp` is a non-canonical alias on
+macOS. Attempt 3 used `/private/tmp` and passed. These failed preflights did not
+execute either save template.
+
+Next gate: bind `macro.project.file` as a plan-only agent-executed child-request
+macro over the four accepted/live-smoked atomic templates. It must not add a
+sixth tool, hidden executor, `call_recipe`, raw action/Lua/shell/UI path, or
+new-project behavior.
