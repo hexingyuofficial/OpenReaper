@@ -3122,6 +3122,39 @@ bounded lower-layer blocker because current templates do not fully express
 whole-project WAV, region-ref OGG with names, selected-item OGG naming, and
 preview-to-execution output naming/collision guarantees.
 
+E-D accepted surface:
+
+- `macro.project.delete_targets` is now runtime-bound as a preview-first,
+  plan-only destructive macro.
+- First pass returns a dry-run preview with exact target counts, target hash,
+  and confirmation token; destructive child requests are emitted only after
+  `dry_run:false` plus matching `confirm_scope`.
+- Supported target kinds are tracks, items, markers, and regions. Takes,
+  automation rows, filesystem/source-media deletion, hardware, devices,
+  unresolved selectors, duplicate refs, and malformed/cross-kind refs fail
+  closed with typed blockers.
+- Confirmed plans emit accepted delete templates plus `macro.project.query`
+  absence-readback requests for affected scopes. The server still does not
+  execute child requests.
+
+E-D evidence:
+
+```text
+Standalone planner prep commit: 7ec56a2
+Runtime/guide integration commit: e4db78c
+Focused E gate: npm run check:alpha3-2e -> 11/11 pass
+Adjacent guide gate: npm run check:alpha3-2a -> pass
+Runtime/discovery gates: npm run check:template-runtime; npm run check:discovery-menu; npm run check:tool-abi -> pass
+Regression gate: npm run check:alpha3-2d -> pass
+Full gate: npm run build -> exit 0
+Whitespace: git diff --check -> exit 0
+```
+
+Remaining E slices: `macro.project.apply_layout`, `macro.routing.apply`, and
+`macro.media.place_assets` still need planner modules and runtime/guide
+integration. `macro.render.targets` remains blocked pending the render-template
+fix decision above.
+
 Accepted dependency baseline:
 
 ```text
