@@ -500,6 +500,10 @@ function bridgeBlockerEnvelope(request, options) {
 function bridgeErrorEnvelope(request, options) {
   const completedAt = safeNowIso(options.now);
   const normalizedRequest = minimalRequest(request);
+  const diagnostics = bridgeFailureDiagnostics({
+    code: options.code,
+    blocker: options.blocker ?? options.details?.blocker,
+  });
   const envelope = {
     contract: FOUNDATION_BRIDGE_CONTRACT,
     id: normalizedRequest.id,
@@ -519,6 +523,7 @@ function bridgeErrorEnvelope(request, options) {
       message: options.message,
       recoverable: Boolean(options.recoverable),
       details: options.details,
+      ...diagnostics,
     },
     undo: undoResult(normalizedRequest),
     verification: verificationResult(normalizedRequest, "skipped"),
@@ -535,6 +540,49 @@ function bridgeErrorEnvelope(request, options) {
   envelope.budget.response_bytes = encodedBytes(envelope);
   validateFoundationBridgeResult(envelope);
   return deepFreeze(envelope);
+}
+
+function bridgeFailureDiagnostics({ code, blocker }) {
+  let failureLayer = null;
+  let recommendedNextAction = {
+    code: "inspect_supported_runtime_status",
+    tool: "ping",
+    input: {},
+    then: "Use only the existing OpenReaper MCP tools and retry after the reported blocker is resolved.",
+  };
+  if (blocker === "live_bridge_request_write_failed" ||
+      blocker === "live_bridge_transport_absent" ||
+      blocker === "reaper_bridge_script_absent" ||
+      blocker === "live_bridge_executor_not_configured") {
+    failureLayer = "transport_write";
+    recommendedNextAction = {
+      code: "check_openreaper_bridge_readiness",
+      tool: "ping",
+      input: {},
+      then: "Retry call_template after ping reports the managed OpenReaper bridge is ready.",
+    };
+  } else if (code === "BRIDGE_TIMEOUT" || blocker === "live_bridge_handshake_failed") {
+    failureLayer = "bridge_timeout";
+    recommendedNextAction = {
+      code: "inspect_before_retry",
+      tool: "ping",
+      input: {},
+      then: "For a mutation, inspect bounded state before retrying; do not blindly replay an uncertain call.",
+    };
+  } else if (blocker === "live_bridge_result_invalid") {
+    failureLayer = "bridge_response";
+    recommendedNextAction = {
+      code: "reconnect_managed_session",
+      tool: "ping",
+      input: {},
+      then: "Retry the supported call_template only after the managed bridge reports ready.",
+    };
+  }
+  return {
+    failure_layer: failureLayer,
+    recommended_next_action: recommendedNextAction,
+    copy_paste_safe_guidance: `OpenReaper MCP recovery (${failureLayer ?? "runtime"}): use ping, get_state, list_templates, list_recipes, or call_template only; do not open transport files or use raw bridge, Lua, shell, or UI execution.`,
+  };
 }
 
 function minimalRequest(request) {

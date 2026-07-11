@@ -42,7 +42,7 @@
     "package:openreaper-alpha": "node scripts/package-openreaper-alpha.mjs",
     "check:layer": "node scripts/check-layer-scope.mjs",
     "build:live-bridge": "node scripts/build-live-bridge.mjs",
-    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes && npm run check:alpha3-d1 && npm run check:alpha3-block2 && npm run check:alpha3-c3 && npm run check:alpha3-c4 && npm run check:alpha3-c5 && npm run check:alpha3-block3 && npm run check:alpha3-d2 && npm run check:alpha3-block5 && npm run check:alpha3-e1 && npm run check:alpha3-block6 && npm run check:alpha3-2a && npm run check:alpha3-2b && npm run check:alpha3-2b3 && npm run check:alpha3-2c1 && npm run check:alpha3-2c2 && npm run check:alpha3-2c3a && npm run check:alpha3-2c3bc && npm run check:alpha3-2d && npm run check:alpha3-2e",
+    "build": "npm run check:layout && npm run check:tool-abi && npm run check:discovery-menu && npm run check:foundation-bridge && npm run check:pack-taxonomy && npm run check:template-authoring && npm run check:template-runtime && npm run check:artifact-state-store && npm run check:recipe-contract && npm run check:user-recipe-authoring && npm run check:official-recipes && npm run check:alpha3-d1 && npm run check:alpha3-block2 && npm run check:alpha3-c3 && npm run check:alpha3-c4 && npm run check:alpha3-c5 && npm run check:alpha3-block3 && npm run check:alpha3-d2 && npm run check:alpha3-block5 && npm run check:alpha3-e1 && npm run check:alpha3-block6 && npm run check:alpha3-2a && npm run check:alpha3-2b && npm run check:alpha3-2b3 && npm run check:alpha3-2c1 && npm run check:alpha3-2c2 && npm run check:alpha3-2c3a && npm run check:alpha3-2c3bc && npm run check:alpha3-2d && npm run check:alpha3-2e && npm run check:alpha3-2f",
     "check:alpha3-2a": "node --test tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs",
     "check:alpha3-2b": "node --test tests/alpha3/alpha3-2b-managed-render-root.test.mjs",
     "check:alpha3-2b3": "node --test tests/alpha3/alpha3-2b3-runtime-doctor-readiness.test.mjs",
@@ -53,7 +53,8 @@
     "check:alpha3-2c3d": "node --test tests/alpha3/alpha3-2c3d-project-file-macro.test.mjs",
     "check:alpha3-2d": "node --test tests/alpha3/alpha3-2d-generic-project-query.test.mjs tests/alpha3/alpha3-2d-project-index-runtime.test.mjs tests/alpha3/alpha3-2d-runtime-stdio-integration.test.mjs",
     "package:openreaper-alpha:project-index-smoke": "node scripts/package-openreaper-alpha.mjs --project-index-smoke-only --skip-zip",
-    "check:alpha3-2e": "node --test tests/alpha3/alpha3-2e-small-macro-spine.test.mjs tests/alpha3/alpha3-2e-project-delete-targets.test.mjs tests/alpha3/alpha3-2e-project-layout.test.mjs tests/alpha3/alpha3-2e-media-place-assets.test.mjs tests/alpha3/alpha3-2e-routing-apply.test.mjs"
+    "check:alpha3-2e": "node --test tests/alpha3/alpha3-2e-small-macro-spine.test.mjs tests/alpha3/alpha3-2e-project-delete-targets.test.mjs tests/alpha3/alpha3-2e-project-layout.test.mjs tests/alpha3/alpha3-2e-media-place-assets.test.mjs tests/alpha3/alpha3-2e-routing-apply.test.mjs",
+    "check:alpha3-2f": "node --test tests/alpha3/alpha3-2f-transport-budget-error-recovery.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"

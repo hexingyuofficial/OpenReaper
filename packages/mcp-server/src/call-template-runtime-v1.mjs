@@ -756,6 +756,14 @@ export const CALL_TEMPLATE_RUNTIME_ALLOWED_REQUEST_FIELDS = Object.freeze([
   "idempotency_key",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_FAILURE_LAYERS = Object.freeze([
+  "server_validation",
+  "transport_write",
+  "bridge_timeout",
+  "bridge_response",
+  "response_budget",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_REQUEST_INVALID",
   "CALL_TEMPLATE_DESCRIPTOR_REJECTED",
@@ -769,6 +777,7 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
   "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
   "CALL_TEMPLATE_PREFLIGHT_FAILED",
+  "RESPONSE_TOO_LARGE",
 ]);
 
 const RUNTIME_ERROR_CODE_SET = new Set(CALL_TEMPLATE_RUNTIME_ERROR_CODES);
@@ -1092,7 +1101,8 @@ export function createCallTemplateRuntime(options = {}) {
       productSurface: { live_gate: live.summary },
     }).list_templates,
     async call_template(request = {}) {
-      return call_template(request);
+      const response = await call_template(request);
+      return enforceRuntimeResponseContract(response, request, now);
     },
     evidence() {
       return cloneJson(retainedEvidence);
@@ -1478,6 +1488,12 @@ function runtimeErrorEnvelope({ id, error, now, budget }) {
       message: normalized.message,
       recoverable: normalized.recoverable,
       ...(normalized.details !== undefined ? { details: normalized.details } : {}),
+      ...runtimeFailureDiagnostics({
+        source: "runtime",
+        code: normalized.code,
+        details: normalized.details,
+        recoverable: normalized.recoverable,
+      }),
     },
     budget: {
       max_response_bytes: budget.max_response_bytes,
@@ -1487,6 +1503,223 @@ function runtimeErrorEnvelope({ id, error, now, budget }) {
   };
   envelope.budget.response_bytes = encodedBytes(envelope);
   return deepFreeze(envelope);
+}
+
+function enforceRuntimeResponseContract(response, request, now) {
+  const budget = safeRuntimeBudget(request?.budget);
+  if (!isPlainObject(response)) {
+    return compactRuntimeErrorEnvelope({
+      id: normalizePossibleId(request?.id),
+      code: "CALL_TEMPLATE_REQUEST_INVALID",
+      message: "call_template runtime returned a non-object response.",
+      recoverable: false,
+      budget,
+      now,
+    });
+  }
+
+  const diagnosed = response.error
+    ? {
+        ...response,
+        error: {
+          ...response.error,
+          ...runtimeFailureDiagnostics(response.error),
+        },
+      }
+    : response;
+  const candidate = withRuntimeResponseBudget(diagnosed, budget, false);
+  if (candidate.budget.response_bytes <= budget.max_response_bytes) {
+    return candidate;
+  }
+
+  return compactRuntimeErrorEnvelope({
+    id: diagnosed.template?.id ?? normalizePossibleId(request?.id),
+    code: "RESPONSE_TOO_LARGE",
+    message: "call_template response exceeded max_response_bytes; retry with a compact budget or bounded fields.",
+    recoverable: true,
+    budget,
+    now,
+    details: {
+      original_response_bytes: candidate.budget.response_bytes,
+      max_response_bytes: budget.max_response_bytes,
+    },
+  });
+}
+
+function withRuntimeResponseBudget(response, budget, truncated) {
+  const candidate = {
+    ...cloneJson(response),
+    budget: {
+      ...(isPlainObject(response.budget) ? response.budget : {}),
+      max_response_bytes: budget.max_response_bytes,
+      response_bytes: 0,
+      truncated: Boolean(truncated || response.budget?.truncated),
+    },
+  };
+  candidate.budget.response_bytes = encodedBytes(candidate);
+  return deepFreeze(candidate);
+}
+
+function compactRuntimeErrorEnvelope({ id, code, message, recoverable, budget, now, details }) {
+  const diagnostics = runtimeFailureDiagnostics({
+    source: "runtime",
+    code,
+    details,
+    recoverable,
+  });
+  const full = {
+    contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
+    ok: false,
+    template: { id: boundedString(id ?? null, 96), pack: null, risk: null },
+    request: null,
+    completed_at: safeNowIso(now),
+    error: {
+      source: "runtime",
+      code,
+      message: boundedString(message, 240),
+      recoverable: Boolean(recoverable),
+      ...(details !== undefined ? { details } : {}),
+      ...diagnostics,
+    },
+    budget: {
+      max_response_bytes: budget.max_response_bytes,
+      response_bytes: 0,
+      truncated: code === "RESPONSE_TOO_LARGE",
+    },
+  };
+  const compact = withRuntimeResponseBudget(full, budget, code === "RESPONSE_TOO_LARGE");
+  if (compact.budget.response_bytes <= budget.max_response_bytes) return compact;
+
+  const minimal = {
+    contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
+    ok: false,
+    error: {
+      source: "runtime",
+      code,
+      message: boundedString(message, 160),
+      recoverable: Boolean(recoverable),
+      failure_layer: diagnostics.failure_layer ?? null,
+      recommended_next_action: compactRecommendedNextAction(code, diagnostics.failure_layer),
+      copy_paste_safe_guidance: compactCopyPasteSafeGuidance(diagnostics.failure_layer),
+    },
+    budget: {
+      max_response_bytes: budget.max_response_bytes,
+      response_bytes: 0,
+      truncated: code === "RESPONSE_TOO_LARGE",
+    },
+  };
+  return withRuntimeResponseBudget(minimal, budget, code === "RESPONSE_TOO_LARGE");
+}
+
+function compactRecommendedNextAction(code, failureLayer) {
+  if (failureLayer === "response_budget" || code === "RESPONSE_TOO_LARGE") {
+    return "Call call_template again with budget.max_items=10 and budget.max_inline_value_bytes=512.";
+  }
+  if (failureLayer === "transport_write") {
+    return "Call ping, then retry call_template after the managed bridge is ready.";
+  }
+  if (failureLayer === "bridge_timeout") {
+    return "Call ping and inspect bounded state before retrying a mutation.";
+  }
+  if (failureLayer === "bridge_response") {
+    return "Call ping, reconnect the managed session if needed, then retry call_template.";
+  }
+  return "Fix the reported call_template request fields, then retry through the MCP tool.";
+}
+
+function compactCopyPasteSafeGuidance(failureLayer) {
+  return `OpenReaper MCP only (${failureLayer ?? "runtime"}); no direct bridge, Lua, shell, or UI execution.`;
+}
+
+function runtimeFailureDiagnostics(error = {}) {
+  const source = error.source;
+  const code = error.code;
+  const details = isPlainObject(error.details) ? error.details : {};
+  const blocker = details.blocker;
+  const failureLayer = runtimeFailureLayer({ source, code, blocker });
+  const action = runtimeRecommendedNextAction({ failureLayer, code, blocker });
+  return {
+    failure_layer: failureLayer,
+    recommended_next_action: action,
+    copy_paste_safe_guidance: runtimeCopyPasteSafeGuidance({ failureLayer, code, blocker }),
+  };
+}
+
+function runtimeFailureLayer({ source, code, blocker }) {
+  if (code === "RESPONSE_TOO_LARGE") return "response_budget";
+  if (code === "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED") return "transport_write";
+  if (blocker === "live_bridge_request_write_failed" ||
+      blocker === "live_bridge_transport_absent" ||
+      blocker === "reaper_bridge_script_absent" ||
+      blocker === "live_bridge_executor_not_configured") {
+    return "transport_write";
+  }
+  if (code === "BRIDGE_TIMEOUT" || blocker === "live_bridge_handshake_failed") {
+    return "bridge_timeout";
+  }
+  if (code === "BRIDGE_RESULT_INVALID" || blocker === "live_bridge_result_invalid" ||
+      code === "BRIDGE_OWNER_MISMATCH" || code === "BRIDGE_GENERATION_MISMATCH") {
+    return "bridge_response";
+  }
+  if ((source === "harness" || source === "runtime") &&
+      (String(code).startsWith("TEMPLATE_") || String(code).startsWith("CALL_TEMPLATE_"))) {
+    return "server_validation";
+  }
+  if (source === "stdio_context" || source === "stdio") return "server_validation";
+  return null;
+}
+
+function runtimeRecommendedNextAction({ failureLayer, code, blocker }) {
+  if (failureLayer === "server_validation") {
+    return {
+      code: "fix_request_and_retry",
+      tool: "call_template",
+      instruction: "Fix the reported id, input, refs, context, or budget fields, then retry call_template through the MCP tool.",
+    };
+  }
+  if (failureLayer === "transport_write") {
+    return {
+      code: "check_openreaper_bridge_readiness",
+      tool: "ping",
+      input: {},
+      then: "Retry call_template after ping reports the managed OpenReaper bridge is ready.",
+    };
+  }
+  if (failureLayer === "bridge_timeout") {
+    return {
+      code: "inspect_before_retry",
+      tool: "ping",
+      input: {},
+      then: "For a mutation, inspect bounded state before retrying; for an idempotent call, retry with the same idempotency_key only after readiness is confirmed.",
+    };
+  }
+  if (failureLayer === "bridge_response") {
+    return {
+      code: "reconnect_managed_session",
+      tool: "ping",
+      input: {},
+      then: "Retry the supported call_template only after the managed bridge reports ready; discard the malformed response.",
+    };
+  }
+  if (failureLayer === "response_budget") {
+    return {
+      code: "retry_compact_response",
+      tool: "call_template",
+      request_patch: { budget: { max_items: 10, max_inline_value_bytes: 512 } },
+      instruction: "Retry call_template with bounded fields, paging, or artifact refs instead of requesting a large inline payload.",
+    };
+  }
+  return {
+    code: "inspect_supported_runtime_status",
+    tool: "ping",
+    input: {},
+    then: "Use only the existing OpenReaper MCP tools and retry after the reported blocker is resolved.",
+  };
+}
+
+function runtimeCopyPasteSafeGuidance({ failureLayer, code, blocker }) {
+  const layer = failureLayer ?? "runtime";
+  return `OpenReaper MCP recovery (${layer}): use ping, get_state, list_templates, list_recipes, or call_template only; do not open transport files or use raw bridge, Lua, shell, or UI execution.`;
 }
 
 function normalizeRuntimeError(error) {
