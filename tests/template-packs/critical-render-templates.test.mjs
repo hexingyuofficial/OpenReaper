@@ -87,6 +87,10 @@ describe("Critical render template descriptors", () => {
 
   it("covers Alpha2 render scopes, formats, settings, and output path metadata as static descriptors", () => {
     const catalog = createTemplateCatalog({ templates: createCriticalRenderTemplates() });
+    const boundedTargets = catalog.require("template.render.render_targets");
+    assert.equal(boundedTargets.bridge.idempotency, "none");
+    assert.equal(boundedTargets.expectedDelta.idempotent, false);
+
     const renderJobs = [
       "template.render.render_item",
       "template.render.render_selected_item",
@@ -139,6 +143,46 @@ describe("Critical render template descriptors", () => {
     assert.equal(path.refs.input[0].kind, "artifact");
     assert.equal(path.outputSchema.properties.absolute_path.type, "string");
     assert.equal(path.artifacts.mode, "metadata");
+  });
+
+  it("describes a bounded project-render target job without a generic render surface", () => {
+    const descriptor = createTemplateCatalog({ templates: createCriticalRenderTemplates() }).require(
+      "template.render.render_targets",
+    );
+
+    assert.equal(descriptor.bridge.operation_family, "run_job");
+    assert.equal(descriptor.bridge.operation_name, "render.targets");
+    assert.equal(descriptor.bridge.capability, "render.targets");
+    assert.equal(descriptor.bridge.idempotency, "none");
+    assert.equal(descriptor.expectedDelta.idempotent, false);
+    assert.equal(descriptor.risk, "write");
+    assert.deepEqual(descriptor.inputSchema.properties.target_kind.enum, [
+      "whole_project",
+      "time_selection",
+      "regions",
+      "selected_items",
+      "explicit_items",
+      "selected_tracks",
+      "explicit_tracks",
+    ]);
+    assert.deepEqual(descriptor.inputSchema.properties.format.enum, ["wav", "ogg"]);
+    assert.deepEqual(descriptor.inputSchema.properties.output_policy, { const: "openreaper_managed_render_root" });
+    assert.deepEqual(descriptor.inputSchema.properties.collision_policy, { const: "fail_if_exists" });
+    assert.deepEqual(descriptor.inputSchema.properties.sample_rate_hz.enum, [44100, 48000]);
+    assert.deepEqual(descriptor.inputSchema.properties.channel_count.enum, [1, 2]);
+    assert.deepEqual(descriptor.inputSchema.properties.wav_bit_depth.enum, [16, 24]);
+    assert.deepEqual(descriptor.inputSchema.properties.ogg_quality.enum, [0.3, 0.5, 0.6, 0.8, 1.0]);
+    assert.deepEqual(descriptor.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
+      ["region_refs", "region", false],
+      ["item_refs", "item", false],
+      ["track_refs", "track", false],
+    ]);
+    assert.deepEqual(descriptor.artifacts.output.map((entry) => entry.schema), [
+      "render.targets_manifest.v1",
+      "render.targets_evidence.v1",
+    ]);
+    assert.equal(JSON.stringify(descriptor).includes("output_path"), false);
+    assert.equal(JSON.stringify(descriptor).includes("output_directory"), false);
   });
 
   it("keeps render scope bounded to region WAV output with artifact refs", () => {

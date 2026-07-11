@@ -134,6 +134,12 @@ import {
   planAlpha3_2EMediaPlaceAssetsMacro,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
 import {
+  createAlpha3_2ERenderTargetsMacroDiscoveryItems,
+  createAlpha3_2ERenderTargetsMacroRuntimeEnvelope,
+  isAlpha3_2ERenderTargetsMacroId,
+  planAlpha3_2ERenderTargetsMacro,
+} from "./alpha3-2e-render-targets-v1.mjs";
+import {
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
   createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
   isAlpha3_2C3DProjectFileMacroId,
@@ -613,6 +619,10 @@ export const CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS = deepFreeze([
   "template.routing.track_mono_or_stereo_button",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS = deepFreeze([
+  "template.render.render_targets",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS = deepFreeze([
   "template.render.output_absolute_path",
   "template.render.output_file_metadata",
@@ -632,6 +642,7 @@ export const CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS = deepF
   "template.render.set_mp3_bitrate_or_quality",
   "template.render.set_ogg_quality_or_compression",
   "template.render.set_render_format",
+  ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS = deepFreeze([
@@ -685,6 +696,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d23_fx_discovery_read", CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS],
   ["d27_analysis_audio", CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS],
   ["d28_small_handlers", CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS],
+  ["d31_render_targets", CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS],
   ["d29_render_output_policy", CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS],
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
   ["alpha3_2c3a_project_file_read", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS],
@@ -702,7 +714,8 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.filter((id) =>
     LIVE_TEMPLATE_GROUPS.some(([, ids]) => ids.includes(id)) &&
-    !CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS.has(id),
+    !CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS.has(id) &&
+    id !== "template.render.render_targets",
   ),
 );
 
@@ -717,6 +730,7 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
 ]);
 
 // Alpha3.2-C3A reads and C3B+C3C saves have control-tower live evidence accepted on 2026-07-11.
@@ -875,6 +889,7 @@ export function createCallTemplateRuntime(options = {}) {
     ...createAlpha3_2EProjectLayoutMacroDiscoveryItems(),
     ...createAlpha3_2ERoutingApplyMacroDiscoveryItems(),
     ...createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems(),
+    ...createAlpha3_2ERenderTargetsMacroDiscoveryItems(),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
     ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
@@ -947,6 +962,19 @@ export function createCallTemplateRuntime(options = {}) {
           idempotency_key_present: normalized.idempotency_key !== undefined,
         });
         const envelope = createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2ERenderTargetsMacroId(id)) {
+        const plan = planAlpha3_2ERenderTargetsMacro(normalized.input, {
+          refs: normalized.refs,
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({
           request: normalized,
           plan,
           now,
@@ -2434,6 +2462,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D23_FX_DISCOVERY_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,

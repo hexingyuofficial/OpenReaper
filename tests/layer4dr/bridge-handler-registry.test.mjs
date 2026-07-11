@@ -281,6 +281,7 @@ const EXTRACTED_D29_RENDER_OUTPUT_POLICY_HANDLERS = Object.freeze(new Map([
   ["template.render.set_mp3_bitrate_or_quality", ["render/d29_render_output_policy_route.lua", "set_mp3_bitrate_or_quality"]],
   ["template.render.set_ogg_quality_or_compression", ["render/d29_render_output_policy_route.lua", "set_ogg_quality_or_compression"]],
   ["template.render.set_render_format", ["render/d29_render_output_policy_route.lua", "set_render_format"]],
+  ["template.render.render_targets", ["render/d31_render_targets_route.lua", "d31_render_targets"]],
 ]));
 const EXTRACTED_D30_PROJECT_CONTAINER_HANDLERS = Object.freeze(new Map([
   ["template.project.create_project_tab", ["project/d30_project_container_route.lua", "create_project_tab"]],
@@ -351,7 +352,7 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 219);
+    assert.equal(REGISTRY.entries.length, 220);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -383,12 +384,12 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 219,
+      entryCount: 220,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 219,
-      handlerModuleCount: 82,
+      extractedHandlerCount: 220,
+      handlerModuleCount: 83,
       routeCount: 33,
-      operationCount: 100,
+      operationCount: 101,
     });
 
     const catalog = createAcceptedOfficialTemplateCatalog();
@@ -753,7 +754,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(219 registered template handler row\(s\); 0 legacy_monolith row\(s\); 219 extracted handler row\(s\); 82 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(220 registered template handler row\(s\); 0 legacy_monolith row\(s\); 220 extracted handler row\(s\); 83 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

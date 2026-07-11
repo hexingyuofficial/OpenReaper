@@ -29,6 +29,7 @@ local A2_ARTIFACT_OPERATIONS = {
   ["run_job:render.m4a"] = true,
   ["run_job:render.opus"] = true,
   ["run_job:render.region_track_filter"] = true,
+  ["run_job:render.targets"] = true,
 }
 
 local A3_ARTIFACT_OPERATIONS = {

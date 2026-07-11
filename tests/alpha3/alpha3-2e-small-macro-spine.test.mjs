@@ -23,7 +23,7 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.apply_layout"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.routing.apply"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.media.place_assets"), false);
-    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.render.targets"), true);
+    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.render.targets"), false);
 
     const runtime = createCallTemplateRuntime();
     const exact = runtime.list_templates({
@@ -42,7 +42,8 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(exact.items[3].capability_truth.support_state, "supported_with_readback");
     assert.equal(exact.items[4].support_status, "plan_only_runtime_bound_preview_first");
     assert.equal(exact.items[4].capability_truth.support_state, "supported_with_readback");
-    assert.equal(exact.items[5].support_status, "contract_only_non_runnable");
+    assert.equal(exact.items[5].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[5].capability_truth.support_state, "blocked");
   });
 
   it("plans a bounded read-only inspect flow over accepted reads and macro.project.query", () => {
@@ -135,9 +136,9 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
         name: "call_template",
         arguments: { id: "macro.media.place_assets", input: { assets: [{ id: "one", path: "/Users/Shared/OpenReaper/one.wav", track_ref: "track:guid:{TRK}", position_seconds: 0 }], dry_run: true } },
       }));
-      const heldResult = parseToolJson(await client.callTool({
+      const renderPreview = parseToolJson(await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.render.targets", input: {} },
+        arguments: { id: "macro.render.targets", input: { target_kind: "whole_project", format: "wav", dry_run: true } },
       }));
       assert.equal(inspectResult.ok, true);
       assert.equal(inspectResult.result.executed, false);
@@ -150,8 +151,9 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       assert.equal(routingPreview.result.preview.target_counts.routes, 1);
       assert.equal(mediaPreview.ok, true);
       assert.equal(mediaPreview.result.preview.target_counts.assets, 1);
-      assert.equal(heldResult.ok, false);
-      assert.equal(heldResult.error?.code ?? heldResult.error_code, "CALL_TEMPLATE_ID_HELD");
+      assert.equal(renderPreview.ok, true);
+      assert.equal(renderPreview.result.mode, "dry_run_preview");
+      assert.deepEqual(renderPreview.result.child_requests, []);
     } finally {
       await client.close();
     }

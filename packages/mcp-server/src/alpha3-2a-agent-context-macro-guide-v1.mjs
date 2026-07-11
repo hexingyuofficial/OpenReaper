@@ -602,98 +602,89 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.render.targets",
     title: "Render declared targets",
-    summary: "Resolve common render target sets, apply bounded format/naming/output policy, render, and verify files/artifacts.",
+    summary: "Preview bounded managed-root WAV/OGG exports and return one audited D31 project-render child request with built-in verification evidence.",
     pack: "render",
     risk: "write",
     entity_kind: "macro.render.targets",
     task_intents: ["render wav", "render region ogg", "render selected items", "export project"],
-    rollout_slice: "3.2-B/E",
+    rollout_slice: "3.2-E",
+    known_blocker: null,
+    implementation_status: "plan_only_runtime_bound_preview_first",
+    runnable: true,
     manual: actionManual({
       when_to_use: [
-        "Render the whole project, time selection, regions, selected/explicit items, or selected/explicit tracks through one bounded entry contract.",
-        "Require deterministic format, output-root, naming, collision, manifest, and verification behavior.",
+        "Render a bounded whole project, time selection, explicit regions, selected/explicit items, or selected/explicit tracks to WAV or OGG.",
+        "Require managed-root output, deterministic handler naming, fail-if-exists collision policy, settings restoration, and verified output artifacts.",
       ],
       when_not_to_use: [
-        "Do not render to an arbitrary unmanaged path or silently fall back to external encoders/processes.",
-        "Do not claim peak/LUFS analysis unless an accepted analysis template produced that evidence.",
+        "Do not provide an arbitrary output path, overwrite route, external encoder, shell/process, raw action/Lua, or hidden executor fallback.",
+        "Do not claim broader format/platform support than the accepted D31 WAV/OGG evidence.",
       ],
       required_readiness: [
-        "Render root readiness must pass independently from bridge readiness.",
-        "Target refs/selectors and bounds must resolve exactly before changing render settings.",
-        "Format/sample-rate/channel/codec and collision policy must be accepted and bounded.",
+        "Managed render-root readiness and live bridge readiness must pass.",
+        "Target kind and canonical refs must match exactly; selected modes use current live selection and explicit modes require matching refs.",
+        "The agent must execute the returned D31 child and retain its manifest/evidence refs before success wording.",
       ],
       input_shape: {
-        targets: "whole_project | time_selection | selected_items | explicit_items | selected_tracks | explicit_tracks | regions | matching_names with exact selectors/refs.",
-        format: "wav | ogg | mp3 | flac | aiff | m4a | opus when accepted by the bounded runtime.",
-        sample_rate: "Optional accepted positive sample rate.",
-        channel_count: "Optional accepted channel count.",
-        codec: "Optional quality/bitrate/compression object appropriate to the selected format.",
-        naming_policy: "Preserve region names or apply a bounded deterministic pattern.",
-        collision_policy: "fail | unique_suffix | explicit_overwrite_confirmation.",
-        output_policy: "Managed render root plus optional relative directory; never arbitrary traversal.",
-        sidecar_manifest: "Boolean.",
-        analysis_policy: "none | basic_metadata | accepted_analysis_only.",
-        dry_run: "Boolean; resolves targets/output paths without rendering.",
+        target_kind: "whole_project | time_selection | regions | selected_items | explicit_items | selected_tracks | explicit_tracks.",
+        format: "wav | ogg.",
+        refs: "Canonical region/item/track refs only for the matching explicit target kind.",
+        sample_rate_hz: "44100 | 48000; defaults to 48000.",
+        channel_count: "1 | 2; defaults to 2.",
+        wav_bit_depth: "16 | 24 for WAV only; defaults to 24.",
+        ogg_quality: "0.3 | 0.5 | 0.6 | 0.8 | 1.0 for OGG only; defaults to 0.5.",
+        output_policy: "openreaper_managed_render_root only.",
+        collision_policy: "fail_if_exists only; overwrite and suffix fallback are forbidden.",
+        max_targets: "Integer from 1 through 16.",
+        dry_run: "Boolean; true returns preview only, false returns one audited mutation child request.",
       },
       preflight_steps: [
-        "Check render-root configuration, writability, managed-path containment, and collision posture.",
-        "Resolve the exact target set and bounds; return empty/ambiguous selection as typed blockers.",
-        "Choose the accepted render route per target kind and validate format/sample-rate/channel/codec options.",
+        "Normalize canonical refs and enforce exact target-kind/ref matching.",
+        "Validate managed-root-only output, fail_if_exists, max_targets, sample rate, channels, and format-specific WAV/OGG settings.",
+        "D31 resolves live targets and checks every expected output/artifact collision before its first render action.",
       ],
       underlying_actions: [
-        "template.render.read_settings",
-        "template.render.resolve_bounds",
-        "template.render.preview_targets",
-        "template.render.read_region_matrix when regions are requested",
-        "template.render.set_render_format and template.render.set_render_sample_rate as needed",
-        "template.render.set_ogg_quality_or_compression or other accepted format-specific setting templates",
-        "template.render.render_region_wav, render_item, render_selected_item, render_track_item, render_selected_tracks, render_ogg/mp3/flac/aiff/m4a/opus according to target/format",
-        "template.render.output_absolute_path and template.render.output_file_metadata",
-        "template.render.create_delivery_report when a sidecar/report is requested",
-        "accepted analysis templates only when analysis_policy requests supported evidence",
+        "template.render.render_targets (single audited D31 mutation child)",
+        "D31 internally uses REAPER project render settings, restores render/selection state, verifies WAV/OGG headers, and emits manifest/evidence artifacts",
       ],
       readback_steps: [
-        "Verify every expected output path exists under the managed render root and collect basic file metadata.",
-        "Match output count/names/durations to the resolved target set and collision policy.",
-        "Return rendered files, artifact refs, warnings, failed targets, and manifest/report refs when requested.",
+        "Require the D31 result to return every output basename/path/size/extension plus manifest and evidence artifact refs.",
+        "Confirm the child reports render-setting and item/track-selection restoration.",
+        "Do not infer success from the macro plan alone; the agent executes and retains the child result.",
       ],
       success_criteria: [
-        "Every successful target has a verified managed output file with basic metadata.",
-        "Output names, format, sample rate/channel posture, and collision handling match the request.",
-        "No unmanaged encoder, shell/process fallback, unsupported analysis claim, or hidden executor was used.",
+        "Dry-run returns a bounded preview and no child request; non-dry-run returns exactly one template.render.render_targets child.",
+        "The executed child verifies every non-empty managed WAV/OGG output and returns compact manifest/evidence refs.",
+        "No arbitrary path, overwrite, external encoder, hidden executor, public call_recipe, raw action/Lua, shell, or UI bypass is exposed.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The universal render macro is not callable until 3.2-B/E."),
         blocker("RENDER_ROOT_NOT_READY", "The managed render root is absent, unwritable, or outside policy."),
-        blocker("TARGET_SET_EMPTY_OR_AMBIGUOUS", "Render targets or bounds cannot be resolved exactly."),
-        blocker("FORMAT_OR_CODEC_UNSUPPORTED", "The selected format/options lack an accepted route."),
-        blocker("OUTPUT_COLLISION", "An existing output conflicts with the selected collision policy."),
-        blocker("OUTPUT_VERIFICATION_FAILED", "Expected rendered files or metadata do not match readback."),
+        blocker("RENDER_TARGET_KIND_OR_REFS_INVALID", "Target kind and canonical refs do not match the strict target contract."),
+        blocker("RENDER_FORMAT_SETTINGS_UNSUPPORTED", "Sample rate, channels, WAV bit depth, or OGG quality is outside the bounded enum."),
+        blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists and fail_if_exists rejected the whole batch before rendering."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, select the exact accepted render template matching one target/format and verify output metadata.",
-        "Repair render-root configuration through supported startup/doctor guidance; do not choose an unmanaged fallback.",
-        "Replace ambiguous selectors with explicit refs or establish a valid time selection/region set.",
-        "Change to an accepted format/collision policy, or request explicit overwrite confirmation when supported.",
-        "On partial output, preserve verified files and retry only failed targets with deterministic names.",
+        "Repair bridge/render-root readiness through supported startup/doctor guidance, then request a fresh plan.",
+        "Repair target_kind and refs; selected modes take no explicit refs and whole/time take no object refs.",
+        "Use only the bounded WAV/OGG settings and a fresh idempotency context; never bypass fail_if_exists.",
+        "After a failure, inspect the D31 restoration/error evidence before retrying.",
       ],
       dry_run_shape: {
         supported: true,
-        required_first_for_overwrite: true,
-        output: ["resolved_targets", "resolved_bounds", "planned_render_routes", "planned_output_paths", "collisions", "estimated_output_count", "typed_blockers"],
+        required_first: true,
+        output: ["normalized_refs", "estimated_output_count", "render_settings", "managed_output_policy", "typed_blockers"],
       },
       resume_or_retry_policy: {
-        resume_from: "verified output manifest plus failed-target rows",
-        retry: "Retry only failed targets after render-root/format/collision repair; preserve deterministic naming.",
-        hard_stop: "Stop on unmanaged output path, unsupported encoder fallback, repeated collision, or verification mismatch.",
+        resume_from: "fresh preview plus retained failed-child evidence",
+        retry: "Retry only after readiness/ref/collision repair with a fresh child request and idempotency key.",
+        hard_stop: "Stop on unmanaged path, overwrite request, explicit-ref mismatch, unsupported setting, or restoration failure.",
       },
       examples: [
-        example("current project WAV", { targets: { kind: "whole_project" }, format: "wav", sample_rate: 48000, channel_count: 2, naming_policy: { pattern: "{project}" }, collision_policy: "fail", output_policy: { root: "managed", directory: "mixes" }, sidecar_manifest: true, analysis_policy: "basic_metadata", dry_run: true }),
-        example("named region OGG", { targets: { kind: "regions", refs: ["region:project:3"] }, format: "ogg", codec: { quality: 0.7 }, naming_policy: { preserve_region_names: true }, collision_policy: "unique_suffix", output_policy: { root: "managed", directory: "regions" }, sidecar_manifest: true, analysis_policy: "none", dry_run: false }),
-        example("selected items OGG", { targets: { kind: "selected_items", one_file_per_item: true }, format: "ogg", sample_rate: 48000, channel_count: 2, naming_policy: { pattern: "{item_name}" }, collision_policy: "unique_suffix", output_policy: { root: "managed", directory: "items" }, sidecar_manifest: false, analysis_policy: "basic_metadata", dry_run: false }),
+        example("whole project WAV preview", { target_kind: "whole_project", format: "wav", sample_rate_hz: 48000, channel_count: 2, wav_bit_depth: 24, dry_run: true }),
+        example("explicit region OGG plan", { target_kind: "regions", refs: ["region:index:3"], format: "ogg", ogg_quality: 0.6, collision_policy: "fail_if_exists", max_targets: 16, dry_run: false }),
       ],
     }),
-  }),
+  })
 ]);
 
 const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
@@ -741,7 +732,7 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"]);
+const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]);
 const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => !RUNTIME_BOUND_PRIMARY_MACRO_IDS.has(entry.id));
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
 const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
@@ -802,7 +793,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, macro.project.apply_layout, macro.routing.apply, and macro.media.place_assets are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
+    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, macro.project.apply_layout, macro.routing.apply, and macro.media.place_assets are supported/runtime-bound plan-only; macro.render.targets is runtime-bound as a plan-only macro over the audited template.render.render_targets child; the audited D31 child is live-evidenced for bounded WAV/OGG targets.",
     recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
   },
   primary_spine: {
@@ -888,58 +879,67 @@ export function createAlpha3_2AAgentContextMacroGuide({ requested_ids = [], miss
 }
 
 export function createAlpha3_2AContractMacroDiscoveryItems() {
-  return CONTRACT_ONLY_DEFINITIONS.map((entry) => deepFreeze({
-    id: entry.id,
-    title: entry.title,
-    summary: entry.summary,
-    pack: entry.pack,
-    lifecycle: "draft",
-    risk: entry.risk,
-    entity_kind: entry.entity_kind,
-    tags: ["macro", "alpha3_2a", "agent_context", "contract_only", entry.pack],
-    kind: "macro_contract",
-    action_kind: "macro",
-    macro_kind: "alpha3_2a_contract_only",
-    menu_group: entry.guide_tier === "secondary" ? "secondary_contract" : "primary_spine_contract",
-    execution_shape: "contract_only_non_runnable",
-    user_label: entry.title,
-    task_intents: entry.task_intents,
-    support_status: "contract_only_non_runnable",
-    support_state: "blocked",
-    exists_in_catalog: false,
-    live_runnable_now: false,
-    evidence_level: "contract_only",
-    known_blocker: entry.known_blocker,
-    allowed_live_group: null,
-    guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
-    guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
-    guide_tier: entry.guide_tier,
-    inputSchema: {
-      type: "object",
-      description: "Future macro input shape. This Alpha3.2-A entry is contract-only and cannot be executed through call_template.",
-      additionalProperties: true,
-      properties: Object.fromEntries(Object.keys(entry.manual.input_shape).map((field) => [field, { description: entry.manual.input_shape[field] }])),
-    },
-    outputSchema: {
-      type: "object",
-      description: "Future bounded macro result. No runtime result exists before the named Alpha3.2 implementation slice.",
-    },
-    examples: entry.manual.examples.map((item) => ({ name: item.name, input: item.input, expected: "contract_only_non_runnable" })),
-    expectedDelta: {
-      kind: "none",
-      summary: "Discovery/manual contract only; call_template must reject this id until a later accepted implementation binds it.",
-    },
-    example_call_shape: {
-      discovery_tool: "list_templates",
-      discovery_request: { ids: [entry.id] },
-      call_template: "not_available",
-      blocker: entry.known_blocker,
-    },
-    output_summary_shape: {
-      current: "action_manual_only",
-      future: "bounded macro result with refs/readback/blockers after the named implementation slice",
-    },
-  }));
+  return CONTRACT_ONLY_DEFINITIONS.map((entry) => {
+    const renderPending = entry.id === "macro.render.targets";
+    return deepFreeze({
+      id: entry.id,
+      title: entry.title,
+      summary: entry.summary,
+      pack: entry.pack,
+      lifecycle: renderPending ? "experimental" : "draft",
+      risk: entry.risk,
+      entity_kind: entry.entity_kind,
+      tags: ["macro", "alpha3_2a", "agent_context", renderPending ? "plan_only_runtime_binding_pending" : "contract_only", entry.pack],
+      kind: renderPending ? "official_macro_plan" : "macro_contract",
+      action_kind: "macro",
+      macro_kind: renderPending ? "alpha3_2e_plan_only_pending" : "alpha3_2a_contract_only",
+      menu_group: entry.guide_tier === "secondary" ? "secondary_contract" : "primary_spine_contract",
+      execution_shape: renderPending ? "plan_only_agent_executed_child_requests" : "contract_only_non_runnable",
+      user_label: entry.title,
+      task_intents: entry.task_intents,
+      support_status: renderPending ? "plan_only_runtime_binding_pending" : "contract_only_non_runnable",
+      support_state: "blocked",
+      exists_in_catalog: false,
+      live_runnable_now: false,
+      evidence_level: renderPending ? "planner_static_no_live_evidence" : "contract_only",
+      known_blocker: entry.known_blocker,
+      allowed_live_group: null,
+      guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+      guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+      guide_tier: entry.guide_tier,
+      inputSchema: {
+        type: "object",
+        description: renderPending
+          ? "Standalone plan-only macro input shape; lower-layer/runtime binding is pending and this entry is not live-callable."
+          : "Future macro input shape. This Alpha3.2-A entry is contract-only and cannot be executed through call_template.",
+        additionalProperties: true,
+        properties: Object.fromEntries(Object.keys(entry.manual.input_shape).map((field) => [field, { description: entry.manual.input_shape[field] }])),
+      },
+      outputSchema: {
+        type: "object",
+        description: renderPending
+          ? "Bounded planner result with preview, preflight, one render_targets mutation child, and output readback guidance; no server executor exists."
+          : "Future bounded macro result. No runtime result exists before the named Alpha3.2 implementation slice.",
+      },
+      examples: entry.manual.examples.map((item) => ({ name: item.name, input: item.input, expected: renderPending ? "plan_only_runtime_binding_pending" : "contract_only_non_runnable" })),
+      expectedDelta: {
+        kind: renderPending ? "plan_only_runtime_binding_pending" : "none",
+        summary: renderPending
+          ? "Standalone planner/manual only; control tower must bind the lower-layer route and separately accept live evidence before runtime dispatch or support wording."
+          : "Discovery/manual contract only; call_template must reject this id until a later accepted implementation binds it.",
+      },
+      example_call_shape: {
+        discovery_tool: "list_templates",
+        discovery_request: { ids: [entry.id] },
+        call_template: "not_available",
+        blocker: entry.known_blocker,
+      },
+      output_summary_shape: {
+        current: renderPending ? "plan_preview_and_child_guidance_only" : "action_manual_only",
+        future: "bounded macro result with refs/readback/blockers after the named implementation slice",
+      },
+    });
+  });
 }
 
 export function isAlpha3_2AContractOnlyMacroId(id) {
@@ -1045,7 +1045,7 @@ function compactPrimaryUnderlyingActions(id) {
     "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.tracks.read_folder_structure"],
     "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.read_track_routing"],
     "macro.media.place_assets": ["template.media.probe_file", "template.tracks.resolve_track_ref", "template.media.import_file_to_track", "template.items.read_item_summary"],
-    "macro.render.targets": ["template.render.preview_targets", "template.render.resolve_bounds", "template.render.render_region_wav", "template.render.render_ogg"],
+    "macro.render.targets": ["template.render.render_targets"],
   })[id] ?? null;
 }
 

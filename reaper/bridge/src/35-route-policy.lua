@@ -168,6 +168,7 @@ local D29_RENDER_JOB_OPERATIONS = {
   ["run_job:render.m4a"] = { pack = "render", risk = "write" },
   ["run_job:render.opus"] = { pack = "render", risk = "write" },
   ["run_job:render.region_track_filter"] = { pack = "render", risk = "write" },
+  ["run_job:render.targets"] = { pack = "render", risk = "write" },
 }
 
 local D30_PROJECT_CONTAINER_CAPABILITIES = {
@@ -440,8 +441,12 @@ local function template_execute_write_capability(request, operation_key)
     or alpha3_2c3bc_project_file_save_capability(request, operation_key)
 end
 
+local function required_undo_capability(request, operation_key)
+  return operation_key == "run_job:render.targets" or template_execute_write_capability(request, operation_key)
+end
+
 local function open_required_undo_block(request, operation_key)
-  if not template_execute_write_capability(request, operation_key) then
+  if not required_undo_capability(request, operation_key) then
     return
   end
   if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
@@ -457,7 +462,7 @@ local function open_required_undo_block(request, operation_key)
 end
 
 local function close_required_undo_block(request, operation_key)
-  if not template_execute_write_capability(request, operation_key) then
+  if not required_undo_capability(request, operation_key) then
     return
   end
   if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
@@ -909,6 +914,10 @@ local function validate_request(request)
   elseif d29_render_settings_write_operation then
     if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL and not is_string(request.idempotency_key) then
       return false, "D29 render settings write idempotency_key must be a string when present."
+    end
+  elseif operation_key == "run_job:render.targets" then
+    if request.idempotency_key ~= nil and request.idempotency_key ~= JSON_NULL then
+      return false, "D31 render targets does not accept an idempotency_key; each request has a fresh managed output identity."
     end
   elseif d29_render_job then
     if not is_string(request.idempotency_key) then

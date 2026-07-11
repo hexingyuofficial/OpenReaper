@@ -1811,6 +1811,22 @@
       ]
     },
     {
+      "template_id": "template.render.render_targets",
+      "operation": {
+        "family": "run_job",
+        "name": "render.targets"
+      },
+      "pack": "render",
+      "risk": "write",
+      "route": "d29-render-output-policy-handlers",
+      "handler_file": "render/d31_render_targets_route.lua",
+      "handler_export": "d31_render_targets",
+      "artifact_policy": "write",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.project.create_project_tab",
       "operation": {
         "family": "run_command",

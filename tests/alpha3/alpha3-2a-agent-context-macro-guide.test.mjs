@@ -154,7 +154,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
             ? "plan_only_runtime_bound"
             : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(row.id)
               ? "plan_only_runtime_bound_preview_first"
-              : "contract_only_non_runnable",
+              : row.id === "macro.render.targets"
+                ? "plan_only_runtime_bound_preview_first"
+                : "contract_only_non_runnable",
       );
       assert.deepEqual(Object.keys(row.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       for (const field of ALPHA3_2A_ACTION_MANUAL_FIELDS) {
@@ -177,7 +179,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
                 ? "ROUTING_APPLY_PREVIEW_REQUIRED"
                 : row.id === "macro.media.place_assets"
                   ? "MEDIA_PLACE_ASSETS_PREVIEW_REQUIRED"
-                  : "CONTRACT_ONLY";
+                  : row.id === "macro.render.targets"
+                    ? "RENDER_ROOT_NOT_READY"
+                    : "CONTRACT_ONLY";
       assert.equal(row.action_manual.common_blockers.includes(expectedBlocker), true, `${row.id} expected ${expectedBlocker}`);
       assert.equal(row.action_manual.examples.requested_expansion, true);
     }
@@ -216,15 +220,17 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.inspect",
     ]);
     for (const expansion of expansions.items) {
-      const runtimeBound = ["macro.project.file", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(expansion.id);
+      const runtimeBound = ["macro.project.file", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"].includes(expansion.id);
       assert.equal(expansion.runnable, runtimeBound);
       assert.equal(
         expansion.implementation_status,
-        ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(expansion.id)
+        expansion.id === "macro.render.targets"
           ? "plan_only_runtime_bound_preview_first"
-          : runtimeBound
-            ? "plan_only_runtime_bound"
-            : "contract_only_non_runnable",
+          : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(expansion.id)
+            ? "plan_only_runtime_bound_preview_first"
+            : runtimeBound
+              ? "plan_only_runtime_bound"
+              : "contract_only_non_runnable",
       );
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
@@ -389,7 +395,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       },
     });
 
-    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(id)));
+    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"].includes(id)));
     for (const id of ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS) {
       const result = await runtime.call_template({ id, input: {} });
       assert.equal(result.ok, false);
@@ -485,9 +491,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
         name: "call_template",
         arguments: { id: "macro.index_status", input: { scope: "project" } },
       });
-      const heldResult = await client.callTool({
+      const renderResult = await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.render.targets", input: {} },
+        arguments: { id: "macro.render.targets", input: { target_kind: "whole_project", format: "wav", dry_run: true } },
       });
       const inspectResult = await client.callTool({
         name: "call_template",
@@ -499,7 +505,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       const recipes = parseToolJson(recipesResult);
       const exact = parseToolJson(exactResult);
       const legacy = parseToolJson(legacyResult);
-      const held = parseToolJson(heldResult);
+      const render = parseToolJson(renderResult);
       const inspect = parseToolJson(inspectResult);
       const guides = [
         ping.product_surface.agent_context_macro_guide,
@@ -534,8 +540,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(legacy.template.id, "macro.index_status");
       assert.equal(legacy.error?.code ?? legacy.error_code, "CALL_TEMPLATE_ID_REPLACED");
       assert.equal(legacy.error?.details?.replacement, "macro.project.query");
-      assert.equal(held.ok, false);
-      assert.equal(held.error?.code ?? held.error_code, "CALL_TEMPLATE_ID_HELD");
+      assert.equal(render.ok, true);
+      assert.equal(render.template.id, "macro.render.targets");
+      assert.equal(render.result.executed, false);
+      assert.equal(render.result.mode, "dry_run_preview");
+      assert.deepEqual(render.result.child_requests, []);
       assert.equal(inspect.ok, true);
       assert.equal(inspect.template.id, "macro.project.inspect");
       assert.equal(inspect.result.executed, false);

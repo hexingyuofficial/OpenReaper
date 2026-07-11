@@ -48,6 +48,7 @@ const D29_RENDER_JOB_OPERATION_KEYS = Object.freeze([
   "render.region_track_filter",
   "render.selected_item",
   "render.selected_tracks",
+  "render.targets",
   "render.track_item",
   "template.execute",
 ].map((operation) => `run_job:${operation}`));

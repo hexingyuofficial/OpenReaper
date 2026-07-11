@@ -253,8 +253,8 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
     assert.equal(exact.items[0].capability_truth.live_runnable_now, false);
     assert.equal(exact.items[0].current_status, "needs_confirmation");
     assert.equal(projectFileRows.length, 1);
-    assert.equal(runtime.accepted_catalog.size, 220);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 220);
+    assert.equal(runtime.accepted_catalog.size, 221);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 221);
     assert.equal(Buffer.byteLength(JSON.stringify(defaultMenu)) <= 98_304, true);
   });
 

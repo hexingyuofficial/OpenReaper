@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 219,
+    "entryCount": 220,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 219,
-    "handlerModuleCount": 82,
+    "extractedHandlerCount": 220,
+    "handlerModuleCount": 83,
     "routeCount": 33,
-    "operationCount": 100
+    "operationCount": 101
   },
   "routes": [
     {
@@ -484,9 +484,9 @@
     },
     {
       "route": "d29-render-output-policy-handlers",
-      "template_count": 18,
-      "handler_module_count": 1,
-      "operation_count": 18,
+      "template_count": 19,
+      "handler_module_count": 2,
+      "operation_count": 19,
       "packs": [
         "render"
       ],
@@ -520,7 +520,8 @@
         "template.render.set_flac_compression",
         "template.render.set_mp3_bitrate_or_quality",
         "template.render.set_ogg_quality_or_compression",
-        "template.render.set_render_format"
+        "template.render.set_render_format",
+        "template.render.render_targets"
       ]
     },
     {

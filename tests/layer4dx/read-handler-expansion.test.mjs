@@ -299,6 +299,7 @@ describe("4D.x Wave 1A read-handler expansion", () => {
         "render.region_wav",
         "render.selected_item",
         "render.selected_tracks",
+        "render.targets",
         "render.track_item",
         "template.execute",
       ].sort(),

@@ -50,6 +50,7 @@ const D29_RENDER_JOB_OPERATIONS = Object.freeze([
   "render.region_track_filter",
   "render.selected_item",
   "render.selected_tracks",
+  "render.targets",
   "render.track_item",
   "template.execute",
 ]);

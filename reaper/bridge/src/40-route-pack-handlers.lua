@@ -1432,6 +1432,10 @@ local ALLOWED_OPERATIONS = {
     pack = "render",
     handler = render_region_with_track_filter,
   },
+  ["run_job:render.targets"] = {
+    pack = "render",
+    handler = d31_render_targets,
+  },
   ["run_job:render.delivery_report.create"] = {
     pack = "render",
     handler = create_delivery_report,
