@@ -776,6 +776,17 @@ const ALPHA3_2A_DISTINCT_LEGACY_IDS = deepFreeze([
   "macro.set_stock_plugin_controls",
 ]);
 
+export const ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER = deepFreeze({
+  status: "deferred",
+  proposed_id: "macro.controls.set",
+  public_runtime: false,
+  public_discovery: false,
+  surface: "secondary_on_demand",
+  retained_secondary_ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
+  blocker: "cross_target_kind_input_refs_verification_contract_not_high_confidence",
+  reason: "Consolidation is deferred because cross-target-kind input/refs/verification has not yet formed a single high-confidence contract across track/item/take/transport/send/MIDI/stock-plugin targets; exposing macro.controls.set now would create a second public surface alongside the existing secondary macros.",
+});
+
 const COMPACT_GUIDE = deepFreeze({
   contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -813,6 +824,7 @@ const COMPACT_GUIDE = deepFreeze({
     rows: ALPHA3_2A_SECONDARY_MACRO_ROWS,
     expansion_hint: "Exact ids keep legacy item fields unchanged; contract manuals appear here.",
   },
+  control_consolidation: ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER,
   common_task_routing: [
     route("inspect project", "macro.project.inspect", "Use accepted reads now, including the exact path and dirty-state templates."),
     route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Use the generic bounded planner; agent runs refresh children and runtime must observe readback."),
@@ -839,7 +851,7 @@ const COMPACT_GUIDE = deepFreeze({
     distinct_legacy: {
       ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
       blockers: [
-        "Control consolidation is not ready; controls remain secondary.",
+        ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER.reason,
         "MIDI controls remain lifecycle/evidence blocked.",
         "Stock-plugin support remains evidence-bound.",
       ],
@@ -1111,6 +1123,7 @@ function compactText(value, maxChars) {
 function secondaryRow(id, purpose, safety_tier, status, when_to_expand) {
   return {
     id,
+    surface: "secondary_on_demand",
     purpose: compactText(purpose, 30),
     safety_tier,
     status: ({

@@ -15,6 +15,7 @@ import {
   ALPHA3_2A_DEFAULT_PRODUCT_SURFACE_BASELINE_MAX_BYTES,
   ALPHA3_2A_EXACT_MANUAL_MAX_BYTES,
   ALPHA3_2A_PRIMARY_MACRO_IDS,
+  ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER,
   ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE,
   ALPHA3_2A_PROJECT_QUERY_ENTITIES,
   ALPHA3_2A_REQUESTED_EXPANSIONS_CONTRACT,
@@ -318,6 +319,46 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(portfolio.distinct_legacy.ids, EXPECTED_DISTINCT_LEGACY_IDS);
     assert.equal(portfolio.distinct_legacy.blockers.length >= 3, true);
     assert.equal(portfolio.distinct_legacy.blockers.every((blocker) => blocker.length > 0), true);
+  });
+
+  it("defers control consolidation without widening the primary or default guide expansion surface", () => {
+    const runtime = createCallTemplateRuntime();
+    const guide = createAlpha3_2AAgentContextMacroGuide();
+    const defaultMenu = runtime.list_templates();
+    const defaultGuide = defaultMenu.product_surface.agent_context_macro_guide;
+    const exactControls = runtime.list_templates({
+      ids: EXPECTED_DISTINCT_LEGACY_IDS,
+      fields: ["id"],
+    });
+    const proposed = runtime.list_templates({
+      ids: ["macro.controls.set"],
+      fields: ["id"],
+    });
+
+    assert.deepEqual(guide.control_consolidation, ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER);
+    assert.equal(guide.control_consolidation.status, "deferred");
+    assert.equal(guide.control_consolidation.proposed_id, "macro.controls.set");
+    assert.equal(guide.control_consolidation.public_runtime, false);
+    assert.equal(guide.control_consolidation.public_discovery, false);
+    assert.equal(guide.control_consolidation.surface, "secondary_on_demand");
+    assert.match(guide.control_consolidation.reason, /cross-target-kind.*input\/refs\/verification/i);
+    assert.match(guide.control_consolidation.reason, /single high-confidence contract/i);
+    assert.match(guide.control_consolidation.reason, /second public surface/i);
+    assert.deepEqual(guide.secondary_menu.rows.filter((row) => EXPECTED_DISTINCT_LEGACY_IDS.includes(row.id)).map((row) => row.surface), [
+      "secondary_on_demand",
+      "secondary_on_demand",
+      "secondary_on_demand",
+      "secondary_on_demand",
+      "secondary_on_demand",
+      "secondary_on_demand",
+      "secondary_on_demand",
+    ]);
+    assert.equal(guide.primary_spine.rows.some((row) => EXPECTED_DISTINCT_LEGACY_IDS.includes(row.id)), false);
+    assert.equal(defaultGuide.requested_expansions.items.some((item) => EXPECTED_DISTINCT_LEGACY_IDS.includes(item.id)), false);
+    assert.deepEqual(exactControls.items.map((item) => item.id), EXPECTED_DISTINCT_LEGACY_IDS);
+    assert.deepEqual(exactControls.product_surface.agent_context_macro_guide.requested_expansions.items, []);
+    assert.deepEqual(proposed.items, []);
+    assert.deepEqual(proposed.missing_ids, ["macro.controls.set"]);
   });
 
   it("enforces the compact default 96-KiB budget while preserving the guide", () => {
