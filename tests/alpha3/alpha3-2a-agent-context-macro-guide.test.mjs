@@ -151,7 +151,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
           ? "supported_runtime_bound_plan_only"
           : row.id === "macro.project.inspect"
             ? "plan_only_runtime_bound"
-            : "contract_only_non_runnable",
+            : row.id === "macro.project.delete_targets"
+              ? "plan_only_runtime_bound_preview_first"
+              : "contract_only_non_runnable",
       );
       assert.deepEqual(Object.keys(row.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       for (const field of ALPHA3_2A_ACTION_MANUAL_FIELDS) {
@@ -205,9 +207,16 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.inspect",
     ]);
     for (const expansion of expansions.items) {
-      const runtimeBound = ["macro.project.file", "macro.project.inspect"].includes(expansion.id);
+      const runtimeBound = ["macro.project.file", "macro.project.inspect", "macro.project.delete_targets"].includes(expansion.id);
       assert.equal(expansion.runnable, runtimeBound);
-      assert.equal(expansion.implementation_status, runtimeBound ? "plan_only_runtime_bound" : "contract_only_non_runnable");
+      assert.equal(
+        expansion.implementation_status,
+        expansion.id === "macro.project.delete_targets"
+          ? "plan_only_runtime_bound_preview_first"
+          : runtimeBound
+            ? "plan_only_runtime_bound"
+            : "contract_only_non_runnable",
+      );
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
     }
@@ -331,7 +340,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       },
     });
 
-    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect"].includes(id)));
+    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect", "macro.project.delete_targets"].includes(id)));
     for (const id of ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS) {
       const result = await runtime.call_template({ id, input: {} });
       assert.equal(result.ok, false);
@@ -429,7 +438,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       });
       const heldResult = await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.project.delete_targets", input: {} },
+        arguments: { id: "macro.project.apply_layout", input: {} },
       });
       const inspectResult = await client.callTool({
         name: "call_template",

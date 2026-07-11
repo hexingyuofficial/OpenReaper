@@ -19,20 +19,23 @@ const EXPECTED_TOOLS = ["call_template", "get_state", "list_recipes", "list_temp
 describe("Alpha3.2-E small macro spine: project inspect", () => {
   it("publishes macro.project.inspect as plan-only runtime-bound while leaving write-side spine entries held", () => {
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.inspect"), false);
-    for (const id of ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]) {
+    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.delete_targets"), false);
+    for (const id of ["macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]) {
       assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes(id), true, id);
     }
 
     const runtime = createCallTemplateRuntime();
     const exact = runtime.list_templates({
-      ids: ["macro.project.inspect", "macro.project.delete_targets"],
+      ids: ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout"],
       fields: ["id", "capability_truth"],
     });
-    assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.inspect", "macro.project.delete_targets"]);
+    assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout"]);
     assert.equal(exact.items[0].support_status, "plan_only_runtime_bound");
     assert.equal(exact.items[0].capability_truth.support_state, "supported");
     assert.equal(exact.items[0].execution_shape, "plan_only_agent_executed_child_requests");
-    assert.equal(exact.items[1].support_status, "contract_only_non_runnable");
+    assert.equal(exact.items[1].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[1].capability_truth.support_state, "supported_with_confirmation");
+    assert.equal(exact.items[2].support_status, "contract_only_non_runnable");
   });
 
   it("plans a bounded read-only inspect flow over accepted reads and macro.project.query", () => {
@@ -109,12 +112,19 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
         name: "call_template",
         arguments: { id: "macro.project.inspect", input: { include: ["project_path", "dirty_state"] } },
       }));
+      const deletePreview = parseToolJson(await client.callTool({
+        name: "call_template",
+        arguments: { id: "macro.project.delete_targets", input: { refs: { items: ["item:guid:{ITEM-A}"] }, dry_run: true } },
+      }));
       const heldResult = parseToolJson(await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.project.delete_targets", input: {} },
+        arguments: { id: "macro.project.apply_layout", input: {} },
       }));
       assert.equal(inspectResult.ok, true);
       assert.equal(inspectResult.result.executed, false);
+      assert.equal(deletePreview.ok, true);
+      assert.equal(deletePreview.result.preview.total_count, 1);
+      assert.equal(deletePreview.result.typed_blockers[0].code, "CONFIRM_SCOPE_REQUIRED");
       assert.equal(heldResult.ok, false);
       assert.equal(heldResult.error?.code ?? heldResult.error_code, "CALL_TEMPLATE_ID_HELD");
     } finally {
