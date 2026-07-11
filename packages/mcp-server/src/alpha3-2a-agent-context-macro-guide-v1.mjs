@@ -78,6 +78,9 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     entity_kind: "macro.project.inspect",
     task_intents: ["inspect project", "show selected context", "check project readiness"],
     rollout_slice: "3.2-C/E",
+    known_blocker: null,
+    implementation_status: "plan_only_runtime_bound",
+    runnable: true,
     manual: actionManual({
       when_to_use: [
         "Inspect accepted identity/selection/refs plus the accepted exact project path and dirty-state reads.",
@@ -726,7 +729,8 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => entry.id !== "macro.project.query");
+const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query"]);
+const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => !RUNTIME_BOUND_PRIMARY_MACRO_IDS.has(entry.id));
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
 const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
 const GUIDE_BY_ID = new Map(GUIDE_DEFINITIONS.map((entry) => [entry.id, entry]));
@@ -775,7 +779,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; macro.project.query is supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
+    macro: "Small product operation; macro.project.inspect and macro.project.query are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
     recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
   },
   primary_spine: {

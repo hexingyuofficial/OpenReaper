@@ -104,6 +104,12 @@ import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
 import {
+  createAlpha3_2EProjectInspectMacroDiscoveryItems,
+  createAlpha3_2EProjectInspectMacroRuntimeEnvelope,
+  isAlpha3_2EProjectInspectMacroId,
+  planAlpha3_2EProjectInspectMacro,
+} from "./alpha3-2e-small-macro-spine-v1.mjs";
+import {
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
   createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
   isAlpha3_2C3DProjectFileMacroId,
@@ -831,6 +837,7 @@ export function createCallTemplateRuntime(options = {}) {
   const legacyProjectIndexCompatibilityDiscovery = createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog })
     .filter((item) => item.id === "macro.selected_context");
   const executableDiscoveryTemplates = [
+    ...createAlpha3_2EProjectInspectMacroDiscoveryItems(),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
     ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
@@ -845,6 +852,23 @@ export function createCallTemplateRuntime(options = {}) {
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (isAlpha3_2EProjectInspectMacroId(id)) {
+        const plan = planAlpha3_2EProjectInspectMacro(normalized.input, {
+          refs_provided: Array.isArray(normalized.refs)
+            ? normalized.refs.length > 0
+            : isPlainObject(normalized.refs)
+              ? Object.keys(normalized.refs).length > 0
+              : normalized.refs !== undefined && normalized.refs !== null,
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2EProjectInspectMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       if (isAlpha3_2C3DProjectFileMacroId(id)) {
         const plan = planAlpha3_2C3DProjectFileMacro(normalized.input, {
           refs_provided: Array.isArray(normalized.refs)

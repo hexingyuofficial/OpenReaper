@@ -147,7 +147,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     for (const row of guide.primary_spine.rows) {
       assert.equal(
         row.implementation_status,
-        row.id === "macro.project.query" ? "supported_runtime_bound_plan_only" : "contract_only_non_runnable",
+        row.id === "macro.project.query"
+          ? "supported_runtime_bound_plan_only"
+          : row.id === "macro.project.inspect"
+            ? "plan_only_runtime_bound"
+            : "contract_only_non_runnable",
       );
       assert.deepEqual(Object.keys(row.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       for (const field of ALPHA3_2A_ACTION_MANUAL_FIELDS) {
@@ -158,10 +162,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(row.action_manual.underlying_actions.length > 0, true);
       assert.equal(row.action_manual.readback_steps.length > 0, true);
       assert.equal(row.action_manual.success_criteria.length > 0, true);
-      assert.equal(
-        row.action_manual.common_blockers.includes(row.id === "macro.project.query" ? "INDEX_NOT_READY" : "CONTRACT_ONLY"),
-        true,
-      );
+      const expectedBlocker = row.id === "macro.project.query"
+        ? "INDEX_NOT_READY"
+        : row.id === "macro.project.inspect"
+          ? "BRIDGE_NOT_READY"
+          : "CONTRACT_ONLY";
+      assert.equal(row.action_manual.common_blockers.includes(expectedBlocker), true);
       assert.equal(row.action_manual.examples.requested_expansion, true);
     }
   });
@@ -199,9 +205,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.inspect",
     ]);
     for (const expansion of expansions.items) {
-      const projectFile = expansion.id === "macro.project.file";
-      assert.equal(expansion.runnable, projectFile);
-      assert.equal(expansion.implementation_status, projectFile ? "plan_only_runtime_bound" : "contract_only_non_runnable");
+      const runtimeBound = ["macro.project.file", "macro.project.inspect"].includes(expansion.id);
+      assert.equal(expansion.runnable, runtimeBound);
+      assert.equal(expansion.implementation_status, runtimeBound ? "plan_only_runtime_bound" : "contract_only_non_runnable");
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
     }
@@ -325,7 +331,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       },
     });
 
-    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => id !== "macro.project.query"));
+    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect"].includes(id)));
     for (const id of ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS) {
       const result = await runtime.call_template({ id, input: {} });
       assert.equal(result.ok, false);
@@ -423,7 +429,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       });
       const heldResult = await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.project.inspect", input: {} },
+        arguments: { id: "macro.project.delete_targets", input: {} },
+      });
+      const inspectResult = await client.callTool({
+        name: "call_template",
+        arguments: { id: "macro.project.inspect", input: { include: ["project_path", "dirty_state"] } },
       });
 
       const ping = parseToolJson(pingResult);
@@ -432,6 +442,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       const exact = parseToolJson(exactResult);
       const legacy = parseToolJson(legacyResult);
       const held = parseToolJson(heldResult);
+      const inspect = parseToolJson(inspectResult);
       const guides = [
         ping.product_surface.agent_context_macro_guide,
         templates.product_surface.agent_context_macro_guide,
@@ -467,6 +478,13 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(legacy.error?.details?.replacement, "macro.project.query");
       assert.equal(held.ok, false);
       assert.equal(held.error?.code ?? held.error_code, "CALL_TEMPLATE_ID_HELD");
+      assert.equal(inspect.ok, true);
+      assert.equal(inspect.template.id, "macro.project.inspect");
+      assert.equal(inspect.result.executed, false);
+      assert.deepEqual(inspect.result.child_requests.map((request) => request.id), [
+        "template.project.read_current_project_path",
+        "template.project.read_dirty_state",
+      ]);
     } finally {
       await client.close();
     }
