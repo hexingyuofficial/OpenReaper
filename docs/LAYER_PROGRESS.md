@@ -2973,3 +2973,76 @@ Next gate: bind `macro.project.file` as a plan-only agent-executed child-request
 macro over the four accepted/live-smoked atomic templates. It must not add a
 sixth tool, hidden executor, `call_recipe`, raw action/Lua/shell/UI path, or
 new-project behavior.
+
+#### Alpha3.2-C3D `macro.project.file` Plan-Only Binding Acceptance
+
+Status: accepted; Alpha3.2-C complete; 2026-07-11.
+
+Accepted implementation commit:
+
+```text
+25161e3 runtime: bind project file macro plan
+```
+
+Accepted contract:
+
+```text
+alpha3.2c3d.project_file_macro.v1
+```
+
+`macro.project.file` is now a discoverable, `call_template`-callable plan-only
+macro over the four accepted/live-smoked atomic project-file templates. It
+supports exactly `save_current` and `save_as`. It returns two serial preflight
+reads, one conditional atomic mutation request, and two serial postflight reads,
+plus explicit dependency gates and success criteria. The agent executes those
+existing child `call_template` requests; the server executes none of them.
+
+The runtime envelope reports `executed:false`, executor call count 0, no bridge
+request, no live-allowlist membership, no added tool, no public `call_recipe`,
+no hidden executor, and no raw action/Lua/shell/UI path. `save_as` forwards only
+the exact target path and literal `overwrite:true`; atomic filesystem safety
+remains owned by `template.project.save_project_as`. New/create/open operations,
+atomic `overwrite=false`, save-current with save-as-only fields, refs, and
+idempotency keys return typed zero-mutation blockers.
+
+Discovery contains exactly one `macro.project.file` row, remains in the folded
+secondary menu, and reports `plan_only_runtime_bound`, supported, present, and
+not itself live-runnable. The accepted atomic catalog remains 220, historical
+Alpha2 remains 213, and the current-product live atomic allowlist remains 217.
+The macro id is not an atomic descriptor and was not added to the live executor.
+
+Control-tower review added bounded amplification hardening after the initial
+worker pass: operation is capped at 64 bytes, target path at the atomic 2048-byte
+limit, control/NUL input is rejected, unknown-field detail is bounded to 8 names
+of 80 bytes, non-empty refs and any idempotency key are rejected without echo,
+and the runtime request summary never clones large raw inputs. Pressure tests
+cover 5,000 unknown keys, large refs, a 20 KiB idempotency key, overlong/control
+operation/path input, and the maximum valid target path; blocked and successful
+serialized responses remain below 32 KiB with executor count zero.
+
+Focused acceptance gates:
+
+```text
+npm run check:alpha3-2c3d                              # 8/8; actual stdio
+npm run check:alpha3-2a                                # 12/12
+node --test tests/layer4d/call-template-runtime.test.mjs # 16/16
+npm run check:tool-abi                                 # exact 5
+npm run check:discovery-menu
+npm run check:template-runtime
+npm run check:alpha3-2c3bc                             # dependency regression 18/18
+git diff --check
+```
+
+No REAPER smoke is required for the macro wrapper because it is intentionally
+plan-only and cannot dispatch the executor or bridge. Its four child atoms rely
+on the separately accepted C3A and C3B+C3C live evidence. Per the user-approved
+accelerated closeout, the already-passed C3B+C3C full test/build and accepted
+package gate were not repeated after this isolated no-bridge macro binding.
+
+Alpha3.2-C final result: normal stdio calls have server-managed context; invalid
+refs are repairable; exact project path and dirty reads plus save-current and
+explicit-overwrite save-as are accepted/live-smoked; and the secondary
+`macro.project.file` provides a bounded agent-executed plan without adding
+resolver tools or an execution bypass.
+
+Next product gate: Alpha3.2-D SQLite Practical Query Gate.
