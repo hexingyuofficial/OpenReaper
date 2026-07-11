@@ -308,14 +308,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "No source file, hardware route, or unsupported object family was deleted.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The destructive macro is not callable until bounded 3.2-E implementation and evidence."),
+        blocker("DELETE_TARGETS_PREVIEW_REQUIRED", "Run the delete-targets dry-run preview and matching confirmation scope before destructive child requests."),
         blocker("CONFIRM_SCOPE_REQUIRED", "The exact previewed target set has not been confirmed."),
         blocker("STALE_OR_AMBIGUOUS_TARGET", "A target is missing, stale, duplicated, or cross-project."),
         blocker("FILESYSTEM_DELETE_FORBIDDEN", "The request would delete media files from disk."),
         blocker("TARGET_KIND_UNSUPPORTED", "Take or automation deletion lacks an accepted audited template."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, use an exact accepted delete template only after explicit user approval and matching readback.",
+        "For preview blockers, rerun dry-run, copy the matching confirmation scope, and execute only the emitted accepted child requests with readback.",
         "Regenerate the preview after any project change; never reuse an old confirmation scope.",
         "Remove unsupported/filesystem targets and retry only the accepted project-object subset.",
         "Use undo evidence when a partial execution succeeded, then re-inspect before retrying failed refs.",
@@ -395,13 +395,13 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Unmatched existing tracks remain unchanged unless an explicit accepted action covered them.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The layout macro is not callable until 3.2-E."),
+        blocker("LAYOUT_PREVIEW_REQUIRED", "Run the layout dry-run preview and planned readback before applying layout child requests."),
         blocker("LAYOUT_INVALID", "The layout contains duplicate ids, cycles, invalid nesting, or invalid fields."),
         blocker("MATCH_AMBIGUOUS", "More than one existing track matches a declared row."),
         blocker("READBACK_MISMATCH", "The resulting folder depth/order differs from the declared layout."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, run individual accepted track/folder templates with readback after each bounded change.",
+        "For preview blockers, rerun dry-run and execute only the emitted accepted layout child requests with readback.",
         "Fix invalid/ambiguous rows and rerun dry-run; do not guess a match.",
         "On partial success, keep the returned local-id-to-ref map, reread structure, and plan only remaining mismatches.",
         "Use undo evidence if structural readback cannot be reconciled safely.",
@@ -430,6 +430,9 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     entity_kind: "macro.routing.apply",
     task_intents: ["create sends", "update routing", "route tracks", "inspect routing graph"],
     rollout_slice: "3.2-E",
+    known_blocker: null,
+    implementation_status: "plan_only_runtime_bound_preview_first",
+    runnable: true,
     manual: actionManual({
       when_to_use: [
         "Create or update explicit internal track-to-track routes and related bounded send settings.",
@@ -482,14 +485,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Canonical route/send refs and request/undo evidence are retained.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The routing macro is not callable until 3.2-E."),
+        blocker("ROUTING_APPLY_PREVIEW_REQUIRED", "Run a dry-run routing preview and planned readback before applying routing changes."),
         blocker("HARDWARE_IO_FORBIDDEN", "A route targets hardware/device I/O."),
         blocker("ROUTE_AMBIGUOUS_OR_FEEDBACK", "Source/target resolution or feedback posture is unsafe."),
         blocker("ROUTE_DELETE_NOT_AUDITED", "A requested route deletion lacks an accepted audited template."),
         blocker("READBACK_MISMATCH", "Actual routing differs from the confirmed patch."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, use exact accepted routing templates for one route at a time with graph readback.",
+        "For preview blockers, rerun dry-run and execute only the emitted internal routing child requests with graph readback.",
         "Remove hardware/external endpoints and replace ambiguous selectors with canonical refs.",
         "Omit unaudited delete rows; report them as blocked rather than emulating deletion through another surface.",
         "On partial success, reread the graph and retry only mismatched accepted rows with a new confirmation scope.",
@@ -519,6 +522,9 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     entity_kind: "macro.media.place_assets",
     task_intents: ["import audio", "place assets", "probe media", "create regions for assets"],
     rollout_slice: "3.2-E",
+    known_blocker: null,
+    implementation_status: "plan_only_runtime_bound_preview_first",
+    runnable: true,
     manual: actionManual({
       when_to_use: [
         "Probe and place a bounded batch of existing media files into explicit target tracks.",
@@ -566,14 +572,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Source files remain unchanged on disk and failures do not shift later explicit placements silently.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "The general media placement macro is not callable until 3.2-E."),
+        blocker("MEDIA_PLACE_ASSETS_PREVIEW_REQUIRED", "Run a dry-run media placement preview and planned readback before importing assets."),
         blocker("PATH_INVALID_OR_UNREADABLE", "A source path is missing, inaccessible, or unsupported."),
         blocker("TARGET_TRACK_AMBIGUOUS", "The requested target track cannot be resolved exactly."),
         blocker("PLACEMENT_COLLISION", "The requested placement/collision policy cannot produce deterministic positions."),
         blocker("RESPONSE_BUDGET_EXCEEDED", "The asset batch or readback is too large."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, use probe/import/readback templates for a bounded asset subset.",
+        "For preview blockers, rerun dry-run and execute only the emitted media probe/import/readback child requests.",
         "Repair or remove invalid paths; never substitute a different file silently.",
         "Replace ambiguous track names with canonical refs or apply an explicit layout first.",
         "Split large batches and resume from the returned next_positions plus verified imported refs.",
@@ -735,7 +741,7 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout"]);
+const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"]);
 const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => !RUNTIME_BOUND_PRIMARY_MACRO_IDS.has(entry.id));
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
 const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
@@ -785,7 +791,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, and macro.project.apply_layout are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
+    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, macro.project.apply_layout, macro.routing.apply, and macro.media.place_assets are supported/runtime-bound plan-only, while the remaining primary entries await their named slices.",
     recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
   },
   primary_spine: {

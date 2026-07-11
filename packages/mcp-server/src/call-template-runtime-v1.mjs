@@ -122,6 +122,18 @@ import {
   planAlpha3_2EProjectLayoutMacro,
 } from "./alpha3-2e-project-layout-v1.mjs";
 import {
+  createAlpha3_2ERoutingApplyMacroDiscoveryItems,
+  createAlpha3_2ERoutingApplyMacroRuntimeEnvelope,
+  isAlpha3_2ERoutingApplyMacroId,
+  planAlpha3_2ERoutingApplyMacro,
+} from "./alpha3-2e-routing-apply-v1.mjs";
+import {
+  createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems,
+  createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope,
+  isAlpha3_2EMediaPlaceAssetsMacroId,
+  planAlpha3_2EMediaPlaceAssetsMacro,
+} from "./alpha3-2e-media-place-assets-v1.mjs";
+import {
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
   createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
   isAlpha3_2C3DProjectFileMacroId,
@@ -852,6 +864,8 @@ export function createCallTemplateRuntime(options = {}) {
     ...createAlpha3_2EProjectInspectMacroDiscoveryItems(),
     ...createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(),
     ...createAlpha3_2EProjectLayoutMacroDiscoveryItems(),
+    ...createAlpha3_2ERoutingApplyMacroDiscoveryItems(),
+    ...createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems(),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
     ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
@@ -900,6 +914,30 @@ export function createCallTemplateRuntime(options = {}) {
           idempotency_key_present: normalized.idempotency_key !== undefined,
         });
         const envelope = createAlpha3_2EProjectLayoutMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2ERoutingApplyMacroId(id)) {
+        const plan = planAlpha3_2ERoutingApplyMacro(normalized.input, {
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2ERoutingApplyMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2EMediaPlaceAssetsMacroId(id)) {
+        const plan = planAlpha3_2EMediaPlaceAssetsMacro(normalized.input, {
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope({
           request: normalized,
           plan,
           now,

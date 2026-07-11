@@ -21,16 +21,16 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.inspect"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.delete_targets"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.apply_layout"), false);
-    for (const id of ["macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]) {
-      assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes(id), true, id);
-    }
+    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.routing.apply"), false);
+    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.media.place_assets"), false);
+    assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.render.targets"), true);
 
     const runtime = createCallTemplateRuntime();
     const exact = runtime.list_templates({
-      ids: ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply"],
+      ids: ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"],
       fields: ["id", "capability_truth"],
     });
-    assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply"]);
+    assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]);
     assert.equal(exact.items[0].support_status, "plan_only_runtime_bound");
     assert.equal(exact.items[0].capability_truth.support_state, "supported");
     assert.equal(exact.items[0].execution_shape, "plan_only_agent_executed_child_requests");
@@ -38,7 +38,11 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(exact.items[1].capability_truth.support_state, "supported_with_confirmation");
     assert.equal(exact.items[2].support_status, "plan_only_runtime_bound_preview_first");
     assert.equal(exact.items[2].capability_truth.support_state, "supported_with_readback");
-    assert.equal(exact.items[3].support_status, "contract_only_non_runnable");
+    assert.equal(exact.items[3].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[3].capability_truth.support_state, "supported_with_readback");
+    assert.equal(exact.items[4].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[4].capability_truth.support_state, "supported_with_readback");
+    assert.equal(exact.items[5].support_status, "contract_only_non_runnable");
   });
 
   it("plans a bounded read-only inspect flow over accepted reads and macro.project.query", () => {
@@ -123,9 +127,17 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
         name: "call_template",
         arguments: { id: "macro.project.apply_layout", input: { layout: [{ id: "fx", kind: "track", name: "FX" }], dry_run: true } },
       }));
+      const routingPreview = parseToolJson(await client.callTool({
+        name: "call_template",
+        arguments: { id: "macro.routing.apply", input: { routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }], dry_run: true } },
+      }));
+      const mediaPreview = parseToolJson(await client.callTool({
+        name: "call_template",
+        arguments: { id: "macro.media.place_assets", input: { assets: [{ id: "one", path: "/Users/Shared/OpenReaper/one.wav", track_ref: "track:guid:{TRK}", position_seconds: 0 }], dry_run: true } },
+      }));
       const heldResult = parseToolJson(await client.callTool({
         name: "call_template",
-        arguments: { id: "macro.routing.apply", input: {} },
+        arguments: { id: "macro.render.targets", input: {} },
       }));
       assert.equal(inspectResult.ok, true);
       assert.equal(inspectResult.result.executed, false);
@@ -134,6 +146,10 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       assert.equal(deletePreview.result.typed_blockers[0].code, "CONFIRM_SCOPE_REQUIRED");
       assert.equal(layoutPreview.ok, true);
       assert.equal(layoutPreview.result.preview.target_counts.rows, 1);
+      assert.equal(routingPreview.ok, true);
+      assert.equal(routingPreview.result.preview.target_counts.routes, 1);
+      assert.equal(mediaPreview.ok, true);
+      assert.equal(mediaPreview.result.preview.target_counts.assets, 1);
       assert.equal(heldResult.ok, false);
       assert.equal(heldResult.error?.code ?? heldResult.error_code, "CALL_TEMPLATE_ID_HELD");
     } finally {

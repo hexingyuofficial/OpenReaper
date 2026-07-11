@@ -119,6 +119,10 @@ export function createAlpha3_2ERoutingApplyMacroDiscoveryItems() {
     execution_shape: "plan_only_agent_executed_child_requests",
     implementation_status: "plan_only_runtime_bound_preview_first",
     runnable: true,
+    support_status: "plan_only_runtime_bound_preview_first",
+    support_state: "supported_with_readback",
+    evidence_level: "runtime_bound_static_fake",
+    known_blocker: "Dry-run preview and affected-track readback required before success wording",
     input_schema: {
       type: "object",
       properties: {
