@@ -11,7 +11,7 @@ import {
   composeAlpha3_2B3RuntimeDoctorReadiness,
 } from "./alpha3-2b3-runtime-doctor-readiness-v1.mjs";
 import {
-  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "./call-template-runtime-v1.mjs";
 import { createDiscoveryCatalog } from "./discovery-menu-v1.mjs";
@@ -37,7 +37,7 @@ async function main() {
           opted_in: true,
           executor: liveBridge.executor,
           executor_config: liveBridge.config,
-          allowed_template_ids: CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+          allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
           evidence: { route: "openreaper_mcp_stdio" },
         }
       : { opted_in: false },

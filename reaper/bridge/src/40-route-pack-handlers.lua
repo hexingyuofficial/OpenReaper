@@ -1075,6 +1075,14 @@ local ALLOWED_OPERATIONS = {
     pack = "project",
     handler = read_project_summary,
   },
+  ["query_state:project.read_current_project_path"] = {
+    pack = "project",
+    handler = read_current_project_path,
+  },
+  ["query_state:project.read_dirty_state"] = {
+    pack = "project",
+    handler = read_dirty_state,
+  },
   ["query_state:project.read_metadata"] = {
     pack = "project",
     handler = read_project_metadata,

@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 215,
+    "entryCount": 217,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 215,
-    "handlerModuleCount": 80,
-    "routeCount": 31,
-    "operationCount": 98
+    "extractedHandlerCount": 217,
+    "handlerModuleCount": 81,
+    "routeCount": 32,
+    "operationCount": 100
   },
   "routes": [
     {
@@ -71,6 +71,28 @@
         "template.tracks.resolve_track_ref",
         "template.items.resolve_item_ref",
         "template.items.read_item_summary"
+      ]
+    },
+    {
+      "route": "alpha3-2c3a-project-file-read",
+      "template_count": 2,
+      "handler_module_count": 1,
+      "operation_count": 2,
+      "packs": [
+        "project"
+      ],
+      "risks": [
+        "read"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs"
+      ],
+      "template_ids": [
+        "template.project.read_current_project_path",
+        "template.project.read_dirty_state"
       ]
     },
     {

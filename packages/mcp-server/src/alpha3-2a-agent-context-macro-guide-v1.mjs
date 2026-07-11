@@ -51,20 +51,20 @@ export const ALPHA3_2A_PROJECT_QUERY_ENTITIES = deepFreeze([
 ]);
 
 export const ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE = deepFreeze({
-  status: "planned_not_accepted",
+  status: "reads_accepted_writes_planned",
   accepted_mutation_route: null,
   ids: [
-    { id: "template.project.read_current_project_path", role: "read current project path", status: "planned_not_accepted" },
-    { id: "template.project.read_dirty_state", role: "read current dirty state", status: "planned_not_accepted" },
+    { id: "template.project.read_current_project_path", role: "read current project path", status: "accepted" },
+    { id: "template.project.read_dirty_state", role: "read current dirty state", status: "accepted" },
     { id: "template.project.save_current_project", role: "save current project", status: "planned_not_accepted" },
     { id: "template.project.save_project_as", role: "save current project as a validated path", status: "planned_not_accepted" },
   ],
-  current_read_boundary: "Existing summary/metadata reads do not prove path or dirty state.",
+  current_read_boundary: "Use the two accepted exact read templates; summary/metadata remain insufficient substitutes.",
   current_write_boundary: "No accepted save/save-as mutation route exists.",
 });
 
 const CONTRACT_ONLY_BLOCKER = "contract_only_pending_alpha3_2_c_d_e_implementation";
-const PROJECT_FILE_BLOCKER = "planned_not_accepted_project_file_templates";
+const PROJECT_FILE_BLOCKER = "project_file_writes_planned_macro_held";
 
 const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
@@ -78,7 +78,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     rollout_slice: "3.2-C/E",
     manual: actionManual({
       when_to_use: [
-        "Inspect accepted identity/selection/refs; path and dirty state are planned_not_accepted.",
+        "Inspect accepted identity/selection/refs plus the accepted exact project path and dirty-state reads.",
         "Collect a compact bounded snapshot before a write, delete, routing, media, or render operation.",
       ],
       when_not_to_use: [
@@ -91,7 +91,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Requested include/fields/limit values must stay within bounded discovery and readback budgets.",
       ],
       input_shape: {
-        include: "Optional ordered subset of project_identity, selected_context, tracks, folders, items, markers_regions, render, index, and planned project_path/dirty_state posture.",
+        include: "Optional ordered subset of project_identity, project_path, dirty_state, selected_context, tracks, folders, items, markers_regions, render, and index posture.",
         fields: "Optional compact field selection applied to returned rows.",
         limit: "Positive bounded row limit per requested entity family.",
         compact_response: "Boolean; defaults true and never enables full descriptor or project dumps.",
@@ -100,7 +100,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Read server/bridge readiness without starting REAPER or using direct bridge files.",
         "Validate include, fields, limit, compact_response, and ref_policy.",
-        "Read accepted project identity before resolving selected or listed objects; report project_path/dirty_state as planned_not_accepted rather than inventing values.",
+        "Read accepted project identity, then use the exact accepted path and dirty-state templates before resolving selected or listed objects.",
       ],
       underlying_actions: [
         "template.project.read_summary",
@@ -112,22 +112,22 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "template.project.list_markers_regions",
         "template.render.read_settings",
         "compatibility helper macro.index_status when index readiness is requested",
-        "planned_not_accepted: template.project.read_current_project_path",
-        "planned_not_accepted: template.project.read_dirty_state",
+        "template.project.read_current_project_path",
+        "template.project.read_dirty_state",
       ],
       readback_steps: [
         "Normalize every returned object ref into one consistent compact row location.",
-        "Report accepted title/identity plus bridge/render/index readiness; return planned_not_accepted for project path and dirty state until their exact templates are accepted.",
+        "Report accepted title/identity, exact path/path_state, exact dirty/raw state, and bridge/render/index readiness.",
         "Return truncation and missing-ref reasons instead of silently dropping rows.",
       ],
       success_criteria: [
-        "The response identifies the current accepted project context and reports requested readiness flags without claiming path or dirty-state values.",
+        "The response identifies current project context and may report path and dirty state only from the two exact accepted reads.",
         "Requested rows are bounded, ordered, and carry canonical refs when resolvable.",
         "No write, render, project save, or hidden recipe execution occurred.",
       ],
       common_blockers: [
         blocker("CONTRACT_ONLY", "This Alpha3.2-A entry is a discovery contract and is not callable yet."),
-        blocker("PROJECT_PATH_DIRTY_PLANNED_NOT_ACCEPTED", "Current project path and dirty-state reads are not accepted yet."),
+        blocker("PROJECT_FILE_WRITES_PLANNED", "Project save and save-as remain planned_not_accepted; the two exact reads are accepted."),
         blocker("BRIDGE_NOT_READY", "Live project identity or entity reads are unavailable."),
         blocker("STALE_REF_GENERATION", "A selected or listed ref belongs to an older project generation."),
         blocker("RESPONSE_BUDGET_EXCEEDED", "The requested include/fields/limit shape is too broad."),
@@ -681,7 +681,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
 const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   id: "macro.project.file",
   title: "Create or save project file",
-  summary: "Secondary planned contract for project path/dirty reads and save/save-as; no accepted mutation route exists yet.",
+  summary: "Secondary held contract: exact path/dirty reads are accepted, while save/save-as have no accepted mutation route.",
   pack: "project",
   risk: "write",
   entity_kind: "macro.project.file",
@@ -690,9 +690,9 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   guide_tier: "secondary",
   known_blocker: PROJECT_FILE_BLOCKER,
   manual: actionManual({
-    when_to_use: ["Inspect the planned project path/dirty/save/save-as contract before 3.2-C implementation; do not execute it yet."],
+    when_to_use: ["Inspect accepted project path and dirty state; keep save/save-as planning held until their exact templates are accepted."],
     when_not_to_use: ["Do not overwrite an existing project without an explicit accepted overwrite policy and confirmation.", "Do not use arbitrary filesystem operations or raw UI automation."],
-    required_readiness: ["All four exact project-file template ids are currently planned_not_accepted.", "A future requested path must pass containment, extension, parent-directory, permission, and overwrite checks."],
+    required_readiness: ["The two exact read ids are accepted; both exact write ids remain planned_not_accepted.", "A future requested write path must pass containment, extension, parent-directory, permission, and overwrite checks."],
     input_shape: {
       operation: "new | save | save_as",
       path: "Required for save_as; validated project-file path only.",
@@ -700,14 +700,14 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
       unsaved_changes_policy: "save_current | explicit_discard_confirmation | stop.",
       dry_run: "Boolean; validates posture without creating/saving.",
     },
-    preflight_steps: ["Return planned_not_accepted for current path and dirty-state reads until their exact templates land.", "Validate the future operation/path/overwrite/unsaved policy without performing a mutation.", "Return exact confirmation requirements before any future overwrite or discard."],
-    underlying_actions: ["planned_not_accepted: template.project.read_current_project_path", "planned_not_accepted: template.project.read_dirty_state", "planned_not_accepted: template.project.save_current_project", "planned_not_accepted: template.project.save_project_as", "current accepted project summary/metadata reads are identity context only and do not substitute for these four ids"],
-    readback_steps: ["Before acceptance, return planned_not_accepted and no path/dirty mutation claim.", "After future implementation, use the exact read_current_project_path/read_dirty_state templates for readback.", "Report render-readiness impact only from audited project-file evidence."],
-    success_criteria: ["Current Alpha3.2-A success means the four exact planned ids and no-accepted-route blocker are reported accurately.", "Future execution success requires path/dirty readback and no unconfirmed overwrite or unsaved-change discard."],
-    common_blockers: [blocker("PLANNED_NOT_ACCEPTED", "The four project path/dirty/save/save-as templates are not accepted until 3.2-C."), blocker("PATH_INVALID", "The requested path fails validation or containment."), blocker("PERMISSION_DENIED", "The target parent is not writable."), blocker("OVERWRITE_CONFIRMATION_REQUIRED", "The target exists and overwrite is not explicitly confirmed."), blocker("UNSAVED_PROJECT_POLICY_REQUIRED", "A new/open operation would discard dirty state without policy.")],
-    recovery_steps: ["For PLANNED_NOT_ACCEPTED, report all four exact ids and the absence of an accepted mutation route; do not use shell or UI fallbacks.", "Choose a valid writable path or create the parent through an approved external user action.", "Resolve overwrite/unsaved policy explicitly, then rerun preflight."],
+    preflight_steps: ["Use the exact accepted path and dirty-state reads without mutation.", "Validate the future operation/path/overwrite/unsaved policy without performing a mutation.", "Return exact confirmation requirements before any future overwrite or discard."],
+    underlying_actions: ["template.project.read_current_project_path", "template.project.read_dirty_state", "planned_not_accepted: template.project.save_current_project", "planned_not_accepted: template.project.save_project_as", "current accepted project summary/metadata reads are identity context only and do not substitute for the two exact reads"],
+    readback_steps: ["Use the exact accepted read_current_project_path/read_dirty_state templates for current readback.", "Return planned_not_accepted for save/save-as and make no mutation claim.", "Report render-readiness impact only from audited project-file evidence."],
+    success_criteria: ["Current Alpha3.2-A success means two accepted reads, two planned writes, and no accepted mutation route are reported accurately.", "Future execution success requires path/dirty readback and no unconfirmed overwrite or unsaved-change discard."],
+    common_blockers: [blocker("PLANNED_NOT_ACCEPTED", "Project save and save-as are not accepted; path and dirty-state reads are accepted."), blocker("PATH_INVALID", "The requested path fails validation or containment."), blocker("PERMISSION_DENIED", "The target parent is not writable."), blocker("OVERWRITE_CONFIRMATION_REQUIRED", "The target exists and overwrite is not explicitly confirmed."), blocker("UNSAVED_PROJECT_POLICY_REQUIRED", "A new/open operation would discard dirty state without policy.")],
+    recovery_steps: ["For PLANNED_NOT_ACCEPTED, report the two held write ids and the absence of an accepted mutation route; do not use shell or UI fallbacks.", "Choose a valid writable path or create the parent through an approved external user action.", "Resolve overwrite/unsaved policy explicitly, then rerun preflight."],
     dry_run_shape: { supported: true, output: ["planned_project_file_posture", "validated_target_path", "existing_target_posture", "required_confirmations", "render_readiness_impact", "typed_blockers"] },
-    resume_or_retry_policy: { resume_from: "the planned contract until all four ids are accepted", retry: "Do not retry execution before 3.2-C acceptance; after acceptance retry only after path/permission/confirmation repair.", hard_stop: "Stop on planned_not_accepted, unconfirmed overwrite, unsaved-change discard, or missing audited template." },
+    resume_or_retry_policy: { resume_from: "the held write contract until both write ids are accepted", retry: "Do not retry save execution before its exact write templates are accepted; then retry only after path/permission/confirmation repair.", hard_stop: "Stop on planned_not_accepted, unconfirmed overwrite, unsaved-change discard, or missing audited template." },
     examples: [example("save as", { operation: "save_as", path: "/projects/demo/demo.RPP", overwrite_policy: "fail_if_exists", unsaved_changes_policy: "save_current", dry_run: true })],
   }),
 }));
@@ -806,14 +806,14 @@ const COMPACT_GUIDE = deepFreeze({
     expansion_hint: "Exact ids keep legacy item fields unchanged; contract manuals appear here.",
   },
   common_task_routing: [
-    route("inspect project", "macro.project.inspect", "Use accepted reads now; path/dirty remain planned_not_accepted."),
+    route("inspect project", "macro.project.inspect", "Use accepted reads now, including the exact path and dirty-state templates."),
     route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Use mapped compatibility query macros until 3.2-D."),
     route("delete scoped objects", "macro.project.delete_targets", "Use one accepted delete template with confirmation/readback; never delete source files."),
     route("apply track/folder layout", "macro.project.apply_layout", "Use bounded track/folder templates and structural readback until 3.2-E."),
     route("apply internal routing", "macro.routing.apply", "Use accepted internal routing templates; hardware/device I/O is blocked."),
     route("place media assets", "macro.media.place_assets", "Use bounded probe/import/readback; never mutate source media files."),
     route("render targets", "macro.render.targets", "Use managed render root and exact accepted render templates; no external encoder fallback."),
-    route("save/save-as", "macro.project.file", "All four project-file ids are planned_not_accepted; no accepted mutation route exists."),
+    route("save/save-as", "macro.project.file", "Both project-file reads are accepted; save and save-as remain planned_not_accepted with no accepted mutation route."),
     route("recover blockers", "ping + exact guide request", "Repair typed readiness/ref/index/render blockers; no direct bridge, raw action/Lua, shell, or UI path."),
   ],
   portfolio: {

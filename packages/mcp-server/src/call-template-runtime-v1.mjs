@@ -593,6 +593,11 @@ export const CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS = deepFree
   "template.project.render_or_update_subproject",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS = deepFreeze([
+  "template.project.read_current_project_path",
+  "template.project.read_dirty_state",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -629,12 +634,14 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d28_small_handlers", CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS],
   ["d29_render_output_policy", CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS],
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
+  ["alpha3_2c3a_project_file_read", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS],
 ]);
 
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
   "template.automation.list_project_envelopes",
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -644,8 +651,18 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFree
   ),
 );
 
+export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreeze([
+  ...CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+]);
+
+// Alpha3.2-C3A live evidence accepted by the control tower on 2026-07-11.
+const ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET = new Set();
+
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
-  LIVE_TEMPLATE_GROUPS.flatMap(([, ids]) => ids),
+  LIVE_TEMPLATE_GROUPS
+    .flatMap(([, ids]) => ids)
+    .filter((id) => !ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET.has(id)),
 );
 
 const RUNTIME_DISCOVERY_DEFAULT_SURFACES = Object.freeze(["catalog", "executable"]);
@@ -1432,6 +1449,9 @@ function runtimeCapabilityTruthRequest(request) {
 
 function acceptedTemplateEvidenceLevel(id) {
   if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, id)) return "blocked_typed";
+  if (ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET.has(id)) {
+    return "route_defined_pending_live_evidence";
+  }
   if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(id)) return "live_smoked";
   const pack = templatePackFromId(id);
   if (Object.hasOwn(RUNTIME_HELD_PACK_BLOCKERS, pack)) return "route_defined_pending_live_promotion";
@@ -1826,7 +1846,9 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   ];
   const allowed = new Set(allowedGroups.flatMap((group) => group));
   const uniqueIds = [...new Set(value)];

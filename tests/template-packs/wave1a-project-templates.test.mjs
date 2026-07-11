@@ -24,6 +24,8 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 
 const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.read_summary",
+  "template.project.read_current_project_path",
+  "template.project.read_dirty_state",
   "template.project.read_metadata",
   "template.project.set_metadata_field",
   "template.project.list_markers_regions",

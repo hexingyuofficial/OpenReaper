@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (215 registered template handler row(s); 0 legacy_monolith row(s); 215 extracted handler row(s); 80 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (217 registered template handler row(s); 0 legacy_monolith row(s); 217 extracted handler row(s); 81 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -2573,7 +2573,7 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 129,
+  template_count = 131,
   by_pack = {
     actions = 8,
     analysis = 7,
@@ -2583,7 +2583,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     items = 11,
     media = 7,
     midi = 12,
-    project = 8,
+    project = 10,
     render = 7,
     routing = 15,
     system = 3,
@@ -2591,12 +2591,12 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     transport = 10,
   },
   by_risk = {
-    read = 66,
+    read = 68,
     safe = 9,
     write = 54,
   },
   by_lifecycle = {
-    experimental = 129,
+    experimental = 131,
   },
   by_entity_kind = {
     action = 4,
@@ -2635,7 +2635,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     peak = 1,
     pin_mapping = 1,
     preset = 2,
-    project = 3,
+    project = 5,
     region = 1,
     render_job = 1,
     render_matrix = 1,
@@ -2658,7 +2658,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 73,
+  template_count = 75,
   by_pack = {
     actions = 6,
     analysis = 3,
@@ -2668,7 +2668,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
     items = 11,
     media = 7,
     midi = 10,
-    project = 8,
+    project = 10,
     render = 2,
     routing = 0,
     system = 3,
@@ -3587,6 +3587,152 @@ local function read_item_summary(request)
 end
 return {
   exports = { read_item_summary = read_item_summary },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/read_file_state.lua
+__openreaper_register_handler_module("project/read_file_state.lua", function()
+-- Alpha3.2-C3A read-only current project file-state handlers.
+
+local READ_FILE_STATE_NAME_MAX_BYTES = 256
+local READ_FILE_STATE_PATH_HARD_MAX_BYTES = 4096
+local READ_FILE_STATE_RESPONSE_OVERHEAD_BYTES = 512
+
+local function read_file_state_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function read_file_state_api_available(name)
+  return reaper and type(reaper[name]) == "function"
+end
+
+local function read_file_state_bounded_text(value, max_bytes)
+  local text = type(value) == "string" and value or tostring(value or "")
+  local limit = math.max(4, math.floor(tonumber(max_bytes) or 4))
+  if #text <= limit then
+    return text, false
+  end
+  local cut = limit - 3
+  while cut > 0 do
+    local next_byte = string.byte(text, cut + 1)
+    if next_byte == nil or next_byte < 128 or next_byte >= 192 then
+      break
+    end
+    cut = cut - 1
+  end
+  return text:sub(1, cut) .. "...", true
+end
+
+local function read_file_state_current_project()
+  if not read_file_state_api_available("EnumProjects") then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER EnumProjects API is required for current project file-state reads.", {
+      api = "EnumProjects",
+      reason = "api_unavailable",
+    })
+  end
+  local ok, project, project_path = pcall(reaper.EnumProjects, -1, "")
+  if not ok then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER EnumProjects failed while reading the current project.", {
+      api = "EnumProjects",
+      reason = "pcall_failed",
+    })
+  end
+  if type(project_path) ~= "string" then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER EnumProjects returned an invalid project path.", {
+      api = "EnumProjects",
+      reason = "invalid_result",
+      expected = "string_path",
+      actual_type = type(project_path),
+    })
+  end
+  return project or 0, project_path
+end
+
+local function read_file_state_project_name(project, project_path)
+  local name = nil
+  if read_file_state_api_available("GetProjectName") then
+    local ok, first, second = pcall(reaper.GetProjectName, project, "")
+    if ok then
+      name = first_string(first, second)
+    end
+  end
+  if type(name) ~= "string" or name == "" then
+    name = project_path:match("([^/\\]+)$") or "current"
+  end
+  local bounded = read_file_state_bounded_text(name, READ_FILE_STATE_NAME_MAX_BYTES)
+  return bounded
+end
+
+local function read_current_project_path(request)
+  local project, project_path_or_error = read_file_state_current_project()
+  if project == nil then
+    return nil, project_path_or_error
+  end
+  local project_path = project_path_or_error
+  local budget = safe_budget(request)
+  local path_limit = math.min(READ_FILE_STATE_PATH_HARD_MAX_BYTES, math.max(256, budget.max_inline_value_bytes - READ_FILE_STATE_RESPONSE_OVERHEAD_BYTES))
+  local bounded_path, path_truncated = read_file_state_bounded_text(project_path, path_limit)
+  local has_project_path = project_path ~= ""
+  return {
+    project_ref = "project:current",
+    name = read_file_state_project_name(project, project_path),
+    path = bounded_path,
+    has_project_path = has_project_path,
+    path_state = has_project_path and "saved_project" or "unsaved_project",
+    path_truncated = path_truncated,
+  }
+end
+
+local function read_dirty_state(_request)
+  local project, project_path_or_error = read_file_state_current_project()
+  if project == nil then
+    return nil, project_path_or_error
+  end
+  if not read_file_state_api_available("IsProjectDirty") then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER IsProjectDirty API is required for project dirty-state reads.", {
+      api = "IsProjectDirty",
+      reason = "api_unavailable",
+    })
+  end
+  local ok, raw_dirty_state = pcall(reaper.IsProjectDirty, project)
+  if not ok then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER IsProjectDirty failed while reading project dirty state.", {
+      api = "IsProjectDirty",
+      reason = "pcall_failed",
+    })
+  end
+  if
+    type(raw_dirty_state) ~= "number" or
+    raw_dirty_state ~= raw_dirty_state or
+    raw_dirty_state == math.huge or
+    raw_dirty_state == -math.huge or
+    raw_dirty_state < 0 or
+    raw_dirty_state ~= math.floor(raw_dirty_state)
+  then
+    return read_file_state_error("INTERNAL_ERROR", "REAPER IsProjectDirty returned an invalid dirty-state value.", {
+      api = "IsProjectDirty",
+      reason = "invalid_result",
+      expected = "non_negative_integer",
+      actual_type = type(raw_dirty_state),
+      actual_value = bounded_string(raw_dirty_state, 80),
+    })
+  end
+  local dirty = raw_dirty_state > 0
+  return {
+    project_ref = "project:current",
+    dirty = dirty,
+    dirty_state = dirty and "dirty" or "clean",
+    raw_dirty_state = raw_dirty_state,
+  }
+end
+return {
+  exports = { read_current_project_path = read_current_project_path, read_dirty_state = read_dirty_state },
   shared = {  },
 }
 end)
@@ -21575,6 +21721,14 @@ local ALLOWED_OPERATIONS = {
   ["query_state:project.read_summary"] = {
     pack = "project",
     handler = OPENREAPER_HANDLER_EXPORTS.read_project_summary,
+  },
+  ["query_state:project.read_current_project_path"] = {
+    pack = "project",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_current_project_path,
+  },
+  ["query_state:project.read_dirty_state"] = {
+    pack = "project",
+    handler = OPENREAPER_HANDLER_EXPORTS.read_dirty_state,
   },
   ["query_state:project.read_metadata"] = {
     pack = "project",

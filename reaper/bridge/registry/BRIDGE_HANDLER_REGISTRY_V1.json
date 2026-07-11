@@ -232,6 +232,38 @@
       ]
     },
     {
+      "template_id": "template.project.read_current_project_path",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_current_project_path"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "alpha3-2c3a-project-file-read",
+      "handler_file": "project/read_file_state.lua",
+      "handler_export": "read_current_project_path",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.read_dirty_state",
+      "operation": {
+        "family": "query_state",
+        "name": "project.read_dirty_state"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "alpha3-2c3a-project-file-read",
+      "handler_file": "project/read_file_state.lua",
+      "handler_export": "read_dirty_state",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.project.set_tempo",
       "operation": {
         "family": "run_command",

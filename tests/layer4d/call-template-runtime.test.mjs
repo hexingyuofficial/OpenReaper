@@ -58,6 +58,8 @@ import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
@@ -733,6 +735,28 @@ describe("Layer 4D call_template runtime binding", () => {
     const graduatedMenu = graduatedRuntime.list_templates({ limit: 100 });
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
     assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.length, 2);
+    assert.equal(
+      CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.some((id) =>
+        CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
+      false,
+    );
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 215);
+    const currentProductRuntime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: new FakeFoundationBridge(),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 215);
+    assert.equal(
+      currentProductRuntime.list_templates({
+        ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+        fields: ["summary"],
+      }).items.every((item) => item.capability_truth.live_runnable_now === true),
+      true,
+    );
     assert.equal(graduatedMenu.items.length, 100);
     assert.equal(graduatedMenu.page.has_more, true);
     assert.equal(graduatedMenu.product_surface.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);

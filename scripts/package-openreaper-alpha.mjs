@@ -8,7 +8,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import {
-  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
@@ -403,7 +403,7 @@ async function smokePackagedOpenReaperMcp() {
     });
     const fxTemplates = parseJsonToolResult(fxTemplateResponse);
     assertDiscoveredIds(fxTemplates, REQUIRED_FX_TEMPLATE_IDS, "Packaged MCP FX template smoke");
-    const packageBridge = new FakeFoundationBridge({
+    const packageBridge = createOperationAwarePackageSmokeBridge({
       owner: "openreaper-alpha-package-smoke",
       generation: 1,
     });
@@ -435,6 +435,56 @@ async function smokePackagedOpenReaperMcp() {
     }
     await clearDirectoryEntries(path.join(transportDir, "requests"));
     await clearDirectoryEntries(path.join(transportDir, "results"));
+    const projectFileReadCalls = [];
+    for (const [templateId, operationName] of [
+      ["template.project.read_current_project_path", "project.read_current_project_path"],
+      ["template.project.read_dirty_state", "project.read_dirty_state"],
+    ]) {
+      const responsePromise = client.callTool({
+        name: "call_template",
+        arguments: { id: templateId, input: {} },
+      });
+      const requestPromise = respondToPackagedBridgeRequest({
+        transportDir,
+        bridge: packageBridge,
+      });
+      const [call, request] = await Promise.all([
+        responsePromise.then(parseJsonToolResult),
+        requestPromise,
+      ]);
+      const expectedSummary = packageProjectFileReadSummary(operationName);
+      const projectRef = call.result?.refs?.find((ref) => ref?.ref === "project:current");
+      if (
+        call.ok !== true ||
+        call.template?.id !== templateId ||
+        request.operation?.family !== "query_state" ||
+        request.operation?.name !== operationName ||
+        request.undo?.mode !== "none" ||
+        request.artifacts?.allow !== false ||
+        JSON.stringify(call.result?.summary) !== JSON.stringify(expectedSummary) ||
+        projectRef?.kind !== "project" ||
+        projectRef?.identity?.scheme !== "current" ||
+        projectRef?.identity?.value !== "current" ||
+        (call.result?.artifacts?.length ?? 0) !== 0 ||
+        (call.result?.jobs?.length ?? 0) !== 0
+      ) {
+        throw new Error(`Packaged MCP C3A project-file read smoke failed: ${templateId}`);
+      }
+      projectFileReadCalls.push({
+        template_id: templateId,
+        operation: `${request.operation.family}:${request.operation.name}`,
+        actual_stdio: true,
+        omitted_context: true,
+        undo_mode: request.undo.mode,
+        artifacts_allowed: request.artifacts.allow,
+        observed_summary: call.result.summary,
+        observed_project_ref: projectRef,
+        observed_artifact_count: call.result.artifacts.length,
+        observed_job_count: call.result.jobs.length,
+      });
+      await clearDirectoryEntries(path.join(transportDir, "requests"));
+      await clearDirectoryEntries(path.join(transportDir, "results"));
+    }
     const keyedRefResponse = client.callTool({
       name: "call_template",
       arguments: {
@@ -499,6 +549,11 @@ async function smokePackagedOpenReaperMcp() {
         expected_owner: omittedContextRequest.bridge.expected_owner,
         expected_generation: omittedContextRequest.bridge.expected_generation,
       },
+      alpha3_2c3a_project_file_reads: {
+        ok: true,
+        contract: "alpha3.2.c3a.project_file_read.v1",
+        calls: projectFileReadCalls,
+      },
       keyed_ref_call_template: {
         ok: true,
         template_id: keyedRefCall.template.id,
@@ -556,6 +611,42 @@ async function smokePackagedOpenReaperMcp() {
     await clearDirectoryEntries(path.join(transportDir, "requests"));
     await clearDirectoryEntries(path.join(transportDir, "results"));
   }
+}
+
+function packageProjectFileReadSummary(operationName) {
+  if (operationName === "project.read_current_project_path") {
+    return {
+      project_ref: "project:current",
+      name: "OpenReaper Package Smoke.RPP",
+      path: "/tmp/OpenReaper Package Smoke.RPP",
+      has_project_path: true,
+      path_state: "saved_project",
+      path_truncated: false,
+    };
+  }
+  if (operationName === "project.read_dirty_state") {
+    return {
+      project_ref: "project:current",
+      dirty: true,
+      dirty_state: "dirty",
+      raw_dirty_state: 2,
+    };
+  }
+  return null;
+}
+
+function createOperationAwarePackageSmokeBridge({ owner, generation }) {
+  const fake = new FakeFoundationBridge({ owner, generation });
+  return {
+    dispatch(request) {
+      const result = fake.dispatch(request);
+      const summary = packageProjectFileReadSummary(request?.operation?.name);
+      if (!summary || result?.ok !== true) return result;
+      const scripted = structuredClone(result);
+      scripted.result.summary = summary;
+      return scripted;
+    },
+  };
 }
 
 async function respondToPackagedBridgeRequest({ transportDir, bridge }) {
@@ -2847,7 +2938,7 @@ function assertMacroExecutionConvenience(flow) {
 
 async function smokeExecutableLiveAllowlist(client) {
   const executableItems = await listAllExecutableTemplateItems(client);
-  const acceptedLiveIds = new Set(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS);
+  const acceptedLiveIds = new Set(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS);
   const callableTemplateItems = executableItems.filter((item) =>
     String(item.id ?? "").startsWith("template.")
     && item.action_kind !== "macro"
@@ -2899,7 +2990,7 @@ async function smokeExecutableLiveAllowlist(client) {
 
   return {
     ok: true,
-    accepted_live_allowlist_count: CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length,
+    current_product_live_allowlist_count: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length,
     executable_template_count: callableTemplateItems.length,
     pages_scanned: Math.ceil(executableItems.length / 100),
     required_template: {

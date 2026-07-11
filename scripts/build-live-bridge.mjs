@@ -9,6 +9,7 @@ import {
   TEMPLATE_DESCRIPTOR_RISKS,
 } from "../packages/core/src/template-descriptor-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
@@ -131,6 +132,10 @@ export const registryRoutes = Object.freeze({
   "wave1a-read-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/read-handler-expansion.test.mjs"]),
+  }),
+  "alpha3-2c3a-project-file-read": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs"]),
   }),
   "d6-project-tempo-handlers": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,

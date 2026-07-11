@@ -246,7 +246,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(manual.input_shape.entity, EXPECTED_QUERY_ENTITIES.join(" | "));
   });
 
-  it("reports exact planned project path/dirty/save/save-as ids with no accepted mutation route", () => {
+  it("reports two accepted project-file reads, two held writes, and no accepted mutation route", () => {
     const runtime = createCallTemplateRuntime();
     const guide = runtime.list_templates().product_surface.agent_context_macro_guide;
     const inspectCard = guide.primary_spine.rows.find((row) => row.id === "macro.project.inspect");
@@ -259,16 +259,16 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
 
     assert.deepEqual(ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE.ids.map((row) => row.id), EXPECTED_PROJECT_FILE_TEMPLATE_IDS);
     assert.deepEqual(guide.project_file_posture.ids.map((row) => row.id), EXPECTED_PROJECT_FILE_TEMPLATE_IDS);
-    assert.equal(guide.project_file_posture.status, "planned_not_accepted");
+    assert.equal(guide.project_file_posture.status, "reads_accepted_writes_planned");
     assert.equal(guide.project_file_posture.accepted_mutation_route, null);
-    assert.equal(guide.project_file_posture.ids.every((row) => row.status === "planned_not_accepted"), true);
-    assert.match(inspectCard.action_manual.when_to_use, /path and dirty state are planned_not_accepted/);
-    assert.equal(inspectCard.action_manual.common_blockers.includes("PROJECT_PATH_DIRTY_PLANNED_NOT_ACCEPTED"), true);
-    assert.match(inspectManual.readback_steps.join(" "), /planned_not_accepted/);
+    assert.deepEqual(guide.project_file_posture.ids.map((row) => row.status), ["accepted", "accepted", "planned_not_accepted", "planned_not_accepted"]);
+    assert.match(inspectCard.action_manual.when_to_use, /accepted exact project path/);
+    assert.equal(inspectCard.action_manual.common_blockers.includes("PROJECT_FILE_WRITES_PLANNED"), true);
+    assert.match(inspectManual.readback_steps.join(" "), /exact path\/path_state/);
     for (const id of EXPECTED_PROJECT_FILE_TEMPLATE_IDS) {
       assert.equal(projectFileManual.underlying_actions.some((row) => row.includes(id)), true, id);
     }
-    assert.match(projectFileManual.success_criteria.join(" "), /no-accepted-route blocker/);
+    assert.match(projectFileManual.success_criteria.join(" "), /two accepted reads, two planned writes/);
   });
 
   it("publishes explicit portfolio ids, legacy mappings, removals, and distinct-legacy blockers", () => {
