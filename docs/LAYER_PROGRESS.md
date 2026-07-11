@@ -2378,3 +2378,101 @@ changes, GUID handler implementation, Lua/resolver edits, broader fixture
 rewrites, or any C2 contract expansion. After the single-file correction the
 same worker must rerun the failed full gate, build, package smoke, and return for
 independent review without committing.
+
+### Alpha3.2-C2 Repairable Refs Accepted
+
+Status: accepted.
+
+Accepted implementation commit:
+
+```text
+1d3afa0 runtime: add repairable ref guidance
+```
+
+Accepted contract:
+
+```text
+alpha3.2.c2.ref_guidance.v1
+```
+
+C2 preserves the frozen Foundation ref kinds and structural validation while
+making invalid refs repairable. Every covered `TEMPLATE_REFS_INVALID` path keeps
+ordinary legacy `details.errors` strings unchanged and adds bounded descriptor
+roles, missing roles, accepted array/keyed forms, complete handler-truth object
+examples, placeholder replacement fields/sources, and a retry action. Error
+projection is capped at 16 errors and 512 Unicode characters / 512 UTF-8 bytes
+per error, with explicit truncation metadata; a 5,000-unknown-key pressure case
+fell from roughly 310 KiB before the control-tower finding to roughly 3 KiB.
+
+Discovery now emits descriptor-keyed object refs and bounded sibling guidance.
+GUID/path examples are explicitly structural placeholders rather than live-
+resolved objects, identify `ref` and `identity.value` as synchronized
+replacement fields, and recommend resolver/query/create/list results or a real
+absolute path. `project:current` is explicitly a no-replacement current-project
+literal. The stdio schema exposes both object-ref arrays and the already
+accepted descriptor-keyed harness form.
+
+Canonical examples follow existing handler truth: project current/current;
+track, item, and take GUID with positional index fallback; owner-qualified
+track/take FX; marker/region REAPER index_number; and absolute file path. The
+exact `project:current` string inference now produces `scheme:current` without
+broad alias changes. Marker/region descriptor wording and its historical test
+now state index-number truth; no GUID handler, Lua, resolver, descriptor schema,
+Foundation ABI, or bridge envelope changed.
+
+The MCP surface remains exactly five tools. No `resolve_ref`, `make_ref`, raw
+request, Lua/action/shell/UI path, recipe executor, or hidden executor was added.
+
+Review history:
+
+- the first full gate exposed one stale GUID-wording test outside the initial
+  write list; the control tower approved only that exact regression path at
+  `2c42fc3`;
+- control-tower review rejected an unbounded `details.errors` projection after
+  reproducing a roughly 310 KiB response from 5,000 unknown keys; count/UTF-8
+  caps and pressure tests closed it;
+- independent review then rejected two P2 issues: malformed array refs consumed
+  required roles in `missing_refs`, and normal discovery lacked per-role
+  placeholder truth; both were fixed without changing validation semantics;
+- final independent re-review returned PASS with P0-P3 all zero.
+
+Control-tower gates passed:
+
+```text
+git diff --check
+node --check packages/core/src/template-ref-guidance-v1.mjs
+node --check packages/core/src/template-execution-harness-v1.mjs
+node --check packages/mcp-server/src/discovery-menu-v1.mjs
+node --check packages/mcp-server/src/openreaper-mcp-stdio.mjs
+npm run check:alpha3-2c2                                      # 8/8
+Layer 4B + Layer 1.5 + Layer 4D + Wave 1A descriptor tests   # 49/49
+npm run check:tool-abi                                        # exact 5
+npm run check:discovery-menu
+npm run check:template-runtime
+npm test
+npm run build
+```
+
+Control-tower evidence:
+
+```text
+/tmp/openreaper-alpha32c2-ct-final-20260711T060729Z
+```
+
+Fresh package smoke passed without `--skip-smoke` and used the packaged actual
+stdio server for omitted context, descriptor-keyed `template.tracks.rename_track`,
+and repairable missing-ref failure:
+
+```text
+/tmp/openreaper-alpha32c2-ct-package-20260711T061132Z/OpenReaper-alpha
+/tmp/openreaper-alpha32c2-ct-final-20260711T060729Z/package.log
+```
+
+The package audit left no fake child, request, result, or probe residue. No
+REAPER process was started; C2 is schema, discovery, harness guidance, static
+handler-truth, and packaged file-bridge evidence, not new live REAPER evidence.
+
+Next gate: Alpha3.2-C3A current project path and dirty-state read templates. It
+requires a separately opened bridge/handler/template lower-layer window and a
+bounded read-only live smoke against the authorized disposable project before
+C3B save-current or C3C save-as may begin.
