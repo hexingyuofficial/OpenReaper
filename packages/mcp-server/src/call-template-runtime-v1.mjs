@@ -96,6 +96,12 @@ import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
 import {
+  createAlpha3_2C3DProjectFileMacroDiscoveryItems,
+  createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
+  isAlpha3_2C3DProjectFileMacroId,
+  planAlpha3_2C3DProjectFileMacro,
+} from "./alpha3-2c3d-project-file-macro-v1.mjs";
+import {
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
   alpha3_2AContractOnlyBlockerForId,
@@ -807,6 +813,7 @@ export function createCallTemplateRuntime(options = {}) {
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
   const executableDiscoveryTemplates = [
     ...createAlpha3_2AContractMacroDiscoveryItems(),
+    ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
     ...createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog }),
     ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
     ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
@@ -818,6 +825,23 @@ export function createCallTemplateRuntime(options = {}) {
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      if (isAlpha3_2C3DProjectFileMacroId(id)) {
+        const plan = planAlpha3_2C3DProjectFileMacro(normalized.input, {
+          refs_provided: Array.isArray(normalized.refs)
+            ? normalized.refs.length > 0
+            : isPlainObject(normalized.refs)
+              ? Object.keys(normalized.refs).length > 0
+              : normalized.refs !== undefined && normalized.refs !== null,
+          idempotency_key_present: normalized.idempotency_key !== undefined,
+        });
+        const envelope = createAlpha3_2C3DProjectFileMacroRuntimeEnvelope({
+          request: normalized,
+          plan,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       if (isAlpha3_2AContractOnlyMacroId(id)) {
         throw new CallTemplateRuntimeError(
           "CALL_TEMPLATE_ID_HELD",

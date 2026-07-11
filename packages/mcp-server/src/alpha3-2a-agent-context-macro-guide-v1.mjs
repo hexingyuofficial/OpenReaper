@@ -63,11 +63,10 @@ export const ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE = deepFreeze({
     { id: "template.project.save_project_as", role: "save current project as a validated path", status: "accepted_live_smoked" },
   ],
   current_read_boundary: "Use the two accepted exact read templates; summary/metadata remain insufficient substitutes.",
-  current_write_boundary: "The two exact save templates are accepted/live-smoked under explicit overwrite=true save-as authorization; macro.project.file and new-project creation remain held, and atomic overwrite=false remains future.",
+  current_write_boundary: "The two exact save templates are accepted/live-smoked under explicit overwrite=true save-as authorization; macro.project.file is plan-only/runtime-bound for save_current and save_as, while new/open/create and atomic overwrite=false remain held.",
 });
 
 const CONTRACT_ONLY_BLOCKER = "contract_only_pending_alpha3_2_c_d_e_implementation";
-const PROJECT_FILE_BLOCKER = "project_file_macro_held_new_project_unimplemented";
 
 const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
@@ -130,7 +129,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       common_blockers: [
         blocker("CONTRACT_ONLY", "This Alpha3.2-A entry is a discovery contract and is not callable yet."),
-        blocker("PROJECT_FILE_MACRO_HELD", "All four exact project-file templates are accepted/live-smoked; macro.project.file and new-project creation remain held."),
+        blocker("PROJECT_FILE_NEW_OPERATION_HELD", "macro.project.file is plan-only/runtime-bound for save_current/save_as; new/open/create remain held."),
         blocker("BRIDGE_NOT_READY", "Live project identity or entity reads are unavailable."),
         blocker("STALE_REF_GENERATION", "A selected or listed ref belongs to an older project generation."),
         blocker("RESPONSE_BUDGET_EXCEEDED", "The requested include/fields/limit shape is too broad."),
@@ -683,40 +682,38 @@ const PRIMARY_DEFINITIONS = deepFreeze([
 
 const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   id: "macro.project.file",
-  title: "Create or save project file",
-  summary: "Secondary held macro contract: all four exact project-file templates are accepted/live-smoked, while macro execution and new-project creation remain held.",
+  title: "Save project file",
+  summary: "Secondary plan-only macro for save_current and save_as over four accepted/live-smoked atomic project-file templates; new/open/create remain typed-held.",
   pack: "project",
   risk: "write",
   entity_kind: "macro.project.file",
-  task_intents: ["save project", "save project as", "create new project", "read project path"],
-  rollout_slice: "3.2-C",
+  task_intents: ["save project", "save current project", "save project as"],
+  rollout_slice: "3.2-C3D",
   guide_tier: "secondary",
-  known_blocker: PROJECT_FILE_BLOCKER,
+  known_blocker: null,
   manual: actionManual({
-    when_to_use: ["Inspect accepted project path and dirty state, or call the exact accepted/live-smoked save templates while the macro itself remains held."],
-    when_not_to_use: ["Do not call save_project_as without explicit overwrite=true race authorization, even when the target appears absent; atomic no-clobber is held future.", "Do not use arbitrary filesystem operations or raw UI automation."],
-    required_readiness: ["All four exact project-file template ids are accepted/live-smoked.", "save_project_as must pass absolute .RPP, non-root/non-home real writable parent, symlink, target type, and explicit overwrite=true race authorization before bridge dispatch.", "New-project creation remains held and is not substituted by save-as."],
+    when_to_use: ["Request a strict serial child plan for save_current or save_as after the four exact atomic project-file templates are available."],
+    when_not_to_use: ["Do not use it for new, create, open, arbitrary filesystem operations, raw actions/Lua/shell/UI, or atomic overwrite=false."],
+    required_readiness: ["All four exact project-file template ids are accepted/live-smoked.", "The agent must execute returned child call_template requests explicitly and serially; the macro server never dispatches them."],
     input_shape: {
-      operation: "new | save | save_as",
-      path: "Required for save_as; validated project-file path only.",
-      overwrite_policy: "explicit_confirmed_overwrite only; overwrite=true is required even when the target is absent because atomic no-clobber is held future.",
-      unsaved_changes_policy: "save_current | explicit_discard_confirmation | stop.",
-      dry_run: "Boolean; validates posture without creating/saving.",
+      operation: "save_current | save_as only; new/create/open/unknown return typed blockers with zero mutation requests.",
+      target_path: "Required only for save_as and forwarded unchanged to template.project.save_project_as.",
+      overwrite: "Required literal true only for save_as; atomic overwrite=false remains held.",
     },
-    preflight_steps: ["Use the exact accepted path and dirty-state reads before mutation.", "For save-as, validate the absolute .RPP target, non-root/non-home real writable parent, symlink chain, target type, and explicit overwrite=true race authorization before dispatch.", "Keep new-project requests held and return exact confirmation requirements before overwrite."],
-    underlying_actions: ["template.project.read_current_project_path", "template.project.read_dirty_state", "template.project.save_current_project", "template.project.save_project_as", "held: new-project creation", "current accepted project summary/metadata reads are identity context only and do not substitute for the two exact reads"],
-    readback_steps: ["Use exact before/after path and raw dirty-state readback from each save handler.", "Report both save templates as accepted/live-smoked with explicit overwrite=true save-as authorization.", "Report render-readiness impact only from audited project-file evidence."],
-    success_criteria: ["Current Alpha3.2-C3BC posture means four accepted/live-smoked atomic project-file templates and a held macro/new-project route are reported accurately.", "Execution success requires exact path plus clean/raw-zero readback and explicit overwrite=true authorization for the preflight-to-REAPER race; atomic overwrite=false remains held future."],
-    common_blockers: [blocker("UNSAVED_PROJECT", "save_current_project refuses an unnamed project and never opens Save As UI."), blocker("PATH_INVALID", "The requested path fails validation or containment."), blocker("PERMISSION_DENIED", "The target parent is not writable."), blocker("OVERWRITE_TRUE_REQUIRED", "save_project_as requires explicit overwrite=true even for an absent target; atomic no-clobber is held future."), blocker("UNSAVED_PROJECT_POLICY_REQUIRED", "A new/open operation would discard dirty state without policy.")],
-    recovery_steps: ["For UNSAVED_PROJECT, use save_project_as only with a validated explicit target; do not trigger Save As UI.", "Choose a valid writable path or create the parent through an approved external user action.", "Authorize overwrite=true explicitly after reviewing the target and race posture, then rerun preflight; do not claim atomic no-clobber."],
-    dry_run_shape: { supported: true, output: ["planned_project_file_posture", "validated_target_path", "existing_target_posture", "required_confirmations", "render_readiness_impact", "typed_blockers"] },
-    resume_or_retry_policy: { resume_from: "exact handler readback after typed failure; macro.project.file remains held", retry: "Retry only after an unsaved-project, path, permission, symlink, target-type, overwrite, or verification blocker is repaired.", hard_stop: "Stop on overwrite other than explicit true, requests for atomic no-clobber, new-project requests, or missing audited template." },
-    examples: [example("save as", { operation: "save_as", path: "/projects/demo/demo.RPP", overwrite_policy: "explicit_confirmed_overwrite", unsaved_changes_policy: "save_current", dry_run: true })],
+    preflight_steps: ["Call template.project.read_current_project_path, then template.project.read_dirty_state.", "Continue to the mutation only when both reads succeed and the path read reports a saved project."],
+    underlying_actions: ["template.project.read_current_project_path", "template.project.read_dirty_state", "template.project.save_current_project", "template.project.save_project_as"],
+    readback_steps: ["After a successful mutation, call the exact path read and exact dirty-state read again in that order."],
+    success_criteria: ["save_current requires the exact preflight path to remain unchanged and dirty state clean/raw 0; save_as requires the exact target_path and dirty state clean/raw 0."],
+    common_blockers: [blocker("PROJECT_FILE_OPERATION_HELD", "new/create/open remain held and produce no mutation requests."), blocker("SAVE_AS_TARGET_PATH_REQUIRED", "save_as requires target_path."), blocker("SAVE_AS_OVERWRITE_TRUE_REQUIRED", "save_as requires explicit overwrite=true."), blocker("SAVE_CURRENT_FIELDS_REJECTED", "save_current rejects target_path and overwrite fields."), blocker("DEPENDENCY_GATE_FAILED", "A failed preflight or unsaved-project read stops before mutation.")],
+    recovery_steps: ["Repair the typed input or preflight blocker, then request a fresh plan.", "For save-as filesystem/path blockers, preserve and rely on the atomic save_project_as validation; the wrapper never substitutes weaker checks."],
+    dry_run_shape: { supported: true, output: ["preflight_requests", "mutation_requests", "readback_requests", "agent_execution_flow", "typed_blockers", "no_executor_safety_posture"] },
+    resume_or_retry_policy: { resume_from: "request a fresh plan after any failed child request", retry: "Retry only after the typed blocker is repaired; never skip or reuse stale preflight evidence.", hard_stop: "Stop on new/create/open, overwrite other than literal true, failed dependency, or exact postflight mismatch." },
+    examples: [example("save current", { operation: "save_current" }), example("save as", { operation: "save_as", target_path: "/projects/demo/demo.RPP", overwrite: true })],
   }),
 }));
 
 export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
-  secondaryRow("macro.project.file", "Held macro over four accepted/live-smoked atomic project-file templates; new-project remains unavailable.", "write_confirmed", "contract_only", "Expand for exact atomic save guidance without treating the macro as executable."),
+  secondaryRow("macro.project.file", "Plan-only save-current/save-as macro; new/open/create remain held.", "write_confirmed", "plan_only_runtime_bound", "Expand for exact child order, gates, readback, and blockers."),
   secondaryRow("macro.index_status", "Read Project Index readiness, freshness, and refresh needs.", "read", "compatibility_plan_only", "Expand when diagnosing INDEX_NOT_READY before macro.project.query is implemented."),
   secondaryRow("macro.selected_context", "Read current selected project context and candidate refs.", "read", "compatibility_plan_only", "Expand when selected context is needed before macro.project.inspect is implemented."),
   secondaryRow("macro.query_tracks", "Query indexed track rows.", "read", "compatibility_plan_only", "Expand for current track-index behavior or migration compatibility."),
@@ -739,8 +736,10 @@ export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const CONTRACT_ONLY_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
+const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS;
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
+const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
+const GUIDE_BY_ID = new Map(GUIDE_DEFINITIONS.map((entry) => [entry.id, entry]));
 
 export const ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS = deepFreeze(CONTRACT_ONLY_DEFINITIONS.map((entry) => entry.id));
 export const ALPHA3_2A_SECONDARY_MACRO_IDS = deepFreeze(ALPHA3_2A_SECONDARY_MACRO_ROWS.map((entry) => entry.id));
@@ -816,7 +815,7 @@ const COMPACT_GUIDE = deepFreeze({
     route("apply internal routing", "macro.routing.apply", "Use accepted internal routing templates; hardware/device I/O is blocked."),
     route("place media assets", "macro.media.place_assets", "Use bounded probe/import/readback; never mutate source media files."),
     route("render targets", "macro.render.targets", "Use managed render root and exact accepted render templates; no external encoder fallback."),
-    route("save/save-as", "macro.project.file", "Use the two exact accepted/live-smoked save templates with explicit race-aware overwrite authorization; the macro and new-project creation remain held."),
+    route("save/save-as", "macro.project.file", "Call the plan-only macro, then execute its strict serial atomic child requests; new/open/create remain held."),
     route("recover blockers", "ping + exact guide request", "Repair typed readiness/ref/index/render blockers; no direct bridge, raw action/Lua, shell, or UI path."),
   ],
   portfolio: {
@@ -928,7 +927,7 @@ export function alpha3_2AContractOnlyBlockerForId(id) {
 }
 
 export function createAlpha3_2AExactMacroExpansion(id) {
-  const contractEntry = CONTRACT_ONLY_BY_ID.get(id);
+  const contractEntry = GUIDE_BY_ID.get(id);
   if (!contractEntry) return null;
   return cloneJson({
     id,
@@ -936,8 +935,8 @@ export function createAlpha3_2AExactMacroExpansion(id) {
     guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
     guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
     guide_tier: contractEntry.guide_tier,
-    implementation_status: "contract_only_non_runnable",
-    runnable: false,
+    implementation_status: id === "macro.project.file" ? "plan_only_runtime_bound" : "contract_only_non_runnable",
+    runnable: id === "macro.project.file",
     rollout_slice: contractEntry.rollout_slice,
     action_manual: contractEntry.manual,
   });

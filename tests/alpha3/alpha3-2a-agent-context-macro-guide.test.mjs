@@ -194,8 +194,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.inspect",
     ]);
     for (const expansion of expansions.items) {
-      assert.equal(expansion.runnable, false);
-      assert.equal(expansion.implementation_status, "contract_only_non_runnable");
+      const projectFile = expansion.id === "macro.project.file";
+      assert.equal(expansion.runnable, projectFile);
+      assert.equal(expansion.implementation_status, projectFile ? "plan_only_runtime_bound" : "contract_only_non_runnable");
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
     }
@@ -246,7 +247,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(manual.input_shape.entity, EXPECTED_QUERY_ENTITIES.join(" | "));
   });
 
-  it("reports four accepted/live-smoked project-file templates and a held macro/new-project route", () => {
+  it("reports four accepted/live-smoked project-file templates and a plan-only save macro with new/open/create held", () => {
     const runtime = createCallTemplateRuntime();
     const guide = runtime.list_templates().product_surface.agent_context_macro_guide;
     const inspectCard = guide.primary_spine.rows.find((row) => row.id === "macro.project.inspect");
@@ -263,12 +264,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(guide.project_file_posture.accepted_mutation_routes, EXPECTED_PROJECT_FILE_TEMPLATE_IDS.slice(2));
     assert.deepEqual(guide.project_file_posture.ids.map((row) => row.status), ["accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked"]);
     assert.match(inspectCard.action_manual.when_to_use, /accepted exact project path/);
-    assert.equal(inspectCard.action_manual.common_blockers.includes("PROJECT_FILE_MACRO_HELD"), true);
+    assert.equal(inspectCard.action_manual.common_blockers.includes("PROJECT_FILE_NEW_OPERATION_HELD"), true);
     assert.match(inspectManual.readback_steps.join(" "), /exact path\/path_state/);
     for (const id of EXPECTED_PROJECT_FILE_TEMPLATE_IDS) {
       assert.equal(projectFileManual.underlying_actions.some((row) => row.includes(id)), true, id);
     }
-    assert.match(projectFileManual.success_criteria.join(" "), /four accepted\/live-smoked atomic project-file templates/);
+    assert.match(projectFileManual.success_criteria.join(" "), /save_current.*exact preflight path.*save_as.*exact target_path/);
   });
 
   it("publishes explicit portfolio ids, legacy mappings, removals, and distinct-legacy blockers", () => {
@@ -304,7 +305,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(marginBytes >= 512, true, `${marginBytes}`);
   });
 
-  it("keeps all contract ids held/non-runnable and preserves legacy macro dispatch", async () => {
+  it("keeps the seven primary contract ids held while project.file is plan-only and legacy dispatch remains", async () => {
     let executorCalls = 0;
     const runtime = createCallTemplateRuntime({
       executor: async () => {
@@ -313,13 +314,18 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       },
     });
 
-    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, [...EXPECTED_PRIMARY_IDS, "macro.project.file"]);
+    assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS);
     for (const id of ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS) {
       const result = await runtime.call_template({ id, input: {} });
       assert.equal(result.ok, false);
       assert.equal(result.error?.code ?? result.error_code, "CALL_TEMPLATE_ID_HELD");
       assert.equal(result.error?.details?.implementation_status, "contract_only_non_runnable");
     }
+
+    const projectFile = await runtime.call_template({ id: "macro.project.file", input: { operation: "save_current" } });
+    assert.equal(projectFile.ok, true);
+    assert.equal(projectFile.result.executed, false);
+    assert.equal(projectFile.result.execution.executor_call_count, 0);
 
     const legacy = await runtime.call_template({ id: "macro.index_status", input: { scope: "project" } });
     assert.equal(legacy.ok, true);

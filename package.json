@@ -49,7 +49,8 @@
     "check:alpha3-2c1": "node --test tests/alpha3/alpha3-2c1-auto-context.test.mjs",
     "check:alpha3-2c2": "node --test tests/alpha3/alpha3-2c2-ref-guidance.test.mjs",
     "check:alpha3-2c3a": "node --test tests/alpha3/alpha3-2c3a-project-file-read.test.mjs tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs",
-    "check:alpha3-2c3bc": "node --test tests/alpha3/alpha3-2c3bc-project-file-save.test.mjs tests/alpha3/alpha3-2c3bc-project-file-save-lua-handler.test.mjs"
+    "check:alpha3-2c3bc": "node --test tests/alpha3/alpha3-2c3bc-project-file-save.test.mjs tests/alpha3/alpha3-2c3bc-project-file-save-lua-handler.test.mjs",
+    "check:alpha3-2c3d": "node --test tests/alpha3/alpha3-2c3d-project-file-macro.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"
