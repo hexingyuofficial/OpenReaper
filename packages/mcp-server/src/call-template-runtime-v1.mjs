@@ -1,3 +1,7 @@
+import { constants as FS_CONSTANTS } from "node:fs";
+import { access, lstat, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   FOUNDATION_BRIDGE_DEFAULT_BUDGET,
 } from "../../core/src/foundation-bridge-v1.mjs";
@@ -598,6 +602,11 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS = 
   "template.project.read_dirty_state",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS = deepFreeze([
+  "template.project.save_current_project",
+  "template.project.save_project_as",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -635,6 +644,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d29_render_output_policy", CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS],
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
   ["alpha3_2c3a_project_file_read", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS],
+  ["alpha3_2c3bc_project_file_save", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS],
 ]);
 
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
@@ -642,6 +652,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_observation_bundle",
   "template.automation.list_project_envelopes",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -654,10 +665,11 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFree
 export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
 ]);
 
-// Alpha3.2-C3A live evidence accepted by the control tower on 2026-07-11.
-const ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET = new Set();
+// Alpha3.2-C3A reads and C3B+C3C saves have control-tower live evidence accepted on 2026-07-11.
+const ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET = new Set([]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
   LIVE_TEMPLATE_GROUPS
@@ -704,6 +716,7 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_ID_UNKNOWN",
   "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
   "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
+  "CALL_TEMPLATE_PREFLIGHT_FAILED",
 ]);
 
 const RUNTIME_ERROR_CODE_SET = new Set(CALL_TEMPLATE_RUNTIME_ERROR_CODES);
@@ -875,7 +888,7 @@ export function createCallTemplateRuntime(options = {}) {
       const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
       const execution = await executeTemplate({
         descriptor,
-        input: normalized.input,
+        input: await preflightTemplateInput(id, normalized.input, normalized.budget),
         refs: normalized.refs,
         context: normalized.context,
         budget: normalized.budget,
@@ -1068,6 +1081,158 @@ function normalizeCallTemplateRequest(request) {
     budget: request.budget,
     idempotency_key: request.idempotency_key,
   };
+}
+
+const PROJECT_SAVE_CURRENT_TEMPLATE_ID = "template.project.save_current_project";
+const PROJECT_SAVE_AS_TEMPLATE_ID = "template.project.save_project_as";
+const PROJECT_SAVE_AS_MAX_PATH_BYTES = 2048;
+const PROJECT_FILE_SAVE_MIN_RESPONSE_BYTES = 65_536;
+const PROJECT_SAVE_AS_RESERVED_BASENAMES = new Set([
+  ".ds_store",
+  "con",
+  "prn",
+  "aux",
+  "nul",
+  ...Array.from({ length: 9 }, (_, index) => `com${index + 1}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${index + 1}`),
+]);
+
+async function preflightTemplateInput(id, input, budget) {
+  if (id !== PROJECT_SAVE_CURRENT_TEMPLATE_ID && id !== PROJECT_SAVE_AS_TEMPLATE_ID) return input;
+  assertProjectFileSaveResponseBudget(id, budget);
+  if (id === PROJECT_SAVE_CURRENT_TEMPLATE_ID) return input;
+  return validateProjectSaveAsTarget(input, { id });
+}
+
+function assertProjectFileSaveResponseBudget(id, budget) {
+  const maxResponseBytes = isPlainObject(budget) && Number.isInteger(budget.max_response_bytes)
+    ? budget.max_response_bytes
+    : FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes;
+  projectSaveAsPreflightAssert(
+    maxResponseBytes >= PROJECT_FILE_SAVE_MIN_RESPONSE_BYTES,
+    "success_envelope_budget_minimum_required",
+    "Project-file saves require max_response_bytes >= 65536 so the complete bounded success envelope is conservatively proven before executor dispatch.",
+    { id, max_response_bytes: maxResponseBytes, required_minimum_bytes: PROJECT_FILE_SAVE_MIN_RESPONSE_BYTES },
+  );
+}
+
+export async function validateProjectSaveAsTarget(input, { id = PROJECT_SAVE_AS_TEMPLATE_ID } = {}) {
+  const targetPath = input?.target_path;
+  const overwrite = input?.overwrite;
+  projectSaveAsPreflightAssert(typeof targetPath === "string", "target_path_type", "save_project_as target_path must be a string.", { id });
+  projectSaveAsPreflightAssert(Buffer.byteLength(targetPath) > 0, "target_path_empty", "save_project_as target_path must not be empty.", { id });
+  projectSaveAsPreflightAssert(Buffer.byteLength(targetPath) <= PROJECT_SAVE_AS_MAX_PATH_BYTES, "target_path_too_long", "save_project_as target_path exceeds the bounded path budget.", { id });
+  projectSaveAsPreflightAssert(!/[\u0000-\u001f\u007f]/u.test(targetPath), "target_path_control_character", "save_project_as target_path contains a NUL or control character.", { id });
+  projectSaveAsPreflightAssert(overwrite === true, "overwrite_true_required_for_dispatch", "save_project_as requires explicit overwrite=true authorization for the preflight-to-REAPER dispatch race; atomic overwrite=false is held for a future contract.", { id, atomic_overwrite_false: "held_future" });
+  const windowsDriveAbsolute = /^[A-Za-z]:[\\/]/u.test(targetPath);
+  projectSaveAsPreflightAssert(windowsDriveAbsolute || !/^[A-Za-z][A-Za-z0-9+.-]*:/u.test(targetPath), "target_path_uri", "save_project_as rejects URI and URL targets.", { id });
+  projectSaveAsPreflightAssert(path.isAbsolute(targetPath), "target_path_relative", "save_project_as requires an absolute target path.", { id });
+  projectSaveAsPreflightAssert(!/[\\/]$/u.test(targetPath), "target_path_directory", "save_project_as target must name a .RPP file, not a directory.", { id });
+
+  const rawParent = path.dirname(targetPath);
+  const normalizedTarget = path.normalize(targetPath);
+  const parsed = path.parse(normalizedTarget);
+  projectSaveAsPreflightAssert(rawParent === parsed.dir, "parent_path_not_normalized", "save_project_as requires an already-normalized parent path without dot segments or redundant separators.", { id, path: rawParent, canonical_parent: parsed.dir });
+  const basename = parsed.base;
+  const stem = basename.slice(0, -parsed.ext.length);
+  projectSaveAsPreflightAssert(normalizedTarget !== parsed.root, "target_path_root", "save_project_as rejects filesystem-root targets.", { id });
+  projectSaveAsPreflightAssert(normalizedTarget !== path.normalize(homedir()), "target_path_home", "save_project_as rejects the home directory itself as a target.", { id });
+  projectSaveAsPreflightAssert(basename.length > 0 && stem.trim().length > 0 && !/^\.+$/u.test(stem), "target_basename_invalid", "save_project_as requires a non-empty safe basename.", { id });
+  projectSaveAsPreflightAssert(parsed.ext.toLowerCase() === ".rpp", "target_extension_invalid", "save_project_as accepts only .RPP targets.", { id });
+  projectSaveAsPreflightAssert(!PROJECT_SAVE_AS_RESERVED_BASENAMES.has(stem.toLowerCase()), "target_basename_reserved", "save_project_as rejects reserved or dangerous target names.", { id });
+
+  const parent = parsed.dir;
+  projectSaveAsPreflightAssert(parent !== parsed.root, "parent_filesystem_root_rejected", "save_project_as rejects the filesystem root as a target parent.", { id, path: parent });
+  projectSaveAsPreflightAssert(parent !== path.normalize(homedir()), "parent_home_directory_rejected", "save_project_as rejects the home directory itself as a target parent.", { id, path: parent });
+  await assertProjectSaveAsParentChain(parent, id);
+  let parentStat;
+  try {
+    parentStat = await lstat(parent);
+  } catch (error) {
+    throw projectSaveAsFsError(error, "parent_missing", "save_project_as target parent must exist.", id, parent);
+  }
+  projectSaveAsPreflightAssert(!parentStat.isSymbolicLink(), "parent_symlink", "save_project_as rejects a symlink parent directory.", { id, path: parent });
+  projectSaveAsPreflightAssert(parentStat.isDirectory(), "parent_not_directory", "save_project_as target parent must be a real directory.", { id, path: parent });
+  try {
+    await access(parent, FS_CONSTANTS.W_OK);
+  } catch (error) {
+    throw projectSaveAsFsError(error, "parent_not_writable", "save_project_as target parent is not writable.", id, parent);
+  }
+  let canonicalParent;
+  try {
+    canonicalParent = await realpath(parent);
+  } catch (error) {
+    throw projectSaveAsFsError(error, "parent_realpath_failed", "save_project_as could not resolve the target parent safely.", id, parent);
+  }
+  projectSaveAsPreflightAssert(canonicalParent === parent, "parent_path_not_canonical", "save_project_as rejects parent paths that resolve through aliases or symlinks.", { id, path: parent, canonical_parent: canonicalParent });
+
+  const validatedTarget = path.join(canonicalParent, basename);
+  let targetStat = null;
+  try {
+    targetStat = await lstat(validatedTarget);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw projectSaveAsFsError(error, "target_lstat_failed", "save_project_as could not inspect the final target safely.", id, validatedTarget);
+    }
+  }
+  if (targetStat) {
+    projectSaveAsPreflightAssert(!targetStat.isSymbolicLink(), "target_symlink", "save_project_as rejects a symlink final target.", { id, path: validatedTarget });
+    projectSaveAsPreflightAssert(targetStat.isFile(), "target_not_regular_file", "save_project_as existing target must be a regular file.", { id, path: validatedTarget });
+  }
+
+  return {
+    target_path: validatedTarget,
+    overwrite,
+  };
+}
+
+async function assertProjectSaveAsParentChain(parent, id) {
+  const parsed = path.parse(parent);
+  let current = parsed.root;
+  for (const segment of parent.slice(parsed.root.length).split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment);
+    let currentStat;
+    try {
+      currentStat = await lstat(current);
+    } catch (error) {
+      throw projectSaveAsFsError(error, "parent_chain_missing", "save_project_as target parent chain must already exist.", id, current);
+    }
+    projectSaveAsPreflightAssert(!currentStat.isSymbolicLink(), "parent_chain_symlink", "save_project_as rejects symlinks in the target parent chain.", { id, path: current });
+    projectSaveAsPreflightAssert(currentStat.isDirectory(), "parent_chain_not_directory", "save_project_as target parent chain must contain only directories.", { id, path: current });
+  }
+}
+
+function projectSaveAsPreflightAssert(condition, reason, message, details = {}) {
+  if (condition) return;
+  throw new CallTemplateRuntimeError("CALL_TEMPLATE_PREFLIGHT_FAILED", message, {
+    recoverable: true,
+    id: details.id,
+    details: {
+      blocker: reason,
+      ...boundedProjectSaveAsDetails(details),
+    },
+  });
+}
+
+function projectSaveAsFsError(error, reason, message, id, targetPath) {
+  return new CallTemplateRuntimeError("CALL_TEMPLATE_PREFLIGHT_FAILED", message, {
+    recoverable: true,
+    id,
+    details: {
+      blocker: reason,
+      path: boundedString(targetPath, 512),
+      filesystem_code: boundedString(error?.code, 80),
+    },
+  });
+}
+
+function boundedProjectSaveAsDetails(details) {
+  const bounded = { ...details };
+  delete bounded.id;
+  for (const key of ["path", "canonical_parent"]) {
+    if (bounded[key] !== undefined) bounded[key] = boundedString(bounded[key], 512);
+  }
+  return bounded;
 }
 
 function assertLiveRuntimeDispatchAllowed(live, id) {
@@ -1847,6 +2012,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   ];

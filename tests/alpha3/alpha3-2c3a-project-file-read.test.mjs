@@ -262,7 +262,7 @@ async function respondToRunnerBridgeRequests({ transportDir, bridge, unknownResi
 describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
   it("adds exactly two official read descriptors with exact discovery truth", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
-    assert.equal(catalog.size, 218);
+    assert.equal(catalog.size, 220);
     for (const id of IDS) {
       const descriptor = catalog.require(id);
       assert.equal(descriptor.pack, "project");
@@ -293,12 +293,12 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
     assert.equal(exact.items.every((item) => item.risk === undefined), true);
   });
 
-  it("keeps historical Alpha2 at 213 and composes the 215-id current-product allowlist", () => {
+  it("keeps historical Alpha2 at 213 and composes the 217-id current-product allowlist", () => {
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
     assert.equal(IDS.some((id) => CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)), false);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS, IDS);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 215);
-    assert.deepEqual(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.slice(-2), IDS);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 217);
+    assert.deepEqual(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.slice(-4, -2), IDS);
     const current = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -306,7 +306,7 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(current.live_gate.allowed_template_ids.length, 215);
+    assert.equal(current.live_gate.allowed_template_ids.length, 217);
     const invalid = createCallTemplateRuntime({
       live: {
         opted_in: true,

@@ -475,12 +475,90 @@ async function smokePackagedOpenReaperMcp() {
         operation: `${request.operation.family}:${request.operation.name}`,
         actual_stdio: true,
         omitted_context: true,
+        client_id: request.client.id,
+        session_id: request.client.session_id,
+        request_id: request.id,
+        created_at: request.created_at,
+        expected_owner: request.bridge.expected_owner,
+        expected_generation: request.bridge.expected_generation,
         undo_mode: request.undo.mode,
         artifacts_allowed: request.artifacts.allow,
         observed_summary: call.result.summary,
         observed_project_ref: projectRef,
         observed_artifact_count: call.result.artifacts.length,
         observed_job_count: call.result.jobs.length,
+      });
+      await clearDirectoryEntries(path.join(transportDir, "requests"));
+      await clearDirectoryEntries(path.join(transportDir, "results"));
+    }
+    const projectFileSaveCalls = [];
+    const packageSaveAsParent = await realpath(path.join(packageRoot, "session"));
+    const packageSaveAsTarget = path.join(packageSaveAsParent, "OpenReaper Package Save As Smoke.RPP");
+    for (const [templateId, capability, input] of [
+      ["template.project.save_current_project", "project.save_current_project", {}],
+      ["template.project.save_project_as", "project.save_project_as", { target_path: packageSaveAsTarget, overwrite: true }],
+    ]) {
+      const responsePromise = client.callTool({
+        name: "call_template",
+        arguments: { id: templateId, input },
+      });
+      const requestPromise = respondToPackagedBridgeRequest({
+        transportDir,
+        bridge: packageBridge,
+      });
+      const [call, request] = await Promise.all([
+        responsePromise.then(parseJsonToolResult),
+        requestPromise,
+      ]);
+      const expectedSummary = packageProjectFileSaveSummary(capability, packageSaveAsTarget);
+      const projectRef = call.result?.refs?.find((ref) => ref?.ref === "project:current");
+      if (
+        call.ok !== true ||
+        call.template?.id !== templateId ||
+        request.operation?.family !== "run_command" ||
+        request.operation?.name !== "template.execute" ||
+        request.pack?.capability !== capability ||
+        request.pack?.risk !== "write" ||
+        request.client?.id !== "openreaper-mcp" ||
+        typeof request.client?.session_id !== "string" ||
+        !request.client.session_id.startsWith("openreaper-mcp-") ||
+        typeof request.id !== "string" ||
+        !/^cmd_[0-9]{17}_[0-9]{3}_[a-f0-9]{6}$/u.test(request.id) ||
+        !Number.isFinite(Date.parse(request.created_at)) ||
+        request.bridge?.expected_owner !== "openreaper-alpha-package-smoke" ||
+        request.bridge?.expected_generation !== 1 ||
+        request.undo?.mode !== "required" ||
+        request.verification?.mode !== "required" ||
+        request.artifacts?.allow !== false ||
+        JSON.stringify(call.result?.summary) !== JSON.stringify(expectedSummary) ||
+        projectRef?.kind !== "project" ||
+        projectRef?.identity?.scheme !== "current" ||
+        projectRef?.identity?.value !== "current" ||
+        (call.result?.artifacts?.length ?? 0) !== 0 ||
+        (call.result?.jobs?.length ?? 0) !== 0 ||
+        (capability === "project.save_project_as" && (request.params?.target_path !== packageSaveAsTarget || request.params?.overwrite !== true))
+      ) {
+        throw new Error(`Packaged MCP C3BC project-file save smoke failed: ${templateId}`);
+      }
+      projectFileSaveCalls.push({
+        template_id: templateId,
+        capability,
+        operation: `${request.operation.family}:${request.operation.name}`,
+        actual_stdio: true,
+        omitted_context: true,
+        client_id: request.client.id,
+        session_id: request.client.session_id,
+        request_id: request.id,
+        created_at: request.created_at,
+        expected_owner: request.bridge.expected_owner,
+        expected_generation: request.bridge.expected_generation,
+        undo_mode: request.undo.mode,
+        verification_mode: request.verification.mode,
+        artifacts_allowed: request.artifacts.allow,
+        validated_target_path: request.params?.target_path ?? null,
+        overwrite: request.params?.overwrite ?? null,
+        observed_summary: call.result.summary,
+        observed_project_ref: projectRef,
       });
       await clearDirectoryEntries(path.join(transportDir, "requests"));
       await clearDirectoryEntries(path.join(transportDir, "results"));
@@ -553,6 +631,11 @@ async function smokePackagedOpenReaperMcp() {
         ok: true,
         contract: "alpha3.2.c3a.project_file_read.v1",
         calls: projectFileReadCalls,
+      },
+      alpha3_2c3bc_project_file_saves: {
+        ok: true,
+        contract: "alpha3.2.c3bc.project_file_save.v1",
+        calls: projectFileSaveCalls,
       },
       keyed_ref_call_template: {
         ok: true,
@@ -635,15 +718,55 @@ function packageProjectFileReadSummary(operationName) {
   return null;
 }
 
+function packageProjectFileSaveSummary(capability, targetPath) {
+  if (capability === "project.save_current_project") {
+    return {
+      project_ref: "project:current",
+      before_path: "/tmp/OpenReaper Package Smoke.RPP",
+      after_path: "/tmp/OpenReaper Package Smoke.RPP",
+      before_dirty: true,
+      before_raw_dirty_state: 1,
+      after_dirty: false,
+      after_raw_dirty_state: 0,
+      path_unchanged: true,
+      summary: "Saved the already-named current project; exact path is unchanged and dirty state is clean/raw 0.",
+    };
+  }
+  if (capability === "project.save_project_as") {
+    return {
+      project_ref: "project:current",
+      before_path: "/tmp/OpenReaper Package Smoke.RPP",
+      after_path: targetPath,
+      before_dirty: true,
+      before_raw_dirty_state: 1,
+      after_dirty: false,
+      after_raw_dirty_state: 0,
+      target_path: targetPath,
+      overwrite: true,
+      path_matches_target: true,
+      summary: "Saved the current project as the exact validated .RPP target under explicit overwrite=true race authorization; current-project identity remains canonical and dirty state is clean/raw 0.",
+    };
+  }
+  return null;
+}
+
 function createOperationAwarePackageSmokeBridge({ owner, generation }) {
   const fake = new FakeFoundationBridge({ owner, generation });
   return {
     dispatch(request) {
       const result = fake.dispatch(request);
-      const summary = packageProjectFileReadSummary(request?.operation?.name);
+      const summary = packageProjectFileReadSummary(request?.operation?.name)
+        ?? packageProjectFileSaveSummary(request?.pack?.capability, request?.params?.target_path);
       if (!summary || result?.ok !== true) return result;
       const scripted = structuredClone(result);
       scripted.result.summary = summary;
+      if (request?.pack?.capability === "project.save_current_project" || request?.pack?.capability === "project.save_project_as") {
+        scripted.result.refs = [{
+          kind: "project",
+          ref: "project:current",
+          identity: { scheme: "current", value: "current" },
+        }];
+      }
       return scripted;
     },
   };

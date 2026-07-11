@@ -950,6 +950,11 @@ local D30_PROJECT_CONTAINER_HANDLERS = {
   ["project.render_or_update_subproject"] = render_or_update_subproject,
 }
 
+local ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS = {
+  ["project.save_current_project"] = save_current_project,
+  ["project.save_project_as"] = save_project_as,
+}
+
 local function dispatch_template_execute(request)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
@@ -1024,6 +1029,10 @@ local function dispatch_template_execute(request)
     return handler(request)
   end
   handler = D30_PROJECT_CONTAINER_HANDLERS[request.pack.capability]
+  if handler then
+    return handler(request)
+  end
+  handler = ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS[request.pack.capability]
   if handler then
     return handler(request)
   end

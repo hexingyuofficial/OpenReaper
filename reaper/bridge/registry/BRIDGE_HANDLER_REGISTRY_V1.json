@@ -264,6 +264,42 @@
       ]
     },
     {
+      "template_id": "template.project.save_current_project",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "alpha3-2c3bc-project-file-save",
+      "handler_file": "project/save_project_file.lua",
+      "handler_export": "save_current_project",
+      "artifact_policy": "none",
+      "capability": "project.save_current_project",
+      "tests": [
+        "tests/alpha3/alpha3-2c3bc-project-file-save.test.mjs",
+        "tests/alpha3/alpha3-2c3bc-project-file-save-lua-handler.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.save_project_as",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "alpha3-2c3bc-project-file-save",
+      "handler_file": "project/save_project_file.lua",
+      "handler_export": "save_project_as",
+      "artifact_policy": "none",
+      "capability": "project.save_project_as",
+      "tests": [
+        "tests/alpha3/alpha3-2c3bc-project-file-save.test.mjs",
+        "tests/alpha3/alpha3-2c3bc-project-file-save-lua-handler.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.project.set_tempo",
       "operation": {
         "family": "run_command",

@@ -26,6 +26,8 @@ const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.read_summary",
   "template.project.read_current_project_path",
   "template.project.read_dirty_state",
+  "template.project.save_current_project",
+  "template.project.save_project_as",
   "template.project.read_metadata",
   "template.project.set_metadata_field",
   "template.project.list_markers_regions",
@@ -230,8 +232,8 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(response.contract, "discovery.menu.v1");
     assert.equal(response.kind, "template_menu");
     assert.equal(response.mode, "menu");
-    assert.equal(response.items.length, PROJECT_ALLOWLIST.length);
-    assert.equal(response.page.has_more, false);
+    assert.equal(response.items.length, 25);
+    assert.equal(response.page.has_more, true);
     assert.equal("total" in response.page, false);
     for (const item of response.items) {
       assert.deepEqual(Object.keys(item), [

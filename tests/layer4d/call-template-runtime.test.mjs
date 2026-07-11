@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -59,6 +59,7 @@ import {
   createAcceptedOfficialTemplateDiscovery,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE,
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
@@ -155,10 +156,16 @@ describe("Layer 4D call_template runtime binding", () => {
       evidenceLimit: catalog.size,
     });
 
+    const projectSaveRoot = realpathSync(mkdtempSync(join(tmpdir(), "openreaper-layer4d-save-")));
+    try {
     for (const [index, descriptor] of catalog.list().entries()) {
+      const descriptorInput = cloneJson(descriptor.examples[0]?.input ?? {});
+      const input = descriptor.id === "template.project.save_project_as"
+        ? { target_path: join(projectSaveRoot, "Layer4D Save As.RPP"), overwrite: true }
+        : descriptorInput;
       const response = await runtime.call_template({
         id: descriptor.id,
-        input: cloneJson(descriptor.examples[0]?.input ?? {}),
+        input,
         refs: sampleInputRefs(descriptor, index),
         context: context({ request_sequence: (index % 999) + 1 }),
       });
@@ -176,6 +183,10 @@ describe("Layer 4D call_template runtime binding", () => {
         JSON.stringify(response),
         /inline_payload|inputSchema|outputSchema|expectedDelta|examples|descriptor/,
       );
+    }
+
+    } finally {
+      rmSync(projectSaveRoot, { recursive: true, force: true });
     }
 
     const evidence = runtime.evidence();
@@ -736,12 +747,13 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
     assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.length, 2);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS.length, 2);
     assert.equal(
       CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.some((id) =>
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 215);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 217);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -749,7 +761,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 215);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 217);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
