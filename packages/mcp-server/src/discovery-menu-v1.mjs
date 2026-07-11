@@ -519,11 +519,17 @@ function exampleCallShape(item, kind) {
       id: stringValue(item.id) || null,
       input: firstExampleInput(item),
       refs: exampleRefs(item),
-      context: {
-        expected_owner: "openreaper",
-        expected_generation: "current",
-        request_sequence: 1,
-      },
+    },
+    context_policy: {
+      normal_call: "omit_context_server_managed",
+      optional_logical_hints: [
+        "client_id",
+        "session_id",
+        "expected_owner",
+        "expected_generation",
+      ],
+      server_owned: ["session_id", "created_at", "request_sequence"],
+      installed_identity_conflicts: "rejected",
     },
   });
 }

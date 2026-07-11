@@ -403,6 +403,36 @@ async function smokePackagedOpenReaperMcp() {
     });
     const fxTemplates = parseJsonToolResult(fxTemplateResponse);
     assertDiscoveredIds(fxTemplates, REQUIRED_FX_TEMPLATE_IDS, "Packaged MCP FX template smoke");
+    const packageBridge = new FakeFoundationBridge({
+      owner: "openreaper-alpha-package-smoke",
+      generation: 1,
+    });
+    const omittedContextResponse = client.callTool({
+      name: "call_template",
+      arguments: {
+        id: "template.transport.read_state",
+        input: {},
+      },
+    });
+    const observedOmittedContextRequest = respondToPackagedBridgeRequest({
+      transportDir,
+      bridge: packageBridge,
+    });
+    const [omittedContextCall, omittedContextRequest] = await Promise.all([
+      omittedContextResponse.then(parseJsonToolResult),
+      observedOmittedContextRequest,
+    ]);
+    if (
+      omittedContextCall.ok !== true ||
+      omittedContextCall.template?.id !== "template.transport.read_state" ||
+      omittedContextRequest.client?.id !== "openreaper-mcp" ||
+      typeof omittedContextRequest.client?.session_id !== "string" ||
+      omittedContextRequest.bridge?.expected_owner !== "openreaper-alpha-package-smoke" ||
+      omittedContextRequest.bridge?.expected_generation !== 1 ||
+      !/_001_/u.test(omittedContextRequest.id)
+    ) {
+      throw new Error("Packaged MCP omitted-context call_template smoke failed");
+    }
     const executableAllowlistSmoke = await smokeExecutableLiveAllowlist(client);
     return {
       ok: true,
@@ -410,6 +440,15 @@ async function smokePackagedOpenReaperMcp() {
       kernel: ping.kernel,
       required_macros: [...REQUIRED_MACRO_IDS],
       required_fx_templates: [...REQUIRED_FX_TEMPLATE_IDS],
+      omitted_context_call_template: {
+        ok: true,
+        template_id: omittedContextCall.template.id,
+        actual_stdio: true,
+        server_managed_session: true,
+        request_sequence: 1,
+        expected_owner: omittedContextRequest.bridge.expected_owner,
+        expected_generation: omittedContextRequest.bridge.expected_generation,
+      },
       agent_startup_guidance: {
         installed_start_reaper_for_mcp: ping.agent_startup_guidance.commands.installed_start_reaper_for_mcp,
         installed_start_project_for_mcp: ping.agent_startup_guidance.commands.installed_start_project_for_mcp,
@@ -450,6 +489,25 @@ async function smokePackagedOpenReaperMcp() {
     await clearDirectoryEntries(path.join(transportDir, "requests"));
     await clearDirectoryEntries(path.join(transportDir, "results"));
   }
+}
+
+async function respondToPackagedBridgeRequest({ transportDir, bridge }) {
+  const requestsDir = path.join(transportDir, "requests");
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    const files = (await readdir(requestsDir)).filter((file) => file.endsWith(".json"));
+    if (files.length > 0) {
+      const request = JSON.parse(await readFile(path.join(requestsDir, files[0]), "utf8"));
+      const result = bridge.dispatch(request);
+      await writeFile(
+        path.join(transportDir, "results", files[0]),
+        `${JSON.stringify(result)}\n`,
+        "utf8",
+      );
+      return request;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for packaged omitted-context bridge request");
 }
 
 async function smokePackagedRuntimeDoctorReadiness() {

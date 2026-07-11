@@ -4,6 +4,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import {
+  Alpha3_2C1CallContextError,
+  createAlpha3_2C1CallContextManager,
+} from "./alpha3-2c1-call-context-v1.mjs";
+import {
   composeAlpha3_2B3RuntimeDoctorReadiness,
 } from "./alpha3-2b3-runtime-doctor-readiness-v1.mjs";
 import {
@@ -25,6 +29,7 @@ const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
 
 async function main() {
+  const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
   const liveBridge = createLiveBridgeExecutorFromEnv(process.env);
   const runtime = createCallTemplateRuntime({
     live: liveBridge.configured
@@ -134,7 +139,14 @@ async function main() {
       idempotency_key: z.string().optional(),
     },
     async (request) => {
-      const normalized = normalizeCallTemplateToolRequest(request ?? {});
+      let normalized;
+      try {
+        const context = callContext.allocate(request?.context);
+        normalized = normalizeCallTemplateToolRequest(request ?? {}, context);
+      } catch (error) {
+        if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
+        return jsonToolResult(callContextErrorResult(request, error), true);
+      }
       const result = await runtime.call_template(normalized);
       return jsonToolResult(result, !result?.ok && isHardToolError(result));
     },
@@ -175,11 +187,28 @@ async function main() {
   process.stderr.write("[openreaper-mcp] stdio server ready\n");
 }
 
-function normalizeCallTemplateToolRequest(request) {
+function normalizeCallTemplateToolRequest(request, context) {
+  const { name: _name, params: _params, context: _callerContext, ...rest } = request;
   return {
-    ...request,
+    ...rest,
     id: request.id ?? request.name,
     input: request.input ?? request.params ?? {},
+    context,
+  };
+}
+
+function callContextErrorResult(request, error) {
+  return {
+    ok: false,
+    contract: "call_template.runtime.v1",
+    id: typeof request?.id === "string" ? request.id : null,
+    error: {
+      source: "stdio_context",
+      code: error.code,
+      message: error.message,
+      recoverable: true,
+      details: error.details,
+    },
   };
 }
 
