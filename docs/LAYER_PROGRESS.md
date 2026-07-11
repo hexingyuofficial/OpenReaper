@@ -3045,11 +3045,48 @@ explicit-overwrite save-as are accepted/live-smoked; and the secondary
 `macro.project.file` provides a bounded agent-executed plan without adding
 resolver tools or an execution bypass.
 
-Next product gate: Alpha3.2-D SQLite Practical Query Gate.
+Next product gate: Alpha3.2-E Small Macro Spine.
 
 ### Alpha3.2-D SQLite Practical Query Gate
 
-Status: in_progress; two bounded implementation slices opened; 2026-07-11.
+Status: accepted; implementation commit `c7fe813` (`product: bind alpha3.2-d project query index`); 2026-07-11.
+
+Acceptance summary:
+
+- `macro.project.query` is now the single public Project Index query surface for
+  `status`, `selected_context`, `tracks`, `items`, `takes`, `fx`, `routing`,
+  `automation`, `markers_regions`, `media_sources`, `duplicates`, and
+  `changed_since`.
+- Normal stdio opens the managed resident/SQLite Project Index only when an
+  explicit package/session state root is configured, and successful accepted
+  atomic readbacks are observed into the cache after validation.
+- Covered old public query ids are removed/replaced; `macro.selected_context`
+  remains a temporary compatibility entry until the later inspect gate.
+- Reviewer P0/P1 fixes are accepted: staged FX/take refresh now reaches indexed
+  track/item refs, FX/item/take projection is scoped, active take refs are
+  projected canonically, and generic filter normalization is bounded by depth
+  and node budget.
+- SQLite rows remain navigation candidates only; no raw SQL, sixth MCP tool,
+  `call_recipe`, hidden executor, direct SQLite write authorization, raw
+  Lua/action/shell/UI bypass, or new bridge write capability was added.
+
+Acceptance evidence:
+
+```text
+Focused D gate: npm run check:alpha3-2d -> 27/27 pass
+Full gate: npm run build -> exit 0
+Whitespace: git diff --check -> exit 0
+Package smoke: /tmp/openreaper-alpha3-2d-ct-final-fast3/OpenReaper-alpha -> ok
+Live evidence: /tmp/openreaper-alpha32d-live-20260711T111749Z/alpha3-2d-live-acceptance.json -> ok
+Reviewer: PASS; previous P0/P1 closed
+Implementation commit: c7fe813
+```
+
+Residual risk: the fast live evidence used an empty disposable project, so
+non-empty multi-track FX chains and real active-take rows are covered by focused
+Node/SQLite/runtime tests and Lua handler code review, not a new non-empty
+REAPER canary. This is accepted for D under the user-approved fast closeout; a
+later macro-spine or trial-rerun slice may add richer non-empty live evidence.
 
 Accepted dependency baseline:
 
