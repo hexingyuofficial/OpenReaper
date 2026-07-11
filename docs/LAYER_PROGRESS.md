@@ -2790,3 +2790,33 @@ fixture state and must not delete recovery evidence.
 After both writes pass, the control tower may open the small
 `macro.project.file` wrapper binding as the final C implementation slice; the
 macro remains held until that separate binding and evidence are accepted.
+
+#### Alpha3.2-C3B+C3C Route-Policy Scope Amendment
+
+Status: approved bounded lower-layer fix; 2026-07-11.
+
+Worker preflight correctly found that all new `run_command:template.execute`
+write capabilities are rejected before dispatch unless they are explicitly
+admitted by the generated bridge route policy. Implementing descriptors and
+handlers without this fix would create a false runtime-bound claim.
+
+Exact added write scope:
+
+```text
+reaper/bridge/src/35-route-policy.lua
+```
+
+The worker may add exactly the two project capabilities
+`project.save_current_project` and `project.save_project_as` as `pack=project`,
+`risk=write`, `run_command:template.execute` operations; wire them through the
+existing capability/pack/risk and required-undo validation plus existing undo
+open/close eligibility; and add only focused route-policy regression assertions.
+It may not change any other capability, operation family, generic validation,
+undo semantics, error ABI, raw execution boundary, or architecture file.
+
+Local REAPER 7.71 API truth confirms direct
+`Main_SaveProject(ReaProject*,bool)` and
+`Main_SaveProjectEx(ReaProject*,const char*,int)`, with option bit 8 setting the
+new project filename for a non-template save. This approval does not itself
+promote either route; focused implementation, final review, package gate, and
+combined live evidence remain required.
