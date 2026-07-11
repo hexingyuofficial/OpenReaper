@@ -2476,3 +2476,149 @@ Next gate: Alpha3.2-C3A current project path and dirty-state read templates. It
 requires a separately opened bridge/handler/template lower-layer window and a
 bounded read-only live smoke against the authorized disposable project before
 C3B save-current or C3C save-as may begin.
+
+### Alpha3.2-C3A Current Project Path / Dirty-State Read Window
+
+Status: reopened_for_fix; C3B save-current, C3C save-as, and
+`macro.project.file` runtime binding remain paused.
+
+Control-tower decision: 2026-07-11.
+
+Accepted dependencies:
+
+```text
+C1 context: c8ded67 / 2992126
+C2 refs: 1d3afa0 / 8cfa397
+```
+
+Concrete blocker: the Alpha3.2 product guide names
+`template.project.read_current_project_path` and
+`template.project.read_dirty_state`, but both remain `planned_not_accepted`.
+The existing broad `template.project.read_summary` happens to include a path
+field but does not define unsaved-path semantics, expose `IsProjectDirty`, or
+provide the separately audited project-file facts required by the active plan.
+
+C3A contract:
+
+```text
+alpha3.2.c3a.project_file_read.v1
+```
+
+This window authorizes exactly two read-only templates:
+
+```text
+template.project.read_current_project_path
+  bridge operation: query_state:project.read_current_project_path
+  required output:
+    project_ref: project:current
+    name: bounded current project name
+    path: bounded current project path, empty only for an unsaved project
+    has_project_path: boolean
+    path_state: saved_project | unsaved_project
+    path_truncated: boolean
+
+template.project.read_dirty_state
+  bridge operation: query_state:project.read_dirty_state
+  required output:
+    project_ref: project:current
+    dirty: boolean
+    dirty_state: clean | dirty
+    raw_dirty_state: non-negative integer returned by IsProjectDirty
+```
+
+Required handler behavior:
+
+- current project identity comes from `EnumProjects(-1, "")` and remains
+  `project:current` with object-ref normalization handled by the accepted C2
+  contract;
+- an empty EnumProjects path is represented truthfully as an unsaved project,
+  not as a transport/config failure and not as the working directory;
+- non-empty paths are returned without canonicalizing, resolving symlinks,
+  opening files, probing parent permissions, or performing filesystem writes;
+- path/name projection is bounded and reports truncation explicitly. Normal
+  macOS `.RPP` paths must be returned exactly;
+- dirty state comes only from `IsProjectDirty(current_project)`. Missing API,
+  protected-call failure, or non-numeric/negative/non-integer results fail with
+  a bounded typed REAPER-runtime error rather than silently reporting clean;
+- both handlers are read-risk, no-undo, no-artifact, no-idempotency-key actions
+  and must not call save, save-as, action, shell, UI, render, or mutation APIs;
+- no existing `read_summary` semantics are silently changed in this slice.
+
+Catalog/runtime posture:
+
+- add the two descriptors to the accepted official catalog under the frozen
+  `project` pack; update exact catalog/bridge counts and tests truthfully;
+- add a dedicated C3A live group and an explicit current-product live allowlist
+  that composes the historical Alpha2 graduated group plus only these two C3A
+  ids. Do not relabel the new ids as Alpha2 evidence;
+- installed/packaged stdio may expose the composed current-product group, while
+  route-specific tests retain exact group validation;
+- update Alpha3.2-A project-file posture so the two reads are accepted and the
+  two writes remain `planned_not_accepted`; `macro.project.file` remains held
+  and no save/new/save-as wording may become executable.
+
+Approved tracked write scope:
+
+```text
+packages/core/src/template-packs/wave1a-project-templates-v1.mjs
+packages/core/src/template-catalog-fixtures-v1.mjs             # only if explicit fixture wiring is needed
+packages/mcp-server/src/call-template-runtime-v1.mjs
+packages/mcp-server/src/openreaper-mcp-stdio.mjs
+packages/mcp-server/src/alpha3-2a-agent-context-macro-guide-v1.mjs
+reaper/bridge/src/handlers/project/read_file_state.lua         # new, two read exports only
+reaper/bridge/src/handlers/core/read_template_catalog_summary.lua # exact count truth only
+reaper/bridge/src/40-route-pack-handlers.lua
+reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json
+reaper/bridge/registry/BRIDGE_ROUTE_METADATA_V1.json           # generated
+reaper/bridge/openreaper-live-bridge.lua                       # generated
+scripts/build-live-bridge.mjs                                  # C3A route registration only
+scripts/package-openreaper-alpha.mjs                           # packaged actual-stdio smoke only
+scripts/smoke-template-runtime-live.mjs                        # optional exact C3A fake/live route
+scripts/smoke-alpha3-2c3a-project-file-read.mjs                # optional dedicated bounded runner
+package.json                                                   # checks only
+tests/alpha3/alpha3-2c3a-project-file-read.test.mjs            # new focused tests
+tests/alpha3/alpha3-2a-agent-context-macro-guide.test.mjs      # exact posture correction
+tests/template-packs/wave1a-project-templates.test.mjs
+tests/layer4d/call-template-runtime.test.mjs
+tests/layer4d2/openreaper-live-bridge.test.mjs
+tests/layer4dx/read-handler-expansion.test.mjs
+tests/layer4dx/alpha3-2c3a-project-file-read-handler.test.mjs  # optional dedicated route test
+tests/layer4dr/bridge-handler-registry.test.mjs                # exact registry/count regression only
+```
+
+Any need to change Tool ABI, Foundation/Template/Discovery ABI docs, ref kinds,
+pack taxonomy, save/new/save-as behavior, raw action/Lua/shell/UI product
+surface, unrelated handlers, or architecture/process files is a blocker and
+must return to the control tower.
+
+Required static/package evidence:
+
+- descriptors validate and exact discovery exposes both accepted reads;
+- fake harness proves saved-path, unsaved-path, clean, dirty, and typed API/
+  malformed-result failures without mutation;
+- generated bridge and registry contain exactly the two C3A operation rows,
+  correct handler exports, read risk, no artifacts, and no write route;
+- current-product stdio allows both templates without weakening exact live-group
+  validation or the five-tool boundary;
+- Alpha3.2-A reports the two reads accepted and both writes held;
+- package actual stdio/fake file bridge calls both reads with omitted context;
+- focused tests, bridge build/checks, full `npm test`, package smoke, and
+  `npm run build` pass.
+
+Required live evidence uses the standing user authorization for:
+
+```text
+/Users/Zhuanz/Untitled/Untitled.RPP
+```
+
+The control tower may start/stop/restart REAPER through the accepted
+`openreaper-start` path and run the registered bridge Action operationally. Use
+a fresh evidence root, candidate package/runtime, and exact MCP calls for both
+C3A templates. Record observed project path/name/path_state and dirty/raw state;
+main-project SHA256/mtime before and after; any automatic backup or `.DS_Store`
+side effect; request/result cleanup; bridge owner/generation; and immediate plus
+delayed REAPER/process cleanup. The C3A calls themselves must be read-only. Do
+not save, save-as, render, or claim broader project-file support.
+
+Workers do not commit. The control tower owns review, live smoke, acceptance,
+ledger updates, and commits.
