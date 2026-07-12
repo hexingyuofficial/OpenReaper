@@ -3333,6 +3333,13 @@ async function smokePackagedVitalAgentMcp() {
       arguments: {
         bundle: minimalResolvedVitalBundle(),
         fx_ref: "track:1/fx:Vital",
+        identity: {
+          session_id: "openreaper-alpha-package-smoke",
+          project_ref: "project:current",
+          project_path: null,
+          bridge_owner: "openreaper-alpha-package-smoke",
+          bridge_generation: 1,
+        },
       },
     }));
     if (handoff.ok !== true || handoff.mode !== "plan_only_no_live_reaper_calls") {

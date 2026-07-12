@@ -216,6 +216,8 @@ sleep 0.1
     assert.match(source, /live_write_refs_reresolved/);
     assert.match(source, /candidateProjectUnderstanding/);
     assert.match(source, /projectAlpha3_2_5BProjectQueryDoctorTask/);
+    assert.match(source, /bridge_owner: "openreaper-alpha-package-smoke"/);
+    assert.match(source, /bridge_generation: 1/);
     assert.equal(source.includes("macro_execution_convenience_snapshot.safety.server_executes_children"), false);
   });
 });
