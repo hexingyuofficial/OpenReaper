@@ -1717,6 +1717,10 @@ async function smokePackagedDoctorNeverSettlingPing({
     "openreaper-mcp-stdio.mjs",
   );
   const candidateReadiness = path.join(path.dirname(candidateServer), "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
+  const candidateProjectUnderstanding = path.join(
+    path.dirname(candidateServer),
+    "alpha3-2-5-b-project-understanding-v1.mjs",
+  );
   const sourceReadiness = path.join(
     packageRoot,
     "vendor",
@@ -1755,6 +1759,10 @@ async function smokePackagedDoctorNeverSettlingPing({
     path.join(path.dirname(sourceReadiness), "live-bridge-executor-v1.mjs"),
     path.join(path.dirname(candidateReadiness), "live-bridge-executor-v1.mjs"),
   );
+  await writeFile(candidateProjectUnderstanding, `export function projectAlpha3_2_5BProjectQueryDoctorTask({ task } = {}) {
+  return task ?? {};
+}
+`, "utf8");
   await cp(
     path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua"),
     candidateBridge,

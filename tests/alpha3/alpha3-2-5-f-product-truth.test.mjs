@@ -214,6 +214,8 @@ sleep 0.1
     assert.match(source, /fixed_registered_programs/);
     assert.match(source, /model_supplied_execution_graph/);
     assert.match(source, /live_write_refs_reresolved/);
+    assert.match(source, /candidateProjectUnderstanding/);
+    assert.match(source, /projectAlpha3_2_5BProjectQueryDoctorTask/);
     assert.equal(source.includes("macro_execution_convenience_snapshot.safety.server_executes_children"), false);
   });
 });
