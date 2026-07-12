@@ -579,7 +579,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(render.contract, "macro.execution.v1");
       assert.equal(render.macro.id, "macro.render.targets");
       assert.equal(render.execution.status, "blocked");
-      assert.equal(render.error.code, "RENDER_EXECUTOR_UNAVAILABLE");
+      assert.equal(render.error.code, "RENDER_MANAGED_ROOT_UNAVAILABLE");
       assert.equal(inspect.ok, false);
       assert.equal(inspect.contract, "macro.execution.v1");
       assert.equal(inspect.macro.id, "macro.project.inspect");

@@ -777,6 +777,7 @@ export function createAlpha3_2B3DoctorTaskResult(options = {}) {
         ? { restart_escalation: recovery.restart_escalation }
         : {}),
       safe_copy_paste_fix: recovery.safe_copy_paste_fix,
+      recovery_card: beginnerRecoveryCard(first, runtime?.bridge, recovery),
       evidence: taskEvidence(runtime, requestResponse, reaperProcess, renderInspection),
       ...(mode === "render" ? renderPreflight(false) : {}),
     });
@@ -830,6 +831,29 @@ export function createAlpha3_2B3DoctorTaskResult(options = {}) {
     evidence: taskEvidence(runtime, requestResponse, reaperProcess, renderInspection),
     ...(mode === "render" ? renderPreflight(true) : {}),
   });
+}
+
+function beginnerRecoveryCard(diagnosis, bridge, recovery) {
+  const observed = bridge?.observed ?? {};
+  const expected = bridge?.expected ?? {};
+  return {
+    diagnosis,
+    likely_cause: diagnosis === "bridge_loop_unresponsive"
+      ? "The heartbeat is stale; it cannot distinguish a stopped Action from an unresponsive loop."
+      : diagnosis === "bridge_action_not_running"
+        ? "REAPER is present but the installed bridge Action has not produced a heartbeat."
+        : diagnosis === "owner_generation_mismatch"
+          ? "This bridge heartbeat belongs to a different OpenReaper session identity."
+          : diagnosis === "reaper_not_running"
+            ? "The installed OpenReaper session has no verified running REAPER process."
+          : "The OpenReaper live precondition is not ready.",
+    ...(diagnosis === "owner_generation_mismatch" ? {
+      expected_identity: { owner: expected.owner ?? null, generation: expected.generation ?? null },
+      observed_identity: { owner: observed.owner ?? null, generation: observed.generation ?? null },
+    } : {}),
+    recovery: recovery.next_action.instruction,
+    action_auto_run: false,
+  };
 }
 
 export function parseAlpha3_2B3DoctorArgs(args = []) {

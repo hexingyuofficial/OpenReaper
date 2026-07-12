@@ -1043,6 +1043,7 @@ export function createCallTemplateRuntime(options = {}) {
           request: normalized,
           executeAtomic: macroAtomic,
           projectIndexRuntime,
+          managedRenderRoot: options.managedRenderRoot,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);

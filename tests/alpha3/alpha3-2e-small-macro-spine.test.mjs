@@ -151,7 +151,7 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       assert.equal(renderPreview.ok, false);
       assert.equal(renderPreview.contract, "macro.execution.v1");
       assert.equal(renderPreview.execution.status, "blocked");
-      assert.equal(renderPreview.error.code, "RENDER_EXECUTOR_UNAVAILABLE");
+      assert.equal(renderPreview.error.code, "RENDER_MANAGED_ROOT_UNAVAILABLE");
     } finally {
       await client.close();
     }

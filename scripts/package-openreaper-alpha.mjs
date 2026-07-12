@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
@@ -9,7 +9,11 @@ import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+  createAcceptedOfficialTemplateCatalogTemplates,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import {
+  ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS,
+} from "../packages/mcp-server/src/alpha3-2-5-0-macro-inventory-v1.mjs";
 import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
   createArtifactStateStoreEnvelope,
@@ -33,6 +37,8 @@ const vitalAgentRoot = path.resolve(options.vital_agent_root ?? path.join(repoRo
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
+const OPENREAPER_PRODUCT_VERSION = "3.2.5-alpha.0";
+const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;
 const projectIndexSmokeOnly = options.project_index_smoke_only === true;
@@ -93,6 +99,8 @@ async function buildPackage() {
   await installVitalAgentCompanion();
   await writePackageEntrypoints();
   await writeReadme();
+  const provenance = await writePackageProvenanceManifest();
+  await validatePackageProvenanceManifest(provenance);
   await removeDsStore(packageRoot);
   const smoke = projectIndexSmokeOnly
     ? {
@@ -100,6 +108,7 @@ async function buildPackage() {
       }
     : {
         installer_upgrade_migration: await smokePackagedInstallerUpgradeMigration(),
+        package_provenance: await smokePackagedProvenanceManifest(provenance),
         openreaper_start_helper: await smokePackagedOpenReaperStartHelper(),
         portable_paths: await smokePackagedPortablePaths(),
         openreaper: await smokePackagedOpenReaperMcp(),
@@ -128,6 +137,7 @@ async function buildPackage() {
       entrypoints: ["bin/openreaper-mcp", "bin/vital-agent-mcp", "bin/openreaper-start", "bin/openreaper-doctor"],
       dependency_source: "package_root_npm_install",
     },
+    provenance,
     smoke,
     install: {
       command: "double-click install.command or run ./install.command",
@@ -138,6 +148,80 @@ async function buildPackage() {
       startup_requirement: "REAPER must be started through openreaper-start for MCP to connect.",
     },
   }, null, 2));
+}
+
+async function writePackageProvenanceManifest() {
+  let gitCommit;
+  let gitStatus;
+  try {
+    gitCommit = execFileSync("git", ["-C", repoRoot, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    gitStatus = execFileSync("git", ["-C", repoRoot, "status", "--porcelain=v1", "--untracked-files=all"], { encoding: "utf8" }).trim();
+  } catch {
+    throw new Error("Package provenance requires the exact OpenReaper git commit.");
+  }
+  if (!/^[0-9a-f]{40}$/u.test(gitCommit)) throw new Error("Package provenance git commit is invalid.");
+  if (gitStatus !== "") throw new Error("Package provenance requires a clean OpenReaper worktree so the packaged files match the recorded commit.");
+  let handlerRegistry;
+  try {
+    handlerRegistry = JSON.parse(await readFile(path.join(repoRoot, "reaper", "bridge", "registry", "BRIDGE_HANDLER_REGISTRY_V1.json"), "utf8"));
+  } catch {
+    throw new Error("Package provenance could not read the bridge handler registry.");
+  }
+  if (handlerRegistry?.contract !== "openreaper.bridge_handler_registry.v1" || !Array.isArray(handlerRegistry.entries)) {
+    throw new Error("Package provenance bridge handler registry is invalid.");
+  }
+  const manifest = {
+    contract: PACKAGE_PROVENANCE_CONTRACT,
+    product: "OpenReaper alpha",
+    package_version: OPENREAPER_PRODUCT_VERSION,
+    build_id: version,
+    openreaper_git_commit: gitCommit,
+    build_time_utc: new Date().toISOString(),
+    source_tree_clean: true,
+    accepted_macro_count: ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS.executable_official,
+    accepted_template_count: createAcceptedOfficialTemplateCatalogTemplates().length,
+    bridge_handler_count: handlerRegistry.entries.length,
+  };
+  const manifestPath = path.join(packageRoot, "provenance.json");
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
+  await chmod(manifestPath, 0o444);
+  return manifest;
+}
+
+async function validatePackageProvenanceManifest(expected) {
+  const manifestPath = path.join(packageRoot, "provenance.json");
+  let observed;
+  let packageMetadata;
+  try {
+    observed = JSON.parse(await readFile(manifestPath, "utf8"));
+    packageMetadata = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
+  } catch {
+    throw new Error("Package provenance or package metadata is missing or invalid JSON.");
+  }
+  if (
+    JSON.stringify(observed) !== JSON.stringify(expected) ||
+    observed.package_version !== OPENREAPER_PRODUCT_VERSION ||
+    packageMetadata.version !== OPENREAPER_PRODUCT_VERSION ||
+    observed.source_tree_clean !== true
+  ) {
+    throw new Error("Package provenance manifest does not match the package build truth.");
+  }
+  const mode = (await stat(manifestPath)).mode & 0o777;
+  if ((mode & 0o222) !== 0) throw new Error("Package provenance manifest must be read-only.");
+}
+
+async function smokePackagedProvenanceManifest(expected) {
+  await validatePackageProvenanceManifest(expected);
+  return {
+    ok: true,
+    package_version: expected.package_version,
+    build_id: expected.build_id,
+    openreaper_git_commit: expected.openreaper_git_commit,
+    accepted_macro_count: expected.accepted_macro_count,
+    accepted_template_count: expected.accepted_template_count,
+    bridge_handler_count: expected.bridge_handler_count,
+    read_only: true,
+  };
 }
 
 async function copyInstallerTemplates() {
@@ -184,7 +268,7 @@ async function copyVitalAgentCompanion() {
 async function installPackageDependencies() {
   await writeFile(path.join(packageRoot, "package.json"), `${JSON.stringify({
     name: "openreaper-alpha-package",
-    version: "0.0.0",
+    version: OPENREAPER_PRODUCT_VERSION,
     private: true,
     type: "module",
     dependencies: {

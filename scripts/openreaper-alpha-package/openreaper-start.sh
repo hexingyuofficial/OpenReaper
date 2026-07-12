@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="${0:A:h}"
 INSTALL_ROOT="${SCRIPT_DIR:h}"
 BRIDGE_SCRIPT="${INSTALL_ROOT}/vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua"
-REAPER_BIN="${REAPER_BINARY:-/Applications/REAPER.app/Contents/MacOS/REAPER}"
-REAPER_APP="${REAPER_APP:-}"
+REAPER_BIN="/Applications/REAPER.app/Contents/MacOS/REAPER"
+REAPER_APP=""
 SESSION_ROOT="${INSTALL_ROOT}/session"
 SESSION_ROOT_EXPLICIT=false
 RENDER_ROOT=""
@@ -40,6 +40,26 @@ LAUNCHSERVICES_ENV_KEYS=(
 
 PROJECT_PATH=""
 ARGS=()
+# An installed launch must never carry another OpenReaper session into REAPER.
+# Explicit supported CLI options below are the only way to select a non-default
+# session, transport, artifact, render, or bridge identity for this launch.
+for stale_openreaper_env in \
+  OPENREAPER_SESSION_ROOT \
+  OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR \
+  OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH \
+  OPENREAPER_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_RENDER_ROOT \
+  OPENREAPER_LIVE_BRIDGE_OWNER \
+  OPENREAPER_LIVE_BRIDGE_GENERATION \
+  OPENREAPER_LIVE_BRIDGE_SESSION_ID \
+  OPENREAPER_PROJECT_INDEX_STATE_ROOT \
+  OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY \
+  OPENREAPER_CURRENT_PROJECT_PATH \
+  OPENREAPER_CURRENT_PROJECT_REF \
+  OPENREAPER_MCP_PACKAGE_ROOT; do
+  unset "${stale_openreaper_env}" 2>/dev/null || true
+done
 require_option_value() {
   local option_name="$1"
   local remaining_count="$2"

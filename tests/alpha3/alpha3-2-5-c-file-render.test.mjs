@@ -17,6 +17,7 @@ import {
 import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 
 const now = () => new Date("2026-07-12T00:00:00.000Z");
+const managedRenderRoot = "/managed/renders";
 
 function atomicExecution(result = {}, ok = true, requestId = null) {
   return { contract: "template.execution.v1", ok, ...(requestId ? { request: { id: requestId } } : {}), result, error: ok ? null : { code: "ATOMIC_FAILED", message: "atomic failed" } };
@@ -183,17 +184,59 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const response = await executeAlpha3_2_5CRenderTargetsMacro({
       request: { request_id: "render-1", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
       now,
+      managedRenderRoot,
       executeAtomic: async ({ id, input }) => {
         calls.push({ id, input });
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: true } });
         return atomicExecution(verifiedRenderResult({
           data: { retained_project_path: "/tmp/trial.RPP", dirty_before: true, dirty_after: true, save_recommendation: "save_after_render" },
         }));
       },
     });
     assert.equal(response.ok, true, JSON.stringify(response));
-    assert.deepEqual(calls.map(({ id }) => id), ["template.render.render_targets"]);
+    assert.deepEqual(calls.map(({ id }) => id), ["template.project.read_dirty_state", "template.render.render_targets", "template.project.read_dirty_state"]);
     assert.equal(response.result.data.outputs[0].absolute_path, "/managed/renders/trial.wav");
     assert.equal(response.result.data.save_recommendation, "save_after_render");
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("retains completed render evidence when post-render dirty readback fails", async () => {
+    let dirtyReads = 0;
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: "render-post-read-fail", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
+      now,
+      managedRenderRoot,
+      executeAtomic: async ({ id }) => {
+        if (id === "template.project.read_dirty_state") {
+          dirtyReads += 1;
+          return dirtyReads === 1
+            ? atomicExecution({ readback: { dirty: false } }, true, "dirty-before")
+            : atomicExecution({}, false, "dirty-after");
+        }
+        return atomicExecution(verifiedRenderResult({
+          data: {
+            outputs: [{
+              absolute_path: "/managed/renders/retained.wav",
+              size: 4096,
+              extension: "wav",
+              generated_project_copy_retained: true,
+              generated_project_copy_path: "/managed/renders/retained.wav.RPP",
+            }],
+          },
+        }), true, "render-completed");
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "RENDER_DIRTY_STATE_REQUIRED");
+    assert.equal(response.result.data.render_completed, true);
+    assert.equal(response.result.data.audio_outputs[0].absolute_path, "/managed/renders/retained.wav");
+    assert.equal(response.result.data.retained_project_copies[0].audio_output_path, "/managed/renders/retained.wav");
+    assert.equal(response.result.data.dirty_after, null);
+    assert.equal(response.result.data.save_recommendation, "check_dirty_state_and_save_if_needed");
+    assert.equal(response.recovery.rendered_outputs_retained, true);
+    assert.equal(response.result.verification.evidence_refs.includes("render-completed"), true);
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
@@ -202,6 +245,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const response = await executeAlpha3_2_5CRenderTargetsMacro({
       request: { idempotency_key: "render-once", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
       now,
+      managedRenderRoot,
       executeAtomic: async () => { calls += 1; return atomicExecution(verifiedRenderResult()); },
     });
     assert.equal(response.ok, false);
@@ -221,7 +265,10 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
       const response = await executeAlpha3_2_5CRenderTargetsMacro({
         request: { request_id: `render-missing-${name}`, input: { target_kind: "whole_project", format: "wav", dry_run: false } },
         now,
-        executeAtomic: async () => atomicExecution(verifiedRenderResult(overrides)),
+        managedRenderRoot,
+        executeAtomic: async ({ id }) => id === "template.project.read_dirty_state"
+          ? atomicExecution({ readback: { dirty: false } })
+          : atomicExecution(verifiedRenderResult(overrides)),
       });
       assert.equal(response.ok, false, name);
       assert.equal(response.error.code, code, name);
@@ -235,7 +282,10 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const response = await executeAlpha3_2_5CRenderTargetsMacro({
       request: { request_id: "render-live-shape", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
       now,
-      executeAtomic: async () => ({
+      managedRenderRoot,
+      executeAtomic: async ({ id }) => id === "template.project.read_dirty_state"
+        ? atomicExecution({ readback: { dirty: false } })
+        : ({
         contract: "template.execution.v1",
         ok: true,
         request: { id: "cmd-render-live" },
@@ -311,8 +361,10 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
           input: { target_kind: fixture.target_kind, refs: [fixture.requested_ref], format: "wav", dry_run: false },
         },
         now,
+        managedRenderRoot,
         executeAtomic: async ({ id, input, refs }) => {
           calls.push({ id, input, refs });
+          if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
           if (id === fixture.resolver_id) return atomicExecution({ refs: [fixture.live_ref] });
           if (id === "template.render.render_targets") {
             return atomicExecution(verifiedRenderResult({
@@ -324,9 +376,9 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
       });
 
       assert.equal(response.ok, true, JSON.stringify(response));
-      assert.deepEqual(calls.map(({ id }) => id), [fixture.resolver_id, "template.render.render_targets"]);
-      assert.deepEqual(calls[1].refs, { [fixture.ref_key]: [fixture.live_ref] });
-      assert.equal(JSON.stringify(calls[1].refs).includes(fixture.requested_ref), fixture.live_ref.ref === fixture.requested_ref);
+      assert.deepEqual(calls.map(({ id }) => id), [fixture.resolver_id, "template.project.read_dirty_state", "template.render.render_targets", "template.project.read_dirty_state"]);
+      assert.deepEqual(calls[2].refs, { [fixture.ref_key]: [fixture.live_ref] });
+      assert.equal(JSON.stringify(calls[2].refs).includes(fixture.requested_ref), fixture.live_ref.ref === fixture.requested_ref);
       assert.equal(response.result.canonical_refs.includes(fixture.live_ref.ref), true);
       assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
     }
@@ -340,6 +392,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
         input: { target_kind: "explicit_items", refs: ["item:guid:{EXPECTED}"], format: "wav", dry_run: false },
       },
       now,
+      managedRenderRoot,
       executeAtomic: async ({ id }) => {
         calls.push(id);
         if (id === "template.items.resolve_item_ref") {

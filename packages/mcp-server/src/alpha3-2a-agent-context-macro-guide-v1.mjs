@@ -618,7 +618,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       required_readiness: [
         "Managed render-root readiness and live bridge readiness must pass.",
         "Target kind and canonical refs must match exactly; selected modes use current live selection and explicit modes require matching refs.",
-        "The registered Macro must be live-runnable; its fixed D31 dependency and manifest/evidence readback must complete before success wording.",
+        "The registered dirty-before, D31 render, and dirty-after dependencies plus manifest/evidence readback must complete before success wording.",
       ],
       input_shape: {
         target_kind: "whole_project | time_selection | regions | selected_items | explicit_items | selected_tracks | explicit_tracks.",
@@ -639,16 +639,18 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "D31 resolves live targets and checks every expected output/artifact collision before its first render action.",
       ],
       underlying_actions: [
-        "template.render.render_targets (single audited D31 dependency executed internally)",
+        "template.project.read_dirty_state before and after the render mutation",
+        "template.render.render_targets (the single audited D31 mutation executed internally)",
         "D31 internally uses REAPER project render settings, restores render/selection state, verifies WAV/OGG headers, and emits manifest/evidence artifacts",
       ],
       readback_steps: [
-        "Require the D31 result to return every output basename/path/size/extension plus manifest and evidence artifact refs.",
+        "Return the exact effective managed root before execution, then label audio outputs separately from retained recovery project copies.",
+        "Return dirty-before/after plus save recommendation and require every output plus manifest/evidence artifact refs.",
         "Confirm the registered render stage reports render-setting and item/track-selection restoration.",
         "Do not infer success from dry-run or a partial stage; accept only the completed Macro envelope and retained evidence.",
       ],
       success_criteria: [
-        "Dry-run returns a bounded preview; non-dry-run internally executes exactly one template.render.render_targets dependency.",
+        "Dry-run returns the effective managed-root preview; non-dry-run executes one D31 mutation bracketed by exact dirty-state reads.",
         "The registered render dependency verifies every non-empty managed WAV/OGG output and returns compact manifest/evidence refs.",
         "No arbitrary path, overwrite, external encoder, hidden executor, public call_recipe, raw action/Lua, shell, or UI bypass is exposed.",
       ],
@@ -667,7 +669,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       dry_run_shape: {
         supported: true,
         required_first: true,
-        output: ["normalized_refs", "estimated_output_count", "render_settings", "managed_output_policy", "typed_blockers"],
+        output: ["normalized_refs", "estimated_output_count", "render_settings", "effective_managed_render_root", "typed_blockers"],
       },
       resume_or_retry_policy: {
         resume_from: "fresh preview plus retained failed-child evidence",
@@ -1211,7 +1213,7 @@ function compactPrimaryUnderlyingActions(id) {
     "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.tracks.read_folder_structure"],
     "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.read_track_routing"],
     "macro.media.place_assets": ["template.media.probe_file", "template.tracks.resolve_track_ref", "template.media.import_file_to_track", "template.items.read_item_summary"],
-    "macro.render.targets": ["template.render.render_targets"],
+    "macro.render.targets": ["template.project.read_dirty_state", "template.render.render_targets"],
   })[id] ?? null;
 }
 

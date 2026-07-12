@@ -42,6 +42,7 @@ async function main() {
     ? createGetStateArtifactRuntime({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
     : null;
   const runtime = createCallTemplateRuntime({
+    managedRenderRoot: process.env.OPENREAPER_LIVE_SMOKE_RENDER_ROOT,
     projectIndexRuntime,
     projectIndexArtifactReader: artifactRuntime
       ? ({ artifact_ref }) => artifactRuntime.get_state({

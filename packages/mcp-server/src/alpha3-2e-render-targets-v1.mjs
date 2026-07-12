@@ -64,11 +64,13 @@ const UNKNOWN_FIELD_DETAIL_LIMIT = 12;
 const MAX_REF_BYTES = 256;
 const LIVE_EVIDENCE_BLOCKER = null;
 const RENDER_TEMPLATE_ID = "template.render.render_targets";
+const DIRTY_STATE_TEMPLATE_ID = "template.project.read_dirty_state";
 const TRACK_RESOLVER_ID = "template.tracks.resolve_track_ref";
 const ITEM_RESOLVER_ID = "template.items.resolve_item_ref";
 const MARKER_REGION_RESOLVER_ID = "template.project.list_markers_regions";
 const RENDER_TEMPLATE_IDS = Object.freeze([
   RENDER_TEMPLATE_ID,
+  DIRTY_STATE_TEMPLATE_ID,
   TRACK_RESOLVER_ID,
   ITEM_RESOLVER_ID,
   MARKER_REGION_RESOLVER_ID,
@@ -76,7 +78,9 @@ const RENDER_TEMPLATE_IDS = Object.freeze([
 const RENDER_STAGE_IDS = new Set([
   "render-selector-resolve",
   "render-live-ref-resolve",
+  "render-dirty-before",
   "render-template-execute",
+  "render-dirty-after",
   "render-result-project",
 ]);
 
@@ -94,7 +98,9 @@ export const ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY = createMacroProgramRegistry([
   stages: [
     { id: "render-selector-resolve", kind: "selector_resolve", risk: "read", stop_on_error: true },
     { id: "render-live-ref-resolve", kind: "live_ref_resolve", risk: "read", stop_on_error: true },
+    { id: "render-dirty-before", kind: "template_execute", dependency_ref: DIRTY_STATE_TEMPLATE_ID, risk: "read", stop_on_error: true },
     { id: "render-template-execute", kind: "template_execute", dependency_ref: RENDER_TEMPLATE_ID, risk: "write", stop_on_error: true },
+    { id: "render-dirty-after", kind: "template_execute", dependency_ref: DIRTY_STATE_TEMPLATE_ID, risk: "read", stop_on_error: true },
     { id: "render-result-project", kind: "result_project", risk: "read", stop_on_error: true },
   ],
   undo_policy: "single_undo",
@@ -162,8 +168,8 @@ export function planAlpha3_2ERenderTargetsMacro(input = {}, requestPosture = {})
   });
 }
 
-export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {}, plan, executeAtomic, projectIndexRuntime, now = () => new Date() } = {}) {
-  if (typeof executeAtomic === "function") return executeAlpha3_2_5CRenderTargetsMacro({ request, executeAtomic, projectIndexRuntime, now });
+export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {}, plan, executeAtomic, projectIndexRuntime, managedRenderRoot = null, now = () => new Date() } = {}) {
+  if (typeof executeAtomic === "function") return executeAlpha3_2_5CRenderTargetsMacro({ request, executeAtomic, projectIndexRuntime, managedRenderRoot, now });
   const normalizedPlan = plan ?? planAlpha3_2ERenderTargetsMacro(
     request.input ?? {},
     requestPosture(request),
@@ -212,13 +218,15 @@ export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {},
   return deepFreeze(envelope);
 }
 
-export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, executeAtomic, projectIndexRuntime, now = () => new Date() } = {}) {
+export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, executeAtomic, projectIndexRuntime, managedRenderRoot = null, now = () => new Date() } = {}) {
   const entry = ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY.get(ALPHA3_2E_RENDER_TARGETS_MACRO_ID);
   const startedAt = safeNowIso(now);
   const input = isPlainObject(request.input) ? request.input : {};
   const validation = validateMacroProgramRequest({ macro_id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, input, refs: request.refs, dry_run: input.dry_run !== false }, { registry: ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY });
   const plan = planAlpha3_2ERenderTargetsMacro(input, { refs: request.refs, idempotency_key_present: request.idempotency_key !== undefined });
+  const managedRoot = normalizeManagedRenderRoot(managedRenderRoot);
   if (!validation.valid || !plan.ok) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: plan.blockers.length > 0 ? plan.blockers : validation.errors.map((message) => blocker("RENDER_REQUEST_INVALID", message)), summary: "Render-target Macro input was blocked.", data: { preview: plan.preview ?? null } });
+  if (!managedRoot) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: [blocker("RENDER_MANAGED_ROOT_UNAVAILABLE", "The installed managed render root is unavailable; start a fresh OpenReaper session before rendering.")], summary: "Render-target Macro needs the installed managed render root.", data: { preview: plan.preview ?? null } });
   if (typeof executeAtomic !== "function") {
     return renderEnvelope({
       entry,
@@ -235,10 +243,13 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
   const stages = [{ id: "render-selector-resolve", kind: "selector_resolve", status: "completed", summary: "Resolved bounded canonical or live-selection target posture.", evidence_refs: [] }];
   if (input.dry_run !== false) {
     stages.push({ id: "render-live-ref-resolve", kind: "live_ref_resolve", status: "skipped", summary: "Live target resolution is deferred until an executable render run.", evidence_refs: [] });
+    stages.push({ id: "render-dirty-before", kind: "template_execute", status: "skipped", summary: "Dirty-state read skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-template-execute", kind: "template_execute", status: "skipped", summary: "Render mutation skipped during dry_run.", evidence_refs: [] });
+    stages.push({ id: "render-dirty-after", kind: "template_execute", status: "skipped", summary: "Post-render dirty-state read skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Managed-root render preview projected.", evidence_refs: [] });
-    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", data: { preview: plan.preview, mutation_skipped: true, managed_root: true, external_encoder: false } });
+    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", data: { preview: plan.preview, mutation_skipped: true, managed_root: true, managed_render_root: managedRoot, external_encoder: false } });
   }
+  let partialResult = null;
   try {
     const child = plan.mutation_requests[0];
     const liveResolveStage = {
@@ -267,11 +278,25 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       liveResolveStage.summary = error.message ?? "Live render target resolution failed.";
       throw error;
     }
-    stages.push({ id: "render-template-execute", kind: "template_execute", status: "running", evidence_refs: [] });
+    const dirtyBeforeStage = { id: "render-dirty-before", kind: "template_execute", status: "running", summary: "Reading exact project dirty state before render.", evidence_refs: [] };
+    stages.push(dirtyBeforeStage);
+    let dirtyBefore;
+    try {
+      dirtyBefore = await readRenderDirtyState({ executeAtomic, request });
+      dirtyBeforeStage.status = "completed";
+      dirtyBeforeStage.summary = `Project dirty-before=${dirtyBefore.dirty}.`;
+      dirtyBeforeStage.evidence_refs = dirtyBefore.evidence_refs;
+    } catch (error) {
+      dirtyBeforeStage.status = "failed";
+      dirtyBeforeStage.summary = error.message ?? "Pre-render dirty-state read failed.";
+      throw error;
+    }
+    const renderStage = { id: "render-template-execute", kind: "template_execute", status: "running", summary: "Executing the audited managed-root render route.", evidence_refs: [] };
+    stages.push(renderStage);
     const execution = await executeAtomic({ id: RENDER_TEMPLATE_ID, input: child.input, refs: resolved.refs, context: request.context, budget: request.budget, observeProjectIndex: false });
-    stages.at(-1).status = execution?.ok === true ? "completed" : "failed";
-    stages.at(-1).summary = typeof execution?.result?.summary === "string" ? execution.result.summary : "Audited render route completed.";
-    stages.at(-1).evidence_refs = evidenceRefs(execution);
+    renderStage.status = execution?.ok === true ? "completed" : "failed";
+    renderStage.summary = typeof execution?.result?.summary === "string" ? execution.result.summary : "Audited render route completed.";
+    renderStage.evidence_refs = evidenceRefs(execution);
     if (execution?.ok !== true) throw Object.assign(new Error(execution?.error?.message ?? "Audited render route failed."), { code: execution?.error?.code ?? "RENDER_TEMPLATE_FAILED" });
     const result = execution.result ?? {};
     const payload = renderAtomicPayload(result);
@@ -288,21 +313,77 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       throw coded("RENDER_VERIFICATION_FAILED", "The audited render route did not return passed verification.");
     }
     const completion = requireRenderCompletion({ result, payload, readback, artifactRefs });
-    const invalidation = invalidateRenderIndex(projectIndexRuntime, now);
-    if (invalidation?.ok === false) {
-      throw Object.assign(new Error(invalidation.blockers?.[0]?.message ?? "Render completed but Project Index project state could not be invalidated."), { code: invalidation.blockers?.[0]?.code ?? "RENDER_INDEX_INVALIDATION_FAILED" });
-    }
-    stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Render output and retained project truth projected from the audited route.", evidence_refs: evidenceRefs(execution) });
+    const canonicalRefs = uniqueStrings([
+      ...resolved.canonical_refs,
+      completion.job_ref,
+      ...canonicalRefStrings(result.refs ?? result.canonical_refs),
+      ...canonicalRefStrings(result.artifacts),
+      ...canonicalRefStrings(result.jobs),
+    ]);
     const verification = {
       status: "passed",
       evidence_refs: uniqueStrings([
         ...(childVerification?.evidence_refs ?? []),
         ...resolved.evidence_refs,
+        ...dirtyBefore.evidence_refs,
         ...evidenceRefs(execution),
         ...artifactRefs,
         completion.job_ref,
       ]),
     };
+    partialResult = {
+      data: {
+        preview: plan.preview,
+        managed_root: true,
+        managed_render_root: managedRoot,
+        external_encoder: false,
+        ...payload,
+        render_completed: true,
+        file_count: completion.file_count,
+        outputs: completion.outputs,
+        audio_outputs: completion.audio_outputs,
+        retained_project_copies: completion.retained_project_copies,
+        dirty_before: dirtyBefore.dirty,
+        dirty_after: null,
+        save_recommendation: "check_dirty_state_and_save_if_needed",
+        job_ref: completion.job_ref,
+        output_artifact_ref: completion.manifest_ref,
+        evidence_artifact_ref: completion.evidence_ref,
+        ...(isPlainObject(result.readback) ? { readback: result.readback } : {}),
+        artifact_refs: artifactRefs,
+        index_update: null,
+      },
+      canonicalRefs,
+      verification,
+      changes: [{ kind: "render", action: "render_targets", file_count: completion.file_count }],
+      sqlite: null,
+    };
+    const invalidation = invalidateRenderIndex(projectIndexRuntime, now);
+    if (invalidation?.ok === false) {
+      throw Object.assign(new Error(invalidation.blockers?.[0]?.message ?? "Render completed but Project Index project state could not be invalidated."), { code: invalidation.blockers?.[0]?.code ?? "RENDER_INDEX_INVALIDATION_FAILED" });
+    }
+    partialResult.data.index_update = compactIndexUpdate(invalidation);
+    partialResult.sqlite = sqliteEvidence(projectIndexRuntime, invalidation);
+    const dirtyAfterStage = { id: "render-dirty-after", kind: "template_execute", status: "running", summary: "Reading exact project dirty state after render.", evidence_refs: [] };
+    stages.push(dirtyAfterStage);
+    let dirtyAfter;
+    try {
+      dirtyAfter = await readRenderDirtyState({ executeAtomic, request });
+      dirtyAfterStage.status = "completed";
+      dirtyAfterStage.summary = `Project dirty-after=${dirtyAfter.dirty}.`;
+      dirtyAfterStage.evidence_refs = dirtyAfter.evidence_refs;
+    } catch (error) {
+      dirtyAfterStage.status = "failed";
+      dirtyAfterStage.summary = error.message ?? "Post-render dirty-state read failed.";
+      throw error;
+    }
+    partialResult.data.dirty_after = dirtyAfter.dirty;
+    partialResult.data.save_recommendation = dirtyAfter.dirty ? "save_after_render" : "no_save_needed_after_render";
+    partialResult.verification.evidence_refs = uniqueStrings([
+      ...partialResult.verification.evidence_refs,
+      ...dirtyAfter.evidence_refs,
+    ]);
+    stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Render output, recovery-copy, and project dirty-state truth projected from the audited route.", evidence_refs: partialResult.verification.evidence_refs });
     return renderEnvelope({
       entry,
       request,
@@ -312,33 +393,29 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       stages,
       blockers: [],
       summary: "Render targets completed through the audited managed-root route.",
-      data: {
-        preview: plan.preview,
-        managed_root: true,
-        external_encoder: false,
-        ...payload,
-        file_count: completion.file_count,
-        outputs: completion.outputs,
-        job_ref: completion.job_ref,
-        output_artifact_ref: completion.manifest_ref,
-        evidence_artifact_ref: completion.evidence_ref,
-        ...(isPlainObject(result.readback) ? { readback: result.readback } : {}),
-        artifact_refs: artifactRefs,
-        index_update: compactIndexUpdate(invalidation),
-      },
-      canonicalRefs: uniqueStrings([
-        ...resolved.canonical_refs,
-        completion.job_ref,
-        ...canonicalRefStrings(result.refs ?? result.canonical_refs),
-        ...canonicalRefStrings(result.artifacts),
-        ...canonicalRefStrings(result.jobs),
-      ]),
-      verification,
-      changes: [{ kind: "render", action: "render_targets", file_count: completion.file_count }],
-      sqlite: sqliteEvidence(projectIndexRuntime, invalidation),
+      data: partialResult.data,
+      canonicalRefs: partialResult.canonicalRefs,
+      verification: partialResult.verification,
+      changes: partialResult.changes,
+      sqlite: partialResult.sqlite,
     });
   } catch (error) {
-    return renderEnvelope({ entry, request, startedAt, now, status: "failed", stages, blockers: [blocker(error.code ?? "RENDER_EXECUTION_FAILED", error.message ?? "Render-target Macro failed.")], summary: error.message ?? "Render-target Macro failed.", data: { preview: plan.preview, managed_root: true, external_encoder: false } });
+    const partial = partialResult !== null;
+    return renderEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: partial ? "partial_failure" : "failed",
+      stages,
+      blockers: [blocker(error.code ?? "RENDER_EXECUTION_FAILED", error.message ?? "Render-target Macro failed.")],
+      summary: error.message ?? "Render-target Macro failed.",
+      data: partial ? partialResult.data : { preview: plan.preview, managed_root: true, managed_render_root: managedRoot, external_encoder: false },
+      canonicalRefs: partial ? partialResult.canonicalRefs : [],
+      verification: partial ? partialResult.verification : { status: "not_required", evidence_refs: [] },
+      changes: partial ? partialResult.changes : [],
+      sqlite: partial ? partialResult.sqlite : null,
+    });
   }
 }
 
@@ -534,13 +611,55 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs }) {
   if (outputs.some((output) => !isPlainObject(output) || typeof output.absolute_path !== "string" || output.absolute_path.length === 0)) {
     throw coded("RENDER_OUTPUT_ROW_INVALID", "The audited render route returned an invalid output row.");
   }
+  const audioOutputs = outputs.map((output) => ({
+    absolute_path: output.absolute_path,
+    ...(output.size === undefined ? {} : { size: output.size }),
+    ...(output.extension === undefined ? {} : { extension: output.extension }),
+  }));
+  const retainedProjectCopies = outputs
+    .filter((output) => output.generated_project_copy_retained === true && typeof output.generated_project_copy_path === "string")
+    .map((output) => ({
+      absolute_path: output.generated_project_copy_path,
+      audio_output_path: output.absolute_path,
+      retained_for_recovery: true,
+    }));
   return {
     manifest_ref: manifestRef,
     evidence_ref: evidenceRef,
     job_ref: jobRef,
     file_count: fileCount,
     outputs: structuredClone(outputs),
+    audio_outputs: audioOutputs,
+    retained_project_copies: retainedProjectCopies,
   };
+}
+
+async function readRenderDirtyState({ executeAtomic, request }) {
+  const execution = await executeAtomic({
+    id: DIRTY_STATE_TEMPLATE_ID,
+    input: {},
+    refs: {},
+    context: request.context,
+    budget: request.budget,
+    observeProjectIndex: false,
+  });
+  const readback = execution?.result?.readback ?? execution?.result?.summary ?? {};
+  if (execution?.ok !== true || typeof readback?.dirty !== "boolean") {
+    throw coded("RENDER_DIRTY_STATE_REQUIRED", "The audited render route could not read the exact project dirty state.");
+  }
+  return { dirty: readback.dirty, evidence_refs: evidenceRefs(execution) };
+}
+
+function normalizeManagedRenderRoot(value) {
+  if (
+    typeof value !== "string" ||
+    value === "" ||
+    value.length > 3_072 ||
+    Buffer.byteLength(value, "utf8") > 3_072 ||
+    !value.startsWith("/") ||
+    /[\u0000-\u001f\u007f]/u.test(value)
+  ) return null;
+  return value;
 }
 
 function renderEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, canonicalRefs = [], verification = { status: "not_required", evidence_refs: [] }, changes = [], sqlite = null }) {
@@ -551,9 +670,16 @@ function renderEnvelope({ entry, request, startedAt, now, status, stages, blocke
     request: { request_id: request.request_id ?? "macro.render.targets", dry_run: failed ? false : request.input?.dry_run !== false },
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: sqlite ?? { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false },
-    result: { summary, canonical_refs: canonicalRefs, changes, verification: failed ? { status: "not_required", evidence_refs: [] } : verification, artifact_refs: data.artifact_refs ?? [], data },
+    result: { summary, canonical_refs: canonicalRefs, changes, verification: failed ? { status: "not_required", evidence_refs: verification.evidence_refs ?? [] } : verification, artifact_refs: data.artifact_refs ?? [], data },
     blockers: failed ? blockers : [], error: failed ? { code: blockers[0]?.code ?? "RENDER_FAILED", message: summary, recoverable: true } : null,
-    recovery: failed ? { action: "Repair the typed render blocker and retry the same registered Macro.", sqlite_rows_authorize_writes: false } : null,
+    recovery: failed ? {
+      action: status === "partial_failure"
+        ? "Keep the reported managed outputs and evidence, repair the post-render blocker, inspect dirty state, then save if recommended before retrying."
+        : "Repair the typed render blocker and retry the same registered Macro.",
+      partial_changes_possible: status === "partial_failure",
+      rendered_outputs_retained: status === "partial_failure" && Array.isArray(data.audio_outputs) && data.audio_outputs.length > 0,
+      sqlite_rows_authorize_writes: false,
+    } : null,
     budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
   for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope));

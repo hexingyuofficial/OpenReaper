@@ -14,8 +14,9 @@ export OPENREAPER_DOCTOR_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 
 exec node --input-type=module - "$@" <<'NODE'
 import { spawn } from "node:child_process";
+import { constants as fsConstants } from "node:fs";
 import { createRequire } from "node:module";
-import { access, readFile } from "node:fs/promises";
+import { access, lstat, open, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -33,6 +34,8 @@ const mcpCommandAliases = pathAliases(mcpCommand);
 const vitalAgentMcpCommandAliases = pathAliases(vitalAgentMcpCommand);
 const startCommand = path.join(installRoot, "bin", "openreaper-start");
 const doctorCommand = path.join(installRoot, "bin", "openreaper-doctor");
+const provenanceManifestPath = path.join(installRoot, "provenance.json");
+const provenanceManifestMaxBytes = 16_384;
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const readinessModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
 const projectUnderstandingModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2-5-b-project-understanding-v1.mjs");
@@ -178,6 +181,8 @@ const report = {
         reached_bridge_ready: false,
       },
   task: null,
+  recovery_card: null,
+  provenance: await readProvenanceManifest(),
 };
 
 report.checks.node = {
@@ -231,6 +236,11 @@ if (cli.mode !== null) {
     projectIndex: report.project_index,
   });
 }
+report.recovery_card = report.task?.recovery_card ?? (
+  report.runtime_diagnosis === "bridge_ready" || report.runtime_diagnosis === "not_observed"
+    ? null
+    : compactDoctorRecoveryCard(report.runtime_diagnosis, report.runtime_readiness?.bridge)
+);
 
 console.log(JSON.stringify(report, null, 2));
 console.log("");
@@ -249,10 +259,13 @@ console.log(`reaper_process_status=${reaperProcess.status}`);
 console.log(`render_root_status=${renderInspection.status}`);
 console.log(`request_response_status=${report.request_response.status}`);
 console.log(`project_index_status=${report.project_index_readiness.status}`);
+console.log(`project_index_freshness=${report.project_index_readiness.status}`);
 console.log(`project_index_backend=${report.project_index?.backend ?? "not_configured"}`);
 console.log(`project_index_revision=${report.project_index?.revision ?? "not_hydrated"}`);
 console.log(`project_index_recovery=${report.project_index?.recovery?.status ?? "none"}`);
 console.log(`project_index_next_action=${report.project_index_readiness.next_action}`);
+console.log(`provenance_package_version=${report.provenance?.package_version ?? "unavailable"}`);
+console.log(`provenance_commit=${report.provenance?.openreaper_git_commit ?? "unavailable"}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
 console.log("startup_lifetime=openreaper-start launches REAPER detached from the agent shell and returns a pid/log path.");
 console.log("startup_dialog_assist=only Project Settings / Notes show-notes-on-load is auto-dismissed; license/evaluation, recovery, plugin/FX, version, and unknown windows require agent/user action.");
@@ -292,6 +305,101 @@ async function pathCheck(filePath) {
   } catch {
     return { ok: false, path: filePath };
   }
+}
+
+async function readProvenanceManifest() {
+  let handle;
+  try {
+    const before = await lstat(provenanceManifestPath);
+    if (
+      before.isSymbolicLink() ||
+      !before.isFile() ||
+      before.size < 1 ||
+      before.size > provenanceManifestMaxBytes ||
+      (before.mode & 0o222) !== 0 ||
+      !Number.isInteger(fsConstants.O_NOFOLLOW)
+    ) return { status: "invalid" };
+    handle = await open(provenanceManifestPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const opened = await handle.stat();
+    if (!sameFileSnapshot(before, opened)) return { status: "invalid" };
+    const raw = await handle.readFile({ encoding: "utf8" });
+    if (Buffer.byteLength(raw, "utf8") > provenanceManifestMaxBytes) return { status: "invalid" };
+    const [finalHandle, finalPath] = await Promise.all([handle.stat(), lstat(provenanceManifestPath)]);
+    if (finalPath.isSymbolicLink() || !sameFileSnapshot(opened, finalHandle) || !sameFileSnapshot(opened, finalPath)) {
+      return { status: "invalid" };
+    }
+    const value = JSON.parse(raw);
+    if (
+      value?.contract !== "openreaper.package.provenance.v1" ||
+      typeof value.package_version !== "string" || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(value.package_version) || value.package_version === "0.0.0" ||
+      typeof value.build_id !== "string" || value.build_id === "" ||
+      !/^[0-9a-f]{40}$/u.test(value.openreaper_git_commit) ||
+      typeof value.build_time_utc !== "string" || Number.isNaN(Date.parse(value.build_time_utc)) ||
+      value.source_tree_clean !== true ||
+      !["accepted_macro_count", "accepted_template_count", "bridge_handler_count"].every((key) =>
+        Number.isSafeInteger(value[key]) && value[key] > 0)
+    ) return { status: "invalid" };
+    return {
+      status: "ready",
+      package_version: value.package_version,
+      build_id: value.build_id,
+      openreaper_git_commit: value.openreaper_git_commit,
+      build_time_utc: value.build_time_utc,
+      accepted_macro_count: value.accepted_macro_count,
+      accepted_template_count: value.accepted_template_count,
+      bridge_handler_count: value.bridge_handler_count,
+    };
+  } catch {
+    return { status: "unavailable" };
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+function sameFileSnapshot(left, right) {
+  return Boolean(
+    left &&
+    right &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function compactDoctorRecoveryCard(diagnosis, bridge) {
+  const expected = bridge?.expected ?? {};
+  const observed = bridge?.observed ?? {};
+  const action = diagnosis === "reaper_not_running"
+    ? `Run ${startCommand}, then run the REAPER Action "${bridgeActionName}" and rerun doctor.`
+    : diagnosis === "bridge_action_not_running"
+      ? `In REAPER, run the Action "${bridgeActionName}" and rerun doctor.`
+      : diagnosis === "bridge_loop_unresponsive"
+        ? `In REAPER, rerun the Action "${bridgeActionName}" and rerun doctor; restart the session only if the heartbeat remains stale.`
+        : diagnosis === "owner_generation_mismatch"
+          ? "Reconnect the MCP client to the current OpenReaper session identity, then rerun doctor; restart the session only if the mismatch persists."
+          : "Repair the reported OpenReaper precondition, then rerun doctor.";
+  return {
+    diagnosis: diagnosis ?? "not_observed",
+    likely_cause: diagnosis === "bridge_loop_unresponsive"
+      ? "The heartbeat is stale; it cannot distinguish a stopped Action from an unresponsive loop."
+      : diagnosis === "bridge_action_not_running"
+        ? "REAPER is present but the installed bridge Action has not produced a heartbeat."
+        : diagnosis === "owner_generation_mismatch"
+          ? "The heartbeat belongs to a different OpenReaper session identity."
+          : diagnosis === "reaper_not_running"
+            ? "The installed OpenReaper session has no verified running REAPER process."
+            : "The OpenReaper live precondition is not ready.",
+    ...(diagnosis === "owner_generation_mismatch" ? {
+      expected_identity: { owner: expected.owner ?? null, generation: expected.generation ?? null },
+      observed_identity: { owner: observed.owner ?? null, generation: observed.generation ?? null },
+    } : {}),
+    recovery: action,
+    action_auto_run: false,
+  };
 }
 
 async function bridgeActionRegistrationCheck() {
@@ -551,7 +659,7 @@ function projectIndexReadiness(index) {
     return {
       status: "recovered_ready",
       ready: true,
-      next_action: "The stale cache was rebuilt without reusing old rows; call macro.project.inspect or macro.project.query normally.",
+      next_action: "The Project Index cache was rebuilt without reusing old rows; it helps navigation but REAPER remains the source of truth. Call macro.project.inspect or macro.project.query normally.",
     };
   }
   if (index.lifecycle === "ready" && index.snapshot_id === null) {
@@ -565,7 +673,7 @@ function projectIndexReadiness(index) {
     return {
       status: "ready_warm",
       ready: true,
-      next_action: "Use macro.project.inspect or macro.project.query; matching fresh SQLite state will be reused.",
+      next_action: "Use macro.project.inspect or macro.project.query; matching fresh Project Index rows may be reused, but REAPER remains the source of truth.",
     };
   }
   return {
