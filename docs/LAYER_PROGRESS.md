@@ -3308,3 +3308,51 @@ no raw SQLite access, and read-only live evidence against the authorized
 disposable project. Marker/region rows must state `exact_hydration_unavailable`
 and require target-template live resolution unless a separately approved lower-
 layer hydration template exists; D must not add that template as a drive-by.
+
+## Alpha3.2.5-0 Highway Contract And Macro Inventory
+
+Status: accepted
+
+Accepted commit: `0c6b76f architecture: define executable macro runtime`
+
+Scope:
+
+- added the additive `macro.runtime.contract.v1` layer between atomic Templates
+  and longer reusable/editable Recipes without changing the frozen five-tool
+  MCP surface;
+- defined fixed versioned Typed Macro Program registry entries, code-owned
+  allowlisted stages/dependencies, request injection rejection, SQLite
+  navigation/freshness rules, live ref re-resolution before writes, risk/undo/
+  verification requirements, dry-run semantics, and compact
+  `macro.execution.v1` evidence;
+- removed `plan_only` from the accepted public Macro completion vocabulary;
+- inventoried exactly 28 current/legacy/proposed Macro ids: 10 executable
+  official targets, 17 consolidated/legacy mappings, and one withdrawn MIDI
+  draft;
+- fixed `macro.project.query` as the replacement for old Project Index query
+  ids, `macro.controls.set` as the target for track/item/take/transport/send
+  controls, and explicit future MIDI task Macros after Alpha3.2.5-A safety;
+- did not connect the target registry to runtime dispatch or claim that current
+  plan-only Macros are already executable.
+
+Evidence:
+
+```text
+npm run check:alpha3-2-5-0 -> 8/8 pass
+npm run check:layout -> pass
+npm run check:tool-abi -> pass, exactly five tools
+npm run check:template-authoring -> 189/189 pass
+npm run check:recipe-contract -> 8/8 pass
+npm run check:alpha3-2a -> 13/13 pass
+npm run check:alpha3-2d -> 27/27 pass
+npm run check:alpha3-2e -> 31/31 pass
+npm run build -> exit 0, including check:alpha3-2-5-0
+git diff --check -> exit 0
+```
+
+REAPER/live status: not run. This slice defines architecture, validation, and
+the required end-state inventory; it promotes no live/runtime Macro claim.
+
+Next gate: Alpha3.2.5-A MIDI and canonical-ref safety. Runtime Macro activation
+remains paused until A and the SQLite hydration/query dependency in B are
+accepted.
