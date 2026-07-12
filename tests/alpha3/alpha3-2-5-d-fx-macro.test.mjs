@@ -89,6 +89,55 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
+  it("prefers the plugin Wet parameter over REAPER's trailing host-wrapper Wet parameter", async () => {
+    const calls = [];
+    const values = new Map();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: { dry_run: false },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: fxAtomic(calls, values, { parameterRows: duplicateReaCompWetRows() }),
+      projectIndexRuntime: indexRuntime([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.data.readback.length, 5);
+    const wetWrite = calls.find((call) =>
+      call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 11);
+    assert.ok(wetWrite, "the plugin-owned Wet parameter was not selected");
+    assert.equal(calls.some((call) =>
+      call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 22), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("keeps equally ranked non-wrapper parameter names ambiguous", async () => {
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: { controls: { threshold_db: -18 }, dry_run: false },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: fxAtomic([], new Map(), {
+        parameterRows: [
+          { param_index: 0, name: "Threshold", normalized_value: 0.5 },
+          { param_index: 4, name: "Threshold", normalized_value: 0.5 },
+          { param_index: 21, name: "Bypass", normalized_value: 0 },
+          { param_index: 22, name: "Wet", normalized_value: 1 },
+          { param_index: 23, name: "Delta", normalized_value: 0 },
+        ],
+      }),
+      projectIndexRuntime: indexRuntime([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "STOCK_PARAMETER_MATCH_AMBIGUOUS");
+  });
+
   it("reports partial failure when FX creation lacks accepted Template verification", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5DNativeFxMacro({
@@ -148,12 +197,13 @@ function fxAtomic(calls, values, options = {}) {
       return execution(id, { fx_ref: FX_REF, name: "VST: ReaComp (Cockos)", parameter_count: 2 }, [objectRef("fx", FX_REF)]);
     }
     if (id === "template.fx.list_fx_parameters") {
+      const parameterRows = options.parameterRows ?? [
+        { param_index: 0, name: "Threshold", normalized_value: 0.5 },
+        { param_index: 1, name: "Ratio", normalized_value: 0.1 },
+      ];
       return execution(id, {
-        parameter_count: 2,
-        parameters: [
-          { param_index: 0, name: "Threshold", normalized_value: 0.5 },
-          { param_index: 1, name: "Ratio", normalized_value: 0.1 },
-        ],
+        parameter_count: parameterRows.length,
+        parameters: parameterRows,
         truncated: false,
       });
     }
@@ -166,6 +216,20 @@ function fxAtomic(calls, values, options = {}) {
     }
     throw new Error(`Unexpected FX Template ${id}`);
   };
+}
+
+function duplicateReaCompWetRows() {
+  return [
+    { param_index: 0, name: "Threshold", normalized_value: 0.5 },
+    { param_index: 1, name: "Ratio", normalized_value: 0.1 },
+    { param_index: 2, name: "Attack", normalized_value: 0.01 },
+    { param_index: 3, name: "Release", normalized_value: 0.02 },
+    { param_index: 10, name: "Dry", normalized_value: 0 },
+    { param_index: 11, name: "Wet", normalized_value: 0.5 },
+    { param_index: 21, name: "Bypass", normalized_value: 0 },
+    { param_index: 22, name: "Wet", normalized_value: 1 },
+    { param_index: 23, name: "Delta", normalized_value: 0 },
+  ];
 }
 
 function execution(id, readback, refs = [], verification = undefined) {

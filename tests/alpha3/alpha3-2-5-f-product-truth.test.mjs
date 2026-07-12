@@ -81,7 +81,7 @@ sleep 0.1
         timeout: 20_000,
         maxBuffer: 1_048_576,
       });
-      const captured = Object.fromEntries((await readEventually(capturePath)).trim().split("\n").map((line) => {
+      const captured = Object.fromEntries((await readEventually(capturePath, pollutedKeys.length)).trim().split("\n").map((line) => {
         const separator = line.indexOf("=");
         return [line.slice(0, separator), line.slice(separator + 1)];
       }));
@@ -230,14 +230,15 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
 }
 
-async function readEventually(filePath) {
+async function readEventually(filePath, minimumLineCount = 1) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
-      return await readFile(filePath, "utf8");
+      const value = await readFile(filePath, "utf8");
+      if (value.trimEnd().split("\n").length >= minimumLineCount) return value;
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
-      await new Promise((resolve) => setTimeout(resolve, 20));
     }
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error(`Timed out waiting for startup capture: ${filePath}`);
 }

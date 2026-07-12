@@ -898,6 +898,7 @@ function resolveFreshParameterMetadata({ pluginMap, wantedControls, rows, observ
   const compact = [];
   const usedIndexes = new Set();
   const blockers = [];
+  const hostWrapperIndexes = reaperHostWrapperParameterIndexes(rows);
   for (const control of wantedControls) {
     const parameter = pluginMap.parameters.find((entry) => entry.id === control);
     if (!parameter) {
@@ -906,18 +907,24 @@ function resolveFreshParameterMetadata({ pluginMap, wantedControls, rows, observ
     }
     const ranked = rows
       .filter((row) => Number.isInteger(row?.param_index) && row.param_index >= 0 && typeof row.name === "string")
-      .map((row) => ({ row, score: parameterMatchScore(parameter, row.name) }))
+      .map((row) => ({
+        row,
+        score: parameterMatchScore(parameter, row.name),
+        hostWrapper: hostWrapperIndexes.has(row.param_index),
+      }))
       .filter((candidate) => candidate.score > 0 && !usedIndexes.has(candidate.row.param_index))
-      .sort((left, right) => right.score - left.score || left.row.param_index - right.row.param_index);
+      .sort((left, right) => right.score - left.score || Number(left.hostWrapper) - Number(right.hostWrapper) || left.row.param_index - right.row.param_index);
     if (ranked.length === 0 || ranked[0].score < 50) {
       blockers.push({ code: "STOCK_PARAMETER_MATCH_NOT_FOUND", message: `${pluginMap.display_name} parameter metadata did not contain one deterministic match for ${parameter.label}.`, recoverable: true });
       continue;
     }
-    if (ranked[1] && ranked[1].score === ranked[0].score) {
+    if (ranked[1] && ranked[1].score === ranked[0].score && ranked[1].hostWrapper === ranked[0].hostWrapper) {
       blockers.push({ code: "STOCK_PARAMETER_MATCH_AMBIGUOUS", message: `${pluginMap.display_name} parameter metadata produced an ambiguous match for ${parameter.label}.`, recoverable: true });
       continue;
     }
     const row = ranked[0].row;
+    const hostWrapperDisambiguated = ranked.some((candidate, index) =>
+      index > 0 && candidate.score === ranked[0].score && candidate.hostWrapper !== ranked[0].hostWrapper);
     usedIndexes.add(row.param_index);
     metadata[parameter.id] = {
       param_index: row.param_index,
@@ -926,9 +933,28 @@ function resolveFreshParameterMetadata({ pluginMap, wantedControls, rows, observ
       freshness_status: "fresh",
       observed_at: observedAt,
     };
-    compact.push({ control: parameter.id, param_index: row.param_index, parameter_name: row.name });
+    compact.push({
+      control: parameter.id,
+      param_index: row.param_index,
+      parameter_name: row.name,
+      ...(hostWrapperDisambiguated ? { disambiguation: "preferred_plugin_parameter_over_trailing_reaper_host_wrapper" } : {}),
+    });
   }
   return blockers.length > 0 ? { ok: false, blockers } : { ok: true, metadata, compact };
+}
+
+function reaperHostWrapperParameterIndexes(rows) {
+  const ordered = rows
+    .filter((row) => Number.isInteger(row?.param_index) && row.param_index >= 0 && typeof row.name === "string")
+    .sort((left, right) => left.param_index - right.param_index);
+  const tail = ordered.slice(-3);
+  if (
+    tail.length !== 3 ||
+    tail[1].param_index !== tail[0].param_index + 1 ||
+    tail[2].param_index !== tail[1].param_index + 1 ||
+    tail.map((row) => normalizeToken(row.name)).join("|") !== "bypass|wet|delta"
+  ) return new Set();
+  return new Set(tail.map((row) => row.param_index));
 }
 
 function parameterMatchScore(parameter, liveName) {
