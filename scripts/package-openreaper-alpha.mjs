@@ -2661,7 +2661,9 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
   const fakeReleasePath = path.join(lsRoot, "release-launchservices-fake-reaper");
   const fakeExitedPath = path.join(lsRoot, "launchservices-fake-reaper.exited");
   const fakeLaunchRequestPath = path.join(lsRoot, "launchservices-fake-reaper.requested");
+  const scrubCapturePath = path.join(lsRoot, "launchservices-scrub.capture");
   const keys = [
+    "OPENREAPER_SESSION_ROOT",
     "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
     "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
     "OPENREAPER_ARTIFACT_ROOT",
@@ -2669,6 +2671,21 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
     "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
     "OPENREAPER_LIVE_BRIDGE_OWNER",
     "OPENREAPER_LIVE_BRIDGE_GENERATION",
+    "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+    "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
+    "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
+    "OPENREAPER_CURRENT_PROJECT_PATH",
+    "OPENREAPER_CURRENT_PROJECT_REF",
+    "OPENREAPER_MCP_PACKAGE_ROOT",
+  ];
+  const scrubKeys = [
+    "OPENREAPER_SESSION_ROOT",
+    "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+    "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
+    "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
+    "OPENREAPER_CURRENT_PROJECT_PATH",
+    "OPENREAPER_CURRENT_PROJECT_REF",
+    "OPENREAPER_MCP_PACKAGE_ROOT",
   ];
   await mkdir(path.dirname(transformedStart), { recursive: true });
   await mkdir(path.dirname(fakeBinary), { recursive: true });
@@ -2709,7 +2726,23 @@ ${openExports}
 print -rn -- "requested" > ${shellQuote(fakeLaunchRequestPath)}
 nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
 `, "utf8");
-  await writeFile(fakeBinary, `#!/bin/zsh\nprint -rn -- "$$" > ${shellQuote(fakePidPath)}\nprint -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}\nfixture_wait_attempt=0\nwhile [[ ! -f ${shellQuote(fakeReleasePath)} && \${fixture_wait_attempt} -lt 200 ]]; do\n  sleep 0.05\n  fixture_wait_attempt=$(( fixture_wait_attempt + 1 ))\ndone\nprint -rn -- "exited" > ${shellQuote(fakeExitedPath)}\n`, "utf8");
+  await writeFile(fakeBinary, `#!/bin/zsh
+print -rn -- "$$" > ${shellQuote(fakePidPath)}
+print -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}
+for key in ${scrubKeys.map(shellQuote).join(" ")}; do
+  if (( \${+parameters[\$key]} )); then
+    print -r -- "\$key=\${(P)key}"
+  else
+    print -r -- "\$key=<unset>"
+  fi
+done > ${shellQuote(scrubCapturePath)}
+fixture_wait_attempt=0
+while [[ ! -f ${shellQuote(fakeReleasePath)} && \${fixture_wait_attempt} -lt 200 ]]; do
+  sleep 0.05
+  fixture_wait_attempt=$(( fixture_wait_attempt + 1))
+done
+print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
+`, "utf8");
   await Promise.all([transformedStart, unamePath, launchctlPath, openPath, fakeBinary].map((file) => chmod(file, 0o755)));
 
   const previousTransport = "previous transport with spaces";
@@ -2719,6 +2752,10 @@ nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
   await writeFile(path.join(stateRoot, "OPENREAPER_LIVE_SMOKE_RENDER_ROOT.value"), "", "utf8");
   await writeFile(path.join(stateRoot, "OPENREAPER_LIVE_BRIDGE_OWNER.presence"), "unset", "utf8");
   await writeFile(path.join(stateRoot, "OPENREAPER_LIVE_BRIDGE_OWNER.value"), "", "utf8");
+  for (const key of scrubKeys) {
+    await writeFile(path.join(stateRoot, `${key}.presence`), "set", "utf8");
+    await writeFile(path.join(stateRoot, `${key}.value`), `stale-${key}`, "utf8");
+  }
 
   let result;
   let smokeResult = null;
@@ -2744,6 +2781,15 @@ nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
     }
     await waitForFile(capturePath);
     assertEqualText(await readFile(capturePath, "utf8"), selectedRoot, "LaunchServices selected render root");
+    const scrubbed = Object.fromEntries((await readFile(scrubCapturePath, "utf8")).trim().split("\n").map((line) => {
+      const separator = line.indexOf("=");
+      return [line.slice(0, separator), line.slice(separator + 1)];
+    }));
+    for (const key of scrubKeys) {
+      assertEqualText(scrubbed[key], "<unset>", `LaunchServices stale identity scrub ${key}`);
+      assertEqualText(await readFile(path.join(stateRoot, `${key}.presence`), "utf8"), "set", `LaunchServices stale identity presence restoration ${key}`);
+      assertEqualText(await readFile(path.join(stateRoot, `${key}.value`), "utf8"), `stale-${key}`, `LaunchServices stale identity value restoration ${key}`);
+    }
     assertEqualText(await readFile(path.join(stateRoot, "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR.value"), "utf8"), previousTransport, "LaunchServices spaced value restoration");
     assertEqualText(await readFile(path.join(stateRoot, "OPENREAPER_LIVE_SMOKE_RENDER_ROOT.presence"), "utf8"), "set", "LaunchServices empty value presence restoration");
     assertEqualText(await readFile(path.join(stateRoot, "OPENREAPER_LIVE_SMOKE_RENDER_ROOT.value"), "utf8"), "", "LaunchServices empty value restoration");
@@ -2763,6 +2809,7 @@ nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
       stable_lock_and_snapshot_removed: true,
       global_lock_source_guard: true,
       getenv_setenv_restore_unset: true,
+      stale_identity_scrubbed_for_child: true,
     };
   } finally {
     reapedPid = await reapFixtureProcess({

@@ -28,6 +28,9 @@ describe("Alpha3.2.5-F product truth", () => {
     ]) assert.match(source, new RegExp(`unset \\"?\\$\\{stale_openreaper_env\\}|${key}`));
     assert.equal(source.includes('REAPER_BIN="${REAPER_BINARY:-'), false);
     assert.equal(source.includes('REAPER_APP="${REAPER_APP:-}"'), false);
+    assert.match(source, /LAUNCHSERVICES_ENV_KEYS=\([\s\S]*OPENREAPER_LIVE_BRIDGE_SESSION_ID/);
+    assert.match(source, /LAUNCHSERVICES_ENV_KEYS=\([\s\S]*OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY/);
+    assert.match(source, /failed to clear stale LaunchServices env/);
   });
 
   it("runs installed startup with fresh explicit identity despite a polluted parent environment", async () => {
@@ -218,6 +221,7 @@ sleep 0.1
     assert.match(source, /projectAlpha3_2_5BProjectQueryDoctorTask/);
     assert.match(source, /bridge_owner: "openreaper-alpha-package-smoke"/);
     assert.match(source, /bridge_generation: 1/);
+    assert.match(source, /stale_identity_scrubbed_for_child/);
     assert.equal(source.includes("macro_execution_convenience_snapshot.safety.server_executes_children"), false);
   });
 });

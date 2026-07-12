@@ -29,6 +29,7 @@ LAUNCHSERVICES_LOCK_TOKEN_WRITTEN=false
 LAUNCHSERVICES_LOCK_METADATA_WRITTEN=false
 LAUNCHSERVICES_SNAPSHOT_CREATED=false
 LAUNCHSERVICES_ENV_KEYS=(
+  OPENREAPER_SESSION_ROOT
   OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR
   OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH
   OPENREAPER_ARTIFACT_ROOT
@@ -36,6 +37,12 @@ LAUNCHSERVICES_ENV_KEYS=(
   OPENREAPER_LIVE_SMOKE_RENDER_ROOT
   OPENREAPER_LIVE_BRIDGE_OWNER
   OPENREAPER_LIVE_BRIDGE_GENERATION
+  OPENREAPER_LIVE_BRIDGE_SESSION_ID
+  OPENREAPER_PROJECT_INDEX_STATE_ROOT
+  OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY
+  OPENREAPER_CURRENT_PROJECT_PATH
+  OPENREAPER_CURRENT_PROJECT_REF
+  OPENREAPER_MCP_PACKAGE_ROOT
 )
 
 PROJECT_PATH=""
@@ -835,10 +842,16 @@ set_launchservices_env() {
   local key
   local desired
   for key in "${LAUNCHSERVICES_ENV_KEYS[@]}"; do
-    desired="$(launchservices_env_value "${key}")"
-    if ! "${LAUNCHCTL_BIN}" setenv "${key}" "${desired}"; then
-      echo "[OpenReaper] failed to set LaunchServices env ${key}" >&2
-      return 1
+    if desired="$(launchservices_env_value "${key}")"; then
+      if ! "${LAUNCHCTL_BIN}" setenv "${key}" "${desired}"; then
+        echo "[OpenReaper] failed to set LaunchServices env ${key}" >&2
+        return 1
+      fi
+    else
+      if ! "${LAUNCHCTL_BIN}" unsetenv "${key}"; then
+        echo "[OpenReaper] failed to clear stale LaunchServices env ${key}" >&2
+        return 1
+      fi
     fi
   done
 }
