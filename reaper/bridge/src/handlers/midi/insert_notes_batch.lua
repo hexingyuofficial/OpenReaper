@@ -36,7 +36,7 @@ local function bounded_number(value, fallback)
   if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
     return value
   end
-  return fallback or 0
+  return fallback
 end
 
 local function integer_value(value)
@@ -63,26 +63,6 @@ local function take_object_ref(take)
   }
 end
 
-local function ppq_position(take, event, key)
-  local value = event[key]
-  if type(value) == "number" then
-    return value
-  end
-  local seconds_key = "seconds"
-  if key == "start_ppq" then
-    seconds_key = "start_seconds"
-  elseif key == "end_ppq" then
-    seconds_key = "end_seconds"
-  elseif key == "ppq" then
-    seconds_key = "position_seconds"
-  end
-  if type(event[seconds_key]) == "number" then
-    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
-    return ok and first_number(ppq) or 0
-  end
-  return 0
-end
-
 local function text_sysex_type_value(kind)
   if kind == "sysex" then
     return -1
@@ -95,38 +75,90 @@ local function text_sysex_type_value(kind)
 end
 
 local function safe_write_insert_notes_batch(request)
+  if request.params.position_unit ~= "ppq" then
+    return handler_error("PARAMS_INVALID", "Seconds-based MIDI note insertion is temporarily blocked; use position_unit ppq.", {
+      blocker_code = "MIDI_SECONDS_MODE_MALFORMED",
+      allowed_position_units = json_array({ "ppq" }),
+      recovery = "Convert note positions to PPQ and retry with position_unit ppq.",
+    })
+  end
+  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
+  if #notes < 1 then
+    return handler_error("PARAMS_INVALID", "MIDI note insertion requires at least one note.", {
+      field = "notes",
+    })
+  end
+  for index = 1, #notes do
+    local note = notes[index]
+    if not is_object(note) then
+      return handler_error("PARAMS_INVALID", "Every MIDI note must be an object.", { note_index = index - 1 })
+    end
+    local start_ppq = bounded_number(note.start_ppq, nil)
+    local end_ppq = bounded_number(note.end_ppq, nil)
+    local channel = integer_value(note.channel)
+    local pitch = integer_value(note.pitch)
+    local velocity = integer_value(note.velocity)
+    if start_ppq == nil or end_ppq == nil or end_ppq <= start_ppq then
+      return handler_error("PARAMS_INVALID", "MIDI note PPQ bounds are invalid.", { note_index = index - 1 })
+    end
+    if channel == nil or channel < 0 or channel > 15 then
+      return handler_error("PARAMS_INVALID", "MIDI note channel must be an integer from 0 through 15.", { note_index = index - 1 })
+    end
+    if pitch == nil or pitch < 0 or pitch > 127 then
+      return handler_error("PARAMS_INVALID", "MIDI note pitch must be an integer from 0 through 127.", { note_index = index - 1 })
+    end
+    if velocity == nil or velocity < 1 or velocity > 127 then
+      return handler_error("PARAMS_INVALID", "MIDI note velocity must be an integer from 1 through 127.", { note_index = index - 1 })
+    end
+    if note.selected ~= nil and type(note.selected) ~= "boolean" then
+      return handler_error("PARAMS_INVALID", "MIDI note selected must be boolean when supplied.", { note_index = index - 1 })
+    end
+    if note.muted ~= nil and type(note.muted) ~= "boolean" then
+      return handler_error("PARAMS_INVALID", "MIDI note muted must be boolean when supplied.", { note_index = index - 1 })
+    end
+  end
   local take, failure = resolve_midi_take_for_request(request)
   if not take then
     return handler_error(failure.code, failure.message, failure.details)
   end
-  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
   local inserted = 0
   for index = 1, #notes do
-    local note = is_object(notes[index]) and notes[index] or {}
-    local start_ppq = ppq_position(take, note, "start_ppq")
-    local end_ppq = ppq_position(take, note, "end_ppq")
-    if end_ppq > start_ppq then
-      local ok, success = call_reaper(
-        "MIDI_InsertNote",
-        take,
-        note.selected == true,
-        note.muted == true,
-        start_ppq,
-        end_ppq,
-        math.max(0, math.min(15, integer_value(note.channel) or 0)),
-        math.max(0, math.min(127, integer_value(note.pitch) or 60)),
-        math.max(1, math.min(127, integer_value(note.velocity) or 96)),
-        true
-      )
-      if ok and success ~= false then
-        inserted = inserted + 1
-      end
+    local note = notes[index]
+    local ok, success = call_reaper(
+      "MIDI_InsertNote",
+      take,
+      note.selected == true,
+      note.muted == true,
+      note.start_ppq,
+      note.end_ppq,
+      note.channel,
+      note.pitch,
+      note.velocity,
+      true
+    )
+    if not ok or success == false then
+      call_reaper("MIDI_Sort", take)
+      return handler_error("COMMAND_FAILED", "MIDI note insertion failed before the complete batch was written.", {
+        failed_note_index = index - 1,
+        inserted_note_count = inserted,
+        partial_failure = inserted > 0,
+      }, false)
     end
+    inserted = inserted + 1
   end
   if request.params.sort_events ~= false then
     call_reaper("MIDI_Sort", take)
   end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  local summary, readback_failure = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  if not summary then
+    return handler_error(
+      readback_failure and readback_failure.code or "VERIFY_FAILED",
+      "MIDI note insertion readback failed.",
+      readback_failure and readback_failure.details or { inserted_note_count = inserted },
+      false
+    )
+  end
+  summary.inserted_count = inserted
   summary.inserted_note_count = inserted
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end

@@ -128,6 +128,50 @@ describe("Layer 2 foundation/bridge ABI contract", () => {
     }
   });
 
+  it("requires each ref to agree exactly with its kind and identity before bridge dispatch", () => {
+    const validComposite = createObjectRef(
+      "fx",
+      { scheme: "track_fx", value: "track:guid:{TRACK}:0" },
+      { ref: "fx:track:guid:{TRACK}:0" },
+    );
+    const validProject = createObjectRef(
+      "project",
+      { scheme: "current", value: "current" },
+      { ref: "project:current" },
+    );
+    const validArtifact = createArtifactRef({
+      owner_pack: "analysis",
+      scope: "loudness",
+      id: "art_20260702000000000_001_abcdef",
+      schema: "analysis.loudness.v1",
+    });
+    const normalized = normalizeFoundationBridgeRequest(makeRequest({
+      refs: [validComposite, validProject, validArtifact],
+    }));
+    assert.deepEqual(normalized.refs, [validComposite, validProject, validArtifact]);
+
+    const cases = [
+      [
+        "wrong kind prefix",
+        { kind: "take", ref: "item:guid:{ITEM}", identity: { scheme: "guid", value: "{ITEM}" } },
+        /refs\[0\]\.ref must start with take:/,
+      ],
+      [
+        "scheme mismatch",
+        { kind: "take", ref: "take:index:0", identity: { scheme: "guid", value: "0" } },
+        /refs\[0\]\.ref scheme must match refs\[0\]\.identity\.scheme/,
+      ],
+      [
+        "value mismatch",
+        { kind: "take", ref: "take:guid:{ITEM}", identity: { scheme: "guid", value: "{TAKE}" } },
+        /refs\[0\]\.ref value must match refs\[0\]\.identity\.value/,
+      ],
+    ];
+    for (const [, ref, expected] of cases) {
+      assert.throws(() => normalizeFoundationBridgeRequest(makeRequest({ refs: [ref] })), expected);
+    }
+  });
+
   it("enforces owner and generation mismatch before fake dispatch", () => {
     const bridge = new FakeFoundationBridge({ owner: "owner-a", generation: 7 });
 

@@ -390,7 +390,11 @@ function buildMutationRequest(preview) {
 }
 
 function childObjectRef(kind, ref) {
-  return deepFreeze({ kind, ref, identity: { scheme: "canonical_ref", value: ref } });
+  const remainder = ref.slice(kind.length + 1);
+  const separator = remainder.indexOf(":");
+  const scheme = remainder.slice(0, separator);
+  const value = remainder.slice(separator + 1);
+  return deepFreeze({ kind, ref, identity: { scheme, value } });
 }
 
 function childRequest(sequence, stage, id, refs, input, purpose, extra = {}) {
@@ -492,11 +496,14 @@ function normalizeRefKind(value) {
 }
 
 function isCanonicalRef(value, kind) {
-  return typeof value === "string"
-    && value.length > 0
-    && Buffer.byteLength(value) <= MAX_REF_BYTES
-    && !/[\u0000-\u001f\u007f]/u.test(value)
-    && value.startsWith(REF_PREFIXES[kind]);
+  if (typeof value !== "string"
+    || value.length === 0
+    || Buffer.byteLength(value) > MAX_REF_BYTES
+    || /[\u0000-\u001f\u007f]/u.test(value)
+    || !value.startsWith(REF_PREFIXES[kind])) return false;
+  const remainder = value.slice(REF_PREFIXES[kind].length);
+  const separator = remainder.indexOf(":");
+  return separator > 0 && separator < remainder.length - 1;
 }
 
 

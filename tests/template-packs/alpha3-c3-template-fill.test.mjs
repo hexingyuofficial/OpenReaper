@@ -51,9 +51,7 @@ describe("Alpha3 C3 template fill descriptors", () => {
     const validation = validateTemplateDescriptor(descriptor);
     const catalog = createTemplateCatalog({ templates: createAlpha3C3TemplateFillTemplates() });
     const bridge = fakeBridgeWithRefs([
-      createObjectRef("envelope", { scheme: "guid", value: "{ENV-1}" }, {
-        ref: "envelope:track:guid:{TRACK-1}:volume",
-      }),
+      createObjectRef("envelope", { scheme: "guid", value: "{ENV-1}" }),
     ]);
     const result = await executeTemplate({
       descriptor: catalog.require("template.automation.list_project_envelopes"),

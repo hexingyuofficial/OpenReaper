@@ -409,6 +409,44 @@ describe("Layer 4B template execution harness contract", () => {
     assert.equal(bridgeExecutor.seen.length, 0);
   });
 
+  it("rejects kind-prefix, scheme, and value ref mismatches before dispatch", async () => {
+    const descriptor = makeDescriptor({
+      refs: refs({ input: [refDeclaration("take_ref", "take", true)] }),
+    });
+    const cases = [
+      [
+        "wrong kind prefix",
+        { kind: "take", ref: "item:guid:{ITEM}", identity: { scheme: "guid", value: "{ITEM}" } },
+        "refs.take_ref.ref must start with take:.",
+      ],
+      [
+        "scheme mismatch",
+        { kind: "take", ref: "take:index:0", identity: { scheme: "guid", value: "0" } },
+        "refs.take_ref.ref scheme must match refs.take_ref.identity.scheme.",
+      ],
+      [
+        "value mismatch",
+        { kind: "take", ref: "take:guid:{ITEM}", identity: { scheme: "guid", value: "{TAKE}" } },
+        "refs.take_ref.ref value must match refs.take_ref.identity.value.",
+      ],
+    ];
+
+    for (const [label, takeRef, expectedError] of cases) {
+      const bridgeExecutor = new FakeFoundationBridge();
+      const result = await executeTemplate({
+        descriptor,
+        input: { name: label },
+        refs: { take_ref: takeRef },
+        context: context(),
+        executor: bridgeExecutor,
+      });
+      assert.equal(result.ok, false, label);
+      assert.equal(result.error.code, "TEMPLATE_REFS_INVALID", label);
+      assert.equal(result.error.details.errors.includes(expectedError), true, label);
+      assert.equal(bridgeExecutor.seen.length, 0, label);
+    }
+  });
+
   it("returns response-too-large as a typed bounded error without inline payload", async () => {
     const descriptor = makeDescriptor({
       inputSchema: objectSchema({

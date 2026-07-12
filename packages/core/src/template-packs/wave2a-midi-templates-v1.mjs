@@ -188,13 +188,13 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
   commandDescriptor({
     id: "template.midi.insert_notes_batch",
     title: "Insert MIDI notes batch",
-    summary: "Insert a bounded batch of MIDI notes into one resolved MIDI take.",
+    summary: "Insert a bounded PPQ-positioned batch of MIDI notes into one resolved MIDI take.",
     entity_kind: "midi_note",
     tags: ["midi", "note", "insert", "batch"],
     bridge: writeBridge({ capability: "midi.insert_notes_batch" }),
     inputSchema: objectSchema({
       notes: { type: "array" },
-      position_unit: { enum: ["ppq", "seconds"] },
+      position_unit: { enum: ["ppq"] },
       sort_events: { type: "boolean" },
     }, ["notes", "position_unit"]),
     outputSchema: objectSchema({

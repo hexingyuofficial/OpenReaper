@@ -9,6 +9,7 @@ import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-
 import { executeTemplate } from "../../packages/core/src/template-execution-harness-v1.mjs";
 import {
   templateRefExample,
+  templateRefExampleGuidance,
 } from "../../packages/core/src/template-ref-guidance-v1.mjs";
 import {
   WAVE1A_PROJECT_TEMPLATE_IDS,
@@ -18,6 +19,7 @@ import {
   WAVE1A_TRACKS_TEMPLATE_IDS,
   WAVE1A_TRACKS_TEMPLATES,
 } from "../../packages/core/src/template-packs/wave1a-tracks-templates-v1.mjs";
+import { WAVE2A_MIDI_TEMPLATES } from "../../packages/core/src/template-packs/wave2a-midi-templates-v1.mjs";
 import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { listTemplates } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
@@ -74,6 +76,12 @@ describe("Alpha3.2-C2 repairable refs", () => {
     assert.equal(templateRefExample("marker").ref, "marker:index:1");
     assert.equal(templateRefExample("region").ref, "region:index:1");
     assert.equal(templateRefExample("file").identity.value, "/absolute/path/to/audio.wav");
+    for (const kind of ["track", "item", "take"]) {
+      const replacement = templateRefExampleGuidance(kind).replacement;
+      assert.match(replacement, /current-view positional selector only/u);
+      assert.match(replacement, /re-resolve/u);
+      assert.match(replacement, /GUID for stable operations/u);
+    }
   });
 
   it("keeps legacy errors and adds bounded repair data for keyed and malformed refs", async () => {
@@ -133,6 +141,29 @@ describe("Alpha3.2-C2 repairable refs", () => {
       "refs.unexpected_ref is not declared by descriptor.refs.input.",
     ]);
     assert.deepEqual(unknownName.error.details.missing_refs, []);
+  });
+
+  it("rejects an item GUID wrapped as a take ref before the MIDI bridge dispatch", async () => {
+    const midiRead = descriptor("template.midi.read_take_event_counts", WAVE2A_MIDI_TEMPLATES);
+    const bridge = new FakeFoundationBridge();
+    const result = await executeTemplate({
+      descriptor: midiRead,
+      input: {},
+      refs: {
+        take_ref: {
+          kind: "take",
+          ref: "item:guid:{ITEM-GUID}",
+          identity: { scheme: "guid", value: "{ITEM-GUID}" },
+        },
+      },
+      context: context(),
+      executor: bridge,
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "TEMPLATE_REFS_INVALID");
+    assert.equal(result.error.details.errors.includes("refs.take_ref.ref must start with take:."), true);
+    assert.equal(bridge.seen.length, 0);
   });
 
   it("bounds unknown-key error floods and overlong UTF-8 keys without changing rejection", async () => {

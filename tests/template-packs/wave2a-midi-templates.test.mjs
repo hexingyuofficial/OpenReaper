@@ -166,7 +166,8 @@ describe("Wave 2A midi template descriptors", () => {
     assert.equal(quantizeSelectedNotes.inputSchema.properties.grid_unit.enum.includes("ppq"), true);
     assert.equal(quantizeSelectedNotes.summary.includes("selected MIDI note"), true);
     assert.deepEqual(setCc.inputSchema.required, ["events", "expected_take_hash"]);
-    assert.equal(insertNotes.inputSchema.properties.position_unit.enum.includes("ppq"), true);
+    assert.deepEqual(insertNotes.inputSchema.properties.position_unit.enum, ["ppq"]);
+    assert.match(insertNotes.summary, /PPQ-positioned/);
     assert.equal(grid.risk, "read");
     assert.equal(grid.summary.includes("project grid"), false);
 
@@ -351,11 +352,25 @@ describe("Wave 2A midi template descriptors", () => {
     assert.match(badUnit.error.details.errors.join("\n"), /input.position_unit must be one of its enum values/);
     assert.equal(bridge.seen.length, 0);
 
+    const secondsMode = await executeTemplate({
+      descriptor: insertNotes,
+      input: {
+        position_unit: "seconds",
+        notes: [{ start_seconds: 0, end_seconds: 0.25, pitch: 60, velocity: 96, channel: 0 }],
+      },
+      refs: { take_ref: take },
+      context: context({ request_sequence: 42 }),
+      executor: bridge,
+    });
+    assert.equal(secondsMode.ok, false);
+    assert.equal(secondsMode.error.code, "TEMPLATE_INPUT_INVALID");
+    assert.equal(bridge.seen.length, 0);
+
     const missingGuard = await executeTemplate({
       descriptor: catalog.require("template.midi.set_notes_batch"),
       input: { notes: [] },
       refs: { take_ref: take },
-      context: context({ request_sequence: 42 }),
+      context: context({ request_sequence: 43 }),
       executor: bridge,
     });
     assert.equal(missingGuard.ok, false);

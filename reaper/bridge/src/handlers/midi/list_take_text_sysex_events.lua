@@ -25,8 +25,8 @@ local function list_take_text_sysex_events(request)
   local events = json_array({})
   local matched = 0
   for index = 0, math.max(total - 1, -1) do
-    local ok_event, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
-    if ok_event and selected ~= nil then
+    local ok_event, event_retval, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
+    if ok_event and event_retval ~= false and selected ~= nil then
       local kind = read_b_midi_text_sysex_kind(first_number(type_value) or 1)
       if requested_kind == "any" or requested_kind == kind then
         matched = matched + 1

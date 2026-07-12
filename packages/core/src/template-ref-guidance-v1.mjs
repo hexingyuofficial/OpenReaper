@@ -19,17 +19,17 @@ const EXAMPLES = Object.freeze({
   track: Object.freeze({
     example: ref("track", "track:guid:{TRACK-GUID}", "guid", "{TRACK-GUID}"),
     fallback: ref("track", "track:index:0", "index", "0"),
-    replacement: "Replace {TRACK-GUID} in ref and identity.value with a real track GUID returned by a resolver or query; track:index:0 is a supported positional fallback.",
+    replacement: "Replace {TRACK-GUID} in ref and identity.value with a real track GUID returned by a resolver or query; track:index:0 is a current-view positional selector only, so re-resolve after track structure changes and use a GUID for stable operations.",
   }),
   item: Object.freeze({
     example: ref("item", "item:guid:{ITEM-GUID}", "guid", "{ITEM-GUID}"),
     fallback: ref("item", "item:index:0", "index", "0"),
-    replacement: "Replace {ITEM-GUID} in ref and identity.value with a real item GUID returned by a resolver or query; item:index:0 is a supported positional fallback.",
+    replacement: "Replace {ITEM-GUID} in ref and identity.value with a real item GUID returned by a resolver or query; item:index:0 is a current-view positional selector only, so re-resolve after item structure changes and use a GUID for stable operations.",
   }),
   take: Object.freeze({
     example: ref("take", "take:guid:{TAKE-GUID}", "guid", "{TAKE-GUID}"),
     fallback: ref("take", "take:index:0", "index", "0"),
-    replacement: "Replace {TAKE-GUID} in ref and identity.value with a real take GUID returned by a resolver or query; take:index:0 is a supported positional fallback.",
+    replacement: "Replace {TAKE-GUID} in ref and identity.value with a real take GUID returned by a resolver or query; take:index:0 is a current-view positional selector only, so re-resolve after take structure changes and use a GUID for stable operations.",
   }),
   fx: Object.freeze({
     example: ref("fx", "fx:track:guid:{TRACK-GUID}:0", "track_fx", "track:guid:{TRACK-GUID}:0"),

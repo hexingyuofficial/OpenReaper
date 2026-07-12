@@ -201,19 +201,26 @@ function READ_B_MIDI.resolve_take_token(token)
   return nil
 end
 
-function READ_B_MIDI.resolve_take_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "take" then
+function READ_B_MIDI.canonical_take_ref_token(ref)
+  if not is_object(ref) or ref.kind ~= "take" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return READ_B_MIDI.resolve_take_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return READ_B_MIDI.resolve_take_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return READ_B_MIDI.resolve_take_token("guid:" .. tostring(identity.value))
+  local scheme, value = ref.ref:match("^take:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid") then
+    return nil
   end
-  return READ_B_MIDI.resolve_take_token(ref.ref)
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
+  end
+  return ref.ref
+end
+
+function READ_B_MIDI.resolve_take_from_ref_object(ref)
+  local token = READ_B_MIDI.canonical_take_ref_token(ref)
+  if not token then
+    return nil
+  end
+  return READ_B_MIDI.resolve_take_token(token)
 end
 
 function READ_B_MIDI.take_is_midi(take)

@@ -13,8 +13,8 @@ local function list_take_notes(request)
     if #notes >= limit then
       break
     end
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and selected ~= nil then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if ok_note and note_retval ~= false and selected ~= nil then
       local note = {
         index = index,
         selected = selected == true,

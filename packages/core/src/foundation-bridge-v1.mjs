@@ -123,10 +123,13 @@ export function createObjectRef(kind, identity, options = {}) {
     throw new FoundationBridgeContractError("Object ref identity.value is required.");
   }
 
-  const ref = options.ref ?? `${kind}:${identity.scheme}:${identity.value}`;
+  const ref = options.ref
+    ?? specialCanonicalRef(kind, identity)?.ref
+    ?? `${kind}:${identity.scheme}:${identity.value}`;
   if (typeof ref !== "string" || !ref.startsWith(`${kind}:`)) {
     throw new FoundationBridgeContractError(`Object ref must start with ${kind}:.`);
   }
+  assertCanonicalRefConsistency({ kind, ref, identity }, "Object ref");
 
   return deepFreeze(
     pruneUndefined({
@@ -627,6 +630,7 @@ function normalizeRefs(refs) {
     normalizeObject(ref.identity, `refs[${index}].identity`);
     assertString(ref.identity.scheme, `refs[${index}].identity.scheme`);
     assertString(ref.identity.value, `refs[${index}].identity.value`);
+    assertCanonicalRefConsistency(ref, `refs[${index}]`);
     return pruneUndefined({
       kind: ref.kind,
       ref: ref.ref,
@@ -643,6 +647,51 @@ function normalizeRefs(refs) {
       summary: ref.summary,
     });
   });
+}
+
+function assertCanonicalRefConsistency(ref, label) {
+  const prefix = `${ref.kind}:`;
+  if (!ref.ref.startsWith(prefix)) {
+    throw new FoundationBridgeContractError(`${label}.ref must start with ${prefix}.`);
+  }
+
+  const special = specialCanonicalRef(ref.kind, ref.identity);
+  if (special) {
+    if (ref.ref === special.ref) return;
+    if (ref.identity.scheme !== special.scheme) {
+      throw new FoundationBridgeContractError(`${label}.ref scheme must match ${label}.identity.scheme.`);
+    }
+    throw new FoundationBridgeContractError(`${label}.ref value must match ${label}.identity.value.`);
+  }
+
+  const remainder = ref.ref.slice(prefix.length);
+  const separator = remainder.indexOf(":");
+  const scheme = separator < 0 ? remainder : remainder.slice(0, separator);
+  const value = separator < 0 ? "" : remainder.slice(separator + 1);
+  if (scheme !== ref.identity.scheme) {
+    throw new FoundationBridgeContractError(`${label}.ref scheme must match ${label}.identity.scheme.`);
+  }
+  if (value !== ref.identity.value) {
+    throw new FoundationBridgeContractError(`${label}.ref value must match ${label}.identity.value.`);
+  }
+}
+
+function specialCanonicalRef(kind, identity) {
+  if (kind === "project" && identity.scheme === "current" && identity.value === "current") {
+    return { ref: "project:current", scheme: "current" };
+  }
+  if (kind === "artifact" && identity.scheme === "artifact_ref" && identity.value.startsWith("artifact:")) {
+    return { ref: identity.value, scheme: "artifact_ref" };
+  }
+
+  const suffix = `_${kind}`;
+  if (identity.scheme.endsWith(suffix)) {
+    const ownerKind = identity.scheme.slice(0, -suffix.length);
+    if (ownerKind !== "" && identity.value.startsWith(`${ownerKind}:`)) {
+      return { ref: `${kind}:${identity.value}`, scheme: identity.scheme };
+    }
+  }
+  return null;
 }
 
 function normalizeUndo(undo) {

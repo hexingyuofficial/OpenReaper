@@ -68,8 +68,8 @@ describe("Alpha3.2-E render target planner", () => {
     assert.deepEqual(plan.child_requests.map((request) => request.id), ["template.render.render_targets"]);
     assert.deepEqual(plan.mutation_requests[0].refs, {
       region_refs: [
-        { kind: "region", ref: "region:index:3", identity: { scheme: "canonical_ref", value: "region:index:3" } },
-        { kind: "region", ref: "region:name:Outro", identity: { scheme: "canonical_ref", value: "region:name:Outro" } },
+        { kind: "region", ref: "region:index:3", identity: { scheme: "index", value: "3" } },
+        { kind: "region", ref: "region:name:Outro", identity: { scheme: "name", value: "Outro" } },
       ],
     });
     assert.deepEqual(plan.mutation_requests[0].input, {

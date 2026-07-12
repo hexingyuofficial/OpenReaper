@@ -6532,18 +6532,15 @@ local function d13_items_resolve_track_token(token)
 end
 
 local function d13_items_track_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "track" then
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return d13_items_resolve_track_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return d13_items_resolve_track_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return d13_items_resolve_track_token("guid:" .. tostring(identity.value))
-  elseif identity.scheme == "name" then
-    return d13_items_find_track_by_name(tostring(identity.value))
+  local scheme, value = ref.ref:match("^track:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid" and scheme ~= "name") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return d13_items_resolve_track_token(ref.ref)
 end
@@ -6633,16 +6630,15 @@ local function d13_items_resolve_item_token(token)
 end
 
 local function d13_items_resolve_item_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "item" then
+  if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return d13_items_resolve_item_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return d13_items_resolve_item_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return d13_items_resolve_item_token("guid:" .. tostring(identity.value))
+  local scheme, value = ref.ref:match("^item:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return d13_items_resolve_item_token(ref.ref)
 end
@@ -7216,16 +7212,15 @@ local function d14_items_resolve_item_token(token)
 end
 
 local function d14_items_resolve_item_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "item" then
+  if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return d14_items_resolve_item_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return d14_items_resolve_item_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return d14_items_resolve_item_token("guid:" .. tostring(identity.value))
+  local scheme, value = ref.ref:match("^item:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return d14_items_resolve_item_token(ref.ref)
 end
@@ -8401,8 +8396,8 @@ local function d17_midi_set_notes_batch(request)
         index = note.index,
       })
     end
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if not ok_note or selected == nil then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if not ok_note or note_retval == false or selected == nil then
       return d17_midi_error("NOTE_NOT_FOUND", "D17 MIDI note row could not be read.", { index = index })
     end
     local new_start = d17_midi_ppq_from_event(take, note, "start_ppq", first_number(start_ppq) or 0)
@@ -8453,8 +8448,8 @@ local function d17_midi_quantize_notes_impl(request, selected_only)
   local selected_count = 0
   local updated = 0
   for index = 0, total - 1 do
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and selected ~= nil and ((not selected_only) or selected == true) then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if ok_note and note_retval ~= false and selected ~= nil and ((not selected_only) or selected == true) then
       if selected == true then
         selected_count = selected_count + 1
       end
@@ -8522,8 +8517,8 @@ local function d17_midi_set_cc_events_batch(request)
         index = event.index,
       })
     end
-    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
-    if not ok_cc or selected == nil then
+    local ok_cc, cc_retval, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
+    if not ok_cc or cc_retval == false or selected == nil then
       return d17_midi_error("CC_NOT_FOUND", "D17 MIDI CC row could not be read.", { index = index })
     end
     local ok_set, success = call_reaper(
@@ -13960,19 +13955,26 @@ function READ_B_MIDI.resolve_take_token(token)
   return nil
 end
 
-function READ_B_MIDI.resolve_take_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "take" then
+function READ_B_MIDI.canonical_take_ref_token(ref)
+  if not is_object(ref) or ref.kind ~= "take" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return READ_B_MIDI.resolve_take_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return READ_B_MIDI.resolve_take_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return READ_B_MIDI.resolve_take_token("guid:" .. tostring(identity.value))
+  local scheme, value = ref.ref:match("^take:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid") then
+    return nil
   end
-  return READ_B_MIDI.resolve_take_token(ref.ref)
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
+  end
+  return ref.ref
+end
+
+function READ_B_MIDI.resolve_take_from_ref_object(ref)
+  local token = READ_B_MIDI.canonical_take_ref_token(ref)
+  if not token then
+    return nil
+  end
+  return READ_B_MIDI.resolve_take_token(token)
 end
 
 function READ_B_MIDI.take_is_midi(take)
@@ -14084,8 +14086,8 @@ local function list_take_notes(request)
     if #notes >= limit then
       break
     end
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and selected ~= nil then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if ok_note and note_retval ~= false and selected ~= nil then
       local note = {
         index = index,
         selected = selected == true,
@@ -14136,8 +14138,8 @@ local function list_take_cc_events(request)
   local events = json_array({})
   local matched = 0
   for index = 0, math.max(total - 1, -1) do
-    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
-    if ok_cc and selected ~= nil then
+    local ok_cc, cc_retval, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
+    if ok_cc and cc_retval ~= false and selected ~= nil then
       local event_controller = first_number(msg2) or 0
       if controller == nil or controller == event_controller then
         matched = matched + 1
@@ -14200,8 +14202,8 @@ local function list_take_text_sysex_events(request)
   local events = json_array({})
   local matched = 0
   for index = 0, math.max(total - 1, -1) do
-    local ok_event, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
-    if ok_event and selected ~= nil then
+    local ok_event, event_retval, selected, muted, ppq, type_value, message = call_reaper("MIDI_GetTextSysexEvt", take, index)
+    if ok_event and event_retval ~= false and selected ~= nil then
       local kind = read_b_midi_text_sysex_kind(first_number(type_value) or 1)
       if requested_kind == "any" or requested_kind == kind then
         matched = matched + 1
@@ -21138,18 +21140,15 @@ local function resolve_track_token(token)
 end
 
 local function resolve_track_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "track" then
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return resolve_track_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return resolve_track_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return resolve_track_token("guid:" .. tostring(identity.value))
-  elseif identity.scheme == "name" then
-    return find_track_by_name(tostring(identity.value))
+  local scheme, value = ref.ref:match("^track:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid" and scheme ~= "name") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return resolve_track_token(ref.ref)
 end
@@ -21211,6 +21210,48 @@ local function take_object_ref(take)
   }
 end
 
+local function created_midi_take(item)
+  local ok_active, active_take = call_reaper("GetActiveTake", item)
+  if ok_active and active_take then
+    local ok_midi, is_midi = call_reaper("TakeIsMIDI", active_take)
+    if ok_midi and is_midi == true then
+      return active_take
+    end
+  end
+  local ok_count, take_count = call_reaper("CountTakes", item)
+  local total = ok_count and first_number(take_count) or 0
+  for index = 0, total - 1 do
+    local ok_take, take = call_reaper("GetTake", item, index)
+    if ok_take and take then
+      local ok_midi, is_midi = call_reaper("TakeIsMIDI", take)
+      if ok_midi and is_midi == true then
+        return take
+      end
+    end
+  end
+  return nil
+end
+
+local function item_time_value(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and bounded_number(first_number(value), nil) or nil
+end
+
+local function time_matches(actual, expected)
+  return type(actual) == "number" and math.abs(actual - expected) <= 0.000001
+end
+
+local function project_time_to_qn(seconds)
+  local ok, value = call_reaper("TimeMap2_timeToQN", 0, seconds)
+  local qn = ok and first_number(value) or nil
+  return type(qn) == "number" and qn == qn and qn ~= math.huge and qn ~= -math.huge and qn or nil
+end
+
+local function discard_created_item(track, item)
+  local ok, removed = call_reaper("DeleteTrackMediaItem", track, item)
+  return ok and removed ~= false
+end
+
 local function safe_write_create_midi_item(request)
   local track, failure = track_from_request_refs(request)
   if not track then
@@ -21224,16 +21265,50 @@ local function safe_write_create_midi_item(request)
       end_seconds = end_seconds,
     })
   end
-  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_seconds, end_seconds, false)
+  local start_qn = project_time_to_qn(start_seconds)
+  local end_qn = project_time_to_qn(end_seconds)
+  if start_qn == nil or end_qn == nil or end_qn <= start_qn then
+    return handler_error("COMMAND_FAILED", "Could not convert MIDI item time bounds to project quarter notes.", {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+    }, false)
+  end
+  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_qn, end_qn, true)
   if not ok_item or not item then
     return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
   end
-  local ok_take, take = call_reaper("GetActiveTake", item)
-  if not ok_take or not take then
-    return handler_error("TAKE_NOT_FOUND", "Created MIDI item did not expose an active take.", {})
+  local ok_extents, extents_set = call_reaper("MIDI_SetItemExtents", item, start_qn, end_qn)
+  if not ok_extents or extents_set == false then
+    return handler_error("COMMAND_FAILED", "Could not set created MIDI item extents.", {
+      cleanup_succeeded = discard_created_item(track, item),
+      start_qn = start_qn,
+      end_qn = end_qn,
+    }, false)
+  end
+  call_reaper("UpdateItemInProject", item)
+  local take = created_midi_take(item)
+  if not take then
+    return handler_error("TAKE_NOT_FOUND", "Created MIDI item did not expose an active take.", {
+      cleanup_succeeded = discard_created_item(track, item),
+    })
+  end
+  local readback_start = item_time_value(item, "D_POSITION")
+  local readback_length = item_time_value(item, "D_LENGTH")
+  local readback_end = readback_start and readback_length and readback_start + readback_length or nil
+  if not time_matches(readback_start, start_seconds) or not time_matches(readback_end, end_seconds) then
+    local cleanup_succeeded = discard_created_item(track, item)
+    return handler_error("VERIFY_FAILED", "Created MIDI item time readback did not match the request.", {
+      requested_start_seconds = start_seconds,
+      requested_end_seconds = end_seconds,
+      readback_start_seconds = readback_start,
+      readback_end_seconds = readback_end,
+      cleanup_succeeded = cleanup_succeeded,
+    }, false)
   end
   local summary = midi_take_summary(take)
   summary.item_ref = item_ref_string(item)
+  summary.start_seconds = readback_start
+  summary.end_seconds = readback_end
   summary.created = true
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
 end
@@ -21287,7 +21362,7 @@ local function bounded_number(value, fallback)
   if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
     return value
   end
-  return fallback or 0
+  return fallback
 end
 
 local function integer_value(value)
@@ -21314,26 +21389,6 @@ local function take_object_ref(take)
   }
 end
 
-local function ppq_position(take, event, key)
-  local value = event[key]
-  if type(value) == "number" then
-    return value
-  end
-  local seconds_key = "seconds"
-  if key == "start_ppq" then
-    seconds_key = "start_seconds"
-  elseif key == "end_ppq" then
-    seconds_key = "end_seconds"
-  elseif key == "ppq" then
-    seconds_key = "position_seconds"
-  end
-  if type(event[seconds_key]) == "number" then
-    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
-    return ok and first_number(ppq) or 0
-  end
-  return 0
-end
-
 local function text_sysex_type_value(kind)
   if kind == "sysex" then
     return -1
@@ -21346,38 +21401,90 @@ local function text_sysex_type_value(kind)
 end
 
 local function safe_write_insert_notes_batch(request)
+  if request.params.position_unit ~= "ppq" then
+    return handler_error("PARAMS_INVALID", "Seconds-based MIDI note insertion is temporarily blocked; use position_unit ppq.", {
+      blocker_code = "MIDI_SECONDS_MODE_MALFORMED",
+      allowed_position_units = json_array({ "ppq" }),
+      recovery = "Convert note positions to PPQ and retry with position_unit ppq.",
+    })
+  end
+  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
+  if #notes < 1 then
+    return handler_error("PARAMS_INVALID", "MIDI note insertion requires at least one note.", {
+      field = "notes",
+    })
+  end
+  for index = 1, #notes do
+    local note = notes[index]
+    if not is_object(note) then
+      return handler_error("PARAMS_INVALID", "Every MIDI note must be an object.", { note_index = index - 1 })
+    end
+    local start_ppq = bounded_number(note.start_ppq, nil)
+    local end_ppq = bounded_number(note.end_ppq, nil)
+    local channel = integer_value(note.channel)
+    local pitch = integer_value(note.pitch)
+    local velocity = integer_value(note.velocity)
+    if start_ppq == nil or end_ppq == nil or end_ppq <= start_ppq then
+      return handler_error("PARAMS_INVALID", "MIDI note PPQ bounds are invalid.", { note_index = index - 1 })
+    end
+    if channel == nil or channel < 0 or channel > 15 then
+      return handler_error("PARAMS_INVALID", "MIDI note channel must be an integer from 0 through 15.", { note_index = index - 1 })
+    end
+    if pitch == nil or pitch < 0 or pitch > 127 then
+      return handler_error("PARAMS_INVALID", "MIDI note pitch must be an integer from 0 through 127.", { note_index = index - 1 })
+    end
+    if velocity == nil or velocity < 1 or velocity > 127 then
+      return handler_error("PARAMS_INVALID", "MIDI note velocity must be an integer from 1 through 127.", { note_index = index - 1 })
+    end
+    if note.selected ~= nil and type(note.selected) ~= "boolean" then
+      return handler_error("PARAMS_INVALID", "MIDI note selected must be boolean when supplied.", { note_index = index - 1 })
+    end
+    if note.muted ~= nil and type(note.muted) ~= "boolean" then
+      return handler_error("PARAMS_INVALID", "MIDI note muted must be boolean when supplied.", { note_index = index - 1 })
+    end
+  end
   local take, failure = resolve_midi_take_for_request(request)
   if not take then
     return handler_error(failure.code, failure.message, failure.details)
   end
-  local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
   local inserted = 0
   for index = 1, #notes do
-    local note = is_object(notes[index]) and notes[index] or {}
-    local start_ppq = ppq_position(take, note, "start_ppq")
-    local end_ppq = ppq_position(take, note, "end_ppq")
-    if end_ppq > start_ppq then
-      local ok, success = call_reaper(
-        "MIDI_InsertNote",
-        take,
-        note.selected == true,
-        note.muted == true,
-        start_ppq,
-        end_ppq,
-        math.max(0, math.min(15, integer_value(note.channel) or 0)),
-        math.max(0, math.min(127, integer_value(note.pitch) or 60)),
-        math.max(1, math.min(127, integer_value(note.velocity) or 96)),
-        true
-      )
-      if ok and success ~= false then
-        inserted = inserted + 1
-      end
+    local note = notes[index]
+    local ok, success = call_reaper(
+      "MIDI_InsertNote",
+      take,
+      note.selected == true,
+      note.muted == true,
+      note.start_ppq,
+      note.end_ppq,
+      note.channel,
+      note.pitch,
+      note.velocity,
+      true
+    )
+    if not ok or success == false then
+      call_reaper("MIDI_Sort", take)
+      return handler_error("COMMAND_FAILED", "MIDI note insertion failed before the complete batch was written.", {
+        failed_note_index = index - 1,
+        inserted_note_count = inserted,
+        partial_failure = inserted > 0,
+      }, false)
     end
+    inserted = inserted + 1
   end
   if request.params.sort_events ~= false then
     call_reaper("MIDI_Sort", take)
   end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  local summary, readback_failure = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
+  if not summary then
+    return handler_error(
+      readback_failure and readback_failure.code or "VERIFY_FAILED",
+      "MIDI note insertion readback failed.",
+      readback_failure and readback_failure.details or { inserted_note_count = inserted },
+      false
+    )
+  end
+  summary.inserted_count = inserted
   summary.inserted_note_count = inserted
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end

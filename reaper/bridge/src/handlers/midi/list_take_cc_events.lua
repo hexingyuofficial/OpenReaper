@@ -12,8 +12,8 @@ local function list_take_cc_events(request)
   local events = json_array({})
   local matched = 0
   for index = 0, math.max(total - 1, -1) do
-    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
-    if ok_cc and selected ~= nil then
+    local ok_cc, cc_retval, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
+    if ok_cc and cc_retval ~= false and selected ~= nil then
       local event_controller = first_number(msg2) or 0
       if controller == nil or controller == event_controller then
         matched = matched + 1

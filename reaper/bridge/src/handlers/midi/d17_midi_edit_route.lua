@@ -160,8 +160,8 @@ local function d17_midi_set_notes_batch(request)
         index = note.index,
       })
     end
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if not ok_note or selected == nil then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if not ok_note or note_retval == false or selected == nil then
       return d17_midi_error("NOTE_NOT_FOUND", "D17 MIDI note row could not be read.", { index = index })
     end
     local new_start = d17_midi_ppq_from_event(take, note, "start_ppq", first_number(start_ppq) or 0)
@@ -212,8 +212,8 @@ local function d17_midi_quantize_notes_impl(request, selected_only)
   local selected_count = 0
   local updated = 0
   for index = 0, total - 1 do
-    local ok_note, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and selected ~= nil and ((not selected_only) or selected == true) then
+    local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
+    if ok_note and note_retval ~= false and selected ~= nil and ((not selected_only) or selected == true) then
       if selected == true then
         selected_count = selected_count + 1
       end
@@ -281,8 +281,8 @@ local function d17_midi_set_cc_events_batch(request)
         index = event.index,
       })
     end
-    local ok_cc, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
-    if not ok_cc or selected == nil then
+    local ok_cc, cc_retval, selected, muted, ppq, chanmsg, channel, msg2, msg3 = call_reaper("MIDI_GetCC", take, index)
+    if not ok_cc or cc_retval == false or selected == nil then
       return d17_midi_error("CC_NOT_FOUND", "D17 MIDI CC row could not be read.", { index = index })
     end
     local ok_set, success = call_reaper(

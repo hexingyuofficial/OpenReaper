@@ -157,18 +157,15 @@ local function d13_items_resolve_track_token(token)
 end
 
 local function d13_items_track_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "track" then
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return d13_items_resolve_track_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return d13_items_resolve_track_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return d13_items_resolve_track_token("guid:" .. tostring(identity.value))
-  elseif identity.scheme == "name" then
-    return d13_items_find_track_by_name(tostring(identity.value))
+  local scheme, value = ref.ref:match("^track:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid" and scheme ~= "name") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return d13_items_resolve_track_token(ref.ref)
 end
@@ -258,16 +255,15 @@ local function d13_items_resolve_item_token(token)
 end
 
 local function d13_items_resolve_item_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "item" then
+  if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return d13_items_resolve_item_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return d13_items_resolve_item_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return d13_items_resolve_item_token("guid:" .. tostring(identity.value))
+  local scheme, value = ref.ref:match("^item:([^:]+):(.+)$")
+  if not scheme or (scheme ~= "selected" and scheme ~= "index" and scheme ~= "guid") then
+    return nil
+  end
+  if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
   end
   return d13_items_resolve_item_token(ref.ref)
 end

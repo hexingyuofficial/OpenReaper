@@ -369,7 +369,62 @@ function validateRefObject(ref, label) {
       errors.push(`${label}.identity.value must be a non-empty string.`);
     }
   }
+  if (
+    typeof ref.kind === "string" && REF_KIND_SET.has(ref.kind)
+    && typeof ref.ref === "string" && ref.ref.trim() !== ""
+    && isPlainObject(ref.identity)
+    && typeof ref.identity.scheme === "string" && ref.identity.scheme.trim() !== ""
+    && typeof ref.identity.value === "string" && ref.identity.value.trim() !== ""
+  ) {
+    const consistencyError = canonicalRefConsistencyError(ref, label);
+    if (consistencyError) errors.push(consistencyError);
+  }
   return errors;
+}
+
+function canonicalRefConsistencyError(ref, label) {
+  const prefix = `${ref.kind}:`;
+  if (!ref.ref.startsWith(prefix)) {
+    return `${label}.ref must start with ${prefix}.`;
+  }
+
+  const special = specialCanonicalRef(ref.kind, ref.identity);
+  if (special) {
+    if (ref.ref === special.ref) return null;
+    return ref.identity.scheme === special.scheme
+      ? `${label}.ref value must match ${label}.identity.value.`
+      : `${label}.ref scheme must match ${label}.identity.scheme.`;
+  }
+
+  const remainder = ref.ref.slice(prefix.length);
+  const separator = remainder.indexOf(":");
+  const scheme = separator < 0 ? remainder : remainder.slice(0, separator);
+  const value = separator < 0 ? "" : remainder.slice(separator + 1);
+  if (scheme !== ref.identity.scheme) {
+    return `${label}.ref scheme must match ${label}.identity.scheme.`;
+  }
+  if (value !== ref.identity.value) {
+    return `${label}.ref value must match ${label}.identity.value.`;
+  }
+  return null;
+}
+
+function specialCanonicalRef(kind, identity) {
+  if (kind === "project" && identity.scheme === "current" && identity.value === "current") {
+    return { ref: "project:current", scheme: "current" };
+  }
+  if (kind === "artifact" && identity.scheme === "artifact_ref" && identity.value.startsWith("artifact:")) {
+    return { ref: identity.value, scheme: "artifact_ref" };
+  }
+
+  const suffix = `_${kind}`;
+  if (identity.scheme.endsWith(suffix)) {
+    const ownerKind = identity.scheme.slice(0, -suffix.length);
+    if (ownerKind !== "" && identity.value.startsWith(`${ownerKind}:`)) {
+      return { ref: `${kind}:${identity.value}`, scheme: identity.scheme };
+    }
+  }
+  return null;
 }
 
 function refsValidationError(errors, declarations, refs) {
