@@ -42,6 +42,7 @@ describe("Alpha3 Block3 speed and generic controls productization", () => {
       "write_project_reversible",
     ]);
     assert.equal(summary.macro_truth.live_runnable_now_count, 0);
+    assert.equal(summary.macro_truth.runtime_bound_executable_count, 1);
     assert.equal(summary.execution.live_reaper, false);
     assert.equal(summary.execution.safe_write, false);
     assert.equal(summary.execution.hidden_executor, false);
@@ -54,27 +55,28 @@ describe("Alpha3 Block3 speed and generic controls productization", () => {
     assert.deepEqual(summary.trial_officer.p0_p1_findings, []);
   });
 
-  it("keeps C5 generic controls non-live while making plan-only macro calls discoverable", () => {
+  it("keeps the executable C5 control Macro discoverable while offline", () => {
     const entries = createAlpha3C5OfficialMacroDiscoveryItems();
-    const track = entries.find((entry) => entry.id === "macro.set_track_controls");
+    const controls = entries.find((entry) => entry.id === "macro.controls.set");
 
     assert.equal(entries.every((entry) => entry.live_runnable_now === false), true);
-    assert.equal(track.support_status, "plan_only_runtime_bound");
-    assert.equal(track.support_state, "supported");
-    assert.equal(track.expectedDelta.summary, "Returns a plan-only macro envelope. It does not mutate REAPER directly.");
+    assert.equal(controls.support_status, "executable_runtime_bound");
+    assert.equal(controls.implementation_status, "executable");
+    assert.equal(controls.support_state, "supported");
+    assert.equal(controls.expectedDelta.kind, "write");
 
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates({
-      ids: ["macro.set_track_controls"],
+      ids: ["macro.controls.set"],
       fields: ["summary", "capability_truth"],
     });
 
-    assert.equal(menu.items[0].id, "macro.set_track_controls");
-    assert.equal(menu.items[0].current_status, "needs_ref");
+    assert.equal(menu.items[0].id, "macro.controls.set");
+    assert.equal(menu.items[0].current_status, "needs_live");
     assert.equal(menu.items[0].capability_truth.live_runnable_now, false);
     assert.equal(menu.items[0].capability_truth.support_state, "supported");
-    assert.equal(menu.items[0].user_message.includes("canonical ref"), true);
-    assert.equal(menu.items[0].safety_note.includes("Macro planner only"), true);
+    assert.equal(menu.items[0].user_message.includes("executable Macro"), true);
+    assert.equal(menu.items[0].safety_note.includes("Registered bounded Macro program"), true);
   });
 
   it("exposes Block3 speed status through the existing runtime product surface", () => {
@@ -92,13 +94,13 @@ describe("Alpha3 Block3 speed and generic controls productization", () => {
     assert.equal(Object.hasOwn(productSurface, "speed_productization_snapshot"), false);
 
     const expandedMenu = runtime.list_templates({
-      ids: ["macro.set_track_controls"],
+      ids: ["macro.controls.set"],
       fields: ["id"],
     });
     const expandedProductSurface = expandedMenu.product_surface;
 
     assert.equal(expandedMenu.mode, "ids");
-    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["macro.set_track_controls"]);
+    assert.deepEqual(expandedMenu.items.map((item) => item.id), ["macro.controls.set"]);
     assert.equal(expandedProductSurface.detail_level, "expanded");
     assert.equal(expandedProductSurface.speed_productization_snapshot.contract, ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT);
     assert.equal(expandedProductSurface.speed_productization_snapshot.ok, true);

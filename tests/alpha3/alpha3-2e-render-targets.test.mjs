@@ -151,12 +151,14 @@ describe("Alpha3.2-E render target planner", () => {
     ]);
   });
 
-  it("advertises a runtime-bound plan-only macro with accepted live render evidence", () => {
+  it("advertises an executable runtime-bound Macro with accepted live render evidence", () => {
     const [item] = createAlpha3_2ERenderTargetsMacroDiscoveryItems();
     assert.equal(item.id, ALPHA3_2E_RENDER_TARGETS_MACRO_ID);
-    assert.equal(item.implementation_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(item.implementation_status, "executable");
+    assert.equal(item.execution_shape, "registered_macro_program");
+    assert.equal(item.support_status, "executable_runtime_bound");
     assert.equal(item.live_runnable_now, false);
-    assert.equal(item.exists_in_catalog, false);
+    assert.equal(item.exists_in_catalog, true);
     assert.equal(item.known_blocker, null);
     assert.equal(item.input_schema.properties.output_policy.const, "openreaper_managed_render_root");
     assert.equal(item.input_schema.properties.collision_policy.const, "fail_if_exists");

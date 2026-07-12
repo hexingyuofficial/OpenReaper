@@ -168,17 +168,77 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("preserves rich track counts across full and scoped mixer refreshes", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [
+          { track_ref: "track:guid:{T1}", index: 0, name: "Kick", item_count: 2, fx_count: 1 },
+          { track_ref: "track:guid:{T2}", index: 1, name: "Bus", item_count: 0, fx_count: 2 },
+        ],
+        track_count: 2,
+        truncated: false,
+      }));
+
+      assertObserved(runtime, execution("template.tracks.read_mixer_controls", identity, {
+        tracks: [
+          { track_ref: "track:guid:{T1}", index: 0, name: "Kick", muted: false },
+          { track_ref: "track:guid:{T2}", index: 1, name: "Bus", muted: false },
+        ],
+        track_count: 2,
+        truncated: false,
+      }, { input: { include_selected: false }, refs: [] }));
+      let rows = runtime.adapter.snapshot().rows.tracks;
+      assert.deepEqual(rows.map((row) => [row.ref, row.item_count, row.fx_count]), [
+        ["track:guid:{T1}", 2, 1],
+        ["track:guid:{T2}", 0, 2],
+      ]);
+
+      assertObserved(runtime, execution("template.tracks.read_mixer_controls", identity, {
+        tracks: [],
+        track_count: 0,
+        truncated: false,
+      }, { input: { include_selected: true }, refs: [] }));
+      assert.equal(runtime.adapter.snapshot().rows.tracks.length, 2);
+
+      assertObserved(runtime, execution("template.tracks.read_mixer_controls", identity, {
+        tracks: [{ track_ref: "track:guid:{T1}", index: 0, name: "Kick", muted: true }],
+        track_count: 1,
+        truncated: false,
+      }, { input: { include_selected: true }, refs: [{ kind: "track", ref: "track:guid:{T1}" }] }));
+      rows = runtime.adapter.snapshot().rows.tracks;
+      assert.equal(rows.length, 2);
+      assert.equal(rows.find((row) => row.ref === "track:guid:{T1}").muted, true);
+      assert.equal(rows.find((row) => row.ref === "track:guid:{T1}").item_count, 2);
+      runtime.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("keeps FX rows isolated by owner and clears only the owner with an empty chain", async () => {
     const fixture = await makeFixture();
     try {
       const runtime = await openRuntime(fixture);
       const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [
+          { track_ref: "track:guid:{T1}", index: 0, name: "Kick", fx_count: 0 },
+          { track_ref: "track:guid:{T2}", index: 1, name: "Bass", fx_count: 0 },
+        ],
+        track_count: 2,
+        truncated: false,
+      }));
       assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, {
         owner_ref: "track:guid:{T1}",
+        fx_count: 1,
         fx: [{ fx_ref: "fx:track:guid:{T1}:slot:0", owner_ref: "track:guid:{T1}", slot_index: 0, name: "ReaEQ" }],
       }));
       assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, {
         owner_ref: "track:guid:{T2}",
+        fx_count: 1,
         fx: [{ fx_ref: "fx:track:guid:{T2}:slot:0", owner_ref: "track:guid:{T2}", slot_index: 0, name: "ReaComp" }],
       }));
 
@@ -186,12 +246,29 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         ["track:guid:{T1}", "fx:track:guid:{T1}:slot:0"],
         ["track:guid:{T2}", "fx:track:guid:{T2}:slot:0"],
       ]);
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => [row.ref, row.fx_count]), [
+        ["track:guid:{T1}", 1],
+        ["track:guid:{T2}", 1],
+      ]);
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.tracks.coverage_status, "complete");
 
-      assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, { owner_ref: "track:guid:{T1}", fx: [] }));
+      assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, { owner_ref: "track:guid:{T1}", fx_count: 0, fx: [] }));
       assert.deepEqual(runtime.adapter.snapshot().rows.fx.map((row) => [row.owner_ref, row.ref]), [
         ["track:guid:{T2}", "fx:track:guid:{T2}:slot:0"],
       ]);
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => [row.ref, row.fx_count]), [
+        ["track:guid:{T1}", 0],
+        ["track:guid:{T2}", 1],
+      ]);
       runtime.close();
+
+      const reopened = await openRuntime(fixture);
+      assert.deepEqual(reopened.adapter.snapshot().rows.tracks.map((row) => [row.ref, row.fx_count]), [
+        ["track:guid:{T1}", 0],
+        ["track:guid:{T2}", 1],
+      ]);
+      assert.equal(reopened.adapter.snapshot().freshness_scopes.tracks.coverage_status, "complete");
+      reopened.close();
     } finally {
       await fixture.cleanup();
     }
@@ -570,7 +647,7 @@ function runtimeIdentity(runtime) {
 }
 
 let requestSequence = 0;
-function execution(templateId, identity, readback) {
+function execution(templateId, identity, readback, observationContext = null) {
   requestSequence += 1;
   return {
     ok: true,
@@ -579,6 +656,7 @@ function execution(templateId, identity, readback) {
     observed_at: NOW,
     request: { id: `request:${templateId}:${requestSequence}` },
     result: { readback },
+    ...(observationContext ? { project_index_observation_context: observationContext } : {}),
   };
 }
 

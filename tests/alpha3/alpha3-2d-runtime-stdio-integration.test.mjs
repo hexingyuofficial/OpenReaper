@@ -127,22 +127,24 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
     }
   });
 
-  it("publishes only the generic query plus selected-context compatibility and rejects internal legacy calls", async () => {
+  it("publishes only the generic query and returns replacements for all legacy query names", async () => {
     const runtime = createCallTemplateRuntime();
     const exact = runtime.list_templates({
       ids: ["macro.project.query", "macro.selected_context", "macro.index_status", "macro.query_tracks"],
     });
-    assert.deepEqual(exact.items.map((item) => item.id).sort(), ["macro.project.query", "macro.selected_context"].sort());
+    assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.query"]);
+    assert.deepEqual(exact.missing_ids, ["macro.selected_context", "macro.index_status", "macro.query_tracks"]);
     const generic = createAlpha3_2DGenericProjectQueryDiscoveryItems()[0];
     assert.equal(generic.support_status, "executable_runtime_bound");
     assert.equal(generic.known_blocker, "live_executor_not_configured");
     assert.equal(generic.execution_shape, "registered_macro_program");
 
-    for (const id of ["macro.index_status", "macro.query_tracks", "macro.query_items", "macro.changed_since"]) {
+    for (const id of ["macro.selected_context", "macro.index_status", "macro.query_tracks", "macro.query_items", "macro.changed_since"]) {
       const result = await runtime.call_template({ id, input: {} });
       assert.equal(result.ok, false, id);
       assert.equal(result.error.code, "CALL_TEMPLATE_ID_REPLACED", id);
       assert.equal(result.error.details.replacement, "macro.project.query", id);
+      if (id === "macro.selected_context") assert.deepEqual(result.error.details.replacement_input, { entity: "selected_context" });
     }
   });
 });

@@ -63,7 +63,7 @@ export const ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE = deepFreeze({
     { id: "template.project.save_project_as", role: "save current project as a validated path", status: "accepted_live_smoked" },
   ],
   current_read_boundary: "Use the two accepted exact read templates; summary/metadata remain insufficient substitutes.",
-  current_write_boundary: "The two exact save templates are accepted/live-smoked under explicit overwrite=true save-as authorization; macro.project.file is plan-only/runtime-bound for save_current and save_as, while new/open/create and atomic overwrite=false remain held.",
+  current_write_boundary: "macro.project.file executes the accepted save_current/save_as program with exact path and dirty-state readback; new/open/create and atomic overwrite=false remain held.",
 });
 
 const CONTRACT_ONLY_BLOCKER = "contract_only_pending_alpha3_2_c_d_e_implementation";
@@ -137,7 +137,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       dry_run_shape: {
         supported: false,
-        behavior: "Inspection is already read-only and executes its registered bounded program; no separate plan-only dry-run is exposed.",
+        behavior: "Inspection is already read-only and executes its registered bounded program; no separate dry-run planning mode is exposed.",
         output: ["macro_execution", "sqlite_evidence", "compact_project_data", "typed_blockers"],
       },
       resume_or_retry_policy: {
@@ -220,7 +220,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       dry_run_shape: {
         supported: false,
-        behavior: "The read Macro executes its registered query/hydration program directly; no public plan-only dry-run is exposed.",
+        behavior: "The read Macro executes its registered query/hydration program directly; no separate dry-run planning mode is exposed.",
         output: ["macro_execution", "sqlite_evidence", "candidate_rows", "canonical_refs", "typed_blockers"],
       },
       resume_or_retry_policy: {
@@ -244,7 +244,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     task_intents: ["delete tracks", "delete items", "delete markers or regions", "scoped cleanup"],
     rollout_slice: "3.2-E",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
@@ -291,14 +291,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "No source file, hardware route, or unsupported object family was deleted.",
       ],
       common_blockers: [
-        blocker("DELETE_TARGETS_PREVIEW_REQUIRED", "Run the delete-targets dry-run preview and matching confirmation scope before destructive child requests."),
+        blocker("DELETE_TARGETS_PREVIEW_REQUIRED", "Run the delete-targets dry-run preview and use its matching confirmation scope before destructive execution."),
         blocker("CONFIRM_SCOPE_REQUIRED", "The exact previewed target set has not been confirmed."),
         blocker("STALE_OR_AMBIGUOUS_TARGET", "A target is missing, stale, duplicated, or cross-project."),
         blocker("FILESYSTEM_DELETE_FORBIDDEN", "The request would delete media files from disk."),
         blocker("TARGET_KIND_UNSUPPORTED", "Take or automation deletion lacks an accepted audited template."),
       ],
       recovery_steps: [
-        "For preview blockers, rerun dry-run, copy the matching confirmation scope, and execute only the emitted accepted child requests with readback.",
+        "For preview blockers, rerun dry-run, use the matching confirmation scope, and call the same registered Macro for bounded execution and readback.",
         "Regenerate the preview after any project change; never reuse an old confirmation scope.",
         "Remove unsupported/filesystem targets and retry only the accepted project-object subset.",
         "Use undo evidence when a partial execution succeeded, then re-inspect before retrying failed refs.",
@@ -329,7 +329,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     task_intents: ["build folder layout", "create tracks", "organize track order", "apply colors"],
     rollout_slice: "3.2-E",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
@@ -378,15 +378,15 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Unmatched existing tracks remain unchanged unless an explicit accepted action covered them.",
       ],
       common_blockers: [
-        blocker("LAYOUT_PREVIEW_REQUIRED", "Run the layout dry-run preview and planned readback before applying layout child requests."),
+        blocker("LAYOUT_PREVIEW_REQUIRED", "Run the layout dry-run preview before applying the bounded registered layout program."),
         blocker("LAYOUT_INVALID", "The layout contains duplicate ids, cycles, invalid nesting, or invalid fields."),
         blocker("MATCH_AMBIGUOUS", "More than one existing track matches a declared row."),
         blocker("READBACK_MISMATCH", "The resulting folder depth/order differs from the declared layout."),
       ],
       recovery_steps: [
-        "For preview blockers, rerun dry-run and execute only the emitted accepted layout child requests with readback.",
+        "For preview blockers, rerun dry-run, then call the same registered Macro after repairing the typed blocker.",
         "Fix invalid/ambiguous rows and rerun dry-run; do not guess a match.",
-        "On partial success, keep the returned local-id-to-ref map, reread structure, and plan only remaining mismatches.",
+        "On partial success, keep the returned local-id-to-ref map, reread structure, and retry only remaining mismatches.",
         "Use undo evidence if structural readback cannot be reconciled safely.",
       ],
       dry_run_shape: {
@@ -414,7 +414,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     task_intents: ["create sends", "update routing", "route tracks", "inspect routing graph"],
     rollout_slice: "3.2-E",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
@@ -475,7 +475,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("READBACK_MISMATCH", "Actual routing differs from the confirmed patch."),
       ],
       recovery_steps: [
-        "For preview blockers, rerun dry-run and execute only the emitted internal routing child requests with graph readback.",
+        "For preview blockers, rerun dry-run, then call the same registered internal-routing Macro and require graph readback.",
         "Remove hardware/external endpoints and replace ambiguous selectors with canonical refs.",
         "Omit unaudited delete rows; report them as blocked rather than emulating deletion through another surface.",
         "On partial success, reread the graph and retry only mismatched accepted rows with a new confirmation scope.",
@@ -506,7 +506,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     task_intents: ["import audio", "place assets", "probe media", "create regions for assets"],
     rollout_slice: "3.2-E",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
@@ -562,7 +562,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("RESPONSE_BUDGET_EXCEEDED", "The asset batch or readback is too large."),
       ],
       recovery_steps: [
-        "For preview blockers, rerun dry-run and execute only the emitted media probe/import/readback child requests.",
+        "For preview blockers, rerun dry-run, then call the same registered media Macro and require item readback.",
         "Repair or remove invalid paths; never substitute a different file silently.",
         "Replace ambiguous track names with canonical refs or apply an explicit layout first.",
         "Split large batches and resume from the returned next_positions plus verified imported refs.",
@@ -585,14 +585,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.render.targets",
     title: "Render declared targets",
-    summary: "Preview bounded managed-root WAV/OGG exports and return one audited D31 project-render child request with built-in verification evidence.",
+    summary: "Preview or execute bounded managed-root WAV/OGG exports through one audited D31 route with verification evidence.",
     pack: "render",
     risk: "write",
     entity_kind: "macro.render.targets",
     task_intents: ["render wav", "render region ogg", "render selected items", "export project"],
     rollout_slice: "3.2-E",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
@@ -606,7 +606,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       required_readiness: [
         "Managed render-root readiness and live bridge readiness must pass.",
         "Target kind and canonical refs must match exactly; selected modes use current live selection and explicit modes require matching refs.",
-        "The agent must execute the returned D31 child and retain its manifest/evidence refs before success wording.",
+        "The registered Macro must be live-runnable; its fixed D31 dependency and manifest/evidence readback must complete before success wording.",
       ],
       input_shape: {
         target_kind: "whole_project | time_selection | regions | selected_items | explicit_items | selected_tracks | explicit_tracks.",
@@ -619,7 +619,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         output_policy: "openreaper_managed_render_root only.",
         collision_policy: "fail_if_exists only; overwrite and suffix fallback are forbidden.",
         max_targets: "Integer from 1 through 16.",
-        dry_run: "Boolean; true returns preview only, false returns one audited mutation child request.",
+        dry_run: "Boolean; true returns preview only, false executes the audited render program.",
       },
       preflight_steps: [
         "Normalize canonical refs and enforce exact target-kind/ref matching.",
@@ -627,17 +627,17 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "D31 resolves live targets and checks every expected output/artifact collision before its first render action.",
       ],
       underlying_actions: [
-        "template.render.render_targets (single audited D31 mutation child)",
+        "template.render.render_targets (single audited D31 dependency executed internally)",
         "D31 internally uses REAPER project render settings, restores render/selection state, verifies WAV/OGG headers, and emits manifest/evidence artifacts",
       ],
       readback_steps: [
         "Require the D31 result to return every output basename/path/size/extension plus manifest and evidence artifact refs.",
-        "Confirm the child reports render-setting and item/track-selection restoration.",
-        "Do not infer success from the macro plan alone; the agent executes and retains the child result.",
+        "Confirm the registered render stage reports render-setting and item/track-selection restoration.",
+        "Do not infer success from dry-run or a partial stage; accept only the completed Macro envelope and retained evidence.",
       ],
       success_criteria: [
-        "Dry-run returns a bounded preview and no child request; non-dry-run returns exactly one template.render.render_targets child.",
-        "The executed child verifies every non-empty managed WAV/OGG output and returns compact manifest/evidence refs.",
+        "Dry-run returns a bounded preview; non-dry-run internally executes exactly one template.render.render_targets dependency.",
+        "The registered render dependency verifies every non-empty managed WAV/OGG output and returns compact manifest/evidence refs.",
         "No arbitrary path, overwrite, external encoder, hidden executor, public call_recipe, raw action/Lua, shell, or UI bypass is exposed.",
       ],
       common_blockers: [
@@ -647,7 +647,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists and fail_if_exists rejected the whole batch before rendering."),
       ],
       recovery_steps: [
-        "Repair bridge/render-root readiness through supported startup/doctor guidance, then request a fresh plan.",
+        "Repair bridge/render-root readiness through supported startup/doctor guidance, then retry the same registered Macro.",
         "Repair target_kind and refs; selected modes take no explicit refs and whole/time take no object refs.",
         "Use only the bounded WAV/OGG settings and a fresh idempotency context; never bypass fail_if_exists.",
         "After a failure, inspect the D31 restoration/error evidence before retrying.",
@@ -659,7 +659,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       },
       resume_or_retry_policy: {
         resume_from: "fresh preview plus retained failed-child evidence",
-        retry: "Retry only after readiness/ref/collision repair with a fresh child request and idempotency key.",
+        retry: "Retry the registered Macro only after readiness, ref, or collision repair.",
         hard_stop: "Stop on unmanaged path, overwrite request, explicit-ref mismatch, unsupported setting, or restoration failure.",
       },
       examples: [
@@ -673,7 +673,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
 const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   id: "macro.project.file",
   title: "Save project file",
-  summary: "Secondary plan-only macro for save_current and save_as over four accepted/live-smoked atomic project-file templates; new/open/create remain typed-held.",
+  summary: "Executable save_current/save_as Macro over four accepted live-smoked project-file templates; new/open/create remain typed-held.",
   pack: "project",
   risk: "write",
   entity_kind: "macro.project.file",
@@ -682,36 +682,37 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   guide_tier: "secondary",
   known_blocker: null,
   manual: actionManual({
-    when_to_use: ["Request a strict serial child plan for save_current or save_as after the four exact atomic project-file templates are available."],
+    when_to_use: ["Execute the registered save_current or save_as program through one Macro call after the four exact atomic project-file Templates are available."],
     when_not_to_use: ["Do not use it for new, create, open, arbitrary filesystem operations, raw actions/Lua/shell/UI, or atomic overwrite=false."],
-    required_readiness: ["All four exact project-file template ids are accepted/live-smoked.", "The agent must execute returned child call_template requests explicitly and serially; the macro server never dispatches them."],
+    required_readiness: ["All four exact project-file Template ids are accepted/live-smoked.", "The managed OpenReaper atomic route must be ready; the Macro executes its fixed serial program internally."],
     input_shape: {
       operation: "save_current | save_as only; new/create/open/unknown return typed blockers with zero mutation requests.",
       target_path: "Required only for save_as and forwarded unchanged to template.project.save_project_as.",
       overwrite: "Required literal true only for save_as; atomic overwrite=false remains held.",
     },
-    preflight_steps: ["Call template.project.read_current_project_path, then template.project.read_dirty_state.", "Continue to the mutation only when both reads succeed and the path read reports a saved project."],
+    preflight_steps: ["Read the exact current path posture, then the exact dirty state.", "save_current requires an already-named project; save_as may name an unsaved current project."],
     underlying_actions: ["template.project.read_current_project_path", "template.project.read_dirty_state", "template.project.save_current_project", "template.project.save_project_as"],
     readback_steps: ["After a successful mutation, call the exact path read and exact dirty-state read again in that order."],
     success_criteria: ["save_current requires the exact preflight path to remain unchanged and dirty state clean/raw 0; save_as requires the exact target_path and dirty state clean/raw 0."],
     common_blockers: [blocker("PROJECT_FILE_OPERATION_HELD", "new/create/open remain held and produce no mutation requests."), blocker("SAVE_AS_TARGET_PATH_REQUIRED", "save_as requires target_path."), blocker("SAVE_AS_OVERWRITE_TRUE_REQUIRED", "save_as requires explicit overwrite=true."), blocker("SAVE_CURRENT_FIELDS_REJECTED", "save_current rejects target_path and overwrite fields."), blocker("DEPENDENCY_GATE_FAILED", "A failed preflight or unsaved-project read stops before mutation.")],
     recovery_steps: ["Repair the typed input or preflight blocker, then request a fresh plan.", "For save-as filesystem/path blockers, preserve and rely on the atomic save_project_as validation; the wrapper never substitutes weaker checks."],
-    dry_run_shape: { supported: true, output: ["preflight_requests", "mutation_requests", "readback_requests", "agent_execution_flow", "typed_blockers", "no_executor_safety_posture"] },
-    resume_or_retry_policy: { resume_from: "request a fresh plan after any failed child request", retry: "Retry only after the typed blocker is repaired; never skip or reuse stale preflight evidence.", hard_stop: "Stop on new/create/open, overwrite other than literal true, failed dependency, or exact postflight mismatch." },
+    dry_run_shape: { supported: true, output: ["macro_execution", "path_before", "dirty_before", "mutation_skipped", "typed_blockers"] },
+    resume_or_retry_policy: { resume_from: "the latest completed stage and exact path/dirty evidence", retry: "Retry only after the typed blocker is repaired; never skip or reuse stale preflight evidence.", hard_stop: "Stop on new/create/open, overwrite other than literal true, failed dependency, or exact postflight mismatch." },
     examples: [example("save current", { operation: "save_current" }), example("save as", { operation: "save_as", target_path: "/projects/demo/demo.RPP", overwrite: true })],
   }),
 }));
 
 export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
-  secondaryRow("macro.project.file", "Plan-only save-current/save-as macro; new/open/create remain held.", "write_confirmed", "plan_only_runtime_bound", "Expand for exact child order, gates, readback, and blockers."),
+  secondaryRow("macro.project.file", "Execute bounded save-current/save-as; new/open/create remain held.", "write_confirmed", "executable", "Expand for exact program stages, path gates, readback, and blockers."),
+  secondaryRow("macro.controls.set", "Execute bounded track/item/take/transport/send controls through one consolidated program.", "write_reversible", "executable", "Expand for target kinds, supported fields, SQLite selectors, live resolution, and readback."),
   secondaryRow("macro.selected_context", "Legacy compatibility mapping for selected project context.", "read", "consolidated_legacy_mapping", "Prefer executable macro.project.inspect or macro.project.query with entity=selected_context."),
-  secondaryRow("macro.set_track_controls", "Plan reversible common track control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed track volume/pan/mute/name/color controls."),
-  secondaryRow("macro.set_item_controls", "Plan reversible common item control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed item move/trim/gain/pan/fade controls."),
-  secondaryRow("macro.set_take_controls", "Plan reversible common take control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed take name/gain/pan/pitch/playrate controls."),
-  secondaryRow("macro.set_transport_controls", "Plan bounded transport/time-selection/loop control changes.", "safe_or_write", "compatibility_plan_only", "Expand for detailed transport controls; recording hard stops remain enforced."),
-  secondaryRow("macro.set_send_controls", "Plan reversible send level/pan/mute changes and routing readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed send controls with owner-track refs."),
-  secondaryRow("macro.set_midi_controls", "Describe bounded MIDI-take control planning where lifecycle support is incomplete.", "write_evidence_bound", "compatibility_blocked", "Expand only to inspect the current typed blocker; do not treat it as executable."),
-  secondaryRow("macro.set_stock_plugin_controls", "Plan evidence-bound semantic controls for supported stock plugins.", "write_evidence_bound", "compatibility_plan_only", "Expand only for supported stock-plugin mappings and starter actions."),
+  secondaryRow("macro.set_track_controls", "Legacy track-control name consolidated into macro.controls.set target_kind=track.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
+  secondaryRow("macro.set_item_controls", "Legacy item-control name consolidated into macro.controls.set target_kind=item.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
+  secondaryRow("macro.set_take_controls", "Legacy take-control name consolidated into macro.controls.set target_kind=take.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
+  secondaryRow("macro.set_transport_controls", "Legacy transport-control name consolidated into macro.controls.set target_kind=transport.", "safe_or_write", "consolidated_legacy_mapping", "Use macro.controls.set."),
+  secondaryRow("macro.set_send_controls", "Legacy send-control name consolidated into macro.controls.set target_kind=send.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
+  secondaryRow("macro.set_midi_controls", "Withdrawn generic MIDI draft; explicit task Macros replace it.", "write_evidence_bound", "withdrawn", "Use an accepted explicit MIDI task Macro when available."),
+  secondaryRow("macro.set_stock_plugin_controls", "Execute semantic controls for supported stock plugins using fresh live parameter metadata.", "write_evidence_bound", "executable", "Expand for supported mappings, starter actions, and live readback requirements."),
 ]);
 
 const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entry]));
@@ -726,7 +727,7 @@ export const ALPHA3_2A_SECONDARY_MACRO_IDS = deepFreeze(ALPHA3_2A_SECONDARY_MACR
 
 const ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING = deepFreeze({
   "macro.index_status": "macro.project.query",
-  "macro.selected_context": "macro.project.inspect",
+  "macro.selected_context": "macro.project.query",
   "macro.query_tracks": "macro.project.query",
   "macro.query_items": "macro.project.query",
   "macro.query_takes": "macro.project.query",
@@ -737,28 +738,36 @@ const ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING = deepFreeze({
   "macro.query_media": "macro.project.query",
   "macro.hydrate_refs": "macro.project.query",
   "macro.changed_since": "macro.project.query",
+  "macro.set_track_controls": "macro.controls.set",
+  "macro.set_item_controls": "macro.controls.set",
+  "macro.set_take_controls": "macro.controls.set",
+  "macro.set_transport_controls": "macro.controls.set",
+  "macro.set_send_controls": "macro.controls.set",
 });
 
 const ALPHA3_2A_COVERED_LEGACY_IDS = deepFreeze(Object.keys(ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING));
 const ALPHA3_2A_DISTINCT_LEGACY_IDS = deepFreeze([
-  "macro.set_track_controls",
-  "macro.set_item_controls",
-  "macro.set_take_controls",
-  "macro.set_transport_controls",
-  "macro.set_send_controls",
   "macro.set_midi_controls",
   "macro.set_stock_plugin_controls",
 ]);
 
 export const ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER = deepFreeze({
-  status: "deferred",
+  status: "accepted_executable",
   proposed_id: "macro.controls.set",
-  public_runtime: false,
-  public_discovery: false,
-  surface: "secondary_on_demand",
-  retained_secondary_ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
-  blocker: "cross_target_kind_input_refs_verification_contract_not_high_confidence",
-  reason: "Consolidation is deferred because cross-target-kind input/refs/verification has not yet formed a single high-confidence contract across track/item/take/transport/send/MIDI/stock-plugin targets; exposing macro.controls.set now would create a second public surface alongside the existing secondary macros.",
+  public_runtime: true,
+  public_discovery: true,
+  surface: "primary_executable",
+  retained_secondary_ids: ["macro.set_stock_plugin_controls"],
+  consolidated_legacy_ids: [
+    "macro.set_track_controls",
+    "macro.set_item_controls",
+    "macro.set_take_controls",
+    "macro.set_transport_controls",
+    "macro.set_send_controls",
+  ],
+  withdrawn_ids: ["macro.set_midi_controls"],
+  blocker: null,
+  reason: "macro.controls.set now owns the fixed track/item/take/transport/send program; old names are compatibility mappings, stock-plugin semantics remain a specialized executable Macro, and the generic MIDI draft is withdrawn.",
 });
 
 const COMPACT_GUIDE = deepFreeze({
@@ -776,7 +785,7 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Registered bounded task program through call_template. macro.project.inspect and macro.project.query execute now with automatic SQLite hydration/reuse; the remaining published write/render candidates retain their current evidence-bound posture until their 3.2.5-C/D conversion.",
+    macro: "Registered bounded task program through call_template. Published Macros execute fixed code-owned stages; project reads prefer SQLite and every write re-resolves live refs before mutation.",
     recipe: "Reusable/editable longer workflow; no public call_recipe or generic server-side Recipe executor.",
   },
   primary_spine: {
@@ -802,12 +811,14 @@ const COMPACT_GUIDE = deepFreeze({
   common_task_routing: [
     route("inspect project", "macro.project.inspect", "Execute one registered read Macro; it reconciles revision, hydrates or reuses SQLite, and returns compact project understanding."),
     route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Execute the SQLite query directly; cold or stale scopes receive one bounded automatic read-only refresh."),
-    route("delete scoped objects", "macro.project.delete_targets", "Use one accepted delete template with confirmation/readback; never delete source files."),
-    route("apply track/folder layout", "macro.project.apply_layout", "Use bounded track/folder templates and structural readback until 3.2-E."),
-    route("apply internal routing", "macro.routing.apply", "Use accepted internal routing templates; hardware/device I/O is blocked."),
-    route("place media assets", "macro.media.place_assets", "Use bounded probe/import/readback; never mutate source media files."),
-    route("render targets", "macro.render.targets", "Use managed render root and exact accepted render templates; no external encoder fallback."),
-    route("save/save-as", "macro.project.file", "Call the plan-only macro, then execute its strict serial atomic child requests; new/open/create remain held."),
+    route("delete scoped objects", "macro.project.delete_targets", "Execute the confirmation-gated registered program with live ref resolution and absence readback; never delete source files."),
+    route("apply track/folder layout", "macro.project.apply_layout", "Execute the bounded registered layout program and verify structural readback."),
+    route("apply internal routing", "macro.routing.apply", "Execute the registered internal-routing program; hardware/device I/O remains blocked."),
+    route("place media assets", "macro.media.place_assets", "Execute bounded probe/import/readback internally; never mutate source media files."),
+    route("set track/item/take/transport/send controls", "macro.controls.set", "Use one target_kind plus fields; SQLite selectors and live ref resolution are internal to the program."),
+    route("set supported stock plugin controls", "macro.set_stock_plugin_controls", "Use semantic controls or a starter action; the program hydrates live parameter metadata and verifies normalized readback."),
+    route("render targets", "macro.render.targets", "Execute one audited managed-root render route; no external encoder fallback."),
+    route("save/save-as", "macro.project.file", "Execute the fixed path/dirty/save/readback program; new/open/create remain held."),
     route("recover blockers", "ping + exact guide request", "Repair typed readiness/ref/index/render blockers; no direct bridge, raw action/Lua, shell, or UI path."),
   ],
   portfolio: {
@@ -818,20 +829,19 @@ const COMPACT_GUIDE = deepFreeze({
     removed_legacy_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
     legacy_query_posture: {
       public_generic_id: "macro.project.query",
-      internal_covered_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
+      internal_covered_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context" && ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING[id] === "macro.project.query"),
       temporary_compatibility_ids: ["macro.selected_context"],
       generic_status: "executable_registered_macro_program",
     },
     distinct_legacy: {
       ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
       blockers: [
-        ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER.reason,
-        "MIDI controls remain lifecycle/evidence blocked.",
-        "Stock-plugin support remains evidence-bound.",
+        "The generic MIDI control draft is withdrawn; use explicit task Macros when accepted.",
+        "Stock-plugin execution is available, but support claims remain bounded by per-plugin live evidence.",
       ],
     },
-    future_coverage_target: "about_80_percent_after_3_2_5_c_d_e_evidence",
-    claim_boundary: "inspect/query executable now; other Macro claims remain evidence-bound until their named 3.2.5 slices",
+    future_coverage_target: "about_80_percent_after_common_midi_fx_workloads",
+    claim_boundary: "Ten public Macros are executable; plugin and workload support claims remain bounded by reviewed evidence.",
   },
   recipe_guidance: {
     empty_catalog: "If empty, use one audited template atomically; for multi-step work state ad-hoc composition and use bounded readback.",
@@ -863,28 +873,27 @@ export function createAlpha3_2AAgentContextMacroGuide({ requested_ids = [], miss
 
 export function createAlpha3_2AContractMacroDiscoveryItems() {
   return CONTRACT_ONLY_DEFINITIONS.map((entry) => {
-    const renderPending = entry.id === "macro.render.targets";
     return deepFreeze({
       id: entry.id,
       title: entry.title,
       summary: entry.summary,
       pack: entry.pack,
-      lifecycle: renderPending ? "experimental" : "draft",
+      lifecycle: "draft",
       risk: entry.risk,
       entity_kind: entry.entity_kind,
-      tags: ["macro", "alpha3_2a", "agent_context", renderPending ? "plan_only_runtime_binding_pending" : "contract_only", entry.pack],
-      kind: renderPending ? "official_macro_plan" : "macro_contract",
+      tags: ["macro", "alpha3_2a", "agent_context", "contract_only", entry.pack],
+      kind: "macro_contract",
       action_kind: "macro",
-      macro_kind: renderPending ? "alpha3_2e_plan_only_pending" : "alpha3_2a_contract_only",
+      macro_kind: "alpha3_2a_contract_only",
       menu_group: entry.guide_tier === "secondary" ? "secondary_contract" : "primary_spine_contract",
-      execution_shape: renderPending ? "plan_only_agent_executed_child_requests" : "contract_only_non_runnable",
+      execution_shape: "contract_only_non_runnable",
       user_label: entry.title,
       task_intents: entry.task_intents,
-      support_status: renderPending ? "plan_only_runtime_binding_pending" : "contract_only_non_runnable",
+      support_status: "contract_only_non_runnable",
       support_state: "blocked",
       exists_in_catalog: false,
       live_runnable_now: false,
-      evidence_level: renderPending ? "planner_static_no_live_evidence" : "contract_only",
+      evidence_level: "contract_only",
       known_blocker: entry.known_blocker,
       allowed_live_group: null,
       guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
@@ -892,24 +901,18 @@ export function createAlpha3_2AContractMacroDiscoveryItems() {
       guide_tier: entry.guide_tier,
       inputSchema: {
         type: "object",
-        description: renderPending
-          ? "Standalone plan-only macro input shape; lower-layer/runtime binding is pending and this entry is not live-callable."
-          : "Future macro input shape. This Alpha3.2-A entry is contract-only and cannot be executed through call_template.",
+        description: "Future macro input shape. This Alpha3.2-A entry is contract-only and cannot be executed through call_template.",
         additionalProperties: true,
         properties: Object.fromEntries(Object.keys(entry.manual.input_shape).map((field) => [field, { description: entry.manual.input_shape[field] }])),
       },
       outputSchema: {
         type: "object",
-        description: renderPending
-          ? "Bounded planner result with preview, preflight, one render_targets mutation child, and output readback guidance; no server executor exists."
-          : "Future bounded macro result. No runtime result exists before the named Alpha3.2 implementation slice.",
+        description: "Future bounded macro result. No runtime result exists before the named Alpha3.2 implementation slice.",
       },
-      examples: entry.manual.examples.map((item) => ({ name: item.name, input: item.input, expected: renderPending ? "plan_only_runtime_binding_pending" : "contract_only_non_runnable" })),
+      examples: entry.manual.examples.map((item) => ({ name: item.name, input: item.input, expected: "contract_only_non_runnable" })),
       expectedDelta: {
-        kind: renderPending ? "plan_only_runtime_binding_pending" : "none",
-        summary: renderPending
-          ? "Standalone planner/manual only; control tower must bind the lower-layer route and separately accept live evidence before runtime dispatch or support wording."
-          : "Discovery/manual contract only; call_template must reject this id until a later accepted implementation binds it.",
+        kind: "none",
+        summary: "Discovery/manual contract only; call_template must reject this id until a later accepted implementation binds it.",
       },
       example_call_shape: {
         discovery_tool: "list_templates",
@@ -942,7 +945,7 @@ export function createAlpha3_2AExactMacroExpansion(id) {
     guide_contract: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
     guide_version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
     guide_tier: contractEntry.guide_tier,
-    implementation_status: id === "macro.project.file" ? "plan_only_runtime_bound" : contractEntry.implementation_status,
+    implementation_status: id === "macro.project.file" ? "executable" : contractEntry.implementation_status,
     runnable: id === "macro.project.file" ? true : contractEntry.runnable,
     rollout_slice: contractEntry.rollout_slice,
     action_manual: contractEntry.manual,
@@ -1111,7 +1114,6 @@ function secondaryRow(id, purpose, safety_tier, status, when_to_expand) {
     safety_tier,
     status: ({
       contract_only: "contract",
-      compatibility_plan_only: "compat",
       compatibility_blocked: "blocked",
     })[status] ?? status,
     when_to_expand: compactText(when_to_expand, 36),

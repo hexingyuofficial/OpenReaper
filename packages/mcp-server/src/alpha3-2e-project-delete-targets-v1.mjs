@@ -2,6 +2,11 @@ export const ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_CONTRACT = "alpha3.2e.projec
 export const ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID = "macro.project.delete_targets";
 export const ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_VERSION = "1.0.0";
 
+export async function executeAlpha3_2EProjectDeleteTargetsMacro(options) {
+  const { executeAlpha3_2_5CProjectWriteMacro } = await import("./alpha3-2-5-c-project-write-runtime-v1.mjs");
+  return executeAlpha3_2_5CProjectWriteMacro(options);
+}
+
 const ALLOWED_INPUT_FIELDS = new Set(["refs", "selectors", "dry_run", "confirm_scope", "delete_policy", "compact_response"]);
 const ALLOWED_DELETE_POLICY = "project_objects_only";
 const MAX_REFS_PER_KIND = 100;
@@ -131,28 +136,29 @@ export function createAlpha3_2EProjectDeleteTargetsMacroRuntimeEnvelope({ reques
   return deepFreeze(envelope);
 }
 
-export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems() {
+export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(options = {}) {
   return [deepFreeze({
     id: ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID,
     title: "Delete scoped project targets",
-    summary: "Plan-only destructive macro that previews explicit project-object targets, requires exact confirmation, and returns deletion plus absence-readback child requests.",
+    summary: "Preview or execute confirmed project-object deletion through one registered Macro with live ref resolution and absence readback.",
     pack: "project",
     lifecycle: "experimental",
     risk: "destructive",
     entity_kind: "macro.project.delete_targets",
-    tags: ["macro", "project", "delete", "cleanup", "alpha3_2e", "plan_only"],
+    tags: ["macro", "project", "delete", "cleanup", "alpha3_2e", "executable"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "project_delete_targets",
     menu_group: "primary",
-    execution_shape: "plan_only_agent_executed_child_requests",
+    execution_shape: "registered_macro_program",
     user_label: "Delete scoped project targets",
     task_intents: ["delete tracks", "delete items", "delete markers", "delete regions", "scoped cleanup"],
-    support_status: "plan_only_runtime_bound_preview_first",
+    support_status: "executable_runtime_bound_confirmation_gated",
+    implementation_status: "executable",
     support_state: "supported_with_confirmation",
     exists_in_catalog: true,
-    live_runnable_now: false,
-    evidence_level: "runtime_bound_static_fake",
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true ? "runtime_bound_live_route_available" : "runtime_bound_executable",
     known_blocker: "CONFIRM_SCOPE_REQUIRED before destructive child requests",
     allowed_live_group: null,
     inputSchema: {
@@ -169,22 +175,21 @@ export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems() {
     },
     outputSchema: {
       type: "object",
-      required: ["contract", "action_kind", "mode", "executed", "plan", "execution"],
+      required: ["contract", "ok", "macro", "execution", "result"],
       properties: {
-        contract: { const: ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_CONTRACT },
-        action_kind: { const: "macro" },
-        mode: { enum: ["dry_run_preview", "plan_only_agent_executed_child_requests", "blocked"] },
-        executed: { const: false },
-        plan: { type: "object" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
         execution: { type: "object" },
+        result: { type: "object" },
       },
     },
     refs: { input: ["track_ref", "item_ref", "marker_ref", "region_ref"], output: [] },
     expectedDelta: {
-      kind: "none_until_agent_executes_children",
-      action: "delete_plan",
-      entities: ["macro_plan", "tracks", "items", "markers", "regions"],
-      summary: "Returns a preview or confirmed deletion plan only. It does not delete project objects or dispatch bridge requests itself.",
+      kind: "destructive",
+      action: "delete_project_objects",
+      entities: ["tracks", "items", "markers", "regions"],
+      summary: "When dry_run is false and confirm_scope matches exactly, executes only the confirmed project-object deletes and verifies the refs are absent.",
     },
     examples: [
       { input: { refs: { items: ["item:guid:{ITEM-A}"] }, dry_run: true, delete_policy: "project_objects_only" } },

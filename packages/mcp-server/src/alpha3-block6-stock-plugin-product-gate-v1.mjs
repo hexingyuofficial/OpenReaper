@@ -24,9 +24,9 @@ export const ALPHA3_BLOCK6_STOCK_PLUGIN_PRODUCT_GATE_DISCOVERY_SUMMARY = deepFre
   },
   gates: [
     "all ten priority stock plugins have semantic maps and one starter action",
-    "each starter action can produce child call_template requests after fresh parameter metadata",
+    "each starter action is executable through the registered Macro after live FX identity and parameter hydration",
     "missing metadata returns typed hydration guidance instead of writes",
-    "customer readback blocks success wording until child requests and readback pass",
+    "customer readback blocks success wording until registered writes and normalized readback pass",
     "live support wording remains limited to accepted bounded plugin rows only",
   ],
   exclusions: [
@@ -89,11 +89,12 @@ export function summarizeAlpha3Block6StockPluginProductGate(request = {}) {
       public_call_recipe: false,
       raw_lua_action_shell_or_ui: false,
       alias_execution: false,
-      direct_live_write_from_macro: false,
+      static_gate_direct_live_write: false,
+      registered_macro_runtime: true,
     },
     customer_flow: {
       status: failures.length === 0 ? "static_ready_no_broad_live_claim" : "needs_repair",
-      promise: "A user can ask for stock plugin controls in musical language; the agent hydrates FX identity/parameters, emits existing call_template child requests, and waits for readback before success wording.",
+      promise: "A user can ask for stock plugin controls in musical language; one registered Macro hydrates live FX identity and parameters, executes fixed accepted writes, and verifies normalized readback before success wording.",
       support_wording: "Only ReaComp has accepted bounded live fixture wording today; other stock plugins remain evidence-gated.",
       bounded_followup: "Open a bounded live REAPER/safe-write window to promote any pending plugin row.",
     },

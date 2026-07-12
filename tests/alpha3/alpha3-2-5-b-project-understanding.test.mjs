@@ -65,10 +65,10 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       fields: ["id", "summary"],
     });
     for (const item of executable.items) {
-      assert.equal(item.current_status, "available_now");
-      assert.equal(item.beginner_label, "Ready now");
-      assert.match(item.user_message, /execute one registered bounded Macro program/);
-      assert.match(item.next_step, /executes its bounded registered program/);
+      assert.equal(item.current_status, "needs_live");
+      assert.equal(item.beginner_label, "Start or reconnect OpenReaper");
+      assert.match(item.user_message, /needs the configured OpenReaper live route/);
+      assert.match(item.next_step, /Start or reconnect the managed OpenReaper bridge/);
       assert.match(item.safety_note, /Registered bounded Macro program/);
       assert.equal(item.next_step.includes("child call_template requests"), false);
       assert.equal(item.safety_note.includes("Macro planner only"), false);
@@ -169,6 +169,65 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(refreshed.result.data.refs_truth.sqlite_authorizes_writes, false);
       assert.equal(refreshed.result.data.refs_truth.write_requires_live_re_resolution, true);
       assert.equal(refreshed.result.data.refresh.call_count >= 1, true);
+
+      const forcedCallCountBefore = state.calls.length;
+      const forced = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "force_read_only_refresh", limit: 25 },
+        context: callContext(3),
+      });
+      assert.equal(forced.ok, true, JSON.stringify(forced));
+      assert.equal(forced.sqlite.source, "refreshed_index");
+      assert.equal(forced.result.data.refresh.call_count > 0, true);
+      assert.equal(state.calls.length > forcedCallCountBefore, true);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("materializes live track object refs across staged FX hydration", async () => {
+    const fixture = await makeFixture();
+    const state = { revision: 1, trackName: "Source", calls: [], fxOwnerRefs: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const tracks = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "force_read_only_refresh", limit: 25 },
+        context: callContext(1),
+      });
+      assert.equal(tracks.ok, true, JSON.stringify(tracks));
+
+      indexRuntime.invalidateScopes({ scopes: ["fx"], observed_at: NOW });
+      const fx = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", refresh_policy: "force_read_only_refresh", limit: 25 },
+        context: callContext(2),
+      });
+
+      assert.equal(fx.ok, true, JSON.stringify(fx));
+      assert.equal(fx.result.data.rows[0].ref, "fx:track:guid:{TRACK-1}:0");
+      assert.deepEqual(state.fxOwnerRefs, [{ kind: "track", ref: "track:guid:{TRACK-1}" }]);
+      assert.equal(state.calls.includes("fx.list_track_chain"), true);
+      assert.equal(fx.result.data.refs_truth.sqlite_authorizes_writes, false);
+
+      const fxCallCountBefore = state.calls.filter((name) => name === "fx.list_track_chain").length;
+      const forcedAgain = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "fx", refresh_policy: "force_read_only_refresh", limit: 25 },
+        context: callContext(3),
+      });
+      assert.equal(forcedAgain.ok, true, JSON.stringify(forcedAgain));
+      assert.equal(
+        state.calls.filter((name) => name === "fx.list_track_chain").length > fxCallCountBefore,
+        true,
+      );
+      assert.equal(
+        indexRuntime.adapter.snapshot().rows.tracks.find((row) => row.ref === "track:guid:{TRACK-1}").fx_count,
+        1,
+      );
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();
@@ -299,6 +358,26 @@ function createRuntime({ fixture, indexRuntime, state }) {
         || request.operation.name === "tracks.read_mixer_controls"
       ) {
         response.result.readback = trackReadback(state.trackName);
+      } else if (request.operation.name === "fx.list_track_chain") {
+        state.fxOwnerRefs.push(...request.refs.map((ref) => ({ kind: ref.kind, ref: ref.ref })));
+        response.result.summary = {
+          owner_ref: "track:guid:{TRACK-1}",
+          track_ref: "track:guid:{TRACK-1}",
+          fx_count: 1,
+          fx: [{
+            fx_ref: "fx:track:guid:{TRACK-1}:0",
+            owner_ref: "track:guid:{TRACK-1}",
+            slot_index: 0,
+            name: "VST: ReaComp (Cockos)",
+            enabled: true,
+          }],
+        };
+        response.result.readback = response.result.summary;
+        response.result.refs = [{
+          kind: "fx",
+          ref: "fx:track:guid:{TRACK-1}:0",
+          identity: { scheme: "track_fx", value: "track:guid:{TRACK-1}:0" },
+        }];
       } else if (request.operation.name === "project.read_dirty_state") {
         response.result.summary = {
           project_ref: projectRef,

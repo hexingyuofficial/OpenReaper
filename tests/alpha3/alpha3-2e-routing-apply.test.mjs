@@ -9,11 +9,13 @@ import {
 } from "../../packages/mcp-server/src/alpha3-2e-routing-apply-v1.mjs";
 
 describe("Alpha3.2-E routing apply planner", () => {
-  it("publishes a plan-only routing macro discovery item", () => {
+  it("publishes an executable registered routing Macro", () => {
     const [item] = createAlpha3_2ERoutingApplyMacroDiscoveryItems();
     assert.equal(item.id, ALPHA3_2E_ROUTING_APPLY_MACRO_ID);
     assert.equal(item.runnable, true);
-    assert.equal(item.execution_shape, "plan_only_agent_executed_child_requests");
+    assert.equal(item.execution_shape, "registered_macro_program");
+    assert.equal(item.implementation_status, "executable");
+    assert.equal(item.support_status, "executable_runtime_bound");
     assert.equal(item.input_schema.properties.routes.type, "array");
   });
 

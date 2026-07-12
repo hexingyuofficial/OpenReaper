@@ -2993,7 +2993,7 @@ function queryTrackRefreshRequests(query) {
       id: "template.tracks.read_mixer_controls",
       refs: {},
       input: {
-        include_selected: true,
+        include_selected: false,
         limit: query.limit,
       },
       purpose: "Hydrate compact mixer fields for track query rows.",
@@ -3178,7 +3178,7 @@ function queryFxRefreshRequests(query, indexState = null) {
       id: "template.tracks.read_mixer_controls",
       refs: {},
       input: {
-        include_selected: true,
+        include_selected: false,
         limit: query.limit,
       },
       purpose: "Refresh track mixer context and FX presence before using indexed FX rows.",

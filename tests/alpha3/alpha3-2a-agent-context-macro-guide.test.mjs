@@ -60,7 +60,7 @@ const EXPECTED_PROJECT_FILE_TEMPLATE_IDS = [
 ];
 const EXPECTED_COVERED_LEGACY_MAPPING = {
   "macro.index_status": "macro.project.query",
-  "macro.selected_context": "macro.project.inspect",
+  "macro.selected_context": "macro.project.query",
   "macro.query_tracks": "macro.project.query",
   "macro.query_items": "macro.project.query",
   "macro.query_takes": "macro.project.query",
@@ -71,13 +71,20 @@ const EXPECTED_COVERED_LEGACY_MAPPING = {
   "macro.query_media": "macro.project.query",
   "macro.hydrate_refs": "macro.project.query",
   "macro.changed_since": "macro.project.query",
+  "macro.set_track_controls": "macro.controls.set",
+  "macro.set_item_controls": "macro.controls.set",
+  "macro.set_take_controls": "macro.controls.set",
+  "macro.set_transport_controls": "macro.controls.set",
+  "macro.set_send_controls": "macro.controls.set",
 };
-const EXPECTED_DISTINCT_LEGACY_IDS = [
+const EXPECTED_CONSOLIDATED_CONTROL_IDS = [
   "macro.set_track_controls",
   "macro.set_item_controls",
   "macro.set_take_controls",
   "macro.set_transport_controls",
   "macro.set_send_controls",
+];
+const EXPECTED_DISTINCT_LEGACY_IDS = [
   "macro.set_midi_controls",
   "macro.set_stock_plugin_controls",
 ];
@@ -150,11 +157,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
         row.implementation_status,
         ["macro.project.query", "macro.project.inspect"].includes(row.id)
           ? "executable_registered_program"
-            : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(row.id)
-              ? "plan_only_runtime_bound_preview_first"
-              : row.id === "macro.render.targets"
-                ? "plan_only_runtime_bound_preview_first"
-                : "contract_only_non_runnable",
+          : "executable",
       );
       assert.deepEqual(Object.keys(row.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       for (const field of ALPHA3_2A_ACTION_MANUAL_FIELDS) {
@@ -224,13 +227,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
         expansion.implementation_status,
         expansion.id === "macro.project.inspect"
           ? "executable_registered_program"
-          : expansion.id === "macro.render.targets"
-          ? "plan_only_runtime_bound_preview_first"
-          : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(expansion.id)
-            ? "plan_only_runtime_bound_preview_first"
-            : runtimeBound
-              ? "plan_only_runtime_bound"
-              : "contract_only_non_runnable",
+          : runtimeBound
+            ? "executable"
+            : "contract_only_non_runnable",
       );
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
@@ -251,11 +250,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(Object.keys(item).some((key) => key.startsWith("guide_")), false);
     }
 
-    const legacyDetails = runtime.list_templates({
-      ids: ["macro.set_track_controls", "macro.query_items"],
+    const macroDetails = runtime.list_templates({
+      ids: ["macro.controls.set", "macro.set_stock_plugin_controls"],
       fields: ["id", "inputSchema", "outputSchema", "examples", "expectedDelta"],
     });
-    for (const item of legacyDetails.items) {
+    assert.deepEqual(macroDetails.items.map((item) => item.id), ["macro.controls.set", "macro.set_stock_plugin_controls"]);
+    for (const item of macroDetails.items) {
       assert.ok(item.inputSchema);
       assert.ok(item.outputSchema);
       assert.ok(Array.isArray(item.examples));
@@ -264,6 +264,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(Object.hasOwn(item, "compatibility"), false);
       assert.equal(Object.keys(item).some((key) => key.startsWith("guide_")), false);
     }
+    const removed = runtime.list_templates({ ids: EXPECTED_CONSOLIDATED_CONTROL_IDS, fields: ["id"] });
+    assert.deepEqual(removed.items, []);
+    assert.deepEqual(removed.missing_ids, EXPECTED_CONSOLIDATED_CONTROL_IDS);
 
     assert.throws(
       () => runtime.list_templates({ ids: ["macro.project.inspect"], fields: ["action_manual"] }),
@@ -282,7 +285,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(manual.input_shape.entity, EXPECTED_QUERY_ENTITIES.join(" | "));
   });
 
-  it("reports four accepted/live-smoked project-file templates and a plan-only save macro with new/open/create held", () => {
+  it("reports four accepted/live-smoked project-file templates and an executable save Macro with new/open/create held", () => {
     const runtime = createCallTemplateRuntime();
     const guide = runtime.list_templates().product_surface.agent_context_macro_guide;
     const inspectCard = guide.primary_spine.rows.find((row) => row.id === "macro.project.inspect");
@@ -323,48 +326,50 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(portfolio.legacy_query_posture.temporary_compatibility_ids, ["macro.selected_context"]);
     assert.equal(portfolio.legacy_query_posture.generic_status, "executable_registered_macro_program");
     assert.deepEqual(portfolio.distinct_legacy.ids, EXPECTED_DISTINCT_LEGACY_IDS);
-    assert.equal(portfolio.distinct_legacy.blockers.length >= 3, true);
+    assert.equal(portfolio.distinct_legacy.blockers.length, 2);
     assert.equal(portfolio.distinct_legacy.blockers.every((blocker) => blocker.length > 0), true);
   });
 
-  it("defers control consolidation without widening the primary or default guide expansion surface", () => {
+  it("publishes the consolidated control Macro and withdraws its five old public names", () => {
     const runtime = createCallTemplateRuntime();
     const guide = createAlpha3_2AAgentContextMacroGuide();
     const defaultMenu = runtime.list_templates();
     const defaultGuide = defaultMenu.product_surface.agent_context_macro_guide;
-    const exactControls = runtime.list_templates({
-      ids: EXPECTED_DISTINCT_LEGACY_IDS,
+    const exactLegacy = runtime.list_templates({
+      ids: [...EXPECTED_CONSOLIDATED_CONTROL_IDS, ...EXPECTED_DISTINCT_LEGACY_IDS],
       fields: ["id"],
     });
-    const proposed = runtime.list_templates({
+    const consolidated = runtime.list_templates({
       ids: ["macro.controls.set"],
       fields: ["id"],
     });
 
     assert.deepEqual(guide.control_consolidation, ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER);
-    assert.equal(guide.control_consolidation.status, "deferred");
+    assert.equal(guide.control_consolidation.status, "accepted_executable");
     assert.equal(guide.control_consolidation.proposed_id, "macro.controls.set");
-    assert.equal(guide.control_consolidation.public_runtime, false);
-    assert.equal(guide.control_consolidation.public_discovery, false);
-    assert.equal(guide.control_consolidation.surface, "secondary_on_demand");
-    assert.match(guide.control_consolidation.reason, /cross-target-kind.*input\/refs\/verification/i);
-    assert.match(guide.control_consolidation.reason, /single high-confidence contract/i);
-    assert.match(guide.control_consolidation.reason, /second public surface/i);
-    assert.deepEqual(guide.secondary_menu.rows.filter((row) => EXPECTED_DISTINCT_LEGACY_IDS.includes(row.id)).map((row) => row.surface), [
-      "secondary_on_demand",
-      "secondary_on_demand",
-      "secondary_on_demand",
-      "secondary_on_demand",
-      "secondary_on_demand",
-      "secondary_on_demand",
-      "secondary_on_demand",
+    assert.equal(guide.control_consolidation.public_runtime, true);
+    assert.equal(guide.control_consolidation.public_discovery, true);
+    assert.equal(guide.control_consolidation.surface, "primary_executable");
+    assert.deepEqual(guide.control_consolidation.consolidated_legacy_ids, EXPECTED_CONSOLIDATED_CONTROL_IDS);
+    assert.deepEqual(guide.control_consolidation.withdrawn_ids, ["macro.set_midi_controls"]);
+    assert.equal(guide.primary_spine.rows.some((row) => EXPECTED_CONSOLIDATED_CONTROL_IDS.includes(row.id)), false);
+    assert.equal(defaultGuide.requested_expansions.items.length, 0);
+    assert.deepEqual(exactLegacy.items.map((item) => item.id), ["macro.set_stock_plugin_controls"]);
+    assert.deepEqual(exactLegacy.missing_ids, [...EXPECTED_CONSOLIDATED_CONTROL_IDS, "macro.set_midi_controls"]);
+    assert.deepEqual(exactLegacy.product_surface.agent_context_macro_guide.requested_expansions.items, []);
+    assert.deepEqual(consolidated.items.map((item) => item.id), ["macro.controls.set"]);
+    assert.deepEqual(defaultMenu.items.filter((item) => item.action_kind === "macro").map((item) => item.id), [
+      "macro.project.inspect",
+      "macro.project.delete_targets",
+      "macro.project.apply_layout",
+      "macro.routing.apply",
+      "macro.media.place_assets",
+      "macro.render.targets",
+      "macro.project.file",
+      "macro.project.query",
+      "macro.set_stock_plugin_controls",
+      "macro.controls.set",
     ]);
-    assert.equal(guide.primary_spine.rows.some((row) => EXPECTED_DISTINCT_LEGACY_IDS.includes(row.id)), false);
-    assert.equal(defaultGuide.requested_expansions.items.some((item) => EXPECTED_DISTINCT_LEGACY_IDS.includes(item.id)), false);
-    assert.deepEqual(exactControls.items.map((item) => item.id), EXPECTED_DISTINCT_LEGACY_IDS);
-    assert.deepEqual(exactControls.product_surface.agent_context_macro_guide.requested_expansions.items, []);
-    assert.deepEqual(proposed.items, []);
-    assert.deepEqual(proposed.missing_ids, ["macro.controls.set"]);
   });
 
   it("enforces the compact default 96-KiB budget while preserving the guide", () => {
@@ -386,14 +391,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(marginBytes >= 512, true, `${marginBytes}`);
   });
 
-  it("keeps unimplemented ids held while inspect/query are executable and project.file remains plan-only", async () => {
-    let executorCalls = 0;
-    const runtime = createCallTemplateRuntime({
-      executor: async () => {
-        executorCalls += 1;
-        throw new Error("unexpected executor call");
-      },
-    });
+  it("keeps contract-only ids held and returns typed live blockers for executable Macros offline", async () => {
+    const runtime = createCallTemplateRuntime();
 
     assert.deepEqual(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS, EXPECTED_PRIMARY_IDS.filter((id) => !["macro.project.query", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"].includes(id)));
     for (const id of ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS) {
@@ -409,9 +408,14 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(queryGuide.runnable, true);
 
     const projectFile = await runtime.call_template({ id: "macro.project.file", input: { operation: "save_current" } });
-    assert.equal(projectFile.ok, true);
-    assert.equal(projectFile.result.executed, false);
-    assert.equal(projectFile.result.execution.executor_call_count, 0);
+    assert.equal(projectFile.ok, false);
+    assert.equal(projectFile.contract, "macro.execution.v1");
+    assert.equal(projectFile.error.code, "PROJECT_FILE_EXECUTOR_UNAVAILABLE");
+
+    const oldControl = await runtime.call_template({ id: "macro.set_track_controls", input: {} });
+    assert.equal(oldControl.ok, false);
+    assert.equal(oldControl.error.code, "CALL_TEMPLATE_ID_REPLACED");
+    assert.equal(oldControl.error.details.replacement, "macro.controls.set");
 
     const legacy = await runtime.call_template({ id: "macro.index_status", input: { scope: "project" } });
     assert.equal(legacy.ok, false);
@@ -419,7 +423,6 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(legacy.error.code, "CALL_TEMPLATE_ID_REPLACED");
     assert.equal(legacy.error.details.id, "macro.index_status");
     assert.equal(legacy.error.details.replacement, "macro.project.query");
-    assert.equal(executorCalls, 0);
   });
 
   it("retains folded secondary discovery, empty/draft recipe guidance, five tools, and no bypass", () => {
@@ -429,9 +432,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(guide.secondary_menu.folded, true);
     assert.equal(secondaryIds.includes("macro.project.file"), true);
     assert.equal(secondaryIds.includes("macro.selected_context"), true);
-    for (const id of Object.keys(EXPECTED_COVERED_LEGACY_MAPPING).filter((id) => id !== "macro.selected_context")) {
+    for (const id of Object.entries(EXPECTED_COVERED_LEGACY_MAPPING)
+      .filter(([id, replacement]) => id !== "macro.selected_context" && replacement === "macro.project.query")
+      .map(([id]) => id)) {
       assert.equal(secondaryIds.includes(id), false, id);
     }
+    for (const id of EXPECTED_CONSOLIDATED_CONTROL_IDS) assert.equal(secondaryIds.includes(id), true, id);
     for (const id of EXPECTED_DISTINCT_LEGACY_IDS) {
       assert.equal(secondaryIds.includes(id), true, id);
     }
@@ -540,11 +546,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(legacy.template.id, "macro.index_status");
       assert.equal(legacy.error?.code ?? legacy.error_code, "CALL_TEMPLATE_ID_REPLACED");
       assert.equal(legacy.error?.details?.replacement, "macro.project.query");
-      assert.equal(render.ok, true);
-      assert.equal(render.template.id, "macro.render.targets");
-      assert.equal(render.result.executed, false);
-      assert.equal(render.result.mode, "dry_run_preview");
-      assert.deepEqual(render.result.child_requests, []);
+      assert.equal(render.ok, false);
+      assert.equal(render.contract, "macro.execution.v1");
+      assert.equal(render.macro.id, "macro.render.targets");
+      assert.equal(render.execution.status, "blocked");
+      assert.equal(render.error.code, "RENDER_EXECUTOR_UNAVAILABLE");
       assert.equal(inspect.ok, false);
       assert.equal(inspect.contract, "macro.execution.v1");
       assert.equal(inspect.macro.id, "macro.project.inspect");

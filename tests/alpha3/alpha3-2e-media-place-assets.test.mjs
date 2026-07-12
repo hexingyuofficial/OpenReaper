@@ -9,11 +9,13 @@ import {
 } from "../../packages/mcp-server/src/alpha3-2e-media-place-assets-v1.mjs";
 
 describe("Alpha3.2-E media place_assets planner", () => {
-  it("publishes a plan-only media placement macro discovery item", () => {
+  it("publishes an executable registered media-placement Macro", () => {
     const [item] = createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems();
     assert.equal(item.id, ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID);
     assert.equal(item.runnable, true);
-    assert.equal(item.execution_shape, "plan_only_agent_executed_child_requests");
+    assert.equal(item.execution_shape, "registered_macro_program");
+    assert.equal(item.implementation_status, "executable");
+    assert.equal(item.support_status, "executable_runtime_bound");
     assert.equal(item.input_schema.required.includes("assets"), true);
   });
 
@@ -61,6 +63,9 @@ describe("Alpha3.2-E media place_assets planner", () => {
     assert.equal(Object.hasOwn(plan.mutation_requests[1].refs, "file_ref"), false);
     assert.equal(plan.mutation_requests[2].refs.track_ref, "track:guid:{DRUMS}");
     assert.equal(plan.mutation_requests[2].refs.source_file_ref, "file:planned:loop");
+    assert.equal(plan.mutation_requests[0].produces_local_id, "kick");
+    assert.equal(plan.mutation_requests[1].produces_local_id, "kick");
+    assert.equal(plan.mutation_requests[2].produces_local_id, "loop");
     assert.equal(plan.readback_requests.filter((request) => request.id === "template.items.read_item_summary").length, 2);
     assert.equal(plan.readback_requests.some((request) => request.id === "template.media.read_take_source"), false);
     assert.equal(plan.preview.local_ref_map.kick.take_ref, undefined);

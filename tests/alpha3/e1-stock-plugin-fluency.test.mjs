@@ -24,7 +24,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     const registry = listAlpha3E1StockPluginMaps();
 
     assert.equal(registry.contract, ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT);
-    assert.equal(registry.mode, "plan_only_stock_plugin_semantic_maps");
+    assert.equal(registry.mode, "semantic_map_registry");
     assert.deepEqual(registry.tool_surface, {
       added_tools: 0,
       discovery_tools: ["list_templates"],
@@ -136,7 +136,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(reaeq.claim_not_allowed.includes("Do not claim live support"), true);
     assert.equal(matrix.claim_policy.not_allowed_yet.includes("All ten stock plugins are live-supported."), true);
     assert.equal(matrix.bounded_live_smoke_plan.status, "blocked_until_user_opens_bounded_live_window");
-    assert.equal(matrix.bounded_live_smoke_plan.hard_stops.includes("child request blocker or readback mismatch"), true);
+    assert.equal(matrix.bounded_live_smoke_plan.hard_stops.includes("registered Macro stage blocker or readback mismatch"), true);
     assert.equal(matrix.bounded_live_smoke_plan.recommended_batches[0].plugin_ids.includes("realimit"), true);
     assert.equal(matrix.bounded_live_smoke_plan.recommended_batches[1].plugin_ids.includes("reapitch"), true);
     assert.equal(matrix.safety.hidden_executor, false);
@@ -182,7 +182,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(entry.macro_kind, "stock_plugin_control");
     assert.equal(entry.menu_group, "act");
     assert.equal(entry.pack, "core");
-    assert.equal(entry.live_runnable_now, true);
+    assert.equal(entry.execution_shape, "registered_macro_program");
+    assert.equal(entry.implementation_status, "executable");
+    assert.equal(entry.support_status, "executable_runtime_bound");
+    assert.equal(entry.live_runnable_now, false);
     assert.equal(entry.known_blocker, null);
     assert.equal(entry.inputSchema.required.includes("plugin"), false);
     assert.equal(entry.inputSchema.required.includes("controls"), false);
@@ -190,7 +193,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(entry.starter_action_ids.includes("gentle_vocal_compression"), true);
     assert.equal(entry.task_intents.includes("monster voice"), true);
     assert.equal(entry.refs.input[0].name, "fx_ref");
-    assert.equal(entry.expectedDelta.summary, "Returns a plan-only stock-plugin macro envelope. It does not mutate REAPER directly.");
+    assert.equal(entry.expectedDelta.summary, "Executes the registered semantic parameter program and verifies every touched normalized parameter value.");
   });
 
   it("blocks stock plugin writes until fresh FX parameter metadata resolves the real index", () => {
@@ -538,8 +541,8 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(menu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     const entry = menu.items.find((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
     assert.equal(entry.action_kind, "macro");
-    assert.equal(entry.current_status, "needs_ref");
-    assert.equal(entry.beginner_label, "Select or resolve an object first");
+    assert.equal(entry.current_status, "needs_live");
+    assert.equal(entry.beginner_label, "Start or reconnect OpenReaper");
     assert.equal(entry.capability_truth.kind, "official_macro");
 
     for (const pluginId of ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.plugin_ids) {
@@ -548,7 +551,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     }
   });
 
-  it("calls the E1 stock plugin macro through call_template as a plan-only envelope", async () => {
+  it("keeps the executable stock-plugin Macro visible and returns a typed live blocker offline", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T14:31:44.000Z"),
     });
@@ -570,38 +573,17 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       },
     });
 
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
-    assert.equal(response.error, null);
-    assert.equal(response.template.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
-    assert.equal(response.template.action_kind, "macro");
-    assert.equal(response.request.macro.contract, ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT);
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.public_call_recipe, false);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.equal(response.result.plan.hydration_flow.status, "ready_for_child_requests");
-    assert.equal(response.result.evidence_plan.status, "ready_for_execution_and_readback");
-    assert.equal(response.result.evidence_plan.readback_status, "not_run");
-    assert.equal(response.result.customer_readback.success_wording_allowed, false);
-    assert.equal(response.result.customer_readback.lines[2].includes("read back every touched control"), true);
-    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
-    assert.equal(response.result.agent_execution_flow.safety.hidden_executor, false);
-    assert.equal(response.result.agent_execution_flow.tool_surface.added_tools, 0);
-    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(response.result.agent_execution_flow);
-    assert.deepEqual(
-      response.result.child_requests.map((request) => request.id),
-      [
-        "template.fx.set_fx_parameter_normalized",
-        "template.fx.set_fx_parameter_normalized",
-      ],
-    );
-    assert.equal(response.result.readback[0].id, "template.fx.read_fx_parameter");
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
+    assert.equal(response.macro.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(response.execution.status, "blocked");
+    assert.deepEqual(response.result.changes, []);
+    assert.equal(response.recovery.sqlite_rows_authorize_writes, false);
     assert.equal(runtime.last_evidence().template.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
   });
 
-  it("calls starter actions through call_template and returns hydration guidance", async () => {
+  it("returns the same typed live blocker for a valid starter action offline", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
       id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
@@ -614,22 +596,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     });
 
     assert.equal(response.ok, false);
-    assert.equal(response.error.code, "PARAMETER_METADATA_REQUIRED");
-    assert.equal(response.result.plan.plugin.id, "reacomp");
-    assert.equal(response.result.plan.starter_action.id, "gentle_vocal_compression");
-    assert.equal(response.result.plan.hydration_flow.status, "needs_fresh_parameter_metadata");
-    assert.equal(response.result.customer_readback.status, "needs_fresh_parameter_metadata");
-    assert.equal(response.result.customer_readback.lines[1].includes("Threshold at -18 dB"), true);
-    assert.equal(response.result.agent_execution_flow.status, "needs_hydration_then_resume");
-    assert.equal(response.result.agent_execution_flow.steps[1].id, "resume_macro_with_fresh_parameter_metadata");
-    assertNestedAgentRequestsUseOnlyAcceptedStockPluginTemplates(response.result.agent_execution_flow);
-    assert.equal(response.result.evidence_plan.child_request_count, 0);
-    assert.deepEqual(response.result.plan.hydration_flow.steps.map((step) => step.id), [
-      "verify_fx_identity",
-      "hydrate_parameter_metadata",
-    ]);
-    assert.equal(response.result.child_requests.length, 0);
-    assert.equal(response.result.readback.length, 0);
+    assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
+    assert.equal(response.macro.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(response.execution.status, "blocked");
+    assert.deepEqual(response.result.changes, []);
   });
 
   it("reports unsupported starter actions clearly through call_template", async () => {
@@ -646,8 +616,8 @@ describe("Alpha3 E1 stock plugin fluency", () => {
 
     assert.equal(response.ok, false);
     assert.equal(response.error.code, "STARTER_ACTION_NOT_SUPPORTED");
-    assert.equal(response.result.child_requests.length, 0);
-    assert.equal(response.result.readback.length, 0);
+    assert.equal(response.blockers[0].code, "STARTER_ACTION_NOT_SUPPORTED");
+    assert.deepEqual(response.result.changes, []);
   });
 
   it("returns typed macro blockers through call_template without child mutation requests", async () => {
@@ -666,11 +636,10 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     });
 
     assert.equal(response.ok, false);
-    assert.equal(response.error.source, "macro");
     assert.equal(response.error.code, "CONTROL_VALUE_OUT_OF_RANGE");
-    assert.equal(response.result.child_requests.length, 0);
-    assert.equal(response.result.readback.length, 0);
-    assert.equal(response.result.blockers[0].field, "ratio");
+    assert.equal(response.execution.status, "blocked");
+    assert.deepEqual(response.result.changes, []);
+    assert.equal(response.blockers[0].code, "CONTROL_VALUE_OUT_OF_RANGE");
   });
 });
 

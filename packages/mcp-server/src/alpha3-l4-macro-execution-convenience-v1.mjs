@@ -2,8 +2,8 @@ export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT = "alpha3.1.l4.macro
 
 export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
-  mode: "static_macro_execution_convenience_gate",
-  product_goal: "Let agents run returned child call_template requests for remaining plan-only Macro families after scoped task authorization, without adding a hidden executor.",
+  mode: "registered_macro_execution_highway",
+  product_goal: "Let agents call task-shaped registered Macros that execute fixed code-owned stages and return compact verification evidence.",
   tool_surface: {
     added_tools: 0,
     discovery_tool: "list_templates",
@@ -11,53 +11,54 @@ export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY = deepFreez
     state_tool: "get_state",
   },
   covered_macro_families: [
-    "c5_generic_control_child_requests",
-    "e1_stock_plugin_agent_execution_flow",
+    "project_understanding_and_query",
+    "project_file_layout_delete_media_routing_render",
+    "generic_controls_and_stock_plugin_controls",
   ],
-  registered_program_exclusions: ["macro.project.inspect", "macro.project.query"],
-  execution_authority: "agent_calls_existing_call_template_requests",
-  user_prompt_policy: "Ask once for the task/risk domain, then continue through returned reversible child requests until a hard stop or typed blocker appears.",
-  safety_policy: macroExecutionConvenienceSafety(),
+  registered_program_exclusions: [],
+  execution_authority: "server_runs_fixed_registered_program",
+  user_prompt_policy: "Authorize the bounded task once; the registered Macro stops at confirmation gates, typed blockers, or verification mismatch.",
+  safety_policy: registeredMacroExecutionSafety(),
 });
 
 export function summarizeAlpha3L4MacroExecutionConvenience() {
   return deepFreeze({
     contract: ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
-    mode: "static_product_surface_summary",
-    status: "ready_for_plan_only_macro_convenience_gate",
+    mode: "registered_macro_product_surface_summary",
+    status: "registered_macro_programs_active",
     agent_default_flow: [
       {
-        id: "inspect_macro_result",
-        source: "call_template macro response",
-        purpose: "Read agent_execution_flow, child_requests, readback, typed blockers, and success wording gate.",
+        id: "select_task_macro",
+        source: "compact list_templates Macro menu",
+        purpose: "Choose the narrowest executable Macro that covers the requested task.",
       },
       {
-        id: "authorize_once",
-        source: "agent task policy",
-        purpose: "Use one scoped authorization for reversible writes or FX parameter control; hard stops still require explicit confirmation.",
+        id: "call_registered_program",
+        source: "call_template",
+        purpose: "Send task-shaped inputs or selectors; the server executes only registered dependencies and re-resolves live write refs.",
       },
       {
-        id: "execute_returned_requests",
-        source: "result.child_requests or result.plan.refresh_requests",
-        purpose: "Run only the returned call_template requests, preserving per-request evidence and stopping on typed blockers.",
+        id: "accept_verified_result",
+        source: "macro.execution.v1",
+        purpose: "Inspect compact stages, SQLite freshness, canonical refs, changes, verification, blockers, and recovery.",
       },
       {
-        id: "run_readback",
-        source: "result.readback or result.agent_execution_flow",
-        purpose: "Run planned readback before success wording; report mismatch as a blocker.",
+        id: "fallback_only_for_gap",
+        source: "list_templates",
+        purpose: "Search atomic Templates only when no registered Macro covers the bounded task, and record the coverage gap.",
       },
     ],
     customer_copy: {
-      ready: "I can run the listed OpenReaper steps under this task authorization and then read back what changed.",
-      blocked: "I need to resolve the typed blocker before running the macro's child requests.",
-      success_gate: "I will not say the change is done until the planned readback matches.",
+      ready: "I can run this bounded OpenReaper task through one registered Macro and verify what changed.",
+      blocked: "I need to resolve the typed blocker before retrying the same Macro.",
+      success_gate: "I will not report completion until the Macro's required readback matches.",
     },
     supported_sources: {
-      project_understanding: "macro.project.inspect and macro.project.query execute their fixed registered programs directly and are not routed through this legacy child-request convenience flow.",
-      c5: "Generic control macros return serial child write requests plus readback.",
-      e1: "Stock plugin macro returns hydration/resume or child execution/readback flow.",
+      project_understanding: "macro.project.inspect and macro.project.query hydrate or reuse SQLite and return compact project truth.",
+      c5: "macro.controls.set executes bounded control stages and required readback internally.",
+      e1: "macro.set_stock_plugin_controls hydrates live FX metadata, writes semantic controls, and verifies normalized values internally.",
     },
-    safety: macroExecutionConvenienceSafety(),
+    safety: registeredMacroExecutionSafety(),
   });
 }
 
@@ -264,6 +265,19 @@ function macroExecutionConvenienceSafety() {
     alias_execution: false,
     live_reaper_called: false,
     safe_write_called: false,
+    success_wording_requires_readback: true,
+  });
+}
+
+function registeredMacroExecutionSafety() {
+  return deepFreeze({
+    added_tools: 0,
+    fixed_registered_programs: true,
+    model_supplied_execution_graph: false,
+    hidden_executor: false,
+    public_call_recipe: false,
+    raw_lua_action_shell_or_ui: false,
+    live_write_refs_reresolved: true,
     success_wording_requires_readback: true,
   });
 }

@@ -216,6 +216,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.tracks.read_mixer_controls",
       ],
     );
+    assert.equal(
+      plan.refresh_requests.find((request) => request.id === "template.tracks.read_mixer_controls").input.include_selected,
+      false,
+    );
     assert.equal(plan.next_actions[0].kind, "resolve_blockers");
     assert.equal(plan.next_actions[1].kind, "run_refresh_requests");
     assert.equal(plan.next_actions[1].status, "partial_blocked");
@@ -248,6 +252,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.tracks.list_tracks",
         "template.tracks.read_mixer_controls",
       ],
+    );
+    assert.equal(
+      plan.refresh_requests.find((request) => request.id === "template.tracks.read_mixer_controls").input.include_selected,
+      false,
     );
     assert.equal(plan.write_safety_loop.sqlite_rows_are_candidates_only, true);
     assert.equal(plan.write_safety_loop.sqlite_may_authorize_write, false);
@@ -399,6 +407,10 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
         "template.fx.list_track_fx_chain",
         "template.fx.read_fx_summary",
       ],
+    );
+    assert.equal(
+      plan.refresh_requests.find((request) => request.id === "template.tracks.read_mixer_controls").input.include_selected,
+      false,
     );
     assert.deepEqual(
       plan.refresh_requests.find((request) => request.id === "template.fx.list_track_fx_chain").refs,
@@ -1386,7 +1398,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     );
   });
 
-  it("exposes the generic public query and selected_context compatibility without public legacy query ids", () => {
+  it("exposes only the generic public query while retaining selected_context replacement guidance", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates();
     const exact = runtime.list_templates({
@@ -1394,7 +1406,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       fields: ["summary", "inputSchema", "expectedDelta", "task_intents", "capability_truth"],
     });
 
-    assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.selected_context"), false);
     for (const id of ALPHA3_2D_INTERNAL_LEGACY_QUERY_IDS) {
       assert.equal(menu.items.some((item) => item.id === id), false, id);
     }
@@ -1490,7 +1502,7 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(response.result.data.refresh.call_count, 0);
   });
 
-  it("calls selected_context through call_template as a plan-only envelope", async () => {
+  it("replaces selected_context with macro.project.query entity=selected_context", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T17:45:00.000Z"),
       projectIndex: selectedProjectIndex(),
@@ -1503,19 +1515,12 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       },
     });
 
-    assert.equal(response.contract, "template.execution.v1");
-    assert.equal(response.ok, true);
+    assert.equal(response.contract, "call_template.runtime.v1");
+    assert.equal(response.ok, false);
     assert.equal(response.template.id, "macro.selected_context");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.deepEqual(response.result.refs, [
-      "track:guid:{TRACK-1}",
-      "item:guid:{ITEM-1}",
-      "fx:track:{TRACK-1}:0",
-    ]);
-    assert.equal(response.result.rows.length, 3);
-    assert.equal(response.result.hydrate_request.id, "macro.hydrate_refs");
+    assert.equal(response.error.code, "CALL_TEMPLATE_ID_REPLACED");
+    assert.equal(response.error.details.replacement, "macro.project.query");
+    assert.deepEqual(response.error.details.replacement_input, { entity: "selected_context" });
   });
 
   it("replaces macro.query_items through call_template after Alpha3.2-D", async () => {

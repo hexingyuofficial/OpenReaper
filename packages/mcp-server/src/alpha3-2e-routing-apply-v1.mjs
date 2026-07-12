@@ -2,6 +2,11 @@ export const ALPHA3_2E_ROUTING_APPLY_MACRO_CONTRACT = "alpha3.2e.routing_apply_m
 export const ALPHA3_2E_ROUTING_APPLY_MACRO_ID = "macro.routing.apply";
 export const ALPHA3_2E_ROUTING_APPLY_MACRO_VERSION = "1.0.0";
 
+export async function executeAlpha3_2ERoutingApplyMacro(options) {
+  const { executeAlpha3_2_5CProjectWriteMacro } = await import("./alpha3-2-5-c-project-write-runtime-v1.mjs");
+  return executeAlpha3_2_5CProjectWriteMacro(options);
+}
+
 const ALLOWED_INPUT_FIELDS = new Set(["routes", "master_parent", "channel_counts", "dry_run", "compact_response"]);
 const ALLOWED_ROUTE_FIELDS = new Set(["id", "action", "source_track_ref", "destination_track_ref", "send_ref", "duplicate_policy", "volume", "pan", "muted"]);
 const ALLOWED_MASTER_PARENT_FIELDS = new Set(["id", "track_ref", "enabled"]);
@@ -105,23 +110,24 @@ export function createAlpha3_2ERoutingApplyMacroRuntimeEnvelope({ request = {}, 
   });
 }
 
-export function createAlpha3_2ERoutingApplyMacroDiscoveryItems() {
+export function createAlpha3_2ERoutingApplyMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_ROUTING_APPLY_MACRO_ID,
     title: "Apply internal routing",
-    summary: "Plan bounded internal track-send, master-parent, and track-channel routing changes with readback.",
+    summary: "Preview or execute bounded internal track-send, master-parent, and track-channel routing changes with live resolution and readback.",
     pack: "routing",
     risk: "write",
     lifecycle: "accepted",
     entity_kind: "macro.routing.apply",
-    tags: ["alpha3.2", "macro", "routing", "send", "plan_only"],
+    tags: ["alpha3.2", "macro", "routing", "send", "executable"],
     action_kind: "macro",
-    execution_shape: "plan_only_agent_executed_child_requests",
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    execution_shape: "registered_macro_program",
+    implementation_status: "executable",
     runnable: true,
-    support_status: "plan_only_runtime_bound_preview_first",
+    support_status: "executable_runtime_bound",
     support_state: "supported_with_readback",
-    evidence_level: "runtime_bound_static_fake",
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true ? "runtime_bound_live_route_available" : "runtime_bound_executable",
     known_blocker: "Dry-run preview and affected-track readback required before success wording",
     input_schema: {
       type: "object",
@@ -137,13 +143,14 @@ export function createAlpha3_2ERoutingApplyMacroDiscoveryItems() {
     output_schema: {
       type: "object",
       properties: {
-        mode: { enum: ["dry_run_preview", "plan_only_agent_executed_child_requests", "blocked"] },
-        preview: { type: "object" },
-        child_requests: { type: "array" },
-        typed_blockers: { type: "array" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
+        execution: { type: "object" },
+        result: { type: "object" },
       },
-      required: ["mode", "preview", "child_requests", "typed_blockers"],
-      additionalProperties: false,
+      required: ["contract", "ok", "macro", "execution", "result"],
+      additionalProperties: true,
     },
     examples: [{
       name: "create_send_and_set_gain",

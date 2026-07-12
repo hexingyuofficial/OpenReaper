@@ -151,7 +151,7 @@ async function main() {
 
   server.tool(
     "call_template",
-    "Run one accepted runtime-bound Template, registered executable Macro program, or retained plan-only compatibility Macro. Contract-only guide ids are rejected; no hidden recipe executor is exposed.",
+    "Run one accepted runtime-bound Template or registered executable Macro program. Legacy Macro ids return typed replacement guidance; contract-only guide ids are rejected and no hidden recipe executor is exposed.",
     {
       id: z.string().optional(),
       name: z.string().optional(),

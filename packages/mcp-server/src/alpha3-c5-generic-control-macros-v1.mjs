@@ -14,10 +14,23 @@ import {
 } from "./alpha3-l4-macro-execution-convenience-v1.mjs";
 
 export const ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT = "alpha3.c5.generic_control_macros.v1";
+export const ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID = "macro.controls.set";
+
+export const ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID = deepFreeze({
+  track: "macro.set_track_controls",
+  item: "macro.set_item_controls",
+  take: "macro.set_take_controls",
+  transport: "macro.set_transport_controls",
+  send: "macro.set_send_controls",
+});
+
+export const ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS = deepFreeze([
+  ...Object.values(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID),
+]);
 
 export const ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
-  mode: "plan_only_schema_registry",
+  mode: "registered_executable_control_program",
   tool_surface: {
     added_tools: 0,
     discovery_tools: ["list_templates"],
@@ -26,16 +39,12 @@ export const ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY = deepFreeze({
   },
   menu_group: "act",
   action_kind: "macro",
-  execution_shape: "generic_control_macro_plan",
-  macro_ids: [
-    "macro.set_track_controls",
-    "macro.set_item_controls",
-    "macro.set_take_controls",
-    "macro.set_transport_controls",
-    "macro.set_send_controls",
-    "macro.set_midi_controls",
-  ],
-  rule: "Supported fields are optional. Unknown or blocked fields return typed blockers. Emit serial per-template call_template requests with per-template undo evidence; no atomic multi-field transaction is claimed.",
+  execution_shape: "registered_macro_program",
+  macro_ids: [ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID],
+  consolidated_legacy_ids: ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS,
+  withdrawn_ids: ["macro.set_midi_controls"],
+  target_kinds: Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID),
+  rule: "Use macro.controls.set for bounded track, item, take, transport, and send controls. The fixed program live-resolves targets, executes accepted Templates serially, reads back the result, and invalidates affected Project Index scopes.",
 });
 
 export const ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
@@ -243,9 +252,7 @@ export function listAlpha3C5GenericControlMacros(options = {}) {
 }
 
 export function createAlpha3C5OfficialMacroDiscoveryItems(options = {}) {
-  return listAlpha3C5GenericControlMacros(options).macros.map((macro) =>
-    officialMacroDiscoveryItem(macro)
-  );
+  return [officialControlsSetDiscoveryItem(options)];
 }
 
 export function getAlpha3C5GenericControlMacro(id, options = {}) {
@@ -257,6 +264,56 @@ export function getAlpha3C5GenericControlMacro(id, options = {}) {
 
 export function isAlpha3C5OfficialMacroId(id) {
   return typeof id === "string" && MACRO_DEFINITIONS.some((macro) => macro.id === id);
+}
+
+export function isAlpha3_2_5CLegacyControlMacroId(id) {
+  return ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS.includes(id);
+}
+
+export function isAlpha3_2_5CWithdrawnControlMacroId(id) {
+  return id === "macro.set_midi_controls";
+}
+
+export function targetKindForAlpha3_2_5CLegacyControlMacro(id) {
+  return Object.entries(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID)
+    .find(([, legacyId]) => legacyId === id)?.[0] ?? null;
+}
+
+export function getAlpha3_2_5CControlTargetDefinition(targetKind, options = {}) {
+  const legacyId = ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind];
+  return legacyId ? getAlpha3C5GenericControlMacro(legacyId, options) : null;
+}
+
+export function planAlpha3_2_5CControlsSetMacro(input = {}, refs = {}, options = {}) {
+  const normalized = isPlainObject(input) ? input : {};
+  const targetKind = normalized.target_kind;
+  const legacyId = ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind];
+  if (!legacyId) {
+    return deepFreeze({
+      contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
+      ok: false,
+      id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+      target_kind: targetKind ?? null,
+      legacy_id: null,
+      requests: [],
+      readback: null,
+      blockers: [blocker(
+        "target_kind",
+        "CONTROL_TARGET_KIND_UNSUPPORTED",
+        "macro.controls.set target_kind must be track, item, take, transport, or send.",
+      )],
+    });
+  }
+  const plan = planAlpha3C5GenericControlMacro(legacyId, {
+    refs,
+    fields: normalized.fields,
+  }, options);
+  return deepFreeze({
+    ...plan,
+    id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+    target_kind: targetKind,
+    legacy_id: legacyId,
+  });
 }
 
 export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) {
@@ -498,6 +555,106 @@ function officialMacroDiscoveryItem(macro) {
     evidence_level: "runtime_bound_static_fake",
     support_state: macro.status === "planned_after_c5" ? "blocked" : "supported",
     known_blocker: macro.status === "planned_after_c5" ? "planned_after_c5" : null,
+    allowed_live_group: null,
+  });
+}
+
+function officialControlsSetDiscoveryItem(options = {}) {
+  const targetKinds = Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID);
+  const fieldsByTarget = Object.fromEntries(targetKinds.map((targetKind) => {
+    const macro = getAlpha3_2_5CControlTargetDefinition(targetKind, options);
+    return [targetKind, macro?.fields.map((fieldDef) => fieldDef.name) ?? []];
+  }));
+  return deepFreeze({
+    id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+    title: "Set project controls",
+    summary: "Set bounded track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
+    pack: "core",
+    lifecycle: "experimental",
+    risk: "write",
+    entity_kind: "macro.controls.set",
+    tags: ["macro", "controls", "track", "item", "take", "transport", "send", "sqlite", "executable"],
+    kind: ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND,
+    action_kind: "macro",
+    macro_kind: "generic_control",
+    menu_group: "act",
+    execution_shape: "registered_macro_program",
+    user_label: "Set project controls",
+    task_intents: [
+      "set track controls",
+      "set item controls",
+      "set take controls",
+      "set transport controls",
+      "set send controls",
+      "change track volume pan mute solo arm name or color",
+      "move trim fade mute lock or gain an item",
+      "change active take gain pan pitch playrate or reverse",
+      "set edit cursor loop time selection repeat or playback rate",
+      "change internal send volume pan mute mode or channels",
+    ],
+    support_status: "executable_runtime_bound",
+    implementation_status: "executable",
+    risk_domain: "write_project_reversible",
+    inputSchema: {
+      type: "object",
+      required: ["target_kind", "fields"],
+      additionalProperties: false,
+      properties: {
+        target_kind: { enum: targetKinds },
+        fields: { type: "object", additionalProperties: true },
+        selector: {
+          type: "object",
+          description: "Optional bounded Project Index selector used when canonical refs are not supplied.",
+          additionalProperties: true,
+        },
+        dry_run: { type: "boolean" },
+      },
+    },
+    outputSchema: {
+      type: "object",
+      required: ["contract", "ok", "macro", "execution", "result"],
+      properties: {
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
+        execution: { type: "object" },
+        result: { type: "object" },
+      },
+    },
+    refs: {
+      input: [
+        { name: "track_ref", kind: "track", required: false },
+        { name: "item_ref", kind: "item", required: false },
+        { name: "send_ref", kind: "send", required: false },
+      ],
+      output: [],
+    },
+    expectedDelta: {
+      kind: "write",
+      action: "set_controls",
+      entities: targetKinds,
+      summary: "Executes only the fixed accepted control Templates selected by target_kind and supplied fields, then reads back the target.",
+    },
+    examples: [
+      {
+        input: {
+          target_kind: "track",
+          fields: { volume: 0.75, pan: -0.1 },
+          selector: { name: "Lead Vocal" },
+          dry_run: false,
+        },
+      },
+    ],
+    target_kinds: targetKinds,
+    fields_by_target: fieldsByTarget,
+    consolidated_legacy_ids: ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS,
+    live_runnable_now: options.liveRunnableNow === true,
+    exists_in_catalog: true,
+    evidence_level: options.liveRunnableNow === true
+      ? "runtime_bound_live_route_available"
+      : "runtime_bound_executable",
+    support_state: "supported",
+    known_blocker: null,
     allowed_live_group: null,
   });
 }

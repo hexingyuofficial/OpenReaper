@@ -424,10 +424,18 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 8);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), false);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.inspect"), false);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.delete_targets"), false);
+    assert.deepEqual(runtimeMenu.items.map((item) => item.id), [
+      "macro.project.inspect",
+      "macro.project.delete_targets",
+      "macro.project.apply_layout",
+      "macro.routing.apply",
+      "macro.media.place_assets",
+      "macro.render.targets",
+      "macro.project.file",
+      "macro.project.query",
+      "macro.set_stock_plugin_controls",
+      "macro.controls.set",
+    ]);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);
     assert.equal("total" in runtimeMenu.page, false);
@@ -512,12 +520,11 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.product_surface.startup_health.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.product_surface.startup_assistant.tool_surface.added_tools, 0);
     assert.equal(runtimeMenu.items.every((item) => item.action_kind === "macro"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.current_status === "available_now"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
-    assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
+    assert.equal(runtimeMenu.items.every((item) => item.current_status === "needs_live"), true);
+    assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Registered bounded Macro program")), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.file"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), false);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.selected_context"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.selected_context"), false);
     for (const removedId of [
       "macro.index_status", "macro.query_tracks", "macro.query_items", "macro.query_takes",
       "macro.query_fx", "macro.query_routing", "macro.query_markers", "macro.query_media",
@@ -525,7 +532,8 @@ describe("Layer 4D call_template runtime binding", () => {
     ]) {
       assert.equal(runtimeMenu.items.some((item) => item.id === removedId), false, removedId);
     }
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), false);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.controls.set"), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
@@ -674,10 +682,10 @@ describe("Layer 4D call_template runtime binding", () => {
 
     const macroSearch = runtime.list_templates({ query: "set track controls", limit: 10 });
     assert.equal(macroSearch.items.length, 1);
-    assert.equal(macroSearch.items[0].id, "macro.set_track_controls");
-    assert.equal(macroSearch.items[0].template_id, "macro.set_track_controls");
-    assert.equal(macroSearch.items[0].beginner_label, "Select or resolve an object first");
-    assert.equal(macroSearch.items[0].current_status, "needs_ref");
+    assert.equal(macroSearch.items[0].id, "macro.controls.set");
+    assert.equal(macroSearch.items[0].template_id, "macro.controls.set");
+    assert.equal(macroSearch.items[0].beginner_label, "Start or reconnect OpenReaper");
+    assert.equal(macroSearch.items[0].current_status, "needs_live");
     assert.equal(macroSearch.items[0].capability_truth.kind, "official_macro");
 
     const stockMacroSearch = runtime.list_templates({ query: "stock plugin controls", limit: 10 });
@@ -696,7 +704,7 @@ describe("Layer 4D call_template runtime binding", () => {
     });
     const liveMenu = liveRuntime.list_templates();
     const liveMenuIds = liveMenu.items.map((item) => item.id);
-    assert.equal(liveMenuIds.includes("macro.set_track_controls"), true);
+    assert.equal(liveMenuIds.includes("macro.controls.set"), true);
     assert.equal(liveMenuIds.includes(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
     assert.deepEqual(
       liveMenuIds.filter((id) => id.startsWith("template.")),
@@ -709,12 +717,17 @@ describe("Layer 4D call_template runtime binding", () => {
         .every((item) => item.capability_truth.live_runnable_now === true),
       true,
     );
+    const wave0Macros = liveMenu.items.filter((item) => item.action_kind === "macro");
+    assert.equal(wave0Macros.length, 10);
     assert.equal(
-      liveMenu.items
-        .filter((item) => item.id.startsWith("macro.query") || item.id === "macro.index_status" || item.id === "macro.selected_context")
-        .every((item) => item.capability_truth.live_runnable_now === false && item.current_status === "available_now"),
+      wave0Macros.every((item) => item.capability_truth.live_runnable_now === false),
       true,
     );
+    assert.equal(
+      wave0Macros.every((item) => item.capability_truth.known_blocker === "macro_fixed_dependencies_not_available"),
+      true,
+    );
+    assert.equal(wave0Macros.every((item) => item.current_status === "needs_live"), true);
     assert.equal(
       liveMenu.items
         .filter((item) => item.id.startsWith("template."))
@@ -843,7 +856,7 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const tempoMenu = tempoRuntime.list_templates({ limit: 23 });
-    assert.equal(tempoMenu.items.some((item) => item.id === "macro.set_track_controls"), true);
+    assert.equal(tempoMenu.items.some((item) => item.id === "macro.controls.set"), true);
     assert.deepEqual(
       tempoMenu.items.map((item) => item.id).filter((id) => id.startsWith("template.")),
       CALL_TEMPLATE_RUNTIME_D6_PROJECT_TEMPO_TEMPLATE_IDS,

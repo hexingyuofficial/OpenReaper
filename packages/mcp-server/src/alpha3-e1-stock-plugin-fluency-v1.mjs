@@ -20,7 +20,7 @@ export const ALPHA3_E1_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
 
 export const ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
-  mode: "plan_only_stock_plugin_semantic_maps",
+  mode: "registered_executable_stock_plugin_program",
   tool_surface: {
     added_tools: 0,
     discovery_tools: ["list_templates"],
@@ -29,7 +29,7 @@ export const ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY = deepFreeze({
   },
   menu_group: "act",
   action_kind: "macro",
-  execution_shape: "stock_plugin_semantic_control_plan",
+  execution_shape: "registered_macro_program",
   live_evidence_contract: ALPHA3_E1_STOCK_PLUGIN_LIVE_EVIDENCE_MATRIX_CONTRACT,
   live_support_status: "bounded_single_plugin_evidence_only",
   broad_live_support: false,
@@ -58,7 +58,7 @@ export const ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY = deepFreeze({
     "gentle_multiband_control",
     "safe_peak_limit",
   ],
-  rule: "Stock plugin fluency maps human controls to plan-only parameter requests. Parameter indexes must come from fresh FX parameter metadata before any write request is emitted.",
+  rule: "The registered stock-plugin Macro resolves live FX identity and parameter metadata, maps human controls to fresh parameter indexes, executes accepted writes, and verifies every normalized readback value.",
 });
 
 const REQUIRED_TEMPLATE_IDS = Object.freeze([
@@ -68,19 +68,19 @@ const REQUIRED_TEMPLATE_IDS = Object.freeze([
   "template.fx.set_fx_parameter_normalized",
 ]);
 
-const STOCK_PLUGIN_SUMMARY_BUDGET = Object.freeze({
+export const ALPHA3_E1_STOCK_PLUGIN_SUMMARY_BUDGET = Object.freeze({
   max_response_bytes: 60_000,
   max_items: 200,
   max_inline_value_bytes: 6_000,
 });
 
-const STOCK_PLUGIN_PARAMETER_LIST_BUDGET = Object.freeze({
+export const ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET = Object.freeze({
   max_response_bytes: 120_000,
   max_items: 1_000,
   max_inline_value_bytes: 12_000,
 });
 
-const STOCK_PLUGIN_PARAMETER_READBACK_BUDGET = Object.freeze({
+export const ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET = Object.freeze({
   max_response_bytes: 60_000,
   max_items: 200,
   max_inline_value_bytes: 6_000,
@@ -235,7 +235,7 @@ export function listAlpha3E1StockPluginMaps(options = {}) {
   const missingTemplates = REQUIRED_TEMPLATE_IDS.filter((id) => !catalog.get(id));
   return deepFreeze({
     contract: ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT,
-    mode: "plan_only_stock_plugin_semantic_maps",
+    mode: "semantic_map_registry",
     tool_surface: ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.tool_surface,
     plugin_count: STOCK_PLUGIN_MAPS.length,
     required_templates: REQUIRED_TEMPLATE_IDS,
@@ -264,7 +264,7 @@ export function summarizeAlpha3E1StockPluginLiveEvidenceMatrix(options = {}) {
     safe_write_called: false,
     broad_live_support: false,
     customer_ready: false,
-    reason: "Static semantic maps and the agent execution flow exist, but broad stock-plugin live support needs per-plugin bounded write/readback evidence.",
+    reason: "The registered semantic-control Macro executes with live metadata and readback, but broad stock-plugin support still needs per-plugin bounded evidence.",
     plugin_count: rows.length,
     accepted_live_count: acceptedRows.length,
     pending_live_count: pendingRows.length,
@@ -274,15 +274,15 @@ export function summarizeAlpha3E1StockPluginLiveEvidenceMatrix(options = {}) {
     bounded_live_smoke_plan: stockPluginBoundedLiveSmokePlan(rows),
     claim_policy: {
       allowed_now: [
-        "Stock-plugin semantic maps and plan-only macro flow are available.",
+        "The registered stock-plugin semantic-control Macro is executable through call_template.",
         "ReaComp has one bounded live write/readback fixture if the evidence record is cited.",
       ],
       not_allowed_yet: [
         "All ten stock plugins are live-supported.",
         "Stock-plugin changes are customer-ready without bounded readback evidence.",
-        "The macro directly executed a live REAPER write.",
+        "An untested plugin row passed live write/readback.",
       ],
-      promotion_gate: "Only turn a plugin row green after a bounded live window proves identity hydration, child request execution, readback, and mismatch handling for that plugin.",
+      promotion_gate: "Only turn a plugin row green after a bounded live window proves identity hydration, registered-program execution, readback, and mismatch handling for that plugin.",
     },
     safety: stockPluginSafety(),
   });
@@ -290,7 +290,7 @@ export function summarizeAlpha3E1StockPluginLiveEvidenceMatrix(options = {}) {
 
 export function createAlpha3E1OfficialMacroDiscoveryItems(options = {}) {
   const maps = listAlpha3E1StockPluginMaps(options);
-  return [officialStockPluginMacroDiscoveryItem(maps)];
+  return [officialStockPluginMacroDiscoveryItem(maps, options)];
 }
 
 export function isAlpha3E1OfficialMacroId(id) {
@@ -405,7 +405,7 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
           id: "template.fx.read_fx_summary",
           refs: { fx_ref: refs.fx_ref },
           input: {},
-          budget: STOCK_PLUGIN_SUMMARY_BUDGET,
+          budget: ALPHA3_E1_STOCK_PLUGIN_SUMMARY_BUDGET,
           purpose: "verify plugin identity before semantic parameter writes",
         },
         {
@@ -413,7 +413,7 @@ export function planAlpha3E1StockPluginMacro(id, request = {}, options = {}) {
           id: "template.fx.list_fx_parameters",
           refs: { fx_ref: refs.fx_ref },
           input: { limit: 128 },
-          budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+          budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
           purpose: "resolve semantic controls to fresh param_index values",
         },
       ]
@@ -551,7 +551,7 @@ export function createAlpha3E1StockPluginRuntimeEnvelope({ request = {}, plan, n
   return deepFreeze(envelope);
 }
 
-function officialStockPluginMacroDiscoveryItem(maps) {
+function officialStockPluginMacroDiscoveryItem(maps, options = {}) {
   return deepFreeze({
     id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
     title: "Set stock plugin controls",
@@ -582,7 +582,8 @@ function officialStockPluginMacroDiscoveryItem(maps) {
     action_kind: "macro",
     macro_kind: "stock_plugin_control",
     menu_group: "act",
-    execution_shape: "stock_plugin_semantic_control_plan",
+    execution_shape: "registered_macro_program",
+    implementation_status: "executable",
     user_label: "Set stock plugin controls",
     task_intents: [
       "adjust stock plugin",
@@ -598,7 +599,7 @@ function officialStockPluginMacroDiscoveryItem(maps) {
       "set realimit musically",
       ...maps.starter_actions.flatMap((action) => [action.id, action.label, ...action.aliases]),
     ],
-    support_status: "plan_only_runtime_bound",
+    support_status: "executable_runtime_bound",
     risk_domain: "fx_parameter_control",
     plugin_ids: maps.plugins.map((pluginMap) => pluginMap.id),
     starter_action_ids: maps.starter_actions.map((action) => action.id),
@@ -611,32 +612,31 @@ function officialStockPluginMacroDiscoveryItem(maps) {
         starter_action: { type: "string" },
         action_parameters: { type: "object", additionalProperties: true },
         control_overrides: { type: "object", additionalProperties: true },
-        parameter_metadata: { type: "object", additionalProperties: true },
+        selector: { type: "object", additionalProperties: true },
+        dry_run: { type: "boolean" },
       },
+      additionalProperties: false,
     },
     outputSchema: {
       type: "object",
-      required: ["contract", "action_kind", "mode", "plan", "execution"],
+      required: ["contract", "ok", "macro", "execution", "result"],
       properties: {
-        contract: { const: ALPHA3_E1_STOCK_PLUGIN_FLUENCY_CONTRACT },
-        action_kind: { const: "macro" },
-        mode: { const: "plan_only_call_template_macro" },
-        plan: { type: "object" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
         execution: { type: "object" },
-        evidence_plan: { type: "object" },
-        customer_readback: { type: "object" },
-        agent_execution_flow: { type: "object" },
+        result: { type: "object" },
       },
     },
     refs: {
-      input: [{ name: "fx_ref", kind: "fx", required: true, summary: "Resolved owner-scoped stock plugin FX ref." }],
+      input: [{ name: "fx_ref", kind: "fx", required: false, summary: "Optional resolved owner-scoped FX ref; a bounded selector may be used instead." }],
       output: [],
     },
     expectedDelta: {
-      kind: "read",
-      action: "read",
-      entities: ["macro_plan"],
-      summary: "Returns a plan-only stock-plugin macro envelope. It does not mutate REAPER directly.",
+      kind: "write",
+      action: "set_stock_plugin_controls",
+      entities: ["fx", "fx_parameter"],
+      summary: "Executes the registered semantic parameter program and verifies every touched normalized parameter value.",
     },
     examples: [
       {
@@ -648,9 +648,9 @@ function officialStockPluginMacroDiscoveryItem(maps) {
         },
       },
     ],
-    live_runnable_now: true,
+    live_runnable_now: options.liveRunnableNow === true,
     exists_in_catalog: true,
-    evidence_level: "runtime_bound_static_fake",
+    evidence_level: options.liveRunnableNow === true ? "runtime_bound_live_route_available" : "runtime_bound_executable",
     support_state: maps.coverage.status === "covered_by_existing_templates" ? "supported" : "blocked",
     known_blocker: maps.coverage.missing_templates.length === 0 ? null : "missing_required_fx_template",
     allowed_live_group: null,
@@ -687,7 +687,7 @@ function readParameterRequest(plan, refs) {
       param_index: plan.resolution.param_index,
       param_ident: plan.resolution.param_ident,
     }),
-    budget: STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+    budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
     semantic_control: {
       id: plan.parameter.id,
       label: plan.parameter.label,
@@ -712,7 +712,7 @@ function createHydrationFlow({ plugin, starter, controls, refs, blockers, reques
       template_id: "template.fx.read_fx_summary",
       refs: { fx_ref: refs.fx_ref },
       input: {},
-      budget: STOCK_PLUGIN_SUMMARY_BUDGET,
+      budget: ALPHA3_E1_STOCK_PLUGIN_SUMMARY_BUDGET,
       purpose: "Confirm the resolved FX is the intended stock plugin before planning parameter writes.",
     });
     steps.push({
@@ -721,7 +721,7 @@ function createHydrationFlow({ plugin, starter, controls, refs, blockers, reques
       template_id: "template.fx.list_fx_parameters",
       refs: { fx_ref: refs.fx_ref },
       input: { limit: 128 },
-      budget: STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+      budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
       wanted_controls: controlIds,
       purpose: "Map semantic controls to fresh param_index and param_ident values.",
     });
@@ -810,8 +810,8 @@ function stockPluginEvidenceRow(pluginMap, evidence) {
     semantic_control_count: pluginMap.parameters.length,
     starter_action_ids: starterActions,
     static_map_ready: true,
-    plan_only_macro_ready: true,
-    agent_execution_flow_ready: true,
+    registered_macro_ready: true,
+    registered_macro_execution_ready: true,
     live_evidence_status: accepted ? "bounded_fixture_accepted" : "needs_bounded_live_window",
     evidence_ref: accepted ? evidence.evidence_ref : null,
     evidence_scope: accepted ? evidence.scope : null,
@@ -820,7 +820,7 @@ function stockPluginEvidenceRow(pluginMap, evidence) {
     customer_claim_status: accepted ? "limited_fixture_claim_only" : "no_live_claim",
     next_gate: accepted
       ? "Repeat or broaden evidence before product-wide support wording."
-      : "Open a bounded live REAPER/safe-write window and run identity, parameter metadata, child write, readback, and mismatch gates.",
+      : "Open a bounded live REAPER/safe-write window and run registered Macro identity, parameter write, readback, and mismatch gates.",
   });
 }
 
@@ -832,23 +832,21 @@ function stockPluginBoundedLiveSmokePlan(rows) {
     allowed_actions: [
       "create disposable tracks and insert stock FX for the selected plugin rows",
       "call list_templates and call_template for macro.set_stock_plugin_controls",
-      "execute only the returned accepted child call_template requests",
-      "run the returned readback requests and compare evidence before success wording",
+      "let the registered program execute only its fixed accepted Template dependencies",
+      "require normalized readback and compare evidence before success wording",
     ],
     hard_stops: [
       "destructive, export, hardware, privacy, or filesystem-write request",
       "unresolved or stale fx_ref/plugin identity",
       "parameter metadata missing or not fresh",
-      "child request blocker or readback mismatch",
+      "registered Macro stage blocker or readback mismatch",
       "request to promote support/live claims beyond the bounded evidence",
     ],
     required_sequence: [
-      "verify_fx_identity",
-      "hydrate_fresh_parameter_metadata",
-      "rerun_macro_with_fresh_parameter_metadata",
-      "execute_child_requests",
-      "run_planned_readback",
-      "compare_readback_to_requested_controls",
+      "call_registered_macro",
+      "resolve_live_fx_identity_and_parameters",
+      "execute_fixed_parameter_write_stages",
+      "verify_normalized_readback",
       "record_plugin_row_result",
     ],
     recommended_batches: recommendedBatches,

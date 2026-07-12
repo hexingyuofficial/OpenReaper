@@ -2,6 +2,15 @@ export const ALPHA3_2E_RENDER_TARGETS_MACRO_CONTRACT = "alpha3.2e.render_targets
 export const ALPHA3_2E_RENDER_TARGETS_MACRO_ID = "macro.render.targets";
 export const ALPHA3_2E_RENDER_TARGETS_MACRO_VERSION = "1.0.0";
 
+import {
+  MACRO_CONTRACT_CEILINGS,
+  MACRO_EXECUTION_CONTRACT,
+  MACRO_PROGRAM_REGISTRY_CONTRACT,
+  createMacroProgramRegistry,
+  validateMacroExecutionEnvelope,
+  validateMacroProgramRequest,
+} from "./macro-runtime-contract-v1.mjs";
+
 export const ALPHA3_2E_RENDER_TARGET_KINDS = Object.freeze([
   "whole_project",
   "time_selection",
@@ -54,6 +63,47 @@ const REF_PREFIXES = Object.freeze({ regions: "region:", items: "item:", tracks:
 const UNKNOWN_FIELD_DETAIL_LIMIT = 12;
 const MAX_REF_BYTES = 256;
 const LIVE_EVIDENCE_BLOCKER = null;
+const RENDER_TEMPLATE_ID = "template.render.render_targets";
+const TRACK_RESOLVER_ID = "template.tracks.resolve_track_ref";
+const ITEM_RESOLVER_ID = "template.items.resolve_item_ref";
+const MARKER_REGION_RESOLVER_ID = "template.project.list_markers_regions";
+const RENDER_TEMPLATE_IDS = Object.freeze([
+  RENDER_TEMPLATE_ID,
+  TRACK_RESOLVER_ID,
+  ITEM_RESOLVER_ID,
+  MARKER_REGION_RESOLVER_ID,
+]);
+const RENDER_STAGE_IDS = new Set([
+  "render-selector-resolve",
+  "render-live-ref-resolve",
+  "render-template-execute",
+  "render-result-project",
+]);
+
+export const ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY = createMacroProgramRegistry([{
+  contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
+  macro_id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID,
+  program_id: "openreaper.macro.render.targets",
+  program_version: ALPHA3_2E_RENDER_TARGETS_MACRO_VERSION,
+  implementation_status: "executable",
+  risk: "write",
+  input_schema: { type: "object", additionalProperties: false },
+  selector_policy: { task_shaped: true, canonical_refs_optional_at_public_boundary: true, live_reresolve_before_write: true },
+  sqlite_policy: { mode: "not_used", write_authority: false, identity_fields: [] },
+  dependencies: { template_ids: RENDER_TEMPLATE_IDS, runtime_capabilities: [] },
+  stages: [
+    { id: "render-selector-resolve", kind: "selector_resolve", risk: "read", stop_on_error: true },
+    { id: "render-live-ref-resolve", kind: "live_ref_resolve", risk: "read", stop_on_error: true },
+    { id: "render-template-execute", kind: "template_execute", dependency_ref: RENDER_TEMPLATE_ID, risk: "write", stop_on_error: true },
+    { id: "render-result-project", kind: "result_project", risk: "read", stop_on_error: true },
+  ],
+  undo_policy: "single_undo",
+  verification_policy: "required",
+  dry_run_supported: true,
+  result_budget: { max_bytes: 65_536 },
+}], { acceptedTemplateIds: RENDER_TEMPLATE_IDS, registeredStageIds: RENDER_STAGE_IDS });
+
+export const ALPHA3_2_5_C_RENDER_REGISTRY = ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY;
 
 export function isAlpha3_2ERenderTargetsMacroId(id) {
   return id === ALPHA3_2E_RENDER_TARGETS_MACRO_ID;
@@ -62,6 +112,12 @@ export function isAlpha3_2ERenderTargetsMacroId(id) {
 export function planAlpha3_2ERenderTargetsMacro(input = {}, requestPosture = {}) {
   const normalized = isPlainObject(input) ? input : {};
   const blockers = validateInput(input, normalized);
+  if (requestPosture.idempotency_key_present === true) {
+    blockers.push(blocker(
+      "RENDER_IDEMPOTENCY_KEY_UNSUPPORTED",
+      "macro.render.targets does not accept idempotency_key because the audited render route is non-idempotent.",
+    ));
+  }
   const sourceRefs = normalizeRefs(normalized, requestPosture, normalized.target_kind);
   blockers.push(...sourceRefs.blockers);
   blockers.push(...validateTargetRefs(normalized.target_kind, sourceRefs.refs));
@@ -106,7 +162,8 @@ export function planAlpha3_2ERenderTargetsMacro(input = {}, requestPosture = {})
   });
 }
 
-export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {}, plan, now = () => new Date() } = {}) {
+export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {}, plan, executeAtomic, projectIndexRuntime, now = () => new Date() } = {}) {
+  if (typeof executeAtomic === "function") return executeAlpha3_2_5CRenderTargetsMacro({ request, executeAtomic, projectIndexRuntime, now });
   const normalizedPlan = plan ?? planAlpha3_2ERenderTargetsMacro(
     request.input ?? {},
     requestPosture(request),
@@ -155,28 +212,419 @@ export function createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({ request = {},
   return deepFreeze(envelope);
 }
 
-export function createAlpha3_2ERenderTargetsMacroDiscoveryItems() {
+export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, executeAtomic, projectIndexRuntime, now = () => new Date() } = {}) {
+  const entry = ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY.get(ALPHA3_2E_RENDER_TARGETS_MACRO_ID);
+  const startedAt = safeNowIso(now);
+  const input = isPlainObject(request.input) ? request.input : {};
+  const validation = validateMacroProgramRequest({ macro_id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, input, refs: request.refs, dry_run: input.dry_run !== false }, { registry: ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY });
+  const plan = planAlpha3_2ERenderTargetsMacro(input, { refs: request.refs, idempotency_key_present: request.idempotency_key !== undefined });
+  if (!validation.valid || !plan.ok) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: plan.blockers.length > 0 ? plan.blockers : validation.errors.map((message) => blocker("RENDER_REQUEST_INVALID", message)), summary: "Render-target Macro input was blocked.", data: { preview: plan.preview ?? null } });
+  if (typeof executeAtomic !== "function") {
+    return renderEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: "blocked",
+      stages: [],
+      blockers: [blocker("RENDER_EXECUTOR_UNAVAILABLE", "The managed OpenReaper atomic executor is unavailable.")],
+      summary: "Render-target Macro needs the managed OpenReaper atomic route.",
+      data: { preview: plan.preview ?? null },
+    });
+  }
+  const stages = [{ id: "render-selector-resolve", kind: "selector_resolve", status: "completed", summary: "Resolved bounded canonical or live-selection target posture.", evidence_refs: [] }];
+  if (input.dry_run !== false) {
+    stages.push({ id: "render-live-ref-resolve", kind: "live_ref_resolve", status: "skipped", summary: "Live target resolution is deferred until an executable render run.", evidence_refs: [] });
+    stages.push({ id: "render-template-execute", kind: "template_execute", status: "skipped", summary: "Render mutation skipped during dry_run.", evidence_refs: [] });
+    stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Managed-root render preview projected.", evidence_refs: [] });
+    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", data: { preview: plan.preview, mutation_skipped: true, managed_root: true, external_encoder: false } });
+  }
+  try {
+    const child = plan.mutation_requests[0];
+    const liveResolveStage = {
+      id: "render-live-ref-resolve",
+      kind: "live_ref_resolve",
+      status: "running",
+      summary: "Resolving explicit render targets from live REAPER state.",
+      evidence_refs: [],
+    };
+    stages.push(liveResolveStage);
+    let resolved;
+    try {
+      resolved = await resolveRenderTargetRefs({
+        targetKind: plan.preview.target_kind,
+        targetRefs: plan.preview.target_refs,
+        executeAtomic,
+        request,
+      });
+      liveResolveStage.status = resolved.required ? "completed" : "skipped";
+      liveResolveStage.summary = resolved.required
+        ? `Resolved ${resolved.canonical_refs.length} explicit render target ref(s) from live REAPER state.`
+        : "This render target kind does not require explicit object refs.";
+      liveResolveStage.evidence_refs = resolved.evidence_refs;
+    } catch (error) {
+      liveResolveStage.status = "failed";
+      liveResolveStage.summary = error.message ?? "Live render target resolution failed.";
+      throw error;
+    }
+    stages.push({ id: "render-template-execute", kind: "template_execute", status: "running", evidence_refs: [] });
+    const execution = await executeAtomic({ id: RENDER_TEMPLATE_ID, input: child.input, refs: resolved.refs, context: request.context, budget: request.budget, observeProjectIndex: false });
+    stages.at(-1).status = execution?.ok === true ? "completed" : "failed";
+    stages.at(-1).summary = typeof execution?.result?.summary === "string" ? execution.result.summary : "Audited render route completed.";
+    stages.at(-1).evidence_refs = evidenceRefs(execution);
+    if (execution?.ok !== true) throw Object.assign(new Error(execution?.error?.message ?? "Audited render route failed."), { code: execution?.error?.code ?? "RENDER_TEMPLATE_FAILED" });
+    const result = execution.result ?? {};
+    const payload = renderAtomicPayload(result);
+    const readback = isPlainObject(result.readback) ? result.readback : {};
+    const artifactRefs = renderArtifactRefs(result, payload);
+    const childVerification = isPlainObject(result.verification)
+      ? result.verification
+      : isPlainObject(execution.verification)
+        ? execution.verification
+        : isPlainObject(payload.verification)
+          ? payload.verification
+          : null;
+    if (!childVerification || childVerification.status !== "passed") {
+      throw coded("RENDER_VERIFICATION_FAILED", "The audited render route did not return passed verification.");
+    }
+    const completion = requireRenderCompletion({ result, payload, readback, artifactRefs });
+    const invalidation = invalidateRenderIndex(projectIndexRuntime, now);
+    if (invalidation?.ok === false) {
+      throw Object.assign(new Error(invalidation.blockers?.[0]?.message ?? "Render completed but Project Index project state could not be invalidated."), { code: invalidation.blockers?.[0]?.code ?? "RENDER_INDEX_INVALIDATION_FAILED" });
+    }
+    stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Render output and retained project truth projected from the audited route.", evidence_refs: evidenceRefs(execution) });
+    const verification = {
+      status: "passed",
+      evidence_refs: uniqueStrings([
+        ...(childVerification?.evidence_refs ?? []),
+        ...resolved.evidence_refs,
+        ...evidenceRefs(execution),
+        ...artifactRefs,
+        completion.job_ref,
+      ]),
+    };
+    return renderEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: "completed",
+      stages,
+      blockers: [],
+      summary: "Render targets completed through the audited managed-root route.",
+      data: {
+        preview: plan.preview,
+        managed_root: true,
+        external_encoder: false,
+        ...payload,
+        file_count: completion.file_count,
+        outputs: completion.outputs,
+        job_ref: completion.job_ref,
+        output_artifact_ref: completion.manifest_ref,
+        evidence_artifact_ref: completion.evidence_ref,
+        ...(isPlainObject(result.readback) ? { readback: result.readback } : {}),
+        artifact_refs: artifactRefs,
+        index_update: compactIndexUpdate(invalidation),
+      },
+      canonicalRefs: uniqueStrings([
+        ...resolved.canonical_refs,
+        completion.job_ref,
+        ...canonicalRefStrings(result.refs ?? result.canonical_refs),
+        ...canonicalRefStrings(result.artifacts),
+        ...canonicalRefStrings(result.jobs),
+      ]),
+      verification,
+      changes: [{ kind: "render", action: "render_targets", file_count: completion.file_count }],
+      sqlite: sqliteEvidence(projectIndexRuntime, invalidation),
+    });
+  } catch (error) {
+    return renderEnvelope({ entry, request, startedAt, now, status: "failed", stages, blockers: [blocker(error.code ?? "RENDER_EXECUTION_FAILED", error.message ?? "Render-target Macro failed.")], summary: error.message ?? "Render-target Macro failed.", data: { preview: plan.preview, managed_root: true, external_encoder: false } });
+  }
+}
+
+async function resolveRenderTargetRefs({ targetKind, targetRefs, executeAtomic, request }) {
+  const kind = targetKind === "regions"
+    ? "region"
+    : targetKind === "explicit_items"
+      ? "item"
+      : targetKind === "explicit_tracks"
+        ? "track"
+        : null;
+  if (kind === null) {
+    return { required: false, refs: {}, canonical_refs: [], evidence_refs: [] };
+  }
+
+  const executions = [];
+  if (kind === "region") {
+    executions.push(await executeRenderResolver({
+      id: MARKER_REGION_RESOLVER_ID,
+      input: { limit: 250 },
+      executeAtomic,
+      request,
+    }));
+  } else {
+    const id = kind === "track" ? TRACK_RESOLVER_ID : ITEM_RESOLVER_ID;
+    for (const targetRef of targetRefs) {
+      executions.push(await executeRenderResolver({
+        id,
+        input: kind === "track" ? { track_ref: targetRef } : { ref: targetRef },
+        executeAtomic,
+        request,
+      }));
+    }
+  }
+
+  const liveRefs = targetRefs.map((targetRef, index) => {
+    const execution = kind === "region" ? executions[0] : executions[index];
+    return requireLiveObjectRef(execution, targetRef, kind);
+  });
+  const refKey = kind === "region" ? "region_refs" : kind === "item" ? "item_refs" : "track_refs";
+  return {
+    required: true,
+    refs: { [refKey]: liveRefs },
+    canonical_refs: liveRefs.map((entry) => entry.ref),
+    evidence_refs: [...new Set(executions.flatMap(evidenceRefs))],
+  };
+}
+
+async function executeRenderResolver({ id, input, executeAtomic, request }) {
+  const execution = await executeAtomic({
+    id,
+    input,
+    refs: {},
+    context: request.context,
+    budget: request.budget,
+    observeProjectIndex: false,
+  });
+  if (execution?.ok !== true) {
+    throw coded(
+      execution?.error?.code ?? "RENDER_LIVE_REF_RESOLUTION_FAILED",
+      execution?.error?.message ?? `${id} failed while resolving an explicit render target.`,
+    );
+  }
+  return execution;
+}
+
+function requireLiveObjectRef(execution, requestedRef, kind) {
+  const objectRefs = executionObjectRefs(execution).filter((entry) => entry.kind === kind);
+  const exact = objectRefs.find((entry) => entry.ref === requestedRef);
+  if (exact) return structuredClone(exact);
+
+  if (kind === "region") {
+    const mappedRef = mappedRegionRef(execution, requestedRef);
+    const mapped = mappedRef === null ? null : objectRefs.find((entry) => entry.ref === mappedRef);
+    if (mapped) return structuredClone(mapped);
+    throw coded("RENDER_REGION_REF_NOT_FOUND", `The live marker/region resolver did not return the requested region ${requestedRef}.`);
+  }
+  if (requiresExactLiveIdentity(requestedRef)) {
+    throw coded("RENDER_LIVE_REF_IDENTITY_MISMATCH", `The live resolver did not return the exact stable ${kind} ref ${requestedRef}.`);
+  }
+  if (objectRefs.length === 1) return structuredClone(objectRefs[0]);
+  if (objectRefs.length > 1) {
+    throw coded("RENDER_LIVE_REF_AMBIGUOUS", `The live resolver returned multiple ${kind} refs for ${requestedRef}.`);
+  }
+  throw coded("RENDER_LIVE_OBJECT_REF_REQUIRED", `The live resolver did not return a full ${kind} object ref for ${requestedRef}.`);
+}
+
+function requiresExactLiveIdentity(ref) {
+  return typeof ref === "string" && ref.includes(":guid:");
+}
+
+function executionObjectRefs(execution) {
+  const refs = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    if (typeof value.kind === "string" && typeof value.ref === "string") {
+      refs.push(value);
+      return;
+    }
+    Object.values(value).forEach(visit);
+  };
+  visit(execution?.result?.refs);
+  visit(execution?.result?.canonical_refs);
+  return refs;
+}
+
+function mappedRegionRef(execution, requestedRef) {
+  const prefix = "region:name:";
+  if (!requestedRef.startsWith(prefix)) return null;
+  const requestedName = requestedRef.slice(prefix.length);
+  const rows = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    if (typeof value.region_ref === "string" && value.name === requestedName) rows.push(value.region_ref);
+    Object.values(value).forEach(visit);
+  };
+  visit(execution?.result?.readback);
+  visit(execution?.result?.summary);
+  visit(execution?.result?.data);
+  const matches = [...new Set(rows)];
+  if (matches.length > 1) throw coded("RENDER_REGION_NAME_AMBIGUOUS", `Multiple live regions are named ${requestedName}; use an index or GUID ref.`);
+  return matches[0] ?? null;
+}
+
+function canonicalRefStrings(value) {
+  const refs = [];
+  const visit = (entry) => {
+    if (Array.isArray(entry)) {
+      entry.forEach(visit);
+      return;
+    }
+    if (typeof entry === "string") {
+      refs.push(entry);
+      return;
+    }
+    if (!isPlainObject(entry)) return;
+    if (typeof entry.ref === "string") refs.push(entry.ref);
+    else Object.values(entry).forEach(visit);
+  };
+  visit(value);
+  return [...new Set(refs)];
+}
+
+function renderAtomicPayload(result) {
+  if (isPlainObject(result?.data)) return structuredClone(result.data);
+  if (isPlainObject(result?.summary)) return structuredClone(result.summary);
+  if (isPlainObject(result?.readback)) return structuredClone(result.readback);
+  return {};
+}
+
+function renderArtifactRefs(result, payload) {
+  return uniqueStrings([
+    ...canonicalRefStrings(result?.artifact_refs),
+    ...canonicalRefStrings(result?.artifacts),
+    ...canonicalRefStrings(result?.refs).filter((ref) => ref.startsWith("artifact:")),
+    ...[payload?.output_artifact_ref, payload?.evidence_artifact_ref]
+      .filter((ref) => typeof ref === "string" && ref.startsWith("artifact:")),
+  ]);
+}
+
+function requireRenderCompletion({ result, payload, readback, artifactRefs }) {
+  const manifestRef = payload.output_artifact_ref;
+  const evidenceRef = payload.evidence_artifact_ref;
+  if (typeof manifestRef !== "string" || !manifestRef.startsWith("artifact:") || !artifactRefs.includes(manifestRef)) {
+    throw coded("RENDER_MANIFEST_ARTIFACT_REQUIRED", "The audited render route did not return its manifest artifact ref.");
+  }
+  if (typeof evidenceRef !== "string" || !evidenceRef.startsWith("artifact:") || !artifactRefs.includes(evidenceRef)) {
+    throw coded("RENDER_EVIDENCE_ARTIFACT_REQUIRED", "The audited render route did not return its evidence artifact ref.");
+  }
+
+  const jobRef = typeof payload.job_ref === "string" && payload.job_ref.startsWith("job:")
+    ? payload.job_ref
+    : canonicalRefStrings(result.jobs).find((ref) => ref.startsWith("job:")) ?? null;
+  if (!jobRef) throw coded("RENDER_JOB_REF_REQUIRED", "The audited render route did not return a render job ref.");
+
+  const outputs = Array.isArray(payload.outputs)
+    ? payload.outputs
+    : Array.isArray(readback.outputs)
+      ? readback.outputs
+      : [];
+  const fileCount = payload.file_count ?? readback.file_count;
+  if (!Number.isInteger(fileCount) || fileCount < 1 || outputs.length !== fileCount) {
+    throw coded("RENDER_OUTPUTS_REQUIRED", "The audited render route must return a positive file_count matching non-empty output rows.");
+  }
+  if (outputs.some((output) => !isPlainObject(output) || typeof output.absolute_path !== "string" || output.absolute_path.length === 0)) {
+    throw coded("RENDER_OUTPUT_ROW_INVALID", "The audited render route returned an invalid output row.");
+  }
+  return {
+    manifest_ref: manifestRef,
+    evidence_ref: evidenceRef,
+    job_ref: jobRef,
+    file_count: fileCount,
+    outputs: structuredClone(outputs),
+  };
+}
+
+function renderEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, canonicalRefs = [], verification = { status: "not_required", evidence_refs: [] }, changes = [], sqlite = null }) {
+  const failed = status !== "completed" && status !== "dry_run_completed";
+  const envelope = {
+    contract: MACRO_EXECUTION_CONTRACT, ok: !failed,
+    macro: { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk },
+    request: { request_id: request.request_id ?? "macro.render.targets", dry_run: failed ? false : request.input?.dry_run !== false },
+    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
+    sqlite: sqlite ?? { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false },
+    result: { summary, canonical_refs: canonicalRefs, changes, verification: failed ? { status: "not_required", evidence_refs: [] } : verification, artifact_refs: data.artifact_refs ?? [], data },
+    blockers: failed ? blockers : [], error: failed ? { code: blockers[0]?.code ?? "RENDER_FAILED", message: summary, recoverable: true } : null,
+    recovery: failed ? { action: "Repair the typed render blocker and retry the same registered Macro.", sqlite_rows_authorize_writes: false } : null,
+    budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope));
+  const validation = validateMacroExecutionEnvelope(envelope);
+  if (!validation.valid) throw new TypeError(`Invalid render Macro envelope: ${validation.errors.join("; ")}`);
+  return deepFreeze(envelope);
+}
+
+function evidenceRefs(execution) {
+  return uniqueStrings([
+    execution?.request?.id,
+    ...(execution?.evidence_refs ?? []),
+    ...(execution?.result?.evidence_refs ?? []),
+    ...canonicalRefStrings(execution?.result?.artifacts),
+  ]);
+}
+function uniqueStrings(values) {
+  return [...new Set((values ?? []).filter((value) => typeof value === "string"))]
+    .slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count);
+}
+function invalidateRenderIndex(runtime, now) {
+  if (typeof runtime?.invalidateScopes !== "function") return null;
+  return runtime.invalidateScopes({ scopes: ["project_head"], observed_at: safeNowIso(now) });
+}
+function sqliteEvidence(runtime, invalidation) {
+  if (!invalidation) return { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false };
+  const status = typeof runtime?.status === "function" ? runtime.status() : {};
+  const revision = status.revision ?? status.project_revision ?? invalidation.revision ?? null;
+  return {
+    used: true,
+    source: "warm_index",
+    freshness: "stale",
+    snapshot_ref: status.snapshot_id ?? invalidation.snapshot_id ?? null,
+    revision: revision === null ? null : String(revision),
+    refreshed: false,
+  };
+}
+function compactIndexUpdate(value) {
+  if (!value) return null;
+  return {
+    status: value.status ?? null,
+    scopes: Array.isArray(value.scopes) ? value.scopes.slice(0, 8) : [],
+    snapshot_id: value.snapshot_id ?? null,
+    revision: value.revision ?? null,
+  };
+}
+
+export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID,
-    title: "Plan render targets",
-    summary: "Preview bounded managed-root WAV/OGG exports and return one audited D31 render child request.",
+    title: "Render targets",
+    summary: "Execute bounded managed-root WAV/OGG exports through the audited render route with output and project-state evidence.",
     pack: "render",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.render.targets",
-    tags: ["alpha3.2", "alpha3.2e", "macro", "render", "plan_only", "runtime_bound"],
+    tags: ["alpha3.2", "alpha3.2e", "macro", "render", "executable", "runtime_bound"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "render_targets",
     menu_group: "primary",
-    execution_shape: "plan_only_agent_executed_child_requests",
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    execution_shape: "registered_macro_program",
+    implementation_status: "executable",
     runnable: true,
-    support_status: "plan_only_runtime_bound_preview_first",
+    support_status: "executable_runtime_bound",
     support_state: "supported_with_readback",
-    exists_in_catalog: false,
-    live_runnable_now: false,
-    evidence_level: "runtime_bound_live_accepted",
+    exists_in_catalog: true,
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true
+      ? "runtime_bound_live_route_available"
+      : "runtime_bound_executable",
     known_blocker: LIVE_EVIDENCE_BLOCKER,
     allowed_live_group: "d31_render_targets",
     input_schema: {
@@ -200,13 +648,13 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems() {
     output_schema: {
       type: "object",
       properties: {
-        mode: { enum: ["dry_run_preview", "plan_only_agent_executed_child_requests", "blocked"] },
-        preview: { type: "object" },
-        child_requests: { type: "array" },
-        typed_blockers: { type: "array" },
+        contract: { const: "macro.execution.v1" },
+        macro: { type: "object" },
+        execution: { type: "object" },
+        result: { type: "object" },
       },
-      required: ["mode", "preview", "child_requests", "typed_blockers"],
-      additionalProperties: false,
+      required: ["contract", "macro", "execution", "result"],
+      additionalProperties: true,
     },
     examples: [
       { name: "whole_project_wav_preview", input: { target_kind: "whole_project", format: "wav", sample_rate_hz: 48_000, channel_count: 2, wav_bit_depth: 24, dry_run: true } },
@@ -537,6 +985,12 @@ function safeNowIso(now) {
 
 function blocker(code, message, details = undefined) {
   return { code, message, recoverable: true, ...(details === undefined ? {} : { details }) };
+}
+
+function coded(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
 }
 
 function boundedString(value) {

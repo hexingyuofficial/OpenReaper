@@ -7,7 +7,7 @@ import {
 import {
   ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
   createAlpha3C5OfficialMacroDiscoveryItems,
-  planAlpha3C5GenericControlMacro,
+  planAlpha3_2_5CControlsSetMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
 
 export const ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_CONTRACT = "alpha3.block3.speed_productization.v1";
@@ -29,7 +29,7 @@ export const ALPHA3_BLOCK3_SPEED_PRODUCTIZATION_DISCOVERY_SUMMARY = deepFreeze({
     "reversible task authorization prompts reduce by at least 3x",
     "batch readback chatter reduces by at least 3x",
     "independent read setup can run as safe parallel read phases",
-    "generic controls stay official plan-only macros until live write evidence exists",
+    "generic controls execute through one fixed registered Macro with required live readback",
     "destructive/export/hardware/privacy domains remain hard-stop confirmations",
   ],
   exclusions: [
@@ -102,7 +102,7 @@ export function summarizeAlpha3Block3SpeedProductization(request = {}) {
       alias_execution: false,
       direct_reaper_write: false,
       low_level_mutation_calls_reduced: false,
-      low_level_mutation_policy: "C5 generic controls still emit accepted child call_template writes; Block3 reduces user prompts, readback chatter, and read setup phases, not serial write evidence.",
+      low_level_mutation_policy: "macro.controls.set executes fixed accepted atomic dependencies internally; speed comes from one task-shaped call, compact readback, and no model-assembled write graph.",
     },
     customer_flow: {
       status: failures.length === 0 ? "static_ready_no_live_claim" : "needs_repair",
@@ -115,7 +115,7 @@ export function summarizeAlpha3Block3SpeedProductization(request = {}) {
       notes: [
         "The flow is faster for the user because repeated confirmations collapse to one task authorization.",
         "Readback is faster because per-field verification collapses to per-target batch readback.",
-        "The flow is honest about serial child mutation calls and does not claim direct live execution.",
+        "The flow keeps serial atomic mutation evidence inside the fixed registered program.",
       ],
     },
   });
@@ -131,11 +131,7 @@ function planGenericControlSpeedFlow(request = {}) {
 
   for (let index = 0; index < trackCount; index += 1) {
     const track_ref = `track:guid:{BLOCK3-${String(index + 1).padStart(2, "0")}}`;
-    macroPlans.push(planAlpha3C5GenericControlMacro("macro.set_track_controls", {
-      fields,
-      input: { fields },
-      refs: { track_ref },
-    }));
+    macroPlans.push(planAlpha3_2_5CControlsSetMacro({ target_kind: "track", fields }, { track_ref }));
   }
 
   const childRequests = macroPlans.flatMap((plan) => plan.requests).map(callTemplateShape);
@@ -164,7 +160,7 @@ function planGenericControlSpeedFlow(request = {}) {
   return deepFreeze({
     id: "block3.generic_control_track_pass",
     ok: macroPlans.every((plan) => plan.ok) && productFlow.ok,
-    macro_id: "macro.set_track_controls",
+    macro_id: "macro.controls.set",
     target_count: trackCount,
     fields: fieldNames,
     macro_plan_count: macroPlans.length,
@@ -261,15 +257,19 @@ function planSafetyBoundaryProbe() {
 
 function summarizeC5MacroTruth() {
   const entries = createAlpha3C5OfficialMacroDiscoveryItems();
-  const runtimeBound = entries.filter((entry) => entry.support_status === "plan_only_runtime_bound");
+  const executable = entries.filter((entry) =>
+    entry.support_status === "executable_runtime_bound"
+    && entry.implementation_status === "executable"
+    && entry.execution_shape === "registered_macro_program"
+  );
   return deepFreeze({
     id: "block3.c5_macro_truth",
-    ok: runtimeBound.length > 0 && runtimeBound.every((entry) => entry.live_runnable_now === false),
+    ok: entries.length > 0 && executable.length === entries.length,
     official_macro_count: entries.length,
-    runtime_bound_plan_only_count: runtimeBound.length,
+    runtime_bound_executable_count: executable.length,
     live_runnable_now_count: entries.filter((entry) => entry.live_runnable_now === true).length,
     support_statuses: unique(entries.map((entry) => entry.support_status)),
-    rule: "Official generic controls are discoverable and callable through call_template as plan-only macro entries; live write execution needs separate evidence.",
+    rule: "macro.controls.set is discoverable and callable through call_template as one fixed registered program; offline discovery reports needs_live without hiding it.",
   });
 }
 
@@ -279,7 +279,7 @@ function hardGateFailures({ genericControlFlow, safeParallelReadFlow, safetyBoun
   if (!genericControlFlow.round_trip_model.meets_3x_target) failures.push(failure("generic_control_speed_under_3x", "Generic controls did not reduce prompts and readback chatter by at least 3x."));
   if (!safeParallelReadFlow.ok) failures.push(failure("safe_parallel_read_flow_not_ok", "Safe parallel read flow did not meet the 3x phase gate."));
   if (!safetyBoundary.ok) failures.push(failure("hard_stop_boundary_failed", "A hard-stop domain did not require explicit confirmation."));
-  if (!macroTruth.ok) failures.push(failure("macro_truth_overclaims_live", "C5 generic controls must not be marked live-runnable while they only return plan envelopes."));
+  if (!macroTruth.ok) failures.push(failure("macro_truth_not_executable", "C5 generic controls must expose exactly the executable registered macro.controls.set program."));
   return deepFreeze(failures);
 }
 

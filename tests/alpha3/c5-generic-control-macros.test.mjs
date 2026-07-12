@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
   ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
@@ -9,12 +10,29 @@ import {
   planAlpha3C5GenericControlMacro,
 } from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
   ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
   ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
 } from "../../packages/mcp-server/src/alpha3-l4-macro-execution-convenience-v1.mjs";
+
+function matchingTrackControlExecutor(bridge) {
+  return {
+    dispatch(request) {
+      const response = structuredClone(bridge.dispatch(request));
+      if (request.pack.capability === "tracks.read_mixer_controls") {
+        response.result.summary = {
+          tracks: [{ track_ref: "track:guid:{TRACK-A}", volume: 0.75, pan: -0.2 }],
+          track_count: 1,
+          truncated: false,
+        };
+      }
+      return response;
+    },
+  };
+}
 
 describe("Alpha3 C5 generic control macro schemas", () => {
   it("registers the planned generic control macro surface without adding tools or an executor", () => {
@@ -49,21 +67,22 @@ describe("Alpha3 C5 generic control macro schemas", () => {
 
   it("creates official macro discovery entries without mutating the accepted template catalog shape", () => {
     const entries = createAlpha3C5OfficialMacroDiscoveryItems();
-    const track = entries.find((entry) => entry.id === "macro.set_track_controls");
+    const controls = entries[0];
 
-    assert.equal(entries.length, 6);
-    assert.equal(track.kind, "official_macro");
-    assert.equal(track.action_kind, "macro");
-    assert.equal(track.menu_group, "act");
-    assert.equal(track.execution_shape, "generic_control_macro_plan");
-    assert.equal(track.user_label, "Set track controls");
-    assert.equal(track.pack, "core");
-    assert.equal(track.live_runnable_now, false);
-    assert.equal(track.support_status, "plan_only_runtime_bound");
-    assert.equal(track.known_blocker, null);
-    assert.equal(track.inputSchema.required.includes("fields"), true);
-    assert.equal(track.refs.input.some((ref) => ref.name === "track_ref" && ref.required), true);
-    assert.equal(track.expectedDelta.summary, "Returns a plan-only macro envelope. It does not mutate REAPER directly.");
+    assert.equal(entries.length, 1);
+    assert.equal(controls.id, "macro.controls.set");
+    assert.equal(controls.kind, "official_macro");
+    assert.equal(controls.action_kind, "macro");
+    assert.equal(controls.menu_group, "act");
+    assert.equal(controls.execution_shape, "registered_macro_program");
+    assert.equal(controls.user_label, "Set project controls");
+    assert.equal(controls.pack, "core");
+    assert.equal(controls.live_runnable_now, false);
+    assert.equal(controls.support_status, "executable_runtime_bound");
+    assert.equal(controls.known_blocker, null);
+    assert.deepEqual(controls.inputSchema.required, ["target_kind", "fields"]);
+    assert.deepEqual(controls.target_kinds, ["track", "item", "take", "transport", "send"]);
+    assert.equal(controls.expectedDelta.kind, "write");
   });
 
   it("keeps generic controls as partial schemas over accepted per-field templates", () => {
@@ -222,9 +241,10 @@ describe("Alpha3 C5 generic control macro schemas", () => {
   it("exposes the compact C5 summary and exact-id convenience detail through list_templates", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates();
-    const exact = runtime.list_templates({ ids: ["macro.set_track_controls"], fields: ["id"] });
+    const exact = runtime.list_templates({ ids: ["macro.controls.set"], fields: ["id"] });
 
-    assert.equal(menu.items.some((item) => item.id === "macro.set_track_controls"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.controls.set"), true);
+    assert.equal(menu.items.some((item) => item.id === "macro.set_track_controls"), false);
     assert.deepEqual(
       menu.product_surface.generic_control_macros,
       ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
@@ -243,84 +263,83 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
     );
     assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.added_tools, 0);
-    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children, false);
-    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor, false);
-    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.public_call_recipe, false);
-    assert.equal(exact.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback, true);
-    assert.deepEqual(
-      menu.product_surface.generic_control_macros.macro_ids.slice(0, 5),
-      [
-        "macro.set_track_controls",
-        "macro.set_item_controls",
-        "macro.set_take_controls",
-        "macro.set_transport_controls",
-        "macro.set_send_controls",
-      ],
-    );
+    assert.deepEqual(menu.product_surface.generic_control_macros.macro_ids, ["macro.controls.set"]);
+    assert.deepEqual(menu.product_surface.generic_control_macros.consolidated_legacy_ids, [
+      "macro.set_track_controls",
+      "macro.set_item_controls",
+      "macro.set_take_controls",
+      "macro.set_transport_controls",
+      "macro.set_send_controls",
+    ]);
   });
 
   it("discovers official C5 macros by label, intent, and exact ids through list_templates", () => {
     const runtime = createCallTemplateRuntime();
-    const byLabel = runtime.list_templates({ query: "set track controls", limit: 10 });
+    const byLabel = runtime.list_templates({ query: "set project controls", limit: 10 });
     const byIntent = runtime.list_templates({ query: "change track volume", limit: 10 });
     const exact = runtime.list_templates({
-      ids: ["macro.set_track_controls"],
+      ids: ["macro.controls.set"],
       fields: ["summary", "inputSchema", "expectedDelta", "task_intents", "capability_truth"],
     });
 
-    assert.equal(byLabel.items[0].id, "macro.set_track_controls");
+    assert.equal(byLabel.items[0].id, "macro.controls.set");
     assert.equal(byLabel.items[0].action_kind, "macro");
-    assert.equal(byLabel.items[0].current_status, "needs_ref");
-    assert.equal(byIntent.items.some((item) => item.id === "macro.set_track_controls"), true);
-    assert.equal(exact.items[0].id, "macro.set_track_controls");
-    assert.equal(exact.items[0].inputSchema.required.includes("fields"), true);
-    assert.equal(exact.items[0].expectedDelta.kind, "read");
+    assert.equal(byLabel.items[0].current_status, "needs_live");
+    assert.equal(byIntent.items.some((item) => item.id === "macro.controls.set"), true);
+    assert.equal(exact.items[0].id, "macro.controls.set");
+    assert.deepEqual(exact.items[0].inputSchema.required, ["target_kind", "fields"]);
+    assert.equal(exact.items[0].expectedDelta.kind, "write");
     assert.equal(exact.items[0].capability_truth.kind, "official_macro");
   });
 
-  it("calls official C5 macro ids through call_template as plan-only envelopes", async () => {
+  it("calls macro.controls.set through call_template as one executed registered program", async () => {
+    const bridge = new FakeFoundationBridge();
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T10:00:00.000Z"),
+      live: {
+        opted_in: true,
+        executor: matchingTrackControlExecutor(bridge),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
     });
     const response = await runtime.call_template({
-      id: "macro.set_track_controls",
+      id: "macro.controls.set",
       input: {
+        target_kind: "track",
         fields: {
           volume: 0.75,
           pan: -0.2,
         },
+        dry_run: false,
       },
       refs: { track_ref: "track:guid:{TRACK-A}" },
+      context: { session_id: "controls", expected_owner: "owner-test", expected_generation: 1 },
     });
 
-    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.contract, "macro.execution.v1");
     assert.equal(response.ok, true);
     assert.equal(response.error, null);
-    assert.equal(response.template.id, "macro.set_track_controls");
-    assert.equal(response.template.action_kind, "macro");
-    assert.equal(response.request.macro.contract, ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT);
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.execution.added_tools, 0);
-    assert.equal(response.result.execution.hidden_executor, false);
-    assert.equal(response.result.execution.alias_execution, false);
-    assert.deepEqual(
-      response.result.child_requests.map((request) => request.id),
-      ["template.tracks.set_volume", "template.tracks.set_pan"],
-    );
-    assert.equal(response.result.readback.id, "template.tracks.read_mixer_controls");
-    assert.equal(response.result.agent_execution_flow.contract, ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT);
-    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
-    assert.equal(response.result.agent_execution_flow.request_counts.child, 2);
-    assert.equal(response.result.agent_execution_flow.request_counts.readback, 1);
-    assert.equal(response.result.agent_execution_flow.steps[0].request_source, "result.child_requests");
-    assert.equal(response.result.agent_execution_flow.steps[1].request_source, "result.readback");
-    assert.equal(response.result.agent_execution_flow.success_gate.success_wording_allowed_now, false);
-    assert.equal(response.result.agent_execution_flow.safety.server_executes_children, false);
-    assert.equal(runtime.last_evidence().template.id, "macro.set_track_controls");
+    assert.equal(response.macro.id, "macro.controls.set");
+    assert.equal(response.execution.status, "completed");
+    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
+      "track.resolve_ref",
+      "track.set_volume",
+      "track.set_pan",
+      "tracks.read_mixer_controls",
+    ]);
+    assert.equal(response.result.verification.status, "passed");
+    assert.equal(runtime.last_evidence().template.id, "macro.controls.set");
   });
 
   it("accepts MCP object-ref arrays for C5 macros and maps them to named refs", async () => {
-    const runtime = createCallTemplateRuntime();
+    const bridge = new FakeFoundationBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: matchingTrackControlExecutor(bridge),
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
     const trackRef = {
       kind: "track",
       ref: "track:guid:{TRACK-A}",
@@ -328,29 +347,26 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       display: { name: "Track A" },
     };
     const response = await runtime.call_template({
-      id: "macro.set_track_controls",
+      id: "macro.controls.set",
       input: {
+        target_kind: "track",
         fields: {
           volume: 0.75,
           pan: -0.2,
         },
+        dry_run: false,
       },
       refs: [trackRef],
+      context: { session_id: "controls-array", expected_owner: "owner-test", expected_generation: 1 },
     });
 
     assert.equal(response.ok, true);
-    assert.deepEqual(
-      response.result.child_requests.map((request) => request.refs),
-      [
-        { track_ref: "track:guid:{TRACK-A}" },
-        { track_ref: "track:guid:{TRACK-A}" },
-      ],
-    );
-    assert.deepEqual(response.result.readback.refs, { track_ref: "track:guid:{TRACK-A}" });
-    assert.equal(response.result.agent_execution_flow.status, "ready_for_child_execution_and_readback");
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.execution.status, "completed");
+    assert.equal(response.result.canonical_refs.includes("track:guid:{TRACK-A}"), true);
   });
 
-  it("normalizes take refs for the planned MIDI macro without promoting or executing it", async () => {
+  it("withdraws the generic MIDI control draft from discovery and execution", async () => {
     const midiDiscovery = createAlpha3C5OfficialMacroDiscoveryItems()
       .find((entry) => entry.id === "macro.set_midi_controls");
     const runtime = createCallTemplateRuntime();
@@ -385,48 +401,21 @@ describe("Alpha3 C5 generic control macro schemas", () => {
       refs: [wrongKindRef],
     });
 
-    assert.deepEqual(
-      {
-        lifecycle: midiDiscovery.lifecycle,
-        support_status: midiDiscovery.support_status,
-        support_state: midiDiscovery.support_state,
-        known_blocker: midiDiscovery.known_blocker,
-        live_runnable_now: midiDiscovery.live_runnable_now,
-      },
-      {
-        lifecycle: "draft",
-        support_status: "planned",
-        support_state: "blocked",
-        known_blocker: "planned_after_c5",
-        live_runnable_now: false,
-      },
-    );
+    assert.equal(midiDiscovery, undefined);
     assert.equal(runtime.list_templates().items.some((item) => item.id === "macro.set_midi_controls"), false);
     assert.equal(response.ok, false);
-    assert.equal(response.error.code, "COMPLEX_SCHEMA_DEFERRED");
-    assert.deepEqual(
-      response.result.blockers.map((blocker) => ({ field: blocker.field, code: blocker.code })),
-      [{ field: "arbitrary_cc_batch_edit", code: "COMPLEX_SCHEMA_DEFERRED" }],
-    );
-    assert.deepEqual(response.result.child_requests, []);
-    assert.equal(response.result.readback, null);
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.agent_execution_flow.status, "blocked_before_agent_execution");
+    assert.equal(response.error.code, "CALL_TEMPLATE_ID_WITHDRAWN");
+    assert.equal(response.error.details.implementation_status, "withdrawn");
     assert.equal(wrongKindOnly.ok, false);
-    assert.equal(
-      wrongKindOnly.result.blockers.some((blocker) =>
-        blocker.field === "take_ref" && blocker.code === "REQUIRED_REF_MISSING"
-      ),
-      true,
-    );
-    assert.deepEqual(wrongKindOnly.result.child_requests, []);
+    assert.equal(wrongKindOnly.error.code, "CALL_TEMPLATE_ID_WITHDRAWN");
   });
 
   it("returns typed macro blockers through call_template without child mutation requests", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
-      id: "macro.set_track_controls",
+      id: "macro.controls.set",
       input: {
+        target_kind: "track",
         fields: {
           hardware_output: 1,
         },
@@ -435,14 +424,10 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     });
 
     assert.equal(response.ok, false);
-    assert.equal(response.error.source, "macro");
     assert.equal(response.error.code, "HARD_STOP_DOMAIN");
-    assert.equal(response.result.plan.ok, false);
-    assert.equal(response.result.child_requests.length, 0);
-    assert.equal(response.result.readback, null);
-    assert.equal(response.result.agent_execution_flow.status, "blocked_before_agent_execution");
-    assert.equal(response.result.agent_execution_flow.safety.hidden_executor, false);
-    assert.equal(response.result.blockers[0].field, "hardware_output");
-    assert.equal(response.result.blockers[0].code, "HARD_STOP_DOMAIN");
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.execution.status, "blocked");
+    assert.deepEqual(response.result.changes, []);
+    assert.equal(response.blockers[0].code, "HARD_STOP_DOMAIN");
   });
 });

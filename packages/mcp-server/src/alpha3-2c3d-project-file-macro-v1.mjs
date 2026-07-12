@@ -2,18 +2,57 @@ export const ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT = "alpha3.2c3d.project_file
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_ID = "macro.project.file";
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.0.0";
 
+import {
+  MACRO_CONTRACT_CEILINGS,
+  MACRO_EXECUTION_CONTRACT,
+  MACRO_PROGRAM_REGISTRY_CONTRACT,
+  createMacroProgramRegistry,
+  validateMacroExecutionEnvelope,
+  validateMacroProgramRequest,
+} from "./macro-runtime-contract-v1.mjs";
+
 const READ_PATH_ID = "template.project.read_current_project_path";
 const READ_DIRTY_ID = "template.project.read_dirty_state";
 const SAVE_CURRENT_ID = "template.project.save_current_project";
 const SAVE_AS_ID = "template.project.save_project_as";
 const HELD_OPERATIONS = new Set(["new", "create", "create_new", "open", "open_project"]);
-const ALLOWED_INPUT_FIELDS = new Set(["operation", "target_path", "overwrite"]);
+const ALLOWED_INPUT_FIELDS = new Set(["operation", "target_path", "overwrite", "dry_run"]);
 const OPERATION_MAX_BYTES = 64;
 const TARGET_PATH_MAX_BYTES = 2048;
 const REQUEST_SUMMARY_TARGET_PATH_MAX_BYTES = 256;
 const UNKNOWN_FIELD_DETAIL_LIMIT = 8;
 const UNKNOWN_FIELD_NAME_MAX_BYTES = 80;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
+const FILE_TEMPLATE_IDS = Object.freeze([READ_PATH_ID, READ_DIRTY_ID, SAVE_CURRENT_ID, SAVE_AS_ID]);
+const FILE_STAGE_IDS = new Set(["file-read-before-path", "file-read-before-dirty", "file-live-save-current", "file-live-save-as", "file-read-after-path", "file-read-after-dirty", "file-result-project"]);
+
+export const ALPHA3_2_5_C_FILE_MACRO_REGISTRY = createMacroProgramRegistry([{
+  contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
+  macro_id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
+  program_id: "openreaper.macro.project.file",
+  program_version: ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION,
+  implementation_status: "executable",
+  risk: "write",
+  input_schema: { type: "object", additionalProperties: false },
+  selector_policy: { task_shaped: true, canonical_refs_optional_at_public_boundary: true, live_reresolve_before_write: true },
+  sqlite_policy: { mode: "not_used", write_authority: false, identity_fields: [] },
+  dependencies: { template_ids: FILE_TEMPLATE_IDS, runtime_capabilities: [] },
+  stages: [
+    { id: "file-read-before-path", kind: "template_execute", dependency_ref: READ_PATH_ID, risk: "read", stop_on_error: true },
+    { id: "file-read-before-dirty", kind: "template_execute", dependency_ref: READ_DIRTY_ID, risk: "read", stop_on_error: true },
+    { id: "file-live-save-current", kind: "template_execute", dependency_ref: SAVE_CURRENT_ID, risk: "write", stop_on_error: true },
+    { id: "file-live-save-as", kind: "template_execute", dependency_ref: SAVE_AS_ID, risk: "write", stop_on_error: true },
+    { id: "file-read-after-path", kind: "template_execute", dependency_ref: READ_PATH_ID, risk: "read", stop_on_error: true },
+    { id: "file-read-after-dirty", kind: "template_execute", dependency_ref: READ_DIRTY_ID, risk: "read", stop_on_error: true },
+    { id: "file-result-project", kind: "result_project", risk: "read", stop_on_error: true },
+  ],
+  undo_policy: "not_required",
+  verification_policy: "required",
+  dry_run_supported: true,
+  result_budget: { max_bytes: 65_536 },
+}], { acceptedTemplateIds: FILE_TEMPLATE_IDS, registeredStageIds: FILE_STAGE_IDS });
+
+export const ALPHA3_2_5_C_PROJECT_FILE_REGISTRY = ALPHA3_2_5_C_FILE_MACRO_REGISTRY;
 
 export function isAlpha3_2C3DProjectFileMacroId(id) {
   return id === ALPHA3_2C3D_PROJECT_FILE_MACRO_ID;
@@ -72,7 +111,10 @@ export function planAlpha3_2C3DProjectFileMacro(input = {}, requestPosture = {})
   });
 }
 
-export function createAlpha3_2C3DProjectFileMacroRuntimeEnvelope({ request = {}, plan, now = () => new Date() } = {}) {
+export function createAlpha3_2C3DProjectFileMacroRuntimeEnvelope({ request = {}, plan, executeAtomic, projectIndexRuntime, now = () => new Date() } = {}) {
+  if (typeof executeAtomic === "function") {
+    return executeAlpha3_2_5CProjectFileMacro({ request, executeAtomic, projectIndexRuntime, now });
+  }
   const normalizedPlan = plan ?? planAlpha3_2C3DProjectFileMacro(request.input ?? {}, requestPosture(request));
   const completedAt = safeNowIso(now);
   const envelope = {
@@ -122,28 +164,201 @@ export function createAlpha3_2C3DProjectFileMacroRuntimeEnvelope({ request = {},
   return deepFreeze(envelope);
 }
 
-export function createAlpha3_2C3DProjectFileMacroDiscoveryItems() {
+export async function executeAlpha3_2_5CProjectFileMacro({
+  request = {},
+  executeAtomic,
+  projectIndexRuntime,
+  now = () => new Date(),
+} = {}) {
+  const entry = ALPHA3_2_5_C_FILE_MACRO_REGISTRY.get(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID);
+  const startedAt = safeNowIso(now);
+  const input = isPlainObject(request.input) ? request.input : {};
+  const validation = validateMacroProgramRequest({
+    macro_id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
+    input,
+    refs: request.refs,
+    dry_run: input.dry_run === true,
+    ...(request.idempotency_key === undefined ? {} : { idempotency_key: request.idempotency_key }),
+  }, { registry: ALPHA3_2_5_C_FILE_MACRO_REGISTRY });
+  const plan = planAlpha3_2C3DProjectFileMacro(input, requestPosture(request));
+  if (!validation.valid || !plan.ok) {
+    return fileEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: plan.blockers.length > 0 ? plan.blockers : validation.errors.map((message) => blocker("PROJECT_FILE_REQUEST_INVALID", message)), summary: "Project-file Macro input was blocked." });
+  }
+  if (typeof executeAtomic !== "function") {
+    return fileEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: "blocked",
+      stages: [],
+      blockers: [blocker("PROJECT_FILE_EXECUTOR_UNAVAILABLE", "The managed OpenReaper atomic executor is unavailable.")],
+      summary: "Project-file Macro needs the managed OpenReaper atomic route.",
+    });
+  }
+
+  const stages = [];
+  const calls = [];
+  const collectedEvidence = () => uniqueEvidenceRefs(calls.flatMap(evidenceRefs));
+  let mutationAttempted = false;
+  const run = async (stageId, id, childInput = {}) => {
+    stages.push({ id: stageId, kind: "template_execute", status: "running", evidence_refs: [] });
+    try {
+      const execution = await executeAtomic({ id, input: childInput, refs: [], context: request.context, budget: request.budget });
+      calls.push(execution);
+      const evidence = evidenceRefs(execution);
+      stages.at(-1).status = execution?.ok === true ? "completed" : "failed";
+      stages.at(-1).summary = typeof execution?.result?.summary === "string" ? execution.result.summary : `${id} completed.`;
+      stages.at(-1).evidence_refs = evidence;
+      if (execution?.ok !== true) throw executionError(id, execution);
+      return execution;
+    } catch (error) {
+      stages.at(-1).status = "failed";
+      throw error;
+    }
+  };
+
+  let beforePath;
+  let beforeDirty;
+  try {
+    beforePath = readback(await run("file-read-before-path", READ_PATH_ID));
+    beforeDirty = readback(await run("file-read-before-dirty", READ_DIRTY_ID));
+    const savedProject = beforePath?.has_project_path === true || beforePath?.path_state === "saved_project";
+    if (input.operation === "save_current" && !savedProject) {
+      throw macroError("PROJECT_FILE_UNSAVED_PROJECT", "save_current requires an already-named project; use save_as with an accepted target path.");
+    }
+    if (input.dry_run === true) {
+      stages.push({ id: "file-live-save-current", kind: "template_execute", status: "skipped", summary: "Mutation skipped during dry_run.", evidence_refs: [] });
+      stages.push({ id: "file-live-save-as", kind: "template_execute", status: "skipped", summary: "Mutation skipped during dry_run.", evidence_refs: [] });
+      stages.push({ id: "file-result-project", kind: "result_project", status: "completed", summary: "Validated save operation without mutation.", evidence_refs: collectedEvidence() });
+      return fileEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Project-file save preview completed.", data: { operation: input.operation, path_before: exactPath(beforePath), dirty_before: dirtyProjection(beforeDirty), mutation_skipped: true }, verificationEvidenceRefs: collectedEvidence() });
+    }
+    const saveId = input.operation === "save_current" ? SAVE_CURRENT_ID : SAVE_AS_ID;
+    const saveInput = input.operation === "save_as" ? { target_path: input.target_path, overwrite: true } : {};
+    mutationAttempted = true;
+    await run(input.operation === "save_current" ? "file-live-save-current" : "file-live-save-as", saveId, saveInput);
+    const afterPath = readback(await run("file-read-after-path", READ_PATH_ID));
+    const afterDirty = readback(await run("file-read-after-dirty", READ_DIRTY_ID));
+    const expectedPath = input.operation === "save_current" ? exactPath(beforePath) : input.target_path;
+    if (exactPath(afterPath) !== expectedPath) throw macroError("PROJECT_FILE_PATH_READBACK_MISMATCH", "Project-file save completed but exact path readback did not match the required path.");
+    if (!isCleanDirtyState(afterDirty)) throw macroError("PROJECT_FILE_DIRTY_READBACK_MISMATCH", "Project-file save completed but exact dirty-state readback was not clean.");
+    const invalidation = invalidateProjectFileIndex(projectIndexRuntime, input.operation, now);
+    if (invalidation?.ok === false) {
+      throw macroError(
+        invalidation.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_INVALIDATION_FAILED",
+        invalidation.blockers?.[0]?.message ?? "Project-file save completed but Project Index identity scopes could not be invalidated.",
+      );
+    }
+    stages.push({ id: "file-result-project", kind: "result_project", status: "completed", summary: "Project-file save verified by exact path and dirty-state readback.", evidence_refs: collectedEvidence() });
+    return fileEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: "completed",
+      stages,
+      blockers: [],
+      summary: "Project-file save completed and was verified.",
+      data: {
+        operation: input.operation,
+        path_before: exactPath(beforePath),
+        path_after: exactPath(afterPath),
+        dirty_before: dirtyProjection(beforeDirty),
+        dirty_after: dirtyProjection(afterDirty),
+        atomic_calls: calls.length,
+        index_update: compactIndexUpdate(invalidation),
+      },
+      changes: [{ kind: "project_file", action: input.operation, path: exactPath(afterPath) }],
+      sqlite: sqliteEvidence(projectIndexRuntime, invalidation),
+      verificationEvidenceRefs: collectedEvidence(),
+    });
+  } catch (error) {
+    return fileEnvelope({ entry, request, startedAt, now, status: mutationAttempted ? "partial_failure" : "failed", stages, blockers: [blocker(error.code ?? "PROJECT_FILE_EXECUTION_FAILED", error.message ?? "Project-file Macro failed.")], summary: error.message ?? "Project-file Macro failed.", data: { operation: input.operation ?? null, path_before: exactPath(beforePath), dirty_before: dirtyProjection(beforeDirty), calls: calls.length } });
+  }
+}
+
+function fileEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, changes = [], sqlite = null, verificationEvidenceRefs = [] }) {
+  const failed = status !== "completed" && status !== "dry_run_completed";
+  const envelope = {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: !failed,
+    macro: { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk },
+    request: { request_id: request.request_id ?? "macro.project.file", dry_run: failed ? false : request.input?.dry_run === true },
+    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
+    sqlite: sqlite ?? { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false },
+    result: { summary, canonical_refs: [], changes, verification: { status: failed ? "not_required" : "passed", evidence_refs: failed ? [] : uniqueEvidenceRefs(verificationEvidenceRefs) }, artifact_refs: [], data },
+    blockers: failed ? blockers : [], error: failed ? { code: blockers[0]?.code ?? "PROJECT_FILE_FAILED", message: summary, recoverable: true } : null,
+    recovery: failed ? { action: "Repair the typed blocker and retry the same registered Macro.", sqlite_rows_authorize_writes: false } : null,
+    budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope));
+  const validation = validateMacroExecutionEnvelope(envelope);
+  if (!validation.valid) throw new TypeError(`Invalid project-file Macro envelope: ${validation.errors.join("; ")}`);
+  return deepFreeze(envelope);
+}
+
+function executionError(id, execution) { return macroError(execution?.error?.code ?? "PROJECT_FILE_TEMPLATE_FAILED", execution?.error?.message ?? `${id} failed.`); }
+function macroError(code, message) { return Object.assign(new Error(message), { code }); }
+function readback(execution) { return execution?.result?.readback ?? execution?.result?.summary ?? execution?.result?.data ?? {}; }
+function exactPath(value) { return value?.project_path ?? value?.path ?? value?.current_project_path ?? null; }
+function isCleanDirtyState(value) { return value?.dirty === false && value?.dirty_state === "clean" && value?.raw_dirty_state === 0; }
+function dirtyProjection(value) { return { raw_dirty_state: value?.raw_dirty_state ?? null, dirty_state: value?.dirty_state ?? null, dirty: value?.dirty ?? null }; }
+function evidenceRefs(execution) { return uniqueEvidenceRefs([execution?.request?.id, ...(execution?.evidence_refs ?? []), ...(execution?.result?.evidence_refs ?? [])]); }
+function uniqueEvidenceRefs(values) { return [...new Set(values.filter((value) => typeof value === "string"))].slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count); }
+function invalidateProjectFileIndex(runtime, operation, now) {
+  if (typeof runtime?.invalidateScopes !== "function") return null;
+  const scopes = operation === "save_as"
+    ? ["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"]
+    : ["project_head"];
+  return runtime.invalidateScopes({ scopes, observed_at: safeNowIso(now) });
+}
+function sqliteEvidence(runtime, invalidation) {
+  if (!invalidation) return { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false };
+  const status = typeof runtime?.status === "function" ? runtime.status() : {};
+  const revision = status.revision ?? status.project_revision ?? invalidation.revision ?? null;
+  return {
+    used: true,
+    source: "warm_index",
+    freshness: "stale",
+    snapshot_ref: status.snapshot_id ?? invalidation.snapshot_id ?? null,
+    revision: revision === null ? null : String(revision),
+    refreshed: false,
+  };
+}
+function compactIndexUpdate(value) {
+  if (!value) return null;
+  return {
+    status: value.status ?? null,
+    scopes: Array.isArray(value.scopes) ? value.scopes.slice(0, 16) : [],
+    snapshot_id: value.snapshot_id ?? null,
+    revision: value.revision ?? null,
+  };
+}
+
+export function createAlpha3_2C3DProjectFileMacroDiscoveryItems(options = {}) {
   return [deepFreeze({
     id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
     title: "Save project file",
-    summary: "Plan-only save-current or save-as macro over four accepted/live-smoked atomic project-file templates; child requests are executed explicitly by the agent.",
+    summary: "Execute a bounded save-current or save-as Macro over accepted project-file Templates with exact path and dirty-state readback.",
     pack: "project",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.project.file",
-    tags: ["macro", "project", "file", "save", "save_as", "alpha3_2c3d", "plan_only"],
+    tags: ["macro", "project", "file", "save", "save_as", "alpha3_2c3d", "executable"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "project_file_save",
     menu_group: "secondary",
-    execution_shape: "plan_only_agent_executed_child_requests",
+    execution_shape: "registered_macro_program",
     user_label: "Save project file",
     task_intents: ["save project", "save current project", "save project as"],
-    support_status: "plan_only_runtime_bound",
+    support_status: "executable_runtime_bound",
     support_state: "supported",
     exists_in_catalog: true,
-    live_runnable_now: false,
-    evidence_level: "runtime_bound_static_fake",
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true
+      ? "runtime_bound_live_route_available"
+      : "runtime_bound_executable",
     known_blocker: null,
     allowed_live_group: null,
     inputSchema: {
@@ -154,26 +369,26 @@ export function createAlpha3_2C3DProjectFileMacroDiscoveryItems() {
         operation: { enum: ["save_current", "save_as"] },
         target_path: { type: "string", description: "Required only for save_as; forwarded unchanged to the atomic save_project_as template." },
         overwrite: { const: true, description: "Required only for save_as. Atomic overwrite=false remains held." },
+        dry_run: { type: "boolean" },
       },
     },
     outputSchema: {
       type: "object",
-      required: ["contract", "action_kind", "mode", "executed", "plan", "execution"],
+      required: ["contract", "ok", "macro", "execution", "result"],
       properties: {
-        contract: { const: ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT },
-        action_kind: { const: "macro" },
-        mode: { const: "plan_only_agent_executed_child_requests" },
-        executed: { const: false },
-        plan: { type: "object" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
         execution: { type: "object" },
+        result: { type: "object" },
       },
     },
     refs: { input: [], output: [] },
     expectedDelta: {
-      kind: "read",
-      action: "read",
-      entities: ["macro_plan"],
-      summary: "Returns a plan only. It does not save a project or dispatch bridge requests itself.",
+      kind: "write",
+      action: "save_project_file",
+      entities: ["project_file", "project_path", "dirty_state"],
+      summary: "Executes the registered save program and verifies exact path and clean dirty state.",
     },
     examples: [
       { input: { operation: "save_current" } },

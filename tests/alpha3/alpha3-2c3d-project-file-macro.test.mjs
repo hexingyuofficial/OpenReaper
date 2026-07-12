@@ -161,12 +161,12 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
         ...testCase.request,
       });
       const serialized = JSON.stringify(result);
-      const codes = result.result.typed_blockers.map((entry) => entry.code);
+      const codes = result.blockers.map((entry) => entry.code);
       assert.equal(result.ok, false);
       for (const code of testCase.codes) assert.equal(codes.includes(code), true, code);
-      assert.equal(result.result.mutation_requests.length, 0);
-      assert.equal(result.result.child_requests.length, 0);
-      assert.equal(result.result.execution.executor_call_count, 0);
+      assert.equal(result.contract, "macro.execution.v1");
+      assert.equal(result.result.changes.length, 0);
+      assert.equal(result.execution.stage_count, 0);
       assert.equal(Buffer.byteLength(serialized) < 32_768, true, `${Buffer.byteLength(serialized)}`);
       assert.equal(serialized.includes("REF_SECRET_399"), false);
       assert.equal(serialized.includes("IDEMPOTENCY_SECRET_"), false);
@@ -176,7 +176,7 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
       id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
       input: { operation: "save_current", ...unknownFields },
     });
-    const unknownBlocker = unknownResult.result.typed_blockers.find((entry) => entry.code === "PROJECT_FILE_INPUT_FIELDS_UNSUPPORTED");
+    const unknownBlocker = unknownResult.blockers.find((entry) => entry.code === "PROJECT_FILE_INPUT_FIELDS_UNSUPPORTED");
     assert.equal(unknownBlocker.details.fields.length, 8);
     assert.equal(unknownBlocker.details.field_count, 5_000);
     assert.equal(unknownBlocker.details.omitted_field_count, 4_992);
@@ -188,54 +188,40 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
       refs: largeRefs,
       idempotency_key: longIdempotency,
     });
-    assert.deepEqual(unusedResult.request.refs, { provided: true, count: 400, shape: "object" });
-    assert.deepEqual(unusedResult.request.idempotency_key, { provided: true });
-    assert.deepEqual(unusedResult.request.input, { operation: "save_current" });
+    assert.equal(unusedResult.request.dry_run, false);
+    assert.equal(JSON.stringify(unusedResult).includes("REF_SECRET_399"), false);
+    assert.equal(JSON.stringify(unusedResult).includes("IDEMPOTENCY_SECRET_"), false);
 
     const maxAcceptedPath = `/${"p".repeat(2_043)}.RPP`;
     assert.equal(Buffer.byteLength(maxAcceptedPath), 2_048);
-    const maxAcceptedResult = await runtime.call_template({
-      id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
-      input: { operation: "save_as", target_path: maxAcceptedPath, overwrite: true },
-    });
+    const maxAcceptedResult = planAlpha3_2C3DProjectFileMacro({ operation: "save_as", target_path: maxAcceptedPath, overwrite: true });
     assert.equal(maxAcceptedResult.ok, true);
-    assert.equal(Buffer.byteLength(JSON.stringify(maxAcceptedResult)) < 32_768, true);
-    assert.deepEqual(maxAcceptedResult.result.mutation_requests[0].call_template.input, {
+    assert.deepEqual(maxAcceptedResult.mutation_requests[0].call_template.input, {
       target_path: maxAcceptedPath,
       overwrite: true,
     });
     assert.equal(executorCalls, 0);
   });
 
-  it("binds call_template to a plan envelope without executor or bridge dispatch", async () => {
+  it("binds call_template to the executable program and blocks cleanly without a bridge", async () => {
     let executorCalls = 0;
     const executor = async () => {
       executorCalls += 1;
       throw new Error("macro must not call executor");
     };
-    const runtime = createCallTemplateRuntime({
-      executor,
-      live: {
-        opted_in: true,
-        executor,
-        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
-      },
-    });
+    const runtime = createCallTemplateRuntime();
     const result = await runtime.call_template({
       id: ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
       input: { operation: "save_current" },
     });
 
-    assert.equal(result.ok, true);
-    assert.equal(result.result.contract, ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT);
-    assert.equal(result.result.executed, false);
-    assert.equal(result.result.execution.executed, false);
-    assert.equal(result.result.execution.executor_call_count, 0);
-    assert.equal(result.result.execution.bridge_request_created, false);
-    assert.equal(result.result.execution.live_executor_allowlist_member, false);
-    assert.equal(result.result.execution.hidden_executor, false);
-    assert.equal(result.result.execution.public_call_recipe, false);
-    assert.equal(result.result.execution.raw_action_lua_shell_ui, false);
+    assert.equal(result.ok, false);
+    assert.equal(result.contract, "macro.execution.v1");
+    assert.equal(result.macro.id, ALPHA3_2C3D_PROJECT_FILE_MACRO_ID);
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, "PROJECT_FILE_EXECUTOR_UNAVAILABLE");
+    assert.equal(result.execution.stage_count, 0);
+    assert.deepEqual(result.result.changes, []);
     assert.equal(executorCalls, 0);
   });
 
@@ -247,11 +233,11 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
 
     assert.equal(exact.items.length, 1);
     assert.equal(exact.items[0].id, ALPHA3_2C3D_PROJECT_FILE_MACRO_ID);
-    assert.equal(exact.items[0].support_status, "plan_only_runtime_bound");
+    assert.equal(exact.items[0].support_status, "executable_runtime_bound");
     assert.equal(exact.items[0].capability_truth.support_state, "supported");
     assert.equal(exact.items[0].capability_truth.exists_in_catalog, true);
     assert.equal(exact.items[0].capability_truth.live_runnable_now, false);
-    assert.equal(exact.items[0].current_status, "needs_confirmation");
+    assert.equal(exact.items[0].current_status, "needs_live");
     assert.equal(projectFileRows.length, 1);
     assert.equal(runtime.accepted_catalog.size, 221);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 221);
@@ -267,7 +253,7 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
     assert.equal(plan.safety.hidden_executor, false);
   });
 
-  it("returns a plan through actual stdio without REAPER", { timeout: 30_000 }, async () => {
+  it("returns a typed executable-Macro readiness blocker through actual stdio without REAPER", { timeout: 30_000 }, async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_SERVER],
@@ -289,11 +275,11 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
         },
       });
       const result = parseToolJson(response);
-      assert.equal(result.ok, true);
-      assert.equal(result.result.executed, false);
-      assert.equal(result.result.execution.executor_call_count, 0);
-      assert.equal(result.result.execution.bridge_request_created, false);
-      assert.deepEqual(childIds(result.result.plan), EXPECTED_CHILD_IDS.save_as);
+      assert.equal(result.ok, false);
+      assert.equal(result.contract, "macro.execution.v1");
+      assert.equal(result.macro.id, ALPHA3_2C3D_PROJECT_FILE_MACRO_ID);
+      assert.equal(result.execution.status, "blocked");
+      assert.equal(result.error.code, "PROJECT_FILE_EXECUTOR_UNAVAILABLE");
     } finally {
       await client.close();
     }

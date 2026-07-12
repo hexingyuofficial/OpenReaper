@@ -17,7 +17,7 @@ const STDIO_SERVER = new URL("../../packages/mcp-server/src/openreaper-mcp-stdio
 const EXPECTED_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 describe("Alpha3.2-E small macro spine: project inspect", () => {
-  it("publishes macro.project.inspect as an executable registered program while leaving write-side spine entries unchanged", () => {
+  it("publishes the complete small Macro spine as registered executable programs", () => {
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.inspect"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.delete_targets"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.apply_layout"), false);
@@ -34,17 +34,17 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(exact.items[0].support_status, "executable_runtime_bound");
     assert.equal(exact.items[0].capability_truth.support_state, "supported");
     assert.equal(exact.items[0].execution_shape, "registered_macro_program");
-    assert.equal(exact.items[0].capability_truth.known_blocker, "live_executor_not_configured");
-    assert.equal(exact.items[1].support_status, "plan_only_runtime_bound_preview_first");
+    assert.match(exact.items[0].capability_truth.known_blocker, /live_executor_not_configured/);
+    assert.equal(exact.items[1].support_status, "executable_runtime_bound_confirmation_gated");
     assert.equal(exact.items[1].capability_truth.support_state, "supported_with_confirmation");
-    assert.equal(exact.items[2].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[2].support_status, "executable_runtime_bound");
     assert.equal(exact.items[2].capability_truth.support_state, "supported_with_readback");
-    assert.equal(exact.items[3].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[3].support_status, "executable_runtime_bound");
     assert.equal(exact.items[3].capability_truth.support_state, "supported_with_readback");
-    assert.equal(exact.items[4].support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(exact.items[4].support_status, "executable_runtime_bound");
     assert.equal(exact.items[4].capability_truth.support_state, "supported_with_readback");
-    assert.equal(exact.items[5].support_status, "plan_only_runtime_bound_preview_first");
-    assert.equal(exact.items[5].capability_truth.support_state, "blocked");
+    assert.equal(exact.items[5].support_status, "executable_runtime_bound");
+    assert.equal(exact.items[5].capability_truth.support_state, "supported_with_readback");
   });
 
   it("plans a bounded read-only inspect flow over accepted reads and macro.project.query", () => {
@@ -142,18 +142,16 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       assert.equal(inspectResult.contract, "macro.execution.v1");
       assert.equal(inspectResult.execution.status, "blocked");
       assert.equal(inspectResult.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
-      assert.equal(deletePreview.ok, true);
-      assert.equal(deletePreview.result.preview.total_count, 1);
-      assert.equal(deletePreview.result.typed_blockers[0].code, "CONFIRM_SCOPE_REQUIRED");
-      assert.equal(layoutPreview.ok, true);
-      assert.equal(layoutPreview.result.preview.target_counts.rows, 1);
-      assert.equal(routingPreview.ok, true);
-      assert.equal(routingPreview.result.preview.target_counts.routes, 1);
-      assert.equal(mediaPreview.ok, true);
-      assert.equal(mediaPreview.result.preview.target_counts.assets, 1);
-      assert.equal(renderPreview.ok, true);
-      assert.equal(renderPreview.result.mode, "dry_run_preview");
-      assert.deepEqual(renderPreview.result.child_requests, []);
+      for (const result of [deletePreview, layoutPreview, routingPreview, mediaPreview]) {
+        assert.equal(result.ok, false);
+        assert.equal(result.contract, "macro.execution.v1");
+        assert.equal(result.execution.status, "blocked");
+        assert.equal(result.error.code, "PROJECT_WRITE_EXECUTOR_UNAVAILABLE");
+      }
+      assert.equal(renderPreview.ok, false);
+      assert.equal(renderPreview.contract, "macro.execution.v1");
+      assert.equal(renderPreview.execution.status, "blocked");
+      assert.equal(renderPreview.error.code, "RENDER_EXECUTOR_UNAVAILABLE");
     } finally {
       await client.close();
     }

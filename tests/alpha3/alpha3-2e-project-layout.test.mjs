@@ -9,13 +9,14 @@ import {
 } from "../../packages/mcp-server/src/alpha3-2e-project-layout-v1.mjs";
 
 describe("Alpha3.2-E project apply_layout planner", () => {
-  it("publishes a plan-only layout macro discovery item", () => {
+  it("publishes an executable layout Macro with readback", () => {
     const [item] = createAlpha3_2EProjectLayoutMacroDiscoveryItems();
     assert.equal(item.id, ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID);
-    assert.equal(item.support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(item.support_status, "executable_runtime_bound");
     assert.equal(item.support_state, "supported_with_readback");
-    assert.equal(item.execution_shape, "plan_only_agent_executed_child_requests");
-    assert.equal(item.expectedDelta.kind, "none_until_agent_executes_children");
+    assert.equal(item.execution_shape, "registered_macro_program");
+    assert.equal(item.implementation_status, "executable");
+    assert.equal(item.expectedDelta.kind, "write");
   });
 
   it("returns a dry-run preview with read-only preflight requests", () => {

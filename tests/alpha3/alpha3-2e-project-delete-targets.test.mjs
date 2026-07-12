@@ -9,13 +9,14 @@ import {
 } from "../../packages/mcp-server/src/alpha3-2e-project-delete-targets-v1.mjs";
 
 describe("Alpha3.2-E project delete_targets planner", () => {
-  it("publishes a preview-first plan-only macro discovery item", () => {
+  it("publishes an executable confirmation-gated delete Macro", () => {
     const [item] = createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems();
     assert.equal(item.id, ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID);
-    assert.equal(item.support_status, "plan_only_runtime_bound_preview_first");
+    assert.equal(item.support_status, "executable_runtime_bound_confirmation_gated");
     assert.equal(item.support_state, "supported_with_confirmation");
-    assert.equal(item.execution_shape, "plan_only_agent_executed_child_requests");
-    assert.equal(item.expectedDelta.kind, "none_until_agent_executes_children");
+    assert.equal(item.execution_shape, "registered_macro_program");
+    assert.equal(item.implementation_status, "executable");
+    assert.equal(item.expectedDelta.kind, "destructive");
   });
 
   it("returns dry-run preview and confirmation token before destructive requests", () => {

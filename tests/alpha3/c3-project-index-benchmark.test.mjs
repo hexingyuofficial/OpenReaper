@@ -82,7 +82,7 @@ describe("Alpha3 C3 Project SQLite Index Block 4 benchmark", () => {
     });
 
     assert.deepEqual(menu.items.map((item) => item.id), ["macro.project.query"]);
-    assert.equal(menu.items[0].current_status, "blocked");
+    assert.equal(menu.items[0].current_status, "needs_live");
     assert.equal(menu.items[0].capability_truth.live_runnable_now, false);
     assert.equal(menu.items[0].capability_truth.support_state, "supported");
     assert.equal(menu.items[0].capability_truth.known_blocker, "live_executor_not_configured");

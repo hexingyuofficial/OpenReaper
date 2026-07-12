@@ -2,6 +2,11 @@ export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_CONTRACT = "alpha3.2e.media_plac
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID = "macro.media.place_assets";
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION = "1.0.0";
 
+export async function executeAlpha3_2EMediaPlaceAssetsMacro(options) {
+  const { executeAlpha3_2_5CProjectWriteMacro } = await import("./alpha3-2-5-c-project-write-runtime-v1.mjs");
+  return executeAlpha3_2_5CProjectWriteMacro(options);
+}
+
 const ALLOWED_INPUT_FIELDS = new Set(["assets", "dry_run", "compact_response"]);
 const ALLOWED_ASSET_FIELDS = new Set(["id", "path", "track_ref", "track_name", "create_track", "track_index", "position_seconds", "start_percent", "end_percent", "preserve_selection", "region", "take_name", "delete_source_media"]);
 const ALLOWED_REGION_FIELDS = new Set(["name", "start_seconds", "end_seconds", "color"]);
@@ -104,23 +109,24 @@ export function createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope({ request = 
   });
 }
 
-export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems() {
+export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
     title: "Place media assets",
-    summary: "Plan bounded probe, track resolve/create, import, optional region, and readback requests for media placement.",
+    summary: "Preview or execute bounded media probe, track resolve/create, import, optional region, and item/source readback through one registered Macro.",
     pack: "media",
     risk: "write",
     lifecycle: "accepted",
     entity_kind: "macro.media.place_assets",
-    tags: ["alpha3.2", "macro", "media", "import", "plan_only"],
+    tags: ["alpha3.2", "macro", "media", "import", "executable"],
     action_kind: "macro",
-    execution_shape: "plan_only_agent_executed_child_requests",
-    implementation_status: "plan_only_runtime_bound_preview_first",
+    execution_shape: "registered_macro_program",
+    implementation_status: "executable",
     runnable: true,
-    support_status: "plan_only_runtime_bound_preview_first",
+    support_status: "executable_runtime_bound",
     support_state: "supported_with_readback",
-    evidence_level: "runtime_bound_static_fake",
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true ? "runtime_bound_live_route_available" : "runtime_bound_executable",
     known_blocker: "Dry-run preview and media/item/source readback required before success wording",
     input_schema: {
       type: "object",
@@ -135,13 +141,14 @@ export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems() {
     output_schema: {
       type: "object",
       properties: {
-        mode: { enum: ["dry_run_preview", "plan_only_agent_executed_child_requests", "blocked"] },
-        preview: { type: "object" },
-        child_requests: { type: "array" },
-        typed_blockers: { type: "array" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
+        execution: { type: "object" },
+        result: { type: "object" },
       },
-      required: ["mode", "preview", "child_requests", "typed_blockers"],
-      additionalProperties: false,
+      required: ["contract", "ok", "macro", "execution", "result"],
+      additionalProperties: true,
     },
     examples: [{
       name: "place_two_assets",
@@ -261,12 +268,30 @@ function buildMutationRequests(assets) {
   const requests = [];
   let sequence = 1;
   for (const asset of assets) {
-    if (asset.create_track) requests.push(childRequest(sequence++, "mutation", CREATE_TRACK_ID, {}, compactObject({ name: asset.track_name, index: asset.track_index }), `Create target track for media asset ${asset.id}.`));
+    if (asset.create_track) {
+      requests.push(childRequest(
+        sequence++,
+        "mutation",
+        CREATE_TRACK_ID,
+        {},
+        compactObject({ name: asset.track_name, index: asset.track_index }),
+        `Create target track for media asset ${asset.id}.`,
+        { produces_local_id: asset.id },
+      ));
+    }
     const importId = asset.start_percent === null ? IMPORT_FILE_ID : IMPORT_SECTION_ID;
     const input = asset.start_percent === null
       ? { position_seconds: asset.position_seconds, preserve_selection: asset.preserve_selection }
       : { position_seconds: asset.position_seconds, start_percent: asset.start_percent, end_percent: asset.end_percent, preserve_selection: asset.preserve_selection };
-    requests.push(childRequest(sequence++, "mutation", importId, { track_ref: plannedTrackRef(asset), source_file_ref: plannedFileRef(asset) }, input, `Import media asset ${asset.id} to its planned target track.`));
+    requests.push(childRequest(
+      sequence++,
+      "mutation",
+      importId,
+      { track_ref: plannedTrackRef(asset), source_file_ref: plannedFileRef(asset) },
+      input,
+      `Import media asset ${asset.id} to its planned target track.`,
+      { produces_local_id: asset.id },
+    ));
     if (asset.region) requests.push(childRequest(sequence++, "mutation", CREATE_REGION_ID, {}, compactObject({ name: asset.region.name, start_seconds: asset.region.start_seconds, end_seconds: asset.region.end_seconds, color: asset.region.color }), `Create optional project region for media asset ${asset.id}.`));
   }
   return deepFreeze(requests);
@@ -362,8 +387,8 @@ function plannedFileRef(asset) { return `file:planned:${asset.id}`; }
 function plannedTrackRef(asset) { return asset.track_ref ?? `track:planned:${asset.id}`; }
 function plannedItemRef(asset) { return `item:planned:${asset.id}`; }
 
-function childRequest(sequence, stage, id, refs, input, purpose) {
-  return deepFreeze({ sequence, stage, tool: "call_template", id, refs: deepFreeze(refs), input: deepFreeze(input), purpose });
+function childRequest(sequence, stage, id, refs, input, purpose, extra = {}) {
+  return deepFreeze({ sequence, stage, tool: "call_template", id, refs: deepFreeze(refs), input: deepFreeze(input), purpose, ...extra });
 }
 
 function blocker(code, message, details = {}) {

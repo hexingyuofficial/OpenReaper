@@ -2,6 +2,11 @@ export const ALPHA3_2E_PROJECT_LAYOUT_MACRO_CONTRACT = "alpha3.2e.project_layout
 export const ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID = "macro.project.apply_layout";
 export const ALPHA3_2E_PROJECT_LAYOUT_MACRO_VERSION = "1.0.0";
 
+export async function executeAlpha3_2EProjectLayoutMacro(options) {
+  const { executeAlpha3_2_5CProjectWriteMacro } = await import("./alpha3-2-5-c-project-write-runtime-v1.mjs");
+  return executeAlpha3_2_5CProjectWriteMacro(options);
+}
+
 const ALLOWED_INPUT_FIELDS = new Set(["layout", "match_policy", "conflict_policy", "dry_run", "compact_response"]);
 const ALLOWED_ROW_FIELDS = new Set(["id", "kind", "name", "track_ref", "color", "parent_id", "index", "folder_depth"]);
 const ALLOWED_KINDS = new Set(["track", "folder"]);
@@ -116,28 +121,29 @@ export function createAlpha3_2EProjectLayoutMacroRuntimeEnvelope({ request = {},
   return deepFreeze(envelope);
 }
 
-export function createAlpha3_2EProjectLayoutMacroDiscoveryItems() {
+export function createAlpha3_2EProjectLayoutMacroDiscoveryItems(options = {}) {
   return [deepFreeze({
     id: ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID,
     title: "Apply project layout",
-    summary: "Plan-only layout macro that previews or emits ordered track/folder create, rename, color, move, and nesting child requests.",
+    summary: "Preview or execute bounded track/folder create, rename, color, move, and nesting through one registered Macro with structural readback.",
     pack: "project",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.project.apply_layout",
-    tags: ["macro", "project", "layout", "tracks", "folders", "alpha3_2e", "plan_only"],
+    tags: ["macro", "project", "layout", "tracks", "folders", "alpha3_2e", "executable"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "project_apply_layout",
     menu_group: "primary",
-    execution_shape: "plan_only_agent_executed_child_requests",
+    execution_shape: "registered_macro_program",
     user_label: "Apply project layout",
     task_intents: ["create track layout", "organize track folders", "apply track colors", "arrange track order"],
-    support_status: "plan_only_runtime_bound_preview_first",
+    support_status: "executable_runtime_bound",
+    implementation_status: "executable",
     support_state: "supported_with_readback",
     exists_in_catalog: true,
-    live_runnable_now: false,
-    evidence_level: "runtime_bound_static_fake",
+    live_runnable_now: options.liveRunnableNow === true,
+    evidence_level: options.liveRunnableNow === true ? "runtime_bound_live_route_available" : "runtime_bound_executable",
     known_blocker: null,
     allowed_live_group: null,
     inputSchema: {
@@ -154,22 +160,21 @@ export function createAlpha3_2EProjectLayoutMacroDiscoveryItems() {
     },
     outputSchema: {
       type: "object",
-      required: ["contract", "action_kind", "mode", "executed", "plan", "execution"],
+      required: ["contract", "ok", "macro", "execution", "result"],
       properties: {
-        contract: { const: ALPHA3_2E_PROJECT_LAYOUT_MACRO_CONTRACT },
-        action_kind: { const: "macro" },
-        mode: { enum: ["dry_run_preview", "plan_only_agent_executed_child_requests", "blocked"] },
-        executed: { const: false },
-        plan: { type: "object" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
         execution: { type: "object" },
+        result: { type: "object" },
       },
     },
     refs: { input: ["track_ref"], output: ["track_ref"] },
     expectedDelta: {
-      kind: "none_until_agent_executes_children",
-      action: "layout_plan",
-      entities: ["macro_plan", "track", "folder"],
-      summary: "Returns a layout preview or child-request plan only. It does not create, rename, move, color, or nest tracks itself.",
+      kind: "write",
+      action: "apply_project_layout",
+      entities: ["track", "folder"],
+      summary: "Executes the fixed bounded layout program and verifies the resulting track/folder structure.",
     },
     examples: [
       { input: { layout: [{ id: "drums", kind: "folder", name: "Drums" }, { id: "kick", kind: "track", name: "Kick", parent_id: "drums", color: "#C00000" }], dry_run: true } },

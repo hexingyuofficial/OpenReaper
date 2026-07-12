@@ -294,6 +294,7 @@ async function executeProjectQuery({
     catalog,
     executeAtomic,
     forceColdBundle: initialCold && refreshPolicy !== "never",
+    now,
   });
   stages.push(stageResult(
     "query-index-hydrate",
@@ -602,10 +603,12 @@ async function hydrateForQuery({
   catalog,
   executeAtomic,
   forceColdBundle,
+  now = () => new Date(),
 }) {
   const refreshPolicy = request.input?.refresh_policy ?? "if_stale";
+  const forceRefresh = refreshPolicy === "required" || refreshPolicy === "force_read_only_refresh";
   if (refreshPolicy === "never") return emptyHydration("Refresh policy forbids live hydration.");
-  if (plan.ok && !forceColdBundle) return emptyHydration("Matching fresh SQLite rows were reused.");
+  if (plan.ok && !forceColdBundle && !forceRefresh) return emptyHydration("Matching fresh SQLite rows were reused.");
   if (typeof executeAtomic !== "function") {
     return hydrationFailure(
       "PROJECT_INDEX_REFRESH_UNAVAILABLE",
@@ -617,6 +620,23 @@ async function hydrateForQuery({
   const artifactRefs = [];
   const evidenceRefs = [];
   const seen = new Set();
+  const objectRefs = new Map();
+  if (forceRefresh && !forceColdBundle) {
+    const scope = refreshScopeForEntity(request.input?.entity);
+    if (scope && typeof projectIndexRuntime?.invalidateScopes === "function") {
+      const invalidation = projectIndexRuntime.invalidateScopes({
+        scopes: [scope],
+        observed_at: safeNowIso(now),
+      });
+      if (invalidation?.ok === false) {
+        return hydrationFailure(
+          invalidation.blockers?.[0]?.code ?? "PROJECT_INDEX_FORCE_REFRESH_INVALIDATION_FAILED",
+          invalidation.blockers?.[0]?.message ?? "The requested Project Index scope could not be marked stale for forced read-only refresh.",
+          invalidation.blockers ?? [],
+        );
+      }
+    }
+  }
   if (forceColdBundle) {
     const cold = await runHydrationRequests({
       requests: [coldObservationBundleRequest(request.input?.limit)],
@@ -624,6 +644,7 @@ async function hydrateForQuery({
       projectIndexRuntime,
       executeAtomic,
       seen,
+      objectRefs,
     });
     if (!cold.ok) return cold;
     executions.push(...cold.executions);
@@ -653,6 +674,7 @@ async function hydrateForQuery({
       projectIndexRuntime,
       executeAtomic,
       seen,
+      objectRefs,
     });
     if (!refreshed.ok) {
       return { ...refreshed, executions: [...executions, ...refreshed.executions], artifactRefs: unique([...artifactRefs, ...refreshed.artifactRefs]), evidenceRefs: unique([...evidenceRefs, ...refreshed.evidenceRefs]) };
@@ -749,7 +771,7 @@ async function runRevisionProbe({ request, projectIndexRuntime, executeAtomic })
   };
 }
 
-async function runHydrationRequests({ requests, request, projectIndexRuntime, executeAtomic, seen = new Set() }) {
+async function runHydrationRequests({ requests, request, projectIndexRuntime, executeAtomic, seen = new Set(), objectRefs = new Map() }) {
   const executions = [];
   const artifactRefs = [];
   const evidenceRefs = [];
@@ -772,7 +794,7 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
     const execution = await executeAtomic({
       id: child.id,
       input: child.input ?? {},
-      refs: child.refs ?? [],
+      refs: materializeHydrationRefs(child.refs ?? [], objectRefs),
       context: request.context,
       budget: request.budget,
       observeProjectIndex: true,
@@ -788,6 +810,7 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
         evidenceRefs,
       });
     }
+    rememberHydrationObjectRefs(objectRefs, execution);
     const observation = execution?.result?.project_index_observation;
     if (observation?.ok !== true) {
       return hydrationFailure(
@@ -809,6 +832,53 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
       ? `Executed ${executions.length} bounded read-only Project Index refresh call(s).`
       : "No new refresh dependency was required.",
   };
+}
+
+function materializeHydrationRefs(refs, objectRefs) {
+  const visit = (value) => {
+    if (typeof value === "string") {
+      const objectRef = objectRefs.get(value);
+      return objectRef ? structuredClone(objectRef) : value;
+    }
+    if (Array.isArray(value)) return value.map(visit);
+    if (isObject(value) && typeof value.kind === "string" && typeof value.ref === "string") return structuredClone(value);
+    if (isObject(value)) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, visit(child)]));
+    return value;
+  };
+  return visit(refs);
+}
+
+function rememberHydrationObjectRefs(objectRefs, execution) {
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!isObject(value)) return;
+    if (typeof value.kind === "string" && typeof value.ref === "string") {
+      objectRefs.set(value.ref, structuredClone(value));
+      return;
+    }
+    Object.values(value).forEach(visit);
+  };
+  visit(execution?.result?.refs);
+  visit(execution?.result?.canonical_refs);
+}
+
+function refreshScopeForEntity(entity) {
+  return {
+    status: "project_head",
+    selected_context: "selection",
+    tracks: "tracks",
+    items: "items",
+    takes: "takes",
+    fx: "fx",
+    routing: "routing",
+    automation: "automation",
+    markers_regions: "markers",
+    media_sources: "media",
+    duplicates: "media",
+  }[entity] ?? null;
 }
 
 async function runDirectRead({ id, input, request, executeAtomic }) {

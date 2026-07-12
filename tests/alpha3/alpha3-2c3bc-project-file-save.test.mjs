@@ -122,17 +122,24 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
       "accepted_live_smoked",
     ]);
     const guide = createAlpha3_2AAgentContextMacroGuide();
-    assert.match(guide.project_file_posture.current_write_boundary, /macro\.project\.file is plan-only.*new\/open\/create.*remain held/);
+    assert.match(
+      guide.project_file_posture.current_write_boundary,
+      /macro\.project\.file executes.*save_current\/save_as.*new\/open\/create.*remain held/,
+    );
     const projectFileManual = runtime.list_templates({ ids: ["macro.project.file"], fields: ["id"] })
       .product_surface.agent_context_macro_guide.requested_expansions.items[0].action_manual;
-    assert.match(projectFileManual.required_readiness.join(" "), /accepted\/live-smoked.*explicitly and serially/);
+    assert.match(
+      projectFileManual.required_readiness.join(" "),
+      /accepted\/live-smoked.*Macro executes its fixed serial program internally/,
+    );
     assert.match(projectFileManual.input_shape.overwrite, /atomic overwrite=false remains held/);
     const invalidPlan = runtime.call_template({ id: "macro.project.file", input: {} });
     return invalidPlan.then((result) => {
       assert.equal(result.ok, false);
       assert.equal(result.error.code, "PROJECT_FILE_OPERATION_REQUIRED");
-      assert.equal(result.result.executed, false);
-      assert.equal(result.result.execution.executor_call_count, 0);
+      assert.equal(result.execution.status, "blocked");
+      assert.equal(result.execution.stage_count, 0);
+      assert.deepEqual(result.execution.stages, []);
     });
   });
 

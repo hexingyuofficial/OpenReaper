@@ -525,7 +525,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     };
     const applied = [];
     try {
-      const scopedResult = applyScopedProjection({ adapter, templateId, projection, readback, common });
+      const scopedResult = applyScopedProjection({ adapter, templateId, projection, readback, execution, common });
       if (scopedResult) {
         if (scopedResult.ok === false) throw new Error(scopedResult.blockers?.[0]?.code ?? "scoped_projection_failed");
         applied.push(...scopedResult.applied);
@@ -607,18 +607,67 @@ const STORE_METHODS = Object.freeze({
   selected_context: "replaceSelection",
 });
 
-function applyScopedProjection({ adapter, templateId, projection, readback, common }) {
+function applyScopedProjection({ adapter, templateId, projection, readback, execution, common }) {
   if (templateId === "template.project.read_summary") {
     const rows = mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, projection.scopes.selected_context ?? []);
     const result = adapter.replaceSelection({ ...common, rows, coverage_status: "head_only", freshness_status: "fresh" });
     return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["selected_context"] };
+  }
+  if (templateId === "template.tracks.list_tracks" || templateId === "template.tracks.read_mixer_controls") {
+    const snapshot = adapter.snapshot();
+    const existingRows = snapshot.rows?.tracks ?? [];
+    const incomingRows = mergeProjectedTrackRows(existingRows, projection.scopes.tracks ?? []);
+    const observation = isObject(execution?.project_index_observation_context)
+      ? execution.project_index_observation_context
+      : {};
+    const observationRefs = arrayOf(observation.refs);
+    const input = isObject(observation.input) ? observation.input : {};
+    const requestedSelectedOnly = templateId === "template.tracks.read_mixer_controls"
+      && observationRefs.length === 0
+      && input.include_selected === true;
+    const projectedCoverage = projection.coverage.tracks ?? "complete";
+    const completeProjectRead = observationRefs.length === 0
+      && !requestedSelectedOnly
+      && projectedCoverage === "complete";
+    const rows = completeProjectRead
+      ? incomingRows
+      : mergeTrackRowSets(existingRows, incomingRows);
+    const priorScope = snapshot.freshness_scopes?.tracks ?? {};
+    const coverage = completeProjectRead
+      ? projectedCoverage
+      : priorScope.status === "fresh" && priorScope.coverage_status === "complete"
+        ? "complete"
+        : projectedCoverage === "complete"
+          ? "partial"
+          : projectedCoverage;
+    const result = adapter.replaceTracks({
+      ...common,
+      rows,
+      coverage_status: coverage,
+      freshness_status: "fresh",
+    });
+    return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["tracks"] };
   }
   if (templateId === "template.fx.list_track_fx_chain" || templateId === "template.fx.list_take_fx_chain") {
     const rows = projection.scopes.fx ?? [];
     const ownerRef = stringOrNull(readback.owner_ref) ?? rows[0]?.owner_ref ?? null;
     if (!ownerRef) return { ok: false, blockers: [{ code: "OWNER_REF_REQUIRED", message: "FX scoped projection requires owner_ref.", recoverable: true }] };
     const result = adapter.replaceFxForOwner({ ...common, owner_ref: ownerRef, rows, coverage_status: projection.coverage.fx ?? "complete", freshness_status: "fresh" });
-    return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["fx"] };
+    if (result?.ok === false) return { ok: false, blockers: result.blockers ?? [], applied: [] };
+    const derived = templateId === "template.fx.list_track_fx_chain"
+      ? syncTrackDerivedCount({
+          adapter,
+          trackRef: ownerRef,
+          field: "fx_count",
+          count: Number.isInteger(readback.fx_count) ? readback.fx_count : rows.length,
+          common,
+        })
+      : { ok: true, applied: false, blockers: [] };
+    return {
+      ok: derived.ok,
+      blockers: derived.blockers,
+      applied: derived.applied ? ["fx", "tracks"] : ["fx"],
+    };
   }
   if (templateId === "template.fx.read_fx_summary") {
     const rows = projection.scopes.fx ?? [];
@@ -640,6 +689,63 @@ function applyScopedProjection({ adapter, templateId, projection, readback, comm
     return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["items", "takes"] };
   }
   return null;
+}
+
+function mergeProjectedTrackRows(existingRows, incomingRows) {
+  const existingByRef = new Map(arrayOf(existingRows).map((row) => [row.ref, row]));
+  return arrayOf(incomingRows).map((row) => {
+    const previous = existingByRef.get(row.ref);
+    if (!previous) return row;
+    const summary = isObject(row.summary) ? row.summary : {};
+    return {
+      ...row,
+      folder_depth: Object.hasOwn(summary, "folder_depth") ? row.folder_depth : previous.folder_depth,
+      item_count: Object.hasOwn(summary, "item_count") ? row.item_count : previous.item_count,
+      fx_count: Object.hasOwn(summary, "fx_count") ? row.fx_count : previous.fx_count,
+      send_count: Object.hasOwn(summary, "send_count") ? row.send_count : previous.send_count,
+    };
+  });
+}
+
+function syncTrackDerivedCount({ adapter, trackRef, field, count, common }) {
+  if (typeof trackRef !== "string" || !trackRef.startsWith("track:") || !Number.isInteger(count) || count < 0) {
+    return { ok: true, applied: false, blockers: [] };
+  }
+  const snapshot = adapter.snapshot();
+  const existingRows = arrayOf(snapshot.rows?.tracks);
+  if (!existingRows.some((row) => row.ref === trackRef)) return { ok: true, applied: false, blockers: [] };
+  const priorScope = snapshot.freshness_scopes?.tracks ?? {};
+  const rows = existingRows.map((row) => row.ref === trackRef
+    ? {
+        ...row,
+        snapshot_id: common.snapshot_id,
+        [field]: count,
+        summary: { ...(isObject(row.summary) ? row.summary : {}), [field]: count },
+      }
+    : { ...row, snapshot_id: common.snapshot_id });
+  const result = adapter.replaceTracks({
+    ...common,
+    rows,
+    scope_ref: priorScope.scope_ref ?? "project",
+    freshness_status: priorScope.status ?? "unknown",
+    coverage_status: priorScope.coverage_status ?? "partial",
+    source_template_id: priorScope.source_template_id ?? "template.tracks.list_tracks",
+  });
+  return {
+    ok: result?.ok !== false,
+    applied: result?.ok !== false,
+    blockers: result?.blockers ?? [],
+  };
+}
+
+function mergeTrackRowSets(existingRows, incomingRows) {
+  const incomingByRef = new Map(arrayOf(incomingRows).map((row) => [row.ref, row]));
+  const merged = arrayOf(existingRows).map((row) => incomingByRef.get(row.ref) ?? row);
+  const existingRefs = new Set(arrayOf(existingRows).map((row) => row.ref));
+  for (const row of arrayOf(incomingRows)) {
+    if (!existingRefs.has(row.ref)) merged.push(row);
+  }
+  return merged;
 }
 
 function projectReadback(templateId, readback, projectRef) {

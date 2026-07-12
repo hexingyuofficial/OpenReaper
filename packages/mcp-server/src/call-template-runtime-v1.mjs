@@ -33,6 +33,8 @@ import {
   validateMacroExecutionEnvelope,
 } from "./macro-runtime-contract-v1.mjs";
 import {
+  ALPHA3_2_5_B_PROJECT_INDEX_RUNTIME_CAPABILITY,
+  ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
   executeAlpha3_2_5BProjectUnderstandingMacro,
   isAlpha3_2_5BProjectUnderstandingMacroId,
 } from "./alpha3-2-5-b-project-understanding-v1.mjs";
@@ -66,6 +68,7 @@ import {
   planAlpha3C3ProjectIndexQueryMacro,
 } from "./alpha3-c3-project-index-query-v1.mjs";
 import {
+  ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
   ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
 } from "./alpha3-2d-project-index-runtime-v1.mjs";
 import {
@@ -74,16 +77,27 @@ import {
 } from "./alpha3-l3-project-index-user-flow-v1.mjs";
 import {
   ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY,
-  createAlpha3C5MacroRuntimeEnvelope,
+  ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
   createAlpha3C5OfficialMacroDiscoveryItems,
+  isAlpha3_2_5CLegacyControlMacroId,
+  isAlpha3_2_5CWithdrawnControlMacroId,
   isAlpha3C5OfficialMacroId,
-  planAlpha3C5GenericControlMacro,
+  targetKindForAlpha3_2_5CLegacyControlMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
+import {
+  executeAlpha3_2_5CControlMacro,
+  ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
+  ALPHA3_2_5_C_CONTROL_REGISTRY,
+  ALPHA3_2_5_C_PROJECT_UNDERSTANDING_CAPABILITY,
+  ALPHA3_2_5_C_STOCK_PLUGIN_EXECUTOR_CAPABILITY,
+  isAlpha3_2_5CExecutableControlMacroId,
+} from "./alpha3-2-5-c-control-runtime-v1.mjs";
 import {
   ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
   summarizeAlpha3L4MacroExecutionConvenience,
 } from "./alpha3-l4-macro-execution-convenience-v1.mjs";
 import {
+  ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
   ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY,
   createAlpha3E1OfficialMacroDiscoveryItems,
   createAlpha3E1StockPluginRuntimeEnvelope,
@@ -110,44 +124,56 @@ import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
 import {
+  ALPHA3_2E_PROJECT_INSPECT_MACRO_ID,
   createAlpha3_2EProjectInspectMacroDiscoveryItems,
 } from "./alpha3-2e-small-macro-spine-v1.mjs";
 import {
+  ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID,
   createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems,
   createAlpha3_2EProjectDeleteTargetsMacroRuntimeEnvelope,
   isAlpha3_2EProjectDeleteTargetsMacroId,
   planAlpha3_2EProjectDeleteTargetsMacro,
 } from "./alpha3-2e-project-delete-targets-v1.mjs";
 import {
+  ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID,
   createAlpha3_2EProjectLayoutMacroDiscoveryItems,
   createAlpha3_2EProjectLayoutMacroRuntimeEnvelope,
   isAlpha3_2EProjectLayoutMacroId,
   planAlpha3_2EProjectLayoutMacro,
 } from "./alpha3-2e-project-layout-v1.mjs";
 import {
+  ALPHA3_2E_ROUTING_APPLY_MACRO_ID,
   createAlpha3_2ERoutingApplyMacroDiscoveryItems,
   createAlpha3_2ERoutingApplyMacroRuntimeEnvelope,
   isAlpha3_2ERoutingApplyMacroId,
   planAlpha3_2ERoutingApplyMacro,
 } from "./alpha3-2e-routing-apply-v1.mjs";
 import {
+  ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
   createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems,
   createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope,
   isAlpha3_2EMediaPlaceAssetsMacroId,
   planAlpha3_2EMediaPlaceAssetsMacro,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
 import {
+  ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
+  ALPHA3_2E_RENDER_TARGETS_MACRO_ID,
   createAlpha3_2ERenderTargetsMacroDiscoveryItems,
-  createAlpha3_2ERenderTargetsMacroRuntimeEnvelope,
+  executeAlpha3_2_5CRenderTargetsMacro,
   isAlpha3_2ERenderTargetsMacroId,
-  planAlpha3_2ERenderTargetsMacro,
 } from "./alpha3-2e-render-targets-v1.mjs";
 import {
+  ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
+  ALPHA3_2C3D_PROJECT_FILE_MACRO_ID,
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
-  createAlpha3_2C3DProjectFileMacroRuntimeEnvelope,
+  executeAlpha3_2_5CProjectFileMacro,
   isAlpha3_2C3DProjectFileMacroId,
-  planAlpha3_2C3DProjectFileMacro,
 } from "./alpha3-2c3d-project-file-macro-v1.mjs";
+import {
+  ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY,
+  executeAlpha3_2_5CProjectWriteMacro,
+  isAlpha3_2_5CProjectWriteMacroId,
+} from "./alpha3-2-5-c-project-write-runtime-v1.mjs";
 import {
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -195,6 +221,7 @@ export const CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS = deepFreeze([
 
 export const CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES = deepFreeze([
   "available_now",
+  "needs_live",
   "needs_ref",
   "needs_confirmation",
   "bug_known",
@@ -204,6 +231,7 @@ export const CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES = deepFreeze([
 export const CALL_TEMPLATE_RUNTIME_PRODUCT_LABEL_VALUES = deepFreeze([
   "Ready now",
   "Ready after input",
+  "Start or reconnect OpenReaper",
   "Select or resolve an object first",
   "Ask before changing the project",
   "Known bug",
@@ -790,6 +818,7 @@ export const CALL_TEMPLATE_RUNTIME_ERROR_CODES = Object.freeze([
   "CALL_TEMPLATE_ID_SEED_ONLY",
   "CALL_TEMPLATE_ID_HELD",
   "CALL_TEMPLATE_ID_REPLACED",
+  "CALL_TEMPLATE_ID_WITHDRAWN",
   "CALL_TEMPLATE_ID_UNKNOWN",
   "CALL_TEMPLATE_LIVE_EXECUTOR_NOT_CONFIGURED",
   "CALL_TEMPLATE_LIVE_ID_NOT_ALLOWED",
@@ -835,6 +864,17 @@ const RAW_EXECUTION_ID_PATTERNS = Object.freeze([
 ]);
 const DEFAULT_EVIDENCE_LIMIT = 100;
 const MAX_EVIDENCE_LIMIT = 1_000;
+const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
+  ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
+  ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY,
+  ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
+  ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
+  ALPHA3_2_5_C_CONTROL_REGISTRY,
+]);
+const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
+  ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
+  ALPHA3_2_5_C_STOCK_PLUGIN_EXECUTOR_CAPABILITY,
+]);
 
 export class CallTemplateRuntimeError extends Error {
   constructor(code, message, options = {}) {
@@ -887,21 +927,32 @@ export function createCallTemplateRuntime(options = {}) {
     ? options.projectIndexArtifactReader
     : null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
-  const legacyProjectIndexCompatibilityDiscovery = createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog })
-    .filter((item) => item.id === "macro.selected_context");
+  const legacyProjectIndexCompatibilityDiscovery = [];
+  const macroDiscovery = (id, createItems) => {
+    const readiness = runtimeMacroLiveReadiness({ id, live, projectIndexRuntime });
+    return createItems({ liveRunnableNow: readiness.live_runnable_now }).map((item) => deepFreeze({
+      ...item,
+      live_runnable_now: readiness.live_runnable_now,
+      known_blocker: readiness.live_runnable_now
+        ? null
+        : readiness.known_blocker ?? item.known_blocker ?? "macro_fixed_dependencies_not_available",
+    }));
+  };
   const executableDiscoveryTemplates = [
-    ...createAlpha3_2EProjectInspectMacroDiscoveryItems({ liveRunnableNow: live.enabled }),
-    ...createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(),
-    ...createAlpha3_2EProjectLayoutMacroDiscoveryItems(),
-    ...createAlpha3_2ERoutingApplyMacroDiscoveryItems(),
-    ...createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems(),
-    ...createAlpha3_2ERenderTargetsMacroDiscoveryItems(),
+    ...macroDiscovery(ALPHA3_2E_PROJECT_INSPECT_MACRO_ID, createAlpha3_2EProjectInspectMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID, createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID, createAlpha3_2EProjectLayoutMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2E_ROUTING_APPLY_MACRO_ID, createAlpha3_2ERoutingApplyMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2E_RENDER_TARGETS_MACRO_ID, createAlpha3_2ERenderTargetsMacroDiscoveryItems),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
-    ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
-    ...createAlpha3_2DGenericProjectQueryDiscoveryItems({ liveRunnableNow: live.enabled }),
+    ...macroDiscovery(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, createAlpha3_2C3DProjectFileMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2D_GENERIC_PROJECT_QUERY_ID, createAlpha3_2DGenericProjectQueryDiscoveryItems),
     ...legacyProjectIndexCompatibilityDiscovery,
-    ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
-    ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
+    ...macroDiscovery(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, (runtimeOptions) =>
+      createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
+    ...macroDiscovery(ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID, (runtimeOptions) =>
+      createAlpha3C5OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
     ...catalogDiscoveryTemplates,
   ];
 
@@ -916,9 +967,10 @@ export function createCallTemplateRuntime(options = {}) {
   }) {
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
+    const normalizedInput = await preflightTemplateInput(id, input, budget);
     const execution = await executeTemplate({
       descriptor,
-      input: await preflightTemplateInput(id, input, budget),
+      input: normalizedInput,
       refs,
       context,
       budget,
@@ -931,6 +983,8 @@ export function createCallTemplateRuntime(options = {}) {
       id,
       projectIndexRuntime,
       projectIndexArtifactReader,
+      observationInput: normalizedInput,
+      observationRefs: refs,
     });
   }
 
@@ -939,90 +993,45 @@ export function createCallTemplateRuntime(options = {}) {
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
+      const macroAtomic = live.enabled || options.executor
+        ? createMacroAtomicExecutor(executeAcceptedAtomic, normalized.context)
+        : null;
       if (isAlpha3_2_5BProjectUnderstandingMacroId(id)) {
         const envelope = await executeAlpha3_2_5BProjectUnderstandingMacro({
           request: normalized,
           projectIndexRuntime,
           catalog,
-          executeAtomic: live.enabled || options.executor ? executeAcceptedAtomic : null,
+          executeAtomic: macroAtomic,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
-      if (isAlpha3_2EProjectDeleteTargetsMacroId(id)) {
-        const plan = planAlpha3_2EProjectDeleteTargetsMacro(normalized.input, {
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2EProjectDeleteTargetsMacroRuntimeEnvelope({
+      if (isAlpha3_2_5CProjectWriteMacroId(id)) {
+        const envelope = await executeAlpha3_2_5CProjectWriteMacro({
           request: normalized,
-          plan,
-          now,
-        });
-        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
-      }
-      if (isAlpha3_2EProjectLayoutMacroId(id)) {
-        const plan = planAlpha3_2EProjectLayoutMacro(normalized.input, {
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2EProjectLayoutMacroRuntimeEnvelope({
-          request: normalized,
-          plan,
-          now,
-        });
-        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
-      }
-      if (isAlpha3_2ERoutingApplyMacroId(id)) {
-        const plan = planAlpha3_2ERoutingApplyMacro(normalized.input, {
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2ERoutingApplyMacroRuntimeEnvelope({
-          request: normalized,
-          plan,
-          now,
-        });
-        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
-      }
-      if (isAlpha3_2EMediaPlaceAssetsMacroId(id)) {
-        const plan = planAlpha3_2EMediaPlaceAssetsMacro(normalized.input, {
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope({
-          request: normalized,
-          plan,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
       if (isAlpha3_2ERenderTargetsMacroId(id)) {
-        const plan = planAlpha3_2ERenderTargetsMacro(normalized.input, {
-          refs: normalized.refs,
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({
+        const envelope = await executeAlpha3_2_5CRenderTargetsMacro({
           request: normalized,
-          plan,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
       if (isAlpha3_2C3DProjectFileMacroId(id)) {
-        const plan = planAlpha3_2C3DProjectFileMacro(normalized.input, {
-          refs_provided: Array.isArray(normalized.refs)
-            ? normalized.refs.length > 0
-            : isPlainObject(normalized.refs)
-              ? Object.keys(normalized.refs).length > 0
-              : normalized.refs !== undefined && normalized.refs !== null,
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2C3DProjectFileMacroRuntimeEnvelope({
+        const envelope = await executeAlpha3_2_5CProjectFileMacro({
           request: normalized,
-          plan,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
@@ -1057,6 +1066,21 @@ export function createCallTemplateRuntime(options = {}) {
           },
         );
       }
+      if (id === "macro.selected_context") {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_REPLACED",
+          "macro.selected_context is consolidated into macro.project.query with entity=selected_context.",
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              replacement: ALPHA3_2D_GENERIC_PROJECT_QUERY_ID,
+              replacement_input: { entity: "selected_context" },
+            },
+          },
+        );
+      }
       if (isAlpha3C3OfficialQueryMacroId(id)) {
         const plan = planAlpha3C3ProjectIndexQueryMacro(id, {
           ...normalized.input,
@@ -1072,38 +1096,50 @@ export function createCallTemplateRuntime(options = {}) {
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
-      if (isAlpha3C5OfficialMacroId(id)) {
-        const plan = planAlpha3C5GenericControlMacro(id, {
-          refs: normalized.input?.refs ?? normalizeAlpha3C5MacroRefs(id, normalized.refs),
-          fields: normalized.input?.fields,
-        });
-        const envelope = createAlpha3C5MacroRuntimeEnvelope({
+      if (isAlpha3_2_5CExecutableControlMacroId(id)) {
+        const envelope = await executeAlpha3_2_5CControlMacro({
           request: normalized,
-          plan,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
+          catalog,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
-      if (isAlpha3E1OfficialMacroId(id)) {
-        const plan = planAlpha3E1StockPluginMacro(id, {
-          plugin: normalized.input?.plugin,
-          plugin_id: normalized.input?.plugin_id,
-          plugin_name: normalized.input?.plugin_name,
-          controls: normalized.input?.controls,
-          starter_action: normalized.input?.starter_action,
-          action_parameters: normalized.input?.action_parameters,
-          control_overrides: normalized.input?.control_overrides,
-          parameter_metadata: normalized.input?.parameter_metadata,
-          refs: normalized.refs,
-        });
-        const envelope = createAlpha3E1StockPluginRuntimeEnvelope({
-          request: normalized,
-          plan,
-          now,
-        });
-        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
+      if (isAlpha3_2_5CLegacyControlMacroId(id)) {
+        const targetKind = targetKindForAlpha3_2_5CLegacyControlMacro(id);
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_REPLACED",
+          `${id} is consolidated into macro.controls.set.`,
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              replacement: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+              replacement_input: {
+                target_kind: targetKind,
+                fields: normalized.input?.fields ?? {},
+              },
+            },
+          },
+        );
+      }
+      if (isAlpha3_2_5CWithdrawnControlMacroId(id)) {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_WITHDRAWN",
+          "macro.set_midi_controls is withdrawn; use explicit accepted MIDI task Macros when available.",
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              implementation_status: "withdrawn",
+              future_candidates: ["macro.midi.create_clip", "macro.midi.edit_notes"],
+            },
+          },
+        );
       }
       const observedExecution = await executeAcceptedAtomic({
         id,
@@ -1155,12 +1191,18 @@ async function observeProjectIndexExecution({
   id,
   projectIndexRuntime,
   projectIndexArtifactReader,
+  observationInput,
+  observationRefs,
 }) {
   if (!projectIndexRuntime || !ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.includes(id) || execution?.ok !== true) {
     return execution;
   }
   const initialObservation = projectIndexRuntime.observeSuccessfulTemplateExecution({
     ...execution,
+    project_index_observation_context: {
+      input: cloneJson(observationInput ?? {}),
+      refs: cloneJson(observationRefs ?? []),
+    },
     identity: {
       ...projectIndexRuntime.identity,
       session_id: projectIndexRuntime.session_id,
@@ -1956,6 +1998,82 @@ function acceptedCatalogSummary(catalog) {
   });
 }
 
+function createMacroAtomicExecutor(executeAtomic, parentContext) {
+  let childIndex = 0;
+  return (childRequest = {}) => {
+    childIndex += 1;
+    const sourceContext = isPlainObject(childRequest.context)
+      ? childRequest.context
+      : isPlainObject(parentContext)
+        ? parentContext
+        : {};
+    const baseTime = new Date(sourceContext.created_at ?? Date.now()).getTime();
+    const childCreatedAt = new Date(
+      (Number.isFinite(baseTime) ? baseTime : Date.now()) + childIndex,
+    ).toISOString();
+    return executeAtomic({
+      ...childRequest,
+      context: {
+        ...sourceContext,
+        created_at: childCreatedAt,
+      },
+    });
+  };
+}
+
+function runtimeMacroLiveReadiness({ id, live, projectIndexRuntime }) {
+  if (!live.opted_in || !live.enabled) {
+    return deepFreeze({
+      live_runnable_now: false,
+      known_blocker: "live_executor_not_configured",
+    });
+  }
+
+  const entry = PUBLIC_MACRO_PROGRAM_REGISTRIES
+    .map((registry) => registry.get(id))
+    .find(Boolean) ?? null;
+  if (!entry) {
+    return deepFreeze({
+      live_runnable_now: false,
+      known_blocker: "macro_program_not_registered",
+    });
+  }
+
+  const missingTemplateIds = entry.dependencies.template_ids
+    .filter((templateId) => !live.allowedTemplateIdSet.has(templateId));
+  const availableRuntimeCapabilities = new Set(IN_PROCESS_MACRO_RUNTIME_CAPABILITIES);
+  if (projectIndexRuntimeReady(projectIndexRuntime)) {
+    availableRuntimeCapabilities.add(ALPHA3_2_5_B_PROJECT_INDEX_RUNTIME_CAPABILITY);
+    availableRuntimeCapabilities.add(ALPHA3_2_5_C_PROJECT_UNDERSTANDING_CAPABILITY);
+  }
+  const missingRuntimeCapabilities = entry.dependencies.runtime_capabilities
+    .filter((capability) => !availableRuntimeCapabilities.has(capability));
+
+  if (missingTemplateIds.length > 0 || missingRuntimeCapabilities.length > 0) {
+    return deepFreeze({
+      live_runnable_now: false,
+      known_blocker: "macro_fixed_dependencies_not_available",
+    });
+  }
+  return deepFreeze({ live_runnable_now: true, known_blocker: null });
+}
+
+function projectIndexRuntimeReady(runtime) {
+  if (runtime?.contract !== ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT
+    || runtime.ok !== true
+    || !runtime.adapter
+    || typeof runtime.status !== "function") return false;
+  try {
+    const status = runtime.status();
+    return status?.contract === ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT
+      && status.ok === true
+      && status.lifecycle !== "closed"
+      && status.lifecycle !== "stale_session";
+  } catch {
+    return false;
+  }
+}
+
 function runtimeCatalogDiscoveryTemplates(catalog, live) {
   return catalog.list().map((descriptor) => {
     const allowedGroup = liveAllowedGroupForTemplateId(descriptor.id);
@@ -2236,6 +2354,7 @@ function runtimeActionStatus(item) {
   const blocker = typeof item.known_blocker === "string" ? item.known_blocker : null;
   if (blocker?.startsWith("known_bug:")) return "bug_known";
   if (item.support_state === "blocked") return "blocked";
+  if (item.execution_shape === "registered_macro_program" && item.live_runnable_now !== true) return "needs_live";
   if (item.live_runnable_now !== true && !runtimeActionIsPlanOnlyMacro(item)) return "blocked";
   if (inputRefDeclarations(item).some((ref) => ref.required === true)) return "needs_ref";
   if (runtimeActionNeedsConfirmation(item)) return "needs_confirmation";
@@ -2263,7 +2382,7 @@ function runtimeActionUserMessage(item, currentStatus) {
       ? "Ready to execute one registered bounded Macro program through call_template."
       : "Ready to return a plan-only macro bundle through call_template; child actions still run as accepted template calls.";
   }
-  if (item.execution_shape === "registered_macro_program" && currentStatus === "blocked") {
+  if (item.execution_shape === "registered_macro_program" && currentStatus === "needs_live") {
     return "This executable Macro needs the configured OpenReaper live route before its bounded program can run.";
   }
   if (currentStatus === "available_now") {
@@ -2296,6 +2415,7 @@ function runtimeBeginnerLabel(item, currentStatus) {
   if (currentStatus === "available_now" && requiredInputFields(item).length > 0) return "Ready after input";
   return ({
     available_now: "Ready now",
+    needs_live: "Start or reconnect OpenReaper",
     needs_ref: "Select or resolve an object first",
     needs_confirmation: "Ask before changing the project",
     bug_known: "Known bug",
@@ -2321,7 +2441,7 @@ function runtimeNextStep(item, currentStatus) {
     }
     return "Call this macro id through call_template to get child call_template requests, typed blockers, and readback requirements.";
   }
-  if (item.execution_shape === "registered_macro_program" && currentStatus === "blocked") {
+  if (item.execution_shape === "registered_macro_program" && currentStatus === "needs_live") {
     return "Start or reconnect the managed OpenReaper bridge, then call this Macro through call_template.";
   }
   if (currentStatus === "blocked") {
@@ -2423,6 +2543,9 @@ function runtimeFixtureRequirements(item, currentStatus) {
       ? item.known_blocker
       : "live_executor_or_allowed_group_required";
     return [blocker];
+  }
+  if (currentStatus === "needs_live") {
+    return ["managed_openreaper_bridge_required"];
   }
   const requirements = [];
   for (const ref of inputRefDeclarations(item).filter((entry) => entry.required === true)) {

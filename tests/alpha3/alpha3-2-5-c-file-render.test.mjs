@@ -1,0 +1,356 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
+import {
+  ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
+  executeAlpha3_2_5CProjectFileMacro,
+} from "../../packages/mcp-server/src/alpha3-2c3d-project-file-macro-v1.mjs";
+import {
+  ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
+  executeAlpha3_2_5CRenderTargetsMacro,
+} from "../../packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs";
+import {
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+  createCallTemplateRuntime,
+} from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
+
+const now = () => new Date("2026-07-12T00:00:00.000Z");
+
+function atomicExecution(result = {}, ok = true, requestId = null) {
+  return { contract: "template.execution.v1", ok, ...(requestId ? { request: { id: requestId } } : {}), result, error: ok ? null : { code: "ATOMIC_FAILED", message: "atomic failed" } };
+}
+
+function verifiedRenderResult(overrides = {}) {
+  const manifestRef = "artifact:render:manifest";
+  const evidenceRef = "artifact:render:evidence";
+  const jobRef = "job:job_id:render.targets.test";
+  return {
+    ...overrides,
+    data: {
+      job_ref: jobRef,
+      output_artifact_ref: manifestRef,
+      evidence_artifact_ref: evidenceRef,
+      file_count: 1,
+      outputs: [{ absolute_path: "/managed/renders/trial.wav", size: 4096, extension: "wav" }],
+      ...overrides.data,
+    },
+    refs: overrides.refs ?? [
+      { kind: "artifact", ref: manifestRef },
+      { kind: "artifact", ref: evidenceRef },
+      { kind: "job", ref: jobRef },
+    ],
+    artifacts: overrides.artifacts ?? [{ kind: "artifact", ref: manifestRef }, { kind: "artifact", ref: evidenceRef }],
+    jobs: overrides.jobs ?? [{ kind: "job", ref: jobRef }],
+    verification: Object.hasOwn(overrides, "verification")
+      ? overrides.verification
+      : { status: "passed", evidence_refs: [evidenceRef] },
+  };
+}
+
+describe("Alpha3.2.5-C executable file/render Macros", () => {
+  it("registers exactly the two fixed executable programs", () => {
+    assert.deepEqual(ALPHA3_2_5_C_FILE_MACRO_REGISTRY.ids, ["macro.project.file"]);
+    assert.deepEqual(ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY.ids, ["macro.render.targets"]);
+    for (const entry of [...ALPHA3_2_5_C_FILE_MACRO_REGISTRY.entries, ...ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY.entries]) {
+      assert.equal(entry.contract, "macro.program.registry.v1");
+      assert.equal(entry.implementation_status, "executable");
+      assert.equal(entry.stages.every((stage) => stage.stop_on_error), true);
+      assert.equal(entry.dependencies.template_ids.length > 0, true);
+    }
+  });
+
+  it("allocates a unique bridge request identity for repeated identical dependencies inside one Macro", async () => {
+    const requests = [];
+    const fake = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    let saved = false;
+    const executor = {
+      dispatch(request) {
+        requests.push(structuredClone(request));
+        const response = structuredClone(fake.dispatch(request));
+        if (request.operation.name === "project.read_current_project_path") {
+          response.result.summary = {
+            has_project_path: true,
+            path_state: "saved_project",
+            path: "/tmp/current.RPP",
+          };
+        } else if (request.operation.name === "project.read_dirty_state") {
+          response.result.summary = saved
+            ? { raw_dirty_state: 0, dirty_state: "clean", dirty: false }
+            : { raw_dirty_state: 1, dirty_state: "dirty", dirty: true };
+        } else if (request.pack.capability === "project.save_current_project") {
+          saved = true;
+          response.result.summary = { saved: true };
+        }
+        return response;
+      },
+    };
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const response = await runtime.call_template({
+      id: "macro.project.file",
+      input: { operation: "save_current" },
+      context: {
+        client_id: "macro-child-id-test",
+        session_id: "macro-child-id-test",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: "2026-07-12T00:00:00.000Z",
+        request_sequence: 1,
+      },
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(requests.length, 5);
+    assert.equal(new Set(requests.map((request) => request.id)).size, requests.length);
+    assert.equal(new Set(requests.map((request) => request.created_at)).size, requests.length);
+  });
+
+  it("executes save_as serially and verifies exact path and clean dirty state", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-1", input: { operation: "save_as", target_path: "/tmp/trial.RPP", overwrite: true, dry_run: false } },
+      now,
+      executeAtomic: async ({ id, input }) => {
+        calls.push({ id, input });
+        if (id === "template.project.read_current_project_path") {
+          return atomicExecution({ readback: calls.length > 3
+            ? { has_project_path: true, path_state: "saved_project", path: "/tmp/trial.RPP" }
+            : { has_project_path: false, path_state: "unsaved_project", path: "" } }, true, `child-${calls.length}`);
+        }
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: calls.length === 2
+          ? { raw_dirty_state: 1, dirty_state: "dirty", dirty: true }
+          : { raw_dirty_state: 0, dirty_state: "clean", dirty: false } }, true, `child-${calls.length}`);
+        return atomicExecution({ summary: { saved: true }, changes: [{ kind: "project_file", action: "save_as" }] }, true, `child-${calls.length}`);
+      },
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.execution.status, "completed");
+    assert.deepEqual(calls.map(({ id }) => id), [
+      "template.project.read_current_project_path",
+      "template.project.read_dirty_state",
+      "template.project.save_project_as",
+      "template.project.read_current_project_path",
+      "template.project.read_dirty_state",
+    ]);
+    assert.equal(response.result.data.path_after, "/tmp/trial.RPP");
+    assert.deepEqual(response.result.verification.evidence_refs, ["child-1", "child-2", "child-3", "child-4", "child-5"]);
+    assert.deepEqual(response.execution.stages.at(-1).evidence_refs, response.result.verification.evidence_refs);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("dry-runs the same save program without executing mutation", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-dry", input: { operation: "save_current", dry_run: true } },
+      now,
+      executeAtomic: async ({ id }) => {
+        calls.push(id);
+        return id.endsWith("path")
+          ? atomicExecution({ readback: { has_project_path: true, path_state: "saved_project", path: "/tmp/current.RPP" } })
+          : atomicExecution({ readback: { raw_dirty_state: 1, dirty_state: "dirty", dirty: true } });
+      },
+    });
+    assert.equal(response.ok, true);
+    assert.equal(response.execution.status, "dry_run_completed");
+    assert.deepEqual(calls, ["template.project.read_current_project_path", "template.project.read_dirty_state"]);
+  });
+
+  it("stops on the first failed preflight and never calls the save template", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-fail", input: { operation: "save_current" } },
+      now,
+      executeAtomic: async ({ id }) => {
+        calls.push(id);
+        return atomicExecution({}, false);
+      },
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "failed");
+    assert.deepEqual(calls, ["template.project.read_current_project_path"]);
+  });
+
+  it("renders through one audited atomic route and preserves returned evidence", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: "render-1", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
+      now,
+      executeAtomic: async ({ id, input }) => {
+        calls.push({ id, input });
+        return atomicExecution(verifiedRenderResult({
+          data: { retained_project_path: "/tmp/trial.RPP", dirty_before: true, dirty_after: true, save_recommendation: "save_after_render" },
+        }));
+      },
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map(({ id }) => id), ["template.render.render_targets"]);
+    assert.equal(response.result.data.outputs[0].absolute_path, "/managed/renders/trial.wav");
+    assert.equal(response.result.data.save_recommendation, "save_after_render");
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("rejects idempotency keys before calling the non-idempotent render route", async () => {
+    let calls = 0;
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: { idempotency_key: "render-once", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
+      now,
+      executeAtomic: async () => { calls += 1; return atomicExecution(verifiedRenderResult()); },
+    });
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "RENDER_IDEMPOTENCY_KEY_UNSUPPORTED");
+    assert.equal(calls, 0);
+  });
+
+  it("fails closed when the audited render result omits required completion evidence", async () => {
+    const cases = [
+      ["verification", { verification: undefined }, "RENDER_VERIFICATION_FAILED"],
+      ["manifest", { data: { output_artifact_ref: undefined } }, "RENDER_MANIFEST_ARTIFACT_REQUIRED"],
+      ["evidence", { data: { evidence_artifact_ref: undefined } }, "RENDER_EVIDENCE_ARTIFACT_REQUIRED"],
+      ["job", { data: { job_ref: undefined }, jobs: [], refs: [] }, "RENDER_JOB_REF_REQUIRED"],
+      ["outputs", { data: { file_count: 0, outputs: [] } }, "RENDER_OUTPUTS_REQUIRED"],
+    ];
+    for (const [name, overrides, code] of cases) {
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: { request_id: `render-missing-${name}`, input: { target_kind: "whole_project", format: "wav", dry_run: false } },
+        now,
+        executeAtomic: async () => atomicExecution(verifiedRenderResult(overrides)),
+      });
+      assert.equal(response.ok, false, name);
+      assert.equal(response.error.code, code, name);
+    }
+  });
+
+  it("projects the live D31 summary, artifacts, jobs, outputs, and verification", async () => {
+    const manifest = { kind: "artifact", ref: "artifact:render:manifest", identity: { scheme: "artifact_ref", value: "artifact:render:manifest" } };
+    const evidence = { kind: "artifact", ref: "artifact:render:evidence", identity: { scheme: "artifact_ref", value: "artifact:render:evidence" } };
+    const job = { kind: "job", ref: "job:job_id:render.targets.live", identity: { scheme: "job_id", value: "render.targets.live" } };
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: "render-live-shape", input: { target_kind: "whole_project", format: "wav", dry_run: false } },
+      now,
+      executeAtomic: async () => ({
+        contract: "template.execution.v1",
+        ok: true,
+        request: { id: "cmd-render-live" },
+        verification: { status: "passed", checks: [] },
+        result: {
+          summary: {
+            job_ref: job.ref,
+            output_artifact_ref: manifest.ref,
+            evidence_artifact_ref: evidence.ref,
+            format: "wav",
+            output_policy: "openreaper_managed_render_root",
+            collision_policy: "fail_if_exists",
+            file_count: 1,
+            outputs: [{
+              absolute_path: "/managed/renders/live.wav",
+              size: 4096,
+              extension: "wav",
+              generated_project_copy_retained: true,
+              generated_project_copy_path: "/managed/renders/live.wav.RPP",
+            }],
+            truncated: false,
+          },
+          refs: [manifest, evidence, job],
+          artifacts: [manifest, evidence],
+          jobs: [job],
+          readback: null,
+        },
+        error: null,
+      }),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.result.data.file_count, 1);
+    assert.equal(response.result.data.outputs[0].absolute_path, "/managed/renders/live.wav");
+    assert.deepEqual(response.result.artifact_refs, [manifest.ref, evidence.ref]);
+    assert.equal(response.result.canonical_refs.includes(job.ref), true);
+    assert.equal(response.result.verification.evidence_refs.includes("cmd-render-live"), true);
+    assert.equal(response.result.verification.evidence_refs.includes(manifest.ref), true);
+    assert.equal(response.result.changes[0].file_count, 1);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("live-resolves explicit track, item, and region targets into full object refs before rendering", async () => {
+    const cases = [
+      {
+        target_kind: "explicit_tracks",
+        requested_ref: "track:name:Drums",
+        resolver_id: "template.tracks.resolve_track_ref",
+        live_ref: { kind: "track", ref: "track:guid:{TRACK-LIVE}", identity: { scheme: "guid", value: "{TRACK-LIVE}" }, provenance: { source: "live_resolver" } },
+        ref_key: "track_refs",
+      },
+      {
+        target_kind: "explicit_items",
+        requested_ref: "item:guid:{ITEM-CANDIDATE}",
+        resolver_id: "template.items.resolve_item_ref",
+        live_ref: { kind: "item", ref: "item:guid:{ITEM-CANDIDATE}", identity: { scheme: "guid", value: "{ITEM-CANDIDATE}" }, provenance: { source: "live_resolver" } },
+        ref_key: "item_refs",
+      },
+      {
+        target_kind: "regions",
+        requested_ref: "region:index:3",
+        resolver_id: "template.project.list_markers_regions",
+        live_ref: { kind: "region", ref: "region:index:3", identity: { scheme: "index", value: "3" }, provenance: { source: "live_resolver" } },
+        ref_key: "region_refs",
+      },
+    ];
+
+    for (const fixture of cases) {
+      const calls = [];
+      const response = await executeAlpha3_2_5CRenderTargetsMacro({
+        request: {
+          request_id: `render-${fixture.target_kind}`,
+          input: { target_kind: fixture.target_kind, refs: [fixture.requested_ref], format: "wav", dry_run: false },
+        },
+        now,
+        executeAtomic: async ({ id, input, refs }) => {
+          calls.push({ id, input, refs });
+          if (id === fixture.resolver_id) return atomicExecution({ refs: [fixture.live_ref] });
+          if (id === "template.render.render_targets") {
+            return atomicExecution(verifiedRenderResult({
+              verification: { status: "passed", evidence_refs: [`evidence:${fixture.target_kind}`] },
+            }));
+          }
+          throw new Error(`Unexpected explicit-render dependency ${id}`);
+        },
+      });
+
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.deepEqual(calls.map(({ id }) => id), [fixture.resolver_id, "template.render.render_targets"]);
+      assert.deepEqual(calls[1].refs, { [fixture.ref_key]: [fixture.live_ref] });
+      assert.equal(JSON.stringify(calls[1].refs).includes(fixture.requested_ref), fixture.live_ref.ref === fixture.requested_ref);
+      assert.equal(response.result.canonical_refs.includes(fixture.live_ref.ref), true);
+      assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    }
+  });
+
+  it("rejects a stable render GUID when the live resolver returns a different object", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: {
+        request_id: "render-stable-guid-mismatch",
+        input: { target_kind: "explicit_items", refs: ["item:guid:{EXPECTED}"], format: "wav", dry_run: false },
+      },
+      now,
+      executeAtomic: async ({ id }) => {
+        calls.push(id);
+        if (id === "template.items.resolve_item_ref") {
+          return atomicExecution({ refs: [{ kind: "item", ref: "item:guid:{WRONG}", identity: { scheme: "guid", value: "{WRONG}" } }] });
+        }
+        throw new Error(`Unexpected render call ${id}`);
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "RENDER_LIVE_REF_IDENTITY_MISMATCH");
+    assert.deepEqual(calls, ["template.items.resolve_item_ref"]);
+  });
+});
