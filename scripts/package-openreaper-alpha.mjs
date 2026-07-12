@@ -403,7 +403,7 @@ root is moved into a uniquely allocated preservation container beside
 reports that path.
 
 Alpha caveat:
-The external product name and MCP server name are OpenReaper. This package uses the OpenReaper alpha stdio MCP kernel from vendor/openreaper-kernel. Some live REAPER execution paths remain evidence-gated; discovery and Alpha3 macro planning are available through list_templates and call_template.
+The external product name and MCP server name are OpenReaper. This package uses the OpenReaper alpha stdio MCP kernel from vendor/openreaper-kernel. Some live REAPER execution paths remain evidence-gated; registered executable Macros and verified Templates are discovered through list_templates and invoked through call_template.
 The companion vital-agent-mcp server is plan-only and does not execute REAPER or Vital writes.
 `;
   await writeFile(path.join(packageRoot, "README.txt"), readme, "utf8");

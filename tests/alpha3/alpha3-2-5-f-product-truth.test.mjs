@@ -222,6 +222,8 @@ sleep 0.1
     assert.match(source, /bridge_owner: "openreaper-alpha-package-smoke"/);
     assert.match(source, /bridge_generation: 1/);
     assert.match(source, /stale_identity_scrubbed_for_child/);
+    assert.match(source, /registered executable Macros and verified Templates/);
+    assert.equal(source.includes("Alpha3 macro planning"), false);
     assert.equal(source.includes("macro_execution_convenience_snapshot.safety.server_executes_children"), false);
   });
 });
