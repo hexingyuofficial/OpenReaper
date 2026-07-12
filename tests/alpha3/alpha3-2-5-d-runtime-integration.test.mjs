@@ -58,6 +58,7 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(midi.result.data.item_ref, ITEM_REF);
     assert.equal(midi.result.data.take_ref, TAKE_REF);
     assert.equal(midi.result.data.note_count, NOTES.length);
+    assert.equal(midi.budget.actual_bytes <= midi.budget.max_bytes, true, JSON.stringify(midi.budget));
 
     const nativeFx = await runtime.call_template({
       id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
@@ -69,6 +70,7 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(nativeFx.result.data.fx_ref, FX_REF);
     assert.equal(nativeFx.result.data.readback.length, 2);
     assert.equal(nativeFx.result.verification.status, "passed");
+    assert.equal(nativeFx.budget.actual_bytes <= nativeFx.budget.max_bytes, true, JSON.stringify(nativeFx.budget));
 
     const capabilities = bridge.seen.map((request) => request.pack.capability);
     assert.deepEqual(capabilities.slice(0, 6), [

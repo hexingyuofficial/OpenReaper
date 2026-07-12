@@ -426,17 +426,17 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.mode, "menu");
     assert.deepEqual(runtimeMenu.items.map((item) => item.id), [
       "macro.project.inspect",
+      "macro.project.query",
       "macro.project.delete_targets",
       "macro.project.apply_layout",
+      "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
-      "macro.render.targets",
-      "macro.project.file",
-      "macro.project.query",
-      "macro.set_stock_plugin_controls",
-      "macro.controls.set",
       "macro.midi.create_clip",
       "macro.fx.apply_native_chain",
+      "macro.render.targets",
+      "macro.set_stock_plugin_controls",
+      "macro.controls.set",
     ]);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);

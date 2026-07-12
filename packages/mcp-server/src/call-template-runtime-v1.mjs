@@ -189,6 +189,8 @@ import {
   isAlpha3_2_5CProjectWriteMacroId,
 } from "./alpha3-2-5-c-project-write-runtime-v1.mjs";
 import {
+  ALPHA3_2_5_E_FALLBACK_GAP_REASONS,
+  ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
   alpha3_2AContractOnlyBlockerForId,
@@ -956,22 +958,22 @@ export function createCallTemplateRuntime(options = {}) {
   };
   const executableDiscoveryTemplates = [
     ...macroDiscovery(ALPHA3_2E_PROJECT_INSPECT_MACRO_ID, createAlpha3_2EProjectInspectMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2D_GENERIC_PROJECT_QUERY_ID, createAlpha3_2DGenericProjectQueryDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID, createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID, createAlpha3_2EProjectLayoutMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, createAlpha3_2C3DProjectFileMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_ROUTING_APPLY_MACRO_ID, createAlpha3_2ERoutingApplyMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
+    ...macroDiscovery(ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, (runtimeOptions) =>
+      [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
+    ...macroDiscovery(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID, createAlpha3_2_5DNativeFxMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_RENDER_TARGETS_MACRO_ID, createAlpha3_2ERenderTargetsMacroDiscoveryItems),
-    ...createAlpha3_2AContractMacroDiscoveryItems(),
-    ...macroDiscovery(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, createAlpha3_2C3DProjectFileMacroDiscoveryItems),
-    ...macroDiscovery(ALPHA3_2D_GENERIC_PROJECT_QUERY_ID, createAlpha3_2DGenericProjectQueryDiscoveryItems),
-    ...legacyProjectIndexCompatibilityDiscovery,
     ...macroDiscovery(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, (runtimeOptions) =>
       createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
     ...macroDiscovery(ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID, (runtimeOptions) =>
       createAlpha3C5OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
-    ...macroDiscovery(ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, (runtimeOptions) =>
-      [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
-    ...macroDiscovery(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID, createAlpha3_2_5DNativeFxMacroDiscoveryItems),
+    ...createAlpha3_2AContractMacroDiscoveryItems(),
+    ...legacyProjectIndexCompatibilityDiscovery,
     ...catalogDiscoveryTemplates,
   ];
 
@@ -2215,13 +2217,14 @@ function runtimeDiscoveryRequestHasIds(request) {
 
 function runtimeActionDiscoveryResponse(response, surface, templatesById, productSurface = {}, request = {}) {
   const attachActionMetadata = runtimeShouldAttachActionMetadata(request);
+  const macroFirstRouting = runtimeMacroFirstRoutingDecision({ response, surface, request });
   return deepFreeze({
     ...response,
     product_surface: runtimeProductSurfaceMetadata(surface, productSurface, {
       detail_level: response.mode === "ids" ? "expanded" : "compact",
       requested_ids: response.mode === "ids" ? response.applied.ids : [],
       missing_ids: response.missing_ids,
-    }),
+    }, macroFirstRouting),
     items: response.items.map((item) => {
       if (!attachActionMetadata) return item;
       const descriptor = templatesById.get(item.id) ?? item;
@@ -2242,7 +2245,49 @@ function runtimeShouldAttachActionMetadata(request) {
   return !(request.fields.length === 1 && request.fields[0] === "id");
 }
 
-function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideRequest = {}) {
+function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
+  const ids = response.items.map((item) => item.id).filter((id) => typeof id === "string");
+  const macroIds = ids.filter((id) => id.startsWith("macro.")).slice(0, 12);
+  const templateIds = ids.filter((id) => id.startsWith("template."));
+  const queryPresent = isPlainObject(request) && typeof request.query === "string" && request.query.trim() !== "";
+  const exactIds = response.mode === "ids";
+  let route = "macro_first";
+  let fallbackGap = null;
+
+  if (macroIds.length === 0 && templateIds.length > 0) {
+    route = "template_fallback";
+    fallbackGap = {
+      recorded: true,
+      reason: ALPHA3_2_5_E_FALLBACK_GAP_REASONS[1],
+      next_action: "Use the returned bounded Template ids directly or expand exact ids; do not invent a Macro or raw execution path.",
+    };
+  } else if (macroIds.length === 0 && templateIds.length === 0) {
+    route = "no_match";
+    fallbackGap = {
+      recorded: true,
+      reason: ALPHA3_2_5_E_FALLBACK_GAP_REASONS[0],
+      next_action: surface === "catalog"
+        ? "Narrow the catalog query or pack filter, then record the uncovered task if no accepted Template matches."
+        : "Retry list_templates with surface=catalog and one bounded query or pack filter.",
+    };
+  }
+
+  return {
+    contract: ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT,
+    route,
+    surface,
+    mode: response.mode,
+    query_present: queryPresent,
+    exact_ids: exactIds,
+    macro_match_count: macroIds.length,
+    template_match_count: templateIds.length,
+    selected_macro_ids: macroIds,
+    fallback_gap: fallbackGap,
+    task_text_persisted: false,
+  };
+}
+
+function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideRequest = {}, macroFirstRouting = null) {
   const expanded = guideRequest.detail_level === "expanded";
   return {
     contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
@@ -2256,6 +2301,7 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideReques
       requested_ids: guideRequest.requested_ids,
       missing_ids: guideRequest.missing_ids,
     }),
+    macro_first_routing: macroFirstRouting,
     item_schema: {
       fields: CALL_TEMPLATE_RUNTIME_PRODUCT_ACTION_ITEM_FIELDS,
       status_values: CALL_TEMPLATE_RUNTIME_PRODUCT_STATUS_VALUES,

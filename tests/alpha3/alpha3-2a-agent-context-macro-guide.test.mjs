@@ -5,6 +5,9 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import {
+  ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
+} from "../../packages/mcp-server/src/alpha3-2-5-0-macro-inventory-v1.mjs";
+import {
   ALPHA3_2A_ACTION_MANUAL_FIELDS,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -86,6 +89,26 @@ const EXPECTED_CONSOLIDATED_CONTROL_IDS = [
 ];
 const EXPECTED_DISTINCT_LEGACY_IDS = [
   "macro.set_midi_controls",
+];
+const EXPECTED_EXECUTABLE_MACRO_IDS = [
+  "macro.project.inspect",
+  "macro.project.query",
+  "macro.project.delete_targets",
+  "macro.project.apply_layout",
+  "macro.project.file",
+  "macro.routing.apply",
+  "macro.media.place_assets",
+  "macro.midi.create_clip",
+  "macro.fx.apply_native_chain",
+  "macro.render.targets",
+  "macro.set_stock_plugin_controls",
+  "macro.controls.set",
+];
+const EXPECTED_SECONDARY_EXECUTABLE_IDS = [
+  "macro.project.file",
+  "macro.midi.create_clip",
+  "macro.fx.apply_native_chain",
+  "macro.controls.set",
   "macro.set_stock_plugin_controls",
 ];
 const EXPECTED_EXPANDED_DETAIL_FIELDS = [
@@ -109,6 +132,7 @@ const EXPECTED_COMPACT_PRODUCT_SURFACE_FIELDS = [
   "expanded_detail_fields",
   "agent_startup_guidance",
   "agent_context_macro_guide",
+  "macro_first_routing",
   "item_schema",
   "workflow_rhythm",
   "startup_preflight",
@@ -129,16 +153,20 @@ const EXPECTED_COMPACT_PRODUCT_SURFACE_FIELDS = [
 ];
 
 describe("Alpha3.2-A agent context and macro guide fix round", () => {
-  it("keeps exactly seven ordered primary ids and marks the guide candidate/in_review", () => {
+  it("keeps exactly seven ordered primary ids and marks the guide runtime-aligned for the 12-Macro surface", () => {
     const guide = createAlpha3_2AAgentContextMacroGuide();
 
     assert.deepEqual(ALPHA3_2A_PRIMARY_MACRO_IDS, EXPECTED_PRIMARY_IDS);
     assert.deepEqual(guide.primary_spine.ordered_ids, EXPECTED_PRIMARY_IDS);
     assert.deepEqual(guide.primary_spine.rows.map((row) => row.id), EXPECTED_PRIMARY_IDS);
     assert.equal(new Set(guide.primary_spine.ordered_ids).size, 7);
-    assert.equal(guide.status, "candidate");
-    assert.equal(guide.review_status, "in_review");
-    assert.doesNotMatch(guide.primary_spine.current_posture, /accepted/i);
+    assert.deepEqual(ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, EXPECTED_EXECUTABLE_MACRO_IDS);
+    assert.deepEqual(guide.ranked_executable_macro_menu.macro_ids, EXPECTED_EXECUTABLE_MACRO_IDS);
+    assert.equal(guide.ranked_executable_macro_menu.macros_before_templates, true);
+    assert.equal(guide.ranked_executable_macro_menu.compact_default_menu, true);
+    assert.equal(guide.status, "runtime_aligned");
+    assert.equal(guide.review_status, "truthful_12_macro_surface");
+    assert.equal(guide.primary_spine.current_posture, "runtime_aligned_primary_manuals");
   });
 
   it("places complete action-precise 13-field manual cards in compact default product metadata", () => {
@@ -315,7 +343,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const portfolio = guide.portfolio;
 
     assert.deepEqual(portfolio.primary_ids, EXPECTED_PRIMARY_IDS);
-    assert.deepEqual(portfolio.secondary_ids, ALPHA3_2A_SECONDARY_MACRO_ROWS.map((row) => row.id));
+    assert.deepEqual(portfolio.secondary_ids, EXPECTED_SECONDARY_EXECUTABLE_IDS);
+    assert.deepEqual(portfolio.executable_official_ids, EXPECTED_EXECUTABLE_MACRO_IDS);
     assert.deepEqual(portfolio.covered_legacy_ids, Object.keys(EXPECTED_COVERED_LEGACY_MAPPING));
     assert.deepEqual(portfolio.legacy_to_primary_mapping, EXPECTED_COVERED_LEGACY_MAPPING);
     assert.deepEqual(
@@ -326,8 +355,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(portfolio.legacy_query_posture.temporary_compatibility_ids, ["macro.selected_context"]);
     assert.equal(portfolio.legacy_query_posture.generic_status, "executable_registered_macro_program");
     assert.deepEqual(portfolio.distinct_legacy.ids, EXPECTED_DISTINCT_LEGACY_IDS);
-    assert.equal(portfolio.distinct_legacy.blockers.length, 2);
+    assert.equal(portfolio.distinct_legacy.blockers.length, 1);
     assert.equal(portfolio.distinct_legacy.blockers.every((blocker) => blocker.length > 0), true);
+    assert.match(portfolio.claim_boundary, /Twelve public Macros are executable/);
   });
 
   it("publishes the consolidated control Macro and withdraws its five old public names", () => {
@@ -336,7 +366,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const defaultMenu = runtime.list_templates();
     const defaultGuide = defaultMenu.product_surface.agent_context_macro_guide;
     const exactLegacy = runtime.list_templates({
-      ids: [...EXPECTED_CONSOLIDATED_CONTROL_IDS, ...EXPECTED_DISTINCT_LEGACY_IDS],
+      ids: [...EXPECTED_CONSOLIDATED_CONTROL_IDS, ...EXPECTED_DISTINCT_LEGACY_IDS, "macro.set_stock_plugin_controls"],
       fields: ["id"],
     });
     const consolidated = runtime.list_templates({
@@ -356,21 +386,21 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(defaultGuide.requested_expansions.items.length, 0);
     assert.deepEqual(exactLegacy.items.map((item) => item.id), ["macro.set_stock_plugin_controls"]);
     assert.deepEqual(exactLegacy.missing_ids, [...EXPECTED_CONSOLIDATED_CONTROL_IDS, "macro.set_midi_controls"]);
-    assert.deepEqual(exactLegacy.product_surface.agent_context_macro_guide.requested_expansions.items, []);
+    assert.deepEqual(exactLegacy.product_surface.agent_context_macro_guide.requested_expansions.items.map((item) => item.id), ["macro.set_stock_plugin_controls"]);
     assert.deepEqual(consolidated.items.map((item) => item.id), ["macro.controls.set"]);
     assert.deepEqual(defaultMenu.items.filter((item) => item.action_kind === "macro").map((item) => item.id), [
       "macro.project.inspect",
+      "macro.project.query",
       "macro.project.delete_targets",
       "macro.project.apply_layout",
+      "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
-      "macro.render.targets",
-      "macro.project.file",
-      "macro.project.query",
-      "macro.set_stock_plugin_controls",
-      "macro.controls.set",
       "macro.midi.create_clip",
       "macro.fx.apply_native_chain",
+      "macro.render.targets",
+      "macro.set_stock_plugin_controls",
+      "macro.controls.set",
     ]);
   });
 
@@ -432,17 +462,13 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const secondaryIds = guide.secondary_menu.rows.map((row) => row.id);
 
     assert.equal(guide.secondary_menu.folded, true);
-    assert.equal(secondaryIds.includes("macro.project.file"), true);
-    assert.equal(secondaryIds.includes("macro.selected_context"), true);
+    assert.deepEqual(secondaryIds, EXPECTED_SECONDARY_EXECUTABLE_IDS);
     for (const id of Object.entries(EXPECTED_COVERED_LEGACY_MAPPING)
       .filter(([id, replacement]) => id !== "macro.selected_context" && replacement === "macro.project.query")
       .map(([id]) => id)) {
       assert.equal(secondaryIds.includes(id), false, id);
     }
-    for (const id of EXPECTED_CONSOLIDATED_CONTROL_IDS) assert.equal(secondaryIds.includes(id), true, id);
-    for (const id of EXPECTED_DISTINCT_LEGACY_IDS) {
-      assert.equal(secondaryIds.includes(id), true, id);
-    }
+    for (const id of EXPECTED_CONSOLIDATED_CONTROL_IDS) assert.equal(secondaryIds.includes(id), false, id);
     assert.match(guide.recipe_guidance.empty_catalog, /ad-hoc composition/);
     assert.match(guide.recipe_guidance.draft_only_catalog, /official\/live-smoked/);
     assert.deepEqual(guide.tool_surface.tools, EXPECTED_TOOLS);
@@ -462,8 +488,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(response.items.length, 0);
     assert.equal(guide.contract, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
     assert.equal(guide.version, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
-    assert.equal(guide.status, "candidate");
-    assert.equal(guide.review_status, "in_review");
+    assert.equal(guide.status, "runtime_aligned");
+    assert.equal(guide.review_status, "truthful_12_macro_surface");
     assert.equal(guide.primary_spine.rows.every((row) => hasCompleteManual(row.action_manual)), true);
     assert.deepEqual(guide.requested_expansions.items, []);
   });
@@ -524,9 +550,10 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       for (const guide of guides) {
         assert.equal(guide.contract, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
         assert.equal(guide.version, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
-        assert.equal(guide.status, "candidate");
-        assert.equal(guide.review_status, "in_review");
+        assert.equal(guide.status, "runtime_aligned");
+        assert.equal(guide.review_status, "truthful_12_macro_surface");
         assert.equal(guide.primary_spine.rows.every((row) => hasCompleteManual(row.action_manual)), true);
+        assert.deepEqual(guide.ranked_executable_macro_menu.macro_ids, EXPECTED_EXECUTABLE_MACRO_IDS);
       }
       assert.equal(toolTextBytes(templatesResult) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
       assert.equal(templates.product_surface.detail_level, "compact");

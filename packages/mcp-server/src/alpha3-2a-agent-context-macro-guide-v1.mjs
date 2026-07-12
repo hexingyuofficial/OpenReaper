@@ -1,3 +1,7 @@
+import {
+  ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
+} from "./alpha3-2-5-0-macro-inventory-v1.mjs";
+
 export const ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.2.agent_context_macro_guide.v1";
 export const ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
 export const ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_PHASE = "Alpha3.2-A";
@@ -34,6 +38,14 @@ export const ALPHA3_2A_DEFAULT_PRODUCT_SURFACE_BASELINE_MAX_BYTES = 73_728;
 export const ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES = 98_304;
 export const ALPHA3_2A_EXACT_MANUAL_MAX_BYTES = 24_576;
 export const ALPHA3_2A_REQUESTED_EXPANSIONS_CONTRACT = "alpha3.2.agent_context_macro_guide.requested_expansions.v1";
+export const ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT = "alpha3.2.5.e.macro_first_routing.v1";
+export const ALPHA3_2_5_E_FALLBACK_GAP_REASONS = deepFreeze([
+  "macro_missing_for_task",
+  "macro_task_out_of_scope",
+  "macro_target_ambiguous_or_unavailable",
+  "macro_domain_not_accepted",
+  "macro_budget_prefers_atomic_template",
+]);
 
 export const ALPHA3_2A_PROJECT_QUERY_ENTITIES = deepFreeze([
   "status",
@@ -702,16 +714,163 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
   }),
 }));
 
+const CONTROLS_SET_DEFINITION = deepFreeze(primaryDefinition({
+  id: "macro.controls.set",
+  title: "Set bounded controls",
+  summary: "Execute bounded track/item/take/transport/send controls with SQLite candidate selectors, live re-resolution, and verified readback.",
+  pack: "core",
+  risk: "write",
+  entity_kind: "macro.controls.set",
+  task_intents: ["set track controls", "set item controls", "set take controls", "set transport controls", "set send controls"],
+  rollout_slice: "3.2.5-C",
+  guide_tier: "secondary",
+  known_blocker: null,
+  implementation_status: "executable_registered_program",
+  runnable: true,
+  manual: actionManual({
+    when_to_use: ["Use one task-shaped Macro call for accepted track/item/take/transport/send control edits instead of hand-assembling atomic write chains."],
+    when_not_to_use: ["Do not use it for MIDI note editing, FX chains, hardware/device I/O, or unsupported write domains outside the accepted control schema."],
+    required_readiness: ["The managed OpenReaper live route must be ready.", "When selectors are used, rely on fresh SQLite candidates and let the Macro live-resolve the final canonical write target."],
+    input_shape: {
+      target_kind: "track | item | take | transport | send",
+      fields: "Required allowlisted field object for the chosen target_kind; use exact names from the expanded discovery item.",
+      selector: "Optional singular bounded Project Index selector when canonical refs are not supplied.",
+      refs: "Optional top-level call_template refs: track_ref, item_ref, or send_ref as required by target_kind.",
+      dry_run: "Boolean; returns planned target resolution and accepted field writes without mutating.",
+    },
+    preflight_steps: ["Validate target_kind and allowlisted fields.", "Resolve one exact live target from the provided ref or fresh SQLite candidate set before any write."],
+    underlying_actions: ["macro.project.query for compact candidate lookup when selectors are used", "accepted atomic control templates owned by the fixed registered program", "readback templates for the affected target kind"],
+    readback_steps: ["Return the resolved canonical target ref, bounded changed fields, and exact readback values in macro.execution.v1."],
+    success_criteria: ["Only accepted control fields changed on one exact live-resolved target and readback matches the requested values."],
+    common_blockers: [blocker("CONTROL_TARGET_REF_REQUIRED", "macro.controls.set needs one exact ref or one unambiguous selector."), blocker("CONTROL_TARGET_KIND_UNSUPPORTED", "target_kind must be track, item, take, transport, or send."), blocker("SELECTOR_TARGET_AMBIGUOUS", "The bounded selector matched more than one candidate."), blocker("CONTROL_READBACK_MISMATCH", "The post-write control readback did not match the requested values.")],
+    recovery_steps: ["Use macro.project.query to narrow candidates or pass the exact canonical ref returned by a prior read.", "Repair the typed blocker, then retry the same registered Macro; never treat SQLite rows as write authority."],
+    dry_run_shape: { supported: true, output: ["target_preview", "accepted_fields", "resolution_path"] },
+    resume_or_retry_policy: { resume_from: "latest successful candidate set and exact target resolution", retry: "Retry after selector narrowing or live-readiness repair.", hard_stop: "Stop on repeated ambiguity, unsupported fields, or readback mismatch." },
+    examples: [example("set track volume", { target_kind: "track", selector: { name: "Bass" }, fields: { volume: 0.75 }, dry_run: true }), example("set transport repeat", { target_kind: "transport", fields: { repeat: true }, dry_run: false })],
+  }),
+}));
+
+const STOCK_PLUGIN_CONTROLS_DEFINITION = deepFreeze(primaryDefinition({
+  id: "macro.set_stock_plugin_controls",
+  title: "Set supported stock plugin controls",
+  summary: "Execute semantic stock-plugin controls with fresh live metadata, bounded mappings, and normalized-value readback.",
+  pack: "fx",
+  risk: "write",
+  entity_kind: "macro.set_stock_plugin_controls",
+  task_intents: ["set stock plugin controls", "configure ReaComp", "apply starter stock plugin settings"],
+  rollout_slice: "3.2.5-C",
+  guide_tier: "secondary",
+  known_blocker: null,
+  implementation_status: "executable_registered_program",
+  runnable: true,
+  manual: actionManual({
+    when_to_use: ["Use a registered semantic stock-plugin control map or starter action when the target FX already exists."],
+    when_not_to_use: ["Do not treat it as an arbitrary FX editor, third-party plugin controller, chain builder, or broad live-support claim; only ReaComp currently has accepted bounded live evidence."],
+    required_readiness: ["The live route must be ready and one owner-scoped fx_ref or singular selector must resolve exactly.", "The requested plugin/control mapping must exist; support wording remains bounded by per-plugin live evidence."],
+    input_shape: {
+      plugin: "Optional accepted stock-plugin id/name; may be omitted when starter_action fixes the plugin.",
+      controls: "Semantic control names and bounded values from the accepted mapping.",
+      starter_action: "Optional registered starter id such as gentle_vocal_compression.",
+      action_parameters: "Optional bounded starter parameters.",
+      control_overrides: "Optional bounded semantic overrides for a starter.",
+      selector: "Optional singular bounded FX selector backed by fresh Project Index candidates.",
+      refs: "Optional top-level call_template fx_ref when already known.",
+      dry_run: "Boolean; preview supported mapping and target resolution without mutation.",
+    },
+    preflight_steps: ["Resolve the owner/FX target exactly, hydrating live FX metadata before any write.", "Validate every semantic control against the accepted plugin mapping and convert only through the audited normalizer."],
+    underlying_actions: ["macro.project.query for compact owner candidates when selectors are used", "accepted FX read templates and semantic stock-plugin runtime helpers", "exact FX parameter readback templates"],
+    readback_steps: ["Return the resolved fx_ref, normalized parameter evidence, semantic-to-parameter mapping, and bounded readback rows."],
+    success_criteria: ["Only supported mapped controls changed and the final normalized readback matches the requested semantic values."],
+    common_blockers: [blocker("STOCK_PLUGIN_FX_REF_REQUIRED", "Supply one owner-scoped fx_ref or one unambiguous bounded FX selector."), blocker("STOCK_PLUGIN_PLAN_BLOCKED", "The requested plugin, starter, or semantic control mapping was not accepted."), blocker("PARAMETER_METADATA_NOT_FRESH", "Fresh live parameter metadata is required before writes."), blocker("STOCK_PLUGIN_READBACK_MISMATCH", "The final parameter readback did not match the requested semantic controls.")],
+    recovery_steps: ["Use macro.project.query or a direct accepted FX read to get one exact owner target, then retry the same Macro.", "If the mapping is unsupported, fall back to direct accepted FX Templates and record the typed fallback-gap reason."],
+    dry_run_shape: { supported: true, output: ["supported_mapping", "target_preview", "planned_parameter_changes"] },
+    resume_or_retry_policy: { resume_from: "resolved owner/fx target plus hydrated parameter metadata", retry: "Retry after target or mapping repair only.", hard_stop: "Stop on unsupported mapping or repeated readback mismatch." },
+    examples: [example("gentle ReaComp starter", { starter_action: "gentle_vocal_compression", selector: { plugin_id: "reacomp", track_name: "VOX" }, dry_run: false }), example("set ReaComp controls", { plugin: "reacomp", controls: { threshold_db: -18, ratio: 3 }, selector: { plugin_id: "reacomp", track_name: "VOX" }, dry_run: true })],
+  }),
+}));
+
+const MIDI_CREATE_CLIP_DEFINITION = deepFreeze(primaryDefinition({
+  id: "macro.midi.create_clip",
+  title: "Create bounded MIDI clip",
+  summary: "Create one bounded MIDI clip on an exact or unambiguous track target, insert PPQ notes, and verify item/take readback.",
+  pack: "midi",
+  risk: "write",
+  entity_kind: "macro.midi.create_clip",
+  task_intents: ["create MIDI clip", "insert MIDI notes", "make a simple MIDI region"],
+  rollout_slice: "3.2.5-D",
+  guide_tier: "secondary",
+  known_blocker: null,
+  implementation_status: "executable_registered_program",
+  runnable: true,
+  manual: actionManual({
+    when_to_use: ["Create one bounded PPQ-backed MIDI clip with explicit note rows on one exact target track."],
+    when_not_to_use: ["Do not use it for arbitrary MIDI editing graphs, unsupported seconds-mode note insertion, or ambiguous track targeting."],
+    required_readiness: ["The live route must be ready.", "Pass one exact track ref or one fresh unambiguous project-aware selector that the Macro can re-resolve live before creating the clip."],
+    input_shape: {
+      start_seconds: "Required clip start time in project seconds.",
+      end_seconds: "Required clip end time in project seconds.",
+      notes: "Bounded PPQ note rows with pitch, velocity, channel, start_ppq, and end_ppq.",
+      selector: "Optional singular fresh SQLite-backed track selector instead of manual low-level ref assembly.",
+      refs: "Optional top-level call_template track_ref when already known.",
+      dry_run: "Boolean; performs target resolution and validation without creating the item or notes.",
+    },
+    preflight_steps: ["Resolve one exact live track target from ref or selector.", "Validate clip bounds and every note field before any bridge mutation."],
+    underlying_actions: ["macro.project.query for track candidates when selectors are used", "template.midi.create_midi_item", "template.midi.insert_notes_batch", "accepted MIDI readback templates"],
+    readback_steps: ["Return canonical item/take refs, note_count, and exact post-create/readback evidence."],
+    success_criteria: ["The created item/take round-trips immediately, note readback matches the request, and no partial false-success is reported."],
+    common_blockers: [blocker("MIDI_TRACK_TARGET_REQUIRED", "The MIDI clip Macro needs one exact track ref or one unambiguous selector."), blocker("MIDI_CLIP_NOTES_INVALID", "notes must contain between one and 128 valid PPQ note rows."), blocker("MIDI_SECONDS_MODE_BLOCKED", "Seconds-positioned note fields remain blocked."), blocker("MIDI_NOTE_LIST_READBACK_MISMATCH", "The exact note multiset readback did not match the request.")],
+    recovery_steps: ["Use macro.project.query to get one exact track candidate or pass the returned canonical track_ref from a prior read.", "Repair the typed blocker, then retry the same Macro; do not assemble take refs manually."],
+    dry_run_shape: { supported: true, output: ["track_ref", "start_seconds", "end_seconds", "note_count", "mutation_skipped"] },
+    resume_or_retry_policy: { resume_from: "exact track resolution only; the clip itself must be recreated on retry", retry: "Retry after target or note repair.", hard_stop: "Stop on repeated target mismatch, blocked seconds mode, or readback mismatch." },
+    examples: [example("create two-note clip", { selector: { name: "Bass MIDI" }, start_seconds: 0, end_seconds: 2, notes: [{ start_ppq: 0, end_ppq: 480, pitch: 36, velocity: 96, channel: 0 }, { start_ppq: 480, end_ppq: 960, pitch: 38, velocity: 92, channel: 0 }], dry_run: false })],
+  }),
+}));
+
+const NATIVE_FX_CHAIN_DEFINITION = deepFreeze(primaryDefinition({
+  id: "macro.fx.apply_native_chain",
+  title: "Apply bounded native FX chain",
+  summary: "Add the accepted native FX chain task, set its supported controls, and verify exact readback.",
+  pack: "fx",
+  risk: "write",
+  entity_kind: "macro.fx.apply_native_chain",
+  task_intents: ["add native FX", "apply ReaComp chain", "configure accepted FX task"],
+  rollout_slice: "3.2.5-D",
+  guide_tier: "secondary",
+  known_blocker: null,
+  implementation_status: "executable_registered_program",
+  runnable: true,
+  manual: actionManual({
+    when_to_use: ["Apply the accepted native-FX task Macro when its reviewed chain and controls match the user intent."],
+    when_not_to_use: ["Do not use it as a general FX browser, third-party plugin loader, or arbitrary chain editor."],
+    required_readiness: ["The live route must be ready and one exact track target must resolve.", "Alpha3.2.5-D accepts only the reviewed ReaComp task and control set."],
+    input_shape: {
+      plugin: "Optional; only reacomp is accepted.",
+      controls: "Optional bounded ReaComp semantic controls such as threshold_db and ratio.",
+      starter_action: "Optional; only gentle_vocal_compression is accepted. It is the default when controls are omitted.",
+      action_parameters: "Optional bounded parameters for the starter action.",
+      control_overrides: "Optional bounded semantic overrides for the starter action.",
+      selector: "Optional singular fresh Project Index track selector.",
+      insert_at_index: "Optional integer FX insertion slot from 0 through 127.",
+      refs: "Optional top-level call_template track_ref when already known.",
+      dry_run: "Boolean; preview resolution and supported controls without mutation.",
+    },
+    preflight_steps: ["Resolve one exact live owner target from a ref or fresh selector.", "Validate the requested controls against the accepted native-FX task surface."],
+    underlying_actions: ["macro.project.query for track candidates when selector is used", "template.fx.add_track_fx", "the registered macro.set_stock_plugin_controls semantic program", "exact FX summary/parameter readback templates"],
+    readback_steps: ["Return the canonical fx_ref, applied control rows, and verification evidence in macro.execution.v1."],
+    success_criteria: ["The accepted FX task is present on the expected owner target and readback matches the requested controls."],
+    common_blockers: [blocker("NATIVE_FX_TRACK_REF_REQUIRED", "Supply one exact track_ref or one unambiguous bounded selector."), blocker("NATIVE_FX_PLUGIN_NOT_ACCEPTED", "Only plugin=reacomp is accepted in Alpha3.2.5-D."), blocker("NATIVE_FX_STARTER_NOT_ACCEPTED", "Only starter_action=gentle_vocal_compression is accepted."), blocker("NATIVE_FX_CONFIGURATION_UNVERIFIED", "The semantic-control child program did not return passed verification.")],
+    recovery_steps: ["Use macro.project.query to get one exact owner candidate or pass the returned canonical owner ref from a prior read.", "If the task is unsupported, fall back to direct accepted FX Templates and record the typed fallback-gap reason."],
+    dry_run_shape: { supported: true, output: ["owner_preview", "supported_controls", "planned_fx_changes"] },
+    resume_or_retry_policy: { resume_from: "exact owner resolution and hydrated FX metadata", retry: "Retry after owner or control repair only.", hard_stop: "Stop on unsupported chain or repeated readback mismatch." },
+    examples: [example("apply gentle ReaComp", { plugin: "reacomp", selector: { name: "Lead Vox" }, starter_action: "gentle_vocal_compression", dry_run: false }), example("preview ReaComp controls", { plugin: "reacomp", selector: { name: "Lead Vox" }, controls: { threshold_db: -18, ratio: 3 }, dry_run: true })],
+  }),
+}));
+
 export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
   secondaryRow("macro.project.file", "Execute bounded save-current/save-as; new/open/create remain held.", "write_confirmed", "executable", "Expand for exact program stages, path gates, readback, and blockers."),
+  secondaryRow("macro.midi.create_clip", "Create one bounded MIDI clip with verified item/take readback.", "write_evidence_bound", "executable", "Expand for exact note bounds, target resolution, and PPQ-only limits."),
+  secondaryRow("macro.fx.apply_native_chain", "Apply the accepted native FX task with exact readback.", "write_evidence_bound", "executable", "Expand for owner targeting, supported controls, and fallback limits."),
   secondaryRow("macro.controls.set", "Execute bounded track/item/take/transport/send controls through one consolidated program.", "write_reversible", "executable", "Expand for target kinds, supported fields, SQLite selectors, live resolution, and readback."),
-  secondaryRow("macro.selected_context", "Legacy compatibility mapping for selected project context.", "read", "consolidated_legacy_mapping", "Prefer executable macro.project.inspect or macro.project.query with entity=selected_context."),
-  secondaryRow("macro.set_track_controls", "Legacy track-control name consolidated into macro.controls.set target_kind=track.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
-  secondaryRow("macro.set_item_controls", "Legacy item-control name consolidated into macro.controls.set target_kind=item.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
-  secondaryRow("macro.set_take_controls", "Legacy take-control name consolidated into macro.controls.set target_kind=take.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
-  secondaryRow("macro.set_transport_controls", "Legacy transport-control name consolidated into macro.controls.set target_kind=transport.", "safe_or_write", "consolidated_legacy_mapping", "Use macro.controls.set."),
-  secondaryRow("macro.set_send_controls", "Legacy send-control name consolidated into macro.controls.set target_kind=send.", "write_reversible", "consolidated_legacy_mapping", "Use macro.controls.set."),
-  secondaryRow("macro.set_midi_controls", "Withdrawn generic MIDI draft; explicit task Macros replace it.", "write_evidence_bound", "withdrawn", "Use an accepted explicit MIDI task Macro when available."),
   secondaryRow("macro.set_stock_plugin_controls", "Execute semantic controls for supported stock plugins using fresh live parameter metadata.", "write_evidence_bound", "executable", "Expand for supported mappings, starter actions, and live readback requirements."),
 ]);
 
@@ -719,7 +878,14 @@ const PRIMARY_BY_ID = new Map(PRIMARY_DEFINITIONS.map((entry) => [entry.id, entr
 const RUNTIME_BOUND_PRIMARY_MACRO_IDS = new Set(["macro.project.inspect", "macro.project.query", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]);
 const CONTRACT_ONLY_DEFINITIONS = PRIMARY_DEFINITIONS.filter((entry) => !RUNTIME_BOUND_PRIMARY_MACRO_IDS.has(entry.id));
 const CONTRACT_ONLY_BY_ID = new Map(CONTRACT_ONLY_DEFINITIONS.map((entry) => [entry.id, entry]));
-const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, PROJECT_FILE_DEFINITION]);
+const SECONDARY_EXECUTABLE_DEFINITIONS = deepFreeze([
+  PROJECT_FILE_DEFINITION,
+  MIDI_CREATE_CLIP_DEFINITION,
+  NATIVE_FX_CHAIN_DEFINITION,
+  CONTROLS_SET_DEFINITION,
+  STOCK_PLUGIN_CONTROLS_DEFINITION,
+]);
+const GUIDE_DEFINITIONS = deepFreeze([...PRIMARY_DEFINITIONS, ...SECONDARY_EXECUTABLE_DEFINITIONS]);
 const GUIDE_BY_ID = new Map(GUIDE_DEFINITIONS.map((entry) => [entry.id, entry]));
 
 export const ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS = deepFreeze(CONTRACT_ONLY_DEFINITIONS.map((entry) => entry.id));
@@ -748,7 +914,6 @@ const ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING = deepFreeze({
 const ALPHA3_2A_COVERED_LEGACY_IDS = deepFreeze(Object.keys(ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING));
 const ALPHA3_2A_DISTINCT_LEGACY_IDS = deepFreeze([
   "macro.set_midi_controls",
-  "macro.set_stock_plugin_controls",
 ]);
 
 export const ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER = deepFreeze({
@@ -767,7 +932,7 @@ export const ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER = deepFreeze({
   ],
   withdrawn_ids: ["macro.set_midi_controls"],
   blocker: null,
-  reason: "macro.controls.set now owns the fixed track/item/take/transport/send program; old names are compatibility mappings, stock-plugin semantics remain a specialized executable Macro, and the generic MIDI draft is withdrawn.",
+  reason: "macro.controls.set owns track/item/take/transport/send controls; old names map to it, stock-plugin semantics stay specialized, and generic MIDI is withdrawn.",
 });
 
 const COMPACT_GUIDE = deepFreeze({
@@ -775,12 +940,11 @@ const COMPACT_GUIDE = deepFreeze({
   version: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
   phase: ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_PHASE,
   mode: "bounded_primary_manual_cards",
-  status: "candidate",
-  review_status: "in_review",
+  status: "runtime_aligned",
+  review_status: "truthful_12_macro_surface",
   tool_surface: {
     count: 5,
     tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
-    added_tools: 0,
     list_macros: false,
   },
   mental_model: {
@@ -788,10 +952,15 @@ const COMPACT_GUIDE = deepFreeze({
     macro: "Registered bounded task program through call_template. Published Macros execute fixed code-owned stages; project reads prefer SQLite and every write re-resolves live refs before mutation.",
     recipe: "Reusable/editable longer workflow; no public call_recipe or generic server-side Recipe executor.",
   },
+  ranked_executable_macro_menu: {
+    macro_ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
+    macros_before_templates: true,
+    compact_default_menu: true,
+  },
   primary_spine: {
     ordered_ids: ALPHA3_2A_PRIMARY_MACRO_IDS,
     rows: PRIMARY_DEFINITIONS.map((entry) => compactPrimaryRow(entry)),
-    current_posture: "candidate_in_review_mixed_runtime_posture",
+    current_posture: "runtime_aligned_primary_manuals",
   },
   project_query_entities: ALPHA3_2A_PROJECT_QUERY_ENTITIES,
   project_file_posture: ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE,
@@ -805,25 +974,37 @@ const COMPACT_GUIDE = deepFreeze({
   secondary_menu: {
     folded: true,
     rows: ALPHA3_2A_SECONDARY_MACRO_ROWS,
-    expansion_hint: "Exact ids keep legacy item fields unchanged; contract manuals appear here.",
+    expansion_hint: "Exact ids preserve item fields; executable secondary manuals expand here while covered legacy ids stay out of the default menu.",
+  },
+  direct_template_fallback: {
+    allowed: true,
+    trigger: "only_when_no_ranked_macro_covers_the_task",
+    discovery_tool: "list_templates",
+    request_shape: { surface: "catalog", query: "one bounded capability phrase", limit: 25 },
+    typed_gap_reasons: ALPHA3_2_5_E_FALLBACK_GAP_REASONS,
+    routing: "Use exact or filtered Template discovery only after recording one typed fallback-gap reason; do not add a new tool, raw SQL, or call_recipe.",
   },
   control_consolidation: ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER,
   common_task_routing: [
-    route("inspect project", "macro.project.inspect", "Execute one registered read Macro; it reconciles revision, hydrates or reuses SQLite, and returns compact project understanding."),
-    route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Execute the SQLite query directly; cold or stale scopes receive one bounded automatic read-only refresh."),
-    route("delete scoped objects", "macro.project.delete_targets", "Execute the confirmation-gated registered program with live ref resolution and absence readback; never delete source files."),
+    route("inspect project", "macro.project.inspect", "Execute one registered read Macro; it reconciles revision, uses SQLite, and returns compact project understanding."),
+    route("query project index", "macro.project.query", "Execute the SQLite query directly; cold or stale scopes get one bounded automatic read-only refresh."),
+    route("delete scoped objects", "macro.project.delete_targets", "Execute the confirmation-gated program with live ref resolution and absence readback; never delete source files."),
     route("apply track/folder layout", "macro.project.apply_layout", "Execute the bounded registered layout program and verify structural readback."),
     route("apply internal routing", "macro.routing.apply", "Execute the registered internal-routing program; hardware/device I/O remains blocked."),
     route("place media assets", "macro.media.place_assets", "Execute bounded probe/import/readback internally; never mutate source media files."),
-    route("set track/item/take/transport/send controls", "macro.controls.set", "Use one target_kind plus fields; SQLite selectors and live ref resolution are internal to the program."),
+    route("set controls", "macro.controls.set", "Use one target_kind plus fields; SQLite selectors and live re-resolution stay inside the program."),
     route("set supported stock plugin controls", "macro.set_stock_plugin_controls", "Use semantic controls or a starter action; the program hydrates live parameter metadata and verifies normalized readback."),
+    route("create a bounded MIDI clip", "macro.midi.create_clip", "Prefer a fresh unambiguous track selector or exact track_ref; the Macro creates the item/take and verifies PPQ note readback."),
+    route("apply the accepted native FX task", "macro.fx.apply_native_chain", "Prefer a fresh owner selector or owner ref; the Macro adds the accepted chain and verifies readback."),
     route("render targets", "macro.render.targets", "Execute one audited managed-root render route; no external encoder fallback."),
-    route("save/save-as", "macro.project.file", "Execute the fixed path/dirty/save/readback program; new/open/create remain held."),
-    route("recover blockers", "ping + exact guide request", "Repair typed readiness/ref/index/render blockers; no direct bridge, raw action/Lua, shell, or UI path."),
+    route("save/save-as", "macro.project.file", "Execute the fixed path/dirty/save/readback program; new/open stay held."),
+    route("recover blockers", "ping + exact guide request", "Repair typed readiness/ref/index/render blockers; no direct bridge or raw bypass path."),
+    route("fallback to direct Templates", "list_templates", "Only when no ranked Macro covers the task; record a typed gap reason and request exact Template detail."),
   ],
   portfolio: {
     primary_ids: ALPHA3_2A_PRIMARY_MACRO_IDS,
     secondary_ids: ALPHA3_2A_SECONDARY_MACRO_IDS,
+    executable_official_ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
     covered_legacy_ids: ALPHA3_2A_COVERED_LEGACY_IDS,
     legacy_to_primary_mapping: ALPHA3_2A_LEGACY_TO_PRIMARY_MAPPING,
     removed_legacy_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
@@ -836,12 +1017,11 @@ const COMPACT_GUIDE = deepFreeze({
     distinct_legacy: {
       ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
       blockers: [
-        "The generic MIDI control draft is withdrawn; use explicit task Macros when accepted.",
-        "Stock-plugin execution is available, but support claims remain bounded by per-plugin live evidence.",
+        "The generic MIDI control draft is withdrawn; use executable macro.midi.create_clip for clip creation and direct accepted Templates for uncovered MIDI edits.",
       ],
     },
     future_coverage_target: "about_80_percent_after_common_midi_fx_workloads",
-    claim_boundary: "Ten public Macros are executable; plugin and workload support claims remain bounded by reviewed evidence.",
+    claim_boundary: "Twelve public Macros are executable; plugin/workload claims remain evidence-bounded.",
   },
   recipe_guidance: {
     empty_catalog: "If empty, use one audited template atomically; for multi-step work state ad-hoc composition and use bounded readback.",
