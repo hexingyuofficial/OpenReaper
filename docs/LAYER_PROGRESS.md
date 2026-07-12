@@ -3356,3 +3356,77 @@ the required end-state inventory; it promotes no live/runtime Macro claim.
 Next gate: Alpha3.2.5-A MIDI and canonical-ref safety. Runtime Macro activation
 remains paused until A and the SQLite hydration/query dependency in B are
 accepted.
+
+## Alpha3.2.5-A MIDI And Canonical Ref Safety
+
+Status: accepted
+
+Accepted implementation commit:
+`78551b3 runtime: harden canonical refs and midi safety`
+
+Accepted surface:
+
+- typed object refs now require exact `kind`, `ref`, and `identity` agreement
+  before bridge dispatch, including project, artifact, and owner-qualified
+  composite ref grammars;
+- direct track/item/take create, resolve, write, and delete handlers reject
+  mismatched object refs instead of reconstructing a different target from
+  `identity` fields;
+- index refs remain accepted only as current-view positional selectors; product
+  guidance now tells agents to re-resolve after structure changes and prefer
+  GUID refs for stable operations;
+- `template.midi.create_midi_item` converts requested project time to QN, sets
+  explicit MIDI item extents, recovers the real MIDI take when active-take
+  readback is empty, verifies exact item time bounds, and deletes a failed
+  partial creation when cleanup is possible;
+- `template.midi.insert_notes_batch` is PPQ-only until seconds conversion is
+  separately repaired, strictly validates every note field before mutation,
+  and cannot return success for a partial insert or failed readback;
+- MIDI note, CC, and text/sysex list handlers now preserve the REAPER API retval
+  slot instead of shifting event fields, and D17 edit handlers preserve the
+  correct existing note/CC values during partial updates;
+- render-target child requests now emit canonical region/item/track identities
+  instead of the obsolete `canonical_ref` wrapper;
+- the five-tool MCP surface, Template risk/undo/verification boundaries,
+  hardware/device stops, and no-raw-bypass rules remain unchanged.
+
+Evidence:
+
+```text
+npm run check:alpha3-2-5-a -> 74/74 pass
+npm run check:alpha3-2c2 -> 9/9 pass
+npm run check:alpha3-2e -> 31/31 pass
+npm run check:template-runtime -> pass
+npm run build -> BUILD_EXIT=0 on exact accepted code
+git diff --check -> exit 0
+```
+
+Final live evidence:
+
+```text
+/private/tmp/openreaper-alpha325-a-live-20260712T061655Z/ALPHA325_A_FINAL_REPORT.json
+contract: alpha3.2.5-a.final_live.v1
+owner/generation: openreaper-alpha325-a / 4
+result: pass
+```
+
+The final live chain used a canonical track GUID returned by
+`template.project.read_track_item_overview` unchanged for MIDI creation, then
+passed the returned item/take GUID refs unchanged through resolve, PPQ note/CC/
+text insertion, exact list readback, item summary, delete, and post-delete
+absence verification. The seconds-positioned note request failed before bridge
+mutation with `TEMPLATE_INPUT_INVALID`; note count stayed `0 -> 0`. PPQ
+readback returned the exact inserted note (`120..360`, channel 2, pitch 64,
+velocity 91), CC (PPQ 240, channel 3, controller 74, value 99), and lyric
+(PPQ 480, `hello`). Item readback was exactly 4..6 seconds; delete returned one
+deletion and the next read returned `ITEM_NOT_FOUND`.
+
+The run used a disposable copy at
+`/private/tmp/openreaper-alpha325-a-live-20260712T061655Z/fixture/Untitled-A.RPP`.
+Its on-disk SHA-256 matched `/Users/Zhuanz/Untitled/Untitled.RPP`; the authorized
+source fixture was not modified. No render or source-media deletion occurred.
+Earlier failed fresh-root runs exposed the MIDI extent and event-slot bugs and
+were retained as diagnostic evidence rather than promoted as passes.
+
+Next gate: Alpha3.2.5-B SQLite automatic hydration and fast query. No public
+plan-only Macro was promoted by A.
