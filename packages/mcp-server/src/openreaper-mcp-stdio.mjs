@@ -204,10 +204,10 @@ async function main() {
             : "SCOPE_NOT_BOUND_IN_ALPHA_STDIO",
           message: request?.scope === "artifact"
             ? "Artifact reads require OPENREAPER_ARTIFACT_ROOT in the MCP server environment."
-            : "This alpha stdio server exposes OpenReaper discovery and macro planning; live project state reads require a configured live bridge route.",
+            : "This alpha stdio server reserves get_state for bounded artifact reads; inspect live project state with executable macro.project.inspect or macro.project.query through call_template.",
           recoverable: true,
         },
-        user_reminder: "Start REAPER through OpenReaper and reconnect before expecting live project reads.",
+        user_reminder: "Use call_template with macro.project.inspect or macro.project.query for live project state; use get_state with scope=artifact only for artifact refs.",
       }, true);
     },
   );

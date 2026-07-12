@@ -179,6 +179,26 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.deepEqual(calls, ["template.project.read_current_project_path"]);
   });
 
+  it("dry-runs render through the public Macro envelope without dispatching a child", async () => {
+    let calls = 0;
+    const response = await executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: "render-dry", input: { target_kind: "whole_project", format: "wav", dry_run: true } },
+      now,
+      managedRenderRoot,
+      executeAtomic: async () => {
+        calls += 1;
+        throw new Error("dry_run must not dispatch an atomic child");
+      },
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.execution.status, "dry_run_completed");
+    assert.equal(response.result.verification.status, "passed");
+    assert.equal(response.result.data.mutation_skipped, true);
+    assert.equal(response.result.data.managed_render_root, managedRenderRoot);
+    assert.equal(calls, 0);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
   it("renders through one audited atomic route and preserves returned evidence", async () => {
     const calls = [];
     const response = await executeAlpha3_2_5CRenderTargetsMacro({

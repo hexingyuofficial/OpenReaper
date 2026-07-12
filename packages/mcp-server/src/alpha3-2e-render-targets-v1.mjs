@@ -247,7 +247,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     stages.push({ id: "render-template-execute", kind: "template_execute", status: "skipped", summary: "Render mutation skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-dirty-after", kind: "template_execute", status: "skipped", summary: "Post-render dirty-state read skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Managed-root render preview projected.", evidence_refs: [] });
-    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", data: { preview: plan.preview, mutation_skipped: true, managed_root: true, managed_render_root: managedRoot, external_encoder: false } });
+    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", verification: { status: "passed", evidence_refs: [] }, data: { preview: plan.preview, mutation_skipped: true, managed_root: true, managed_render_root: managedRoot, external_encoder: false } });
   }
   let partialResult = null;
   try {

@@ -512,6 +512,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(tools.tools.some((tool) => tool.name === "list_macros" || tool.name === "call_recipe"), false);
 
       const pingResult = await client.callTool({ name: "ping", arguments: {} });
+      const stateResult = await client.callTool({ name: "get_state", arguments: {} });
       const templatesResult = await client.callTool({ name: "list_templates", arguments: {} });
       const recipesResult = await client.callTool({ name: "list_recipes", arguments: {} });
       const exactResult = await client.callTool({
@@ -535,6 +536,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       });
 
       const ping = parseToolJson(pingResult);
+      const state = parseToolJson(stateResult);
       const templates = parseToolJson(templatesResult);
       const recipes = parseToolJson(recipesResult);
       const exact = parseToolJson(exactResult);
@@ -556,6 +558,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
         assert.deepEqual(guide.ranked_executable_macro_menu.macro_ids, EXPECTED_EXECUTABLE_MACRO_IDS);
       }
       assert.equal(toolTextBytes(templatesResult) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
+      assert.equal(state.ok, false);
+      assert.equal(state.error.code, "SCOPE_NOT_BOUND_IN_ALPHA_STDIO");
+      assert.match(state.error.message, /macro\.project\.inspect/);
+      assert.match(state.error.message, /macro\.project\.query/);
+      assert.equal(state.error.message.includes("macro planning"), false);
+      assert.match(state.user_reminder, /call_template/);
       assert.equal(templates.product_surface.detail_level, "compact");
       assert.deepEqual(expandedDetailFieldsPresent(templates.product_surface), []);
       assert.equal(exact.product_surface.detail_level, "expanded");
