@@ -283,6 +283,11 @@ Executable Macros return `macro.execution.v1`:
     "summary": "Current project inspected.",
     "canonical_refs": [],
     "changes": [],
+    "data": {
+      "project": {},
+      "rows": [],
+      "page": null
+    },
     "verification": {
       "status": "passed",
       "evidence_refs": []
@@ -310,10 +315,12 @@ partial_failure
 ```
 
 Default results contain the completed task summary, returned canonical refs,
-important changes, SQLite source/freshness, verification, blockers, and compact
-stage evidence. Full descriptors, schemas, raw bridge envelopes, raw SQLite
-rows, logs, and large FX/project detail remain on-demand artifacts or paged
-queries.
+important changes, optional bounded task-shaped `data`, SQLite
+source/freshness, verification, blockers, and compact stage evidence. Query and
+inspection Macros use `data` for compact projected rows, page facts, and project
+understanding; they do not expose raw SQL or unbounded database records. Full
+descriptors, schemas, raw bridge envelopes, raw SQLite rows, logs, and large
+FX/project detail remain on-demand artifacts or paged queries.
 
 Initial compact ceilings are:
 

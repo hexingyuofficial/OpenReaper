@@ -38,8 +38,19 @@ async function main() {
     env: process.env,
     callContext,
   });
+  const artifactRuntime = process.env.OPENREAPER_ARTIFACT_ROOT
+    ? createGetStateArtifactRuntime({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
+    : null;
   const runtime = createCallTemplateRuntime({
     projectIndexRuntime,
+    projectIndexArtifactReader: artifactRuntime
+      ? ({ artifact_ref }) => artifactRuntime.get_state({
+          scope: "artifact",
+          artifact_ref,
+          view: "payload",
+          budget: { max_response_bytes: 1_048_576 },
+        })
+      : null,
     live: liveBridge.configured
       ? {
           opted_in: true,
@@ -51,9 +62,6 @@ async function main() {
       : { opted_in: false },
   });
   const recipeDiscovery = createDiscoveryCatalog({ recipes: [] });
-  const artifactRuntime = process.env.OPENREAPER_ARTIFACT_ROOT
-    ? createGetStateArtifactRuntime({ artifactRoot: process.env.OPENREAPER_ARTIFACT_ROOT })
-    : null;
 
   process.stderr.write(
     `[openreaper-mcp] ${KERNEL}\n` +
@@ -143,7 +151,7 @@ async function main() {
 
   server.tool(
     "call_template",
-    "Run one accepted runtime-bound template or legacy plan macro. Alpha3.2 contract-only guide ids are rejected; no hidden recipe executor is exposed.",
+    "Run one accepted runtime-bound Template, registered executable Macro program, or retained plan-only compatibility Macro. Contract-only guide ids are rejected; no hidden recipe executor is exposed.",
     {
       id: z.string().optional(),
       name: z.string().optional(),

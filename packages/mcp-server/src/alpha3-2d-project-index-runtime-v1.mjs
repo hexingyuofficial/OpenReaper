@@ -21,6 +21,7 @@ export const ALPHA3_2D_PROJECT_INDEX_MAX_ROWS = 4096;
 export const ALPHA3_2D_PROJECT_INDEX_MAX_BYTES = 1_048_576;
 
 export const ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS = Object.freeze([
+  "template.project.read_summary",
   "template.project.create_observation_bundle",
   "template.project.create_project_map_snapshot",
   "template.tracks.list_tracks",
@@ -43,6 +44,12 @@ const ARTIFACT_PAYLOAD_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
 ]);
 const ACCEPTED_TEMPLATE_IDS = new Set(ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS);
+const PROJECT_INDEX_SCOPE_NAMES = new Set([
+  "project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media",
+]);
+const PROJECT_REVISION_DEPENDENT_SCOPES = Object.freeze([
+  "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media",
+]);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const EMPTY_ROWS = Object.freeze({
   tracks: [], items: [], takes: [], fx: [], sends: [], envelopes: [],
@@ -83,6 +90,7 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
   let lifecycle;
   let degradedReason = null;
   let blockers = [];
+  let recovery = null;
   const sqliteAvailability = await loadSqliteBackend(options.sqliteModuleLoader);
   if (sqliteAvailability.ok) {
     const sqliteOpen = await openAlpha3C3ProjectIndexSqliteAdapter(adapterOptions);
@@ -92,6 +100,27 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
       backend = "sqlite_file_adapter";
       lifecycle = adapter.snapshot().lifecycle;
       blockers = sqliteOpen.blockers ?? [];
+      if (lifecycle === "stale_session") {
+        const rebuilt = await rebuildStaleManagedSqliteAdapter({
+          adapter,
+          adapterOptions,
+          dbPath,
+          observedAt,
+          identityBlockers: identityBlockersFromSnapshot(adapter.snapshot()),
+        });
+        recovery = rebuilt.recovery;
+        if (rebuilt.ok) {
+          adapter = rebuilt.adapter;
+          lifecycle = adapter.snapshot().lifecycle;
+          blockers = [];
+        } else {
+          adapter = createAlpha3C3ProjectIndex(adapterOptions);
+          backend = "resident_memory_fallback";
+          lifecycle = "degraded";
+          degradedReason = "SQLITE_STALE_SESSION_RECOVERY_FAILED";
+          blockers = rebuilt.blockers;
+        }
+      }
     } else {
       adapter = createAlpha3C3ProjectIndex(adapterOptions);
       backend = "resident_memory_fallback";
@@ -116,6 +145,7 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
     identity,
     lifecycle,
     now,
+    recovery,
     sessionId,
     maxRows: positiveBound(options.maxRows, ALPHA3_2D_PROJECT_INDEX_MAX_ROWS),
     maxBytes: positiveBound(options.maxBytes, ALPHA3_2D_PROJECT_INDEX_MAX_BYTES),
@@ -195,7 +225,55 @@ export async function validateManagedStateRoot(stateRoot, options = {}) {
     : { ok: true, state_root: canonical, db_path: dbPath, blockers: [] };
 }
 
-function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, identity, lifecycle, now, sessionId, maxRows, maxBytes }) {
+async function rebuildStaleManagedSqliteAdapter({ adapter, adapterOptions, dbPath, observedAt, identityBlockers }) {
+  const evidence = (status, stage, details = {}) => Object.freeze({
+    status,
+    stage,
+    stale_rows_reused: false,
+    observed_at: observedAt,
+    identity_blocker_codes: [...new Set(arrayOf(identityBlockers).map((entry) => entry?.code).filter(Boolean))].slice(0, 8),
+    ...details,
+  });
+  try {
+    adapter.close({ observed_at: observedAt });
+  } catch (error) {
+    return {
+      ok: false,
+      recovery: evidence("failed", "close"),
+      blockers: [blocker("SQLITE_STALE_SESSION_CLOSE_FAILED", "Stale Project Index adapter could not close before rebuild.", error)],
+    };
+  }
+  try {
+    await unlink(dbPath);
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      return {
+        ok: false,
+        recovery: evidence("failed", "remove"),
+        blockers: [blocker("SQLITE_STALE_SESSION_REMOVE_FAILED", "Validated managed Project Index database could not be removed for rebuild.", error)],
+      };
+    }
+  }
+  const reopened = await openAlpha3C3ProjectIndexSqliteAdapter(adapterOptions);
+  if (!reopened.ok || !reopened.adapter || reopened.adapter.snapshot().lifecycle === "stale_session") {
+    try { reopened.adapter?.close({ observed_at: observedAt }); } catch {}
+    return {
+      ok: false,
+      recovery: evidence("failed", "reopen"),
+      blockers: [
+        blocker("SQLITE_STALE_SESSION_REOPEN_FAILED", "Fresh Project Index database could not reopen after stale-session removal."),
+        ...arrayOf(reopened.blockers),
+      ],
+    };
+  }
+  return {
+    ok: true,
+    adapter: reopened.adapter,
+    recovery: evidence("recovered", "rebuild", { db_rebuilt: true }),
+  };
+}
+
+function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, identity, lifecycle, now, recovery, sessionId, maxRows, maxBytes }) {
   let closed = false;
   let managerLifecycle = lifecycle;
   let managerDegradedReason = degradedReason;
@@ -205,6 +283,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
   const status = () => {
     const snapshot = guardedSnapshot(adapter.snapshot());
     const stale = snapshot.lifecycle === "stale_session";
+    const snapshotEvidence = compactSnapshotEvidence(snapshot, identity.project_ref);
     return Object.freeze({
       contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
       ok: !closed && !stale,
@@ -220,6 +299,12 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
       bridge_generation: identity.bridge_generation,
       session_id: sessionId,
       session_policy: "deterministic_server_managed_id_for_matching_project_owner_generation_and_logical_install_session",
+      snapshot_id: snapshotEvidence.snapshot_id,
+      revision: snapshotEvidence.revision,
+      freshness_token: snapshotEvidence.freshness_token,
+      revision_source: snapshotEvidence.revision_source,
+      project_change_count: snapshotEvidence.project_change_count,
+      recovery,
       rows_available: !closed && !stale,
       sqlite_rows_are_candidates_only: true,
       sqlite_is_truth: false,
@@ -283,6 +368,136 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     return result;
   };
 
+  const invalidateScopes = (input = {}) => {
+    if (closed) return invalidationFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
+    if (adapter.snapshot().lifecycle === "stale_session") return invalidationFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; scope invalidation is rejected.");
+    if (!isObject(input) || !Array.isArray(input.scopes)) return invalidationFailure("invalid_scopes", "INDEX_SCOPES_REQUIRED", "Scope invalidation requires a non-empty scopes array.");
+    const scopes = [...new Set(input.scopes)];
+    if (scopes.length === 0 || scopes.some((scope) => typeof scope !== "string" || !PROJECT_INDEX_SCOPE_NAMES.has(scope))) {
+      return invalidationFailure("invalid_scopes", "INDEX_SCOPE_UNKNOWN", "Scope invalidation accepts only known Project Index scope names.", { scopes: input.scopes });
+    }
+    const observedAt = safeIso(input.observed_at, now);
+    const before = adapter.snapshot();
+    for (const scope of scopes) {
+      const current = before.freshness_scopes?.[scope] ?? {};
+      const result = adapter.markScopeStale({
+        scope_kind: scope,
+        scope_ref: current.scope_ref ?? "project",
+        snapshot_id: before.snapshot_id,
+        coverage_status: current.coverage_status ?? "unknown",
+        observed_at: observedAt,
+        reason: "known_write_requires_refresh",
+      });
+      if (result?.ok === false) {
+        managerLifecycle = "degraded";
+        managerDegradedReason = "SCOPE_INVALIDATION_FAILED";
+        managerBlockers = [blocker("SCOPE_INVALIDATION_FAILED", "Project Index could not mark known write scopes stale.", result.blockers?.[0])];
+        return invalidationFailure("scope_invalidation_failed", "SCOPE_INVALIDATION_FAILED", "Known write scopes could not be invalidated.");
+      }
+    }
+    const snapshotEvidence = compactSnapshotEvidence(adapter.snapshot(), identity.project_ref);
+    return Object.freeze({
+      contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+      ok: true,
+      status: "scopes_invalidated",
+      scopes,
+      observed_at: observedAt,
+      snapshot_id: snapshotEvidence.snapshot_id,
+      revision: snapshotEvidence.revision,
+      freshness_token: snapshotEvidence.freshness_token,
+      revision_source: snapshotEvidence.revision_source,
+      project_change_count: snapshotEvidence.project_change_count,
+      sqlite_rows_are_candidates_only: true,
+    });
+  };
+
+  const reconcileProjectRevision = (input = {}) => {
+    if (closed) return invalidationFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
+    if (adapter.snapshot().lifecycle === "stale_session") return invalidationFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; project revision reconciliation is rejected.");
+    if (!isObject(input)) return invalidationFailure("invalid_change_count", "PROJECT_CHANGE_COUNT_REQUIRED", "Project revision reconciliation requires a non-negative live change_count.");
+    const changeCount = nonNegativeIntegerOrNull(input.change_count ?? input.changeCount);
+    if (changeCount === null) return invalidationFailure("invalid_change_count", "PROJECT_CHANGE_COUNT_REQUIRED", "Project revision reconciliation requires a non-negative live change_count.");
+    const before = adapter.snapshot();
+    const storedChangeCount = projectChangeCountFromSnapshot(before, identity.project_ref);
+    if (storedChangeCount === null) {
+      const observedAt = safeIso(input.observed_at, now);
+      const selection = selectionRowsWithProjectChangeCount(before.rows?.selection_state, identity.project_ref, changeCount);
+      const initialized = adapter.replaceSelection({
+        snapshot_id: before.snapshot_id,
+        observed_at: observedAt,
+        source_template_id: "template.project.read_summary",
+        projectRef: identity.project_ref,
+        bridgeOwner: identity.bridge_owner,
+        bridgeGeneration: identity.bridge_generation,
+        sessionId,
+        rows: selection,
+        coverage_status: "head_only",
+        freshness_status: "fresh",
+      });
+      if (initialized?.ok === false) {
+        return invalidationFailure("revision_initialize_failed", "PROJECT_REVISION_INITIALIZE_FAILED", "Project revision could not be initialized.", initialized.blockers?.[0]);
+      }
+      const snapshotEvidence = compactSnapshotEvidence(adapter.snapshot(), identity.project_ref);
+      return Object.freeze({
+        contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+        ok: true,
+        status: "revision_initialized",
+        changed: false,
+        live_change_count: changeCount,
+        snapshot_id: snapshotEvidence.snapshot_id,
+        revision: snapshotEvidence.revision,
+        freshness_token: snapshotEvidence.freshness_token,
+        revision_source: snapshotEvidence.revision_source,
+        sqlite_rows_are_candidates_only: true,
+      });
+    }
+    if (storedChangeCount === changeCount) {
+      const snapshotEvidence = compactSnapshotEvidence(before, identity.project_ref);
+      return Object.freeze({
+        contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+        ok: true,
+        status: "revision_matched",
+        changed: false,
+        live_change_count: changeCount,
+        snapshot_id: snapshotEvidence.snapshot_id,
+        revision: snapshotEvidence.revision,
+        freshness_token: snapshotEvidence.freshness_token,
+        revision_source: snapshotEvidence.revision_source,
+        sqlite_rows_are_candidates_only: true,
+      });
+    }
+
+    const observedAt = safeIso(input.observed_at, now);
+    const selection = selectionRowsWithProjectChangeCount(before.rows?.selection_state, identity.project_ref, changeCount);
+    const selectionResult = adapter.replaceSelection({
+      snapshot_id: before.snapshot_id,
+      observed_at: observedAt,
+      source_template_id: "template.project.read_summary",
+      projectRef: identity.project_ref,
+      bridgeOwner: identity.bridge_owner,
+      bridgeGeneration: identity.bridge_generation,
+      sessionId,
+      rows: selection,
+      coverage_status: "head_only",
+      freshness_status: "fresh",
+    });
+    if (selectionResult?.ok === false) {
+      managerLifecycle = "degraded";
+      managerDegradedReason = "PROJECT_REVISION_RECONCILE_FAILED";
+      managerBlockers = [blocker("PROJECT_REVISION_RECONCILE_FAILED", "Project Index could not retain the live project revision.", selectionResult.blockers?.[0])];
+      return invalidationFailure("revision_reconcile_failed", "PROJECT_REVISION_RECONCILE_FAILED", "Project revision could not be reconciled.");
+    }
+    const invalidated = invalidateScopes({ scopes: PROJECT_REVISION_DEPENDENT_SCOPES, observed_at: observedAt });
+    if (!invalidated.ok) return invalidated;
+    return Object.freeze({
+      ...invalidated,
+      status: "revision_changed",
+      changed: true,
+      previous_change_count: storedChangeCount,
+      live_change_count: changeCount,
+    });
+  };
+
   const projectAndApply = ({ templateId, readback, execution, payloadRef }) => {
     let projection;
     try {
@@ -319,7 +534,10 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
           const method = STORE_METHODS[scope];
           if (!method) continue;
           const coverage = projection.coverage[scope] ?? "complete";
-          const result = adapter[method]({ ...common, rows, coverage_status: coverage, freshness_status: "fresh" });
+          const projectedRows = method === "replaceSelection"
+            ? mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, rows)
+            : rows;
+          const result = adapter[method]({ ...common, rows: projectedRows, coverage_status: coverage, freshness_status: "fresh" });
           if (result?.ok === false) throw new Error(result.blockers?.[0]?.code ?? `${method}_failed`);
           applied.push(scope);
         }
@@ -365,6 +583,8 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     status_summary: status,
     observeSuccessfulTemplateExecution: observe,
     observeArtifactPayload,
+    invalidateScopes,
+    reconcileProjectRevision,
     close(input = {}) {
       if (closed) return status();
       closed = true;
@@ -388,6 +608,11 @@ const STORE_METHODS = Object.freeze({
 });
 
 function applyScopedProjection({ adapter, templateId, projection, readback, common }) {
+  if (templateId === "template.project.read_summary") {
+    const rows = mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, projection.scopes.selected_context ?? []);
+    const result = adapter.replaceSelection({ ...common, rows, coverage_status: "head_only", freshness_status: "fresh" });
+    return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["selected_context"] };
+  }
   if (templateId === "template.fx.list_track_fx_chain" || templateId === "template.fx.list_take_fx_chain") {
     const rows = projection.scopes.fx ?? [];
     const ownerRef = stringOrNull(readback.owner_ref) ?? rows[0]?.owner_ref ?? null;
@@ -419,6 +644,8 @@ function applyScopedProjection({ adapter, templateId, projection, readback, comm
 
 function projectReadback(templateId, readback, projectRef) {
   switch (templateId) {
+    case "template.project.read_summary":
+      return { scopes: { selected_context: projectHeadRows(readback, projectRef) }, coverage: { selected_context: "head_only" } };
     case "template.tracks.list_tracks":
     case "template.tracks.read_mixer_controls":
       return simpleProjection("tracks", mapTracks(readback.tracks, projectRef), coverageOf(readback, "complete"), arrayOf(readback.tracks).length);
@@ -504,6 +731,7 @@ function projectMapPayload(overview, projectRef, coverage = {}) {
 }
 
 function projectHeadRows(readback, projectRef, selectedRows = []) {
+  const changeCount = nonNegativeIntegerOrNull(readback.change_count);
   const projectRow = {
     ref: projectRef,
     owner_ref: null,
@@ -518,6 +746,7 @@ function projectHeadRows(readback, projectRef, selectedRows = []) {
       marker_count: readback.marker_count,
       region_count: readback.region_count,
       selected_count: readback.selected_count,
+      ...(changeCount === null ? {} : { change_count: changeCount }),
     }),
   };
   return dedupeRows([projectRow, ...selectedRows]);
@@ -656,6 +885,68 @@ function guardedSnapshot(snapshot) {
   return Object.freeze({ ...snapshot, snapshot_id: null, rows: EMPTY_ROWS, coverage: {}, rows_withheld: true });
 }
 
+function compactSnapshotEvidence(snapshot, projectRef) {
+  const snapshotId = nonEmpty(snapshot?.snapshot_id);
+  if (!snapshotId) return { snapshot_id: null, revision: null, freshness_token: null, revision_source: null, project_change_count: null };
+  const projectChangeCount = projectChangeCountFromSnapshot(snapshot, projectRef);
+  const freshnessMaterial = {
+    snapshot_id: snapshotId,
+    project_change_count: projectChangeCount,
+    scopes: Object.entries(snapshot?.freshness_scopes ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([scope, value]) => [scope, value?.snapshot_id ?? null, value?.status ?? null, value?.coverage_status ?? null, value?.observed_at ?? null]),
+  };
+  const freshnessToken = `freshness:alpha3.2d:${createHash("sha256").update(JSON.stringify(freshnessMaterial)).digest("hex").slice(0, 24)}`;
+  return {
+    snapshot_id: snapshotId,
+    revision: projectChangeCount === null ? freshnessToken : `reaper-change-count:${projectChangeCount}`,
+    freshness_token: freshnessToken,
+    revision_source: projectChangeCount === null ? "project_index_snapshot" : "reaper_project_state_change_count",
+    project_change_count: projectChangeCount,
+  };
+}
+
+function projectChangeCountFromSnapshot(snapshot, projectRef) {
+  const projectHead = arrayOf(snapshot?.rows?.selection_state).find((row) => row?.scope_kind === "project_head" && row?.ref === projectRef);
+  return nonNegativeIntegerOrNull(projectHead?.summary?.change_count);
+}
+
+function mergeProjectHeadSelectionRows(currentRows, nextRows) {
+  const existingProjectHead = arrayOf(currentRows).find((row) => row?.scope_kind === "project_head");
+  const projectedProjectHead = arrayOf(nextRows).find((row) => row?.scope_kind === "project_head");
+  const preserved = arrayOf(currentRows).filter((row) => row?.scope_kind !== "project_head");
+  const projected = arrayOf(nextRows).filter((row) => row?.scope_kind !== "project_head");
+  const projectHead = projectedProjectHead && {
+    ...existingProjectHead,
+    ...projectedProjectHead,
+    summary: { ...compactObject(existingProjectHead?.summary), ...compactObject(projectedProjectHead.summary) },
+  };
+  const rows = [...preserved, ...projected];
+  if (projectHead) rows.unshift(projectHead);
+  const unique = new Map();
+  for (const row of rows) {
+    if (row?.ref && row?.scope_kind) unique.set(`${row.scope_kind}\0${row.ref}`, row);
+  }
+  return [...unique.values()].map((row) => {
+    const {
+      snapshot_id: _snapshotId,
+      observed_at: _observedAt,
+      payload_ref: _payloadRef,
+      ...projected
+    } = row;
+    return projected;
+  });
+}
+
+function selectionRowsWithProjectChangeCount(currentRows, projectRef, changeCount) {
+  return mergeProjectHeadSelectionRows(currentRows, [{
+    ref: projectRef,
+    owner_ref: null,
+    scope_kind: "project_head",
+    summary: { change_count: changeCount },
+  }]);
+}
+
 async function validateRuntimeIdentity(options, stateRoot) {
   const blockers = [];
   const bridgeOwner = nonEmpty(options.bridgeOwner ?? options.bridge_owner);
@@ -733,11 +1024,14 @@ async function loadSqliteBackend(loader) {
 
 function createFailedRuntimeOpen({ observedAt, blockers, dbPath }) {
   const status = () => Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, lifecycle: "degraded", adapter_lifecycle: "missing", degraded: true, degraded_reason: blockers[0]?.code ?? "RUNTIME_OPEN_FAILED", rows_available: false, row_counts: {}, blockers });
-  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: null, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), close: status });
+  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: null, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), invalidateScopes: () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), reconcileProjectRevision: () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), close: status });
 }
 
 function observationFailure(status, code, message, details = undefined) {
   return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_OBSERVATION_CONTRACT, ok: false, status, observed: false, blockers: [blocker(code, message, details)], child_calls_executed: 0 });
+}
+function invalidationFailure(status, code, message, details = undefined) {
+  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, status, blockers: [blocker(code, message, details)], sqlite_rows_are_candidates_only: true });
 }
 function blocker(code, message, detail) {
   const result = { code, message, recoverable: true };
@@ -790,6 +1084,7 @@ function stringOr(value, fallback) { return typeof value === "string" ? value : 
 function stringOrNull(value) { return typeof value === "string" ? value : null; }
 function integerOr(value, fallback) { return Number.isInteger(value) ? value : fallback; }
 function integerOrNull(value) { return Number.isInteger(value) ? value : null; }
+function nonNegativeIntegerOrNull(value) { return Number.isInteger(value) && value >= 0 ? value : null; }
 function finiteOrNull(value) { return Number.isFinite(value) ? value : null; }
 function booleanOrNull(value) { return typeof value === "boolean" ? value : null; }
 function positiveBound(value, fallback) { return Number.isInteger(value) && value > 0 ? value : fallback; }

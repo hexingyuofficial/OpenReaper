@@ -805,9 +805,11 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
 
   it("keeps packaged Doctor smoke aligned with the current macro surface and returns bounded failure detail", async () => {
     const doctorSource = await readFile(path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-doctor.sh"), "utf8");
-    assert.match(doctorSource, /const requiredMacros = \["macro\.project\.query"\];/);
+    assert.match(doctorSource, /const requiredMacros = \["macro\.project\.inspect", "macro\.project\.query"\];/);
     assert.doesNotMatch(doctorSource, /const requiredMacros = \[[^\]]*macro\.index_status/);
     assert.doesNotMatch(doctorSource, /const requiredMacros = \[[^\]]*macro\.query_tracks/);
+    assert.match(doctorSource, /projectAlpha3_2_5BProjectQueryDoctorTask/);
+    assert.match(doctorSource, /projectIndexReadiness: report\.project_index_readiness/);
     assert.match(doctorSource, /error_message: boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
   });

@@ -119,7 +119,7 @@ const ENVELOPE_REQUEST_FIELDS = new Set(["request_id", "dry_run"]);
 const EXECUTION_FIELDS = new Set(["status", "started_at", "completed_at", "stage_count", "stages"]);
 const STAGE_SUMMARY_FIELDS = new Set(["id", "kind", "status", "summary", "evidence_refs"]);
 const SQLITE_EVIDENCE_FIELDS = new Set(["used", "source", "freshness", "snapshot_ref", "revision", "refreshed"]);
-const RESULT_FIELDS = new Set(["summary", "canonical_refs", "changes", "verification", "artifact_refs"]);
+const RESULT_FIELDS = new Set(["summary", "canonical_refs", "changes", "verification", "artifact_refs", "data"]);
 const VERIFICATION_FIELDS = new Set(["status", "evidence_refs"]);
 const BUDGET_FIELDS = new Set(["max_bytes", "actual_bytes", "truncated", "artifact_fallback"]);
 
@@ -448,6 +448,9 @@ function validateResult(value, errors) {
     for (const ref of value.canonical_refs) requireCondition(isCanonicalRef(ref), "canonical_refs contains an invalid ref", errors);
   }
   if (value.artifact_refs !== undefined) validateEvidenceRefs(value.artifact_refs, "artifact_refs", errors);
+  if (value.data !== undefined) {
+    requireCondition(isPlainObject(value.data), "result data must be an object", errors);
+  }
 
   if (!isPlainObject(value.verification)) {
     errors.push("result verification is required");
@@ -479,6 +482,7 @@ function validateSerializedBudget(envelope, errors) {
     const inline = JSON.stringify({
       stages: envelope.execution?.stages,
       changes: envelope.result?.changes,
+      data: envelope.result?.data,
       blockers: envelope.blockers,
       error: envelope.error,
       recovery: envelope.recovery,

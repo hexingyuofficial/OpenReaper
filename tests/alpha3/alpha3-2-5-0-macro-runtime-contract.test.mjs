@@ -170,6 +170,19 @@ describe("Alpha3.2.5-0 Macro runtime contract", () => {
       refreshed: false,
     };
     assert.equal(validateMacroExecutionEnvelope(falseSqliteUse).valid, false);
+
+    const queryResult = structuredClone(envelope);
+    queryResult.result.data = {
+      entity: "tracks",
+      rows: [{ ref: "track:guid:{TRACK-A}", name: "Lead" }],
+      page: { next_cursor: null },
+    };
+    queryResult.budget.actual_bytes = Buffer.byteLength(JSON.stringify(queryResult));
+    assert.deepEqual(validateMacroExecutionEnvelope(queryResult), { valid: true, errors: [] });
+
+    const invalidData = structuredClone(envelope);
+    invalidData.result.data = [];
+    assert.equal(validateMacroExecutionEnvelope(invalidData).valid, false);
   });
 
   it("keeps the architecture boundary explicit in the approved ABI documents", async () => {
@@ -267,6 +280,9 @@ function successfulEnvelope() {
         evidence_refs: ["evidence:readback"],
       },
       artifact_refs: [],
+      data: {
+        target_kind: "track",
+      },
     },
     blockers: [],
     error: null,

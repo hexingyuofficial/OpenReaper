@@ -148,10 +148,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     for (const row of guide.primary_spine.rows) {
       assert.equal(
         row.implementation_status,
-        row.id === "macro.project.query"
-          ? "supported_runtime_bound_plan_only"
-          : row.id === "macro.project.inspect"
-            ? "plan_only_runtime_bound"
+        ["macro.project.query", "macro.project.inspect"].includes(row.id)
+          ? "executable_registered_program"
             : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(row.id)
               ? "plan_only_runtime_bound_preview_first"
               : row.id === "macro.render.targets"
@@ -224,7 +222,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(expansion.runnable, runtimeBound);
       assert.equal(
         expansion.implementation_status,
-        expansion.id === "macro.render.targets"
+        expansion.id === "macro.project.inspect"
+          ? "executable_registered_program"
+          : expansion.id === "macro.render.targets"
           ? "plan_only_runtime_bound_preview_first"
           : ["macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets"].includes(expansion.id)
             ? "plan_only_runtime_bound_preview_first"
@@ -298,9 +298,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(guide.project_file_posture.status, "reads_and_writes_accepted_live_smoked");
     assert.deepEqual(guide.project_file_posture.accepted_mutation_routes, EXPECTED_PROJECT_FILE_TEMPLATE_IDS.slice(2));
     assert.deepEqual(guide.project_file_posture.ids.map((row) => row.status), ["accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked"]);
-    assert.match(inspectCard.action_manual.when_to_use, /accepted exact project path/);
-    assert.equal(inspectCard.action_manual.common_blockers.includes("PROJECT_FILE_NEW_OPERATION_HELD"), true);
-    assert.match(inspectManual.readback_steps.join(" "), /exact path\/path_state/);
+    assert.match(inspectCard.action_manual.when_to_use, /Inspect current project identity/);
+    assert.equal(inspectCard.action_manual.common_blockers.includes("BRIDGE_NOT_READY"), true);
+    assert.match(inspectManual.readback_steps.join(" "), /project identity\/path/);
     for (const id of EXPECTED_PROJECT_FILE_TEMPLATE_IDS) {
       assert.equal(projectFileManual.underlying_actions.some((row) => row.includes(id)), true, id);
     }
@@ -321,7 +321,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     );
     assert.equal(portfolio.legacy_query_posture.public_generic_id, "macro.project.query");
     assert.deepEqual(portfolio.legacy_query_posture.temporary_compatibility_ids, ["macro.selected_context"]);
-    assert.equal(portfolio.legacy_query_posture.generic_status, "supported_runtime_bound_plan_only_not_live_runnable");
+    assert.equal(portfolio.legacy_query_posture.generic_status, "executable_registered_macro_program");
     assert.deepEqual(portfolio.distinct_legacy.ids, EXPECTED_DISTINCT_LEGACY_IDS);
     assert.equal(portfolio.distinct_legacy.blockers.length >= 3, true);
     assert.equal(portfolio.distinct_legacy.blockers.every((blocker) => blocker.length > 0), true);
@@ -386,7 +386,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(marginBytes >= 512, true, `${marginBytes}`);
   });
 
-  it("keeps only the six unimplemented primary ids held while query is runtime-bound and project.file remains plan-only", async () => {
+  it("keeps unimplemented ids held while inspect/query are executable and project.file remains plan-only", async () => {
     let executorCalls = 0;
     const runtime = createCallTemplateRuntime({
       executor: async () => {
@@ -405,8 +405,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
 
     const queryGuide = createAlpha3_2AAgentContextMacroGuide({ requested_ids: ["macro.project.query"] })
       .requested_expansions.items[0];
-    assert.equal(queryGuide.implementation_status, "supported_runtime_bound_plan_only");
-    assert.equal(queryGuide.runnable, false);
+    assert.equal(queryGuide.implementation_status, "executable_registered_program");
+    assert.equal(queryGuide.runnable, true);
 
     const projectFile = await runtime.call_template({ id: "macro.project.file", input: { operation: "save_current" } });
     assert.equal(projectFile.ok, true);
@@ -545,13 +545,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(render.result.executed, false);
       assert.equal(render.result.mode, "dry_run_preview");
       assert.deepEqual(render.result.child_requests, []);
-      assert.equal(inspect.ok, true);
-      assert.equal(inspect.template.id, "macro.project.inspect");
-      assert.equal(inspect.result.executed, false);
-      assert.deepEqual(inspect.result.child_requests.map((request) => request.id), [
-        "template.project.read_current_project_path",
-        "template.project.read_dirty_state",
-      ]);
+      assert.equal(inspect.ok, false);
+      assert.equal(inspect.contract, "macro.execution.v1");
+      assert.equal(inspect.macro.id, "macro.project.inspect");
+      assert.equal(inspect.execution.status, "blocked");
+      assert.equal(inspect.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
     } finally {
       await client.close();
     }

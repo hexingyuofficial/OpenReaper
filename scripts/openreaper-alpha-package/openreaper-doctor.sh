@@ -35,6 +35,7 @@ const startCommand = path.join(installRoot, "bin", "openreaper-start");
 const doctorCommand = path.join(installRoot, "bin", "openreaper-doctor");
 const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs");
 const readinessModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
+const projectUnderstandingModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2-5-b-project-understanding-v1.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
 const bridgeActionName = "OpenReaper: Start MCP bridge";
@@ -42,7 +43,7 @@ const bridgeActionScript = path.join(home, "Library", "Application Support", "RE
 const reaperKbPath = path.join(home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
 const exactTools = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const vitalAgentRequiredTools = ["create_openreaper_handoff_plan", "run_doctor"];
-const requiredMacros = ["macro.project.query"];
+const requiredMacros = ["macro.project.inspect", "macro.project.query"];
 const requiredFxTemplates = [
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
@@ -61,6 +62,7 @@ for (const [signal, exitCode] of [["SIGINT", 130], ["SIGTERM", 143]]) {
 }
 
 const readinessModule = await import(pathToFileURL(readinessModulePath));
+const projectUnderstandingModule = await import(pathToFileURL(projectUnderstandingModulePath));
 const {
   ALPHA3_2B3_READ_PROBE_TEMPLATE_ID,
   alpha3_2B3ReadProbeTimeoutMs,
@@ -72,6 +74,7 @@ const {
   parseAlpha3_2B3ExpectedIdentity,
   resolveAlpha3_2B3DoctorRenderRoot,
 } = readinessModule;
+const { projectAlpha3_2_5BProjectQueryDoctorTask } = projectUnderstandingModule;
 
 const cli = parseAlpha3_2B3DoctorArgs(process.argv.slice(2));
 if (!cli.ok) {
@@ -151,6 +154,8 @@ const report = {
   status: "unknown",
   runtime_readiness: null,
   runtime_diagnosis: null,
+  project_index: null,
+  project_index_readiness: null,
   reaper_process: reaperProcess,
   render_root_selection: {
     source: renderSelection.source,
@@ -183,6 +188,7 @@ report.checks.mcp_command = await pathCheck(mcpCommand);
 report.checks.vital_agent_mcp_command = await pathCheck(vitalAgentMcpCommand);
 report.checks.server_script = await pathCheck(serverScript);
 report.checks.readiness_module = await pathCheck(readinessModulePath);
+report.checks.project_understanding_module = await pathCheck(projectUnderstandingModulePath);
 report.checks.vital_agent_server_script = await pathCheck(vitalAgentServerScript);
 report.checks.bridge_script = await pathCheck(bridgeScript);
 report.checks.bridge_action_script = await pathCheck(bridgeActionScript);
@@ -194,6 +200,10 @@ await scanClientConfigs();
 report.smoke = await smokeMcp();
 report.runtime_readiness = report.smoke?.openreaper?.runtime_readiness ?? null;
 report.request_response = report.smoke?.openreaper?.request_response ?? report.request_response;
+report.project_index = report.smoke?.package_mcp_command?.project_index
+  ?? report.smoke?.openreaper?.project_index
+  ?? null;
+report.project_index_readiness = projectIndexReadiness(report.project_index);
 if (report.wait_bridge) {
   report.wait_bridge.polls = report.smoke?.openreaper?.wait_bridge_polls ?? 0;
   report.wait_bridge.reached_bridge_ready = report.runtime_readiness?.bridge?.status === "bridge_ready";
@@ -204,7 +214,7 @@ report.package_status = computePackageStatus();
 report.status = report.package_status;
 
 if (cli.mode !== null) {
-  report.task = createAlpha3_2B3DoctorTaskResult({
+  const sharedTask = createAlpha3_2B3DoctorTaskResult({
     mode: cli.mode,
     runtimeReadiness: report.runtime_readiness,
     requestResponse: report.request_response,
@@ -214,6 +224,11 @@ if (cli.mode !== null) {
     startCommand,
     bridgeActionName,
     transportDir,
+  });
+  report.task = projectAlpha3_2_5BProjectQueryDoctorTask({
+    task: sharedTask,
+    projectIndexReadiness: report.project_index_readiness,
+    projectIndex: report.project_index,
   });
 }
 
@@ -233,6 +248,11 @@ console.log(`bridge_diagnosis=${report.runtime_diagnosis ?? "not_observed"}`);
 console.log(`reaper_process_status=${reaperProcess.status}`);
 console.log(`render_root_status=${renderInspection.status}`);
 console.log(`request_response_status=${report.request_response.status}`);
+console.log(`project_index_status=${report.project_index_readiness.status}`);
+console.log(`project_index_backend=${report.project_index?.backend ?? "not_configured"}`);
+console.log(`project_index_revision=${report.project_index?.revision ?? "not_hydrated"}`);
+console.log(`project_index_recovery=${report.project_index?.recovery?.status ?? "none"}`);
+console.log(`project_index_next_action=${report.project_index_readiness.next_action}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
 console.log("startup_lifetime=openreaper-start launches REAPER detached from the agent shell and returns a pid/log path.");
 console.log("startup_dialog_assist=only Project Settings / Notes show-notes-on-load is auto-dismissed; license/evaluation, recovery, plugin/FX, version, and unknown windows require agent/user action.");
@@ -410,6 +430,7 @@ async function smokeOpenReaperMcpCommandInner() {
       kernel: ping.kernel,
       tool_surface: toolNames,
       render_root_status: ping.runtime_readiness?.render_root?.status ?? "not_observed",
+      project_index: ping.project_index ?? null,
     };
   } catch (error) {
     return {
@@ -509,12 +530,49 @@ async function smokeOpenReaperMcpInner() {
       required_macros: requiredMacros,
       required_fx_templates: requiredFxTemplates,
       runtime_readiness: ping.runtime_readiness,
+      project_index: ping.project_index ?? null,
       request_response: requestResponse,
       wait_bridge_polls: waitPolls,
     };
   } finally {
     await lifecycle.close("normal_finish");
   }
+}
+
+function projectIndexReadiness(index) {
+  if (!index || index.lifecycle === "not_configured") {
+    return {
+      status: "not_configured",
+      ready: false,
+      next_action: "Run OpenReaper through the installed wrapper so the managed Project Index state root is configured.",
+    };
+  }
+  if (index.lifecycle === "ready" && index.recovery?.status === "recovered") {
+    return {
+      status: "recovered_ready",
+      ready: true,
+      next_action: "The stale cache was rebuilt without reusing old rows; call macro.project.inspect or macro.project.query normally.",
+    };
+  }
+  if (index.lifecycle === "ready" && index.snapshot_id === null) {
+    return {
+      status: "ready_cold",
+      ready: true,
+      next_action: "Call macro.project.inspect or macro.project.query; the first call performs bounded read-only hydration automatically.",
+    };
+  }
+  if (index.lifecycle === "ready") {
+    return {
+      status: "ready_warm",
+      ready: true,
+      next_action: "Use macro.project.inspect or macro.project.query; matching fresh SQLite state will be reused.",
+    };
+  }
+  return {
+    status: index.lifecycle ?? "degraded",
+    ready: false,
+    next_action: "Restore the managed OpenReaper bridge/session, then retry macro.project.inspect or macro.project.query once.",
+  };
 }
 
 async function smokeVitalAgentMcpInner() {

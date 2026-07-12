@@ -106,7 +106,7 @@ export function createAlpha3_2EProjectInspectMacroRuntimeEnvelope({ request = {}
       execution: {
         executed: false,
         executor_call_count: 0,
-        reason: "macro.project.inspect only returns an agent-executed read-only child-request plan; the server never dispatches child requests.",
+        reason: "This retained legacy inspect-planner envelope does not dispatch children; public call_template macro.project.inspect uses the separate registered executable program.",
         added_tools: 0,
         public_call_recipe: false,
         hidden_executor: false,
@@ -125,30 +125,31 @@ export function createAlpha3_2EProjectInspectMacroRuntimeEnvelope({ request = {}
   return deepFreeze(envelope);
 }
 
-export function createAlpha3_2EProjectInspectMacroDiscoveryItems() {
+export function createAlpha3_2EProjectInspectMacroDiscoveryItems(options = {}) {
+  const liveRunnableNow = options.liveRunnableNow === true;
   return [deepFreeze({
     id: ALPHA3_2E_PROJECT_INSPECT_MACRO_ID,
     title: "Inspect current project",
-    summary: "Plan-only read macro over accepted project identity, path, dirty-state, Project Index, and render-setting reads.",
+    summary: "Execute one bounded project inspection that hydrates or reuses SQLite and returns compact project understanding.",
     pack: "project",
     lifecycle: "experimental",
     risk: "read",
     entity_kind: "macro.project.inspect",
-    tags: ["macro", "project", "inspect", "read", "alpha3_2e", "plan_only"],
+    tags: ["macro", "project", "inspect", "read", "sqlite", "executable", "alpha3_2_5_b"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "project_inspect",
     menu_group: "primary",
-    execution_shape: "plan_only_agent_executed_child_requests",
+    execution_shape: "registered_macro_program",
     user_label: "Inspect current project",
     task_intents: ["inspect project", "show selected context", "check project readiness"],
-    support_status: "plan_only_runtime_bound",
+    support_status: "executable_runtime_bound",
     support_state: "supported",
     exists_in_catalog: true,
-    live_runnable_now: false,
-    evidence_level: "runtime_bound_static_fake",
-    known_blocker: null,
-    allowed_live_group: null,
+    live_runnable_now: liveRunnableNow,
+    evidence_level: liveRunnableNow ? "runtime_bound_live_route" : "runtime_bound_executable",
+    known_blocker: liveRunnableNow ? null : "live_executor_not_configured",
+    allowed_live_group: "macro_project_understanding",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -163,22 +164,22 @@ export function createAlpha3_2EProjectInspectMacroDiscoveryItems() {
     },
     outputSchema: {
       type: "object",
-      required: ["contract", "action_kind", "mode", "executed", "plan", "execution"],
+      required: ["contract", "ok", "macro", "execution", "sqlite", "result"],
       properties: {
-        contract: { const: ALPHA3_2E_PROJECT_INSPECT_MACRO_CONTRACT },
-        action_kind: { const: "macro" },
-        mode: { const: "plan_only_agent_executed_child_requests" },
-        executed: { const: false },
-        plan: { type: "object" },
+        contract: { const: "macro.execution.v1" },
+        ok: { type: "boolean" },
+        macro: { type: "object" },
         execution: { type: "object" },
+        sqlite: { type: "object" },
+        result: { type: "object" },
       },
     },
     refs: { input: [], output: [] },
     expectedDelta: {
       kind: "read",
       action: "read",
-      entities: ["macro_plan", "project_identity", "project_refs"],
-      summary: "Returns a read-only plan only. It does not inspect REAPER or dispatch bridge requests itself.",
+      entities: ["project_identity", "project_index", "project_refs"],
+      summary: "Executes bounded read-only inspection, updates or reuses the Project Index, and returns compact evidence.",
     },
     examples: [
       { input: { include: ["project_path", "dirty_state", "selected_context"], refresh_policy: "if_stale", limit: 25 } },

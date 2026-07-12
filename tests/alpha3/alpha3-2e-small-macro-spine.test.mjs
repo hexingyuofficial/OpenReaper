@@ -17,7 +17,7 @@ const STDIO_SERVER = new URL("../../packages/mcp-server/src/openreaper-mcp-stdio
 const EXPECTED_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 describe("Alpha3.2-E small macro spine: project inspect", () => {
-  it("publishes macro.project.inspect as plan-only runtime-bound while leaving write-side spine entries held", () => {
+  it("publishes macro.project.inspect as an executable registered program while leaving write-side spine entries unchanged", () => {
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.inspect"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.delete_targets"), false);
     assert.equal(ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS.includes("macro.project.apply_layout"), false);
@@ -31,9 +31,10 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       fields: ["id", "capability_truth"],
     });
     assert.deepEqual(exact.items.map((item) => item.id), ["macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"]);
-    assert.equal(exact.items[0].support_status, "plan_only_runtime_bound");
+    assert.equal(exact.items[0].support_status, "executable_runtime_bound");
     assert.equal(exact.items[0].capability_truth.support_state, "supported");
-    assert.equal(exact.items[0].execution_shape, "plan_only_agent_executed_child_requests");
+    assert.equal(exact.items[0].execution_shape, "registered_macro_program");
+    assert.equal(exact.items[0].capability_truth.known_blocker, "live_executor_not_configured");
     assert.equal(exact.items[1].support_status, "plan_only_runtime_bound_preview_first");
     assert.equal(exact.items[1].capability_truth.support_state, "supported_with_confirmation");
     assert.equal(exact.items[2].support_status, "plan_only_runtime_bound_preview_first");
@@ -91,19 +92,16 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(invalid.blockers.some((blocker) => blocker.code === "PROJECT_INSPECT_FIELD_INVALID"), true);
   });
 
-  it("binds call_template runtime without adding tools or executing children", async () => {
+  it("fails closed when the executable inspect Macro has no configured live read route", async () => {
     const response = await callTemplate({ id: "macro.project.inspect", input: { include: ["project_path", "dirty_state"] } });
-    assert.equal(response.ok, true);
-    assert.equal(response.template.id, "macro.project.inspect");
-    assert.equal(response.result.executed, false);
-    assert.equal(response.result.execution.executor_call_count, 0);
-    assert.deepEqual(response.result.child_requests.map((request) => request.id), [
-      "template.project.read_current_project_path",
-      "template.project.read_dirty_state",
-    ]);
+    assert.equal(response.ok, false);
+    assert.equal(response.contract, "macro.execution.v1");
+    assert.equal(response.macro.id, "macro.project.inspect");
+    assert.equal(response.execution.status, "blocked");
+    assert.equal(response.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
   });
 
-  it("keeps actual stdio at five tools and turns inspect from held into a plan", { timeout: 30_000 }, async () => {
+  it("keeps actual stdio at five tools and reports executable inspect as blocked until live readiness", { timeout: 30_000 }, async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_SERVER],
@@ -140,8 +138,10 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
         name: "call_template",
         arguments: { id: "macro.render.targets", input: { target_kind: "whole_project", format: "wav", dry_run: true } },
       }));
-      assert.equal(inspectResult.ok, true);
-      assert.equal(inspectResult.result.executed, false);
+      assert.equal(inspectResult.ok, false);
+      assert.equal(inspectResult.contract, "macro.execution.v1");
+      assert.equal(inspectResult.execution.status, "blocked");
+      assert.equal(inspectResult.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
       assert.equal(deletePreview.ok, true);
       assert.equal(deletePreview.result.preview.total_count, 1);
       assert.equal(deletePreview.result.typed_blockers[0].code, "CONFIRM_SCOPE_REQUIRED");

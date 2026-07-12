@@ -67,6 +67,9 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       assert.equal(status.bridge_generation, 7);
       assert.match(status.session_id, /^session:alpha3\.2d:[a-f0-9]{32}$/);
       assert.equal(status.rows_available, true);
+      assert.equal(status.snapshot_id, null);
+      assert.equal(status.revision, null);
+      assert.equal(status.freshness_token, null);
       assert.equal(typeof runtime.adapter.snapshot, "function");
       assert.equal(runtime.close().lifecycle, "closed");
     } finally {
@@ -321,7 +324,134 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
-  it("persists across close/reopen for the same logical installed session and withholds rows on project, owner, or generation mismatch", async () => {
+  it("exposes deterministic snapshot freshness evidence that advances after accepted refresh observations", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assert.equal(runtime.status().freshness_token, null);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, { tracks: [{ track_ref: "track:guid:{REV-A}", name: "A" }] }));
+      const first = runtime.status();
+      assert.match(first.snapshot_id, /^snapshot:alpha3\.2d:/);
+      assert.match(first.revision, /^freshness:alpha3\.2d:[a-f0-9]{24}$/);
+      assert.equal(first.revision, first.freshness_token);
+      assert.equal(first.revision, runtime.status().revision);
+
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, { tracks: [{ track_ref: "track:guid:{REV-B}", name: "B" }] }));
+      const second = runtime.status();
+      assert.notEqual(second.snapshot_id, first.snapshot_id);
+      assert.notEqual(second.freshness_token, first.freshness_token);
+      runtime.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("accepts project change counts without discarding rows and reconciles only dependent scopes", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, { tracks: [{ track_ref: "track:guid:{KEEP}", name: "Keep" }] }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, {
+        project_ref: identity.project_ref,
+        change_count: 41,
+        track_count: 1,
+      }));
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{KEEP}"]);
+      assert.equal(runtime.adapter.snapshot().rows.selection_state.find((row) => row.scope_kind === "project_head").summary.change_count, 41);
+      assert.equal(runtime.status().revision, "reaper-change-count:41");
+      assert.equal(runtime.status().revision_source, "reaper_project_state_change_count");
+
+      assertObserved(runtime, execution("template.project.create_observation_bundle", identity, {
+        payload: {
+          project_ref: identity.project_ref,
+          project_map: {
+            project_ref: identity.project_ref,
+            track_count: 1,
+            item_count: 0,
+            tracks: [{ track_ref: "track:guid:{KEEP}", name: "Keep", items: [] }],
+            selected_items: [],
+          },
+          markers_regions: { items: [] },
+          coverage: { project_map: "complete_page", markers_regions: "bounded" },
+        },
+      }));
+      assert.equal(runtime.status().revision, "reaper-change-count:41");
+
+      const matched = runtime.reconcileProjectRevision({ change_count: 41 });
+      assert.equal(matched.ok, true);
+      assert.equal(matched.status, "revision_matched");
+      const changed = runtime.reconcileProjectRevision({ change_count: 42 });
+      assert.equal(changed.ok, true);
+      assert.equal(changed.status, "revision_changed");
+      assert.equal(changed.live_change_count, 42);
+      assert.equal(runtime.status().revision, "reaper-change-count:42");
+      assert.equal(runtime.status().sqlite_is_truth, false);
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{KEEP}"]);
+      for (const scope of ["selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"]) {
+        assert.equal(runtime.adapter.snapshot().freshness_scopes[scope].status, "stale");
+      }
+      assert.equal(runtime.reconcileProjectRevision({ change_count: -1 }).blockers[0].code, "PROJECT_CHANGE_COUNT_REQUIRED");
+      assert.equal(runtime.reconcileProjectRevision(null).blockers[0].code, "PROJECT_CHANGE_COUNT_REQUIRED");
+      runtime.close();
+
+      if (await hasSqlite()) {
+        const reopened = await openRuntime(fixture);
+        assert.equal(reopened.status().project_change_count, 42);
+        assert.equal(reopened.status().revision, "reaper-change-count:42");
+        reopened.close();
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("initializes a live project revision without a prior read-summary observation", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const initialized = runtime.reconcileProjectRevision({ change_count: 7 });
+      assert.equal(initialized.ok, true);
+      assert.equal(initialized.status, "revision_initialized");
+      assert.equal(initialized.changed, false);
+      assert.equal(runtime.status().revision, "reaper-change-count:7");
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.selection.status, "fresh");
+      runtime.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("dedupes targeted known-scope invalidation and rejects unknown, stale, or closed runtimes", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, { tracks: [{ track_ref: "track:guid:{TARGET}", name: "Target" }] }));
+      const invalidated = runtime.invalidateScopes({ scopes: ["tracks", "routing", "tracks"] });
+      assert.equal(invalidated.ok, true);
+      assert.deepEqual(invalidated.scopes, ["tracks", "routing"]);
+      assert.equal(invalidated.sqlite_rows_are_candidates_only, true);
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.tracks.status, "stale");
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.routing.status, "stale");
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{TARGET}"]);
+      const beforeUnknown = JSON.stringify(runtime.adapter.snapshot());
+      const unknown = runtime.invalidateScopes({ scopes: ["tracks", "unknown_scope"] });
+      assert.equal(unknown.ok, false);
+      assert.equal(unknown.blockers[0].code, "INDEX_SCOPE_UNKNOWN");
+      assert.equal(JSON.stringify(runtime.adapter.snapshot()), beforeUnknown);
+
+      runtime.adapter.markStaleSession({ reason: "test_stale" });
+      assert.equal(runtime.invalidateScopes({ scopes: ["tracks"] }).status, "stale_session");
+      runtime.close();
+      assert.equal(runtime.invalidateScopes({ scopes: ["tracks"] }).status, "runtime_closed");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("persists across close/reopen for the same logical installed session and safely rebuilds a stale managed database", async () => {
     if (!await hasSqlite()) return;
     const fixture = await makeFixture();
     const alternateProject = path.join(fixture.root, "Alternate.RPP");
@@ -346,12 +476,15 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         { bridgeGeneration: 8 },
       ]) {
         const mismatch = await openRuntime(fixture, overrides);
-        assert.equal(mismatch.status().lifecycle, "stale_session");
-        assert.equal(mismatch.status().rows_available, false);
-        assert.equal(mismatch.adapter.snapshot().rows_withheld, true);
+        assert.equal(mismatch.status().lifecycle, "ready");
+        assert.equal(mismatch.status().rows_available, true);
+        assert.equal(mismatch.status().recovery.status, "recovered");
+        assert.equal(mismatch.status().recovery.db_rebuilt, true);
+        assert.equal(mismatch.status().recovery.stale_rows_reused, false);
         assert.deepEqual(mismatch.adapter.snapshot().rows.tracks, []);
-        const blocked = mismatch.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", runtimeIdentity(mismatch), { tracks: [{ track_ref: "track:guid:{NEW}" }] }));
-        assert.equal(blocked.status, "stale_session");
+        const observedCurrentIdentity = mismatch.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", runtimeIdentity(mismatch), { tracks: [{ track_ref: "track:guid:{NEW}", name: "New" }] }));
+        assert.equal(observedCurrentIdentity.ok, true);
+        assert.deepEqual(mismatch.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{NEW}"]);
         mismatch.close();
       }
     } finally {

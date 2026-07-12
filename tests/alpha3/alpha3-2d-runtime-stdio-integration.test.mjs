@@ -17,26 +17,36 @@ const LOGICAL_SESSION = "installed-alpha32d-integration";
 const NOW = "2026-07-11T11:15:00.000Z";
 
 describe("Alpha3.2-D call_template Project Index integration", () => {
-  it("returns refresh children without hidden execution, observes an explicit atomic read, and serves the indexed row", async () => {
+  it("executes bounded cold hydration once, then serves warm SQLite rows without a broad reread", async () => {
     const fixture = await makeFixture();
     let executorCalls = 0;
+    const operations = [];
     const fake = new FakeFoundationBridge({ owner: OWNER, generation: GENERATION, now: () => new Date(NOW) });
     const executor = {
       dispatch(request) {
         executorCalls += 1;
+        operations.push(request.operation.name);
         const response = structuredClone(fake.dispatch(request));
-        response.result.readback = {
-          tracks: [{
-            track_ref: "track:guid:{TRACK-1}",
-            index: 0,
-            name: "Kick",
-            selected: true,
-            muted: false,
-            record_armed: false,
-          }],
-          track_count: 1,
-          coverage: "complete",
-        };
+        if (request.operation.name === "project.read_summary") {
+          response.result.summary = {
+            project_ref: indexRuntime.identity.project_ref,
+            change_count: 1,
+            track_count: 1,
+            item_count: 0,
+          };
+          response.result.readback = response.result.summary;
+        } else if (request.operation.name === "project.create_observation_bundle") {
+          response.result.summary = {
+            artifact_ref: "artifact:project:observation_bundle:art_20260711111500000_001_abcdef",
+            project_ref: indexRuntime.identity.project_ref,
+          };
+          response.result.readback = response.result.summary;
+          response.result.refs = [{
+            kind: "artifact",
+            ref: response.result.summary.artifact_ref,
+            identity: { scheme: "artifact_ref", value: response.result.summary.artifact_ref },
+          }];
+        }
         return response;
       },
     };
@@ -51,44 +61,66 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
           executor,
           allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
         },
+        projectIndexArtifactReader: async () => ({
+          payload: {
+            project_ref: indexRuntime.identity.project_ref,
+            project_map: {
+              project_ref: indexRuntime.identity.project_ref,
+              track_count: 1,
+              item_count: 0,
+              truncated: false,
+              tracks: [{
+                track_ref: "track:guid:{TRACK-1}",
+                index: 0,
+                name: "Kick",
+                selected: true,
+                muted: false,
+                record_armed: false,
+                items: [],
+              }],
+              selected_items: [],
+            },
+            markers_regions: { items: [] },
+            coverage: {
+              project_map: "complete_page",
+              markers_regions: "bounded",
+            },
+          },
+        }),
         now: () => new Date(NOW),
       });
 
-      const before = await runtime.call_template({
+      const cold = await runtime.call_template({
         id: "macro.project.query",
         input: { entity: "tracks", refresh_policy: "if_stale", limit: 25 },
-      });
-      assert.equal(before.ok, false);
-      assert.equal(["INDEX_NOT_READY", "INDEX_REFRESH_REQUIRED"].includes(before.error.code), true);
-      assert.equal(executorCalls, 0);
-      assert.equal(before.result.execution.child_executor, false);
-      assert.equal(before.result.execution.executor_call_count, 0);
-      assert.equal(before.result.refresh_requests.some((request) => request.id === "template.tracks.list_tracks"), true);
-
-      const child = await runtime.call_template({
-        id: "template.tracks.list_tracks",
-        input: { limit: 25, include_selection: true },
         context: callContext(1),
       });
-      assert.equal(child.ok, true, JSON.stringify(child));
-      assert.equal(executorCalls, 1);
-      assert.equal(child.result.project_index_observation.ok, true);
-      assert.equal(child.result.project_index_observation.status, "observed");
-      assert.deepEqual(child.result.project_index_observation.scopes, ["tracks"]);
-      assert.equal(child.result.project_index_observation.child_calls_executed, 0);
+      assert.equal(cold.ok, true, JSON.stringify(cold));
+      assert.equal(cold.contract, "macro.execution.v1");
+      assert.equal(cold.execution.status, "completed");
+      assert.equal(cold.sqlite.source, "cold_hydration");
+      assert.equal(cold.result.data.rows.length, 1);
+      assert.equal(cold.result.data.rows[0].ref, "track:guid:{TRACK-1}");
+      assert.equal(cold.result.data.rows[0].name, "Kick");
+      assert.deepEqual(operations, ["project.read_summary", "project.create_observation_bundle"]);
+      assert.equal(cold.result.data.refresh.call_count, 1);
 
-      const after = await runtime.call_template({
+      const warm = await runtime.call_template({
         id: "macro.project.query",
-        input: { entity: "tracks", refresh_policy: "never", limit: 25 },
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 25 },
+        context: callContext(2),
       });
-      assert.equal(after.ok, true, JSON.stringify(after));
-      assert.equal(executorCalls, 1);
-      assert.equal(after.result.rows.length, 1);
-      assert.equal(after.result.rows[0].ref, "track:guid:{TRACK-1}");
-      assert.equal(after.result.rows[0].name, "Kick");
-      assert.equal(after.result.execution.child_executor, false);
-      assert.equal(after.result.execution.executor_call_count, 0);
-      assert.equal(after.result.plan.safety.hidden_executor, false);
+      assert.equal(warm.ok, true, JSON.stringify(warm));
+      assert.equal(warm.sqlite.source, "warm_index");
+      assert.equal(warm.result.data.rows[0].ref, "track:guid:{TRACK-1}");
+      assert.equal(warm.result.data.refresh.call_count, 0);
+      assert.equal(executorCalls, 3);
+      assert.deepEqual(operations, [
+        "project.read_summary",
+        "project.create_observation_bundle",
+        "project.read_summary",
+      ]);
+      assert.equal(warm.sqlite.revision, "reaper-change-count:1");
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();
@@ -102,9 +134,9 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
     });
     assert.deepEqual(exact.items.map((item) => item.id).sort(), ["macro.project.query", "macro.selected_context"].sort());
     const generic = createAlpha3_2DGenericProjectQueryDiscoveryItems()[0];
-    assert.equal(generic.support_status, "supported_runtime_bound");
-    assert.equal(generic.known_blocker, null);
-    assert.equal(generic.evidence_level, "runtime_bound_product_store");
+    assert.equal(generic.support_status, "executable_runtime_bound");
+    assert.equal(generic.known_blocker, "live_executor_not_configured");
+    assert.equal(generic.execution_shape, "registered_macro_program");
 
     for (const id of ["macro.index_status", "macro.query_tracks", "macro.query_items", "macro.changed_since"]) {
       const result = await runtime.call_template({ id, input: {} });

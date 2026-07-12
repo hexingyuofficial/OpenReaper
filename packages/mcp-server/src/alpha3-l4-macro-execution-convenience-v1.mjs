@@ -3,7 +3,7 @@ export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT = "alpha3.1.l4.macro
 export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_CONTRACT,
   mode: "static_macro_execution_convenience_gate",
-  product_goal: "Let agents run returned macro child call_template requests after scoped task authorization without adding a hidden executor.",
+  product_goal: "Let agents run returned child call_template requests for remaining plan-only Macro families after scoped task authorization, without adding a hidden executor.",
   tool_surface: {
     added_tools: 0,
     discovery_tool: "list_templates",
@@ -11,10 +11,10 @@ export const ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY = deepFreez
     state_tool: "get_state",
   },
   covered_macro_families: [
-    "c3_project_index_refresh_and_hydration",
     "c5_generic_control_child_requests",
     "e1_stock_plugin_agent_execution_flow",
   ],
+  registered_program_exclusions: ["macro.project.inspect", "macro.project.query"],
   execution_authority: "agent_calls_existing_call_template_requests",
   user_prompt_policy: "Ask once for the task/risk domain, then continue through returned reversible child requests until a hard stop or typed blocker appears.",
   safety_policy: macroExecutionConvenienceSafety(),
@@ -53,7 +53,7 @@ export function summarizeAlpha3L4MacroExecutionConvenience() {
       success_gate: "I will not say the change is done until the planned readback matches.",
     },
     supported_sources: {
-      c3: "Project Index macros return refresh/hydrate next actions; SQLite rows stay candidates only.",
+      project_understanding: "macro.project.inspect and macro.project.query execute their fixed registered programs directly and are not routed through this legacy child-request convenience flow.",
       c5: "Generic control macros return serial child write requests plus readback.",
       e1: "Stock plugin macro returns hydration/resume or child execution/readback flow.",
     },

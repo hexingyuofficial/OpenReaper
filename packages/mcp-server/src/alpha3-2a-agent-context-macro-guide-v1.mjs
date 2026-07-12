@@ -77,13 +77,13 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     risk: "read",
     entity_kind: "macro.project.inspect",
     task_intents: ["inspect project", "show selected context", "check project readiness"],
-    rollout_slice: "3.2-C/E",
+    rollout_slice: "3.2.5-B",
     known_blocker: null,
-    implementation_status: "plan_only_runtime_bound",
+    implementation_status: "executable_registered_program",
     runnable: true,
     manual: actionManual({
       when_to_use: [
-        "Inspect accepted identity/selection/refs plus the accepted exact project path and dirty-state reads.",
+        "Inspect current project identity, selection, compact entity rows, path, dirty state, render posture, and index readiness in one executable Macro call.",
         "Collect a compact bounded snapshot before a write, delete, routing, media, or render operation.",
       ],
       when_not_to_use: [
@@ -96,7 +96,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Requested include/fields/limit values must stay within bounded discovery and readback budgets.",
       ],
       input_shape: {
-        include: "Optional ordered subset of project_identity, project_path, dirty_state, selected_context, tracks, folders, items, markers_regions, render, and index posture.",
+        include: "Optional ordered subset of project_identity, project_path, dirty_state, selected_context, tracks, items, markers_regions, render, and index_status.",
         fields: "Optional compact field selection applied to returned rows.",
         limit: "Positive bounded row limit per requested entity family.",
         compact_response: "Boolean; defaults true and never enables full descriptor or project dumps.",
@@ -105,48 +105,40 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Read server/bridge readiness without starting REAPER or using direct bridge files.",
         "Validate include, fields, limit, compact_response, and ref_policy.",
-        "Read accepted project identity, then use the exact accepted path and dirty-state templates before resolving selected or listed objects.",
+        "Probe the live REAPER change-count, hydrate or reuse the matching SQLite index, then run only requested bounded direct reads.",
       ],
       underlying_actions: [
         "template.project.read_summary",
-        "template.project.read_metadata",
-        "template.project.read_track_item_overview",
-        "template.tracks.list_tracks",
-        "template.tracks.read_folder_structure",
-        "template.items.list_selected_items",
-        "template.project.list_markers_regions",
+        "template.project.create_observation_bundle when the index is cold or stale",
+        "SQLite Project Index queries for requested entity scopes",
         "template.render.read_settings",
-        "compatibility helper macro.index_status when index readiness is requested",
-        "template.project.read_current_project_path",
         "template.project.read_dirty_state",
       ],
       readback_steps: [
-        "Normalize every returned object ref into one consistent compact row location.",
-        "Report accepted title/identity, exact path/path_state, exact dirty/raw state, and bridge/render/index readiness.",
-        "Return truncation and missing-ref reasons instead of silently dropping rows.",
+        "Return macro.execution.v1 with completed registered stages, SQLite source/freshness/revision, and compact task-shaped data.",
+        "Report project identity/path from the live summary, exact dirty state, render settings, and requested SQLite candidate rows.",
+        "Return canonical candidate refs and budget truncation facts instead of child-request plans.",
       ],
       success_criteria: [
-        "The response identifies current project context and may report path and dirty state only from the two exact accepted reads.",
+        "The response identifies current project context and reports requested path/dirty/render/index facts from executed reads.",
         "Requested rows are bounded, ordered, and carry canonical refs when resolvable.",
-        "No write, render, project save, or hidden recipe execution occurred.",
+        "No write, render job, project save, model-supplied execution graph, or hidden recipe execution occurred.",
       ],
       common_blockers: [
-        blocker("CONTRACT_ONLY", "This Alpha3.2-A entry is a discovery contract and is not callable yet."),
-        blocker("PROJECT_FILE_NEW_OPERATION_HELD", "macro.project.file is plan-only/runtime-bound for save_current/save_as; new/open/create remain held."),
         blocker("BRIDGE_NOT_READY", "Live project identity or entity reads are unavailable."),
-        blocker("STALE_REF_GENERATION", "A selected or listed ref belongs to an older project generation."),
+        blocker("PROJECT_INDEX_REFRESH_FAILED", "The bounded read-only hydration could not produce fresh requested scopes."),
+        blocker("PROJECT_REVISION_RECONCILE_FAILED", "The live REAPER change-count could not be reconciled with the managed index."),
         blocker("RESPONSE_BUDGET_EXCEEDED", "The requested include/fields/limit shape is too broad."),
       ],
       recovery_steps: [
-        "For CONTRACT_ONLY, use the named audited read templates or existing compatibility macros until 3.2-C/E binds this macro.",
         "For bridge readiness, use ping/startup guidance; never write direct bridge request files.",
-        "For stale refs, rerun project identity and selected/list reads, then discard prior-generation refs.",
+        "For index/revision failure, restore the managed bridge/index route and retry the same Macro once; stale rows remain candidates only.",
         "For budget errors, reduce include families, fields, or limit and retry from the project-identity checkpoint.",
       ],
       dry_run_shape: {
-        supported: true,
-        behavior: "Inspection is read-only; dry-run returns the same planned include families and estimated row caps without project mutation.",
-        output: ["planned_reads", "estimated_row_caps", "readiness_checks", "typed_blockers"],
+        supported: false,
+        behavior: "Inspection is already read-only and executes its registered bounded program; no separate plan-only dry-run is exposed.",
+        output: ["macro_execution", "sqlite_evidence", "compact_project_data", "typed_blockers"],
       },
       resume_or_retry_policy: {
         resume_from: "latest project-identity read for the same bridge owner/generation",
@@ -154,8 +146,8 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         hard_stop: "Stop after the same typed blocker repeats twice.",
       },
       examples: [
-        example("compact readiness", { include: ["project_identity", "selected_context", "render", "index", "project_path", "dirty_state"], fields: ["id", "name", "ref", "status"], limit: 25, compact_response: true, ref_policy: "canonical_only" }),
-        example("tracks and folders", { include: ["tracks", "folders"], fields: ["name", "ref", "parent_ref", "depth"], limit: 100, compact_response: true }),
+        example("compact readiness", { include: ["project_identity", "selected_context", "render", "index_status", "project_path", "dirty_state"], fields: ["name", "ref", "status"], limit: 25, compact_response: true, ref_policy: "canonical_only" }),
+        example("tracks and items", { include: ["tracks", "items"], fields: ["name", "ref", "track_ref"], limit: 100, compact_response: true }),
       ],
     }),
   }),
@@ -167,9 +159,9 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     risk: "read",
     entity_kind: "macro.project.query",
     task_intents: ["query project", "find tracks or items", "find duplicates", "changed since"],
-    rollout_slice: "3.2-D",
-    implementation_status: "supported_runtime_bound_plan_only",
-    runnable: false,
+    rollout_slice: "3.2.5-B",
+    implementation_status: "executable_registered_program",
+    runnable: true,
     known_blocker: null,
     manual: actionManual({
       when_to_use: [
@@ -181,7 +173,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Do not use a broad query when one direct atomic read template answers the question more cheaply.",
       ],
       required_readiness: [
-        "The Project Index store must be reachable or return INDEX_NOT_READY with a recoverable refresh route.",
+        "The managed Project Index store and live read route must be reachable when the requested scope needs hydration.",
         "The query must name one supported entity and bounded fields/limit.",
         "hydrate_refs requires live read support and must remain opt-in.",
       ],
@@ -198,32 +190,23 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Validate entity against the exact Alpha3.2 vocabulary, then validate filters, selectors, fields, cursor, and limit without accepting raw SQL.",
         "Read index status, session identity, freshness, and entity coverage.",
-        "Apply refresh_policy; the agent explicitly runs only the returned accepted read templates, and the server observes successful readback into the managed index.",
+        "Apply refresh_policy inside the registered Macro program; execute at most one bounded hydration flow and observe successful readback into the managed index.",
       ],
       underlying_actions: [
-        "macro.index_status",
-        "macro.selected_context",
-        "macro.query_tracks",
-        "macro.query_items",
-        "macro.query_takes",
-        "macro.query_fx",
-        "macro.query_routing",
-        "macro.query_automation",
-        "macro.query_markers",
-        "macro.query_media",
-        "macro.changed_since",
-        "macro.hydrate_refs",
-        "accepted REAPER read templates returned by the Project Index refresh plan",
+        "template.project.read_summary for live project revision reconciliation",
+        "template.project.create_observation_bundle for bounded cold hydration",
+        "accepted entity-specific read templates selected by the code-owned refresh policy",
+        "internal covered macro.index_status/macro.query_* query planners",
       ],
       readback_steps: [
         "Validate that returned rows match the current project/session and requested entity.",
-        "Return freshness, coverage, cursor, truncation, and hydration posture with every page.",
-        "When refs are hydrated, mark failures per row and never fabricate missing refs.",
+        "Return freshness, coverage, cursor, truncation, hydration evidence, and SQLite source with every page.",
+        "Return canonical candidate refs; every later write must live re-resolve them and never fabricate missing refs.",
       ],
       success_criteria: [
         "The response contains a bounded page of rows or an explicit empty result.",
         "Freshness and coverage are stated, and any hydrated refs are current and canonical.",
-        "No raw SQL, direct database write, REAPER mutation, or hidden executor was used.",
+        "No raw SQL, direct database write, REAPER mutation, model-supplied child graph, or generic hidden executor was used.",
       ],
       common_blockers: [
         blocker("INDEX_NOT_READY", "The project index is missing, stale, or bound to another session."),
@@ -231,14 +214,14 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("REF_HYDRATION_UNAVAILABLE", "Live read support is unavailable for requested ref hydration."),
       ],
       recovery_steps: [
-        "For INDEX_NOT_READY, run the returned read-only refresh requests and retry with the new freshness token.",
+        "For INDEX_NOT_READY, let the same Macro perform its one bounded read-only refresh; retry only after a typed bridge/artifact recovery blocker.",
         "For unsupported fields, request a smaller allowlisted projection instead of raw SQL.",
         "For hydration failure, keep candidate rows, disable hydrate_refs, or restore bridge readiness before retrying.",
       ],
       dry_run_shape: {
-        supported: true,
-        behavior: "Returns the normalized query, freshness decision, planned refresh reads, estimated page cap, and whether hydration would be attempted.",
-        output: ["normalized_query", "freshness_decision", "refresh_plan", "estimated_rows", "typed_blockers"],
+        supported: false,
+        behavior: "The read Macro executes its registered query/hydration program directly; no public plan-only dry-run is exposed.",
+        output: ["macro_execution", "sqlite_evidence", "candidate_rows", "canonical_refs", "typed_blockers"],
       },
       resume_or_retry_policy: {
         resume_from: "latest successful freshness checkpoint and opaque cursor",
@@ -721,7 +704,7 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
 
 export const ALPHA3_2A_SECONDARY_MACRO_ROWS = deepFreeze([
   secondaryRow("macro.project.file", "Plan-only save-current/save-as macro; new/open/create remain held.", "write_confirmed", "plan_only_runtime_bound", "Expand for exact child order, gates, readback, and blockers."),
-  secondaryRow("macro.selected_context", "Read current selected project context and candidate refs.", "read", "compatibility_plan_only", "Expand when selected context is needed before macro.project.inspect is implemented."),
+  secondaryRow("macro.selected_context", "Legacy compatibility mapping for selected project context.", "read", "consolidated_legacy_mapping", "Prefer executable macro.project.inspect or macro.project.query with entity=selected_context."),
   secondaryRow("macro.set_track_controls", "Plan reversible common track control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed track volume/pan/mute/name/color controls."),
   secondaryRow("macro.set_item_controls", "Plan reversible common item control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed item move/trim/gain/pan/fade controls."),
   secondaryRow("macro.set_take_controls", "Plan reversible common take control changes and readback.", "write_reversible", "compatibility_plan_only", "Expand for detailed take name/gain/pan/pitch/playrate controls."),
@@ -793,8 +776,8 @@ const COMPACT_GUIDE = deepFreeze({
   },
   mental_model: {
     template: "One audited call_template operation.",
-    macro: "Small product operation; macro.project.inspect, macro.project.query, macro.project.delete_targets, macro.project.apply_layout, macro.routing.apply, and macro.media.place_assets are supported/runtime-bound plan-only; macro.render.targets is runtime-bound as a plan-only macro over the audited template.render.render_targets child; the audited D31 child is live-evidenced for bounded WAV/OGG targets.",
-    recipe: "Agent-run call_template/get_state procedure; no call_recipe or server executor.",
+    macro: "Registered bounded task program through call_template. macro.project.inspect and macro.project.query execute now with automatic SQLite hydration/reuse; the remaining published write/render candidates retain their current evidence-bound posture until their 3.2.5-C/D conversion.",
+    recipe: "Reusable/editable longer workflow; no public call_recipe or generic server-side Recipe executor.",
   },
   primary_spine: {
     ordered_ids: ALPHA3_2A_PRIMARY_MACRO_IDS,
@@ -817,8 +800,8 @@ const COMPACT_GUIDE = deepFreeze({
   },
   control_consolidation: ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER,
   common_task_routing: [
-    route("inspect project", "macro.project.inspect", "Use accepted reads now, including the exact path and dirty-state templates."),
-    route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Use the generic bounded planner; agent runs refresh children and runtime must observe readback."),
+    route("inspect project", "macro.project.inspect", "Execute one registered read Macro; it reconciles revision, hydrates or reuses SQLite, and returns compact project understanding."),
+    route("query status/context/tracks/items/takes/fx/routing/automation/markers_regions/media_sources/duplicates/changes", "macro.project.query", "Execute the SQLite query directly; cold or stale scopes receive one bounded automatic read-only refresh."),
     route("delete scoped objects", "macro.project.delete_targets", "Use one accepted delete template with confirmation/readback; never delete source files."),
     route("apply track/folder layout", "macro.project.apply_layout", "Use bounded track/folder templates and structural readback until 3.2-E."),
     route("apply internal routing", "macro.routing.apply", "Use accepted internal routing templates; hardware/device I/O is blocked."),
@@ -837,7 +820,7 @@ const COMPACT_GUIDE = deepFreeze({
       public_generic_id: "macro.project.query",
       internal_covered_ids: ALPHA3_2A_COVERED_LEGACY_IDS.filter((id) => id !== "macro.selected_context"),
       temporary_compatibility_ids: ["macro.selected_context"],
-      generic_status: "supported_runtime_bound_plan_only_not_live_runnable",
+      generic_status: "executable_registered_macro_program",
     },
     distinct_legacy: {
       ids: ALPHA3_2A_DISTINCT_LEGACY_IDS,
@@ -847,8 +830,8 @@ const COMPACT_GUIDE = deepFreeze({
         "Stock-plugin support remains evidence-bound.",
       ],
     },
-    future_coverage_target: "about_80_percent_after_3_2_c_d_e_evidence",
-    claim_boundary: "candidate only; not executable/live/stable/support",
+    future_coverage_target: "about_80_percent_after_3_2_5_c_d_e_evidence",
+    claim_boundary: "inspect/query executable now; other Macro claims remain evidence-bound until their named 3.2.5 slices",
   },
   recipe_guidance: {
     empty_catalog: "If empty, use one audited template atomically; for multi-step work state ad-hoc composition and use bounded readback.",
@@ -1039,8 +1022,8 @@ function compactPrimaryRow(entry) {
 
 function compactPrimaryUnderlyingActions(id) {
   return ({
-    "macro.project.inspect": ["template.project.read_summary", "template.project.read_metadata", "template.project.read_track_item_overview", "template.tracks.list_tracks"],
-    "macro.project.query": ["macro.index_status", "macro.selected_context", "macro.query_tracks", "macro.query_items"],
+    "macro.project.inspect": ["template.project.read_summary", "template.project.create_observation_bundle", "template.project.read_dirty_state", "template.render.read_settings"],
+    "macro.project.query": ["template.project.read_summary", "template.project.create_observation_bundle", "entity-specific accepted read templates", "SQLite query runtime"],
     "macro.project.delete_targets": ["template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region"],
     "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.tracks.read_folder_structure"],
     "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.read_track_routing"],

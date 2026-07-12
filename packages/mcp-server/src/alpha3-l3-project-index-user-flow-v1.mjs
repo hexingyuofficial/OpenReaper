@@ -3,7 +3,7 @@ export const ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT = "alpha3.1.l3.project_i
 export const ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY = deepFreeze({
   contract: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
   mode: "project_index_user_flow_gate",
-  product_goal: "Teach one public macro.project.query flow: choose an entity, refresh read-only index scopes when required, then use compact candidate rows.",
+  product_goal: "Teach one public macro.project.query flow: execute the registered Macro program, let it perform bounded read-only hydration when required, then use its final compact candidate rows or typed blockers.",
   tool_surface: {
     added_tools: 0,
     discovery_tool: "list_templates",
@@ -13,11 +13,14 @@ export const ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY = deepFreeze({
   primary_macro_ids: ["macro.project.query"],
   user_path: [
     "Call macro.project.query with exactly one supported entity and bounded fields/filters/selectors.",
-    "If refresh_requests are returned, the agent runs those accepted read-only call_template children; the integrated server runtime must automatically observe successful readback into the Project Index.",
-    "Rerun macro.project.query with the same entity/query after refresh observation completes.",
+    "The registered Macro program internally performs only allowlisted bounded read-only refresh/hydration when current Project Index state requires it.",
+    "Use the completed Macro response for final compact rows, freshness evidence, or typed blockers; do not replay internal refresh work.",
     "Use compact rows as candidate facts; hydrate where available or resolve through the target write template before mutation.",
   ],
   safety_policy: {
+    registered_macro_program: true,
+    bounded_read_only_hydration: "internal_when_required",
+    agent_replays_internal_refresh: false,
     sqlite_is_truth: false,
     rows_authorize_writes: false,
     live_reaper_called: false,
@@ -36,22 +39,16 @@ export function summarizeAlpha3L3ProjectIndexUserFlow() {
     primary_macro_ids: ["macro.project.query"],
     default_agent_flow: [
       {
-        id: "plan_generic_query",
+        id: "execute_registered_query_program",
         tool: "call_template",
         template_id: "macro.project.query",
-        purpose: "Choose one of the twelve entities and receive compact rows or a typed read-only refresh path.",
+        purpose: "Choose one of the twelve entities and execute the fixed registered Macro program.",
       },
       {
-        id: "agent_executes_refresh_children",
-        tool: "call_template",
-        template_id: "returned_refresh_requests",
-        purpose: "The agent runs only returned accepted read requests; no server child executor is implied.",
-      },
-      {
-        id: "runtime_observes_readback",
+        id: "consume_completed_query_result",
         tool: "call_template",
         template_id: "macro.project.query",
-        purpose: "Required integrated runtime behavior: automatically observe successful refresh readback into the Project Index, then rerun the same generic query.",
+        purpose: "Consume final compact rows, freshness evidence, and typed blockers from the completed Macro response.",
       },
       {
         id: "hydrate_or_target_resolve",
@@ -61,12 +58,15 @@ export function summarizeAlpha3L3ProjectIndexUserFlow() {
       },
     ],
     user_copy: {
-      missing_index: "I need to refresh the OpenReaper project index before using cached rows.",
+      missing_index: "I will call macro.project.query; it performs any bounded read-only Project Index hydration it needs before returning final rows or blockers.",
       ready_rows: "I found compact project-index rows; I will hydrate exact refs only if we need deeper detail or a write target.",
       stale_or_blocked: "The project index is stale or blocked, so I will reconnect or resolve blockers before using rows.",
     },
     safety: {
       added_tools: 0,
+      registered_macro_program: true,
+      bounded_read_only_hydration: "internal_when_required",
+      agent_replays_internal_refresh: false,
       live_reaper_called: false,
       safe_write_called: false,
       hidden_executor: false,
@@ -92,13 +92,11 @@ export function createAlpha3L3ProjectIndexUserFlow(plan = {}) {
     refreshRequests,
     rows,
   });
-  const primaryNextAction = nextActions[0]?.kind ?? (
-    refreshRequests.length > 0
-      ? "run_refresh_requests"
-      : blockers.length > 0
-        ? "resolve_blockers"
-        : "no_followup_required"
-  );
+  const primaryNextAction = refreshRequests.length > 0
+    ? "await_macro_completion"
+    : blockers.length > 0
+      ? "resolve_blockers"
+      : nextActions[0]?.kind ?? "no_followup_required";
 
   return deepFreeze({
     contract: ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT,
@@ -111,7 +109,7 @@ export function createAlpha3L3ProjectIndexUserFlow(plan = {}) {
     agent_next_step: projectIndexFlowAgentNextStep(stage, { primaryNextAction }),
     row_count: rows.length,
     ref_count: refs.length,
-    refresh_request_count: refreshRequests.length,
+    internal_read_only_refresh_required: refreshRequests.length > 0,
     blocker_codes: blockerCodes,
     safe_to_use_rows: plan.ok === true && blockers.length === 0,
     safe_to_write_from_rows: false,
@@ -120,6 +118,9 @@ export function createAlpha3L3ProjectIndexUserFlow(plan = {}) {
     copyable_agent_summary: projectIndexFlowCopyableSummary(stage, { rows, refs, refreshRequests, blockerCodes }),
     safety: {
       added_tools: 0,
+      registered_macro_program: true,
+      bounded_read_only_hydration: "internal_when_required",
+      agent_replays_internal_refresh: false,
       live_reaper_called: false,
       safe_write_called: false,
       hidden_executor: false,
@@ -134,8 +135,8 @@ export function createAlpha3L3ProjectIndexUserFlow(plan = {}) {
 function projectIndexFlowStage({ ok, blockers, refreshRequests, rows }) {
   const blockerCodes = new Set(blockers.map((entry) => entry?.code).filter(Boolean));
   if (blockerCodes.has("INDEX_STALE_SESSION")) return "stale_session_reconnect";
-  if (blockers.length > 0 && refreshRequests.length === 0) return "blocked";
-  if (refreshRequests.length > 0) return blockers.length > 0 ? "needs_refresh_after_blockers" : "needs_refresh";
+  if (refreshRequests.length > 0) return "internal_read_only_refresh";
+  if (blockers.length > 0) return "blocked";
   if (ok && rows.length > 0) return "ready_compact_rows";
   if (ok && rows.length === 0) return "ready_no_rows";
   if (blockers.length > 0) return "blocked";
@@ -143,11 +144,8 @@ function projectIndexFlowStage({ ok, blockers, refreshRequests, rows }) {
 }
 
 function projectIndexFlowUserMessage(stage, { rows, refs, refreshRequests, blockerCodes }) {
-  if (stage === "needs_refresh") {
-    return `Project Index needs a read-only refresh first; the agent runs ${refreshRequests.length} returned call_template request(s), the integrated runtime observes successful readback, then macro.project.query is rerun.`;
-  }
-  if (stage === "needs_refresh_after_blockers") {
-    return `Project Index refresh is partially available, but blocker(s) ${blockerCodes.join(", ")} must be resolved first.`;
+  if (stage === "internal_read_only_refresh") {
+    return "macro.project.query will perform its bounded allowlisted read-only hydration internally, then return final rows or typed blockers.";
   }
   if (stage === "stale_session_reconnect") {
     return "Project Index belongs to an old session; reconnect through OpenReaper before using cached rows.";
@@ -165,14 +163,14 @@ function projectIndexFlowUserMessage(stage, { rows, refs, refreshRequests, block
 }
 
 function projectIndexFlowAgentNextStep(stage, { primaryNextAction }) {
-  if (stage === "needs_refresh") {
-    return "Run the returned refresh_requests with call_template; require the integrated runtime to observe successful readback into the Project Index, then rerun macro.project.query.";
+  if (stage === "internal_read_only_refresh") {
+    return "Await the completed macro.project.query response; use its final rows or typed blockers and do not execute internal refresh work.";
   }
-  if (stage === "needs_refresh_after_blockers" || stage === "blocked") {
-    return "Resolve typed blockers before using Project Index rows or child requests.";
+  if (stage === "blocked") {
+    return "Resolve typed blockers before using Project Index rows.";
   }
   if (stage === "stale_session_reconnect") {
-    return "Reconnect to the current OpenReaper session, call macro.project.query with entity status, then rerun the intended entity query.";
+    return "Reconnect to the current OpenReaper session before using Project Index rows.";
   }
   if (stage === "ready_compact_rows") {
     return primaryNextAction === "page_next"
@@ -186,8 +184,8 @@ function projectIndexFlowAgentNextStep(stage, { primaryNextAction }) {
 }
 
 function projectIndexFlowCopyableSummary(stage, details) {
-  if (stage === "needs_refresh") {
-    return "I need to run macro.project.query's returned read-only refresh requests; the integrated runtime must observe their readback before I rerun the query.";
+  if (stage === "internal_read_only_refresh") {
+    return "macro.project.query performs bounded read-only hydration internally and returns the final compact rows or typed blockers.";
   }
   if (stage === "ready_compact_rows") {
     return `I found ${details.rows.length} compact project-index row(s); I will hydrate exact refs only if the task needs detail or a write target.`;
@@ -195,7 +193,7 @@ function projectIndexFlowCopyableSummary(stage, details) {
   if (stage === "stale_session_reconnect") {
     return "The project index is from an old session, so I need to reconnect before using cached rows.";
   }
-  if (stage === "blocked" || stage === "needs_refresh_after_blockers") {
+  if (stage === "blocked") {
     return `I cannot use project-index rows until these blockers are resolved: ${details.blockerCodes.join(", ") || "reported blockers"}.`;
   }
   return "The Project Index query flow is ready.";

@@ -12,6 +12,10 @@ import {
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  createArtifactStateStoreEnvelope,
+  writeArtifactStateStoreEnvelope,
+} from "../packages/core/src/artifact-state-store-live-helper-v1.mjs";
+import {
   LIVE_BRIDGE_HEARTBEAT_FILENAME,
   LIVE_BRIDGE_LIVENESS_CONTRACT,
 } from "../packages/mcp-server/src/live-bridge-executor-v1.mjs";
@@ -40,8 +44,10 @@ const EXACT_MCP_TOOLS = Object.freeze([
   "ping",
 ]);
 const REQUIRED_MACRO_IDS = Object.freeze([
+  "macro.project.inspect",
   "macro.project.query",
 ]);
+const PROJECT_INDEX_FLOW_MACRO_IDS = Object.freeze(["macro.project.query"]);
 const FORMER_PUBLIC_MACRO_IDS = Object.freeze([
   "macro.index_status",
   "macro.query_tracks",
@@ -398,6 +404,8 @@ async function smokePackagedOpenReaperMcp() {
       const projectIndexLifecycle = await smokePackagedProjectIndexLifecycle({
         client,
         transportDir,
+        artifactRoot,
+        projectRef: `project:path:${canonicalProjectPath}`,
         owner: "openreaper-alpha-package-smoke",
         generation: 1,
       });
@@ -658,6 +666,8 @@ async function smokePackagedOpenReaperMcp() {
     const projectIndexLifecycle = await smokePackagedProjectIndexLifecycle({
       client,
       transportDir,
+      artifactRoot,
+      projectRef: `project:path:${canonicalProjectPath}`,
       owner: "openreaper-alpha-package-smoke",
       generation: 1,
     });
@@ -750,10 +760,45 @@ async function smokePackagedOpenReaperMcp() {
 async function smokePackagedProjectIndexLifecycle({
   client,
   transportDir,
+  artifactRoot,
+  projectRef,
   owner,
   generation,
 }) {
-  const packageBridge = createOperationAwarePackageSmokeBridge({ owner, generation });
+  const state = {
+    revision: 1,
+    track_name: "OpenReaper Package Smoke Track",
+  };
+  const observationArtifactRef = "artifact:project:observation_bundle:art_20260712000000000_001_abcdef";
+  const projectMapArtifactRef = "artifact:project:project_map_snapshot:art_20260712000000000_002_abcdef";
+  await writeArtifactStateStoreEnvelope({
+    artifactRoot,
+    envelope: createArtifactStateStoreEnvelope({
+      ref: observationArtifactRef,
+      schema: "project.observation_bundle.v1",
+      producer: {
+        kind: "template",
+        id: "template.project.create_observation_bundle",
+        pack: "project",
+      },
+      created_at: "2026-07-12T00:00:00.000Z",
+      summary: {
+        project_ref: projectRef,
+        track_count: 1,
+        item_count: 0,
+        fixture: "openreaper_alpha_package_smoke",
+      },
+      payload: packageProjectObservationBundlePayload(projectRef, state.track_name),
+    }),
+  });
+  const packageBridge = createOperationAwarePackageSmokeBridge({
+    owner,
+    generation,
+    projectRef,
+    state,
+    observationArtifactRef,
+    projectMapArtifactRef,
+  });
   const queryInput = {
     entity: "tracks",
     fields: ["ref", "name", "index"],
@@ -762,95 +807,150 @@ async function smokePackagedProjectIndexLifecycle({
   };
   await clearDirectoryEntries(path.join(transportDir, "requests"));
   await clearDirectoryEntries(path.join(transportDir, "results"));
-  const missing = parseJsonToolResult(await client.callTool({
+  const coldResponse = client.callTool({
     name: "call_template",
     arguments: { id: "macro.project.query", input: queryInput },
-  }));
-  const refreshRequests = missing.result?.refresh_requests ?? [];
+  });
+  const coldRequestsResponse = respondToPackagedBridgeRequests({
+    transportDir,
+    bridge: packageBridge,
+    count: 2,
+  });
+  const [cold, coldRequests] = await Promise.all([
+    coldResponse.then(parseJsonToolResult),
+    coldRequestsResponse,
+  ]);
+  const coldRows = cold.result?.data?.rows ?? [];
   if (
-    missing.template?.id !== "macro.project.query" ||
-    refreshRequests.length === 0 ||
-    missing.result?.execution?.child_executor !== false ||
-    missing.result?.plan?.refresh_execution?.server_executes_children !== false
+    cold.contract !== "macro.execution.v1" ||
+    cold.ok !== true ||
+    cold.macro?.id !== "macro.project.query" ||
+    cold.execution?.status !== "completed" ||
+    cold.sqlite?.source !== "cold_hydration" ||
+    coldRows.length !== 1 ||
+    coldRows[0]?.name !== state.track_name ||
+    cold.result?.data?.refresh?.call_count !== 1 ||
+    JSON.stringify(coldRequests.map((request) => request.operation?.name)) !== JSON.stringify([
+      "project.read_summary",
+      "project.create_observation_bundle",
+    ])
   ) {
-    throw new Error("Packaged MCP Project Index missing-state smoke did not return explicit refresh children without hidden execution");
+    throw new Error(`Packaged MCP cold Project Index Macro smoke failed: ${JSON.stringify({ cold, requests: coldRequests.map((request) => request.operation?.name) })}`);
   }
 
-  const executableRefreshRequests = refreshRequests.filter((child) => child.id === "template.tracks.list_tracks");
-  if (executableRefreshRequests.length !== 1) {
-    throw new Error("Packaged MCP Project Index smoke did not return the required tracks.list_tracks refresh child");
+  await clearDirectoryEntries(path.join(transportDir, "requests"));
+  await clearDirectoryEntries(path.join(transportDir, "results"));
+  const warmResponse = client.callTool({
+    name: "call_template",
+    arguments: { id: "macro.project.query", input: queryInput },
+  });
+  const warmRequestsResponse = respondToPackagedBridgeRequests({
+    transportDir,
+    bridge: packageBridge,
+    count: 1,
+  });
+  const [warm, warmRequests] = await Promise.all([
+    warmResponse.then(parseJsonToolResult),
+    warmRequestsResponse,
+  ]);
+  const warmRows = warm.result?.data?.rows ?? [];
+  if (
+    warm.ok !== true ||
+    warm.sqlite?.source !== "warm_index" ||
+    warmRows.length !== 1 ||
+    warmRows[0]?.name !== state.track_name ||
+    warm.result?.data?.refresh?.call_count !== 0 ||
+    warmRequests.length !== 1 ||
+    warmRequests[0]?.operation?.name !== "project.read_summary"
+  ) {
+    throw new Error(`Packaged MCP warm Project Index Macro smoke failed: ${JSON.stringify({ warm, requests: warmRequests.map((request) => request.operation?.name) })}`);
   }
-  const skippedRefreshRequestIds = refreshRequests
-    .filter((child) => !executableRefreshRequests.includes(child))
-    .map((child) => child.id);
-  const childCalls = [];
-  for (const child of executableRefreshRequests) {
-    if (child?.tool !== "call_template" || typeof child.id !== "string") {
-      throw new Error("Packaged MCP Project Index refresh child was not an explicit call_template request");
-    }
-    const responsePromise = client.callTool({
-      name: "call_template",
-      arguments: {
-        id: child.id,
-        input: child.input ?? {},
-        refs: child.refs ?? {},
+
+  state.revision = 2;
+  state.track_name = "OpenReaper Package Smoke Track Updated";
+  await writeArtifactStateStoreEnvelope({
+    artifactRoot,
+    envelope: createArtifactStateStoreEnvelope({
+      ref: projectMapArtifactRef,
+      schema: "project.project_map_snapshot.v1",
+      producer: {
+        kind: "template",
+        id: "template.project.create_project_map_snapshot",
+        pack: "project",
       },
-    });
-    const requestPromise = respondToPackagedBridgeRequest({
-      transportDir,
-      bridge: packageBridge,
-    });
-    const [childCall, bridgeRequest] = await Promise.all([
-      responsePromise.then(parseJsonToolResult),
-      requestPromise,
-    ]);
-    if (
-      childCall.ok !== true ||
-      childCall.template?.id !== child.id ||
-      childCall.result?.project_index_observation?.status !== "observed" ||
-      bridgeRequest.pack?.risk !== "read"
-    ) {
-      throw new Error(`Packaged MCP Project Index child execution/auto-ingest smoke failed: ${child.id}`);
-    }
-    childCalls.push({
-      id: child.id,
-      request_id: bridgeRequest.id,
-      observed: childCall.result.project_index_observation,
-    });
-    await clearDirectoryEntries(path.join(transportDir, "requests"));
-    await clearDirectoryEntries(path.join(transportDir, "results"));
-  }
-
-  const refreshed = parseJsonToolResult(await client.callTool({
+      created_at: "2026-07-12T00:00:01.000Z",
+      summary: {
+        project_ref: projectRef,
+        track_count: 1,
+        item_count: 0,
+        fixture: "openreaper_alpha_package_smoke_revision_refresh",
+      },
+      payload: packageProjectMapSnapshotPayload(projectRef, state.track_name),
+    }),
+  });
+  await clearDirectoryEntries(path.join(transportDir, "requests"));
+  await clearDirectoryEntries(path.join(transportDir, "results"));
+  const changedResponse = client.callTool({
     name: "call_template",
     arguments: { id: "macro.project.query", input: queryInput },
-  }));
-  const refreshedRows = refreshed.result?.rows ?? [];
+  });
+  const changedRequestsResponse = respondToPackagedBridgeRequests({
+    transportDir,
+    bridge: packageBridge,
+    count: 4,
+  });
+  const [changed, changedRequests] = await Promise.all([
+    changedResponse.then(parseJsonToolResult),
+    changedRequestsResponse,
+  ]);
+  const changedRows = changed.result?.data?.rows ?? [];
   if (
-    refreshed.ok !== true ||
-    refreshedRows.length < 1 ||
-    refreshedRows[0]?.name !== "OpenReaper Package Smoke Track" ||
-    refreshed.result?.refresh_requests?.length !== 0
+    changed.ok !== true ||
+    changed.sqlite?.source !== "refreshed_index" ||
+    changed.sqlite?.revision !== "reaper-change-count:2" ||
+    changedRows.length !== 1 ||
+    changedRows[0]?.name !== state.track_name ||
+    changed.result?.data?.refresh?.call_count !== 3 ||
+    JSON.stringify(changedRequests.map((request) => request.operation?.name)) !== JSON.stringify([
+      "project.read_summary",
+      "project.create_project_map_snapshot",
+      "tracks.list_tracks",
+      "tracks.read_mixer_controls",
+    ])
   ) {
-    throw new Error("Packaged MCP Project Index refresh did not produce query rows");
+    throw new Error(`Packaged MCP revision refresh smoke failed: ${JSON.stringify({ changed, requests: changedRequests.map((request) => request.operation?.name) })}`);
   }
 
   return {
     ok: true,
-    contract: "alpha3.2d.package_project_index_stdio_smoke.v1",
+    contract: "alpha3.2.5.b.package_project_understanding_stdio_smoke.v1",
     public_macro: "macro.project.query",
     former_public_macros: [...FORMER_PUBLIC_MACRO_IDS],
-    missing_to_refresh: {
-      refresh_request_count: refreshRequests.length,
-      child_calls: childCalls,
-      skipped_refresh_request_ids: skippedRefreshRequestIds,
-      server_executes_children: false,
+    execution_model: {
+      registered_macro_program: true,
+      agent_executes_refresh_children: false,
+      raw_sql_exposed: false,
+      sqlite_authorizes_writes: false,
     },
-    refreshed_query: {
-      row_count: refreshedRows.length,
-      first_row: refreshedRows[0],
+    cold_query: {
+      sqlite_source: cold.sqlite.source,
+      revision: cold.sqlite.revision,
+      row_count: coldRows.length,
+      bridge_operations: coldRequests.map((request) => request.operation.name),
     },
-    persistence_generation_followup: "deferred_in_fast_worker_smoke",
+    warm_query: {
+      sqlite_source: warm.sqlite.source,
+      revision: warm.sqlite.revision,
+      row_count: warmRows.length,
+      bridge_operations: warmRequests.map((request) => request.operation.name),
+    },
+    revision_refresh: {
+      sqlite_source: changed.sqlite.source,
+      revision: changed.sqlite.revision,
+      row_count: changedRows.length,
+      first_row: changedRows[0],
+      bridge_operations: changedRequests.map((request) => request.operation.name),
+    },
   };
 }
 
@@ -908,12 +1008,51 @@ function packageProjectFileSaveSummary(capability, targetPath) {
   return null;
 }
 
-function packageProjectIndexReadback(request) {
-  const operationName = request?.operation?.name;
-  const track = {
+function packageProjectObservationBundlePayload(projectRef, trackName) {
+  const track = packageProjectIndexTrack(trackName);
+  return {
+    project_ref: projectRef,
+    project_map: {
+      project_ref: projectRef,
+      track_count: 1,
+      item_count: 0,
+      truncated: false,
+      tracks: [{ ...track, items: [] }],
+      selected_items: [],
+    },
+    markers_regions: { items: [] },
+    coverage: {
+      project_map: "complete_page",
+      markers_regions: "bounded",
+    },
+  };
+}
+
+function packageProjectMapSnapshotPayload(projectRef, trackName) {
+  const track = packageProjectIndexTrack(trackName);
+  return {
+    project_ref: projectRef,
+    overview: {
+      project_ref: projectRef,
+      track_count: 1,
+      item_count: 0,
+      truncated: false,
+      tracks: [{ ...track, items: [] }],
+      selected_items: [],
+    },
+    coverage: {
+      tracks: "complete_page",
+      track_items: "bounded_per_track",
+      selected_items: "bounded",
+    },
+  };
+}
+
+function packageProjectIndexTrack(trackName) {
+  return {
     ref: "track:guid:{PACKAGE-SMOKE}",
     track_ref: "track:guid:{PACKAGE-SMOKE}",
-    name: "OpenReaper Package Smoke Track",
+    name: trackName,
     index: 0,
     display_number: "1",
     selected: true,
@@ -921,12 +1060,11 @@ function packageProjectIndexReadback(request) {
     fx_count: 0,
     send_count: 0,
   };
-  if (operationName === "project.create_project_map_snapshot") {
-    return {
-      overview: { tracks: [track], project_ref: "project:current" },
-      coverage: { tracks: "complete", track_items: "partial", selected_items: "selected_only" },
-    };
-  }
+}
+
+function packageProjectIndexReadback(request, { projectRef, state } = {}) {
+  const operationName = request?.operation?.name;
+  const track = packageProjectIndexTrack(state?.track_name ?? "OpenReaper Package Smoke Track");
   if (operationName === "tracks.list_tracks" || operationName === "tracks.read_mixer_controls") {
     return {
       tracks: [track],
@@ -937,17 +1075,57 @@ function packageProjectIndexReadback(request) {
   return null;
 }
 
-function createOperationAwarePackageSmokeBridge({ owner, generation }) {
+function createOperationAwarePackageSmokeBridge({
+  owner,
+  generation,
+  projectRef = "project:current",
+  state = { revision: 1, track_name: "OpenReaper Package Smoke Track" },
+  observationArtifactRef = null,
+  projectMapArtifactRef = null,
+}) {
   const fake = new FakeFoundationBridge({ owner, generation });
   return {
     dispatch(request) {
       const result = fake.dispatch(request);
       const summary = packageProjectFileReadSummary(request?.operation?.name)
         ?? packageProjectFileSaveSummary(request?.pack?.capability, request?.params?.target_path);
-      const projectIndexReadback = packageProjectIndexReadback(request);
-      if ((!summary && !projectIndexReadback) || result?.ok !== true) return result;
+      const operationName = request?.operation?.name;
+      const revisionReadback = operationName === "project.read_summary"
+        ? {
+            project_ref: projectRef,
+            name: "OpenReaper Package Smoke",
+            change_count: state.revision,
+            track_count: 1,
+            item_count: 0,
+            marker_count: 0,
+            region_count: 0,
+          }
+        : null;
+      const producedArtifactRef = operationName === "project.create_observation_bundle"
+        ? observationArtifactRef
+        : operationName === "project.create_project_map_snapshot"
+          ? projectMapArtifactRef
+          : null;
+      const observationReadback = producedArtifactRef
+        ? { project_ref: projectRef, artifact_ref: producedArtifactRef }
+        : null;
+      const projectIndexReadback = packageProjectIndexReadback(request, { projectRef, state });
+      if ((!summary && !revisionReadback && !observationReadback && !projectIndexReadback) || result?.ok !== true) return result;
       const scripted = structuredClone(result);
       if (summary) scripted.result.summary = summary;
+      if (revisionReadback) {
+        scripted.result.summary = revisionReadback;
+        scripted.result.readback = revisionReadback;
+      }
+      if (observationReadback) {
+        scripted.result.summary = observationReadback;
+        scripted.result.readback = observationReadback;
+        scripted.result.refs = [{
+          kind: "artifact",
+          ref: producedArtifactRef,
+          identity: { scheme: "artifact_ref", value: producedArtifactRef },
+        }];
+      }
       if (projectIndexReadback) scripted.result.readback = projectIndexReadback;
       if (request?.pack?.capability === "project.save_current_project" || request?.pack?.capability === "project.save_project_as") {
         scripted.result.refs = [{
@@ -962,22 +1140,32 @@ function createOperationAwarePackageSmokeBridge({ owner, generation }) {
 }
 
 async function respondToPackagedBridgeRequest({ transportDir, bridge }) {
+  const requests = await respondToPackagedBridgeRequests({ transportDir, bridge, count: 1 });
+  return requests[0];
+}
+
+async function respondToPackagedBridgeRequests({ transportDir, bridge, count }) {
   const requestsDir = path.join(transportDir, "requests");
-  for (let attempt = 0; attempt < 400; attempt += 1) {
-    const files = (await readdir(requestsDir)).filter((file) => file.endsWith(".json"));
-    if (files.length > 0) {
-      const request = JSON.parse(await readFile(path.join(requestsDir, files[0]), "utf8"));
-      const result = bridge.dispatch(request);
+  const seen = new Set();
+  const requests = [];
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    const files = (await readdir(requestsDir)).filter((file) => file.endsWith(".json")).sort();
+    for (const file of files) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const request = JSON.parse(await readFile(path.join(requestsDir, file), "utf8"));
+      const result = await Promise.resolve(bridge.dispatch(request));
       await writeFile(
-        path.join(transportDir, "results", files[0]),
+        path.join(transportDir, "results", file),
         `${JSON.stringify(result)}\n`,
         "utf8",
       );
-      return request;
+      requests.push(request);
+      if (requests.length === count) return requests;
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error("Timed out waiting for packaged omitted-context bridge request");
+  throw new Error(`Timed out waiting for ${count} packaged bridge request(s); observed ${requests.length}`);
 }
 
 async function smokePackagedRuntimeDoctorReadiness() {
@@ -3229,7 +3417,7 @@ function assertProjectIndexUserFlow(flow) {
   if (!flow || flow.contract !== REQUIRED_PROJECT_INDEX_USER_FLOW_CONTRACT) {
     throw new Error("Packaged MCP list_templates missing Project Index user flow");
   }
-  for (const id of REQUIRED_MACRO_IDS) {
+  for (const id of PROJECT_INDEX_FLOW_MACRO_IDS) {
     if (!flow.primary_macro_ids?.includes(id)) {
       throw new Error(`Packaged MCP Project Index user flow missing primary macro ${id}`);
     }

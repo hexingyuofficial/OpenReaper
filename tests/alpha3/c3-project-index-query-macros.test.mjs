@@ -76,11 +76,15 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     const generic = createAlpha3_2DGenericProjectQueryDiscoveryItems();
     assert.equal(generic.length, 1);
     assert.equal(generic[0].id, "macro.project.query");
-    assert.equal(generic[0].support_status, "supported_runtime_bound");
+    assert.equal(generic[0].support_status, "executable_runtime_bound");
+    assert.equal(generic[0].execution_shape, "registered_macro_program");
     assert.equal(generic[0].live_runnable_now, false);
     assert.deepEqual(generic[0].replacement, ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT);
     assert.deepEqual(ALPHA3_2D_GENERIC_PROJECT_QUERY_REPLACEMENT.covers_legacy_ids, ALPHA3_2D_COVERED_LEGACY_QUERY_IDS);
-    assert.equal(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.macro_ids.every((id) => id !== "macro.project.query"), true);
+    assert.deepEqual(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.macro_ids, ["macro.project.query"]);
+    assert.deepEqual(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.implemented_macro_ids, ["macro.project.query"]);
+    assert.deepEqual(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.covered_legacy_ids, ALPHA3_2D_COVERED_LEGACY_QUERY_IDS);
+    assert.deepEqual(ALPHA3_C3_PROJECT_INDEX_DISCOVERY_SUMMARY.temporary_compatibility_ids, ["macro.selected_context"]);
   });
 
   it("creates official query macro discovery entries over list_templates/call_template", () => {
@@ -180,9 +184,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     ]);
     assert.equal(plan.next_actions[0].then, "update_project_index_from_readback_and_rerun_macro");
     assert.equal(plan.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
-    assert.equal(plan.user_flow.stage, "needs_refresh");
-    assert.equal(plan.user_flow.primary_next_action, "run_refresh_requests");
-    assert.equal(plan.user_flow.refresh_request_count, 2);
+    assert.equal(plan.user_flow.stage, "internal_read_only_refresh");
+    assert.equal(plan.user_flow.primary_next_action, "await_macro_completion");
+    assert.equal(plan.user_flow.internal_read_only_refresh_required, true);
     assert.equal(plan.user_flow.safe_to_use_rows, true);
     assert.equal(plan.user_flow.safe_to_write_from_rows, false);
     assert.equal(plan.user_flow.must_hydrate_or_re_resolve_before_write, false);
@@ -249,8 +253,8 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(plan.write_safety_loop.sqlite_may_authorize_write, false);
     assert.equal(plan.page.has_more, false);
     assert.equal(plan.user_flow.contract, ALPHA3_L3_PROJECT_INDEX_USER_FLOW_CONTRACT);
-    assert.equal(plan.user_flow.stage, "needs_refresh_after_blockers");
-    assert.equal(plan.user_flow.primary_next_action, "run_refresh_requests");
+    assert.equal(plan.user_flow.stage, "internal_read_only_refresh");
+    assert.equal(plan.user_flow.primary_next_action, "await_macro_completion");
     assert.deepEqual(plan.user_flow.blocker_codes, ["INDEX_NOT_READY"]);
     assert.equal(plan.user_flow.safe_to_use_rows, false);
     assert.equal(plan.user_flow.safe_to_write_from_rows, false);
@@ -1402,6 +1406,9 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
       menu.product_surface.project_index_user_flow,
       ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY,
     );
+    assert.equal(ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY.safety_policy.registered_macro_program, true);
+    assert.equal(ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY.safety_policy.agent_replays_internal_refresh, false);
+    assert.doesNotMatch(JSON.stringify(ALPHA3_L3_PROJECT_INDEX_USER_FLOW_DISCOVERY_SUMMARY), /refresh_requests|rerun/i);
     assert.equal(menu.product_surface.project_index_queries.tool_surface.added_tools, 0);
     assert.equal(menu.product_surface.detail_level, "compact");
     assert.equal(Object.hasOwn(menu.product_surface, "project_index_user_flow_snapshot"), false);
@@ -1419,9 +1426,15 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.public_call_recipe, false);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed, false);
     assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.sqlite_authorizes_writes, false);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.registered_macro_program, true);
+    assert.equal(exact.product_surface.project_index_user_flow_snapshot.safety.agent_replays_internal_refresh, false);
+    assert.deepEqual(
+      exact.product_surface.project_index_user_flow_snapshot.default_agent_flow.map((step) => step.id),
+      ["execute_registered_query_program", "consume_completed_query_result", "hydrate_or_target_resolve"],
+    );
     assert.equal(exact.items[0].id, "macro.project.query");
     assert.equal(exact.items[0].capability_truth.kind, "macro");
-    assert.equal(exact.items[0].support_status, "supported_runtime_bound");
+    assert.equal(exact.items[0].support_status, "executable_runtime_bound");
     assert.deepEqual(
       exact.items[0].inputSchema.properties.entity.enum,
       [
@@ -1441,34 +1454,40 @@ describe("Alpha3 C3 Project SQLite Index query macros", () => {
     );
   });
 
-  it("calls the generic public query through call_template as a plan-only envelope", async () => {
+  it("calls the generic public query through call_template as one completed registered Macro program", async () => {
+    const projectIndex = readyProjectIndex();
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T16:28:15.000Z"),
-      projectIndex: readyProjectIndex(),
+      projectIndexRuntime: {
+        adapter: projectIndex,
+        status: () => projectIndex,
+      },
     });
     const response = await runtime.call_template({
       id: "macro.project.query",
       input: {
         entity: "tracks",
+        refresh_policy: "never",
         limit: 2,
         filters: { selected: true },
         fields: ["name", "selected", "fx_count"],
       },
     });
 
-    assert.equal(response.contract, "template.execution.v1");
+    assert.equal(response.contract, "macro.execution.v1");
     assert.equal(response.ok, true);
     assert.equal(response.error, null);
-    assert.equal(response.template.id, "macro.project.query");
-    assert.equal(response.template.action_kind, "macro");
-    assert.equal(response.result.contract, "alpha3.2.generic_project_query.v1");
-    assert.equal(response.result.plan.id, "macro.project.query");
-    assert.equal(response.result.plan.entity, "tracks");
-    assert.equal(response.result.execution.executed, false);
-    assert.equal(response.result.plan.safety.hidden_executor, false);
-    assert.equal(response.result.execution.live_reaper, false);
-    assert.equal(response.result.plan.legacy_implementation.id, "macro.query_tracks");
-    assert.equal(response.result.plan.replacement.id, "macro.project.query");
+    assert.equal(response.macro.id, "macro.project.query");
+    assert.equal(response.macro.program_id, "openreaper.macro.project.query");
+    assert.equal(response.execution.status, "completed");
+    assert.equal(response.execution.stages.some((stage) => stage.id === "query-index-read" && stage.status === "completed"), true);
+    assert.equal(Object.hasOwn(response.result, "plan"), false);
+    assert.equal(response.result.data.entity, "tracks");
+    assert.deepEqual(response.result.canonical_refs, ["track:guid:{TRACK-1}", "track:guid:{TRACK-3}"]);
+    assert.equal(response.result.data.rows.length, 2);
+    assert.equal(response.result.data.refs_truth.sqlite_authorizes_writes, false);
+    assert.equal(response.result.data.refs_truth.write_requires_live_re_resolution, true);
+    assert.equal(response.result.data.refresh.call_count, 0);
   });
 
   it("calls selected_context through call_template as a plan-only envelope", async () => {

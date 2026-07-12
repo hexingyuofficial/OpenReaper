@@ -424,9 +424,9 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.contract, "discovery.menu.v1");
     assert.equal(runtimeMenu.kind, "template_menu");
     assert.equal(runtimeMenu.mode, "menu");
-    assert.equal(runtimeMenu.items.length, 10);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.inspect"), true);
+    assert.equal(runtimeMenu.items.length, 8);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), false);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.inspect"), false);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.delete_targets"), false);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);
@@ -516,7 +516,7 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(runtimeMenu.items.some((item) => item.current_status === "needs_ref"), true);
     assert.equal(runtimeMenu.items.every((item) => item.safety_note.includes("Macro planner only")), true);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.file"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.project.query"), false);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.selected_context"), true);
     for (const removedId of [
       "macro.index_status", "macro.query_tracks", "macro.query_items", "macro.query_takes",

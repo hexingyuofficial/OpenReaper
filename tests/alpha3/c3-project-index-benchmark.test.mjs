@@ -60,7 +60,7 @@ describe("Alpha3 C3 Project SQLite Index Block 4 benchmark", () => {
     assert.equal(benchmark.discovery.tool_surface_added_tools, 0);
   });
 
-  it("keeps query macro capability truth non-live while runtime exposes plan-only macro calls", () => {
+  it("keeps the static benchmark non-live while publishing executable query Macro capability truth", () => {
     const discoveryEntries = createAlpha3C3OfficialQueryMacroDiscoveryItems();
     assert.equal(discoveryEntries.every((entry) => entry.live_runnable_now === false), true);
     assert.equal(
@@ -72,7 +72,8 @@ describe("Alpha3 C3 Project SQLite Index Block 4 benchmark", () => {
     assert.equal(genericEntries.length, 1);
     assert.equal(genericEntries[0].id, "macro.project.query");
     assert.equal(genericEntries[0].live_runnable_now, false);
-    assert.equal(genericEntries[0].support_status, "supported_runtime_bound");
+    assert.equal(genericEntries[0].support_status, "executable_runtime_bound");
+    assert.equal(genericEntries[0].execution_shape, "registered_macro_program");
 
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates({
@@ -81,10 +82,12 @@ describe("Alpha3 C3 Project SQLite Index Block 4 benchmark", () => {
     });
 
     assert.deepEqual(menu.items.map((item) => item.id), ["macro.project.query"]);
-    assert.equal(menu.items[0].current_status, "available_now");
+    assert.equal(menu.items[0].current_status, "blocked");
     assert.equal(menu.items[0].capability_truth.live_runnable_now, false);
     assert.equal(menu.items[0].capability_truth.support_state, "supported");
-    assert.equal(menu.items[0].capability_truth.known_blocker, null);
-    assert.equal(menu.items[0].user_message.includes("plan-only macro bundle"), true);
+    assert.equal(menu.items[0].capability_truth.known_blocker, "live_executor_not_configured");
+    assert.match(menu.items[0].user_message, /needs the configured OpenReaper live route/);
+    assert.match(menu.items[0].next_step, /Start or reconnect the managed OpenReaper bridge/);
+    assert.equal(menu.items[0].safety_note.includes("Macro planner only"), false);
   });
 });

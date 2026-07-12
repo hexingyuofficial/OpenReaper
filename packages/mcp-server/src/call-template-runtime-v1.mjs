@@ -29,6 +29,14 @@ import {
 } from "../../core/src/template-catalog-fixtures-v1.mjs";
 import { executeTemplate } from "../../core/src/template-execution-harness-v1.mjs";
 import {
+  MACRO_EXECUTION_CONTRACT,
+  validateMacroExecutionEnvelope,
+} from "./macro-runtime-contract-v1.mjs";
+import {
+  executeAlpha3_2_5BProjectUnderstandingMacro,
+  isAlpha3_2_5BProjectUnderstandingMacroId,
+} from "./alpha3-2-5-b-project-understanding-v1.mjs";
+import {
   TEMPLATE_SUMMARY_FIELDS,
   createDiscoveryCatalog,
 } from "./discovery-menu-v1.mjs";
@@ -54,10 +62,8 @@ import {
   createAlpha3C3OfficialQueryMacroDiscoveryItems,
   createAlpha3C3ProjectIndexQueryRuntimeEnvelope,
   createAlpha3_2DGenericProjectQueryDiscoveryItems,
-  createAlpha3_2DGenericProjectQueryRuntimeEnvelope,
   isAlpha3C3OfficialQueryMacroId,
   planAlpha3C3ProjectIndexQueryMacro,
-  planAlpha3_2DGenericProjectQuery,
 } from "./alpha3-c3-project-index-query-v1.mjs";
 import {
   ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
@@ -105,9 +111,6 @@ import {
 } from "./openreaper-agent-startup-guidance-v1.mjs";
 import {
   createAlpha3_2EProjectInspectMacroDiscoveryItems,
-  createAlpha3_2EProjectInspectMacroRuntimeEnvelope,
-  isAlpha3_2EProjectInspectMacroId,
-  planAlpha3_2EProjectInspectMacro,
 } from "./alpha3-2e-small-macro-spine-v1.mjs";
 import {
   createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems,
@@ -880,11 +883,14 @@ export function createCallTemplateRuntime(options = {}) {
   const live = normalizeLiveRuntimeOptions(options.live);
   const projectIndexRuntime = options.projectIndexRuntime ?? null;
   const projectIndex = projectIndexRuntime?.adapter ?? options.projectIndex ?? null;
+  const projectIndexArtifactReader = typeof options.projectIndexArtifactReader === "function"
+    ? options.projectIndexArtifactReader
+    : null;
   const catalogDiscoveryTemplates = runtimeCatalogDiscoveryTemplates(catalog, live);
   const legacyProjectIndexCompatibilityDiscovery = createAlpha3C3OfficialQueryMacroDiscoveryItems({ catalog })
     .filter((item) => item.id === "macro.selected_context");
   const executableDiscoveryTemplates = [
-    ...createAlpha3_2EProjectInspectMacroDiscoveryItems(),
+    ...createAlpha3_2EProjectInspectMacroDiscoveryItems({ liveRunnableNow: live.enabled }),
     ...createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(),
     ...createAlpha3_2EProjectLayoutMacroDiscoveryItems(),
     ...createAlpha3_2ERoutingApplyMacroDiscoveryItems(),
@@ -892,30 +898,53 @@ export function createCallTemplateRuntime(options = {}) {
     ...createAlpha3_2ERenderTargetsMacroDiscoveryItems(),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...createAlpha3_2C3DProjectFileMacroDiscoveryItems(),
-    ...createAlpha3_2DGenericProjectQueryDiscoveryItems(),
+    ...createAlpha3_2DGenericProjectQueryDiscoveryItems({ liveRunnableNow: live.enabled }),
     ...legacyProjectIndexCompatibilityDiscovery,
     ...createAlpha3E1OfficialMacroDiscoveryItems({ catalog }),
     ...createAlpha3C5OfficialMacroDiscoveryItems({ catalog }),
     ...catalogDiscoveryTemplates,
   ];
 
+  async function executeAcceptedAtomic({
+    id,
+    input = {},
+    refs = [],
+    context,
+    budget,
+    idempotency_key,
+    observeProjectIndex = true,
+  }) {
+    assertLiveRuntimeDispatchAllowed(live, id);
+    const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
+    const execution = await executeTemplate({
+      descriptor,
+      input: await preflightTemplateInput(id, input, budget),
+      refs,
+      context,
+      budget,
+      idempotency_key,
+      executor: live.enabled ? live.executor : options.executor,
+    });
+    if (!observeProjectIndex) return execution;
+    return observeProjectIndexExecution({
+      execution,
+      id,
+      projectIndexRuntime,
+      projectIndexArtifactReader,
+    });
+  }
+
   async function call_template(request = {}) {
     let id = null;
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
-      if (isAlpha3_2EProjectInspectMacroId(id)) {
-        const plan = planAlpha3_2EProjectInspectMacro(normalized.input, {
-          refs_provided: Array.isArray(normalized.refs)
-            ? normalized.refs.length > 0
-            : isPlainObject(normalized.refs)
-              ? Object.keys(normalized.refs).length > 0
-              : normalized.refs !== undefined && normalized.refs !== null,
-          idempotency_key_present: normalized.idempotency_key !== undefined,
-        });
-        const envelope = createAlpha3_2EProjectInspectMacroRuntimeEnvelope({
+      if (isAlpha3_2_5BProjectUnderstandingMacroId(id)) {
+        const envelope = await executeAlpha3_2_5BProjectUnderstandingMacro({
           request: normalized,
-          plan,
+          projectIndexRuntime,
+          catalog,
+          executeAtomic: live.enabled || options.executor ? executeAcceptedAtomic : null,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
@@ -999,18 +1028,6 @@ export function createCallTemplateRuntime(options = {}) {
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
-      if (id === ALPHA3_2D_GENERIC_PROJECT_QUERY_ID) {
-        const plan = planAlpha3_2DGenericProjectQuery(normalized.input, { projectIndex, catalog });
-        const envelope = createAlpha3_2DGenericProjectQueryRuntimeEnvelope({
-          request: normalized,
-          plan,
-          projectIndex,
-          catalog,
-          now,
-        });
-        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
-        return envelope;
-      }
       if (isAlpha3_2AContractOnlyMacroId(id)) {
         throw new CallTemplateRuntimeError(
           "CALL_TEMPLATE_ID_HELD",
@@ -1088,21 +1105,13 @@ export function createCallTemplateRuntime(options = {}) {
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
-      assertLiveRuntimeDispatchAllowed(live, id);
-      const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
-      const execution = await executeTemplate({
-        descriptor,
-        input: await preflightTemplateInput(id, normalized.input, normalized.budget),
+      const observedExecution = await executeAcceptedAtomic({
+        id,
+        input: normalized.input,
         refs: normalized.refs,
         context: normalized.context,
         budget: normalized.budget,
         idempotency_key: normalized.idempotency_key,
-        executor: live.enabled ? live.executor : options.executor,
-      });
-      const observedExecution = observeProjectIndexExecution({
-        execution,
-        id,
-        projectIndexRuntime,
       });
       retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
       return observedExecution;
@@ -1141,24 +1150,83 @@ export function createCallTemplateRuntime(options = {}) {
   });
 }
 
-function observeProjectIndexExecution({ execution, id, projectIndexRuntime }) {
+async function observeProjectIndexExecution({
+  execution,
+  id,
+  projectIndexRuntime,
+  projectIndexArtifactReader,
+}) {
   if (!projectIndexRuntime || !ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.includes(id) || execution?.ok !== true) {
     return execution;
   }
-  const observation = projectIndexRuntime.observeSuccessfulTemplateExecution({
+  const initialObservation = projectIndexRuntime.observeSuccessfulTemplateExecution({
     ...execution,
     identity: {
       ...projectIndexRuntime.identity,
       session_id: projectIndexRuntime.session_id,
     },
   });
+  let observation = initialObservation;
+  let artifactReadSummary = null;
+  const artifactRequired = initialObservation?.blockers?.find((entry) => entry?.code === "ARTIFACT_PAYLOAD_REQUIRED");
+  const artifactRef = artifactRequired?.details?.artifact_refs?.find((ref) => typeof ref === "string");
+  if (artifactRef && projectIndexArtifactReader) {
+    try {
+      const artifactRead = await projectIndexArtifactReader({
+        artifact_ref: artifactRef,
+        template_id: id,
+        execution,
+      });
+      const payload = artifactPayloadFromRead(artifactRead);
+      if (payload) {
+        observation = projectIndexRuntime.observeArtifactPayload({
+          templateId: id,
+          artifactRef,
+          payload,
+          validated: true,
+          identity: {
+            ...projectIndexRuntime.identity,
+            session_id: projectIndexRuntime.session_id,
+          },
+        });
+        artifactReadSummary = {
+          ok: observation.ok === true,
+          artifact_ref: artifactRef,
+          view: "payload",
+        };
+      } else {
+        artifactReadSummary = {
+          ok: false,
+          artifact_ref: artifactRef,
+          error_code: artifactRead?.error?.code ?? "ARTIFACT_PAYLOAD_UNAVAILABLE",
+        };
+      }
+    } catch (error) {
+      artifactReadSummary = {
+        ok: false,
+        artifact_ref: artifactRef,
+        error_code: error?.code ?? "ARTIFACT_PAYLOAD_READ_FAILED",
+      };
+    }
+  }
   return deepFreeze({
     ...execution,
     result: {
       ...execution.result,
+      ...(initialObservation !== observation
+        ? { project_index_initial_observation: initialObservation }
+        : {}),
       project_index_observation: observation,
+      ...(artifactReadSummary ? { project_index_artifact_read: artifactReadSummary } : {}),
     },
   });
+}
+
+function artifactPayloadFromRead(value) {
+  if (isPlainObject(value?.result?.artifact?.payload)) return value.result.artifact.payload;
+  if (isPlainObject(value?.artifact?.payload)) return value.artifact.payload;
+  if (isPlainObject(value?.payload)) return value.payload;
+  return null;
 }
 
 export async function callTemplate(request = {}, options = {}) {
@@ -1546,6 +1614,10 @@ function enforceRuntimeResponseContract(response, request, now) {
     });
   }
 
+  if (response.contract === MACRO_EXECUTION_CONTRACT) {
+    return enforceMacroExecutionResponse(response, request, budget, now);
+  }
+
   const diagnosed = response.error
     ? {
         ...response,
@@ -1570,6 +1642,37 @@ function enforceRuntimeResponseContract(response, request, now) {
     details: {
       original_response_bytes: candidate.budget.response_bytes,
       max_response_bytes: budget.max_response_bytes,
+    },
+  });
+}
+
+function enforceMacroExecutionResponse(response, request, budget, now) {
+  const candidate = cloneJson(response);
+  candidate.budget.max_bytes = Math.min(
+    candidate.budget.max_bytes,
+    budget.max_response_bytes,
+  );
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    candidate.budget.actual_bytes = encodedBytes(candidate);
+  }
+  const validation = validateMacroExecutionEnvelope(candidate);
+  if (validation.valid && candidate.budget.actual_bytes <= candidate.budget.max_bytes) {
+    return deepFreeze(candidate);
+  }
+  return compactRuntimeErrorEnvelope({
+    id: response.macro?.id ?? normalizePossibleId(request?.id),
+    code: candidate.budget.actual_bytes > candidate.budget.max_bytes
+      ? "RESPONSE_TOO_LARGE"
+      : "CALL_TEMPLATE_REQUEST_INVALID",
+    message: candidate.budget.actual_bytes > candidate.budget.max_bytes
+      ? "Macro response exceeded max_response_bytes; retry with a smaller limit or narrower fields."
+      : "Macro runtime returned an envelope outside macro.execution.v1.",
+    recoverable: true,
+    budget,
+    now,
+    details: {
+      validation_errors: validation.errors.slice(0, 8),
+      response_bytes: candidate.budget.actual_bytes,
     },
   });
 }
@@ -1771,12 +1874,13 @@ function normalizeRuntimeError(error) {
 function evidenceFromExecution(execution, liveEvidence) {
   const result = execution?.result ?? {};
   const lastResult = result.last_result ?? {};
+  const isMacro = execution?.contract === MACRO_EXECUTION_CONTRACT;
   return deepFreeze(pruneUndefined({
     contract: CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT,
     template: {
-      id: execution?.template?.id ?? null,
-      pack: execution?.template?.pack ?? null,
-      risk: execution?.template?.risk ?? null,
+      id: isMacro ? execution?.macro?.id ?? null : execution?.template?.id ?? null,
+      pack: isMacro ? null : execution?.template?.pack ?? null,
+      risk: isMacro ? execution?.macro?.risk ?? null : execution?.template?.risk ?? null,
     },
     ok: Boolean(execution?.ok),
     error: execution?.ok
@@ -1785,7 +1889,7 @@ function evidenceFromExecution(execution, liveEvidence) {
           source: execution?.error?.source ?? null,
           code: execution?.error?.code ?? null,
     },
-    request_id: execution?.request?.id ?? null,
+    request_id: isMacro ? execution?.request?.request_id ?? null : execution?.request?.id ?? null,
     bridge: {
       expected_owner: execution?.request?.bridge?.expected_owner ?? null,
       expected_generation: execution?.request?.bridge?.expected_generation ?? null,
@@ -1793,15 +1897,19 @@ function evidenceFromExecution(execution, liveEvidence) {
       generation: execution?.bridge?.generation ?? null,
     },
     counts: {
-      refs: Array.isArray(result.refs) ? result.refs.length : 0,
-      artifacts: Array.isArray(result.artifacts) ? result.artifacts.length : 0,
+      refs: isMacro
+        ? Array.isArray(result.canonical_refs) ? result.canonical_refs.length : 0
+        : Array.isArray(result.refs) ? result.refs.length : 0,
+      artifacts: isMacro
+        ? Array.isArray(result.artifact_refs) ? result.artifact_refs.length : 0
+        : Array.isArray(result.artifacts) ? result.artifacts.length : 0,
       jobs: Array.isArray(result.jobs) ? result.jobs.length : 0,
       last_result_refs: Array.isArray(lastResult.refs) ? lastResult.refs.length : 0,
     },
     last_result_updated: Boolean(lastResult.updated),
     timestamps: {
       request_created_at: execution?.request?.created_at ?? null,
-      completed_at: execution?.completed_at ?? null,
+      completed_at: isMacro ? execution?.execution?.completed_at ?? null : execution?.completed_at ?? null,
     },
     live: liveEvidence,
   }));
@@ -2136,7 +2244,7 @@ function runtimeActionStatus(item) {
 
 function runtimeActionIsPlanOnlyMacro(item) {
   return item.action_kind === "macro"
-    && ["plan_only_runtime_bound", "supported_runtime_bound"].includes(item.support_status)
+    && item.support_status === "plan_only_runtime_bound"
     && item.execution_shape !== "live_reaper_write";
 }
 
@@ -2151,7 +2259,12 @@ function runtimeActionUserMessage(item, currentStatus) {
     return "Contract/manual discovery entry only. It is not executable or live-runnable until its named Alpha3.2 implementation slice is accepted.";
   }
   if (item.action_kind === "macro" && currentStatus === "available_now") {
-    return "Ready to return a plan-only macro bundle through call_template; child actions still run as accepted template calls.";
+    return item.execution_shape === "registered_macro_program"
+      ? "Ready to execute one registered bounded Macro program through call_template."
+      : "Ready to return a plan-only macro bundle through call_template; child actions still run as accepted template calls.";
+  }
+  if (item.execution_shape === "registered_macro_program" && currentStatus === "blocked") {
+    return "This executable Macro needs the configured OpenReaper live route before its bounded program can run.";
   }
   if (currentStatus === "available_now") {
     return "Ready to run in the current bounded live runtime.";
@@ -2178,6 +2291,7 @@ function runtimeActionUserMessage(item, currentStatus) {
 }
 
 function runtimeBeginnerLabel(item, currentStatus) {
+  if (item.execution_shape === "registered_macro_program" && currentStatus === "available_now") return "Ready now";
   if (item.action_kind === "macro" && currentStatus === "available_now") return "Ready as macro plan";
   if (currentStatus === "available_now" && requiredInputFields(item).length > 0) return "Ready after input";
   return ({
@@ -2202,7 +2316,13 @@ function runtimeNextStep(item, currentStatus) {
     return "Use list_templates exact-id expansion to read action_manual; do not call_template this id before the later bounded implementation is accepted.";
   }
   if (item.action_kind === "macro" && currentStatus === "available_now") {
+    if (item.execution_shape === "registered_macro_program") {
+      return "Call this Macro through call_template; it executes its bounded registered program and returns final data, evidence, and typed blockers in macro.execution.v1.";
+    }
     return "Call this macro id through call_template to get child call_template requests, typed blockers, and readback requirements.";
+  }
+  if (item.execution_shape === "registered_macro_program" && currentStatus === "blocked") {
+    return "Start or reconnect the managed OpenReaper bridge, then call this Macro through call_template.";
   }
   if (currentStatus === "blocked") {
     return "Keep this in catalog/backlog view or configure a bounded live executor allowlist that includes this template.";
@@ -2227,6 +2347,9 @@ function runtimeSafetyNote(item) {
     return "Discovery contract only: no call_template execution, REAPER mutation, live claim, raw action/Lua/shell/UI path, or hidden executor.";
   }
   if (item.action_kind === "macro") {
+    if (item.execution_shape === "registered_macro_program") {
+      return "Registered bounded Macro program: only declared audited stages may execute; no raw SQL, Lua, action, shell, UI, alias, or hidden model executor is exposed.";
+    }
     return "Macro planner only: no direct REAPER mutation, no alias execution, and no hidden executor.";
   }
   if (item.risk === "destructive") return "Destructive action: use only in a disposable or explicitly approved project.";

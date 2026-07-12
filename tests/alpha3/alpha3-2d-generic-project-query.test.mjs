@@ -60,12 +60,12 @@ function staleIndex() {
 }
 
 describe("Alpha3.2-D generic macro.project.query", () => {
-  it("publishes exactly one supported runtime-bound plan-only discovery item and internal legacy replacement metadata", () => {
+  it("publishes exactly one executable registered query Macro and internal legacy replacement metadata", () => {
     const items = createAlpha3_2DGenericProjectQueryDiscoveryItems();
     assert.equal(items.length, 1);
     assert.equal(items[0].id, "macro.project.query");
-    assert.equal(items[0].support_status, "supported_runtime_bound");
-    assert.equal(items[0].execution_shape, "plan_only_generic_project_query");
+    assert.equal(items[0].support_status, "executable_runtime_bound");
+    assert.equal(items[0].execution_shape, "registered_macro_program");
     assert.equal(items[0].live_runnable_now, false);
     assert.deepEqual(items[0].entities, ENTITIES);
     assert.deepEqual(ALPHA3_2D_GENERIC_PROJECT_QUERY_ENTITIES, ENTITIES);
@@ -278,7 +278,7 @@ describe("Alpha3.2-D generic macro.project.query", () => {
     assert.equal(itemRequests.every((request) => request.tool === "call_template" && request.input.include_take_summary === true), true);
   });
 
-  it("returns a plan-only runtime envelope with no child executor or live execution", () => {
+  it("retains the old plan envelope only as an internal query-planning helper", () => {
     const envelope = createAlpha3_2DGenericProjectQueryRuntimeEnvelope({
       request: { input: { entity: "tracks", refresh_policy: "never" } },
       projectIndex: freshIndex(),
