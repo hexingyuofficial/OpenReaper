@@ -3430,3 +3430,100 @@ were retained as diagnostic evidence rather than promoted as passes.
 
 Next gate: Alpha3.2.5-B SQLite automatic hydration and fast query. No public
 plan-only Macro was promoted by A.
+
+## Alpha3.2.5-B Executable Project Understanding
+
+Status: accepted
+
+Accepted implementation commit:
+`661ed71 runtime: activate project understanding highways`
+
+Accepted surface:
+
+- `macro.project.inspect` and `macro.project.query` are fixed registered
+  executable programs through the existing `call_template` tool and return
+  bounded `macro.execution.v1` results; agents no longer execute returned
+  refresh children or rerun the same query manually;
+- a cold project performs one bounded `template.project.create_observation_bundle`
+  hydration, validates and reads its artifact through the existing `get_state`
+  artifact runtime, then projects compact SQLite candidate rows;
+- a warm project performs only the live `project.read_summary` revision probe
+  before reusing matching SQLite rows;
+- a changed REAPER project revision invalidates dependent scopes and runs the
+  declared read-only refresh set before returning refreshed rows; SQLite never
+  authorizes writes and write targets still require live re-resolution;
+- a managed SQLite DB with stale logical-session/owner/generation/project
+  identity is removed and rebuilt without reusing stale rows;
+- `macro.execution.v1.result.data` now carries bounded task-shaped rows, page,
+  coverage, project understanding, and refresh facts without exposing raw SQL
+  or unbounded database records;
+- discovery, the compact agent guide, Project Index user flow, package smoke,
+  and Doctor now present `inspect/query` as executable registered programs.
+  Doctor `--for project-query` combines the frozen B3 shared bridge/read
+  preflight with current Project Index readiness and reports `ready` when both
+  are ready;
+- public Project Index discovery now lists only `macro.project.query`, while
+  old query ids remain internal-covered and `macro.selected_context` remains a
+  temporary compatibility route;
+- the MCP surface remains exactly five tools. No raw SQL, Lua, action, shell,
+  UI, generic graph, `call_recipe`, hardware/device I/O, or SQLite write
+  authority was added.
+
+Verification:
+
+```text
+npm run check:alpha3-2-5-b -> 41/41 pass
+npm run check:alpha3-c3 -> 67/67 pass
+npm run check:alpha3-c5 -> 13/13 pass
+npm run build -> exit 0
+git diff --check -> exit 0
+```
+
+Packaged stdio evidence:
+
+```text
+/Users/Zhuanz/Documents/openreaper/dist/openreaper-alpha-20260712-083240/OpenReaper-alpha
+contract: alpha3.2.5.b.package_project_understanding_stdio_smoke.v1
+tools: call_template,get_state,list_recipes,list_templates,ping
+required_macros: macro.project.inspect,macro.project.query
+cold query: cold_hydration, revision 1, one row
+warm query: warm_index, revision 1, one revision-probe bridge call
+changed query: refreshed_index, revision 2, updated row observed
+agent_executes_refresh_children: false
+```
+
+REAPER live evidence:
+
+```text
+/private/tmp/openreaper-alpha325-b-live-Wc7lIArC/reports/alpha3-2-5-b-live-smoke.json
+contract: alpha3.2.5.b.live_smoke.v1
+owner/generation: openreaper-alpha325-b-live / 1
+result: pass
+```
+
+The authorized `/Users/Zhuanz/Untitled/Untitled.RPP` fixture returned one track,
+two items, and one region. Cold inspect used one observation-bundle artifact;
+warm query used zero hydration calls. A reversible MCP track rename advanced
+the REAPER change count from 4 to 5, triggered a bounded project-map/track
+refresh, and returned the temporary name. The original name was restored. A
+second logical session rebuilt the same SQLite DB with
+`stale_rows_reused=false`, then cold-hydrated and observed the restored name.
+The source RPP and verified backup retained SHA-256
+`5f6239fcedcf3d91367c53245fef46404b5c0232158a899c21ee3afada46a96b`;
+no save, render output, source-media deletion, or hardware/device I/O occurred.
+
+Packaged Doctor live acceptance used the same bridge and reported
+`bridge_ready`, request/response `ready`, Project Index `ready_warm` on the
+SQLite file adapter at `reaper-change-count:6`, and `task_status=ready` for
+`--for project-query`. The separate package status remained
+`needs_client_config_refresh` only because the new build directory was tested
+directly rather than installed over `~/.openreaper/current`.
+
+Residual performance note: a changed tracks scope currently executes the
+fixed read-only project-map snapshot, track list, and mixer-control refresh
+set. This is bounded and correct, but a later performance slice may prove a
+smaller equivalent refresh set. It is not a correctness blocker for B.
+
+Next gate: Alpha3.2.5-C converts the approved bounded write/control Macro
+families into registered executable programs. Alpha3.2.5 as a whole remains
+in progress through C/D/E/F, trial rerun, final reviewer, and manual closeout.
