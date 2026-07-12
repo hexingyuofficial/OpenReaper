@@ -826,8 +826,13 @@ async function smokePackagedOpenReaperMcp() {
       },
       macro_execution_convenience: {
         contract: macros.product_surface.macro_execution_convenience_snapshot.contract,
-        server_executes_children: macros.product_surface.macro_execution_convenience_snapshot.safety.server_executes_children,
+        fixed_registered_programs:
+          macros.product_surface.macro_execution_convenience_snapshot.safety.fixed_registered_programs,
+        model_supplied_execution_graph:
+          macros.product_surface.macro_execution_convenience_snapshot.safety.model_supplied_execution_graph,
         hidden_executor: macros.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor,
+        live_write_refs_reresolved:
+          macros.product_surface.macro_execution_convenience_snapshot.safety.live_write_refs_reresolved,
         success_wording_requires_readback:
           macros.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback,
       },
@@ -3521,11 +3526,15 @@ function assertMacroExecutionConvenience(flow) {
   if (flow.safety?.added_tools !== 0 || flow.safety?.hidden_executor !== false) {
     throw new Error("Packaged MCP macro execution convenience expanded tools or hid an executor");
   }
-  if (flow.safety?.server_executes_children !== false || flow.safety?.public_call_recipe !== false) {
-    throw new Error("Packaged MCP macro execution convenience introduced a hidden execution path");
+  if (
+    flow.safety?.fixed_registered_programs !== true ||
+    flow.safety?.model_supplied_execution_graph !== false ||
+    flow.safety?.public_call_recipe !== false
+  ) {
+    throw new Error("Packaged MCP macro execution convenience escaped the fixed registered-program boundary");
   }
-  if (flow.safety?.raw_lua_action_shell_or_ui !== false || flow.safety?.alias_execution !== false) {
-    throw new Error("Packaged MCP macro execution convenience weakened raw/alias execution policy");
+  if (flow.safety?.raw_lua_action_shell_or_ui !== false || flow.safety?.live_write_refs_reresolved !== true) {
+    throw new Error("Packaged MCP macro execution convenience weakened raw execution or live-ref safety");
   }
   if (flow.safety?.success_wording_requires_readback !== true) {
     throw new Error("Packaged MCP macro execution convenience must require readback before success wording");

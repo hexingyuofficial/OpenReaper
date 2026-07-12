@@ -211,6 +211,10 @@ sleep 0.1
     assert.match(source, /source_tree_clean/);
     assert.match(source, /status", "--porcelain=v1"/);
     assert.match(source, /BRIDGE_HANDLER_REGISTRY_V1\.json/);
+    assert.match(source, /fixed_registered_programs/);
+    assert.match(source, /model_supplied_execution_graph/);
+    assert.match(source, /live_write_refs_reresolved/);
+    assert.equal(source.includes("macro_execution_convenience_snapshot.safety.server_executes_children"), false);
   });
 });
 
