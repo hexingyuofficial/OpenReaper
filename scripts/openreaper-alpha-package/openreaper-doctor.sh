@@ -42,7 +42,7 @@ const bridgeActionScript = path.join(home, "Library", "Application Support", "RE
 const reaperKbPath = path.join(home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
 const exactTools = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const vitalAgentRequiredTools = ["create_openreaper_handoff_plan", "run_doctor"];
-const requiredMacros = ["macro.index_status", "macro.query_tracks"];
+const requiredMacros = ["macro.project.query"];
 const requiredFxTemplates = [
   "template.fx.read_fx_summary",
   "template.fx.list_fx_parameters",
@@ -363,6 +363,7 @@ async function smokeMcp() {
       ok: false,
       reason: "mcp_smoke_failed",
       error_code: boundedErrorCode(error),
+      error_message: boundedErrorMessage(error),
     };
   }
 }
@@ -958,5 +959,13 @@ function sleep(ms) {
 function boundedErrorCode(error) {
   const value = error?.code ?? error?.name ?? "ERROR";
   return String(value).replace(/[^A-Za-z0-9_.:-]/gu, "_").slice(0, 64);
+}
+
+function boundedErrorMessage(error) {
+  return String(error?.message ?? error ?? "MCP doctor smoke failed")
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 320);
 }
 NODE

@@ -1722,8 +1722,11 @@ setInterval(() => {}, 1000);
   }
   await waitForFile(childPidMarker, { attempts: 100, delayMs: 20 });
   const childPid = Number((await readFile(childPidMarker, "utf8")).trim());
-  if (!Number.isSafeInteger(childPid) || childPid <= 0 || isProcessAlive(childPid)) {
-    throw new Error(`Packaged doctor fixture timeout left stubborn child alive: ${childPid}`);
+  if (!Number.isSafeInteger(childPid) || childPid <= 0) {
+    throw new Error(`Packaged doctor fixture timeout returned an invalid stubborn child pid: ${childPid}`);
+  }
+  if (!await waitForDeadPid(childPid, 100, 20)) {
+    throw new Error(`Packaged doctor fixture timeout left stubborn child alive after bounded reap wait: ${childPid}`);
   }
   if (
     timeoutError.cleanup?.term_sent !== true ||
