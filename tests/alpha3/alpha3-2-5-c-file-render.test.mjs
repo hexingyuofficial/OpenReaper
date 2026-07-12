@@ -50,6 +50,14 @@ function verifiedRenderResult(overrides = {}) {
   };
 }
 
+function assertExecutableRenderEnvelope(response) {
+  const serialized = JSON.stringify(response);
+  for (const forbidden of ["plan_only", "agent_executed_child", "bound_plan_only_child_route"]) {
+    assert.equal(serialized.includes(forbidden), false, forbidden);
+  }
+  assert.equal(response.result.data.preview.runtime_binding, "server_executed_registered_route");
+}
+
 describe("Alpha3.2.5-C executable file/render Macros", () => {
   it("registers exactly the two fixed executable programs", () => {
     assert.deepEqual(ALPHA3_2_5_C_FILE_MACRO_REGISTRY.ids, ["macro.project.file"]);
@@ -197,6 +205,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.equal(response.result.data.managed_render_root, managedRenderRoot);
     assert.equal(calls, 0);
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    assertExecutableRenderEnvelope(response);
   });
 
   it("renders through one audited atomic route and preserves returned evidence", async () => {
@@ -218,6 +227,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.equal(response.result.data.outputs[0].absolute_path, "/managed/renders/trial.wav");
     assert.equal(response.result.data.save_recommendation, "save_after_render");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    assertExecutableRenderEnvelope(response);
   });
 
   it("retains completed render evidence when post-render dirty readback fails", async () => {

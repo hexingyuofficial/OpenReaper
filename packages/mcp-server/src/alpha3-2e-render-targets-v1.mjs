@@ -224,9 +224,10 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
   const input = isPlainObject(request.input) ? request.input : {};
   const validation = validateMacroProgramRequest({ macro_id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, input, refs: request.refs, dry_run: input.dry_run !== false }, { registry: ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY });
   const plan = planAlpha3_2ERenderTargetsMacro(input, { refs: request.refs, idempotency_key_present: request.idempotency_key !== undefined });
+  const publicPreview = executableRenderPreview(plan.preview);
   const managedRoot = normalizeManagedRenderRoot(managedRenderRoot);
-  if (!validation.valid || !plan.ok) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: plan.blockers.length > 0 ? plan.blockers : validation.errors.map((message) => blocker("RENDER_REQUEST_INVALID", message)), summary: "Render-target Macro input was blocked.", data: { preview: plan.preview ?? null } });
-  if (!managedRoot) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: [blocker("RENDER_MANAGED_ROOT_UNAVAILABLE", "The installed managed render root is unavailable; start a fresh OpenReaper session before rendering.")], summary: "Render-target Macro needs the installed managed render root.", data: { preview: plan.preview ?? null } });
+  if (!validation.valid || !plan.ok) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: plan.blockers.length > 0 ? plan.blockers : validation.errors.map((message) => blocker("RENDER_REQUEST_INVALID", message)), summary: "Render-target Macro input was blocked.", data: { preview: publicPreview } });
+  if (!managedRoot) return renderEnvelope({ entry, request, startedAt, now, status: "blocked", stages: [], blockers: [blocker("RENDER_MANAGED_ROOT_UNAVAILABLE", "The installed managed render root is unavailable; start a fresh OpenReaper session before rendering.")], summary: "Render-target Macro needs the installed managed render root.", data: { preview: publicPreview } });
   if (typeof executeAtomic !== "function") {
     return renderEnvelope({
       entry,
@@ -237,7 +238,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       stages: [],
       blockers: [blocker("RENDER_EXECUTOR_UNAVAILABLE", "The managed OpenReaper atomic executor is unavailable.")],
       summary: "Render-target Macro needs the managed OpenReaper atomic route.",
-      data: { preview: plan.preview ?? null },
+      data: { preview: publicPreview },
     });
   }
   const stages = [{ id: "render-selector-resolve", kind: "selector_resolve", status: "completed", summary: "Resolved bounded canonical or live-selection target posture.", evidence_refs: [] }];
@@ -247,7 +248,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     stages.push({ id: "render-template-execute", kind: "template_execute", status: "skipped", summary: "Render mutation skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-dirty-after", kind: "template_execute", status: "skipped", summary: "Post-render dirty-state read skipped during dry_run.", evidence_refs: [] });
     stages.push({ id: "render-result-project", kind: "result_project", status: "completed", summary: "Managed-root render preview projected.", evidence_refs: [] });
-    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", verification: { status: "passed", evidence_refs: [] }, data: { preview: plan.preview, mutation_skipped: true, managed_root: true, managed_render_root: managedRoot, external_encoder: false } });
+    return renderEnvelope({ entry, request, startedAt, now, status: "dry_run_completed", stages, blockers: [], summary: "Render-target preview completed without mutation.", verification: { status: "passed", evidence_refs: [] }, data: { preview: publicPreview, mutation_skipped: true, managed_root: true, managed_render_root: managedRoot, external_encoder: false } });
   }
   let partialResult = null;
   try {
@@ -333,7 +334,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     };
     partialResult = {
       data: {
-        preview: plan.preview,
+        preview: publicPreview,
         managed_root: true,
         managed_render_root: managedRoot,
         external_encoder: false,
@@ -410,7 +411,7 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
       stages,
       blockers: [blocker(error.code ?? "RENDER_EXECUTION_FAILED", error.message ?? "Render-target Macro failed.")],
       summary: error.message ?? "Render-target Macro failed.",
-      data: partial ? partialResult.data : { preview: plan.preview, managed_root: true, managed_render_root: managedRoot, external_encoder: false },
+      data: partial ? partialResult.data : { preview: publicPreview, managed_root: true, managed_render_root: managedRoot, external_encoder: false },
       canonicalRefs: partial ? partialResult.canonicalRefs : [],
       verification: partial ? partialResult.verification : { status: "not_required", evidence_refs: [] },
       changes: partial ? partialResult.changes : [],
@@ -660,6 +661,14 @@ function normalizeManagedRenderRoot(value) {
     /[\u0000-\u001f\u007f]/u.test(value)
   ) return null;
   return value;
+}
+
+function executableRenderPreview(preview) {
+  if (!isPlainObject(preview)) return null;
+  return deepFreeze({
+    ...preview,
+    runtime_binding: "server_executed_registered_route",
+  });
 }
 
 function renderEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, canonicalRefs = [], verification = { status: "not_required", evidence_refs: [] }, changes = [], sqlite = null }) {
