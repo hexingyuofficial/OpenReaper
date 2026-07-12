@@ -8,6 +8,8 @@ import { ALPHA3_2_5_C_CONTROL_REGISTRY } from "../../packages/mcp-server/src/alp
 import { ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-c-project-write-runtime-v1.mjs";
 import { ALPHA3_2_5_C_FILE_MACRO_REGISTRY } from "../../packages/mcp-server/src/alpha3-2c3d-project-file-macro-v1.mjs";
 import { ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY } from "../../packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs";
+import { ALPHA3_2_5_D_MIDI_MACRO_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-d-midi-macro-v1.mjs";
+import { ALPHA3_2_5_D_NATIVE_FX_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-d-fx-macro-v1.mjs";
 import { ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT } from "../../packages/mcp-server/src/alpha3-2d-project-index-runtime-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
@@ -21,10 +23,12 @@ const REGISTRIES = [
   ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
   ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
   ALPHA3_2_5_C_CONTROL_REGISTRY,
+  ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
+  ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
 ];
 
-describe("Alpha3.2.5-C Macro discovery capability truth", () => {
-  it("keeps the approved 10-Macro registry dependency closure inside the current product allowlist", () => {
+describe("Alpha3.2.5 Macro discovery capability truth", () => {
+  it("keeps the approved 12-Macro registry dependency closure inside the current product allowlist", () => {
     const entries = REGISTRIES.flatMap((registry) => registry.entries);
     assert.deepEqual(entries.map((entry) => entry.macro_id).sort(), [...ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS].sort());
     const allowed = new Set(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS);
@@ -40,7 +44,7 @@ describe("Alpha3.2.5-C Macro discovery capability truth", () => {
       },
     });
     const items = runtime.list_templates({ ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, fields: ["summary"] }).items;
-    assert.equal(items.length, 10);
+    assert.equal(items.length, 12);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === "macro_fixed_dependencies_not_available"), true);
     assert.equal(items.every((item) => item.current_status === "needs_live"), true);
@@ -62,7 +66,7 @@ describe("Alpha3.2.5-C Macro discovery capability truth", () => {
       },
     });
     const items = runtime.list_templates({ ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, fields: ["summary"] }).items;
-    assert.equal(items.length, 10);
+    assert.equal(items.length, 12);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === true), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === null), true);
   });

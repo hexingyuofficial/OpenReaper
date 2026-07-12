@@ -13,6 +13,8 @@ export const ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS = deepFreeze([
   "macro.project.file",
   "macro.routing.apply",
   "macro.media.place_assets",
+  "macro.midi.create_clip",
+  "macro.fx.apply_native_chain",
   "macro.render.targets",
   "macro.set_stock_plugin_controls",
   "macro.controls.set",
@@ -28,6 +30,8 @@ export const ALPHA3_2_5_0_MACRO_INVENTORY = deepFreeze([
   official("macro.project.file", "public_save_child_request_plan"),
   official("macro.routing.apply", "public_preview_first_child_request_plan"),
   official("macro.media.place_assets", "public_preview_first_child_request_plan"),
+  official("macro.midi.create_clip", "public_bounded_ppq_clip_program"),
+  official("macro.fx.apply_native_chain", "public_bounded_reacomp_chain_program"),
   official("macro.render.targets", "public_render_child_request_plan"),
   mapping("macro.selected_context", "current", "public_compatibility_query_plan", "macro.project.query", { entity: "selected_context" }),
   mapping("macro.set_track_controls", "current", "public_generic_control_plan", "macro.controls.set", { target_kind: "track" }),
@@ -38,8 +42,8 @@ export const ALPHA3_2_5_0_MACRO_INVENTORY = deepFreeze([
   withdrawn(
     "macro.set_midi_controls",
     "blocked_draft_generic_midi_plan",
-    ["macro.midi.create_clip", "macro.midi.edit_notes"],
-    "Future explicit MIDI task Macros must wait for Alpha3.2.5-A ref and seconds-mode safety.",
+    ["macro.midi.edit_notes"],
+    "Bounded clip creation moved to macro.midi.create_clip; future note-edit tasks remain explicit candidates.",
   ),
   official("macro.set_stock_plugin_controls", "public_semantic_stock_plugin_plan"),
   mapping("macro.index_status", "legacy_query", "replaced_legacy_sqlite_query", "macro.project.query", { entity: "status" }),
@@ -63,11 +67,11 @@ export const ALPHA3_2_5_0_MACRO_INVENTORY = deepFreeze([
 ]);
 
 export const ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS = deepFreeze({
-  current: 16,
+  current: 18,
   legacy_query: 11,
   proposed: 1,
-  total: 28,
-  executable_official: 10,
+  total: 30,
+  executable_official: 12,
   consolidated_legacy_mapping: 17,
   internal_withdrawn_draft: 1,
 });
@@ -123,7 +127,7 @@ export function validateMacroInventory(inventory = ALPHA3_2_5_0_MACRO_INVENTORY)
     }
   }
 
-  if (inventory.length !== ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS.total) errors.push("Macro inventory must contain exactly 28 rows");
+  if (inventory.length !== ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS.total) errors.push("Macro inventory must contain exactly 30 rows");
   for (const [key, observed] of Object.entries({ ...sourceCounts, ...outcomeCounts })) {
     const expected = ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS[key];
     if (observed !== expected) errors.push(`Macro inventory ${key} count must be ${expected}, observed ${observed}`);

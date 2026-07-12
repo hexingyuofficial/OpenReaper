@@ -93,6 +93,20 @@ import {
   isAlpha3_2_5CExecutableControlMacroId,
 } from "./alpha3-2-5-c-control-runtime-v1.mjs";
 import {
+  ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
+  ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
+  createAlpha3_2_5DMidiMacroDiscoveryItem,
+  executeAlpha3_2_5DMidiMacro,
+  isAlpha3_2_5DMidiMacroId,
+} from "./alpha3-2-5-d-midi-macro-v1.mjs";
+import {
+  ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+  ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
+  createAlpha3_2_5DNativeFxMacroDiscoveryItems,
+  executeAlpha3_2_5DNativeFxMacro,
+  isAlpha3_2_5DNativeFxMacroId,
+} from "./alpha3-2-5-d-fx-macro-v1.mjs";
+import {
   ALPHA3_L4_MACRO_EXECUTION_CONVENIENCE_DISCOVERY_SUMMARY,
   summarizeAlpha3L4MacroExecutionConvenience,
 } from "./alpha3-l4-macro-execution-convenience-v1.mjs";
@@ -870,6 +884,8 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
   ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
   ALPHA3_2_5_C_CONTROL_REGISTRY,
+  ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
+  ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
 ]);
 const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
@@ -953,6 +969,9 @@ export function createCallTemplateRuntime(options = {}) {
       createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
     ...macroDiscovery(ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID, (runtimeOptions) =>
       createAlpha3C5OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
+    ...macroDiscovery(ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, (runtimeOptions) =>
+      [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
+    ...macroDiscovery(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID, createAlpha3_2_5DNativeFxMacroDiscoveryItems),
     ...catalogDiscoveryTemplates,
   ];
 
@@ -1107,6 +1126,28 @@ export function createCallTemplateRuntime(options = {}) {
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
         return envelope;
       }
+      if (isAlpha3_2_5DMidiMacroId(id)) {
+        const envelope = await executeAlpha3_2_5DMidiMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
+          catalog,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2_5DNativeFxMacroId(id)) {
+        const envelope = await executeAlpha3_2_5DNativeFxMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
+          catalog,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
       if (isAlpha3_2_5CLegacyControlMacroId(id)) {
         const targetKind = targetKindForAlpha3_2_5CLegacyControlMacro(id);
         throw new CallTemplateRuntimeError(
@@ -1129,14 +1170,15 @@ export function createCallTemplateRuntime(options = {}) {
       if (isAlpha3_2_5CWithdrawnControlMacroId(id)) {
         throw new CallTemplateRuntimeError(
           "CALL_TEMPLATE_ID_WITHDRAWN",
-          "macro.set_midi_controls is withdrawn; use explicit accepted MIDI task Macros when available.",
+          "macro.set_midi_controls is withdrawn; use macro.midi.create_clip for bounded clip creation and direct accepted Templates for uncovered MIDI edits.",
           {
             recoverable: true,
             id,
             details: {
               id,
               implementation_status: "withdrawn",
-              future_candidates: ["macro.midi.create_clip", "macro.midi.edit_notes"],
+              executable_replacement: ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
+              future_candidates: ["macro.midi.edit_notes"],
             },
           },
         );

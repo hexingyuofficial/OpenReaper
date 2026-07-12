@@ -351,6 +351,8 @@ to preserve count.
 | `macro.project.file` | public save child-request plan | executable official | Registered bounded save/save-as program. |
 | `macro.routing.apply` | public preview-first child-request plan | executable official | Registered internal-routing program; hardware remains blocked. |
 | `macro.media.place_assets` | public preview-first child-request plan | executable official | Registered media placement program. |
+| `macro.midi.create_clip` | post-A explicit MIDI task candidate | executable official | Creates one bounded PPQ clip, chains the returned take ref, and verifies exact count/list readback. |
+| `macro.fx.apply_native_chain` | common-workload native FX gap | executable official | Adds the live-accepted ReaComp chain and applies semantic controls with registered-tolerance readback. |
 | `macro.render.targets` | public/expanded render child-request plan | executable official | Registered audited render program with managed-root truth. |
 | `macro.selected_context` | public compatibility query plan | consolidated legacy mapping | `macro.project.query` with `entity=selected_context`. |
 | `macro.set_track_controls` | public generic control plan | consolidated legacy mapping | `macro.controls.set` with `target_kind=track`. |
@@ -358,7 +360,7 @@ to preserve count.
 | `macro.set_take_controls` | public generic control plan | consolidated legacy mapping | `macro.controls.set` with `target_kind=take`. |
 | `macro.set_transport_controls` | public generic control plan | consolidated legacy mapping | `macro.controls.set` with `target_kind=transport`. |
 | `macro.set_send_controls` | public generic control plan | consolidated legacy mapping | `macro.controls.set` with `target_kind=send`. |
-| `macro.set_midi_controls` | blocked draft generic MIDI plan | internal/withdrawn draft | Replace with explicit executable MIDI task Macros after 3.2.5-A safety. |
+| `macro.set_midi_controls` | blocked draft generic MIDI plan | internal/withdrawn draft | Clip creation is covered by `macro.midi.create_clip`; future note editing remains an explicit task candidate. |
 | `macro.set_stock_plugin_controls` | public semantic stock-plugin plan | executable official | Registered plugin-aware semantic control program. |
 | `macro.index_status` | replaced legacy SQLite query | consolidated legacy mapping | `macro.project.query` with `entity=status`. |
 | `macro.query_tracks` | replaced legacy SQLite query | consolidated legacy mapping | `macro.project.query` with `entity=tracks`. |
@@ -376,8 +378,8 @@ to preserve count.
 Inventory totals:
 
 ```text
-inventoried ids: 28
-executable official targets: 10
+inventoried ids: 30
+executable official targets: 12
 consolidated/legacy mappings: 17
 internal/withdrawn drafts: 1
 ```

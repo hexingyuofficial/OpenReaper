@@ -435,6 +435,8 @@ describe("Layer 4D call_template runtime binding", () => {
       "macro.project.query",
       "macro.set_stock_plugin_controls",
       "macro.controls.set",
+      "macro.midi.create_clip",
+      "macro.fx.apply_native_chain",
     ]);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);
@@ -718,7 +720,7 @@ describe("Layer 4D call_template runtime binding", () => {
       true,
     );
     const wave0Macros = liveMenu.items.filter((item) => item.action_kind === "macro");
-    assert.equal(wave0Macros.length, 10);
+    assert.equal(wave0Macros.length, 12);
     assert.equal(
       wave0Macros.every((item) => item.capability_truth.live_runnable_now === false),
       true,

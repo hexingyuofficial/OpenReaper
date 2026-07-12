@@ -103,18 +103,18 @@ describe("Alpha3.2.5-0 Macro runtime contract", () => {
     }, { registry }).valid, true);
   });
 
-  it("inventories exactly 16 current, 11 legacy, and one proposed Macro id", () => {
+  it("inventories exactly 18 current, 11 legacy, and one proposed Macro id", () => {
     assert.deepEqual(validateMacroInventory(), { valid: true, errors: [] });
     assert.deepEqual(ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS, {
-      current: 16,
+      current: 18,
       legacy_query: 11,
       proposed: 1,
-      total: 28,
-      executable_official: 10,
+      total: 30,
+      executable_official: 12,
       consolidated_legacy_mapping: 17,
       internal_withdrawn_draft: 1,
     });
-    assert.equal(new Set(ALPHA3_2_5_0_MACRO_INVENTORY.map((row) => row.id)).size, 28);
+    assert.equal(new Set(ALPHA3_2_5_0_MACRO_INVENTORY.map((row) => row.id)).size, 30);
     assert.equal(summarizeMacroInventory().valid, true);
   });
 
@@ -127,7 +127,7 @@ describe("Alpha3.2.5-0 Macro runtime contract", () => {
     }
     assert.deepEqual(
       ALPHA3_2_5_0_MACRO_INVENTORY.find((row) => row.id === "macro.set_midi_controls").future_candidates,
-      ["macro.midi.create_clip", "macro.midi.edit_notes"],
+      ["macro.midi.edit_notes"],
     );
   });
 
@@ -195,6 +195,8 @@ describe("Alpha3.2.5-0 Macro runtime contract", () => {
     assert.match(macroAbi, /Macro\s+= one registered executable bounded task program/);
     assert.match(macroAbi, /plan_only.*forbidden/s);
     assert.match(macroAbi, /model-supplied child-request executor is forbidden/);
+    assert.match(macroAbi, /`macro\.midi\.create_clip`[\s\S]*executable official/);
+    assert.match(macroAbi, /`macro\.fx\.apply_native_chain`[\s\S]*executable official/);
     assert.match(foundation, /Post-V1 Additive Layer: Macro Runtime Contract v1/);
     assert.match(layout, /registered Macros are the bounded executable task layer/);
     assert.match(ratchet, /## Macro States/);

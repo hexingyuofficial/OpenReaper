@@ -369,6 +369,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.query",
       "macro.set_stock_plugin_controls",
       "macro.controls.set",
+      "macro.midi.create_clip",
+      "macro.fx.apply_native_chain",
     ]);
   });
 
