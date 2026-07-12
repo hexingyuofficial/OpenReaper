@@ -17,6 +17,8 @@ built, reviewed, frozen, reopened, and promoted.
 - layer status and lower-layer reopen rules;
 - template status from research through descriptor, fake smoke, runtime, live
   smoke, and stable use;
+- Macro status from internal draft through registered execution, live smoke,
+  and stable use;
 - recipe status from draft through validation and official use;
 - capability coverage decisions across packs;
 - worker scope, route ownership, and accepted-file boundaries.
@@ -67,6 +69,44 @@ Rules:
 - A template cannot be promoted if its owner pack, risk, refs, expected delta,
   or evidence contradict frozen lower-layer contracts.
 
+## Macro States
+
+```text
+internal_draft
+registered
+fake_smoked
+runtime_executable
+live_smoked
+stable
+deprecated_alias
+withdrawn
+blocked
+```
+
+Rules:
+
+- `internal_draft` may describe a future program but is not a completed public
+  Macro.
+- `registered` means the fixed program/version, inputs, dependencies, risk,
+  SQLite policy, stages, verification, and result budget validate.
+- `fake_smoked` proves registry and bounded execution-envelope behavior only.
+- `runtime_executable` means one `call_template` Macro call executes the
+  registered program; returning child requests for the agent to replay is not
+  this state.
+- `live_smoked` requires bounded REAPER evidence for the claimed task and risk.
+- `stable` Macros may be preferred dependencies for ordinary agent tasks and a
+  future compatible Recipe revision.
+- `deprecated_alias` maps clearly to an executable replacement and is not
+  presented as a separate completed capability.
+- `withdrawn` is non-public and cannot be selected as an executable Macro.
+- `plan_only` is not an accepted public completed Macro state.
+- Macro promotion cannot weaken Template risk, ref, undo, verification,
+  artifact, bridge, or response-budget contracts.
+- Project-aware Macros may use SQLite for candidates and freshness, but writes
+  must live-resolve canonical refs and SQLite is never write authority.
+- A registered Macro is not an arbitrary execution graph or hidden Recipe
+  executor; requests cannot inject stages or dependencies.
+
 ## Recipe States
 
 ```text
@@ -82,6 +122,9 @@ deprecated
 Rules:
 
 - Recipes compose known templates. They do not create new write powers.
+- The current Recipe Contract v1 remains unchanged. A future bounded revision
+  may compose accepted executable Macros without adding new Macro/Template
+  powers or a server-side Recipe executor.
 - User-authored recipes may not define raw Lua, raw actions, shell commands,
   new template descriptors, or bypass paths.
 - Official real recipes should depend only on templates that meet the minimum
@@ -102,6 +145,10 @@ template_candidate
 descriptor_done
 runtime_done
 live_done
+macro_candidate
+macro_registered
+macro_runtime_done
+macro_live_done
 recipe_covered
 blocked_by_policy
 not_v1
@@ -132,3 +179,8 @@ layer/freeze process.
 
 OpenReaper v1 target: templates are a closed, reviewed catalog; users primarily
 create and edit recipes against that catalog.
+
+Post-v1 product target: agents normally choose the small executable Macro
+surface and SQLite-backed project understanding for ordinary tasks, use direct
+Templates for long-tail fallback, and keep Recipes as the reusable/editable
+longer workflow layer.

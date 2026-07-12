@@ -28,8 +28,14 @@ packages/core/        Shared TypeScript contracts and registry logic.
 packages/mcp-server/  MCP server implementation.
 ```
 
-No runtime package should define product workflows as top-level APIs. Workflows
-belong in recipes.
+Runtime packages may define only registered, versioned Macro programs that
+conform to `docs/abi/MACRO_RUNTIME_CONTRACT_V1.md`. They must not expose
+arbitrary product workflows as top-level APIs, accept model-supplied execution
+graphs, or implement a hidden Recipe executor.
+
+Longer reusable/editable workflows belong in Recipes. Direct Templates remain
+atomic capabilities; registered Macros are the bounded executable task layer
+between Templates and Recipes.
 
 ## REAPER Runtime
 
@@ -51,10 +57,17 @@ recipes/user/      Local user-authored recipes. Not shipped as product default.
 Recipes are discovered through `list_recipes` and executed by agents through
 normal `call_template` and `get_state` calls.
 
+Executable Macros are discovered through the existing action discovery surface
+and called through the existing `call_template` tool. Macro registry and
+execution code belongs under the existing package ownership boundaries, not in
+new workflow-shaped top-level packs.
+
 ## What Does Not Belong Here
 
 - Raw Soundly audio libraries.
 - Old workflow-shaped top-level packs.
 - Chat-only plans with no ABI or test gate.
+- Public completed Macros that only return child-request plans.
+- Model-supplied Template graphs or generic child-request executors.
 - Hidden recipe executors.
 - Arbitrary Lua evaluation as a normal feature.

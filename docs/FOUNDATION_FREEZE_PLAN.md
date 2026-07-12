@@ -13,6 +13,7 @@ frozen five-tool agent interface
   + frozen foundation / bridge ABI
   + fixed REAPER capability pack taxonomy
   + verified template library
+  + registered executable macro runtime
   + official recipe catalog
   + user-editable recipe layer
 ```
@@ -22,8 +23,9 @@ Definitions:
 ```text
 Pack = dependency / capability domain
 Template = concrete verified action
+Macro = registered executable bounded task program
 Recipe = workflow contract
-Agent = reads recipes and calls templates through MCP tools
+Agent = chooses macros first for ordinary tasks, then recipes/templates as needed
 User = primarily creates or edits recipes
 ```
 
@@ -38,8 +40,9 @@ The long-term authoring boundary is:
 ```text
 Official / reviewed maintainers expand templates.
 Users and community authors primarily create recipes.
-Agents discover recipes first and call templates only through recipes or
-explicit atomic calls.
+Agents discover executable Macros first for ordinary tasks. Recipes remain the
+reusable/editable longer workflow layer, and direct Templates remain verified
+atomic fallback for uncovered work.
 ```
 
 Reason: templates are the dangerous boundary. They touch REAPER state, files,
@@ -143,12 +146,30 @@ Freeze how templates are described, validated, implemented, tested, and smoked.
 
 Templates execute actions. They do not decide strategy.
 
+### Post-V1 Additive Layer: Macro Runtime Contract v1
+
+The post-v1 product adds the bounded executable Macro layer defined by
+`docs/abi/MACRO_RUNTIME_CONTRACT_V1.md`. Macros execute fixed,
+versioned, allowlisted programs through the existing `call_template` tool. They
+may compose accepted Templates and bounded internal runtime helpers, use SQLite
+for project navigation, live-resolve refs before writes, and return compact
+executed evidence.
+
+Macros are not arbitrary model-supplied execution graphs, hidden Recipe
+executors, raw Lua/action/shell/UI bypasses, or a sixth MCP tool. A dry-run mode
+is allowed, but a public completed Macro may not be plan-only.
+
 ### Layer 5: Recipe Contract v1
 
 Freeze recipe metadata, dependencies, steps, assertions, recovery branches, and
 expected outputs.
 
 Recipes compose templates. They do not create new write powers.
+
+The existing Recipe Contract v1 remains frozen. A future bounded Recipe
+revision may allow accepted executable Macros as dependencies, but the Macro
+runtime does not silently mutate Recipe v1 or add a server-side Recipe
+executor.
 
 ### Layer 6: User Recipe Authoring v1
 
