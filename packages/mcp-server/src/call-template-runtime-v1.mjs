@@ -210,6 +210,12 @@ import {
 import {
   createAlpha3_3B1AgentContextMacroGuide,
 } from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
+import {
+  ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
+  createAlpha3_3B1bItemsAnalyzeDiscoveryItems,
+  executeAlpha3_3B1bItemsAnalyzeMacro,
+  isAlpha3_3B1bItemsAnalyzeMacroId,
+} from "./alpha3-3-b1b-items-analyze-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -900,6 +906,7 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_REGISTRY,
   ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
   ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
+  ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
 ]);
 const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
@@ -979,6 +986,7 @@ export function createCallTemplateRuntime(options = {}) {
     ...macroDiscovery(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, createAlpha3_2C3DProjectFileMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_ROUTING_APPLY_MACRO_ID, createAlpha3_2ERoutingApplyMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
+    ...macroDiscovery("macro.items.analyze", createAlpha3_3B1bItemsAnalyzeDiscoveryItems),
     ...macroDiscovery("macro.midi.apply", (runtimeOptions) =>
       [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
     ...macroDiscovery("macro.fx.apply_chain", createAlpha3_2_5DNativeFxMacroDiscoveryItems),
@@ -1065,6 +1073,15 @@ export function createCallTemplateRuntime(options = {}) {
             },
           },
         );
+      }
+      if (isAlpha3_3B1bItemsAnalyzeMacroId(id)) {
+        const envelope = await executeAlpha3_3B1bItemsAnalyzeMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
       }
       if (["macro.midi.apply", "macro.fx.apply_chain", "macro.fx.set_controls"].includes(id)) {
         const adapted = adaptAlpha3_3B1CanonicalExecutionRequest(normalized);

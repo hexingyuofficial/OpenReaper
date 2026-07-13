@@ -432,6 +432,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
+      "macro.items.analyze",
       "macro.midi.apply",
       "macro.fx.apply_chain",
       "macro.fx.set_controls",
@@ -722,7 +723,7 @@ describe("Layer 4D call_template runtime binding", () => {
       true,
     );
     const wave0Macros = liveMenu.items.filter((item) => item.action_kind === "macro");
-    assert.equal(wave0Macros.length, 12);
+    assert.equal(wave0Macros.length, 13);
     assert.equal(
       wave0Macros.every((item) => item.capability_truth.live_runnable_now === false),
       true,

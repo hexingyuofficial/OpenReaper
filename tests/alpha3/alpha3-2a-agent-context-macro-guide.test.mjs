@@ -363,6 +363,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
+      "macro.items.analyze",
       "macro.midi.apply",
       "macro.fx.apply_chain",
       "macro.fx.set_controls",

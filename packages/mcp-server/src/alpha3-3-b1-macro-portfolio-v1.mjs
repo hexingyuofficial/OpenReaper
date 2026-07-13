@@ -20,7 +20,6 @@ export const ALPHA3_3_B1_FINAL_TARGET_IDS = deepFreeze([
 ]);
 
 export const ALPHA3_3_B1_INTERNAL_DRAFT_IDS = deepFreeze([
-  "macro.items.analyze",
   "macro.items.apply",
   "macro.automation.apply",
 ]);
@@ -71,8 +70,8 @@ export function validateAlpha3_3B1MacroPortfolio(portfolio = ALPHA3_3_B1_MACRO_P
   const draftSet = new Set(draftIds);
 
   if (targetIds.length !== 15 || targetSet.size !== 15) errors.push("Alpha3.3 target portfolio must contain exactly 15 unique ids");
-  if (visibleIds.length !== 12 || visibleSet.size !== 12) errors.push("Alpha3.3-B1a visible portfolio must contain exactly 12 unique executable ids");
-  if (draftIds.length !== 3 || draftSet.size !== 3) errors.push("Alpha3.3-B1a must retain exactly three internal draft ids");
+  if (visibleIds.length !== 13 || visibleSet.size !== 13) errors.push("Alpha3.3-B1b visible portfolio must contain exactly 13 unique executable ids");
+  if (draftIds.length !== 2 || draftSet.size !== 2) errors.push("Alpha3.3-B1b must retain exactly two internal draft ids");
   if (aliasRows.length !== 3) errors.push("Alpha3.3-B1a must retain exactly three renamed compatibility aliases");
 
   for (const id of [...targetIds, ...visibleIds, ...draftIds]) {

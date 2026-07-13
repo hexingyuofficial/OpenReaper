@@ -47,7 +47,7 @@ describe("Alpha3.2.5 Macro discovery capability truth", () => {
       },
     });
     const items = runtime.list_templates({ ids: ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, fields: ["summary"] }).items;
-    assert.equal(items.length, 12);
+    assert.equal(items.length, ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === "macro_fixed_dependencies_not_available"), true);
     assert.equal(items.every((item) => item.current_status === "needs_live"), true);
@@ -69,7 +69,7 @@ describe("Alpha3.2.5 Macro discovery capability truth", () => {
       },
     });
     const items = runtime.list_templates({ ids: ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, fields: ["summary"] }).items;
-    assert.equal(items.length, 12);
+    assert.equal(items.length, ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === true), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === null), true);
   });

@@ -77,6 +77,52 @@ describe("Wave 1A analysis template descriptors", () => {
     }
   });
 
+  it("publishes native measurement evidence and only the bounded inputs each analyzer actually uses", () => {
+    const byId = new Map(createWave1AAnalysisTemplates().map((descriptor) => [descriptor.id, descriptor]));
+    const rms = byId.get("template.analysis.measure_item_rms");
+    const peaks = byId.get("template.analysis.measure_item_peaks");
+    const silence = byId.get("template.analysis.detect_item_silence");
+    const transients = byId.get("template.analysis.detect_item_transients");
+
+    assert.deepEqual(Object.keys(rms.inputSchema.properties), [
+      "start_seconds",
+      "end_seconds",
+      "max_analysis_seconds",
+    ]);
+    assert.equal(rms.outputSchema.properties.lufs_i.type, "number");
+    assert.equal(rms.outputSchema.properties.measurement_basis.type, "string");
+    assert.equal(rms.outputSchema.properties.coverage.type, "object");
+
+    assert.deepEqual(Object.keys(peaks.inputSchema.properties), [
+      "start_seconds",
+      "end_seconds",
+      "max_analysis_seconds",
+    ]);
+    assert.equal(peaks.outputSchema.properties.true_peak_available.type, "boolean");
+    assert.equal(peaks.outputSchema.properties.per_channel.type, "array");
+
+    assert.deepEqual(Object.keys(silence.inputSchema.properties), [
+      "start_seconds",
+      "end_seconds",
+      "max_analysis_seconds",
+      "silence_threshold_dbfs",
+      "min_silence_ms",
+      "max_segments",
+    ]);
+    assert.equal(silence.outputSchema.properties.total_detected.type, "integer");
+    assert.equal(silence.outputSchema.properties.returned_count.type, "integer");
+
+    assert.deepEqual(Object.keys(transients.inputSchema.properties), [
+      "start_seconds",
+      "end_seconds",
+      "max_analysis_seconds",
+      "transient_delta_linear",
+      "min_transient_gap_ms",
+      "max_transients",
+    ]);
+    assert.equal(transients.outputSchema.properties.transient_delta_linear.type, "number");
+  });
+
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery bounded", () => {
     const templates = createWave1AAnalysisTemplates();
     const validation = validateTemplateCatalog({ templates });

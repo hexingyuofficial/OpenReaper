@@ -40,11 +40,10 @@ const EXPECTED_FINAL_IDS = [
 ];
 
 describe("Alpha3.3-B1 Macro portfolio", () => {
-  it("separates the final fifteen targets from twelve visible executables and three internal drafts", () => {
+  it("separates the final fifteen targets from thirteen visible executables and two internal drafts", () => {
     assert.deepEqual(validateAlpha3_3B1MacroPortfolio(), { valid: true, errors: [] });
     assert.deepEqual(ALPHA3_3_B1_FINAL_TARGET_IDS, EXPECTED_FINAL_IDS);
     assert.deepEqual(ALPHA3_3_B1_INTERNAL_DRAFT_IDS, [
-      "macro.items.analyze",
       "macro.items.apply",
       "macro.automation.apply",
     ]);

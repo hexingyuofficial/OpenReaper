@@ -11,14 +11,14 @@ import {
 } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 
 describe("Alpha3.3-B1 agent context Macro guide", () => {
-  it("returns one flat compact twelve-Macro menu without tier fields", () => {
+  it("returns one flat compact thirteen-Macro menu without tier fields", () => {
     const guide = createAlpha3_3B1AgentContextMacroGuide({
       recommended_macro_ids: ["macro.midi.apply", "macro.fx.apply_chain", "macro.items.apply"],
     });
 
     assert.equal(guide.contract, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
     assert.deepEqual(guide.macro_menu.macro_ids, ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS);
-    assert.equal(guide.macro_menu.visible_executable_count, 12);
+    assert.equal(guide.macro_menu.visible_executable_count, 13);
     assert.equal(guide.macro_menu.final_target_count, 15);
     assert.deepEqual(guide.recommended_macro_ids, ["macro.midi.apply", "macro.fx.apply_chain"]);
 
@@ -43,15 +43,19 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
       "macro.midi.apply",
       "macro.fx.apply_chain",
       "macro.fx.set_controls",
+      "macro.items.analyze",
     ]);
     assert.deepEqual(guide.requested_expansions.missing_ids, [
-      "macro.items.analyze",
       "macro.midi.create_clip",
     ]);
     assert.equal(guide.requested_expansions.items.every((entry) => entry.runnable === true), true);
     assert.match(
       guide.requested_expansions.items[0].action_manual.input_shape.mode,
       /create_clips only/i,
+    );
+    assert.deepEqual(
+      guide.requested_expansions.items[3].action_manual.input_shape.profile,
+      "quick | audio | timing | full; defaults to quick.",
     );
     assert.equal(collectKeys(guide.requested_expansions).includes("guide_tier"), false);
   });

@@ -22,6 +22,7 @@ const EXPECTED_DEFAULT_MENU_MACRO_IDS = [
   "macro.project.file",
   "macro.routing.apply",
   "macro.media.place_assets",
+  "macro.items.analyze",
   "macro.midi.apply",
   "macro.fx.apply_chain",
   "macro.fx.set_controls",
@@ -30,7 +31,7 @@ const EXPECTED_DEFAULT_MENU_MACRO_IDS = [
 ];
 
 describe("Alpha3.2.5-E macro-first routing and compact results", () => {
-  it("keeps the compact default menu focused on the 12 executable Macros before templates", () => {
+  it("keeps the compact default menu focused on the 13 executable Macros before templates", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates();
     const macroIds = menu.items.filter((item) => item.action_kind === "macro").map((item) => item.id);

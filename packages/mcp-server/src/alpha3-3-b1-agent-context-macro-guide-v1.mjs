@@ -9,6 +9,10 @@ import {
   canonicalizeAlpha3_3B1MacroExecutionEnvelope,
   isAlpha3_3B1VisibleExecutableMacroId,
 } from "./alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
+  ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID,
+  createAlpha3_3B1bItemsAnalyzeExactManual,
+} from "./alpha3-3-b1b-items-analyze-v1.mjs";
 
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_context_macro_guide.v1";
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
@@ -37,7 +41,7 @@ export function createAlpha3_3B1AgentContextMacroGuide({
   return deepFreeze({
     contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
     version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
-    phase: "Alpha3.3-B1a",
+    phase: "Alpha3.3-B1b",
     tool_surface: {
       count: 5,
       tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
@@ -113,6 +117,17 @@ export function attachAlpha3_3B1AgentContextProductMetadata(response) {
 
 export function createAlpha3_3B1ExactMacroExpansion(id) {
   if (!isAlpha3_3B1VisibleExecutableMacroId(id)) return null;
+  if (id === ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID) {
+    const expansion = createAlpha3_3B1bItemsAnalyzeExactManual();
+    return deepFreeze({
+      ...expansion,
+      contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
+      guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+      guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+      implementation_status: "executable_registered_program",
+      runnable: true,
+    });
+  }
   const sourceId = alpha3_3B1ExecutorSourceId(id);
   const historical = createAlpha3_2AExactMacroExpansion(sourceId);
   if (!historical) return null;
@@ -166,7 +181,7 @@ function compactMenuRow(id) {
 }
 
 function riskFor(id) {
-  if (id === "macro.project.inspect" || id === "macro.project.query") return "read";
+  if (id === "macro.project.inspect" || id === "macro.project.query" || id === ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID) return "read";
   if (id === "macro.project.delete_targets") return "destructive";
   return "write";
 }
