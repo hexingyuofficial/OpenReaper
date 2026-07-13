@@ -32,6 +32,10 @@ const ITEM_RESOLVER_ID = ITEM_ID_RESOLVER_ID;
 const MARKER_REGION_RESOLVER_ID = "template.project.list_markers_regions";
 const SEND_RESOLVER_ID = "template.routing.resolve_send_ref";
 const MAX_MUTATIONS = 256;
+const LAYOUT_EVIDENCE_REF_MAX_COUNT = 16;
+const LAYOUT_EVIDENCE_REF_MAX_BYTES = 128;
+const LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER = "track:guid:{00000000-0000-4000-8000-000000000000}";
+const LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES = 1_024;
 const PROJECT_WRITE_INTERNAL_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
   max_items: MAX_MUTATIONS,
@@ -144,6 +148,25 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     indexUpdate: null,
   };
   rememberInputObjectRefs(state, request.refs);
+  if (!dryRun && program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
+    const budgetBlocker = layoutResponseBudgetBlocker(program, request, plan);
+    if (budgetBlocker) {
+      return failure(
+        program,
+        request,
+        startedAt,
+        now,
+        stages,
+        "blocked",
+        budgetBlocker.code,
+        budgetBlocker.message,
+        [budgetBlocker],
+        { preview: plan.preview ?? {}, source_media_deleted: false },
+        state,
+      );
+    }
+    initializeLayoutOperationOutcomes(state, plan);
+  }
   try {
     const selectionReads = dryRun ? program.dryReads : plan.preflight_requests ?? [];
     for (const child of selectionReads) {
@@ -181,19 +204,12 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     for (const mutation of plan.mutation_requests ?? []) {
       if (!program.templateIds.includes(mutation.id) || mutation.id.startsWith("macro.")) throw coded("PROJECT_WRITE_DEPENDENCY_REJECTED", `Rejected non-atomic dependency ${String(mutation.id)}.`);
       const resolvedRefs = await liveResolveRefs({ program, request, executeAtomic, stages, state, refs: mutation.refs ?? {}, now });
-      const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: mutation.id, input: mutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(mutation.id)}`, kind: "template_execute", now });
+      const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: mutation.id, input: mutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(mutation.id)}`, kind: "template_execute", mutation, plan, now });
       rememberRefs(state, execution);
       bindMutationLocalRef(plan, mutation, execution, state);
-      state.changes.push({
-        template_id: mutation.id,
-        purpose: mutation.purpose ?? null,
-        target_refs: unique([...refsInValue(resolvedRefs), ...collectedRefs(execution)]),
-        status: "mutation_completed",
-        mutation: { status: "completed", verification_status: "passed" },
-        live_readback: { status: "pending" },
-        index_maintenance: { status: "pending" },
-      });
+      recordCompletedMutation(program, plan, state, mutation, resolvedRefs, execution);
     }
+    let readbackFailure = null;
     if (program.entry.macro_id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) {
       await verifyDeletedTargets({ program, plan, request, executeAtomic, stages, state, now });
     } else {
@@ -211,7 +227,11 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs, stageId: `verify-${stageToken(child.id)}`, kind: "verify", now });
         recordProjectWriteReadback(state, execution);
       }
-      applyProjectWriteReadbackToChanges(state);
+      try {
+        applyProjectWriteReadbackToChanges(state);
+      } catch (error) {
+        readbackFailure = error;
+      }
     }
     const invalidation = invalidateProjectIndex(projectIndexRuntime, scopesFor(program.entry.macro_id, plan), now);
     if (invalidation?.ok === false) {
@@ -236,6 +256,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         : "No configured Project Index runtime required invalidation.",
       [],
     );
+    if (readbackFailure) throw readbackFailure;
     recordStage(stages, stageIdFor(program, "result_project"), "result_project", "completed", "Projected verified registered-write evidence.", state.evidenceRefs);
     return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation), outcome: projectWriteOutcome(state) });
   } catch (error) {
@@ -347,9 +368,9 @@ function resolverFor(key, ref) {
   return null;
 }
 
-async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, now }) {
+async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, mutation = null, plan = null, now }) {
   const execution = await executeAtomic({ id, input, refs: materializeRefs(refs, state), context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
-  const evidence = evidenceRefs(execution);
+  const evidence = boundedProgramEvidenceRefs(program, evidenceRefs(execution));
   state.evidenceRefs.push(...evidence);
   const childVerification = execution?.verification ?? execution?.result?.verification;
   const verified = kind !== "template_execute" || childVerification?.status === "passed";
@@ -360,14 +381,7 @@ async function atomicStage({ program, request, executeAtomic, stages, state, id,
   }
   if (kind === "template_execute") state.writeExecuted = true;
   if (!verified) {
-    state.changes.push({
-      template_id: id,
-      target_refs: refsInValue(refs),
-      status: "mutation_unverified",
-      mutation: { status: "completed", verification_status: "failed" },
-      live_readback: { status: "not_run" },
-      index_maintenance: { status: "pending" },
-    });
+    recordUnverifiedMutation(program, plan, state, mutation, id, refs, execution);
     throw coded("PROJECT_WRITE_CHILD_VERIFICATION_FAILED", `${id} completed without passed accepted Template verification.`);
   }
   rememberRefs(state, execution);
@@ -513,6 +527,126 @@ function bindMutationLocalRef(plan, mutation, execution, state) {
   if (routeId && mutation.id === "template.routing.create_track_send" && sendRef) state.localRefs.set(`send:planned:${routeId}`, sendRef);
 }
 
+function initializeLayoutOperationOutcomes(state, plan) {
+  const projection = buildLayoutOperationProjection(plan);
+  state.layoutOperations = {
+    rowsById: new Map((plan.preview?.rows ?? []).map((row) => [row.id, row])),
+    mutationRowIds: projection.mutationRowIds,
+    changesById: new Map(projection.changes.map((change) => [change.operation_id, change])),
+  };
+  state.changes = projection.changes;
+}
+
+function buildLayoutOperationProjection(plan, { projectedApplied = false } = {}) {
+  const rows = plan.preview?.rows ?? [];
+  const mutations = plan.mutation_requests ?? [];
+  const mutationRowIds = new Map();
+  const mutationsByRow = new Map(rows.map((row) => [row.id, []]));
+  for (const mutation of mutations) {
+    const rowIds = layoutRowIdsForMutation(rows, mutation);
+    mutationRowIds.set(mutation.sequence, rowIds);
+    for (const rowId of rowIds) mutationsByRow.get(rowId)?.push(mutation);
+  }
+  const changes = rows.map((row) => {
+    const rowMutations = mutationsByRow.get(row.id) ?? [];
+    const totalCount = rowMutations.length;
+    return {
+      operation_id: row.id,
+      target_ref: row.track_ref ?? (projectedApplied ? LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER : null),
+      status: projectedApplied ? "applied" : "pending",
+      template_ids: uniqueUnbounded(rowMutations.map((mutation) => mutation.id)),
+      mutation: {
+        status: projectedApplied ? "completed" : "pending",
+        completed_count: projectedApplied ? totalCount : 0,
+        total_count: totalCount,
+      },
+      live_readback: { status: projectedApplied ? "passed" : "pending" },
+      index_maintenance: { status: projectedApplied ? "skipped" : "pending" },
+    };
+  });
+  return { changes, mutationRowIds };
+}
+
+function layoutRowIdsForMutation(rows, mutation) {
+  const ids = [];
+  for (const row of rows) {
+    const target = row.track_ref ?? `track:planned:${row.id}`;
+    if (mutation.produces_local_id === row.id || valueContainsExactString(mutation.refs, target)) ids.push(row.id);
+  }
+  return ids;
+}
+
+function valueContainsExactString(value, expected) {
+  if (value === expected) return true;
+  if (Array.isArray(value)) return value.some((entry) => valueContainsExactString(entry, expected));
+  if (object(value)) return Object.values(value).some((entry) => valueContainsExactString(entry, expected));
+  return false;
+}
+
+function recordCompletedMutation(program, plan, state, mutation, resolvedRefs, execution) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
+    state.changes.push({
+      template_id: mutation.id,
+      purpose: mutation.purpose ?? null,
+      target_refs: unique([...refsInValue(resolvedRefs), ...collectedRefs(execution)]),
+      status: "mutation_completed",
+      mutation: { status: "completed", verification_status: "passed" },
+      live_readback: { status: "pending" },
+      index_maintenance: { status: "pending" },
+    });
+    return;
+  }
+  for (const change of layoutChangesForMutation(state, mutation)) {
+    const row = state.layoutOperations.rowsById.get(change.operation_id);
+    const targetRef = canonicalLayoutTargetRef(row, state, resolvedRefs, execution);
+    if (targetRef) change.target_ref = targetRef;
+    change.mutation.completed_count += 1;
+    const completed = change.mutation.completed_count === change.mutation.total_count;
+    change.mutation.status = completed ? "completed" : "in_progress";
+    change.status = completed ? "mutation_completed" : "mutation_in_progress";
+  }
+}
+
+function recordUnverifiedMutation(program, plan, state, mutation, id, refs, execution) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || !mutation || !state.layoutOperations) {
+    state.changes.push({
+      template_id: id,
+      target_refs: refsInValue(refs),
+      status: "mutation_unverified",
+      mutation: { status: "completed", verification_status: "failed" },
+      live_readback: { status: "not_run" },
+      index_maintenance: { status: "pending" },
+    });
+    return;
+  }
+  for (const change of layoutChangesForMutation(state, mutation)) {
+    const row = state.layoutOperations.rowsById.get(change.operation_id);
+    const targetRef = canonicalLayoutTargetRef(row, state, refs, execution);
+    if (targetRef) change.target_ref = targetRef;
+    change.status = "mutation_unverified";
+    change.mutation.status = "unverified";
+    change.mutation.verification_status = "failed";
+    change.live_readback = { status: "not_run" };
+  }
+}
+
+function layoutChangesForMutation(state, mutation) {
+  const rowIds = state.layoutOperations?.mutationRowIds.get(mutation.sequence) ?? [];
+  return rowIds.map((rowId) => state.layoutOperations.changesById.get(rowId)).filter(Boolean);
+}
+
+function canonicalLayoutTargetRef(row, state, resolvedRefs, execution) {
+  if (!row) return null;
+  const plannedRef = `track:planned:${row.id}`;
+  const candidates = [
+    state.localRefs.get(plannedRef),
+    row.track_ref,
+    ...refsInValue(resolvedRefs),
+    ...collectedRefs(execution),
+  ];
+  return candidates.find((ref) => typeof ref === "string" && ref.startsWith("track:") && !ref.startsWith("track:planned:")) ?? null;
+}
+
 function firstCanonicalWithPrefix(execution, prefix) {
   return collectedRefs(execution).find((ref) => ref.startsWith(prefix)) ?? null;
 }
@@ -618,20 +752,25 @@ function applyProjectWriteReadbackToChanges(state) {
   const missing = [];
   for (const change of state.changes) {
     if (change.mutation?.status !== "completed") continue;
-    const matchedRefs = (change.target_refs ?? []).filter((ref) => state.readbackRefs.has(ref));
+    const targetRefs = typeof change.target_ref === "string" ? [change.target_ref] : change.target_refs ?? [];
+    const matchedRefs = targetRefs.filter((ref) => state.readbackRefs.has(ref));
     if (matchedRefs.length === 0) {
       change.status = "readback_missing";
-      change.live_readback = { status: "failed", source: "live_project_readback", matched_refs: [] };
+      change.live_readback = change.operation_id
+        ? { status: "failed" }
+        : { status: "failed", source: "live_project_readback", matched_refs: [] };
       missing.push(change);
       continue;
     }
     change.status = "applied";
-    change.live_readback = {
-      status: "passed",
-      source: "live_project_readback",
-      matched_refs: matchedRefs,
-      evidence_refs: unique(state.readbackEvidenceRefs),
-    };
+    change.live_readback = change.operation_id
+      ? { status: "passed" }
+      : {
+          status: "passed",
+          source: "live_project_readback",
+          matched_refs: matchedRefs,
+          evidence_refs: unique(state.readbackEvidenceRefs),
+        };
   }
   if (missing.length > 0) {
     throw coded(
@@ -639,7 +778,7 @@ function applyProjectWriteReadbackToChanges(state) {
       `${missing.length} mutation row(s) had no exact live readback match.`,
       missing.map((change) => ({
         code: "PROJECT_WRITE_ROW_READBACK_MISSING",
-        message: `No exact live readback matched ${change.template_id}.`,
+        message: `No exact live readback matched ${change.operation_id ?? change.template_id}.`,
         recoverable: true,
       })),
     );
@@ -649,11 +788,16 @@ function applyProjectWriteReadbackToChanges(state) {
 function applyProjectWriteIndexMaintenance(changes, status, invalidation) {
   for (const change of changes) {
     if (change.mutation?.status !== "completed") continue;
-    change.index_maintenance = {
-      status,
-      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
-      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
-    };
+    change.index_maintenance = change.operation_id
+      ? {
+          status,
+          ...(invalidation?.blockers?.[0]?.code ? { blocker_code: invalidation.blockers[0].code } : {}),
+        }
+      : {
+          status,
+          scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+          blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+        };
   }
 }
 
@@ -683,7 +827,7 @@ function success(program, request, startedAt, now, stages, state, status, summar
     macro: identity(program), request: requestSummary(request),
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary, canonical_refs: unique(state.canonicalRefs), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: "passed", evidence_refs: unique(state.evidenceRefs) }, data: compactData(data) },
+    result: { summary, canonical_refs: projectedCanonicalRefs(program, state), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: "passed", evidence_refs: projectedEvidenceRefs(program, state.evidenceRefs) }, data: projectResultData(program, request, data) },
     blockers: [], error: null, recovery: null,
     budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
@@ -698,7 +842,7 @@ function failure(program, request, startedAt, now, stages, status, code, message
     macro: identity(program), request: requestSummary(request, { forceNonDry: true }),
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary: message, canonical_refs: unique(state.canonicalRefs), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? unique(state.evidenceRefs) : [] }, data: compactData(data) },
+    result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, data) },
     blockers: boundedBlockers(blockers.length ? blockers : [{ code, message, recoverable: true }]),
     error: { code, message, recoverable: true },
     recovery: { undo_policy: program.entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: "Inspect reported stage evidence, use the project undo scope where available, then retry only after live refs are current." },
@@ -715,7 +859,7 @@ function finalize(envelope) {
   if (!validation.valid) throw new TypeError(`Invalid Alpha3.2.5-C Macro envelope: ${validation.errors.join("; ")}`);
   return deepFreeze(result);
 }
-function stage(id, kind, status, summary, evidence_refs) { return { id, kind, status, summary, evidence_refs: unique(evidence_refs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) }; }
+function stage(id, kind, status, summary, evidence_refs) { return { id, kind, status, summary, evidence_refs: projectedStageEvidenceRefs(id, evidence_refs) }; }
 function recordStage(stages, id, kind, status, summary, evidenceRefs) {
   const existing = stages.find((entry) => entry.id === id && entry.kind === kind);
   if (!existing) {
@@ -723,7 +867,7 @@ function recordStage(stages, id, kind, status, summary, evidenceRefs) {
     return;
   }
   existing.status = status === "failed" ? "failed" : existing.status;
-  existing.evidence_refs = unique([...existing.evidence_refs, ...evidenceRefs]);
+  existing.evidence_refs = projectedStageEvidenceRefs(id, [...existing.evidence_refs, ...evidenceRefs]);
   existing.summary = `${id} executed through the fixed registered dependency.`;
 }
 function identity(program) { const entry = program.entry; return { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk }; }
@@ -732,6 +876,83 @@ function macroRequest(request) { return { macro_id: request.id, input: object(re
 function evidenceRefs(execution) { return unique([execution?.request?.id, ...collectedRefs(execution).filter((ref) => ref.startsWith("artifact:"))].filter((ref) => typeof ref === "string")); }
 function firstCode(plan, fallback) { return plan?.blockers?.find((entry) => typeof entry?.code === "string")?.code ?? fallback; }
 function boundedBlockers(entries) { return entries.slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count).map((entry) => ({ code: entry?.code ?? "PROJECT_WRITE_BLOCKED", message: entry?.message ?? String(entry), recoverable: entry?.recoverable !== false })); }
+function layoutResponseBudgetBlocker(program, request, plan) {
+  const projection = buildLayoutOperationProjection(plan, { projectedApplied: true });
+  const sampleEvidenceRefs = Array.from({ length: LAYOUT_EVIDENCE_REF_MAX_COUNT }, (_, index) => `request:${String(index).padStart(2, "0")}:${"x".repeat(LAYOUT_EVIDENCE_REF_MAX_BYTES - 11)}`);
+  const stages = program.entry.stages.map((entry) => stage(entry.id, entry.kind, "completed", "Projected bounded layout stage.", sampleEvidenceRefs));
+  const data = projectResultData(program, request, {
+    preview: plan.preview ?? {},
+    undo_policy: program.entry.undo_policy,
+    source_media_deleted: false,
+    index_update: null,
+    outcome: projectedLayoutOutcome(projection.changes),
+  });
+  const envelope = {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: true,
+    macro: identity(program),
+    request: requestSummary(request),
+    execution: { status: "completed", started_at: new Date(0).toISOString(), completed_at: new Date(0).toISOString(), stage_count: stages.length, stages },
+    sqlite: sqliteEvidence(),
+    result: { summary: "Registered project write completed and required readback passed.", canonical_refs: [], changes: projection.changes, verification: { status: "passed", evidence_refs: sampleEvidenceRefs }, data },
+    blockers: [],
+    error: null,
+    recovery: null,
+    budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  const inline = JSON.stringify({ stages, changes: projection.changes, data, blockers: [], error: null, recovery: null });
+  const inlineBytes = Buffer.byteLength(inline, "utf8") + LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES;
+  const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8") + LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES;
+  const requestedEnvelopeBytes = Number.isInteger(request.budget?.max_response_bytes) && request.budget.max_response_bytes > 0
+    ? request.budget.max_response_bytes
+    : program.entry.result_budget.max_bytes;
+  const maxEnvelopeBytes = Math.min(MACRO_CONTRACT_CEILINGS.envelope_max_bytes, requestedEnvelopeBytes);
+  if (inlineBytes <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes && envelopeBytes <= maxEnvelopeBytes) return null;
+  return {
+    code: "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED",
+    message: `The compact per-layout-row result would exceed the active response contract (${inlineBytes} inline bytes projected; ${envelopeBytes} envelope bytes projected; ${maxEnvelopeBytes} envelope bytes available). Split the layout into smaller calls or raise only the public response projection budget before mutation.`,
+    recoverable: true,
+  };
+}
+function projectedLayoutOutcome(changes) {
+  return {
+    mutation: { status: "completed", completed_count: changes.length },
+    live_readback: { status: "passed", passed_count: changes.length, total_count: changes.length },
+    index_maintenance: { status: "skipped", scopes: [], blocker_code: null },
+  };
+}
+function projectedCanonicalRefs(program, state) {
+  return program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID ? [] : unique(state.canonicalRefs);
+}
+function boundedProgramEvidenceRefs(program, refs) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) return refs;
+  return refs.filter((ref) => Buffer.byteLength(ref, "utf8") <= LAYOUT_EVIDENCE_REF_MAX_BYTES);
+}
+function projectedEvidenceRefs(program, refs) {
+  const values = unique(refs);
+  return program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID ? values.slice(0, LAYOUT_EVIDENCE_REF_MAX_COUNT) : values;
+}
+function projectedStageEvidenceRefs(id, refs) {
+  const values = unique(refs);
+  return String(id).startsWith("project-apply_layout-") ? values.slice(0, LAYOUT_EVIDENCE_REF_MAX_COUNT) : values;
+}
+function projectResultData(program, request, data) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || request.input?.dry_run !== false) return compactData(data);
+  const cloned = structuredClone(object(data) ? data : {});
+  const preview = object(cloned.preview) ? cloned.preview : {};
+  return {
+    preview: {
+      target_counts: preview.target_counts ?? {},
+      total_count: preview.target_counts?.rows ?? null,
+    },
+    ...(cloned.applied_change_count !== undefined ? { applied_change_count: cloned.applied_change_count } : {}),
+    ...(cloned.undo_policy !== undefined ? { undo_policy: cloned.undo_policy } : {}),
+    source_media_deleted: false,
+    ...(cloned.index_update !== undefined ? { index_update: cloned.index_update } : {}),
+    ...(cloned.outcome !== undefined ? { outcome: cloned.outcome } : {}),
+  };
+}
 function compactData(data) {
   const cloned = structuredClone(object(data) ? data : {});
   if (Buffer.byteLength(JSON.stringify(cloned), "utf8") <= 16_000) return cloned;
@@ -793,6 +1014,7 @@ function compactIndexUpdate(value) {
   };
 }
 function unique(values) { return [...new Set((values ?? []).filter((value) => typeof value === "string"))].slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count); }
+function uniqueUnbounded(values) { return [...new Set((values ?? []).filter((value) => typeof value === "string"))]; }
 function safeNowIso(now) { try { const value = now(); const date = value instanceof Date ? value : new Date(value); if (!Number.isNaN(date.getTime())) return date.toISOString(); } catch {} return new Date(0).toISOString(); }
 function coded(code, message, blockers) { const error = new Error(message); error.code = code; error.blockers = blockers; return error; }
 function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }

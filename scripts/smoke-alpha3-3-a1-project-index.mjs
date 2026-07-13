@@ -21,7 +21,7 @@ const PUBLIC_BUDGET = {
   max_items: 50,
   max_inline_value_bytes: 2_048,
 };
-const LAYOUT_BATCH_SIZE = 14;
+const LAYOUT_BATCH_SIZE = options.layout_batch_size ?? 14;
 const TRACK_NAMES = Array.from({ length: TRACK_COUNT }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
 const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
@@ -117,6 +117,7 @@ try {
     calls.create_layout_batches.push(batch);
     assertMacroSuccess(response, "macro.project.apply_layout");
     assertAppliedRows(response);
+    assertLayoutOperationRows(response, { start, names });
     assert(response.result?.data?.outcome?.live_readback?.status === "passed", `Layout batch ${start / LAYOUT_BATCH_SIZE + 1} live readback was not passed`);
   }
 
@@ -201,6 +202,7 @@ const report = {
   source_project: SOURCE_PROJECT,
   active_test_project: COPY_PROJECT,
   public_budget: PUBLIC_BUDGET,
+  layout_batch_size: LAYOUT_BATCH_SIZE,
   expected_track_count: TRACK_COUNT,
   expected_last_track_name: `${TRACK_NAMES.at(-1)} Refreshed`,
   tests: {
@@ -226,7 +228,9 @@ const report = {
     tracks_created_from_applied_change_rows: calls.create_layout_batches?.reduce((count, batch) => (
       count + (batch.response?.result?.changes ?? []).filter((change) => (
         change.status === "applied"
-        && ["template.tracks.create_track", "template.tracks.create_folder_track"].includes(change.template_id)
+        && typeof change.operation_id === "string"
+        && typeof change.target_ref === "string"
+        && change.target_ref.startsWith("track:guid:")
       )).length
     ), 0) ?? 0,
     layout_batch_count: calls.create_layout_batches?.length ?? 0,
@@ -297,6 +301,20 @@ async function callTool(client, name, args) {
   return JSON.parse(text);
 }
 
+function assertLayoutOperationRows(value, { start, names }) {
+  const changes = value?.result?.changes ?? [];
+  assert(changes.length === names.length, `Expected ${names.length} layout operation rows, got ${changes.length}`);
+  for (const [offset, change] of changes.entries()) {
+    const operationId = `track_${start + offset + 1}`;
+    assert(change.operation_id === operationId, `Layout operation id mismatch: expected ${operationId}, got ${change.operation_id}`);
+    assert(typeof change.target_ref === "string" && change.target_ref.startsWith("track:guid:"), `Layout ${operationId} returned no canonical target_ref`);
+    assert(change.status === "applied", `Layout ${operationId} status=${change.status}`);
+    assert(change.mutation?.status === "completed", `Layout ${operationId} mutation=${change.mutation?.status}`);
+    assert(change.live_readback?.status === "passed", `Layout ${operationId} live_readback=${change.live_readback?.status}`);
+    assert(change.index_maintenance?.status === "completed", `Layout ${operationId} index_maintenance=${change.index_maintenance?.status}`);
+  }
+}
+
 function assertMacroSuccess(value, id) {
   assert(value?.contract === "macro.execution.v1", `${id} returned ${value?.contract}`);
   assert(value?.ok === true, `${id} failed: ${JSON.stringify(value?.error ?? value?.blockers)}`);
@@ -329,6 +347,10 @@ function parseArgs(argv) {
       if (!/^[1-9][0-9]{0,3}$/u.test(value)) throw new Error("--track-count must be an integer from 1 to 9999");
       result.track_count = Number(value);
       if (result.track_count > 4096) throw new Error("--track-count may not exceed the Project Index row bound of 4096");
+    } else if (key === "--layout-batch-size") {
+      if (!/^[1-9][0-9]{0,2}$/u.test(value)) throw new Error("--layout-batch-size must be an integer from 1 to 100");
+      result.layout_batch_size = Number(value);
+      if (result.layout_batch_size > 100) throw new Error("--layout-batch-size may not exceed the public layout row bound of 100");
     } else if (key === "--fixture-label") {
       if (!/^[A-Za-z0-9_-]{1,32}$/u.test(value)) throw new Error("--fixture-label must be a bounded filename token");
       result.fixture_label = value;
@@ -342,7 +364,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option ${key}`);
     index += 1;
   }
-  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP> [--track-count N]");
+  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP> [--track-count N] [--layout-batch-size N]");
   return result;
 }
 
