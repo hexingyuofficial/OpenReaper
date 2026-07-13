@@ -40,13 +40,10 @@ const EXPECTED_FINAL_IDS = [
 ];
 
 describe("Alpha3.3-B1 Macro portfolio", () => {
-  it("separates the final fifteen targets from thirteen visible executables and two internal drafts", () => {
+  it("separates the final fifteen targets from fourteen visible executables and one internal draft", () => {
     assert.deepEqual(validateAlpha3_3B1MacroPortfolio(), { valid: true, errors: [] });
     assert.deepEqual(ALPHA3_3_B1_FINAL_TARGET_IDS, EXPECTED_FINAL_IDS);
-    assert.deepEqual(ALPHA3_3_B1_INTERNAL_DRAFT_IDS, [
-      "macro.items.apply",
-      "macro.automation.apply",
-    ]);
+    assert.deepEqual(ALPHA3_3_B1_INTERNAL_DRAFT_IDS, ["macro.automation.apply"]);
     assert.deepEqual(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, EXPECTED_FINAL_IDS.filter((id) =>
       !ALPHA3_3_B1_INTERNAL_DRAFT_IDS.includes(id)));
   });
@@ -56,6 +53,8 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
       "macro.midi.create_clip",
       "macro.fx.apply_native_chain",
       "macro.set_stock_plugin_controls",
+      "macro.items.arrange",
+      "macro.items.process",
     ]);
     assert.equal(ALPHA3_3_B1_DEPRECATED_ALIASES.every((entry) => entry.visible === false), true);
     assert.deepEqual(alpha3_3B1DeprecatedAlias("macro.midi.create_clip", {
@@ -73,6 +72,21 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
         notes: [],
         mode: "create_clips",
       },
+    });
+
+    assert.deepEqual(alpha3_3B1DeprecatedAlias("macro.items.process"), {
+      id: "macro.items.process",
+      implementation_status: "deprecated_alias",
+      visible: false,
+      replacement: "macro.items.apply",
+      replacement_input: {
+        mode: "normalize_peak",
+        target: "selected",
+        dry_run: true,
+      },
+      replacement_available_now: false,
+      blocker_code: "ITEM_APPLY_MODE_HELD",
+      blocker_message: "macro.items.process maps to the canonical processing family, but normalize_peak is not executable in Alpha3.3-B1c yet.",
     });
   });
 
@@ -159,6 +173,13 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
       notes: [],
       mode: "create_clips",
     });
+    assert.equal(alias.error.details.replacement_available_now, true);
+
+    const heldAlias = await runtime.call_template({ id: "macro.items.process", input: {} });
+    assert.equal(heldAlias.error.code, "CALL_TEMPLATE_ID_REPLACED");
+    assert.equal(heldAlias.error.details.replacement, "macro.items.apply");
+    assert.equal(heldAlias.error.details.replacement_available_now, false);
+    assert.equal(heldAlias.error.details.blocker_code, "ITEM_APPLY_MODE_HELD");
 
     for (const id of ALPHA3_3_B1_INTERNAL_DRAFT_IDS) {
       const held = await runtime.call_template({ id, input: {} });

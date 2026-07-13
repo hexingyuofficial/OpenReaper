@@ -10,9 +10,9 @@ export const WAVE1A_ITEMS_TEMPLATE_IDS = Object.freeze([
   "template.items.delete_item",
   "template.items.delete_items",
   "template.items.set_item_volume",
-  "template.items.set_item_pan",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
+  "template.items.set_active_take",
   "template.items.rename_take",
   "template.items.set_loop_source",
   "template.items.set_mute",
@@ -433,34 +433,6 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
     ],
   }),
   commandDescriptor({
-    id: "template.items.set_item_pan",
-    title: "Set item pan",
-    summary: "Set one media item's item-level pan position from left to right.",
-    entity_kind: "item",
-    tags: ["items", "item", "pan"],
-    bridge: bridge({ capability: "items.set_item_pan" }),
-    inputSchema: objectSchema({
-      pan: { type: "number" },
-    }, ["pan"]),
-    outputSchema: objectSchema({
-      item_ref: { type: "string" },
-      pan: { type: "number" },
-    }, ["item_ref", "pan"]),
-    expectedDelta: itemUpdateDelta("Updates one item's item-level pan position."),
-    verification: requiredVerification({
-      name: "item_pan_matches",
-      kind: "state_delta",
-      summary: "Item pan readback matches the requested value.",
-    }),
-    examples: [
-      {
-        name: "pan_item_left",
-        summary: "Pan one item slightly left.",
-        input: { pan: -0.25 },
-      },
-    ],
-  }),
-  commandDescriptor({
     id: "template.items.set_take_volume",
     title: "Set take volume",
     summary: "Set the active take volume gain in decibels without changing item volume.",
@@ -491,7 +463,7 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
   commandDescriptor({
     id: "template.items.set_take_pan",
     title: "Set take pan",
-    summary: "Set the active take pan position without changing item pan.",
+    summary: "Set the active take pan position without changing item-level volume or timeline state.",
     entity_kind: "take",
     tags: ["items", "take", "pan"],
     bridge: bridge({ capability: "items.set_take_pan" }),
@@ -513,6 +485,60 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
         name: "pan_take_right",
         summary: "Pan the active take slightly right.",
         input: { pan: 0.25 },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.items.set_active_take",
+    title: "Set active take",
+    summary: "Set one exact take as active on its exact owning item without relying on item or take selection.",
+    entity_kind: "take",
+    tags: ["items", "take", "active", "selection"],
+    bridge: bridge({ capability: "items.set_active_take" }),
+    inputSchema: objectSchema({}, []),
+    outputSchema: objectSchema({
+      item_ref: { type: "string" },
+      active_take_ref: { type: "string" },
+      take_index: { type: "integer" },
+      take_count: { type: "integer" },
+      changed: { type: "boolean" },
+    }, ["item_ref", "active_take_ref", "take_index", "take_count", "changed"]),
+    refs: refs({
+      input: [
+        ref("item_ref", "item", true, "Exact owning item ref; selected refs are not accepted."),
+        ref("take_ref", "take", true, "Exact take ref that must belong to item_ref; selected refs are not accepted."),
+      ],
+      output: [
+        ref("item_ref", "item", true, "Exact owning item ref read back after the mutation."),
+        ref("active_take_ref", "take", true, "Exact active take ref read back from REAPER."),
+      ],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Updates only the active-take choice for one exact item.",
+      entities: [
+        {
+          entity_kind: "item",
+          action: "update",
+          summary: "The item's active-take choice is updated.",
+        },
+        {
+          entity_kind: "take",
+          action: "update",
+          summary: "The requested take becomes active without changing take content.",
+        },
+      ],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "active_take_matches",
+      kind: "state_delta",
+      summary: "GetActiveTake readback exactly matches the requested take on the requested item.",
+    }),
+    examples: [
+      {
+        name: "activate_exact_take",
+        summary: "Set an exact resolved take active on its exact resolved owner item.",
+        input: {},
       },
     ],
   }),

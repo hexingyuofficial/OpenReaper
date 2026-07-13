@@ -216,6 +216,12 @@ import {
   executeAlpha3_3B1bItemsAnalyzeMacro,
   isAlpha3_3B1bItemsAnalyzeMacroId,
 } from "./alpha3-3-b1b-items-analyze-v1.mjs";
+import {
+  ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY,
+  createAlpha3_3B1cItemsApplyDiscoveryItems,
+  executeAlpha3_3B1cItemsApplyMacro,
+  isAlpha3_3B1cItemsApplyMacroId,
+} from "./alpha3-3-b1c-items-apply-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -615,6 +621,7 @@ export const CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS = deepFreeze([
   "template.items.set_item_volume",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
+  "template.items.set_active_take",
   "template.items.rename_take",
   "template.items.set_loop_source",
   "template.items.set_mute",
@@ -677,7 +684,6 @@ export const CALL_TEMPLATE_RUNTIME_D27_ANALYSIS_AUDIO_TEMPLATE_IDS = deepFreeze(
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D28_SMALL_HANDLER_TEMPLATE_IDS = deepFreeze([
-  "template.items.set_item_pan",
   "template.items.set_reverse",
   "template.project.set_snap",
   "template.fx.read_video_processor_code",
@@ -772,6 +778,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
   "template.automation.list_project_envelopes",
+  "template.items.set_active_take",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
 ]);
@@ -784,6 +791,14 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFree
   ),
 );
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS = deepFreeze(
+  CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.flatMap((id) =>
+    id === "template.items.set_take_volume"
+      ? ["template.items.set_item_pan", id]
+      : [id]
+  ),
+);
+
 export const CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS = deepFreeze(
   ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.filter((id) =>
     !CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id),
@@ -792,6 +807,7 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS 
 
 export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
+  "template.items.set_active_take",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
@@ -824,6 +840,10 @@ export const CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS = deepFreeze(
 export const CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS = Object.freeze([
   "template.core.read_template_coverage_summary",
   "template.system.read_ext_state_value",
+]);
+
+export const CALL_TEMPLATE_RUNTIME_WITHDRAWN_TEMPLATE_IDS = Object.freeze([
+  "template.items.set_item_pan",
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALLOWED_REQUEST_FIELDS = Object.freeze([
@@ -907,6 +927,7 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
   ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
   ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
+  ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY,
 ]);
 const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
@@ -987,6 +1008,7 @@ export function createCallTemplateRuntime(options = {}) {
     ...macroDiscovery(ALPHA3_2E_ROUTING_APPLY_MACRO_ID, createAlpha3_2ERoutingApplyMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
     ...macroDiscovery("macro.items.analyze", createAlpha3_3B1bItemsAnalyzeDiscoveryItems),
+    ...macroDiscovery("macro.items.apply", createAlpha3_3B1cItemsApplyDiscoveryItems),
     ...macroDiscovery("macro.midi.apply", (runtimeOptions) =>
       [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
     ...macroDiscovery("macro.fx.apply_chain", createAlpha3_2_5DNativeFxMacroDiscoveryItems),
@@ -1055,6 +1077,9 @@ export function createCallTemplateRuntime(options = {}) {
               implementation_status: "deprecated_alias",
               replacement: alias.replacement,
               replacement_input: alias.replacement_input,
+              replacement_available_now: alias.replacement_available_now ?? true,
+              ...(alias.blocker_code ? { blocker_code: alias.blocker_code } : {}),
+              ...(alias.blocker_message ? { blocker_message: alias.blocker_message } : {}),
             },
           },
         );
@@ -1078,6 +1103,16 @@ export function createCallTemplateRuntime(options = {}) {
         const envelope = await executeAlpha3_3B1bItemsAnalyzeMacro({
           request: normalized,
           executeAtomic: macroAtomic,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_3B1cItemsApplyMacroId(id)) {
+        const envelope = await executeAlpha3_3B1cItemsApplyMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
@@ -1291,6 +1326,28 @@ export function createCallTemplateRuntime(options = {}) {
               implementation_status: "withdrawn",
               executable_replacement: ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
               future_candidates: ["macro.midi.edit_notes"],
+            },
+          },
+        );
+      }
+      if (CALL_TEMPLATE_RUNTIME_WITHDRAWN_TEMPLATE_IDS.includes(id)) {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_WITHDRAWN",
+          "template.items.set_item_pan is withdrawn because REAPER does not expose a verified Item-level pan write. For explicit Active Take pan, use macro.controls.set with target_kind=take or template.items.set_take_pan only after confirming active_take_identity; never reinterpret a multi-Take Item as Item pan.",
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              implementation_status: "withdrawn",
+              reason_code: "ITEM_PAN_NOT_A_VERIFIED_REAPER_PROPERTY",
+              active_take_macro: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+              active_take_macro_input: {
+                target_kind: "take",
+                fields: { pan: normalized.input?.pan ?? 0 },
+              },
+              active_take_template: "template.items.set_take_pan",
+              requires: ["confirm active_take_identity", "explicit Active Take intent"],
             },
           },
         );

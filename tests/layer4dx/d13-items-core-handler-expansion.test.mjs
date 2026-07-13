@@ -30,6 +30,7 @@ const WRITE_CAPABILITIES = Object.freeze([
   "items.set_item_volume",
   "items.set_take_volume",
   "items.set_take_pan",
+  "items.set_active_take",
   "items.rename_take",
   "items.set_loop_source",
   "items.set_mute",
@@ -53,13 +54,14 @@ describe("D13 items core live handler expansion", () => {
     );
   });
 
-  it("adds a separate runtime allowlist for the fourteen D13 template ids", async () => {
+  it("adds a separate runtime allowlist for the fifteen D13 template ids", async () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_D13_ITEMS_CORE_TEMPLATE_IDS, [
       "template.items.list_selected_items",
       "template.items.list_items_on_track",
       "template.items.set_item_volume",
       "template.items.set_take_volume",
       "template.items.set_take_pan",
+      "template.items.set_active_take",
       "template.items.rename_take",
       "template.items.set_loop_source",
       "template.items.set_mute",
@@ -122,6 +124,9 @@ describe("D13 items core live handler expansion", () => {
       assert.equal(request.verification.mode, "required");
       assert.equal(request.artifacts.allow, false);
       assert.equal(request.refs.some((ref) => ref.kind === "item" && ref.ref === ITEM_REF.ref), true);
+      if (request.pack.capability === "items.set_active_take") {
+        assert.equal(request.refs.some((ref) => ref.kind === "take" && ref.ref === TAKE_REF.ref), true);
+      }
       if ("idempotency_key" in request) {
         assert.equal(typeof request.idempotency_key, "string");
       }
@@ -163,10 +168,11 @@ describe("D13 items core live handler expansion", () => {
       "I_PITCHMODE",
       "F_STRETCHFADESIZE",
       "d13_items_values_match",
-      "VERIFICATION_FAILED",
+      "VERIFY_FAILED",
     ]) {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }
+    assert.doesNotMatch(HANDLER_SOURCE, /VERIFICATION_FAILED/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
@@ -175,6 +181,9 @@ describe("D13 items core live handler expansion", () => {
 
 const ITEM_REF = createObjectRef("item", { scheme: "guid", value: "{D13-ITEM}" }, {
   ref: "item:guid:{D13-ITEM}",
+});
+const TAKE_REF = createObjectRef("take", { scheme: "guid", value: "{D13-TAKE}" }, {
+  ref: "take:guid:{D13-TAKE}",
 });
 const TRACK_REF = createObjectRef("track", { scheme: "guid", value: "{D13-TRACK}" }, {
   ref: "track:guid:{D13-TRACK}",
@@ -230,6 +239,9 @@ function d13Refs(id) {
   if (id === "template.items.list_items_on_track") {
     return { track_ref: TRACK_REF };
   }
+  if (id === "template.items.set_active_take") {
+    return { item_ref: ITEM_REF, take_ref: TAKE_REF };
+  }
   return { item_ref: ITEM_REF };
 }
 
@@ -248,6 +260,7 @@ function handlerExport(capability) {
     "items.set_item_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_item_volume",
     "items.set_take_volume": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_volume",
     "items.set_take_pan": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_take_pan",
+    "items.set_active_take": "OPENREAPER_HANDLER_EXPORTS.set_active_take",
     "items.rename_take": "OPENREAPER_HANDLER_EXPORTS.d13_items_rename_take",
     "items.set_loop_source": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_loop_source",
     "items.set_mute": "OPENREAPER_HANDLER_EXPORTS.d13_items_set_mute",

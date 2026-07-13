@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
@@ -293,11 +294,15 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
     assert.equal(exact.items.every((item) => item.risk === undefined), true);
   });
 
-  it("keeps historical Alpha2 at 213 and composes the 221-id current-product allowlist", () => {
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
+  it("keeps historical Alpha2 evidence at 213 while withdrawing false Item pan from the 221-id current product", () => {
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.includes("template.items.set_item_pan"), true);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_pan"), false);
     assert.equal(IDS.some((id) => CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)), false);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS, IDS);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 221);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS[212], "template.items.set_active_take");
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.slice(213, 215), IDS);
     const current = createCallTemplateRuntime({
       live: {

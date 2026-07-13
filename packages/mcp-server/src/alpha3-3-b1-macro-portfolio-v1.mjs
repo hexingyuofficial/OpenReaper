@@ -20,7 +20,6 @@ export const ALPHA3_3_B1_FINAL_TARGET_IDS = deepFreeze([
 ]);
 
 export const ALPHA3_3_B1_INTERNAL_DRAFT_IDS = deepFreeze([
-  "macro.items.apply",
   "macro.automation.apply",
 ]);
 
@@ -34,6 +33,17 @@ export const ALPHA3_3_B1_DEPRECATED_ALIASES = deepFreeze([
   alias("macro.midi.create_clip", "macro.midi.apply", { mode: "create_clips" }),
   alias("macro.fx.apply_native_chain", "macro.fx.apply_chain", {}),
   alias("macro.set_stock_plugin_controls", "macro.fx.set_controls", {}),
+  alias("macro.items.arrange", "macro.items.apply", { mode: "align_starts", target: "selected", dry_run: true }),
+  alias(
+    "macro.items.process",
+    "macro.items.apply",
+    { mode: "normalize_peak", target: "selected", dry_run: true },
+    {
+      replacement_available_now: false,
+      blocker_code: "ITEM_APPLY_MODE_HELD",
+      blocker_message: "macro.items.process maps to the canonical processing family, but normalize_peak is not executable in Alpha3.3-B1c yet.",
+    },
+  ),
 ]);
 
 const ALIAS_BY_ID = new Map(ALPHA3_3_B1_DEPRECATED_ALIASES.map((entry) => [entry.id, entry]));
@@ -70,9 +80,9 @@ export function validateAlpha3_3B1MacroPortfolio(portfolio = ALPHA3_3_B1_MACRO_P
   const draftSet = new Set(draftIds);
 
   if (targetIds.length !== 15 || targetSet.size !== 15) errors.push("Alpha3.3 target portfolio must contain exactly 15 unique ids");
-  if (visibleIds.length !== 13 || visibleSet.size !== 13) errors.push("Alpha3.3-B1b visible portfolio must contain exactly 13 unique executable ids");
-  if (draftIds.length !== 2 || draftSet.size !== 2) errors.push("Alpha3.3-B1b must retain exactly two internal draft ids");
-  if (aliasRows.length !== 3) errors.push("Alpha3.3-B1a must retain exactly three renamed compatibility aliases");
+  if (visibleIds.length !== 14 || visibleSet.size !== 14) errors.push("Alpha3.3-B1c visible portfolio must contain exactly 14 unique executable ids");
+  if (draftIds.length !== 1 || draftSet.size !== 1) errors.push("Alpha3.3-B1c must retain exactly one internal draft id");
+  if (aliasRows.length !== 5) errors.push("Alpha3.3-B1c must retain exactly five renamed compatibility aliases");
 
   for (const id of [...targetIds, ...visibleIds, ...draftIds]) {
     if (typeof id !== "string" || !id.startsWith("macro.")) errors.push(`Invalid Macro id: ${String(id)}`);
@@ -210,13 +220,14 @@ export function canonicalizeAlpha3_3B1MacroExecutionEnvelope(envelope, canonical
   return canonical;
 }
 
-function alias(id, replacement, replacementInput) {
+function alias(id, replacement, replacementInput, metadata = {}) {
   return {
     id,
     implementation_status: "deprecated_alias",
     visible: false,
     replacement,
     replacement_input: replacementInput,
+    ...metadata,
   };
 }
 

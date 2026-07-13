@@ -934,6 +934,23 @@
       "capability": "items.set_take_pan"
     },
     {
+      "template_id": "template.items.set_active_take",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "d13-items-core-handlers",
+      "handler_file": "items/set_active_take.lua",
+      "handler_export": "set_active_take",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/d13-items-core-handler-expansion.test.mjs"
+      ],
+      "capability": "items.set_active_take"
+    },
+    {
       "template_id": "template.items.rename_take",
       "operation": {
         "family": "run_command",
@@ -1437,23 +1454,6 @@
       "tests": [
         "tests/layer4dr/bridge-handler-registry.test.mjs"
       ]
-    },
-    {
-      "template_id": "template.items.set_item_pan",
-      "operation": {
-        "family": "run_command",
-        "name": "template.execute"
-      },
-      "pack": "items",
-      "risk": "write",
-      "route": "d28-small-handlers",
-      "handler_file": "items/d13_items_core_route.lua",
-      "handler_export": "d13_items_set_item_pan",
-      "artifact_policy": "none",
-      "tests": [
-        "tests/layer4dr/bridge-handler-registry.test.mjs"
-      ],
-      "capability": "items.set_item_pan"
     },
     {
       "template_id": "template.items.set_reverse",

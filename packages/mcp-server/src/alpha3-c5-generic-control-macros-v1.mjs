@@ -82,7 +82,7 @@ const MACRO_DEFINITIONS = deepFreeze([
   {
     id: "macro.set_item_controls",
     user_label: "Set item controls",
-    task_intents: ["move an item", "trim an item", "mute an item", "change item gain or pan", "set item fades"],
+    task_intents: ["move an item", "trim an item", "mute an item", "change item gain", "set item fades"],
     scope: "item",
     refs: [{ name: "item_ref", kind: "item", required: true }],
     freshness_requires: ["item_ref", "item_identity", "active_take_identity"],
@@ -97,7 +97,6 @@ const MACRO_DEFINITIONS = deepFreeze([
       field("length_seconds", "number", "template.items.trim_item", "length_seconds", { min: 0, unit: "seconds" }),
       field("start_offset_seconds", "number", "template.items.trim_item", "start_offset_seconds", { min: 0, unit: "seconds", optional_when: "length_seconds supplied" }),
       field("volume_db", "number", "template.items.set_item_volume", "volume_db", { min: -150, max: 24, unit: "dB" }),
-      field("pan", "number", "template.items.set_item_pan", "pan", { min: -1, max: 1 }),
       field("mute", "boolean", "template.items.set_mute", "muted"),
       field("lock", "boolean", "template.items.set_lock", "locked"),
       field("loop_source", "boolean", "template.items.set_loop_source", "loop_source"),
@@ -108,6 +107,7 @@ const MACRO_DEFINITIONS = deepFreeze([
       field("no_autofades", "boolean", "template.items.set_no_autofades", "no_autofades"),
     ],
     blocked_fields: [
+      blocker("pan", "ITEM_PAN_UNSUPPORTED", "REAPER does not expose a verified Item-level pan write. To pan the current Active Take, use target_kind=take with field pan only after confirming active_take_identity; never treat a multi-Take Item as Item pan."),
       blocker("delete", "DESTRUCTIVE_DOMAIN", "Delete remains outside generic controls and requires explicit destructive confirmation."),
       blocker("grouping", "MISSING_ACCEPTED_RUNTIME_SUPPORT", "Item grouping descriptors are not accepted in the current runtime catalog."),
       blocker("fade_shapes", "MISSING_ACCEPTED_RUNTIME_SUPPORT", "Fade shape descriptors are not accepted in the current runtime catalog."),

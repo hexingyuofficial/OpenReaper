@@ -94,6 +94,58 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(calls.some((call) => call.id === "template.tracks.set_mute"), false);
   });
 
+  it("blocks false Item-level pan before live resolution and points to explicit Active Take pan", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "item", fields: { pan: 0.25 }, dry_run: false },
+        refs: { item_ref: "item:guid:{ITEM-A}" },
+      },
+      executeAtomic: controlAtomic(calls),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "blocked");
+    assert.equal(response.error.code, "ITEM_PAN_UNSUPPORTED");
+    assert.match(response.error.message, /target_kind=take/);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(response.result.changes, []);
+  });
+
+  it("carries the exact accepted Template value into Active Take pan changes", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "take", fields: { pan: 0.25 }, dry_run: false },
+        refs: { item_ref: "item:guid:{ITEM-A}" },
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.items.set_take_pan",
+      "template.items.read_item_summary",
+    ]);
+    assert.deepEqual(response.result.changes[0].live_readback, {
+      status: "passed",
+      source: "accepted_template_live_readback",
+      fields: [{
+        field: "pan",
+        status: "passed",
+        source: "accepted_template_live_readback",
+        requested_value: 0.25,
+        observed_value: 0.25,
+      }],
+    });
+  });
+
   it("fails closed when a batch-readable control value does not match", async () => {
     const calls = [];
     const response = await executeAlpha3_2_5CControlMacro({
@@ -220,6 +272,29 @@ function controlAtomic(calls, options = {}) {
     }
     if (id === "template.tracks.resolve_track_ref") {
       return execution(id, { track_ref: options.resolvedTrackRef ?? input.track_ref, name: "Lead Vocal" });
+    }
+    if (id === "template.items.resolve_item_ref") {
+      return execution(id, {
+        item_ref: input.ref,
+        track_ref: "track:guid:{TRACK-A}",
+        active_take_ref: "take:guid:{TAKE-A}",
+      });
+    }
+    if (id === "template.items.set_take_pan") {
+      return execution(id, {
+        item_ref: typeof refs.item_ref === "string" ? refs.item_ref : refs.item_ref?.ref,
+        active_take_ref: "take:guid:{TAKE-A}",
+        pan: input.pan,
+        take_pan: input.pan,
+        readback_status: "passed",
+      });
+    }
+    if (id === "template.items.read_item_summary") {
+      return execution(id, {
+        item_ref: typeof refs.item_ref === "string" ? refs.item_ref : refs.item_ref?.ref,
+        active_take_ref: "take:guid:{TAKE-A}",
+        take_count: 1,
+      });
     }
     if (id === "template.tracks.read_mixer_controls") {
       return execution(id, {

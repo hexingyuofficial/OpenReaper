@@ -252,6 +252,12 @@ async function executeControlsSet({
         idempotencyKey: childIdempotencyKey(request.idempotency_key, index),
       });
       collectExecution(state, execution);
+      const atomicReadback = captureRequiredAtomicControlReadback({
+        targetKind: input.target_kind,
+        fields: child.fields,
+        requestedFields: input.fields,
+        readback: executionReadback(execution),
+      });
       state.changes.push({
         template_id: child.id,
         fields: clone(child.fields ?? []),
@@ -259,6 +265,7 @@ async function executeControlsSet({
         mutation: { status: "completed", dispatch_status: "completed" },
         live_readback: { status: "pending" },
         index_maintenance: { status: "pending" },
+        atomic_readback: atomicReadback,
       });
     }
     pushStage(
@@ -283,6 +290,7 @@ async function executeControlsSet({
       requestedFields: input.fields,
       targetRefs: target.refs,
       readback: state.readback,
+      atomicChanges: state.changes,
     });
     if (!readbackVerification.ok) {
       throw coded(
@@ -1057,6 +1065,12 @@ const CONTROL_BATCH_READBACK_PATHS = Object.freeze({
   }),
 });
 
+const CONTROL_REQUIRED_ATOMIC_READBACK_PATHS = Object.freeze({
+  take: Object.freeze({
+    pan: ["pan"],
+  }),
+});
+
 function applyControlReadbackToChanges(changes, rows) {
   const byField = new Map((rows ?? []).map((row) => [row.field, row]));
   for (const change of changes) {
@@ -1070,11 +1084,20 @@ function applyControlReadbackToChanges(changes, rows) {
     change.status = "applied";
     change.live_readback = {
       status: "passed",
-      source: evidence.some((row) => row.status === "passed")
-        ? "live_control_readback"
-        : "accepted_template_readback",
-      fields: evidence.map((row) => ({ field: row.field, status: row.status })),
+      source: evidence.every((row) => row.source === "accepted_template_live_readback")
+        ? "accepted_template_live_readback"
+        : evidence.some((row) => row.status === "passed")
+          ? "live_control_readback"
+          : "accepted_template_readback",
+      fields: evidence.map((row) => compactObject({
+        field: row.field,
+        status: row.status,
+        source: row.source,
+        requested_value: row.requested,
+        observed_value: row.observed,
+      })),
     };
+    delete change.atomic_readback;
   }
 }
 
@@ -1110,7 +1133,7 @@ function outcomeEvidence(state) {
   };
 }
 
-function verifyControlReadback({ targetKind, requestedFields, targetRefs, readback }) {
+function verifyControlReadback({ targetKind, requestedFields, targetRefs, readback, atomicChanges = [] }) {
   const target = controlReadbackTarget(targetKind, targetRefs, readback);
   if (!target.ok) return { ok: false, blockers: target.blockers, rows: [], compared_count: 0, atomic_only_count: 0 };
   const paths = CONTROL_BATCH_READBACK_PATHS[targetKind] ?? {};
@@ -1122,13 +1145,29 @@ function verifyControlReadback({ targetKind, requestedFields, targetRefs, readba
     const path = paths[field];
     if (!path) {
       atomicOnlyCount += 1;
-      rows.push({ field, status: "verified_by_atomic_template" });
+      const atomic = requiredAtomicEvidenceForField(atomicChanges, field);
+      rows.push(atomic ?? { field, status: "verified_by_atomic_template" });
+      if (atomic && atomic.status !== "passed") {
+        blockers.push({
+          code: "CONTROL_READBACK_MISMATCH",
+          message: `Accepted Template readback for ${targetKind}.${field} did not match the requested value.`,
+          recoverable: true,
+        });
+      }
       continue;
     }
     const observed = valueAtPath(target.value, path);
     if (observed === undefined) {
       atomicOnlyCount += 1;
-      rows.push({ field, status: "verified_by_atomic_template" });
+      const atomic = requiredAtomicEvidenceForField(atomicChanges, field);
+      rows.push(atomic ?? { field, status: "verified_by_atomic_template" });
+      if (atomic && atomic.status !== "passed") {
+        blockers.push({
+          code: "CONTROL_READBACK_MISMATCH",
+          message: `Accepted Template readback for ${targetKind}.${field} did not match the requested value.`,
+          recoverable: true,
+        });
+      }
       continue;
     }
     comparedCount += 1;
@@ -1149,6 +1188,31 @@ function verifyControlReadback({ targetKind, requestedFields, targetRefs, readba
     compared_count: comparedCount,
     atomic_only_count: atomicOnlyCount,
   };
+}
+
+function captureRequiredAtomicControlReadback({ targetKind, fields = [], requestedFields = {}, readback }) {
+  const paths = CONTROL_REQUIRED_ATOMIC_READBACK_PATHS[targetKind] ?? {};
+  return fields.flatMap((field) => {
+    const path = paths[field];
+    if (!path) return [];
+    const requested = requestedFields[field];
+    const observed = valueAtPath(readback, path);
+    return [{
+      field,
+      status: observed !== undefined && controlValuesMatch(requested, observed) ? "passed" : "mismatch",
+      source: "accepted_template_live_readback",
+      requested,
+      observed,
+    }];
+  });
+}
+
+function requiredAtomicEvidenceForField(changes, field) {
+  for (const change of changes) {
+    const row = change.atomic_readback?.find((entry) => entry.field === field);
+    if (row) return row;
+  }
+  return null;
 }
 
 function controlReadbackTarget(targetKind, targetRefs, readback) {

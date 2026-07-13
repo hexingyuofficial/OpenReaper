@@ -6,7 +6,7 @@
     "entryCount": 220,
     "legacyMonolithCount": 0,
     "extractedHandlerCount": 220,
-    "handlerModuleCount": 83,
+    "handlerModuleCount": 84,
     "routeCount": 33,
     "operationCount": 101
   },
@@ -277,9 +277,9 @@
     },
     {
       "route": "d13-items-core-handlers",
-      "template_count": 14,
-      "handler_module_count": 1,
-      "operation_count": 14,
+      "template_count": 15,
+      "handler_module_count": 2,
+      "operation_count": 15,
       "packs": [
         "items"
       ],
@@ -299,6 +299,7 @@
         "template.items.set_item_volume",
         "template.items.set_take_volume",
         "template.items.set_take_pan",
+        "template.items.set_active_take",
         "template.items.rename_take",
         "template.items.set_loop_source",
         "template.items.set_mute",
@@ -454,9 +455,9 @@
     },
     {
       "route": "d28-small-handlers",
-      "template_count": 5,
+      "template_count": 4,
       "handler_module_count": 4,
-      "operation_count": 5,
+      "operation_count": 4,
       "packs": [
         "fx",
         "items",
@@ -475,7 +476,6 @@
         "tests/layer4dr/bridge-handler-registry.test.mjs"
       ],
       "template_ids": [
-        "template.items.set_item_pan",
         "template.items.set_reverse",
         "template.project.set_snap",
         "template.fx.read_video_processor_code",

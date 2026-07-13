@@ -97,10 +97,13 @@ describe("Alpha3 C5 generic control macro schemas", () => {
 
     assert.equal(item.fields.find((field) => field.name === "position_seconds").template_id, "template.items.move_item");
     assert.equal(item.fields.find((field) => field.name === "fade_in_seconds").template_required_inputs.includes("fade_out_seconds"), true);
+    assert.equal(item.fields.some((field) => field.name === "pan"), false);
+    assert.equal(item.blocked_fields.some((field) => field.field === "pan" && field.code === "ITEM_PAN_UNSUPPORTED"), true);
     assert.equal(item.blocked_fields.some((field) => field.field === "delete" && field.code === "DESTRUCTIVE_DOMAIN"), true);
 
     assert.equal(take.refs[0].name, "item_ref");
     assert.equal(take.blocked_fields.some((field) => field.field === "per_take_selection"), true);
+    assert.equal(take.fields.find((field) => field.name === "pan").template_id, "template.items.set_take_pan");
     assert.equal(take.fields.find((field) => field.name === "playrate").template_required_inputs.includes("preserve_pitch"), true);
   });
 

@@ -7,6 +7,7 @@ import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
@@ -77,7 +78,8 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
       "template.project.read_dirty_state",
     ]);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS, IDS);
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 221);
 
     const [saveCurrent, saveAs] = IDS.map((id) => catalog.get(id));

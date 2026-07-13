@@ -885,6 +885,7 @@ local D13_ITEMS_CORE_WRITE_HANDLERS = {
   ["items.set_item_volume"] = d13_items_set_item_volume,
   ["items.set_take_volume"] = d13_items_set_take_volume,
   ["items.set_take_pan"] = d13_items_set_take_pan,
+  ["items.set_active_take"] = set_active_take,
   ["items.rename_take"] = d13_items_rename_take,
   ["items.set_loop_source"] = d13_items_set_loop_source,
   ["items.set_mute"] = d13_items_set_mute,
@@ -929,7 +930,6 @@ local D22_RENDER_SETTINGS_WRITE_HANDLERS = {
 }
 
 local D28_SMALL_WRITE_HANDLERS = {
-  ["items.set_item_pan"] = d13_items_set_item_pan,
   ["items.set_reverse"] = d13_items_set_reverse,
   ["project.set_snap"] = d20_project_set_snap,
   ["routing.track_mono_stereo.set"] = track_mono_or_stereo_button,

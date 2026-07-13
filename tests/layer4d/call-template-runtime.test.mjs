@@ -57,6 +57,7 @@ import {
 import {
   createAcceptedOfficialTemplateCatalog,
   createAcceptedOfficialTemplateDiscovery,
+  CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
@@ -80,6 +81,7 @@ import {
   CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
   CALL_TEMPLATE_RUNTIME_PRODUCT_WORKFLOW_RHYTHM,
   CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_WITHDRAWN_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -143,6 +145,7 @@ describe("Layer 4D call_template runtime binding", () => {
     for (const id of [
       ...CALL_TEMPLATE_RUNTIME_SEED_ONLY_TEMPLATE_IDS,
       ...CALL_TEMPLATE_RUNTIME_HELD_TEMPLATE_IDS,
+      ...CALL_TEMPLATE_RUNTIME_WITHDRAWN_TEMPLATE_IDS,
     ]) {
       assert.equal(catalog.get(id), null, id);
     }
@@ -212,6 +215,7 @@ describe("Layer 4D call_template runtime binding", () => {
       ["template.render.render_region_job", "CALL_TEMPLATE_ID_SEED_ONLY"],
       ["template.core.read_template_coverage_summary", "CALL_TEMPLATE_ID_HELD"],
       ["template.system.read_ext_state_value", "CALL_TEMPLATE_ID_HELD"],
+      ["template.items.set_item_pan", "CALL_TEMPLATE_ID_WITHDRAWN"],
       ["template.tracks.not_in_catalog", "CALL_TEMPLATE_ID_UNKNOWN"],
       ["template.loop.cleanup_project", "CALL_TEMPLATE_ID_WORKFLOW_SHAPED"],
       ["not-a-template-id", "CALL_TEMPLATE_ID_NON_CATALOG"],
@@ -433,6 +437,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "macro.routing.apply",
       "macro.media.place_assets",
       "macro.items.analyze",
+      "macro.items.apply",
       "macro.midi.apply",
       "macro.fx.apply_chain",
       "macro.fx.set_controls",
@@ -723,7 +728,7 @@ describe("Layer 4D call_template runtime binding", () => {
       true,
     );
     const wave0Macros = liveMenu.items.filter((item) => item.action_kind === "macro");
-    assert.equal(wave0Macros.length, 13);
+    assert.equal(wave0Macros.length, 14);
     assert.equal(
       wave0Macros.every((item) => item.capability_truth.live_runnable_now === false),
       true,
@@ -765,8 +770,11 @@ describe("Layer 4D call_template runtime binding", () => {
       },
     });
     const graduatedMenu = graduatedRuntime.list_templates({ limit: 100 });
-    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 213);
-    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.includes("template.items.set_item_pan"), true);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_pan"), false);
+    assert.equal(graduatedRuntime.live_gate.allowed_template_ids.length, 212);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS.length, 2);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS.length, 2);
     assert.equal(
@@ -1579,7 +1587,7 @@ describe("Layer 4D call_template runtime binding", () => {
     }).trim();
     const preview = JSON.parse(previewOutput);
     assert.equal(preview.contract, CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT);
-    assert.equal(preview.allowed_template_count, 213);
+    assert.equal(preview.allowed_template_count, 212);
     assert.deepEqual(preview.workflow_rhythm.steps, ["discover", "observe", "target", "confirm", "execute_one", "readback"]);
     assert.equal(preview.startup_preflight[0].id, "manual_session_visible");
     assert.equal(preview.startup_health.contract, ALPHA3_D1_STARTUP_HEALTH_CONTRACT);

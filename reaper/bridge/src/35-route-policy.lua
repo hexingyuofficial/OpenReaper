@@ -105,6 +105,7 @@ local D13_ITEMS_CORE_WRITE_CAPABILITIES = {
   ["items.set_item_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_volume"] = { pack = "items", risk = "write" },
   ["items.set_take_pan"] = { pack = "items", risk = "write" },
+  ["items.set_active_take"] = { pack = "items", risk = "write" },
   ["items.rename_take"] = { pack = "items", risk = "write" },
   ["items.set_loop_source"] = { pack = "items", risk = "write" },
   ["items.set_mute"] = { pack = "items", risk = "write" },
@@ -184,7 +185,6 @@ local ALPHA3_2C3BC_PROJECT_FILE_SAVE_CAPABILITIES = {
 }
 
 local D28_SMALL_WRITE_CAPABILITIES = {
-  ["items.set_item_pan"] = { pack = "items", risk = "write" },
   ["items.set_reverse"] = { pack = "items", risk = "write" },
   ["project.set_snap"] = { pack = "project", risk = "write" },
   ["routing.track_mono_stereo.set"] = { pack = "routing", risk = "write" },

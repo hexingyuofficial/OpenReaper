@@ -37,9 +37,9 @@ const ALLOWLIST = Object.freeze([
   "template.items.delete_item",
   "template.items.delete_items",
   "template.items.set_item_volume",
-  "template.items.set_item_pan",
   "template.items.set_take_volume",
   "template.items.set_take_pan",
+  "template.items.set_active_take",
   "template.items.rename_take",
   "template.items.set_loop_source",
   "template.items.set_mute",
@@ -61,6 +61,7 @@ const ALLOWLIST = Object.freeze([
 ]);
 
 const BLOCKED_ITEMS_IDS = Object.freeze([
+  "template.items.set_item_pan",
   "template.items.copy_item_to_track",
   "template.items.snap_item_start_to_grid",
   "template.items.select_take",
@@ -142,9 +143,9 @@ describe("Wave 1A items template descriptors", () => {
     const deleteOne = catalog.require("template.items.delete_item");
     const deleteMany = catalog.require("template.items.delete_items");
     const itemVolume = catalog.require("template.items.set_item_volume");
-    const itemPan = catalog.require("template.items.set_item_pan");
     const takeVolume = catalog.require("template.items.set_take_volume");
     const takePan = catalog.require("template.items.set_take_pan");
+    const activeTake = catalog.require("template.items.set_active_take");
     const renameTake = catalog.require("template.items.rename_take");
     const loopSource = catalog.require("template.items.set_loop_source");
     const mute = catalog.require("template.items.set_mute");
@@ -174,9 +175,23 @@ describe("Wave 1A items template descriptors", () => {
     assert.equal(deleteMany.risk, "destructive");
     assert.equal(deleteMany.refs.input[0].name, "item_ref");
     assert.deepEqual(Object.keys(itemVolume.inputSchema.properties), ["volume_db"]);
-    assert.deepEqual(Object.keys(itemPan.inputSchema.properties), ["pan"]);
     assert.equal(takeVolume.entity_kind, "take");
     assert.equal(takePan.entity_kind, "take");
+    assert.deepEqual(activeTake.inputSchema, {
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    assert.deepEqual(activeTake.refs.input.map((entry) => [entry.name, entry.kind]), [
+      ["item_ref", "item"],
+      ["take_ref", "take"],
+    ]);
+    assert.deepEqual(activeTake.refs.output.map((entry) => [entry.name, entry.kind]), [
+      ["item_ref", "item"],
+      ["active_take_ref", "take"],
+    ]);
+    assert.equal(activeTake.summary.includes("without relying on item or take selection"), true);
     assert.deepEqual(Object.keys(renameTake.inputSchema.properties), ["name"]);
     assert.deepEqual(Object.keys(loopSource.inputSchema.properties), ["loop_source"]);
     assert.deepEqual(Object.keys(mute.inputSchema.properties), ["muted"]);
@@ -322,6 +337,7 @@ describe("Wave 1A items template descriptors", () => {
   it("builds legal 4B bridge requests and fake-smokes every write item atom", async () => {
     const catalog = createTemplateCatalog({ templates: createWave1AItemsTemplates() });
     const item = itemRef("{ITEM-WRITE}");
+    const take = takeRef("{TAKE-WRITE}");
     const file = fileRef("{FILE-WRITE}");
     const left = itemRef("{ITEM-LEFT}");
     const right = itemRef("{ITEM-RIGHT}");
@@ -331,8 +347,10 @@ describe("Wave 1A items template descriptors", () => {
       const input = sampleInput(id);
       const refs = id === "template.items.choose_new_source_file"
         ? { item_ref: item, file_ref: file }
-        : { item_ref: item };
-      const outputRefs = outputRefsFor(id, { item, file, left, right });
+        : id === "template.items.set_active_take"
+          ? { item_ref: item, take_ref: take }
+          : { item_ref: item };
+      const outputRefs = outputRefsFor(id, { item, take, file, left, right });
       const executor = fakeRefsExecutor(outputRefs);
       const request = buildTemplateBridgeRequest({
         descriptor,
@@ -455,7 +473,6 @@ function sampleInput(id) {
     case "template.items.set_item_volume":
     case "template.items.set_take_volume":
       return { volume_db: -3 };
-    case "template.items.set_item_pan":
     case "template.items.set_take_pan":
       return { pan: -0.25 };
     case "template.items.rename_take":
@@ -502,6 +519,7 @@ function sampleInput(id) {
 function outputRefsFor(id, refs) {
   if (id === "template.items.split_item_at_time") return [refs.left, refs.right];
   if (id === "template.items.choose_new_source_file") return [refs.item, refs.file];
+  if (id === "template.items.set_active_take") return [refs.item, refs.take];
   return [refs.item];
 }
 
@@ -511,6 +529,10 @@ function itemRef(value) {
 
 function trackRef(value) {
   return createObjectRef("track", { scheme: "guid", value });
+}
+
+function takeRef(value) {
+  return createObjectRef("take", { scheme: "guid", value });
 }
 
 function fileRef(value) {
