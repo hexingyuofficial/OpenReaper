@@ -115,6 +115,7 @@ async function buildPackage() {
         runtime_doctor_readiness: await smokePackagedRuntimeDoctorReadiness(),
         vital_agent_mcp: await smokePackagedVitalAgentMcp(),
       };
+  const packageCleanliness = await scrubPackagedRuntimeState(packageRoot);
 
   let zipPath = null;
   if (!skipZip) {
@@ -139,6 +140,7 @@ async function buildPackage() {
     },
     provenance,
     smoke,
+    package_cleanliness: packageCleanliness,
     install: {
       command: "double-click install.command or run ./install.command",
       default_install_root: "~/.openreaper/current",
@@ -854,12 +856,13 @@ async function smokePackagedProjectIndexLifecycle({
   owner,
   generation,
 }) {
+  const observationArtifactRef = "artifact:project:observation_bundle:art_20260712000000000_001_abcdef";
+  const projectMapArtifactRef = "artifact:project:project_map_snapshot:art_20260712000000000_002_abcdef";
   const state = {
     revision: 1,
     track_name: "OpenReaper Package Smoke Track",
+    observation_artifact_ref: observationArtifactRef,
   };
-  const observationArtifactRef = "artifact:project:observation_bundle:art_20260712000000000_001_abcdef";
-  const projectMapArtifactRef = "artifact:project:project_map_snapshot:art_20260712000000000_002_abcdef";
   await writeArtifactStateStoreEnvelope({
     artifactRoot,
     envelope: createArtifactStateStoreEnvelope({
@@ -903,7 +906,7 @@ async function smokePackagedProjectIndexLifecycle({
   const coldRequestsResponse = respondToPackagedBridgeRequests({
     transportDir,
     bridge: packageBridge,
-    count: 2,
+    count: 3,
   });
   const [cold, coldRequests] = await Promise.all([
     coldResponse.then(parseJsonToolResult),
@@ -922,6 +925,7 @@ async function smokePackagedProjectIndexLifecycle({
     JSON.stringify(coldRequests.map((request) => request.operation?.name)) !== JSON.stringify([
       "project.read_summary",
       "project.create_observation_bundle",
+      "project.read_summary",
     ])
   ) {
     throw new Error(`Packaged MCP cold Project Index Macro smoke failed: ${JSON.stringify({ cold, requests: coldRequests.map((request) => request.operation?.name) })}`);
@@ -957,6 +961,28 @@ async function smokePackagedProjectIndexLifecycle({
 
   state.revision = 2;
   state.track_name = "OpenReaper Package Smoke Track Updated";
+  const changedObservationArtifactRef = "artifact:project:observation_bundle:art_20260712000000000_003_abcdef";
+  state.observation_artifact_ref = changedObservationArtifactRef;
+  await writeArtifactStateStoreEnvelope({
+    artifactRoot,
+    envelope: createArtifactStateStoreEnvelope({
+      ref: changedObservationArtifactRef,
+      schema: "project.observation_bundle.v1",
+      producer: {
+        kind: "template",
+        id: "template.project.create_observation_bundle",
+        pack: "project",
+      },
+      created_at: "2026-07-12T00:00:01.000Z",
+      summary: {
+        project_ref: projectRef,
+        track_count: 1,
+        item_count: 0,
+        fixture: "openreaper_alpha_package_smoke_revision_refresh",
+      },
+      payload: packageProjectObservationBundlePayload(projectRef, state.track_name),
+    }),
+  });
   await writeArtifactStateStoreEnvelope({
     artifactRoot,
     envelope: createArtifactStateStoreEnvelope({
@@ -986,7 +1012,7 @@ async function smokePackagedProjectIndexLifecycle({
   const changedRequestsResponse = respondToPackagedBridgeRequests({
     transportDir,
     bridge: packageBridge,
-    count: 4,
+    count: 3,
   });
   const [changed, changedRequests] = await Promise.all([
     changedResponse.then(parseJsonToolResult),
@@ -999,12 +1025,11 @@ async function smokePackagedProjectIndexLifecycle({
     changed.sqlite?.revision !== "reaper-change-count:2" ||
     changedRows.length !== 1 ||
     changedRows[0]?.name !== state.track_name ||
-    changed.result?.data?.refresh?.call_count !== 3 ||
+    changed.result?.data?.refresh?.call_count !== 1 ||
     JSON.stringify(changedRequests.map((request) => request.operation?.name)) !== JSON.stringify([
       "project.read_summary",
-      "project.create_project_map_snapshot",
-      "tracks.list_tracks",
-      "tracks.read_mixer_controls",
+      "project.create_observation_bundle",
+      "project.read_summary",
     ])
   ) {
     throw new Error(`Packaged MCP revision refresh smoke failed: ${JSON.stringify({ changed, requests: changedRequests.map((request) => request.operation?.name) })}`);
@@ -1105,6 +1130,8 @@ function packageProjectObservationBundlePayload(projectRef, trackName) {
       project_ref: projectRef,
       track_count: 1,
       item_count: 0,
+      track_cursor: 0,
+      returned_track_count: 1,
       truncated: false,
       tracks: [{ ...track, items: [] }],
       selected_items: [],
@@ -1191,12 +1218,19 @@ function createOperationAwarePackageSmokeBridge({
           }
         : null;
       const producedArtifactRef = operationName === "project.create_observation_bundle"
-        ? observationArtifactRef
+        ? state.observation_artifact_ref ?? observationArtifactRef
         : operationName === "project.create_project_map_snapshot"
           ? projectMapArtifactRef
           : null;
       const observationReadback = producedArtifactRef
-        ? { project_ref: projectRef, artifact_ref: producedArtifactRef }
+        ? {
+            project_ref: projectRef,
+            artifact_ref: producedArtifactRef,
+            track_count: 1,
+            track_cursor: request?.params?.track_cursor ?? 0,
+            returned_track_count: 1,
+            map_truncated: false,
+          }
         : null;
       const projectIndexReadback = packageProjectIndexReadback(request, { projectRef, state });
       if ((!summary && !revisionReadback && !observationReadback && !projectIndexReadback) || result?.ok !== true) return result;
@@ -3736,6 +3770,31 @@ async function removeDsStore(root) {
       await removeDsStore(fullPath);
     }
   }
+}
+
+export async function scrubPackagedRuntimeState(root) {
+  await rm(path.join(root, "session"), { recursive: true, force: true });
+  return assertPackagedRuntimeStateClean(root);
+}
+
+export async function assertPackagedRuntimeStateClean(root) {
+  const forbidden = await collectNamedFiles(root, (name) => {
+    const lower = name.toLowerCase();
+    return lower.endsWith(".sqlite")
+      || lower.endsWith(".sqlite-wal")
+      || lower.endsWith(".sqlite-shm")
+      || lower.endsWith(".db")
+      || lower.endsWith(".rpp")
+      || lower.endsWith(".rpp-bak");
+  });
+  if (forbidden.length > 0) {
+    throw new Error(`Package contains runtime state: ${forbidden.map((entry) => path.relative(root, entry)).join(", ")}`);
+  }
+  return Object.freeze({
+    ok: true,
+    session_state_removed: true,
+    forbidden_runtime_file_count: 0,
+  });
 }
 
 async function assertReadable(filePath) {

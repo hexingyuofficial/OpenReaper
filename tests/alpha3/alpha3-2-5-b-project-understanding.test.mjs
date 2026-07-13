@@ -114,6 +114,8 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.deepEqual(state.calls, [
         "project.read_summary",
         "project.create_observation_bundle",
+        "project.read_summary",
+        "project.create_observation_bundle",
         "project.read_dirty_state",
         "render.settings.read",
       ]);
@@ -126,7 +128,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(warm.ok, true, JSON.stringify(warm));
       assert.equal(warm.sqlite.source, "warm_index");
       assert.equal(warm.result.data.refresh.call_count, 0);
-      assert.deepEqual(state.calls.slice(4), [
+      assert.deepEqual(state.calls.slice(6), [
         "project.read_summary",
         "project.read_dirty_state",
         "render.settings.read",
@@ -169,6 +171,8 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       const observationRequest = state.atomicRequests.find((entry) => entry.operation.name === "project.create_observation_bundle");
       assert.equal(observationRequest.budget.max_inline_value_bytes, 24_576);
       assert.equal(observationRequest.params.max_tracks, 32);
+      assert.equal(firstPage.result.data.refresh.revision_probe_count, 1);
+      assert.equal(firstPage.result.data.refresh.logical_refresh.coverage.tracks, "complete");
 
       const exactLast = await runtime.call_template({
         id: "macro.project.query",
@@ -209,6 +213,88 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(reopenedExactLast.ok, true, JSON.stringify(reopenedExactLast));
       assert.equal(reopenedExactLast.result.data.rows[0].name, trackNames.at(-1));
       assert.equal(reopenedExactLast.result.data.coverage.indexed_row_count, 14);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("merges hidden physical pages before exposing one complete forty-track logical scope", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 40 }, (_, index) => `Chunked ${String(index + 1).padStart(2, "0")}`);
+    const state = { revision: 40, trackName: trackNames[0], trackNames, calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          fields: ["name", "index"],
+          filters: { name: trackNames.at(-1) },
+          refresh_policy: "if_stale",
+          limit: 1,
+        },
+        context: callContext(1),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.data.rows[0].name, trackNames.at(-1));
+      assert.equal(result.result.data.rows[0].index, 39);
+      assert.equal(result.result.data.coverage.known_total_row_count, 40);
+      assert.equal(result.result.data.coverage.indexed_row_count, 40);
+      assert.equal(result.result.data.coverage.public_returned_row_count, 1);
+      assert.equal(result.result.data.refresh.call_count, 2);
+      assert.equal(result.result.data.refresh.logical_refresh.chunk_count, 2);
+      assert.equal(result.result.data.refresh.logical_refresh.row_counts.tracks, 40);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 40);
+      assert.deepEqual(
+        state.atomicRequests
+          .filter((entry) => entry.operation.name === "project.create_observation_bundle")
+          .map((entry) => entry.params.track_cursor),
+        [0, 32],
+      );
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("discards a mixed forty-track snapshot and retries once when REAPER changes between chunking and commit", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 40 }, (_, index) => `Retry ${String(index + 1).padStart(2, "0")}`);
+    const state = {
+      revision: 1,
+      trackName: trackNames[0],
+      trackNames,
+      calls: [],
+      atomicRequests: [],
+      bumpRevisionAfterObservationCount: 2,
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 1 },
+        context: callContext(1),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.sqlite.revision, "reaper-change-count:2");
+      assert.equal(result.result.data.refresh.call_count, 4);
+      assert.equal(result.result.data.refresh.revision_probe_count, 2);
+      assert.equal(result.result.data.refresh.logical_refresh.attempt_count, 2);
+      assert.equal(result.result.data.refresh.logical_refresh.row_counts.tracks, 40);
+      assert.deepEqual(
+        state.atomicRequests
+          .filter((entry) => entry.operation.name === "project.create_observation_bundle")
+          .map((entry) => entry.params.track_cursor),
+        [0, 32, 0, 32],
+      );
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 40);
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();
@@ -419,19 +505,36 @@ function createRuntime({ fixture, indexRuntime, state }) {
         request.operation.name === "project.create_observation_bundle"
         || request.operation.name === "project.create_project_map_snapshot"
       ) {
+        state.observationCallCount = (state.observationCallCount ?? 0) + 1;
         const scope = request.operation.name === "project.create_observation_bundle"
           ? "observation_bundle"
           : "project_map_snapshot";
         response.result.summary = {
           artifact_ref: `artifact:project:${scope}:art_20260712060000000_001_abcdef`,
           project_ref: projectRef,
+          track_count: state.trackNames?.length ?? 1,
+          track_cursor: request.params.track_cursor ?? 0,
+          returned_track_count: Math.min(
+            request.params.max_tracks ?? 32,
+            Math.max(0, (state.trackNames?.length ?? 1) - (request.params.track_cursor ?? 0)),
+          ),
+          map_truncated: (request.params.track_cursor ?? 0) + (request.params.max_tracks ?? 32) < (state.trackNames?.length ?? 1),
         };
+        if (response.result.summary.map_truncated) {
+          response.result.summary.next_track_cursor = String(
+            (request.params.track_cursor ?? 0) + (request.params.max_tracks ?? 32),
+          );
+        }
         response.result.readback = response.result.summary;
         response.result.refs = [{
           kind: "artifact",
           ref: response.result.summary.artifact_ref,
           identity: { scheme: "artifact_ref", value: response.result.summary.artifact_ref },
         }];
+        if (state.observationCallCount === state.bumpRevisionAfterObservationCount) {
+          state.revision += 1;
+          state.bumpRevisionAfterObservationCount = null;
+        }
       } else if (
         request.operation.name === "tracks.list_tracks"
         || request.operation.name === "tracks.read_mixer_controls"
@@ -479,9 +582,14 @@ function createRuntime({ fixture, indexRuntime, state }) {
 
   return createCallTemplateRuntime({
     projectIndexRuntime: indexRuntime,
-    projectIndexArtifactReader: async ({ template_id }) => ({
+    projectIndexArtifactReader: async ({ template_id, execution }) => ({
       payload: template_id === "template.project.create_observation_bundle"
-        ? observationBundlePayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName])
+        ? observationBundlePayload(
+            indexRuntime.identity.project_ref,
+            state.trackNames ?? [state.trackName],
+            execution?.result?.readback?.track_cursor ?? 0,
+            execution?.result?.readback?.returned_track_count ?? 32,
+          )
         : projectMapPayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName]),
     }),
     live: {
@@ -493,10 +601,10 @@ function createRuntime({ fixture, indexRuntime, state }) {
   });
 }
 
-function observationBundlePayload(projectRef, trackNames) {
+function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTracks = 32) {
   return {
     project_ref: projectRef,
-    project_map: projectOverview(projectRef, trackNames),
+    project_map: projectOverview(projectRef, trackNames, trackCursor, maxTracks),
     markers_regions: {
       items: [{
         ref: "region:index:1",
@@ -525,25 +633,32 @@ function projectMapPayload(projectRef, trackNames) {
   };
 }
 
-function projectOverview(projectRef, trackNames) {
+function projectOverview(projectRef, trackNames, trackCursor = 0, maxTracks = 32) {
   const names = Array.isArray(trackNames) ? trackNames : [trackNames];
+  const end = Math.min(names.length, trackCursor + maxTracks);
   return {
     project_ref: projectRef,
     track_count: names.length,
     item_count: 1,
-    truncated: false,
-    tracks: names.map((name, index) => ({
-      track_ref: `track:guid:{TRACK-${index + 1}}`,
-      name,
-      index,
-      items: index === 0 ? [{
-        item_ref: "item:guid:{ITEM-1}",
-        track_ref: "track:guid:{TRACK-1}",
-        start_seconds: 0,
-        end_seconds: 4,
-        active_take_ref: "take:guid:{TAKE-1}",
-      }] : [],
-    })),
+    track_cursor: trackCursor,
+    returned_track_count: end - trackCursor,
+    truncated: end < names.length,
+    ...(end < names.length ? { next_track_cursor: String(end) } : {}),
+    tracks: names.slice(trackCursor, end).map((name, offset) => {
+      const index = trackCursor + offset;
+      return {
+        track_ref: `track:guid:{TRACK-${index + 1}}`,
+        name,
+        index,
+        items: index === 0 ? [{
+          item_ref: "item:guid:{ITEM-1}",
+          track_ref: "track:guid:{TRACK-1}",
+          start_seconds: 0,
+          end_seconds: 4,
+          active_take_ref: "take:guid:{TAKE-1}",
+        }] : [],
+      };
+    }),
     selected_items: [],
   };
 }

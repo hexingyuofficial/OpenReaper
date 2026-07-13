@@ -30,6 +30,8 @@ const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_RESULT_DATA_BYTES = 18_000;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
+const PROJECT_INDEX_MAX_TRACK_CHUNKS = 128;
+const PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS = 2;
 const PROJECT_INDEX_HYDRATION_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
   max_items: 128,
@@ -253,8 +255,9 @@ async function executeProjectQuery({
 
   const refreshPolicy = request.input?.refresh_policy ?? "if_stale";
   const shouldProbeRevision = typeof executeAtomic === "function" && refreshPolicy !== "never";
+  let revision = null;
   if (shouldProbeRevision) {
-    const revision = await runRevisionProbe({
+    revision = await runRevisionProbe({
       request,
       projectIndexRuntime,
       executeAtomic,
@@ -300,6 +303,7 @@ async function executeProjectQuery({
     catalog,
     executeAtomic,
     forceColdBundle: initialCold && refreshPolicy !== "never",
+    expectedRevision: revisionKey(revision),
     now,
   });
   stages.push(stageResult(
@@ -459,14 +463,38 @@ async function executeProjectInspect({
     }, { projectIndex: projectIndexRuntime?.adapter, catalog });
     return planned.ok !== true;
   });
-  const hydration = needsHydration
-    ? await runHydrationRequests({
+  let hydration = emptyHydration("Matching fresh SQLite project state was reused.");
+  if (needsHydration) {
+    if (requestedEntities.includes("tracks")) {
+      const tracksHydration = await runCompleteTrackRefresh({
+          request,
+          projectIndexRuntime,
+          executeAtomic,
+          expectedRevision: revisionKey(revision),
+          now,
+        });
+      if (!tracksHydration.ok) {
+        hydration = tracksHydration;
+      } else if (requestedEntities.some((entity) => !["status", "tracks"].includes(entity))) {
+        const supplemental = await runHydrationRequests({
+          requests: [coldObservationBundleRequest()],
+          request,
+          projectIndexRuntime,
+          executeAtomic,
+        });
+        hydration = mergeHydrationResults(tracksHydration, supplemental);
+      } else {
+        hydration = tracksHydration;
+      }
+    } else {
+      hydration = await runHydrationRequests({
         requests: [coldObservationBundleRequest()],
         request,
         projectIndexRuntime,
         executeAtomic,
-      })
-    : emptyHydration("Matching fresh SQLite project state was reused.");
+      });
+    }
+  }
   stages.push(stageResult(
     "inspect-index-hydrate",
     "sqlite_hydrate",
@@ -609,6 +637,7 @@ async function hydrateForQuery({
   catalog,
   executeAtomic,
   forceColdBundle,
+  expectedRevision,
   now = () => new Date(),
 }) {
   const refreshPolicy = request.input?.refresh_policy ?? "if_stale";
@@ -627,6 +656,8 @@ async function hydrateForQuery({
   const evidenceRefs = [];
   const seen = new Set();
   const objectRefs = new Map();
+  let logicalRefresh = null;
+  let revisionProbeCount = 0;
   if (forceRefresh && !forceColdBundle) {
     const scope = refreshScopeForEntity(request.input?.entity);
     if (scope && typeof projectIndexRuntime?.invalidateScopes === "function") {
@@ -643,7 +674,23 @@ async function hydrateForQuery({
       }
     }
   }
-  if (forceColdBundle) {
+  const completeTracks = request.input?.entity === "tracks"
+    && (forceColdBundle || forceRefresh || plan.ok !== true);
+  if (completeTracks) {
+    const cold = await runCompleteTrackRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision,
+      now,
+    });
+    if (!cold.ok) return cold;
+    executions.push(...cold.executions);
+    artifactRefs.push(...cold.artifactRefs);
+    evidenceRefs.push(...cold.evidenceRefs);
+    logicalRefresh = cold.logicalRefresh ?? null;
+    revisionProbeCount += cold.revisionProbeCount ?? 0;
+  } else if (forceColdBundle) {
     const cold = await runHydrationRequests({
       requests: [coldObservationBundleRequest()],
       request,
@@ -705,10 +752,217 @@ async function hydrateForQuery({
     evidenceRefs: unique(evidenceRefs),
     blockers: [],
     error: null,
+    logicalRefresh,
+    revisionProbeCount,
     summary: executions.length > 0
       ? `Executed ${executions.length} bounded read-only Project Index refresh call(s).`
       : "Matching fresh SQLite rows were reused.",
   };
+}
+
+function mergeHydrationResults(primary, supplemental) {
+  if (primary?.ok !== true) return primary;
+  if (supplemental?.ok !== true) {
+    return {
+      ...supplemental,
+      executions: [...(primary.executions ?? []), ...(supplemental.executions ?? [])],
+      artifactRefs: unique([...(primary.artifactRefs ?? []), ...(supplemental.artifactRefs ?? [])]),
+      evidenceRefs: unique([...(primary.evidenceRefs ?? []), ...(supplemental.evidenceRefs ?? [])]),
+      logicalRefresh: primary.logicalRefresh ?? null,
+      revisionProbeCount: (primary.revisionProbeCount ?? 0) + (supplemental.revisionProbeCount ?? 0),
+    };
+  }
+  const executions = [...(primary.executions ?? []), ...(supplemental.executions ?? [])];
+  return {
+    ok: true,
+    executions,
+    artifactRefs: unique([...(primary.artifactRefs ?? []), ...(supplemental.artifactRefs ?? [])]),
+    evidenceRefs: unique([...(primary.evidenceRefs ?? []), ...(supplemental.evidenceRefs ?? [])]),
+    blockers: [],
+    error: null,
+    logicalRefresh: primary.logicalRefresh ?? supplemental.logicalRefresh ?? null,
+    revisionProbeCount: (primary.revisionProbeCount ?? 0) + (supplemental.revisionProbeCount ?? 0),
+    summary: `${primary.summary} ${supplemental.summary}`,
+  };
+}
+
+async function runCompleteTrackRefresh({
+  request,
+  projectIndexRuntime,
+  executeAtomic,
+  expectedRevision,
+  now = () => new Date(),
+}) {
+  if (
+    typeof projectIndexRuntime?.beginLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.commitLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.abortLogicalRefresh !== "function"
+  ) {
+    return hydrationFailure(
+      "PROJECT_INDEX_LOGICAL_REFRESH_UNAVAILABLE",
+      "Complete track hydration requires the managed Project Index logical-refresh transaction runtime.",
+    );
+  }
+  if (typeof expectedRevision !== "string") {
+    return hydrationFailure(
+      "PROJECT_INDEX_REFRESH_REVISION_REQUIRED",
+      "Complete track hydration requires a validated REAPER revision before reading physical chunks.",
+    );
+  }
+
+  const executions = [];
+  const artifactRefs = [];
+  const evidenceRefs = [];
+  let revisionProbeCount = 0;
+  let attemptRevision = expectedRevision;
+
+  for (let attempt = 1; attempt <= PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS; attempt += 1) {
+    const observedAt = safeNowIso(now);
+    const begun = projectIndexRuntime.beginLogicalRefresh({
+      scopes: ["tracks"],
+      expected_revision: attemptRevision,
+      observed_at: observedAt,
+    });
+    if (begun?.ok !== true || typeof begun.transaction_id !== "string") {
+      return hydrationFailure(
+        begun?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_BEGIN_FAILED",
+        begun?.blockers?.[0]?.message ?? "Project Index logical track refresh could not begin.",
+        begun?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const transactionId = begun.transaction_id;
+    const attemptExecutionStart = executions.length;
+    let cursor = 0;
+    let declaredTrackCount = null;
+    let completed = false;
+
+    for (let chunkIndex = 0; chunkIndex < PROJECT_INDEX_MAX_TRACK_CHUNKS; chunkIndex += 1) {
+      const child = coldObservationBundleRequest(cursor);
+      const execution = await executeAtomic({
+        id: child.id,
+        input: child.input,
+        refs: child.refs,
+        context: request.context,
+        budget: PROJECT_INDEX_HYDRATION_BUDGET,
+        observeProjectIndex: true,
+        projectIndexObservationContext: {
+          logical_refresh: { transaction_id: transactionId },
+        },
+      });
+      executions.push(execution);
+      evidenceRefs.push(...executionEvidenceRefs(execution));
+      artifactRefs.push(...executionArtifactRefs(execution));
+      if (execution?.ok !== true || execution?.result?.project_index_observation?.ok !== true) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "chunk_observation_failed", observed_at: safeNowIso(now) });
+        const failed = execution?.ok === true
+          ? {
+              error: {
+                code: execution.result?.project_index_observation?.blockers?.[0]?.code ?? "PROJECT_INDEX_OBSERVATION_FAILED",
+                message: "A physical track chunk was not accepted into logical-refresh staging.",
+              },
+              blockers: execution.result?.project_index_observation?.blockers ?? [],
+            }
+          : readFailure(child.id, execution);
+        return hydrationFailure(failed.error.code, failed.error.message, failed.blockers, { executions, artifactRefs, evidenceRefs });
+      }
+
+      const readback = executionReadback(execution);
+      const chunkFacts = trackChunkFacts(readback, cursor, declaredTrackCount);
+      if (!chunkFacts.ok) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: chunkFacts.code, observed_at: safeNowIso(now) });
+        return hydrationFailure(chunkFacts.code, chunkFacts.message, [chunkFacts.blocker], { executions, artifactRefs, evidenceRefs });
+      }
+      declaredTrackCount = chunkFacts.track_count;
+      if (!chunkFacts.truncated) {
+        completed = true;
+        break;
+      }
+      cursor = chunkFacts.next_cursor;
+    }
+
+    if (!completed) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "chunk_limit_exceeded", observed_at: safeNowIso(now) });
+      return hydrationFailure(
+        "PROJECT_INDEX_TRACK_CHUNK_LIMIT_EXCEEDED",
+        `Complete track hydration exceeded ${PROJECT_INDEX_MAX_TRACK_CHUNKS} hidden physical chunks and was not committed.`,
+        [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const postRevision = await runRevisionProbe({ request, projectIndexRuntime, executeAtomic });
+    revisionProbeCount += 1;
+    evidenceRefs.push(...(postRevision.evidenceRefs ?? []));
+    artifactRefs.push(...(postRevision.artifactRefs ?? []));
+    if (!postRevision.ok) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "post_revision_probe_failed", observed_at: safeNowIso(now) });
+      return hydrationFailure(postRevision.error.code, postRevision.error.message, postRevision.blockers, { executions, artifactRefs, evidenceRefs });
+    }
+
+    const observedRevision = revisionKey(postRevision);
+    if (observedRevision !== attemptRevision) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "revision_changed_during_refresh", observed_at: safeNowIso(now) });
+      if (attempt < PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS && typeof observedRevision === "string") {
+        attemptRevision = observedRevision;
+        continue;
+      }
+      return hydrationFailure(
+        "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+        "REAPER changed while Project Index track chunks were being read; the mixed snapshot was discarded.",
+        [{
+          code: "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+          message: `Expected ${attemptRevision}, observed ${String(observedRevision)} after hydration.`,
+          recoverable: true,
+        }],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const committed = projectIndexRuntime.commitLogicalRefresh({
+      transaction_id: transactionId,
+      observed_revision: observedRevision,
+      observed_at: safeNowIso(now),
+    });
+    if (committed?.ok !== true) {
+      return hydrationFailure(
+        committed?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_COMMIT_FAILED",
+        committed?.blockers?.[0]?.message ?? "Complete track hydration could not be committed atomically.",
+        committed?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+    return {
+      ok: true,
+      executions,
+      artifactRefs: unique(artifactRefs),
+      evidenceRefs: unique(evidenceRefs),
+      blockers: [],
+      error: null,
+      revisionProbeCount,
+      logicalRefresh: {
+        status: "committed",
+        transaction_id: transactionId,
+        attempt_count: attempt,
+        chunk_count: executions.length - attemptExecutionStart,
+        expected_revision: attemptRevision,
+        observed_revision: observedRevision,
+        declared_track_count: declaredTrackCount,
+        applied_scopes: committed.applied_scopes ?? ["tracks"],
+        row_counts: committed.row_counts ?? {},
+        coverage: committed.coverage ?? { tracks: "complete" },
+      },
+      summary: `Merged ${executions.length} hidden physical track chunk(s) and committed one complete logical scope.`,
+    };
+  }
+
+  return hydrationFailure(
+    "PROJECT_INDEX_LOGICAL_REFRESH_RETRY_EXHAUSTED",
+    "Complete track hydration exhausted its bounded retry policy without a stable REAPER revision.",
+    [],
+    { executions, artifactRefs, evidenceRefs },
+  );
 }
 
 async function runRevisionProbe({ request, projectIndexRuntime, executeAtomic }) {
@@ -1157,17 +1411,19 @@ function hydrationEvidence(hydration) {
     call_count: hydration.executions.length,
     template_ids: unique(hydration.executions.map((execution) => execution?.template?.id).filter(Boolean)),
     artifact_refs: hydration.artifactRefs,
+    revision_probe_count: hydration.revisionProbeCount ?? 0,
+    logical_refresh: hydration.logicalRefresh ?? null,
   };
 }
 
-function coldObservationBundleRequest() {
+function coldObservationBundleRequest(trackCursor = 0) {
   return {
     id: OBSERVATION_BUNDLE_ID,
     input: {
       max_tracks: PROJECT_INDEX_HYDRATION_TRACK_LIMIT,
       max_items_per_track: 4,
       max_selected_items: 32,
-      track_cursor: 0,
+      track_cursor: trackCursor,
       marker_region_limit: 128,
       tempo_marker_limit: 64,
       include_transport: false,
@@ -1176,6 +1432,72 @@ function coldObservationBundleRequest() {
     refs: [],
     read_only: true,
   };
+}
+
+function revisionKey(probe) {
+  const changeCount = probe?.readback?.change_count;
+  return Number.isInteger(changeCount) && changeCount >= 0
+    ? `reaper-change-count:${changeCount}`
+    : null;
+}
+
+function trackChunkFacts(readback, expectedCursor, priorTrackCount) {
+  const trackCount = readback?.track_count;
+  const trackCursor = readback?.track_cursor;
+  const returnedTrackCount = readback?.returned_track_count;
+  const truncated = readback?.map_truncated;
+  const invalid = (code, message, details = {}) => ({
+    ok: false,
+    code,
+    message,
+    blocker: { code, message, recoverable: true, details },
+  });
+  if (!Number.isInteger(trackCount) || trackCount < 0) {
+    return invalid("PROJECT_INDEX_TRACK_COUNT_INVALID", "A hidden track chunk did not report a non-negative REAPER track_count.");
+  }
+  if (priorTrackCount !== null && trackCount !== priorTrackCount) {
+    return invalid(
+      "PROJECT_INDEX_TRACK_COUNT_CHANGED",
+      "REAPER track_count changed between hidden physical chunks.",
+      { expected_track_count: priorTrackCount, observed_track_count: trackCount },
+    );
+  }
+  if (!Number.isInteger(trackCursor) || trackCursor !== expectedCursor) {
+    return invalid(
+      "PROJECT_INDEX_TRACK_CURSOR_MISMATCH",
+      "A hidden track chunk did not echo the requested cursor.",
+      { expected_cursor: expectedCursor, observed_cursor: trackCursor },
+    );
+  }
+  if (!Number.isInteger(returnedTrackCount) || returnedTrackCount < 0) {
+    return invalid("PROJECT_INDEX_RETURNED_TRACK_COUNT_INVALID", "A hidden track chunk did not report a non-negative returned_track_count.");
+  }
+  if (typeof truncated !== "boolean") {
+    return invalid("PROJECT_INDEX_TRACK_TRUNCATION_INVALID", "A hidden track chunk did not report map_truncated truthfully.");
+  }
+  if (!truncated && trackCursor + returnedTrackCount < trackCount) {
+    return invalid(
+      "PROJECT_INDEX_TRACK_CHUNK_INCOMPLETE",
+      "The final hidden track chunk ended before the declared REAPER track total.",
+      { track_count: trackCount, track_cursor: trackCursor, returned_track_count: returnedTrackCount },
+    );
+  }
+  if (!truncated) {
+    return { ok: true, track_count: trackCount, truncated: false, next_cursor: null };
+  }
+  const nextCursor = typeof readback.next_track_cursor === "string" && /^(?:0|[1-9][0-9]*)$/u.test(readback.next_track_cursor)
+    ? Number(readback.next_track_cursor)
+    : Number.isInteger(readback.next_track_cursor)
+      ? readback.next_track_cursor
+      : null;
+  if (!Number.isInteger(nextCursor) || nextCursor <= expectedCursor || nextCursor > trackCount) {
+    return invalid(
+      "PROJECT_INDEX_TRACK_CURSOR_NO_PROGRESS",
+      "A truncated hidden track chunk did not provide a strictly advancing next_track_cursor.",
+      { expected_cursor: expectedCursor, next_track_cursor: readback.next_track_cursor, track_count: trackCount },
+    );
+  }
+  return { ok: true, track_count: trackCount, truncated: true, next_cursor: nextCursor };
 }
 
 function inspectEntities(include) {

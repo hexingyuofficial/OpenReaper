@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import {
   chmod,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -58,7 +61,9 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       const runtime = await openRuntime(fixture);
       assert.equal(runtime.contract, ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT);
       assert.equal(runtime.ok, true);
-      assert.equal(runtime.db_path, path.join(fixture.stateRoot, ALPHA3_2D_PROJECT_INDEX_DB_BASENAME));
+      assert.equal(path.dirname(runtime.db_path), fixture.stateRoot);
+      assert.match(path.basename(runtime.db_path), /^openreaper-project-index\.[a-f0-9]{24}\.sqlite$/);
+      assert.notEqual(runtime.db_path, path.join(fixture.stateRoot, ALPHA3_2D_PROJECT_INDEX_DB_BASENAME));
       assert.notEqual(runtime.db_path.includes("/Documents/openreaper/"), true);
       const status = runtime.status();
       assert.equal(status.backend, sqliteAvailable() ? "sqlite_file_adapter" : "resident_memory_fallback");
@@ -66,12 +71,40 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       assert.equal(status.bridge_owner, "bridge:alpha3.2d:test");
       assert.equal(status.bridge_generation, 7);
       assert.match(status.session_id, /^session:alpha3\.2d:[a-f0-9]{32}$/);
+      assert.equal(status.ownership.mode, "process_isolated");
+      assert.equal(status.ownership.shared_between_processes, false);
+      assert.equal(status.ownership.peer_database_unlink_allowed, false);
+      assert.equal(status.ownership.recovery_scope, "owned_database_only");
+      assert.equal(status.ownership.db_path, runtime.db_path);
       assert.equal(status.rows_available, true);
       assert.equal(status.snapshot_id, null);
       assert.equal(status.revision, null);
       assert.equal(status.freshness_token, null);
       assert.equal(typeof runtime.adapter.snapshot, "function");
       assert.equal(runtime.close().lifecycle, "closed");
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects a symlink substituted at the process-isolated database path", async () => {
+    if (!await hasSqlite()) return;
+    const fixture = await makeFixture();
+    const externalDb = path.join(fixture.root, "external-owned.sqlite");
+    try {
+      const initial = await openRuntime(fixture, { processIdentity: "symlink-owner" });
+      const dbPath = initial.db_path;
+      initial.close();
+      await unlink(dbPath);
+      await writeFile(externalDb, "external\n");
+      await symlink(externalDb, dbPath);
+
+      const blocked = await openRuntime(fixture, { processIdentity: "symlink-owner" });
+      assert.equal(blocked.ok, false);
+      assert.equal(blocked.status().degraded_reason, "INDEX_DB_SYMLINK");
+      assert.equal(blocked.status().ownership.mode, "process_isolated");
+      assert.equal(blocked.status().ownership.db_path, dbPath);
+      assert.deepEqual(await readFile(externalDb, "utf8"), "external\n");
     } finally {
       await fixture.cleanup();
     }
@@ -566,6 +599,215 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("stages three hidden artifact pages and atomically commits complete 40-track knowledge only after revision confirmation", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{PREVIOUS}", name: "Previous" }],
+        track_count: 1,
+        truncated: false,
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, {
+        project_ref: identity.project_ref,
+        change_count: 41,
+        track_count: 40,
+      }));
+      const started = runtime.beginLogicalRefresh({
+        scopes: ["tracks"],
+        expected_revision: "reaper-change-count:41",
+        declared_track_count: 40,
+        observed_at: NOW,
+      });
+      assert.equal(started.ok, true);
+      assert.equal(started.sqlite_updated, false);
+      assert.match(started.transaction_id, /^logical-refresh:/);
+      const transactionId = started.transaction_id;
+
+      for (const [cursor, count] of [[0, 16], [16, 16], [32, 8]]) {
+        const nextCursor = cursor + count < 40 ? cursor + count : null;
+        const artifactRef = `artifact:alpha3.3:logical-tracks-${cursor}`;
+        const tracks = Array.from({ length: count }, (_, offset) => {
+          const index = cursor + offset;
+          return { track_ref: `track:guid:{LOGICAL-${index + 1}}`, name: `Logical ${index + 1}`, index, items: [] };
+        });
+        const summary = {
+          artifact_ref: artifactRef,
+          project_ref: identity.project_ref,
+          track_count: 40,
+          track_cursor: cursor,
+          returned_track_count: count,
+          next_track_cursor: nextCursor === null ? null : String(nextCursor),
+          truncated: nextCursor !== null,
+        };
+        const envelope = execution("template.project.create_observation_bundle", identity, summary, {
+          logical_refresh: { transaction_id: transactionId, scope: "tracks" },
+        });
+        envelope.result = {
+          readback: summary,
+          refs: [{ kind: "artifact", ref: artifactRef }],
+        };
+        const pending = runtime.observeSuccessfulTemplateExecution(envelope);
+        assert.equal(pending.ok, false);
+        assert.equal(pending.blockers[0].code, "ARTIFACT_PAYLOAD_REQUIRED");
+
+        const staged = runtime.observeArtifactPayload({
+          ...identity,
+          artifactRef,
+          templateId: "template.project.create_observation_bundle",
+          validated: true,
+          payload: {
+            project_ref: identity.project_ref,
+            project_map: {
+              project_ref: identity.project_ref,
+              track_count: 40,
+              item_count: 0,
+              track_cursor: cursor,
+              returned_track_count: count,
+              next_track_cursor: nextCursor === null ? null : String(nextCursor),
+              truncated: nextCursor !== null,
+              tracks,
+              selected_items: [],
+            },
+            coverage: { project_map: nextCursor === null ? "complete_page" : "paged_partial" },
+          },
+        });
+        assert.equal(staged.ok, true, JSON.stringify(staged));
+        assert.equal(staged.status, "logical_refresh_page_staged");
+        assert.equal(staged.sqlite_updated, false);
+        assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PREVIOUS}"]);
+      }
+
+      assert.equal(runtime.status().logical_refreshes_staged, 1);
+      const committed = runtime.commitLogicalRefresh({
+        transaction_id: transactionId,
+        observed_revision: "reaper-change-count:41",
+        observed_at: NOW,
+      });
+      assert.equal(committed.ok, true, JSON.stringify(committed));
+      assert.equal(committed.status, "logical_refresh_committed");
+      assert.equal(committed.page_count, 3);
+      assert.equal(committed.row_count, 40);
+      assert.deepEqual(committed.applied_scopes, ["tracks"]);
+      assert.deepEqual(committed.row_counts, { tracks: 40 });
+      assert.deepEqual(committed.coverage, { tracks: "complete" });
+      assert.equal(committed.sqlite_updated, true);
+      const snapshot = runtime.adapter.snapshot();
+      assert.equal(snapshot.rows.tracks.length, 40);
+      assert.equal(snapshot.rows.tracks.at(-1).ref, "track:guid:{LOGICAL-40}");
+      assert.equal(snapshot.freshness_scopes.tracks.coverage_status, "complete");
+      assert.equal(runtime.status().revision, "reaper-change-count:41");
+      assert.equal(runtime.status().logical_refreshes_staged, 0);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("discards gapped, incomplete, duplicate-count, or revision-mismatched logical refreshes without replacing prior SQLite rows", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{KEEP-LOGICAL}", name: "Keep Logical" }],
+        track_count: 1,
+        truncated: false,
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, {
+        project_ref: identity.project_ref,
+        change_count: 41,
+        track_count: 1,
+      }));
+      const priorRows = () => runtime.adapter.snapshot().rows.tracks.map((row) => row.ref);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "gap", expected_revision: "reaper-change-count:41", declared_track_count: 3 }).ok, true);
+      assert.equal(runtime.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", identity, {
+        tracks: [
+          { track_ref: "track:guid:{GAP-1}", index: 0 },
+          { track_ref: "track:guid:{GAP-2}", index: 1 },
+        ],
+        track_count: 3,
+        track_cursor: 0,
+        returned_track_count: 2,
+        next_track_cursor: "2",
+        truncated: true,
+      }, { logical_refresh: { transaction_id: "gap" } })).ok, true);
+      assert.equal(runtime.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{GAP-3}", index: 2 }],
+        track_count: 3,
+        track_cursor: 3,
+        returned_track_count: 1,
+        next_track_cursor: null,
+        truncated: false,
+      }, { logical_refresh: { transaction_id: "gap" } })).ok, true);
+      const gap = runtime.commitLogicalRefresh({ transaction_id: "gap", observed_revision: "reaper-change-count:41" });
+      assert.equal(gap.ok, false);
+      assert.equal(gap.blockers[0].code, "LOGICAL_REFRESH_CURSOR_GAP");
+      assert.deepEqual(priorRows(), ["track:guid:{KEEP-LOGICAL}"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "incomplete", expected_revision: "reaper-change-count:41", declared_track_count: 2 }).ok, true);
+      assert.equal(runtime.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{INCOMPLETE-1}", index: 0 }],
+        track_count: 2,
+        track_cursor: 0,
+        returned_track_count: 1,
+        next_track_cursor: "1",
+        truncated: true,
+      }, { logical_refresh: { transaction_id: "incomplete" } })).ok, true);
+      const incomplete = runtime.commitLogicalRefresh({ transaction_id: "incomplete", observed_revision: "reaper-change-count:41" });
+      assert.equal(incomplete.ok, false);
+      assert.equal(incomplete.blockers[0].code, "LOGICAL_REFRESH_COVERAGE_INCOMPLETE");
+      assert.deepEqual(priorRows(), ["track:guid:{KEEP-LOGICAL}"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "duplicates", expected_revision: "reaper-change-count:41", declared_track_count: 2 }).ok, true);
+      assert.equal(runtime.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", identity, {
+        tracks: [
+          { track_ref: "track:guid:{DUPLICATE}", index: 0 },
+          { track_ref: "track:guid:{DUPLICATE}", index: 1 },
+        ],
+        track_count: 2,
+        track_cursor: 0,
+        returned_track_count: 1,
+        next_track_cursor: null,
+        truncated: false,
+      }, { logical_refresh: { transaction_id: "duplicates" } })).ok, true);
+      const duplicates = runtime.commitLogicalRefresh({ transaction_id: "duplicates", observed_revision: "reaper-change-count:41" });
+      assert.equal(duplicates.ok, false);
+      assert.equal(duplicates.blockers[0].code, "LOGICAL_REFRESH_TRACK_COUNT_MISMATCH");
+      assert.deepEqual(priorRows(), ["track:guid:{KEEP-LOGICAL}"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "revision", expected_revision: "reaper-change-count:41", declared_track_count: 1 }).ok, true);
+      assert.equal(runtime.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", identity, {
+        tracks: [{ track_ref: "track:guid:{REVISION}", index: 0 }],
+        track_count: 1,
+        track_cursor: 0,
+        returned_track_count: 1,
+        next_track_cursor: null,
+        truncated: false,
+      }, { logical_refresh: { transaction_id: "revision" } })).ok, true);
+      const revision = runtime.commitLogicalRefresh({ transaction_id: "revision", observed_revision: "reaper-change-count:42" });
+      assert.equal(revision.ok, false);
+      assert.equal(revision.blockers[0].code, "LOGICAL_REFRESH_REVISION_MISMATCH");
+      assert.deepEqual(priorRows(), ["track:guid:{KEEP-LOGICAL}"]);
+
+      const abortable = runtime.beginLogicalRefresh({ scopes: ["tracks"], expected_revision: "reaper-change-count:41" });
+      const aborted = runtime.abortLogicalRefresh({ transaction_id: abortable.transaction_id, reason: "caller_cancelled", observed_at: NOW });
+      assert.equal(aborted.ok, true);
+      assert.equal(aborted.status, "logical_refresh_aborted");
+      assert.equal(aborted.transaction_id, abortable.transaction_id);
+      assert.equal(aborted.reason, "caller_cancelled");
+      assert.equal(aborted.sqlite_updated, false);
+      assert.equal(runtime.status().logical_refreshes_staged, 0);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("dedupes targeted known-scope invalidation and rejects unknown, stale, or closed runtimes", async () => {
     const fixture = await makeFixture();
     try {
@@ -594,7 +836,7 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
-  it("persists across close/reopen for the same logical installed session and safely rebuilds a stale managed database", async () => {
+  it("persists across close/reopen for one process identity and isolates project, owner, and generation databases", async () => {
     if (!await hasSqlite()) return;
     const fixture = await makeFixture();
     const alternateProject = path.join(fixture.root, "Alternate.RPP");
@@ -605,10 +847,12 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       const observed = first.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", firstIdentity, { tracks: [{ track_ref: "track:guid:{RESTORE}", name: "Restore" }] }));
       assert.equal(observed.ok, true);
       const stableSession = first.session_id;
+      const stableDbPath = first.db_path;
       first.close();
 
       const second = await openRuntime(fixture);
       assert.equal(second.session_id, stableSession);
+      assert.equal(second.db_path, stableDbPath);
       assert.equal(second.status().lifecycle, "ready");
       assert.deepEqual(second.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{RESTORE}"]);
       second.close();
@@ -621,16 +865,82 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         const mismatch = await openRuntime(fixture, overrides);
         assert.equal(mismatch.status().lifecycle, "ready");
         assert.equal(mismatch.status().rows_available, true);
-        assert.equal(mismatch.status().recovery.status, "recovered");
-        assert.equal(mismatch.status().recovery.db_rebuilt, true);
-        assert.equal(mismatch.status().recovery.stale_rows_reused, false);
+        assert.equal(mismatch.status().recovery, null);
+        assert.notEqual(mismatch.db_path, stableDbPath);
+        assert.notEqual(mismatch.session_id, stableSession);
         assert.deepEqual(mismatch.adapter.snapshot().rows.tracks, []);
         const observedCurrentIdentity = mismatch.observeSuccessfulTemplateExecution(execution("template.tracks.list_tracks", runtimeIdentity(mismatch), { tracks: [{ track_ref: "track:guid:{NEW}", name: "New" }] }));
         assert.equal(observedCurrentIdentity.ok, true);
         assert.deepEqual(mismatch.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{NEW}"]);
         mismatch.close();
       }
+
+      const restored = await openRuntime(fixture);
+      assert.equal(restored.db_path, stableDbPath);
+      assert.deepEqual(restored.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{RESTORE}"]);
+      restored.close();
     } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps simultaneous process owners isolated and rebuilds only the stale owner's database while a peer is active", async () => {
+    if (!await hasSqlite()) return;
+    const fixture = await makeFixture();
+    let peerA;
+    let recoveredB;
+    try {
+      peerA = await openRuntime(fixture, { processIdentity: "process-owner-a" });
+      assertObserved(peerA, execution("template.tracks.list_tracks", runtimeIdentity(peerA), {
+        tracks: [{ track_ref: "track:guid:{PROCESS-A}", name: "Process A" }],
+        track_count: 1,
+        truncated: false,
+      }));
+      const peerABytes = await readFile(peerA.db_path);
+
+      const peerB = await openRuntime(fixture, { processIdentity: "process-owner-b" });
+      assert.notEqual(peerB.session_id, peerA.session_id);
+      assert.notEqual(peerB.db_path, peerA.db_path);
+      assert.notEqual(peerB.status().ownership.owner_id, peerA.status().ownership.owner_id);
+      assert.deepEqual(peerB.adapter.snapshot().rows.tracks, []);
+      assertObserved(peerB, execution("template.tracks.list_tracks", runtimeIdentity(peerB), {
+        tracks: [{ track_ref: "track:guid:{PROCESS-B}", name: "Process B" }],
+        track_count: 1,
+        truncated: false,
+      }));
+      const peerBPath = peerB.db_path;
+      peerB.close();
+
+      await copyFile(peerA.db_path, peerBPath);
+      recoveredB = await openRuntime(fixture, { processIdentity: "process-owner-b" });
+      assert.equal(recoveredB.db_path, peerBPath);
+      assert.equal(recoveredB.status().recovery.status, "recovered");
+      assert.equal(recoveredB.status().recovery.db_rebuilt, true);
+      assert.equal(recoveredB.status().recovery.recovery_scope, "owned_database_only");
+      assert.equal(recoveredB.status().recovery.peer_database_untouched, true);
+      assert.deepEqual(recoveredB.adapter.snapshot().rows.tracks, []);
+      assert.deepEqual(peerA.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PROCESS-A}"]);
+      assert.deepEqual(await readFile(peerA.db_path), peerABytes);
+
+      assertObserved(recoveredB, execution("template.tracks.list_tracks", runtimeIdentity(recoveredB), {
+        tracks: [{ track_ref: "track:guid:{PROCESS-B-RECOVERED}", name: "Process B Recovered" }],
+        track_count: 1,
+        truncated: false,
+      }));
+      recoveredB.close();
+      recoveredB = null;
+      peerA.close();
+      peerA = null;
+
+      const reopenedA = await openRuntime(fixture, { processIdentity: "process-owner-a" });
+      const reopenedB = await openRuntime(fixture, { processIdentity: "process-owner-b" });
+      assert.deepEqual(reopenedA.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PROCESS-A}"]);
+      assert.deepEqual(reopenedB.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PROCESS-B-RECOVERED}"]);
+      reopenedA.close();
+      reopenedB.close();
+    } finally {
+      recoveredB?.close();
+      peerA?.close();
       await fixture.cleanup();
     }
   });
@@ -657,14 +967,18 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
   it("degrades without trusting or replacing a corrupt/incompatible database", async () => {
     if (!await hasSqlite()) return;
     const fixture = await makeFixture();
-    const dbPath = path.join(fixture.stateRoot, ALPHA3_2D_PROJECT_INDEX_DB_BASENAME);
     const corrupt = Buffer.from("not-a-sqlite-database\n");
-    await writeFile(dbPath, corrupt);
     try {
-      const runtime = await openRuntime(fixture);
+      const initial = await openRuntime(fixture, { processIdentity: "corrupt-owner" });
+      const dbPath = initial.db_path;
+      initial.close();
+      await writeFile(dbPath, corrupt);
+      const runtime = await openRuntime(fixture, { processIdentity: "corrupt-owner" });
       assert.equal(runtime.backend, "resident_memory_fallback");
       assert.equal(runtime.status().lifecycle, "degraded");
       assert.match(runtime.status().degraded_reason, /SQLITE_/);
+      assert.equal(runtime.status().ownership.mode, "process_isolated");
+      assert.equal(runtime.status().ownership.recovery_scope, "owned_database_only");
       assert.deepEqual(await import("node:fs/promises").then(({ readFile }) => readFile(dbPath)), corrupt);
       assert.deepEqual(runtime.adapter.snapshot().rows.tracks, []);
       runtime.close();
@@ -696,6 +1010,7 @@ async function openRuntime(fixture, overrides = {}) {
     bridgeOwner: "bridge:alpha3.2d:test",
     bridgeGeneration: 7,
     logicalSessionKey: "installed-alpha-session",
+    processIdentity: "test-process-default",
     now,
     ...overrides,
   });

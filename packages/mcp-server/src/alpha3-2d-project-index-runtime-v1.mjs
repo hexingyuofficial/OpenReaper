@@ -51,6 +51,7 @@ const PROJECT_REVISION_DEPENDENT_SCOPES = Object.freeze([
   "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media",
 ]);
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const PROCESS_INSTANCE_KEY = `process:${process.pid}:${randomUUID()}`;
 const EMPTY_ROWS = Object.freeze({
   tracks: [], items: [], takes: [], fx: [], sends: [], envelopes: [],
   markers_regions: [], media_sources: [], selection_state: [], object_changes: [], background_jobs: [],
@@ -73,8 +74,14 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
   }
 
   const identity = identityCheck.identity;
-  const dbPath = pathCheck.db_path;
-  const sessionId = deriveManagedSessionId(identity, options.logicalSessionKey);
+  const storageOwnership = deriveRuntimeStorageOwnership(identity, options.logicalSessionKey, options.processIdentity);
+  const dbPath = path.join(pathCheck.state_root, storageOwnership.db_basename);
+  const ownership = Object.freeze({ ...storageOwnership, db_path: dbPath });
+  const dbPathCheck = await validateManagedIndexDbPath(dbPath, pathCheck.state_root);
+  if (!dbPathCheck.ok) {
+    return createFailedRuntimeOpen({ observedAt, blockers: dbPathCheck.blockers, dbPath, ownership });
+  }
+  const sessionId = ownership.session_id;
   const adapterOptions = {
     dbPath,
     now,
@@ -107,6 +114,7 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
           dbPath,
           observedAt,
           identityBlockers: identityBlockersFromSnapshot(adapter.snapshot()),
+          ownership,
         });
         recovery = rebuilt.recovery;
         if (rebuilt.ok) {
@@ -145,11 +153,28 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
     identity,
     lifecycle,
     now,
+    ownership,
     recovery,
     sessionId,
     maxRows: positiveBound(options.maxRows, ALPHA3_2D_PROJECT_INDEX_MAX_ROWS),
     maxBytes: positiveBound(options.maxBytes, ALPHA3_2D_PROJECT_INDEX_MAX_BYTES),
   });
+}
+
+async function validateManagedIndexDbPath(dbPath, stateRoot) {
+  if (path.dirname(dbPath) !== stateRoot || !path.basename(dbPath).startsWith("openreaper-project-index.") || path.extname(dbPath) !== ".sqlite") {
+    return { ok: false, blockers: [blocker("INDEX_DB_PATH_NOT_OWNED", "The Project Index database path must be an owned process-isolated file inside stateRoot.")] };
+  }
+  try {
+    const dbStat = await lstat(dbPath);
+    if (dbStat.isSymbolicLink()) return { ok: false, blockers: [blocker("INDEX_DB_SYMLINK", "The managed Project Index database must not be a symlink.")] };
+    if (!dbStat.isFile()) return { ok: false, blockers: [blocker("INDEX_DB_NOT_FILE", "The managed Project Index database path must be a regular file when it exists.")] };
+    const canonicalDb = await realpath(dbPath);
+    if (canonicalDb !== dbPath) return { ok: false, blockers: [blocker("INDEX_DB_NOT_CANONICAL", "The managed Project Index database must not resolve through an alias.")] };
+  } catch (error) {
+    if (error?.code !== "ENOENT") return { ok: false, blockers: [blocker("INDEX_DB_INSPECTION_FAILED", "The managed Project Index database path could not be inspected.", error)] };
+  }
+  return { ok: true, blockers: [] };
 }
 
 export async function validateManagedStateRoot(stateRoot, options = {}) {
@@ -225,15 +250,27 @@ export async function validateManagedStateRoot(stateRoot, options = {}) {
     : { ok: true, state_root: canonical, db_path: dbPath, blockers: [] };
 }
 
-async function rebuildStaleManagedSqliteAdapter({ adapter, adapterOptions, dbPath, observedAt, identityBlockers }) {
+async function rebuildStaleManagedSqliteAdapter({ adapter, adapterOptions, dbPath, observedAt, identityBlockers, ownership }) {
   const evidence = (status, stage, details = {}) => Object.freeze({
     status,
     stage,
     stale_rows_reused: false,
     observed_at: observedAt,
     identity_blocker_codes: [...new Set(arrayOf(identityBlockers).map((entry) => entry?.code).filter(Boolean))].slice(0, 8),
+    ownership_mode: ownership?.mode ?? "unknown",
+    database_owner_id: ownership?.owner_id ?? null,
+    recovery_scope: ownership?.recovery_scope ?? "unknown",
+    peer_database_untouched: true,
     ...details,
   });
+  if (ownership?.mode !== "process_isolated" || ownership?.db_path !== dbPath || ownership?.peer_database_unlink_allowed !== false) {
+    try { adapter.close({ observed_at: observedAt }); } catch {}
+    return {
+      ok: false,
+      recovery: evidence("failed", "ownership_check"),
+      blockers: [blocker("SQLITE_STALE_SESSION_OWNERSHIP_UNVERIFIED", "Stale Project Index recovery refused to remove a database without process-isolated ownership proof.")],
+    };
+  }
   try {
     adapter.close({ observed_at: observedAt });
   } catch (error) {
@@ -241,6 +278,14 @@ async function rebuildStaleManagedSqliteAdapter({ adapter, adapterOptions, dbPat
       ok: false,
       recovery: evidence("failed", "close"),
       blockers: [blocker("SQLITE_STALE_SESSION_CLOSE_FAILED", "Stale Project Index adapter could not close before rebuild.", error)],
+    };
+  }
+  const dbPathCheck = await validateManagedIndexDbPath(dbPath, path.dirname(dbPath));
+  if (!dbPathCheck.ok) {
+    return {
+      ok: false,
+      recovery: evidence("failed", "owned_path_check"),
+      blockers: [blocker("SQLITE_STALE_SESSION_OWNED_PATH_INVALID", "Stale Project Index recovery refused to remove an invalid owned database path.", dbPathCheck.blockers)],
     };
   }
   try {
@@ -273,12 +318,13 @@ async function rebuildStaleManagedSqliteAdapter({ adapter, adapterOptions, dbPat
   };
 }
 
-function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, identity, lifecycle, now, recovery, sessionId, maxRows, maxBytes }) {
+function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, identity, lifecycle, now, ownership, recovery, sessionId, maxRows, maxBytes }) {
   let closed = false;
   let managerLifecycle = lifecycle;
   let managerDegradedReason = degradedReason;
   let managerBlockers = [...blockers];
   const pendingArtifacts = new Map();
+  const logicalRefreshes = new Map();
 
   const status = () => {
     const snapshot = guardedSnapshot(adapter.snapshot());
@@ -298,7 +344,8 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
       bridge_owner: identity.bridge_owner,
       bridge_generation: identity.bridge_generation,
       session_id: sessionId,
-      session_policy: "deterministic_server_managed_id_for_matching_project_owner_generation_and_logical_install_session",
+      session_policy: "deterministic_server_managed_id_for_matching_project_owner_generation_logical_session_and_process_instance",
+      ownership,
       snapshot_id: snapshotEvidence.snapshot_id,
       revision: snapshotEvidence.revision,
       freshness_token: snapshotEvidence.freshness_token,
@@ -309,6 +356,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
       sqlite_rows_are_candidates_only: true,
       sqlite_is_truth: false,
       child_calls_executed: 0,
+      logical_refreshes_staged: logicalRefreshes.size,
       row_counts: countSnapshotRows(snapshot),
       blockers: stale ? [...managerBlockers, ...identityBlockersFromSnapshot(adapter.snapshot())] : [...managerBlockers],
     });
@@ -339,11 +387,20 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     const size = jsonByteLength({ template_id: templateId, readback });
     if (size === null) return observationFailure("invalid_readback", "READBACK_NOT_JSON_SERIALIZABLE", "Readback must be JSON serializable.");
     if (size > maxBytes) return observationFailure("pressure_rejected", "READBACK_BYTES_EXCEEDED", "Readback exceeds the Project Index byte bound.", { bytes: size, max_bytes: maxBytes });
+    const executionLogicalRefresh = logicalRefreshContext(execution);
+    if (hasLogicalRefreshContext(execution) && !executionLogicalRefresh) {
+      return observationFailure("invalid_logical_refresh", "LOGICAL_REFRESH_CONTEXT_INVALID", "project_index_observation_context.logical_refresh must be an object; rows were not stored.");
+    }
 
     const artifactRefs = collectArtifactRefs(result, readback);
     const inlinePayload = isObject(readback.payload) ? readback.payload : isObject(result.artifact_payload) ? result.artifact_payload : null;
     if (ARTIFACT_PAYLOAD_TEMPLATE_IDS.has(templateId) && !inlinePayload) {
-      for (const artifactRef of artifactRefs) pendingArtifacts.set(artifactRef, { templateId, observedAt: observationTime(execution, now) });
+      for (const artifactRef of artifactRefs) pendingArtifacts.set(artifactRef, {
+        templateId,
+        observedAt: observationTime(execution, now),
+        logical_refresh: executionLogicalRefresh,
+        page_evidence: readback,
+      });
       return observationFailure("artifact_payload_required", "ARTIFACT_PAYLOAD_REQUIRED", "This atomic result contains only artifact metadata; validated artifact payload is required before rows can be projected.", { template_id: templateId, artifact_refs: artifactRefs });
     }
     return projectAndApply({ templateId, readback: inlinePayload ?? readback, execution, payloadRef: artifactRefs[0] ?? null });
@@ -352,8 +409,9 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
   const observeArtifactPayload = (input = {}) => {
     if (closed) return observationFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
     if (adapter.snapshot().lifecycle === "stale_session") return observationFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; artifact payload is rejected.");
-    const templateId = typeof input.templateId === "string" ? input.templateId : typeof input.template_id === "string" ? input.template_id : pendingArtifacts.get(input.artifactRef)?.templateId;
     const artifactRef = typeof input.artifactRef === "string" ? input.artifactRef : typeof input.artifact_ref === "string" ? input.artifact_ref : null;
+    const pending = pendingArtifacts.get(artifactRef);
+    const templateId = typeof input.templateId === "string" ? input.templateId : typeof input.template_id === "string" ? input.template_id : pending?.templateId;
     if (!ARTIFACT_PAYLOAD_TEMPLATE_IDS.has(templateId)) return observationFailure("unknown_refresh_template", "ARTIFACT_TEMPLATE_NOT_ACCEPTED", "Artifact payload template is not an accepted artifact-backed refresh source.");
     if (!isCanonicalRef(artifactRef, "artifact")) return observationFailure("invalid_artifact_payload", "ARTIFACT_REF_INVALID", "observeArtifactPayload requires a canonical artifact ref.");
     if (!pendingArtifacts.has(artifactRef) && input.allowUnregistered !== true) return observationFailure("invalid_artifact_payload", "ARTIFACT_REF_NOT_PENDING", "Artifact ref was not produced by an observed successful execution in this runtime.");
@@ -363,7 +421,21 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     if (!isObject(input.payload)) return observationFailure("invalid_artifact_payload", "ARTIFACT_PAYLOAD_INVALID", "Artifact payload must be a validated object supplied by the artifact integration.");
     const size = jsonByteLength(input.payload);
     if (size === null || size > maxBytes) return observationFailure("pressure_rejected", "READBACK_BYTES_EXCEEDED", "Artifact payload exceeds the Project Index byte bound.", { bytes: size, max_bytes: maxBytes });
-    const result = projectAndApply({ templateId, readback: input.payload, execution: input, payloadRef: artifactRef });
+    const suppliedObservationContext = isObject(input.project_index_observation_context) ? input.project_index_observation_context : {};
+    const pendingLogicalRefresh = isObject(pending?.logical_refresh) ? pending.logical_refresh : null;
+    const effectiveInput = pendingLogicalRefresh
+      ? {
+          ...input,
+          project_index_observation_context: {
+            ...suppliedObservationContext,
+            logical_refresh: isObject(suppliedObservationContext.logical_refresh)
+              ? suppliedObservationContext.logical_refresh
+              : pendingLogicalRefresh,
+          },
+          logical_refresh_page_evidence: pending.page_evidence,
+        }
+      : input;
+    const result = projectAndApply({ templateId, readback: input.payload, execution: effectiveInput, payloadRef: artifactRef });
     if (result.ok) pendingArtifacts.delete(artifactRef);
     return result;
   };
@@ -498,6 +570,154 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     });
   };
 
+  const beginLogicalRefresh = (input = {}) => {
+    if (closed) return logicalRefreshFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
+    if (adapter.snapshot().lifecycle === "stale_session") return logicalRefreshFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; logical refresh cannot begin.");
+    if (!isObject(input)) return logicalRefreshFailure("invalid_request", "LOGICAL_REFRESH_INPUT_REQUIRED", "Logical refresh requires an input object.");
+    const scopes = [...new Set(arrayOf(input.scopes).length > 0 ? input.scopes : [input.scope ?? "tracks"])];
+    if (scopes.length !== 1 || scopes[0] !== "tracks") {
+      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime currently supports complete logical refresh staging for tracks only.", { scopes });
+    }
+    const requestedRevision = input.expected_revision ?? input.expectedRevision;
+    const expectedRevision = typeof requestedRevision === "string" ? normalizeProjectRevisionToken(requestedRevision) : null;
+    if (!expectedRevision) return logicalRefreshFailure("revision_required", "LOGICAL_REFRESH_REVISION_REQUIRED", "Logical refresh must bind to the live REAPER project revision captured before paging.");
+    const declaredTrackCount = nonNegativeIntegerOrNull(input.declared_track_count ?? input.declaredTrackCount ?? input.declared_counts?.tracks);
+    const refreshId = nonEmpty(input.transaction_id ?? input.transactionId ?? input.refresh_id ?? input.refreshId ?? input.id) ?? `logical-refresh:${randomUUID()}`;
+    if (refreshId.length > 256 || /[\0\r\n]/.test(refreshId)) return logicalRefreshFailure("invalid_id", "LOGICAL_REFRESH_ID_INVALID", "Logical refresh id must be a bounded printable string.");
+    if (logicalRefreshes.has(refreshId)) return logicalRefreshFailure("already_active", "LOGICAL_REFRESH_ALREADY_ACTIVE", "A logical refresh with this id is already active.", { transaction_id: refreshId });
+    logicalRefreshes.set(refreshId, {
+      refresh_id: refreshId,
+      scope: "tracks",
+      expected_revision: expectedRevision,
+      declared_track_count: declaredTrackCount,
+      observed_at: safeIso(input.observed_at, now),
+      pages: new Map(),
+      source_template_ids: new Set(),
+    });
+    return logicalRefreshSuccess("logical_refresh_started", {
+      transaction_id: refreshId,
+      refresh_id: refreshId,
+      scope: "tracks",
+      expected_revision: expectedRevision,
+      declared_track_count: declaredTrackCount,
+      sqlite_updated: false,
+    });
+  };
+
+  const abortLogicalRefresh = (input = {}) => {
+    if (closed) return logicalRefreshFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
+    const refreshId = logicalRefreshId(input);
+    if (!refreshId) return logicalRefreshFailure("invalid_id", "LOGICAL_REFRESH_ID_REQUIRED", "Logical refresh abort requires transaction_id.");
+    const existed = discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts);
+    return logicalRefreshSuccess(existed ? "logical_refresh_aborted" : "logical_refresh_not_found", {
+      transaction_id: refreshId,
+      refresh_id: refreshId,
+      reason: nonEmpty(input?.reason),
+      discarded: existed,
+      sqlite_updated: false,
+    });
+  };
+
+  const commitLogicalRefresh = (input = {}) => {
+    if (closed) return logicalRefreshFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed.");
+    if (adapter.snapshot().lifecycle === "stale_session") return logicalRefreshFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; logical refresh cannot commit.");
+    const refreshId = logicalRefreshId(input);
+    const refresh = refreshId ? logicalRefreshes.get(refreshId) : null;
+    if (!refresh) return logicalRefreshFailure("not_found", "LOGICAL_REFRESH_NOT_FOUND", "Logical refresh commit requires an active transaction_id.", { transaction_id: refreshId });
+    const failCommit = (code, message, details) => {
+      discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts);
+      return logicalRefreshFailure("logical_refresh_aborted", code, message, details);
+    };
+    const requestedFinalRevision = input.observed_revision ?? input.observedRevision;
+    const finalRevision = typeof requestedFinalRevision === "string" ? normalizeProjectRevisionToken(requestedFinalRevision) : null;
+    if (!finalRevision || finalRevision !== refresh.expected_revision) {
+      return failCommit("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh was discarded because the live REAPER revision changed or was not confirmed after paging.", {
+        expected_revision: refresh.expected_revision,
+        final_revision: finalRevision,
+      });
+    }
+    const pages = [...refresh.pages.values()].sort((left, right) => left.cursor - right.cursor);
+    if (pages.length === 0) return failCommit("LOGICAL_REFRESH_PAGES_REQUIRED", "Logical refresh cannot commit without staged pages.");
+    let expectedCursor = 0;
+    let terminalPageSeen = false;
+    const mergedRows = [];
+    for (const [pageIndex, page] of pages.entries()) {
+      if (page.cursor !== expectedCursor) {
+        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", "Logical refresh pages must form one continuous track cursor sequence from zero.", { expected_cursor: expectedCursor, actual_cursor: page.cursor });
+      }
+      if (page.revision && page.revision !== refresh.expected_revision) {
+        return failCommit("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh page revision did not match the revision captured before paging.", { expected_revision: refresh.expected_revision, page_revision: page.revision, cursor: page.cursor });
+      }
+      mergedRows.push(...page.rows);
+      expectedCursor += page.rows.length;
+      if (page.next_cursor === null) {
+        if (pageIndex !== pages.length - 1) return failCommit("LOGICAL_REFRESH_EARLY_TERMINAL_PAGE", "A logical refresh terminal page must be the final cursor page.", { cursor: page.cursor });
+        terminalPageSeen = true;
+      } else if (page.next_cursor !== expectedCursor) {
+        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", "Each logical refresh next cursor must equal the next unobserved track offset.", { cursor: page.cursor, expected_next_cursor: expectedCursor, actual_next_cursor: page.next_cursor });
+      }
+    }
+    if (!terminalPageSeen) return failCommit("LOGICAL_REFRESH_COVERAGE_INCOMPLETE", "Logical refresh was discarded because no terminal complete-coverage page was staged.");
+    const canonicalRows = dedupeRows(mergedRows);
+    const declaredTrackCount = refresh.declared_track_count ?? pages[0]?.declared_track_count ?? null;
+    if (declaredTrackCount === null || pages.some((page) => page.declared_track_count !== declaredTrackCount)) {
+      return failCommit("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", "Every logical refresh page must agree on one declared live track count.", { declared_track_count: declaredTrackCount });
+    }
+    if (mergedRows.length !== canonicalRows.length || canonicalRows.length !== declaredTrackCount || expectedCursor !== declaredTrackCount) {
+      return failCommit("LOGICAL_REFRESH_TRACK_COUNT_MISMATCH", "Logical refresh canonical rows must exactly match the declared live track count before complete coverage can commit.", {
+        declared_track_count: declaredTrackCount,
+        merged_row_count: mergedRows.length,
+        canonical_row_count: canonicalRows.length,
+        final_cursor: expectedCursor,
+      });
+    }
+    if (canonicalRows.length > maxRows || jsonByteLength(canonicalRows) > maxBytes) {
+      return failCommit("LOGICAL_REFRESH_PRESSURE_EXCEEDED", "Logical refresh exceeded the bounded Project Index staging limits and was discarded.", { row_count: canonicalRows.length, max_rows: maxRows, max_bytes: maxBytes });
+    }
+    const observedAt = safeIso(input.observed_at, now);
+    const snapshotId = `snapshot:alpha3.3:logical:${createHash("sha256").update(`${refreshId}\0${finalRevision}\0${declaredTrackCount}`).digest("hex").slice(0, 24)}`;
+    let result;
+    try {
+      result = adapter.replaceTracks({
+        snapshot_id: snapshotId,
+        observed_at: observedAt,
+        source_template_id: [...refresh.source_template_ids][0] ?? "template.project.create_observation_bundle",
+        projectRef: identity.project_ref,
+        bridgeOwner: identity.bridge_owner,
+        bridgeGeneration: identity.bridge_generation,
+        sessionId,
+        rows: canonicalRows,
+        coverage_status: "complete",
+        freshness_status: "fresh",
+      });
+    } catch (error) {
+      result = { ok: false, blockers: [error] };
+    }
+    discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts);
+    if (result?.ok === false) {
+      managerLifecycle = "degraded";
+      managerDegradedReason = "LOGICAL_REFRESH_COMMIT_FAILED";
+      managerBlockers = [blocker("LOGICAL_REFRESH_COMMIT_FAILED", "Complete logical refresh could not commit to the Project Index after validation.", result.blockers?.[0])];
+      return logicalRefreshFailure("commit_failed", "LOGICAL_REFRESH_COMMIT_FAILED", "Complete logical refresh could not commit to the Project Index after validation.");
+    }
+    return logicalRefreshSuccess("logical_refresh_committed", {
+      transaction_id: refreshId,
+      refresh_id: refreshId,
+      scope: "tracks",
+      expected_revision: refresh.expected_revision,
+      final_revision: finalRevision,
+      snapshot_id: snapshotId,
+      page_count: pages.length,
+      row_count: canonicalRows.length,
+      declared_track_count: declaredTrackCount,
+      applied_scopes: Object.freeze(["tracks"]),
+      row_counts: Object.freeze({ tracks: canonicalRows.length }),
+      coverage: Object.freeze({ tracks: "complete" }),
+      sqlite_updated: true,
+      sqlite_rows_are_candidates_only: true,
+    });
+  };
+
   const projectAndApply = ({ templateId, readback, execution, payloadRef }) => {
     let projection;
     try {
@@ -510,6 +730,23 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     const totalRows = scopeEntries.reduce((sum, [, rows]) => sum + rows.length, 0);
     if (totalRows > maxRows) return observationFailure("pressure_rejected", "READBACK_ROWS_EXCEEDED", "Readback exceeds the Project Index row bound; no rows were stored.", { row_count: totalRows, max_rows: maxRows });
     if (scopeEntries.length === 0) return observationFailure("invalid_readback", "NO_PROJECTABLE_SCOPES", "Readback did not identify any accepted Project Index scope.");
+
+    const logicalRefresh = logicalRefreshContext(execution);
+    if (logicalRefresh) {
+      return stageLogicalRefreshProjection({
+        logicalRefresh,
+        logicalRefreshes,
+        pendingArtifacts,
+        projection,
+        readback,
+        execution,
+        templateId,
+        payloadRef,
+        maxRows,
+        maxBytes,
+        now,
+      });
+    }
 
     const observedAt = observationTime(execution, now);
     const snapshotId = observationSnapshotId(execution, templateId, observedAt);
@@ -533,10 +770,21 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
         for (const [scope, rows] of scopeEntries) {
           const method = STORE_METHODS[scope];
           if (!method) continue;
-          const coverage = projection.coverage[scope] ?? "complete";
-          const projectedRows = method === "replaceSelection"
+          let coverage = projection.coverage[scope] ?? "complete";
+          let projectedRows = method === "replaceSelection"
             ? mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, rows)
             : rows;
+          if (method === "replaceTracks" && coverage !== "complete") {
+            const snapshot = adapter.snapshot();
+            const priorScope = snapshot.freshness_scopes?.tracks ?? {};
+            if (priorScope.status === "fresh" && priorScope.coverage_status === "complete") {
+              projectedRows = mergeTrackRowSets(
+                snapshot.rows?.tracks,
+                mergeProjectedTrackRows(snapshot.rows?.tracks, rows),
+              );
+              coverage = "complete";
+            }
+          }
           const result = adapter[method]({ ...common, rows: projectedRows, coverage_status: coverage, freshness_status: "fresh" });
           if (result?.ok === false) throw new Error(result.blockers?.[0]?.code ?? `${method}_failed`);
           applied.push(scope);
@@ -573,6 +821,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     backend,
     db_path: dbPath,
     session_id: sessionId,
+    ownership,
     identity,
     get lifecycle() { return status().lifecycle; },
     get adapter_lifecycle() { return status().adapter_lifecycle; },
@@ -585,14 +834,212 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     observeArtifactPayload,
     invalidateScopes,
     reconcileProjectRevision,
+    beginLogicalRefresh,
+    commitLogicalRefresh,
+    abortLogicalRefresh,
     close(input = {}) {
       if (closed) return status();
       closed = true;
+      logicalRefreshes.clear();
+      pendingArtifacts.clear();
       adapter.close({ observed_at: safeIso(input.observed_at, now) });
       managerLifecycle = "closed";
       return status();
     },
   });
+}
+
+function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendingArtifacts, projection, readback, execution, templateId, payloadRef, maxRows, maxBytes, now }) {
+  const refreshId = logicalRefreshId(logicalRefresh);
+  const refresh = refreshId ? logicalRefreshes.get(refreshId) : null;
+  if (!refresh) return logicalRefreshFailure("not_found", "LOGICAL_REFRESH_NOT_FOUND", "Logical refresh observation requires an active refresh_id.", { refresh_id: refreshId });
+  const failStage = (code, message, details) => {
+    discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts);
+    return logicalRefreshFailure("logical_refresh_aborted", code, message, details);
+  };
+  const scope = logicalRefresh.scope ?? "tracks";
+  if (scope !== "tracks" || refresh.scope !== "tracks") return failStage("LOGICAL_REFRESH_SCOPE_MISMATCH", "Logical refresh page scope must match the active tracks refresh.", { scope });
+  const rows = arrayOf(projection.scopes?.tracks);
+  const pageEvidence = isObject(execution?.logical_refresh_page_evidence) ? execution.logical_refresh_page_evidence : {};
+  const overview = isObject(readback?.project_map)
+    ? readback.project_map
+    : isObject(readback?.overview)
+      ? readback.overview
+      : isObject(readback)
+        ? readback
+        : {};
+  const cursor = logicalCursor(firstDefined(logicalRefresh.cursor, logicalRefresh.track_cursor, overview.track_cursor, pageEvidence.track_cursor));
+  if (cursor === null) return failStage("LOGICAL_REFRESH_CURSOR_REQUIRED", "Every logical refresh track page must report a non-negative integer cursor.");
+  const declaredTrackCount = nonNegativeIntegerOrNull(firstDefined(
+    logicalRefresh.declared_track_count,
+    logicalRefresh.declaredTrackCount,
+    overview.track_count,
+    pageEvidence.track_count,
+    refresh.declared_track_count,
+  ));
+  if (declaredTrackCount === null) return failStage("LOGICAL_REFRESH_DECLARED_COUNT_REQUIRED", "Every logical refresh track page must report the declared live track count.");
+  if (refresh.declared_track_count !== null && refresh.declared_track_count !== declaredTrackCount) {
+    return failStage("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", "Logical refresh page declared track count changed during paging.", { expected: refresh.declared_track_count, actual: declaredTrackCount, cursor });
+  }
+  const returnedTrackCount = nonNegativeIntegerOrNull(firstDefined(
+    logicalRefresh.returned_track_count,
+    logicalRefresh.returnedTrackCount,
+    overview.returned_track_count,
+    pageEvidence.returned_track_count,
+    rows.length,
+  ));
+  if (returnedTrackCount !== rows.length) {
+    return failStage("LOGICAL_REFRESH_RETURNED_COUNT_MISMATCH", "Logical refresh page canonical row count must match returned_track_count.", { cursor, returned_track_count: returnedTrackCount, canonical_row_count: rows.length });
+  }
+  const rawNextCursor = firstDefined(
+    logicalRefresh.next_cursor,
+    logicalRefresh.nextCursor,
+    logicalRefresh.next_track_cursor,
+    overview.next_track_cursor,
+    pageEvidence.next_track_cursor,
+  );
+  const truncated = firstDefined(logicalRefresh.truncated, overview.truncated, pageEvidence.truncated);
+  let nextCursor;
+  if (rawNextCursor === null || (rawNextCursor === undefined && truncated === false)) nextCursor = null;
+  else nextCursor = logicalCursor(rawNextCursor);
+  if (nextCursor === null && rawNextCursor !== null && !(rawNextCursor === undefined && truncated === false)) {
+    return failStage("LOGICAL_REFRESH_NEXT_CURSOR_INVALID", "A non-terminal logical refresh page must report a valid next cursor.", { cursor, next_cursor: rawNextCursor });
+  }
+  if (truncated === true && nextCursor === null) return failStage("LOGICAL_REFRESH_NEXT_CURSOR_REQUIRED", "A truncated logical refresh page must report the next track cursor.", { cursor });
+  if (truncated === false && nextCursor !== null) return failStage("LOGICAL_REFRESH_COVERAGE_CONFLICT", "A page with a next cursor cannot claim terminal non-truncated coverage.", { cursor, next_cursor: nextCursor });
+  if (nextCursor !== null && (nextCursor <= cursor || rows.length === 0)) {
+    return failStage("LOGICAL_REFRESH_CURSOR_NOT_ADVANCING", "Logical refresh pages must advance the track cursor with at least one canonical row.", { cursor, next_cursor: nextCursor, row_count: rows.length });
+  }
+  const pageRevision = normalizeProjectRevisionToken(firstDefined(
+    logicalRefresh.revision,
+    logicalRefresh.project_revision,
+    logicalRefresh.change_count,
+    overview.revision,
+    overview.project_revision,
+    overview.change_count,
+    pageEvidence.revision,
+    pageEvidence.project_revision,
+    pageEvidence.change_count,
+  ));
+  if (pageRevision && pageRevision !== refresh.expected_revision) {
+    return failStage("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh page revision changed during paging; the staged refresh was discarded.", { expected_revision: refresh.expected_revision, page_revision: pageRevision, cursor });
+  }
+  const page = {
+    cursor,
+    next_cursor: nextCursor,
+    declared_track_count: declaredTrackCount,
+    revision: pageRevision,
+    rows: structuredClone(rows),
+    template_id: templateId,
+    payload_ref: payloadRef,
+    observed_at: observationTime(execution, now),
+  };
+  const existing = refresh.pages.get(cursor);
+  if (existing) {
+    if (JSON.stringify(existing) === JSON.stringify(page)) {
+      return logicalRefreshSuccess("logical_refresh_page_staged", {
+        transaction_id: refreshId,
+        refresh_id: refreshId,
+        scope: "tracks",
+        cursor,
+        next_cursor: nextCursor,
+        page_row_count: rows.length,
+        staged_page_count: refresh.pages.size,
+        staged_row_count: [...refresh.pages.values()].reduce((sum, entry) => sum + entry.rows.length, 0),
+        replayed: true,
+        sqlite_updated: false,
+      });
+    }
+    return failStage("LOGICAL_REFRESH_CURSOR_CONFLICT", "A logical refresh cursor cannot be replaced with different page evidence.", { cursor });
+  }
+  const stagedRows = [...refresh.pages.values()].reduce((sum, entry) => sum + entry.rows.length, 0) + rows.length;
+  const stagedBytes = jsonByteLength([...refresh.pages.values()].flatMap((entry) => entry.rows).concat(rows));
+  if (stagedRows > maxRows || stagedBytes === null || stagedBytes > maxBytes) {
+    return failStage("LOGICAL_REFRESH_PRESSURE_EXCEEDED", "Logical refresh staging exceeded the bounded Project Index row or byte limit and was discarded.", { staged_rows: stagedRows, max_rows: maxRows, staged_bytes: stagedBytes, max_bytes: maxBytes });
+  }
+  refresh.declared_track_count ??= declaredTrackCount;
+  refresh.pages.set(cursor, page);
+  refresh.source_template_ids.add(templateId);
+  return logicalRefreshSuccess("logical_refresh_page_staged", {
+    transaction_id: refreshId,
+    refresh_id: refreshId,
+    scope: "tracks",
+    cursor,
+    next_cursor: nextCursor,
+    page_row_count: rows.length,
+    staged_page_count: refresh.pages.size,
+    staged_row_count: stagedRows,
+    declared_track_count: declaredTrackCount,
+    coverage: nextCursor === null ? "terminal_page_staged" : "paged_staging",
+    sqlite_updated: false,
+    payload_ref: payloadRef,
+  });
+}
+
+function hasLogicalRefreshContext(input) {
+  return isObject(input?.project_index_observation_context)
+    && Object.hasOwn(input.project_index_observation_context, "logical_refresh");
+}
+
+function logicalRefreshContext(input) {
+  const value = input?.project_index_observation_context?.logical_refresh;
+  return isObject(value) ? structuredClone(value) : null;
+}
+
+function logicalRefreshId(input) {
+  if (typeof input === "string") return nonEmpty(input);
+  return isObject(input) ? nonEmpty(input.transaction_id ?? input.transactionId ?? input.refresh_id ?? input.refreshId ?? input.id) : null;
+}
+
+function discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts) {
+  const existed = logicalRefreshes.delete(refreshId);
+  for (const [artifactRef, pending] of pendingArtifacts.entries()) {
+    if (logicalRefreshId(pending?.logical_refresh) === refreshId) pendingArtifacts.delete(artifactRef);
+  }
+  return existed;
+}
+
+function logicalRefreshSuccess(status, details = {}) {
+  return Object.freeze({
+    contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+    ok: true,
+    status,
+    ...details,
+    sqlite_is_truth: false,
+    child_calls_executed: 0,
+    blockers: [],
+  });
+}
+
+function logicalRefreshFailure(status, code, message, details = undefined) {
+  return Object.freeze({
+    contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+    ok: false,
+    status,
+    sqlite_updated: false,
+    sqlite_is_truth: false,
+    child_calls_executed: 0,
+    blockers: [blocker(code, message, details)],
+  });
+}
+
+function logicalCursor(value) {
+  if (Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeProjectRevisionToken(value) {
+  if (Number.isInteger(value) && value >= 0) return `reaper-change-count:${value}`;
+  if (typeof value === "string" && /^reaper-change-count:[0-9]+$/.test(value)) return value;
+  return null;
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined);
 }
 
 const STORE_METHODS = Object.freeze({
@@ -1113,16 +1560,35 @@ function validateObservationIdentity(input, expected, sessionId) {
   return { ok: true };
 }
 
-function deriveManagedSessionId(identity, logicalSessionKey) {
+function deriveManagedSessionId(identity, logicalSessionKey, processIdentity = PROCESS_INSTANCE_KEY) {
   const logical = typeof logicalSessionKey === "string" && logicalSessionKey ? logicalSessionKey : "default-installed-session";
   const digest = createHash("sha256").update(JSON.stringify({
     logical,
+    process_identity: processIdentity,
     project_ref: identity.project_ref,
     project_path: identity.project_path,
     bridge_owner: identity.bridge_owner,
     bridge_generation: identity.bridge_generation,
   })).digest("hex").slice(0, 32);
   return `session:alpha3.2d:${digest}`;
+}
+
+function deriveRuntimeStorageOwnership(identity, logicalSessionKey, explicitProcessIdentity) {
+  const processIdentity = nonEmpty(explicitProcessIdentity) ?? PROCESS_INSTANCE_KEY;
+  const sessionId = deriveManagedSessionId(identity, logicalSessionKey, processIdentity);
+  const isolationKey = createHash("sha256").update(sessionId).digest("hex").slice(0, 24);
+  return Object.freeze({
+    mode: "process_isolated",
+    owner_id: `project-index-owner:${isolationKey}`,
+    isolation_key: isolationKey,
+    isolation_dimensions: Object.freeze(["project", "bridge_owner", "bridge_generation", "logical_session", "process_instance"]),
+    process_identity_source: nonEmpty(explicitProcessIdentity) ? "explicit_process_identity" : "runtime_process_instance",
+    shared_between_processes: false,
+    peer_database_unlink_allowed: false,
+    recovery_scope: "owned_database_only",
+    db_basename: `openreaper-project-index.${isolationKey}.sqlite`,
+    session_id: sessionId,
+  });
 }
 
 async function loadSqliteBackend(loader) {
@@ -1135,9 +1601,10 @@ async function loadSqliteBackend(loader) {
   }
 }
 
-function createFailedRuntimeOpen({ observedAt, blockers, dbPath }) {
-  const status = () => Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, lifecycle: "degraded", adapter_lifecycle: "missing", degraded: true, degraded_reason: blockers[0]?.code ?? "RUNTIME_OPEN_FAILED", rows_available: false, row_counts: {}, blockers });
-  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: null, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), invalidateScopes: () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), reconcileProjectRevision: () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), close: status });
+function createFailedRuntimeOpen({ observedAt, blockers, dbPath, ownership = null }) {
+  const status = () => Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, lifecycle: "degraded", adapter_lifecycle: "missing", degraded: true, degraded_reason: blockers[0]?.code ?? "RUNTIME_OPEN_FAILED", ownership, rows_available: false, row_counts: {}, blockers });
+  const notOpen = () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open.");
+  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: ownership?.session_id ?? null, ownership, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), invalidateScopes: notOpen, reconcileProjectRevision: notOpen, beginLogicalRefresh: notOpen, commitLogicalRefresh: notOpen, abortLogicalRefresh: notOpen, close: status });
 }
 
 function observationFailure(status, code, message, details = undefined) {

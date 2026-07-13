@@ -9,11 +9,40 @@ import { promisify } from "node:util";
 
 import { createAlpha3_2B3DoctorTaskResult } from "../../packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs";
 import { executeAlpha3_2_5CRenderTargetsMacro } from "../../packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs";
+import {
+  assertPackagedRuntimeStateClean,
+  scrubPackagedRuntimeState,
+} from "../../scripts/package-openreaper-alpha.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const execFileAsync = promisify(execFile);
 
 describe("Alpha3.2.5-F product truth", () => {
+  it("removes package-smoke session state and rejects DB or project leakage before zip", async () => {
+    const fixture = await mkdtemp(path.join(await realpath(os.tmpdir()), "openreaper-alpha33-package-clean-"));
+    try {
+      const packageRoot = path.join(fixture, "OpenReaper-alpha");
+      const stateRoot = path.join(packageRoot, "session", "project-index-state");
+      await mkdir(stateRoot, { recursive: true });
+      await writeFile(path.join(stateRoot, "openreaper-project-index.sqlite"), "smoke-db", "utf8");
+      await writeFile(path.join(packageRoot, "session", "Package Smoke.RPP"), "<REAPER_PROJECT 0.1>\n", "utf8");
+      await writeFile(path.join(packageRoot, "README.txt"), "product", "utf8");
+
+      const scrubbed = await scrubPackagedRuntimeState(packageRoot);
+      assert.equal(scrubbed.ok, true);
+      assert.equal(scrubbed.session_state_removed, true);
+      assert.equal(await readFile(path.join(packageRoot, "README.txt"), "utf8"), "product");
+
+      await writeFile(path.join(packageRoot, "leaked.sqlite-wal"), "leak", "utf8");
+      await assert.rejects(
+        assertPackagedRuntimeStateClean(packageRoot),
+        /Package contains runtime state: leaked\.sqlite-wal/u,
+      );
+    } finally {
+      await rm(fixture, { recursive: true, force: true });
+    }
+  });
+
   it("scrubs inherited session identity and keeps only explicit start overrides", async () => {
     const source = await readFile(path.join(root, "scripts/openreaper-alpha-package/openreaper-start.sh"), "utf8");
     for (const key of [

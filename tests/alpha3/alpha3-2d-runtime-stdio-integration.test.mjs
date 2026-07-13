@@ -39,6 +39,10 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
           response.result.summary = {
             artifact_ref: "artifact:project:observation_bundle:art_20260711111500000_001_abcdef",
             project_ref: indexRuntime.identity.project_ref,
+            track_count: 1,
+            track_cursor: request.params.track_cursor ?? 0,
+            returned_track_count: 1,
+            map_truncated: false,
           };
           response.result.readback = response.result.summary;
           response.result.refs = [{
@@ -68,6 +72,8 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
               project_ref: indexRuntime.identity.project_ref,
               track_count: 1,
               item_count: 0,
+              track_cursor: 0,
+              returned_track_count: 1,
               truncated: false,
               tracks: [{
                 track_ref: "track:guid:{TRACK-1}",
@@ -102,8 +108,9 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
       assert.equal(cold.result.data.rows.length, 1);
       assert.equal(cold.result.data.rows[0].ref, "track:guid:{TRACK-1}");
       assert.equal(cold.result.data.rows[0].name, "Kick");
-      assert.deepEqual(operations, ["project.read_summary", "project.create_observation_bundle"]);
+      assert.deepEqual(operations, ["project.read_summary", "project.create_observation_bundle", "project.read_summary"]);
       assert.equal(cold.result.data.refresh.call_count, 1);
+      assert.equal(cold.result.data.refresh.revision_probe_count, 1);
 
       const warm = await runtime.call_template({
         id: "macro.project.query",
@@ -114,10 +121,11 @@ describe("Alpha3.2-D call_template Project Index integration", () => {
       assert.equal(warm.sqlite.source, "warm_index");
       assert.equal(warm.result.data.rows[0].ref, "track:guid:{TRACK-1}");
       assert.equal(warm.result.data.refresh.call_count, 0);
-      assert.equal(executorCalls, 3);
+      assert.equal(executorCalls, 4);
       assert.deepEqual(operations, [
         "project.read_summary",
         "project.create_observation_bundle",
+        "project.read_summary",
         "project.read_summary",
       ]);
       assert.equal(warm.sqlite.revision, "reaper-change-count:1");

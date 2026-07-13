@@ -10,16 +10,19 @@ const options = parseArgs(process.argv.slice(2));
 const ROOT = options.evidence_root;
 const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const SOURCE_PROJECT = options.source_project;
-const COPY_PROJECT = path.join(ROOT, "fixture", "Alpha33-A1-14Track.RPP");
+const TRACK_COUNT = options.track_count ?? 14;
+const FIXTURE_LABEL = options.fixture_label ?? "A1";
+const COPY_PROJECT = path.join(ROOT, "fixture", `Alpha33-${FIXTURE_LABEL}-${TRACK_COUNT}Track.RPP`);
 const BACKUP_PROJECT = path.join(ROOT, "recovery", "Untitled-before.RPP");
-const REPORT_PATH = path.join(ROOT, "reports", "alpha3-3-a1-project-index-live.json");
+const REPORT_PATH = path.join(ROOT, "reports", options.report_name ?? "alpha3-3-a1-project-index-live.json");
 const STDIO = path.join(REPO, "packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 const PUBLIC_BUDGET = {
   max_response_bytes: 65_536,
   max_items: 50,
   max_inline_value_bytes: 2_048,
 };
-const TRACK_NAMES = Array.from({ length: 14 }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
+const LAYOUT_BATCH_SIZE = 14;
+const TRACK_NAMES = Array.from({ length: TRACK_COUNT }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
 const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 await mkdir(path.dirname(COPY_PROJECT), { recursive: true });
@@ -89,22 +92,42 @@ try {
 
   calls.empty_tracks = await queryTracks(clientA, { limit: 10, refresh_policy: "if_stale" });
   assertMacroSuccess(calls.empty_tracks, "macro.project.query");
-  assert(calls.empty_tracks.result?.data?.rows?.length === 0, "Project was not empty before the 14-track fixture build");
+  assert(calls.empty_tracks.result?.data?.rows?.length === 0, `Project was not empty before the ${TRACK_COUNT}-track fixture build`);
   assert(calls.empty_tracks.result?.data?.coverage?.match_status === "no_match_definitive", "Empty complete scope was not definitive");
 
-  calls.create_layout = await callTemplate(clientA, "macro.project.apply_layout", {
-    layout: TRACK_NAMES.map((name, index) => ({ id: `track_${index + 1}`, kind: "track", name, index })),
-    match_policy: "create_only",
-    conflict_policy: "stop",
-    dry_run: false,
-  });
-  assertMacroSuccess(calls.create_layout, "macro.project.apply_layout");
-  assertAppliedRows(calls.create_layout);
-  assert(calls.create_layout.result?.data?.outcome?.live_readback?.status === "passed", "Layout live readback was not passed");
+  calls.create_layout_batches = [];
+  for (let start = 0; start < TRACK_NAMES.length; start += LAYOUT_BATCH_SIZE) {
+    const names = TRACK_NAMES.slice(start, start + LAYOUT_BATCH_SIZE);
+    const response = await callTemplate(clientA, "macro.project.apply_layout", {
+      layout: names.map((name, offset) => ({
+        id: `track_${start + offset + 1}`,
+        kind: "track",
+        name,
+        index: start + offset,
+      })),
+      match_policy: "create_only",
+      conflict_policy: "stop",
+      dry_run: false,
+    });
+    const batch = {
+      start_index: start,
+      end_index: start + names.length - 1,
+      response,
+    };
+    calls.create_layout_batches.push(batch);
+    assertMacroSuccess(response, "macro.project.apply_layout");
+    assertAppliedRows(response);
+    assert(response.result?.data?.outcome?.live_readback?.status === "passed", `Layout batch ${start / LAYOUT_BATCH_SIZE + 1} live readback was not passed`);
+  }
 
   calls.cold_page = await queryTracks(clientA, { limit: 3, refresh_policy: "if_stale" });
   assertMacroSuccess(calls.cold_page, "macro.project.query");
-  assertCoverage(calls.cold_page, 14, 14, 3);
+  assertCoverage(calls.cold_page, TRACK_COUNT, TRACK_COUNT, Math.min(3, TRACK_COUNT));
+  assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.coverage?.tracks === "complete", "Track logical refresh did not commit complete coverage");
+  assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.row_counts?.tracks === TRACK_COUNT, "Logical refresh row count did not match REAPER track total");
+  if (TRACK_COUNT > 32) {
+    assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.chunk_count === Math.ceil(TRACK_COUNT / 32), "Hidden physical chunk count did not match the track total");
+  }
   assert(calls.cold_page.result?.data?.page?.has_more === true, "Public page did not expose has_more");
 
   calls.exact_last = await queryTracks(clientA, {
@@ -114,7 +137,7 @@ try {
   });
   assertMacroSuccess(calls.exact_last, "macro.project.query");
   assert(calls.exact_last.result?.data?.rows?.[0]?.name === TRACK_NAMES.at(-1), "Exact final track was not resolved");
-  assert(calls.exact_last.result?.data?.rows?.[0]?.index === 13, "Exact final track index was not 13");
+  assert(calls.exact_last.result?.data?.rows?.[0]?.index === TRACK_COUNT - 1, `Exact final track index was not ${TRACK_COUNT - 1}`);
 
   calls.warm_last = await queryTracks(clientA, {
     limit: 1,
@@ -137,7 +160,7 @@ try {
   const lastRef = calls.exact_last.result.data.rows[0].ref;
   const renamedLast = `${TRACK_NAMES.at(-1)} Refreshed`;
   calls.rename_last = await callTemplate(clientA, "macro.project.apply_layout", {
-    layout: [{ id: "track_14", kind: "track", track_ref: lastRef, name: renamedLast, index: 13 }],
+    layout: [{ id: `track_${TRACK_COUNT}`, kind: "track", track_ref: lastRef, name: renamedLast, index: TRACK_COUNT - 1 }],
     match_policy: "by_ref",
     conflict_policy: "update_declared_fields",
     dry_run: false,
@@ -152,7 +175,7 @@ try {
   calls.refreshed_b = await queryTracks(clientB, { limit: 1, refresh_policy: "if_stale", filters: { name: renamedLast } });
   assertMacroSuccess(calls.refreshed_b, "macro.project.query");
   assert(calls.refreshed_b.result?.data?.rows?.[0]?.name === renamedLast, "Client B did not refresh after another client's write");
-  assertCoverage(calls.refreshed_b, 14, 14, 1);
+  assertCoverage(calls.refreshed_b, TRACK_COUNT, TRACK_COUNT, 1);
 
   calls.save_current = await callTemplate(clientA, "macro.project.file", { operation: "save_current", dry_run: false });
   assertMacroSuccess(calls.save_current, "macro.project.file");
@@ -172,28 +195,43 @@ const after = {
   copy_size: await exists(COPY_PROJECT) ? (await stat(COPY_PROJECT)).size : null,
 };
 const report = {
-  contract: "alpha3.3.a1.project_index_live.v1",
+  contract: options.contract ?? "alpha3.3.a1.project_index_live.v1",
   ok: error === null,
   evidence_root: ROOT,
   source_project: SOURCE_PROJECT,
   active_test_project: COPY_PROJECT,
   public_budget: PUBLIC_BUDGET,
-  expected_track_count: 14,
+  expected_track_count: TRACK_COUNT,
   expected_last_track_name: `${TRACK_NAMES.at(-1)} Refreshed`,
   tests: {
-    cold_hydration: calls.cold_page?.sqlite?.source ?? null,
+    cold_hydration: calls.initial_tracks?.sqlite?.source ?? null,
+    post_build_refresh: calls.cold_page?.sqlite?.source ?? null,
+    logical_refresh: calls.cold_page?.result?.data?.refresh?.logical_refresh ?? null,
     warm_reuse: calls.warm_last?.sqlite?.source ?? null,
     write_invalidation_refresh_a: calls.refreshed_a?.sqlite?.source ?? null,
     cross_client_refresh_b: calls.refreshed_b?.sqlite?.source ?? null,
     exact_last_track_resolved: calls.refreshed_b?.result?.data?.rows?.[0]?.name === `${TRACK_NAMES.at(-1)} Refreshed`,
     coverage: calls.refreshed_b?.result?.data?.coverage ?? null,
-    layout_outcome: calls.create_layout?.result?.data?.outcome ?? null,
+    layout_outcomes: calls.create_layout_batches?.map((batch) => ({
+      start_index: batch.start_index,
+      end_index: batch.end_index,
+      outcome: batch.response?.result?.data?.outcome ?? null,
+    })) ?? [],
   },
   project_changes: {
     initial_track_count: calls.initial_tracks?.result?.data?.coverage?.known_total_row_count ?? null,
     initial_tracks_deleted: calls.delete_initial?.result?.changes?.filter((change) => change.status === "applied").length ?? 0,
-    tracks_created: 14,
-    final_track_renamed: true,
+    tracks_requested: TRACK_COUNT,
+    tracks_created: calls.cold_page?.result?.data?.coverage?.known_total_row_count ?? null,
+    tracks_created_from_applied_change_rows: calls.create_layout_batches?.reduce((count, batch) => (
+      count + (batch.response?.result?.changes ?? []).filter((change) => (
+        change.status === "applied"
+        && ["template.tracks.create_track", "template.tracks.create_folder_track"].includes(change.template_id)
+      )).length
+    ), 0) ?? 0,
+    layout_batch_count: calls.create_layout_batches?.length ?? 0,
+    layout_batches_completed: calls.create_layout_batches?.filter((batch) => batch.response?.ok === true).length ?? 0,
+    final_track_renamed: calls.rename_last?.ok === true,
     saved_to_evidence_copy: calls.save_current?.ok === true,
   },
   rendered_files: [],
@@ -249,7 +287,11 @@ async function callTemplate(client, id, input, refs = undefined) {
 }
 
 async function callTool(client, name, args) {
-  const response = await client.callTool({ name, arguments: args });
+  const response = await client.callTool(
+    { name, arguments: args },
+    undefined,
+    { timeout: 300_000, maxTotalTimeout: 600_000 },
+  );
   const text = response.content?.find((entry) => entry.type === "text")?.text;
   if (typeof text !== "string") throw new Error(`${name} returned no JSON text`);
   return JSON.parse(text);
@@ -283,10 +325,24 @@ function parseArgs(argv) {
     if (!value || value.startsWith("--")) throw new Error(`Missing value for ${key}`);
     if (key === "--evidence-root") result.evidence_root = path.resolve(value);
     else if (key === "--source-project") result.source_project = path.resolve(value);
+    else if (key === "--track-count") {
+      if (!/^[1-9][0-9]{0,3}$/u.test(value)) throw new Error("--track-count must be an integer from 1 to 9999");
+      result.track_count = Number(value);
+      if (result.track_count > 4096) throw new Error("--track-count may not exceed the Project Index row bound of 4096");
+    } else if (key === "--fixture-label") {
+      if (!/^[A-Za-z0-9_-]{1,32}$/u.test(value)) throw new Error("--fixture-label must be a bounded filename token");
+      result.fixture_label = value;
+    } else if (key === "--report-name") {
+      if (!/^[A-Za-z0-9_.-]{1,128}\.json$/u.test(value) || path.basename(value) !== value) throw new Error("--report-name must be a plain .json filename");
+      result.report_name = value;
+    } else if (key === "--contract") {
+      if (!/^[A-Za-z0-9_.-]{1,128}$/u.test(value)) throw new Error("--contract must be a bounded contract token");
+      result.contract = value;
+    }
     else throw new Error(`Unknown option ${key}`);
     index += 1;
   }
-  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP>");
+  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP> [--track-count N]");
   return result;
 }
 

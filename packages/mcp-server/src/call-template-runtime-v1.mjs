@@ -985,6 +985,7 @@ export function createCallTemplateRuntime(options = {}) {
     budget,
     idempotency_key,
     observeProjectIndex = true,
+    projectIndexObservationContext = null,
   }) {
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
@@ -1006,6 +1007,7 @@ export function createCallTemplateRuntime(options = {}) {
       projectIndexArtifactReader,
       observationInput: normalizedInput,
       observationRefs: refs,
+      observationContext: projectIndexObservationContext,
     });
   }
 
@@ -1238,6 +1240,7 @@ async function observeProjectIndexExecution({
   projectIndexArtifactReader,
   observationInput,
   observationRefs,
+  observationContext,
 }) {
   if (!projectIndexRuntime || !ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS.includes(id) || execution?.ok !== true) {
     return execution;
@@ -1247,6 +1250,7 @@ async function observeProjectIndexExecution({
     project_index_observation_context: {
       input: cloneJson(observationInput ?? {}),
       refs: cloneJson(observationRefs ?? []),
+      ...(isPlainObject(observationContext) ? cloneJson(observationContext) : {}),
     },
     identity: {
       ...projectIndexRuntime.identity,
