@@ -28,29 +28,39 @@ const TAKE_OBJECT = createObjectRef("take", { scheme: "guid", value: "{D-RUNTIME
 const FX_OBJECT = createObjectRef("fx", { scheme: "track_fx", value: `${TRACK_REF}:0` }, { ref: FX_REF });
 
 describe("Alpha3.2.5-D call_template runtime integration", () => {
-  it("discovers both D Macros as live-runnable with the full dependency closure", () => {
+  it("discovers both D executors through their Alpha3.3 canonical ids and hides the old aliases", () => {
     const runtime = createRuntime();
     const items = runtime.list_templates({
-      ids: [ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, ALPHA3_2_5_D_NATIVE_FX_MACRO_ID],
+      ids: ["macro.midi.apply", "macro.fx.apply_chain"],
       fields: ["summary"],
     }).items;
 
     assert.deepEqual(items.map((item) => item.id).sort(), [
-      ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
-      ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
+      "macro.fx.apply_chain",
+      "macro.midi.apply",
     ].sort());
     assert.equal(items.every((item) => item.execution_shape === "registered_macro_program"), true);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === true), true);
+
+    const hidden = runtime.list_templates({
+      ids: [ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, ALPHA3_2_5_D_NATIVE_FX_MACRO_ID],
+      fields: ["id"],
+    });
+    assert.deepEqual(hidden.items, []);
+    assert.deepEqual(hidden.missing_ids, [
+      ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
+      ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+    ]);
   });
 
-  it("executes MIDI and native FX through the real call_template harness with reusable object refs", async () => {
+  it("executes MIDI and native FX through canonical ids and returns exact replacement errors for old ids", async () => {
     const bridge = new DRuntimeBridge();
     const invalidations = [];
     const runtime = createRuntime({ bridge, invalidations });
 
     const midi = await runtime.call_template({
-      id: ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
-      input: { start_seconds: 0, end_seconds: 2, notes: NOTES, dry_run: false },
+      id: "macro.midi.apply",
+      input: { mode: "create_clips", start_seconds: 0, end_seconds: 2, notes: NOTES, dry_run: false },
       refs: { track_ref: TRACK_REF },
       context: context(1),
     });
@@ -58,10 +68,12 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(midi.result.data.item_ref, ITEM_REF);
     assert.equal(midi.result.data.take_ref, TAKE_REF);
     assert.equal(midi.result.data.note_count, NOTES.length);
+    assert.equal(midi.macro.id, "macro.midi.apply");
+    assert.equal(midi.macro.program_id, "openreaper.macro.midi.apply");
     assert.equal(midi.budget.actual_bytes <= midi.budget.max_bytes, true, JSON.stringify(midi.budget));
 
     const nativeFx = await runtime.call_template({
-      id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+      id: "macro.fx.apply_chain",
       input: { controls: { threshold_db: -18, ratio: 3 }, dry_run: false },
       refs: { track_ref: TRACK_REF },
       context: context(2),
@@ -70,6 +82,8 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(nativeFx.result.data.fx_ref, FX_REF);
     assert.equal(nativeFx.result.data.readback.length, 2);
     assert.equal(nativeFx.result.verification.status, "passed");
+    assert.equal(nativeFx.macro.id, "macro.fx.apply_chain");
+    assert.equal(nativeFx.macro.program_id, "openreaper.macro.fx.apply_chain");
     assert.equal(nativeFx.budget.actual_bytes <= nativeFx.budget.max_bytes, true, JSON.stringify(nativeFx.budget));
 
     const capabilities = bridge.seen.map((request) => request.pack.capability);
@@ -84,6 +98,21 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(capabilities.includes("fx.add_track"), true);
     assert.equal(capabilities.filter((capability) => capability === "fx.set_parameter_normalized").length, 2);
     assert.deepEqual(invalidations, [["items", "takes", "selection"], ["fx"]]);
+
+    const oldMidi = await runtime.call_template({
+      id: ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
+      input: { start_seconds: 0, end_seconds: 2, notes: NOTES },
+    });
+    assert.equal(oldMidi.error.code, "CALL_TEMPLATE_ID_REPLACED");
+    assert.equal(oldMidi.error.details.replacement, "macro.midi.apply");
+    assert.equal(oldMidi.error.details.replacement_input.mode, "create_clips");
+
+    const oldFx = await runtime.call_template({
+      id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+      input: { controls: { threshold_db: -18, ratio: 3 } },
+    });
+    assert.equal(oldFx.error.code, "CALL_TEMPLATE_ID_REPLACED");
+    assert.equal(oldFx.error.details.replacement, "macro.fx.apply_chain");
   });
 });
 

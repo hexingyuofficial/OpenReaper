@@ -24,9 +24,9 @@ import {
   createOpenReaperAgentStartupGuidance,
 } from "./openreaper-agent-startup-guidance-v1.mjs";
 import {
-  attachAlpha3_2AAgentContextProductMetadata,
-  createAlpha3_2AAgentContextMacroGuide,
-} from "./alpha3-2a-agent-context-macro-guide-v1.mjs";
+  attachAlpha3_3B1AgentContextProductMetadata,
+  createAlpha3_3B1AgentContextMacroGuide,
+} from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
@@ -106,7 +106,7 @@ async function main() {
           package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
         }),
         product_surface: {
-          agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide(),
+          agent_context_macro_guide: createAlpha3_3B1AgentContextMacroGuide(),
         },
       });
     },
@@ -114,7 +114,7 @@ async function main() {
 
   server.tool(
     "list_templates",
-    "List OpenReaper runtime actions plus exact-id Alpha3.2 contract manuals. Check capability truth before call_template.",
+    "List OpenReaper runtime actions plus exact-id Alpha3.3 Macro manuals. Check capability truth before call_template.",
     {
       surface: z.enum(["executable", "catalog"]).optional(),
       ids: z.array(z.string()).optional(),
@@ -145,7 +145,7 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
     },
-    async (request) => jsonToolResult(attachAlpha3_2AAgentContextProductMetadata(
+    async (request) => jsonToolResult(attachAlpha3_3B1AgentContextProductMetadata(
       recipeDiscovery.list_recipes(request ?? {}),
     )),
   );

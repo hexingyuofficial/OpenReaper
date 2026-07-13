@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
-} from "../../packages/mcp-server/src/alpha3-2-5-0-macro-inventory-v1.mjs";
+  ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
+} from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import {
   ALPHA3_2_5_E_FALLBACK_GAP_REASONS,
   ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT,
   ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES,
-  createAlpha3_2AAgentContextMacroGuide,
 } from "../../packages/mcp-server/src/alpha3-2a-agent-context-macro-guide-v1.mjs";
+import { createAlpha3_3B1AgentContextMacroGuide } from "../../packages/mcp-server/src/alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import {
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -22,11 +22,11 @@ const EXPECTED_DEFAULT_MENU_MACRO_IDS = [
   "macro.project.file",
   "macro.routing.apply",
   "macro.media.place_assets",
-  "macro.midi.create_clip",
-  "macro.fx.apply_native_chain",
-  "macro.render.targets",
-  "macro.set_stock_plugin_controls",
+  "macro.midi.apply",
+  "macro.fx.apply_chain",
+  "macro.fx.set_controls",
   "macro.controls.set",
+  "macro.render.targets",
 ];
 
 describe("Alpha3.2.5-E macro-first routing and compact results", () => {
@@ -35,14 +35,14 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
     const menu = runtime.list_templates();
     const macroIds = menu.items.filter((item) => item.action_kind === "macro").map((item) => item.id);
 
-    assert.deepEqual(ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, EXPECTED_DEFAULT_MENU_MACRO_IDS);
+    assert.deepEqual(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, EXPECTED_DEFAULT_MENU_MACRO_IDS);
     assert.deepEqual(macroIds, EXPECTED_DEFAULT_MENU_MACRO_IDS);
     assert.equal(Buffer.byteLength(JSON.stringify(menu)) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
 
     const guide = menu.product_surface.agent_context_macro_guide;
-    assert.deepEqual(guide.ranked_executable_macro_menu.macro_ids, EXPECTED_DEFAULT_MENU_MACRO_IDS);
-    assert.equal(guide.ranked_executable_macro_menu.macros_before_templates, true);
-    assert.equal(guide.ranked_executable_macro_menu.compact_default_menu, true);
+    assert.deepEqual(guide.macro_menu.macro_ids, EXPECTED_DEFAULT_MENU_MACRO_IDS);
+    assert.equal(guide.macro_menu.flat, true);
+    assert.equal(guide.macro_menu.compact, true);
     assert.equal(menu.product_surface.macro_first_routing.contract, ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT);
     assert.equal(menu.product_surface.macro_first_routing.route, "macro_first");
     assert.deepEqual(menu.product_surface.macro_first_routing.selected_macro_ids, EXPECTED_DEFAULT_MENU_MACRO_IDS);
@@ -51,9 +51,9 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
 
   it("keeps exact detail truthful and records typed reasons on real Template fallback responses", () => {
     const runtime = createCallTemplateRuntime();
-    const guide = createAlpha3_2AAgentContextMacroGuide();
+    const guide = createAlpha3_3B1AgentContextMacroGuide();
     const exact = runtime.list_templates({
-      ids: ["macro.midi.create_clip", "macro.fx.apply_native_chain", "macro.controls.set"],
+      ids: ["macro.midi.apply", "macro.fx.apply_chain", "macro.controls.set"],
       fields: ["id"],
     });
     const expansions = exact.product_surface.agent_context_macro_guide.requested_expansions.items;
@@ -70,8 +70,8 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
     assert.match(guide.direct_template_fallback.routing, /call_recipe/i);
 
     assert.deepEqual(expansions.map((item) => item.id), [
-      "macro.midi.create_clip",
-      "macro.fx.apply_native_chain",
+      "macro.midi.apply",
+      "macro.fx.apply_chain",
       "macro.controls.set",
     ]);
     assert.equal(expansions.every((item) => item.implementation_status === "executable_registered_program"), true);
@@ -96,7 +96,7 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
   it("makes SQLite candidates and live re-resolution the convenient project-aware path without low-level ref assembly", () => {
     const runtime = createCallTemplateRuntime();
     const expansions = runtime.list_templates({
-      ids: ["macro.project.query", "macro.controls.set", "macro.midi.create_clip", "macro.fx.apply_native_chain"],
+      ids: ["macro.project.query", "macro.controls.set", "macro.midi.apply", "macro.fx.apply_chain"],
       fields: ["id"],
     }).product_surface.agent_context_macro_guide.requested_expansions.items;
 
@@ -107,11 +107,11 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
     assert.match(byId.get("macro.controls.set").recovery_steps.join(" "), /never treat SQLite rows as write authority/i);
     assert.equal(Object.hasOwn(byId.get("macro.controls.set").input_shape, "selector"), true);
     assert.equal(Object.hasOwn(byId.get("macro.controls.set").input_shape, "selectors"), false);
-    assert.match(byId.get("macro.midi.create_clip").required_readiness.join(" "), /fresh unambiguous project-aware selector/i);
-    assert.match(byId.get("macro.midi.create_clip").recovery_steps.join(" "), /do not assemble take refs manually/i);
-    assert.equal(byId.get("macro.midi.create_clip").dry_run_shape.supported, true);
-    assert.match(byId.get("macro.fx.apply_native_chain").input_shape.selector, /Project Index track selector/i);
-    assert.match(byId.get("macro.fx.apply_native_chain").input_shape.plugin, /reacomp/i);
+    assert.match(byId.get("macro.midi.apply").required_readiness.join(" "), /fresh unambiguous project-aware selector/i);
+    assert.match(byId.get("macro.midi.apply").recovery_steps.join(" "), /do not assemble take refs manually/i);
+    assert.equal(byId.get("macro.midi.apply").dry_run_shape.supported, true);
+    assert.match(byId.get("macro.fx.apply_chain").input_shape.selector, /Project Index track selector/i);
+    assert.match(byId.get("macro.fx.apply_chain").input_shape.plugin, /reacomp/i);
   });
 
   it("keeps representative Macro envelopes compact under offline blockers", async () => {
@@ -120,8 +120,8 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
       runtime.call_template({ id: "macro.project.inspect", input: { include: ["project_path"] } }),
       runtime.call_template({ id: "macro.project.query", input: { entity: "tracks", limit: 25 } }),
       runtime.call_template({ id: "macro.controls.set", input: { target_kind: "track", fields: { volume_db: -6 } } }),
-      runtime.call_template({ id: "macro.midi.create_clip", input: { start_seconds: 0, end_seconds: 1, notes: [] } }),
-      runtime.call_template({ id: "macro.fx.apply_native_chain", input: { controls: { threshold_db: -18, ratio: 3 } } }),
+      runtime.call_template({ id: "macro.midi.apply", input: { mode: "create_clips", start_seconds: 0, end_seconds: 1, notes: [] } }),
+      runtime.call_template({ id: "macro.fx.apply_chain", input: { controls: { threshold_db: -18, ratio: 3 } } }),
     ]);
 
     for (const response of responses) {

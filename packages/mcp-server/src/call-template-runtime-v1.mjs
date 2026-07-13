@@ -194,10 +194,22 @@ import {
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
   ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
   alpha3_2AContractOnlyBlockerForId,
-  createAlpha3_2AAgentContextMacroGuide,
   createAlpha3_2AContractMacroDiscoveryItems,
   isAlpha3_2AContractOnlyMacroId,
 } from "./alpha3-2a-agent-context-macro-guide-v1.mjs";
+import {
+  ALPHA3_3_B1_FINAL_TARGET_IDS,
+  adaptAlpha3_3B1CanonicalExecutionRequest,
+  alpha3_3B1DeprecatedAlias,
+  alpha3_3B1ExecutorSourceId,
+  canonicalizeAlpha3_3B1MacroDiscoveryItem,
+  canonicalizeAlpha3_3B1MacroExecutionEnvelope,
+  isAlpha3_3B1DeprecatedAlias,
+  isAlpha3_3B1InternalDraftMacroId,
+} from "./alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
+  createAlpha3_3B1AgentContextMacroGuide,
+} from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -948,13 +960,16 @@ export function createCallTemplateRuntime(options = {}) {
   const legacyProjectIndexCompatibilityDiscovery = [];
   const macroDiscovery = (id, createItems) => {
     const readiness = runtimeMacroLiveReadiness({ id, live, projectIndexRuntime });
-    return createItems({ liveRunnableNow: readiness.live_runnable_now }).map((item) => deepFreeze({
-      ...item,
-      live_runnable_now: readiness.live_runnable_now,
-      known_blocker: readiness.live_runnable_now
-        ? null
-        : readiness.known_blocker ?? item.known_blocker ?? "macro_fixed_dependencies_not_available",
-    }));
+    return createItems({ liveRunnableNow: readiness.live_runnable_now }).map((item) => {
+      const canonicalItem = canonicalizeAlpha3_3B1MacroDiscoveryItem(item, id);
+      return deepFreeze({
+        ...canonicalItem,
+        live_runnable_now: readiness.live_runnable_now,
+        known_blocker: readiness.live_runnable_now
+          ? null
+          : readiness.known_blocker ?? canonicalItem.known_blocker ?? "macro_fixed_dependencies_not_available",
+      });
+    });
   };
   const executableDiscoveryTemplates = [
     ...macroDiscovery(ALPHA3_2E_PROJECT_INSPECT_MACRO_ID, createAlpha3_2EProjectInspectMacroDiscoveryItems),
@@ -964,14 +979,14 @@ export function createCallTemplateRuntime(options = {}) {
     ...macroDiscovery(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, createAlpha3_2C3DProjectFileMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_ROUTING_APPLY_MACRO_ID, createAlpha3_2ERoutingApplyMacroDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
-    ...macroDiscovery(ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, (runtimeOptions) =>
+    ...macroDiscovery("macro.midi.apply", (runtimeOptions) =>
       [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
-    ...macroDiscovery(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID, createAlpha3_2_5DNativeFxMacroDiscoveryItems),
-    ...macroDiscovery(ALPHA3_2E_RENDER_TARGETS_MACRO_ID, createAlpha3_2ERenderTargetsMacroDiscoveryItems),
-    ...macroDiscovery(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, (runtimeOptions) =>
+    ...macroDiscovery("macro.fx.apply_chain", createAlpha3_2_5DNativeFxMacroDiscoveryItems),
+    ...macroDiscovery("macro.fx.set_controls", (runtimeOptions) =>
       createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
     ...macroDiscovery(ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID, (runtimeOptions) =>
       createAlpha3C5OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
+    ...macroDiscovery(ALPHA3_2E_RENDER_TARGETS_MACRO_ID, createAlpha3_2ERenderTargetsMacroDiscoveryItems),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...legacyProjectIndexCompatibilityDiscovery,
     ...catalogDiscoveryTemplates,
@@ -1019,6 +1034,81 @@ export function createCallTemplateRuntime(options = {}) {
       const macroAtomic = live.enabled || options.executor
         ? createMacroAtomicExecutor(executeAcceptedAtomic, normalized.context)
         : null;
+      if (isAlpha3_3B1DeprecatedAlias(id)) {
+        const alias = alpha3_3B1DeprecatedAlias(id, normalized.input);
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_REPLACED",
+          `${id} is a hidden compatibility alias; use ${alias.replacement}.`,
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              implementation_status: "deprecated_alias",
+              replacement: alias.replacement,
+              replacement_input: alias.replacement_input,
+            },
+          },
+        );
+      }
+      if (isAlpha3_3B1InternalDraftMacroId(id)) {
+        throw new CallTemplateRuntimeError(
+          "CALL_TEMPLATE_ID_HELD",
+          `${id} is an internal Alpha3.3 draft and is not publicly callable before its executable runtime and evidence are accepted.`,
+          {
+            recoverable: true,
+            id,
+            details: {
+              id,
+              implementation_status: "internal_draft",
+              visible: false,
+            },
+          },
+        );
+      }
+      if (["macro.midi.apply", "macro.fx.apply_chain", "macro.fx.set_controls"].includes(id)) {
+        const adapted = adaptAlpha3_3B1CanonicalExecutionRequest(normalized);
+        if (!adapted.ok) {
+          throw new CallTemplateRuntimeError(
+            "CALL_TEMPLATE_REQUEST_INVALID",
+            adapted.message,
+            {
+              recoverable: true,
+              id,
+              details: { blocker_code: adapted.code, ...adapted.details },
+            },
+          );
+        }
+        let envelope;
+        if (adapted.executor_id === ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID) {
+          envelope = await executeAlpha3_2_5DMidiMacro({
+            request: adapted.request,
+            executeAtomic: macroAtomic,
+            projectIndexRuntime,
+            catalog,
+            now,
+          });
+        } else if (adapted.executor_id === ALPHA3_2_5_D_NATIVE_FX_MACRO_ID) {
+          envelope = await executeAlpha3_2_5DNativeFxMacro({
+            request: adapted.request,
+            executeAtomic: macroAtomic,
+            projectIndexRuntime,
+            catalog,
+            now,
+          });
+        } else {
+          envelope = await executeAlpha3_2_5CControlMacro({
+            request: adapted.request,
+            executeAtomic: macroAtomic,
+            projectIndexRuntime,
+            catalog,
+            now,
+          });
+        }
+        const canonicalEnvelope = canonicalizeAlpha3_3B1MacroExecutionEnvelope(envelope, id);
+        retainEvidence(retainedEvidence, evidenceFromExecution(canonicalEnvelope, live.evidence), evidenceLimit);
+        return canonicalEnvelope;
+      }
       if (isAlpha3_2_5BProjectUnderstandingMacroId(id)) {
         const envelope = await executeAlpha3_2_5BProjectUnderstandingMacro({
           request: normalized,
@@ -2078,8 +2168,9 @@ function runtimeMacroLiveReadiness({ id, live, projectIndexRuntime }) {
     });
   }
 
+  const executorSourceId = alpha3_3B1ExecutorSourceId(id);
   const entry = PUBLIC_MACRO_PROGRAM_REGISTRIES
-    .map((registry) => registry.get(id))
+    .map((registry) => registry.get(executorSourceId))
     .find(Boolean) ?? null;
   if (!entry) {
     return deepFreeze({
@@ -2252,7 +2343,7 @@ function runtimeShouldAttachActionMetadata(request) {
 
 function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
   const ids = response.items.map((item) => item.id).filter((id) => typeof id === "string");
-  const macroIds = ids.filter((id) => id.startsWith("macro.")).slice(0, 12);
+  const macroIds = ids.filter((id) => id.startsWith("macro.")).slice(0, ALPHA3_3_B1_FINAL_TARGET_IDS.length);
   const templateIds = ids.filter((id) => id.startsWith("template."));
   const queryPresent = isPlainObject(request) && typeof request.query === "string" && request.query.trim() !== "";
   const exactIds = response.mode === "ids";
@@ -2302,9 +2393,10 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideReques
     expanded_detail_fields: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_EXPANDED_DETAIL_FIELDS,
     agent_startup_guidance: OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY,
     ...(expanded ? { agent_startup_guidance_snapshot: createOpenReaperAgentStartupGuidance() } : {}),
-    agent_context_macro_guide: createAlpha3_2AAgentContextMacroGuide({
+    agent_context_macro_guide: createAlpha3_3B1AgentContextMacroGuide({
       requested_ids: guideRequest.requested_ids,
       missing_ids: guideRequest.missing_ids,
+      recommended_macro_ids: macroFirstRouting?.selected_macro_ids?.slice(0, 3) ?? [],
     }),
     macro_first_routing: macroFirstRouting,
     item_schema: {

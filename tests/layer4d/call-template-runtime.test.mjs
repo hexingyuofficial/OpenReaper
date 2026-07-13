@@ -432,11 +432,11 @@ describe("Layer 4D call_template runtime binding", () => {
       "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
-      "macro.midi.create_clip",
-      "macro.fx.apply_native_chain",
-      "macro.render.targets",
-      "macro.set_stock_plugin_controls",
+      "macro.midi.apply",
+      "macro.fx.apply_chain",
+      "macro.fx.set_controls",
       "macro.controls.set",
+      "macro.render.targets",
     ]);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
     assert.equal(runtimeMenu.page.has_more, false);
@@ -536,7 +536,8 @@ describe("Layer 4D call_template runtime binding", () => {
     }
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.set_track_controls"), false);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.controls.set"), true);
-    assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === "macro.fx.set_controls"), true);
+    assert.equal(runtimeMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), false);
     assert.deepEqual(
       runtimeMenu.product_surface.orchestration_policy.batch_readback.evidence_required,
       ["request_id", "undo_evidence", "canonical_refs", "readback_status", "typed_blockers"],
@@ -692,8 +693,8 @@ describe("Layer 4D call_template runtime binding", () => {
 
     const stockMacroSearch = runtime.list_templates({ query: "stock plugin controls", limit: 10 });
     assert.equal(stockMacroSearch.items.length, 1);
-    assert.equal(stockMacroSearch.items[0].id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
-    assert.equal(stockMacroSearch.items[0].template_id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(stockMacroSearch.items[0].id, "macro.fx.set_controls");
+    assert.equal(stockMacroSearch.items[0].template_id, "macro.fx.set_controls");
     assert.equal(stockMacroSearch.items[0].capability_truth.kind, "official_macro");
 
     const liveRuntime = createCallTemplateRuntime({
@@ -707,7 +708,8 @@ describe("Layer 4D call_template runtime binding", () => {
     const liveMenu = liveRuntime.list_templates();
     const liveMenuIds = liveMenu.items.map((item) => item.id);
     assert.equal(liveMenuIds.includes("macro.controls.set"), true);
-    assert.equal(liveMenuIds.includes(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
+    assert.equal(liveMenuIds.includes("macro.fx.set_controls"), true);
+    assert.equal(liveMenuIds.includes(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), false);
     assert.deepEqual(
       liveMenuIds.filter((id) => id.startsWith("template.")),
       CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,

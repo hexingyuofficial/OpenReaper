@@ -19,6 +19,8 @@ import {
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 
+const CURRENT_STOCK_PLUGIN_MACRO_ID = "macro.fx.set_controls";
+
 describe("Alpha3 E1 stock plugin fluency", () => {
   it("registers semantic maps for the Phase 3 stock plugin set without adding tools", () => {
     const registry = listAlpha3E1StockPluginMaps();
@@ -520,7 +522,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     const runtime = createCallTemplateRuntime();
     const menu = runtime.list_templates({ query: "stock plugin controls", limit: 10 });
     const expanded = runtime.list_templates({
-      ids: [ALPHA3_E1_STOCK_PLUGIN_MACRO_ID],
+      ids: [CURRENT_STOCK_PLUGIN_MACRO_ID],
       fields: ["id"],
     }).product_surface;
 
@@ -538,8 +540,8 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     );
     assert.equal(expanded.stock_plugin_live_evidence.broad_live_support, false);
     assert.deepEqual(expanded.stock_plugin_live_evidence.accepted_live_plugin_ids, ["reacomp"]);
-    assert.equal(menu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true);
-    const entry = menu.items.find((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(menu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID), true);
+    const entry = menu.items.find((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID);
     assert.equal(entry.action_kind, "macro");
     assert.equal(entry.current_status, "needs_live");
     assert.equal(entry.beginner_label, "Start or reconnect OpenReaper");
@@ -547,7 +549,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
 
     for (const pluginId of ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.plugin_ids) {
       const pluginMenu = runtime.list_templates({ query: pluginId, limit: 10 });
-      assert.equal(pluginMenu.items.some((item) => item.id === ALPHA3_E1_STOCK_PLUGIN_MACRO_ID), true, pluginId);
+      assert.equal(pluginMenu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID), true, pluginId);
     }
   });
 
@@ -556,7 +558,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
       now: () => new Date("2026-07-07T14:31:44.000Z"),
     });
     const response = await runtime.call_template({
-      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
         plugin: "reacomp",
         controls: {
@@ -576,17 +578,17 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(response.contract, "macro.execution.v1");
     assert.equal(response.ok, false);
     assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
-    assert.equal(response.macro.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(response.macro.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
     assert.equal(response.execution.status, "blocked");
     assert.deepEqual(response.result.changes, []);
     assert.equal(response.recovery.sqlite_rows_authorize_writes, false);
-    assert.equal(runtime.last_evidence().template.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(runtime.last_evidence().template.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
   });
 
   it("returns the same typed live blocker for a valid starter action offline", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
-      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
         starter_action: "gentle_vocal_compression",
       },
@@ -597,7 +599,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
 
     assert.equal(response.ok, false);
     assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
-    assert.equal(response.macro.id, ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
+    assert.equal(response.macro.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
     assert.equal(response.execution.status, "blocked");
     assert.deepEqual(response.result.changes, []);
   });
@@ -605,7 +607,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
   it("reports unsupported starter actions clearly through call_template", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
-      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
         starter_action: "make_everything_magical",
       },
@@ -623,7 +625,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
   it("returns typed macro blockers through call_template without child mutation requests", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
-      id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+      id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
         plugin: "reacomp",
         controls: {

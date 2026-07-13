@@ -12,6 +12,9 @@ import { ALPHA3_2_5_D_MIDI_MACRO_REGISTRY } from "../../packages/mcp-server/src/
 import { ALPHA3_2_5_D_NATIVE_FX_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-d-fx-macro-v1.mjs";
 import { ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT } from "../../packages/mcp-server/src/alpha3-2d-project-index-runtime-v1.mjs";
 import {
+  ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
+} from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -43,7 +46,7 @@ describe("Alpha3.2.5 Macro discovery capability truth", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
       },
     });
-    const items = runtime.list_templates({ ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, fields: ["summary"] }).items;
+    const items = runtime.list_templates({ ids: ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, fields: ["summary"] }).items;
     assert.equal(items.length, 12);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === false), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === "macro_fixed_dependencies_not_available"), true);
@@ -65,7 +68,7 @@ describe("Alpha3.2.5 Macro discovery capability truth", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    const items = runtime.list_templates({ ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS, fields: ["summary"] }).items;
+    const items = runtime.list_templates({ ids: ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, fields: ["summary"] }).items;
     assert.equal(items.length, 12);
     assert.equal(items.every((item) => item.capability_truth.live_runnable_now === true), true);
     assert.equal(items.every((item) => item.capability_truth.known_blocker === null), true);

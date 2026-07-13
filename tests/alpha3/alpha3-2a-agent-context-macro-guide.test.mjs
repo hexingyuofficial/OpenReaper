@@ -26,6 +26,12 @@ import {
   attachAlpha3_2AAgentContextProductMetadata,
   createAlpha3_2AAgentContextMacroGuide,
 } from "../../packages/mcp-server/src/alpha3-2a-agent-context-macro-guide-v1.mjs";
+import {
+  ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+  ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+  ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
+} from "../../packages/mcp-server/src/alpha3-3-b1-agent-context-macro-guide-v1.mjs";
+import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
@@ -111,6 +117,7 @@ const EXPECTED_SECONDARY_EXECUTABLE_IDS = [
   "macro.controls.set",
   "macro.set_stock_plugin_controls",
 ];
+const EXPECTED_CURRENT_PRODUCT_MACRO_IDS = [...ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS];
 const EXPECTED_EXPANDED_DETAIL_FIELDS = [
   "agent_startup_guidance_snapshot",
   "speed_productization_snapshot",
@@ -169,7 +176,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(guide.primary_spine.current_posture, "runtime_aligned_primary_manuals");
   });
 
-  it("places complete action-precise 13-field manual cards in compact default product metadata", () => {
+  it("keeps default product metadata compact and expands complete manuals only by exact id", () => {
     const runtime = createCallTemplateRuntime();
     const surface = runtime.list_templates().product_surface;
     const guide = surface.agent_context_macro_guide;
@@ -180,39 +187,17 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(surface.expanded_detail_fields, EXPECTED_EXPANDED_DETAIL_FIELDS);
     assert.deepEqual(expandedDetailFieldsPresent(surface), []);
 
-    for (const row of guide.primary_spine.rows) {
-      assert.equal(
-        row.implementation_status,
-        ["macro.project.query", "macro.project.inspect"].includes(row.id)
-          ? "executable_registered_program"
-          : "executable",
-      );
-      assert.deepEqual(Object.keys(row.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
+    assert.deepEqual(guide.macro_menu.macro_ids, EXPECTED_CURRENT_PRODUCT_MACRO_IDS);
+    assert.equal(guide.macro_menu.rows.every((row) => !Object.hasOwn(row, "action_manual")), true);
+    assert.equal(Object.hasOwn(guide, "primary_spine"), false);
+    assert.equal(Object.hasOwn(guide, "secondary_menu"), false);
+
+    const exact = runtime.list_templates({ ids: ["macro.project.inspect", "macro.midi.apply"], fields: ["id"] });
+    for (const expansion of exact.product_surface.agent_context_macro_guide.requested_expansions.items) {
+      assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       for (const field of ALPHA3_2A_ACTION_MANUAL_FIELDS) {
-        assert.equal(hasContent(row.action_manual[field]), true, `${row.id}.${field}`);
+        assert.equal(hasContent(expansion.action_manual[field]), true, `${expansion.id}.${field}`);
       }
-      assert.equal(row.action_manual.input_shape.length > 0, true);
-      assert.equal(row.action_manual.preflight_steps.length > 0, true);
-      assert.equal(row.action_manual.underlying_actions.length > 0, true);
-      assert.equal(row.action_manual.readback_steps.length > 0, true);
-      assert.equal(row.action_manual.success_criteria.length > 0, true);
-      const expectedBlocker = row.id === "macro.project.query"
-        ? "INDEX_NOT_READY"
-        : row.id === "macro.project.inspect"
-          ? "BRIDGE_NOT_READY"
-          : row.id === "macro.project.delete_targets"
-            ? "DELETE_TARGETS_PREVIEW_REQUIRED"
-            : row.id === "macro.project.apply_layout"
-              ? "LAYOUT_PREVIEW_REQUIRED"
-              : row.id === "macro.routing.apply"
-                ? "ROUTING_APPLY_PREVIEW_REQUIRED"
-                : row.id === "macro.media.place_assets"
-                  ? "MEDIA_PLACE_ASSETS_PREVIEW_REQUIRED"
-                  : row.id === "macro.render.targets"
-                    ? "RENDER_ROOT_NOT_READY"
-                    : "CONTRACT_ONLY";
-      assert.equal(row.action_manual.common_blockers.includes(expectedBlocker), true, `${row.id} expected ${expectedBlocker}`);
-      assert.equal(row.action_manual.examples.requested_expansion, true);
     }
   });
 
@@ -241,24 +226,16 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(exact.missing_ids, ["macro.index_status", "macro.missing"]);
     assert.deepEqual(expansions.requested_ids, requested);
     assert.deepEqual(expansions.missing_ids, ["macro.index_status", "macro.missing"]);
-    assert.equal(expansions.contract, ALPHA3_2A_REQUESTED_EXPANSIONS_CONTRACT);
-    assert.equal(expansions.version, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
+    assert.equal(expansions.contract, ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT);
+    assert.equal(expansions.version, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
     assert.deepEqual(expansions.items.map((item) => item.id), [
       "macro.render.targets",
       "macro.project.file",
       "macro.project.inspect",
     ]);
     for (const expansion of expansions.items) {
-      const runtimeBound = ["macro.project.file", "macro.project.inspect", "macro.project.delete_targets", "macro.project.apply_layout", "macro.routing.apply", "macro.media.place_assets", "macro.render.targets"].includes(expansion.id);
-      assert.equal(expansion.runnable, runtimeBound);
-      assert.equal(
-        expansion.implementation_status,
-        expansion.id === "macro.project.inspect"
-          ? "executable_registered_program"
-          : runtimeBound
-            ? "executable"
-            : "contract_only_non_runnable",
-      );
+      assert.equal(expansion.runnable, true);
+      assert.equal(expansion.implementation_status, "executable_registered_program");
       assert.deepEqual(Object.keys(expansion.action_manual), ALPHA3_2A_ACTION_MANUAL_FIELDS);
       assert.equal(Buffer.byteLength(JSON.stringify(expansion.action_manual)) <= ALPHA3_2A_EXACT_MANUAL_MAX_BYTES, true);
     }
@@ -279,10 +256,10 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     }
 
     const macroDetails = runtime.list_templates({
-      ids: ["macro.controls.set", "macro.set_stock_plugin_controls"],
+      ids: ["macro.controls.set", "macro.fx.set_controls"],
       fields: ["id", "inputSchema", "outputSchema", "examples", "expectedDelta"],
     });
-    assert.deepEqual(macroDetails.items.map((item) => item.id), ["macro.controls.set", "macro.set_stock_plugin_controls"]);
+    assert.deepEqual(macroDetails.items.map((item) => item.id), ["macro.controls.set", "macro.fx.set_controls"]);
     for (const item of macroDetails.items) {
       assert.ok(item.inputSchema);
       assert.ok(item.outputSchema);
@@ -304,19 +281,15 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
 
   it("uses the active-plan project.query entity vocabulary exactly", () => {
     const runtime = createCallTemplateRuntime();
-    const guide = runtime.list_templates().product_surface.agent_context_macro_guide;
     const exact = runtime.list_templates({ ids: ["macro.project.query"], fields: ["id"] });
     const manual = exact.product_surface.agent_context_macro_guide.requested_expansions.items[0].action_manual;
 
     assert.deepEqual(ALPHA3_2A_PROJECT_QUERY_ENTITIES, EXPECTED_QUERY_ENTITIES);
-    assert.deepEqual(guide.project_query_entities, EXPECTED_QUERY_ENTITIES);
     assert.equal(manual.input_shape.entity, EXPECTED_QUERY_ENTITIES.join(" | "));
   });
 
   it("reports four accepted/live-smoked project-file templates and an executable save Macro with new/open/create held", () => {
     const runtime = createCallTemplateRuntime();
-    const guide = runtime.list_templates().product_surface.agent_context_macro_guide;
-    const inspectCard = guide.primary_spine.rows.find((row) => row.id === "macro.project.inspect");
     const requested = runtime.list_templates({
       ids: ["macro.project.inspect", "macro.project.file"],
       fields: ["id"],
@@ -325,12 +298,6 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const projectFileManual = requested.find((item) => item.id === "macro.project.file").action_manual;
 
     assert.deepEqual(ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE.ids.map((row) => row.id), EXPECTED_PROJECT_FILE_TEMPLATE_IDS);
-    assert.deepEqual(guide.project_file_posture.ids.map((row) => row.id), EXPECTED_PROJECT_FILE_TEMPLATE_IDS);
-    assert.equal(guide.project_file_posture.status, "reads_and_writes_accepted_live_smoked");
-    assert.deepEqual(guide.project_file_posture.accepted_mutation_routes, EXPECTED_PROJECT_FILE_TEMPLATE_IDS.slice(2));
-    assert.deepEqual(guide.project_file_posture.ids.map((row) => row.status), ["accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked", "accepted_live_smoked"]);
-    assert.match(inspectCard.action_manual.when_to_use, /Inspect current project identity/);
-    assert.equal(inspectCard.action_manual.common_blockers.includes("BRIDGE_NOT_READY"), true);
     assert.match(inspectManual.readback_steps.join(" "), /project identity\/path/);
     for (const id of EXPECTED_PROJECT_FILE_TEMPLATE_IDS) {
       assert.equal(projectFileManual.underlying_actions.some((row) => row.includes(id)), true, id);
@@ -366,7 +333,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const defaultMenu = runtime.list_templates();
     const defaultGuide = defaultMenu.product_surface.agent_context_macro_guide;
     const exactLegacy = runtime.list_templates({
-      ids: [...EXPECTED_CONSOLIDATED_CONTROL_IDS, ...EXPECTED_DISTINCT_LEGACY_IDS, "macro.set_stock_plugin_controls"],
+      ids: [...EXPECTED_CONSOLIDATED_CONTROL_IDS, ...EXPECTED_DISTINCT_LEGACY_IDS, "macro.set_stock_plugin_controls", "macro.fx.set_controls"],
       fields: ["id"],
     });
     const consolidated = runtime.list_templates({
@@ -384,9 +351,9 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.deepEqual(guide.control_consolidation.withdrawn_ids, ["macro.set_midi_controls"]);
     assert.equal(guide.primary_spine.rows.some((row) => EXPECTED_CONSOLIDATED_CONTROL_IDS.includes(row.id)), false);
     assert.equal(defaultGuide.requested_expansions.items.length, 0);
-    assert.deepEqual(exactLegacy.items.map((item) => item.id), ["macro.set_stock_plugin_controls"]);
-    assert.deepEqual(exactLegacy.missing_ids, [...EXPECTED_CONSOLIDATED_CONTROL_IDS, "macro.set_midi_controls"]);
-    assert.deepEqual(exactLegacy.product_surface.agent_context_macro_guide.requested_expansions.items.map((item) => item.id), ["macro.set_stock_plugin_controls"]);
+    assert.deepEqual(exactLegacy.items.map((item) => item.id), ["macro.fx.set_controls"]);
+    assert.deepEqual(exactLegacy.missing_ids, [...EXPECTED_CONSOLIDATED_CONTROL_IDS, "macro.set_midi_controls", "macro.set_stock_plugin_controls"]);
+    assert.deepEqual(exactLegacy.product_surface.agent_context_macro_guide.requested_expansions.items.map((item) => item.id), ["macro.fx.set_controls"]);
     assert.deepEqual(consolidated.items.map((item) => item.id), ["macro.controls.set"]);
     assert.deepEqual(defaultMenu.items.filter((item) => item.action_kind === "macro").map((item) => item.id), [
       "macro.project.inspect",
@@ -396,11 +363,11 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.project.file",
       "macro.routing.apply",
       "macro.media.place_assets",
-      "macro.midi.create_clip",
-      "macro.fx.apply_native_chain",
-      "macro.render.targets",
-      "macro.set_stock_plugin_controls",
+      "macro.midi.apply",
+      "macro.fx.apply_chain",
+      "macro.fx.set_controls",
       "macro.controls.set",
+      "macro.render.targets",
     ]);
   });
 
@@ -543,20 +510,18 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       const legacy = parseToolJson(legacyResult);
       const render = parseToolJson(renderResult);
       const inspect = parseToolJson(inspectResult);
-      const guides = [
-        ping.product_surface.agent_context_macro_guide,
-        templates.product_surface.agent_context_macro_guide,
-        recipes.product_surface.agent_context_macro_guide,
-      ];
-
-      for (const guide of guides) {
-        assert.equal(guide.contract, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
-        assert.equal(guide.version, ALPHA3_2A_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
-        assert.equal(guide.status, "runtime_aligned");
-        assert.equal(guide.review_status, "truthful_12_macro_surface");
-        assert.equal(guide.primary_spine.rows.every((row) => hasCompleteManual(row.action_manual)), true);
-        assert.deepEqual(guide.ranked_executable_macro_menu.macro_ids, EXPECTED_EXECUTABLE_MACRO_IDS);
+      for (const guide of [ping.product_surface.agent_context_macro_guide, recipes.product_surface.agent_context_macro_guide]) {
+        assert.equal(guide.contract, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
+        assert.equal(guide.version, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
+        assert.deepEqual(guide.macro_menu.macro_ids, EXPECTED_CURRENT_PRODUCT_MACRO_IDS);
+        assert.equal(Object.hasOwn(guide, "primary_spine"), false);
+        assert.equal(Object.hasOwn(guide, "secondary_menu"), false);
       }
+      const templateGuide = templates.product_surface.agent_context_macro_guide;
+      assert.equal(templateGuide.contract, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
+      assert.equal(templateGuide.version, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
+      assert.deepEqual(templateGuide.macro_menu.macro_ids, EXPECTED_CURRENT_PRODUCT_MACRO_IDS);
+      assert.equal(Object.hasOwn(templateGuide, "primary_spine"), false);
       assert.equal(toolTextBytes(templatesResult) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
       assert.equal(state.ok, false);
       assert.equal(state.error.code, "SCOPE_NOT_BOUND_IN_ALPHA_STDIO");
