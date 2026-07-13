@@ -56,6 +56,32 @@ const EMPTY_ROWS = Object.freeze({
   tracks: [], items: [], takes: [], fx: [], sends: [], envelopes: [],
   markers_regions: [], media_sources: [], selection_state: [], object_changes: [], background_jobs: [],
 });
+const LOGICAL_REFRESH_SCOPE_CONFIG = Object.freeze({
+  tracks: Object.freeze({
+    projection_scope: "tracks",
+    store_method: "replaceTracks",
+    row_noun: "track",
+    row_plural: "tracks",
+    declared_count_field: "declared_track_count",
+    returned_count_field: "returned_track_count",
+    cursor_field: "track_cursor",
+    next_cursor_field: "next_track_cursor",
+    count_mismatch_code: "LOGICAL_REFRESH_TRACK_COUNT_MISMATCH",
+    source_template_id: "template.project.create_observation_bundle",
+  }),
+  automation: Object.freeze({
+    projection_scope: "automation",
+    store_method: "replaceEnvelopes",
+    row_noun: "envelope",
+    row_plural: "envelopes",
+    declared_count_field: "declared_envelope_count",
+    returned_count_field: "returned_envelope_count",
+    cursor_field: "envelope_cursor",
+    next_cursor_field: "next_envelope_cursor",
+    count_mismatch_code: "LOGICAL_REFRESH_ENVELOPE_COUNT_MISMATCH",
+    source_template_id: "template.automation.list_project_envelopes",
+  }),
+});
 
 export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => new Date();
@@ -575,21 +601,26 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     if (adapter.snapshot().lifecycle === "stale_session") return logicalRefreshFailure("stale_session", "INDEX_STALE_SESSION", "Project Index identity is stale; logical refresh cannot begin.");
     if (!isObject(input)) return logicalRefreshFailure("invalid_request", "LOGICAL_REFRESH_INPUT_REQUIRED", "Logical refresh requires an input object.");
     const scopes = [...new Set(arrayOf(input.scopes).length > 0 ? input.scopes : [input.scope ?? "tracks"])];
-    if (scopes.length !== 1 || scopes[0] !== "tracks") {
-      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime currently supports complete logical refresh staging for tracks only.", { scopes });
+    const scope = scopes.length === 1 ? scopes[0] : null;
+    const scopeConfig = logicalRefreshScopeConfig(scope);
+    if (!scopeConfig) {
+      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime supports one complete logical refresh scope at a time: tracks or automation.", { scopes });
     }
     const requestedRevision = input.expected_revision ?? input.expectedRevision;
     const expectedRevision = typeof requestedRevision === "string" ? normalizeProjectRevisionToken(requestedRevision) : null;
     if (!expectedRevision) return logicalRefreshFailure("revision_required", "LOGICAL_REFRESH_REVISION_REQUIRED", "Logical refresh must bind to the live REAPER project revision captured before paging.");
-    const declaredTrackCount = nonNegativeIntegerOrNull(input.declared_track_count ?? input.declaredTrackCount ?? input.declared_counts?.tracks);
+    const declaredEvidence = logicalRefreshDeclaredCountEvidence(scope, input);
+    if (declaredEvidence.invalid) return logicalRefreshFailure("invalid_declared_count", "LOGICAL_REFRESH_DECLARED_COUNT_INVALID", `Logical refresh declared ${scopeConfig.row_noun} count must be a non-negative integer.`, { scope });
+    if (declaredEvidence.values.length > 1) return logicalRefreshFailure("declared_count_inconsistent", "LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", `Logical refresh begin evidence disagrees on the declared ${scopeConfig.row_noun} count.`, { scope, declared_counts: declaredEvidence.values });
+    const declaredCount = declaredEvidence.values[0] ?? null;
     const refreshId = nonEmpty(input.transaction_id ?? input.transactionId ?? input.refresh_id ?? input.refreshId ?? input.id) ?? `logical-refresh:${randomUUID()}`;
     if (refreshId.length > 256 || /[\0\r\n]/.test(refreshId)) return logicalRefreshFailure("invalid_id", "LOGICAL_REFRESH_ID_INVALID", "Logical refresh id must be a bounded printable string.");
     if (logicalRefreshes.has(refreshId)) return logicalRefreshFailure("already_active", "LOGICAL_REFRESH_ALREADY_ACTIVE", "A logical refresh with this id is already active.", { transaction_id: refreshId });
     logicalRefreshes.set(refreshId, {
       refresh_id: refreshId,
-      scope: "tracks",
+      scope,
       expected_revision: expectedRevision,
-      declared_track_count: declaredTrackCount,
+      declared_count: declaredCount,
       observed_at: safeIso(input.observed_at, now),
       pages: new Map(),
       source_template_ids: new Set(),
@@ -597,9 +628,9 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     return logicalRefreshSuccess("logical_refresh_started", {
       transaction_id: refreshId,
       refresh_id: refreshId,
-      scope: "tracks",
+      scope,
       expected_revision: expectedRevision,
-      declared_track_count: declaredTrackCount,
+      [scopeConfig.declared_count_field]: declaredCount,
       sqlite_updated: false,
     });
   };
@@ -637,13 +668,15 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
       });
     }
     const pages = [...refresh.pages.values()].sort((left, right) => left.cursor - right.cursor);
+    const scopeConfig = logicalRefreshScopeConfig(refresh.scope);
+    if (!scopeConfig) return failCommit("LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "Logical refresh scope is no longer supported.", { scope: refresh.scope });
     if (pages.length === 0) return failCommit("LOGICAL_REFRESH_PAGES_REQUIRED", "Logical refresh cannot commit without staged pages.");
     let expectedCursor = 0;
     let terminalPageSeen = false;
     const mergedRows = [];
     for (const [pageIndex, page] of pages.entries()) {
       if (page.cursor !== expectedCursor) {
-        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", "Logical refresh pages must form one continuous track cursor sequence from zero.", { expected_cursor: expectedCursor, actual_cursor: page.cursor });
+        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", `Logical refresh pages must form one continuous ${scopeConfig.row_noun} cursor sequence from zero.`, { expected_cursor: expectedCursor, actual_cursor: page.cursor, scope: refresh.scope });
       }
       if (page.revision && page.revision !== refresh.expected_revision) {
         return failCommit("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh page revision did not match the revision captured before paging.", { expected_revision: refresh.expected_revision, page_revision: page.revision, cursor: page.cursor });
@@ -654,34 +687,35 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
         if (pageIndex !== pages.length - 1) return failCommit("LOGICAL_REFRESH_EARLY_TERMINAL_PAGE", "A logical refresh terminal page must be the final cursor page.", { cursor: page.cursor });
         terminalPageSeen = true;
       } else if (page.next_cursor !== expectedCursor) {
-        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", "Each logical refresh next cursor must equal the next unobserved track offset.", { cursor: page.cursor, expected_next_cursor: expectedCursor, actual_next_cursor: page.next_cursor });
+        return failCommit("LOGICAL_REFRESH_CURSOR_GAP", `Each logical refresh next cursor must equal the next unobserved ${scopeConfig.row_noun} offset.`, { cursor: page.cursor, expected_next_cursor: expectedCursor, actual_next_cursor: page.next_cursor, scope: refresh.scope });
       }
     }
     if (!terminalPageSeen) return failCommit("LOGICAL_REFRESH_COVERAGE_INCOMPLETE", "Logical refresh was discarded because no terminal complete-coverage page was staged.");
     const canonicalRows = dedupeRows(mergedRows);
-    const declaredTrackCount = refresh.declared_track_count ?? pages[0]?.declared_track_count ?? null;
-    if (declaredTrackCount === null || pages.some((page) => page.declared_track_count !== declaredTrackCount)) {
-      return failCommit("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", "Every logical refresh page must agree on one declared live track count.", { declared_track_count: declaredTrackCount });
+    const declaredCount = refresh.declared_count ?? pages[0]?.declared_count ?? null;
+    if (declaredCount === null || pages.some((page) => page.declared_count !== declaredCount)) {
+      return failCommit("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", `Every logical refresh page must agree on one declared live ${scopeConfig.row_noun} count.`, { [scopeConfig.declared_count_field]: declaredCount, scope: refresh.scope });
     }
-    if (mergedRows.length !== canonicalRows.length || canonicalRows.length !== declaredTrackCount || expectedCursor !== declaredTrackCount) {
-      return failCommit("LOGICAL_REFRESH_TRACK_COUNT_MISMATCH", "Logical refresh canonical rows must exactly match the declared live track count before complete coverage can commit.", {
-        declared_track_count: declaredTrackCount,
+    if (mergedRows.length !== canonicalRows.length || canonicalRows.length !== declaredCount || expectedCursor !== declaredCount) {
+      return failCommit(scopeConfig.count_mismatch_code, `Logical refresh canonical rows must exactly match the declared live ${scopeConfig.row_noun} count before complete coverage can commit.`, {
+        [scopeConfig.declared_count_field]: declaredCount,
         merged_row_count: mergedRows.length,
         canonical_row_count: canonicalRows.length,
         final_cursor: expectedCursor,
+        scope: refresh.scope,
       });
     }
     if (canonicalRows.length > maxRows || jsonByteLength(canonicalRows) > maxBytes) {
       return failCommit("LOGICAL_REFRESH_PRESSURE_EXCEEDED", "Logical refresh exceeded the bounded Project Index staging limits and was discarded.", { row_count: canonicalRows.length, max_rows: maxRows, max_bytes: maxBytes });
     }
     const observedAt = safeIso(input.observed_at, now);
-    const snapshotId = `snapshot:alpha3.3:logical:${createHash("sha256").update(`${refreshId}\0${finalRevision}\0${declaredTrackCount}`).digest("hex").slice(0, 24)}`;
+    const snapshotId = `snapshot:alpha3.3:logical:${createHash("sha256").update(`${refreshId}\0${refresh.scope}\0${finalRevision}\0${declaredCount}`).digest("hex").slice(0, 24)}`;
     let result;
     try {
-      result = adapter.replaceTracks({
+      result = adapter[scopeConfig.store_method]({
         snapshot_id: snapshotId,
         observed_at: observedAt,
-        source_template_id: [...refresh.source_template_ids][0] ?? "template.project.create_observation_bundle",
+        source_template_id: [...refresh.source_template_ids][0] ?? scopeConfig.source_template_id,
         projectRef: identity.project_ref,
         bridgeOwner: identity.bridge_owner,
         bridgeGeneration: identity.bridge_generation,
@@ -703,16 +737,16 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     return logicalRefreshSuccess("logical_refresh_committed", {
       transaction_id: refreshId,
       refresh_id: refreshId,
-      scope: "tracks",
+      scope: refresh.scope,
       expected_revision: refresh.expected_revision,
       final_revision: finalRevision,
       snapshot_id: snapshotId,
       page_count: pages.length,
       row_count: canonicalRows.length,
-      declared_track_count: declaredTrackCount,
-      applied_scopes: Object.freeze(["tracks"]),
-      row_counts: Object.freeze({ tracks: canonicalRows.length }),
-      coverage: Object.freeze({ tracks: "complete" }),
+      [scopeConfig.declared_count_field]: declaredCount,
+      applied_scopes: Object.freeze([refresh.scope]),
+      row_counts: Object.freeze({ [refresh.scope]: canonicalRows.length }),
+      coverage: Object.freeze({ [refresh.scope]: "complete" }),
       sqlite_updated: true,
       sqlite_rows_are_candidates_only: true,
     });
@@ -857,47 +891,49 @@ function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendi
     discardLogicalRefresh(refreshId, logicalRefreshes, pendingArtifacts);
     return logicalRefreshFailure("logical_refresh_aborted", code, message, details);
   };
-  const scope = logicalRefresh.scope ?? "tracks";
-  if (scope !== "tracks" || refresh.scope !== "tracks") return failStage("LOGICAL_REFRESH_SCOPE_MISMATCH", "Logical refresh page scope must match the active tracks refresh.", { scope });
-  const rows = arrayOf(projection.scopes?.tracks);
+  const scope = logicalRefresh.scope ?? refresh.scope;
+  const scopeConfig = logicalRefreshScopeConfig(scope);
+  if (!scopeConfig || scope !== refresh.scope) return failStage("LOGICAL_REFRESH_SCOPE_MISMATCH", "Logical refresh page scope must match the active refresh scope.", { expected_scope: refresh.scope, actual_scope: scope });
+  const rows = arrayOf(projection.scopes?.[scopeConfig.projection_scope]);
   const pageEvidence = isObject(execution?.logical_refresh_page_evidence) ? execution.logical_refresh_page_evidence : {};
-  const overview = isObject(readback?.project_map)
-    ? readback.project_map
-    : isObject(readback?.overview)
-      ? readback.overview
-      : isObject(readback)
-        ? readback
-        : {};
-  const cursor = logicalCursor(firstDefined(logicalRefresh.cursor, logicalRefresh.track_cursor, overview.track_cursor, pageEvidence.track_cursor));
-  if (cursor === null) return failStage("LOGICAL_REFRESH_CURSOR_REQUIRED", "Every logical refresh track page must report a non-negative integer cursor.");
-  const declaredTrackCount = nonNegativeIntegerOrNull(firstDefined(
-    logicalRefresh.declared_track_count,
-    logicalRefresh.declaredTrackCount,
-    overview.track_count,
-    pageEvidence.track_count,
-    refresh.declared_track_count,
-  ));
-  if (declaredTrackCount === null) return failStage("LOGICAL_REFRESH_DECLARED_COUNT_REQUIRED", "Every logical refresh track page must report the declared live track count.");
-  if (refresh.declared_track_count !== null && refresh.declared_track_count !== declaredTrackCount) {
-    return failStage("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", "Logical refresh page declared track count changed during paging.", { expected: refresh.declared_track_count, actual: declaredTrackCount, cursor });
+  const overview = logicalRefreshPageOverview(scope, readback);
+  const observationInput = isObject(execution?.project_index_observation_context?.input)
+    ? execution.project_index_observation_context.input
+    : {};
+  const cursorEvidence = logicalRefreshCursorEvidence(logicalRefreshPageCursorValues(scope, logicalRefresh, overview, pageEvidence, observationInput));
+  if (cursorEvidence.invalid || cursorEvidence.values.length > 1) {
+    return failStage("LOGICAL_REFRESH_CURSOR_CONFLICT", `Logical refresh page evidence must agree on one ${scopeConfig.row_noun} cursor.`, { scope, cursor_values: cursorEvidence.values });
   }
-  const returnedTrackCount = nonNegativeIntegerOrNull(firstDefined(
-    logicalRefresh.returned_track_count,
-    logicalRefresh.returnedTrackCount,
-    overview.returned_track_count,
-    pageEvidence.returned_track_count,
-    rows.length,
-  ));
-  if (returnedTrackCount !== rows.length) {
-    return failStage("LOGICAL_REFRESH_RETURNED_COUNT_MISMATCH", "Logical refresh page canonical row count must match returned_track_count.", { cursor, returned_track_count: returnedTrackCount, canonical_row_count: rows.length });
+  const cursor = cursorEvidence.values[0] ?? (refresh.pages.size === 0 ? 0 : null);
+  if (cursor === null) return failStage("LOGICAL_REFRESH_CURSOR_REQUIRED", `Every logical refresh ${scopeConfig.row_noun} page must report a non-negative integer cursor.`);
+  const declaredEvidence = logicalRefreshDeclaredCountEvidence(scope, logicalRefresh, overview, pageEvidence, refresh);
+  if (declaredEvidence.invalid) return failStage("LOGICAL_REFRESH_DECLARED_COUNT_INVALID", `Logical refresh page declared ${scopeConfig.row_noun} count must be a non-negative integer.`, { scope, cursor });
+  if (declaredEvidence.values.length > 1) return failStage("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", `Logical refresh page evidence disagrees on the declared ${scopeConfig.row_noun} count.`, { scope, cursor, declared_counts: declaredEvidence.values });
+  const declaredCount = declaredEvidence.values[0] ?? null;
+  if (declaredCount === null) return failStage("LOGICAL_REFRESH_DECLARED_COUNT_REQUIRED", `Every logical refresh ${scopeConfig.row_noun} page must report the declared live ${scopeConfig.row_noun} count.`);
+  if (refresh.declared_count !== null && refresh.declared_count !== declaredCount) {
+    return failStage("LOGICAL_REFRESH_DECLARED_COUNT_INCONSISTENT", `Logical refresh page declared ${scopeConfig.row_noun} count changed during paging.`, { expected: refresh.declared_count, actual: declaredCount, cursor, scope });
   }
-  const rawNextCursor = firstDefined(
-    logicalRefresh.next_cursor,
-    logicalRefresh.nextCursor,
-    logicalRefresh.next_track_cursor,
-    overview.next_track_cursor,
-    pageEvidence.next_track_cursor,
-  );
+  const returnedEvidence = nonNegativeIntegerEvidence([
+    logicalRefresh[scopeConfig.returned_count_field],
+    logicalRefresh.returned_count,
+    overview[scopeConfig.returned_count_field],
+    overview.returned_count,
+    pageEvidence[scopeConfig.returned_count_field],
+    pageEvidence.returned_count,
+  ]);
+  if (returnedEvidence.invalid || returnedEvidence.values.length > 1) {
+    return failStage("LOGICAL_REFRESH_RETURNED_COUNT_MISMATCH", `Logical refresh page evidence must agree on one ${scopeConfig.returned_count_field}.`, { cursor, scope, returned_counts: returnedEvidence.values });
+  }
+  const returnedCount = returnedEvidence.values[0] ?? rows.length;
+  if (returnedCount !== rows.length) {
+    return failStage("LOGICAL_REFRESH_RETURNED_COUNT_MISMATCH", `Logical refresh page canonical row count must match ${scopeConfig.returned_count_field}.`, { cursor, [scopeConfig.returned_count_field]: returnedCount, canonical_row_count: rows.length, scope });
+  }
+  const nextCursorEvidence = logicalRefreshCursorEvidence(logicalRefreshNextPageCursorValues(scope, logicalRefresh, overview, pageEvidence), { allowNull: true });
+  if (nextCursorEvidence.invalid || nextCursorEvidence.values.length > 1) {
+    return failStage("LOGICAL_REFRESH_CURSOR_CONFLICT", `Logical refresh page evidence must agree on one next ${scopeConfig.row_noun} cursor.`, { cursor, scope, next_cursor_values: nextCursorEvidence.values });
+  }
+  const rawNextCursor = nextCursorEvidence.provided ? nextCursorEvidence.values[0] : undefined;
   const truncated = firstDefined(logicalRefresh.truncated, overview.truncated, pageEvidence.truncated);
   let nextCursor;
   if (rawNextCursor === null || (rawNextCursor === undefined && truncated === false)) nextCursor = null;
@@ -905,29 +941,35 @@ function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendi
   if (nextCursor === null && rawNextCursor !== null && !(rawNextCursor === undefined && truncated === false)) {
     return failStage("LOGICAL_REFRESH_NEXT_CURSOR_INVALID", "A non-terminal logical refresh page must report a valid next cursor.", { cursor, next_cursor: rawNextCursor });
   }
-  if (truncated === true && nextCursor === null) return failStage("LOGICAL_REFRESH_NEXT_CURSOR_REQUIRED", "A truncated logical refresh page must report the next track cursor.", { cursor });
+  if (truncated === true && nextCursor === null) return failStage("LOGICAL_REFRESH_NEXT_CURSOR_REQUIRED", `A truncated logical refresh page must report the next ${scopeConfig.row_noun} cursor.`, { cursor, scope });
   if (truncated === false && nextCursor !== null) return failStage("LOGICAL_REFRESH_COVERAGE_CONFLICT", "A page with a next cursor cannot claim terminal non-truncated coverage.", { cursor, next_cursor: nextCursor });
   if (nextCursor !== null && (nextCursor <= cursor || rows.length === 0)) {
-    return failStage("LOGICAL_REFRESH_CURSOR_NOT_ADVANCING", "Logical refresh pages must advance the track cursor with at least one canonical row.", { cursor, next_cursor: nextCursor, row_count: rows.length });
+    return failStage("LOGICAL_REFRESH_CURSOR_NOT_ADVANCING", `Logical refresh pages must advance the ${scopeConfig.row_noun} cursor with at least one canonical row.`, { cursor, next_cursor: nextCursor, row_count: rows.length, scope });
   }
-  const pageRevision = normalizeProjectRevisionToken(firstDefined(
-    logicalRefresh.revision,
-    logicalRefresh.project_revision,
-    logicalRefresh.change_count,
-    overview.revision,
-    overview.project_revision,
-    overview.change_count,
-    pageEvidence.revision,
-    pageEvidence.project_revision,
-    pageEvidence.change_count,
-  ));
-  if (pageRevision && pageRevision !== refresh.expected_revision) {
-    return failStage("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh page revision changed during paging; the staged refresh was discarded.", { expected_revision: refresh.expected_revision, page_revision: pageRevision, cursor });
+  const pageCoverage = logicalRefreshPageCoverage({
+    scope,
+    projection,
+    readback,
+    overview,
+    pageEvidence,
+    logicalRefresh,
+  });
+  if (nextCursor === null && pageCoverage !== "complete") {
+    return failStage("LOGICAL_REFRESH_COVERAGE_INCOMPLETE", "A logical refresh terminal page must carry explicit complete coverage from REAPER readback.", { cursor, scope, coverage_status: pageCoverage });
   }
+  if (nextCursor !== null && pageCoverage === "complete") {
+    return failStage("LOGICAL_REFRESH_COVERAGE_CONFLICT", "A non-terminal logical refresh page cannot claim complete coverage.", { cursor, next_cursor: nextCursor, scope, coverage_status: pageCoverage });
+  }
+  const revisionEvidence = logicalRefreshRevisionEvidence(logicalRefresh, overview, pageEvidence);
+  if (revisionEvidence.invalid || revisionEvidence.values.length > 1 || revisionEvidence.values.some((value) => value !== refresh.expected_revision)) {
+    return failStage("LOGICAL_REFRESH_REVISION_MISMATCH", "Logical refresh page revision evidence changed or disagreed during paging; the staged refresh was discarded.", { expected_revision: refresh.expected_revision, page_revisions: revisionEvidence.values, cursor });
+  }
+  const pageRevision = revisionEvidence.values[0] ?? null;
   const page = {
     cursor,
     next_cursor: nextCursor,
-    declared_track_count: declaredTrackCount,
+    declared_count: declaredCount,
+    coverage_status: pageCoverage,
     revision: pageRevision,
     rows: structuredClone(rows),
     template_id: templateId,
@@ -940,9 +982,9 @@ function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendi
       return logicalRefreshSuccess("logical_refresh_page_staged", {
         transaction_id: refreshId,
         refresh_id: refreshId,
-        scope: "tracks",
-        cursor,
-        next_cursor: nextCursor,
+        scope,
+        [scopeConfig.cursor_field]: cursor,
+        [scopeConfig.next_cursor_field]: nextCursor,
         page_row_count: rows.length,
         staged_page_count: refresh.pages.size,
         staged_row_count: [...refresh.pages.values()].reduce((sum, entry) => sum + entry.rows.length, 0),
@@ -957,19 +999,19 @@ function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendi
   if (stagedRows > maxRows || stagedBytes === null || stagedBytes > maxBytes) {
     return failStage("LOGICAL_REFRESH_PRESSURE_EXCEEDED", "Logical refresh staging exceeded the bounded Project Index row or byte limit and was discarded.", { staged_rows: stagedRows, max_rows: maxRows, staged_bytes: stagedBytes, max_bytes: maxBytes });
   }
-  refresh.declared_track_count ??= declaredTrackCount;
+  refresh.declared_count ??= declaredCount;
   refresh.pages.set(cursor, page);
   refresh.source_template_ids.add(templateId);
   return logicalRefreshSuccess("logical_refresh_page_staged", {
     transaction_id: refreshId,
     refresh_id: refreshId,
-    scope: "tracks",
-    cursor,
-    next_cursor: nextCursor,
+    scope,
+    [scopeConfig.cursor_field]: cursor,
+    [scopeConfig.next_cursor_field]: nextCursor,
     page_row_count: rows.length,
     staged_page_count: refresh.pages.size,
     staged_row_count: stagedRows,
-    declared_track_count: declaredTrackCount,
+    [scopeConfig.declared_count_field]: declaredCount,
     coverage: nextCursor === null ? "terminal_page_staged" : "paged_staging",
     sqlite_updated: false,
     payload_ref: payloadRef,
@@ -1023,11 +1065,142 @@ function logicalRefreshFailure(status, code, message, details = undefined) {
   });
 }
 
+function logicalRefreshScopeConfig(scope) {
+  return typeof scope === "string" ? LOGICAL_REFRESH_SCOPE_CONFIG[scope] ?? null : null;
+}
+
+function logicalRefreshDeclaredCountEvidence(scope, ...sources) {
+  const candidates = [];
+  for (const source of sources) {
+    if (!isObject(source)) continue;
+    if (scope === "tracks") {
+      candidates.push(source.declared_track_count, source.declaredTrackCount, source.track_count, source.declared_counts?.tracks);
+    } else if (scope === "automation") {
+      candidates.push(
+        source.declared_envelope_count,
+        source.declaredEnvelopeCount,
+        source.envelope_count,
+        source.total_count,
+        source.declared_counts?.automation,
+        source.declared_counts?.envelopes,
+      );
+    }
+    candidates.push(source.declared_count);
+  }
+  return nonNegativeIntegerEvidence(candidates);
+}
+
+function nonNegativeIntegerEvidence(candidates) {
+  const provided = candidates.filter((value) => value !== undefined && value !== null);
+  const normalized = provided.map((value) => nonNegativeIntegerOrNull(value));
+  return {
+    provided: provided.length > 0,
+    invalid: normalized.some((value) => value === null),
+    values: [...new Set(normalized.filter((value) => value !== null))],
+  };
+}
+
+function logicalRefreshPageOverview(scope, readback) {
+  if (scope === "tracks") {
+    if (isObject(readback?.project_map)) return readback.project_map;
+    if (isObject(readback?.overview)) return readback.overview;
+  }
+  return isObject(readback) ? readback : {};
+}
+
+function logicalRefreshPageCursorValues(scope, logicalRefresh, overview, pageEvidence, observationInput) {
+  const config = logicalRefreshScopeConfig(scope);
+  if (!config) return [];
+  return [
+    logicalRefresh[config.cursor_field],
+    logicalRefresh.cursor,
+    overview[config.cursor_field],
+    overview.cursor,
+    pageEvidence[config.cursor_field],
+    pageEvidence.cursor,
+    observationInput[config.cursor_field],
+    observationInput.cursor,
+  ];
+}
+
+function logicalRefreshNextPageCursorValues(scope, logicalRefresh, overview, pageEvidence) {
+  const config = logicalRefreshScopeConfig(scope);
+  if (!config) return [];
+  return [
+    logicalRefresh[config.next_cursor_field],
+    logicalRefresh.next_cursor,
+    logicalRefresh.nextCursor,
+    overview[config.next_cursor_field],
+    overview.next_cursor,
+    pageEvidence[config.next_cursor_field],
+    pageEvidence.next_cursor,
+  ];
+}
+
+function logicalRefreshCursorEvidence(candidates, options = {}) {
+  const allowNull = options.allowNull === true;
+  const provided = candidates.filter((value) => value !== undefined);
+  let invalid = false;
+  const normalized = [];
+  for (const value of provided) {
+    if (value === null) {
+      if (allowNull) normalized.push(null);
+      else invalid = true;
+      continue;
+    }
+    const cursor = logicalCursor(value);
+    if (cursor === null) invalid = true;
+    else normalized.push(cursor);
+  }
+  const keys = new Set(normalized.map((value) => value === null ? "terminal" : `offset:${value}`));
+  const values = [...keys].map((key) => key === "terminal" ? null : Number(key.slice("offset:".length)));
+  return { provided: provided.length > 0, invalid, values };
+}
+
+function logicalRefreshRevisionEvidence(...sources) {
+  const provided = [];
+  for (const source of sources) {
+    if (!isObject(source)) continue;
+    for (const field of ["revision", "project_revision", "change_count"]) {
+      if (source[field] !== undefined && source[field] !== null) provided.push(source[field]);
+    }
+  }
+  const normalized = provided.map((value) => normalizeProjectRevisionToken(value));
+  return {
+    provided: provided.length > 0,
+    invalid: normalized.some((value) => value === null),
+    values: [...new Set(normalized.filter(Boolean))],
+  };
+}
+
+function logicalRefreshPageCoverage({ scope, projection, readback, overview, pageEvidence, logicalRefresh }) {
+  const config = logicalRefreshScopeConfig(scope);
+  if (!config) return "unknown";
+  const scopeSpecificCoverage = scope === "tracks"
+    ? readback?.coverage?.project_map ?? readback?.coverage?.tracks
+    : readback?.coverage?.automation ?? readback?.coverage?.envelopes;
+  return normalizeCoverage(firstDefined(
+    scopeSpecificCoverage,
+    overview.coverage_status,
+    pageEvidence.coverage_status,
+    projection.coverage?.[config.projection_scope],
+    logicalRefresh.coverage_status,
+  ), "unknown");
+}
+
 function logicalCursor(value) {
   if (Number.isInteger(value) && value >= 0) return value;
   if (typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) ? parsed : null;
+  }
+  if (typeof value === "string" && value.length <= 2048) {
+    try {
+      const decoded = JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+      if (Number.isSafeInteger(decoded?.offset) && decoded.offset >= 0) return decoded.offset;
+    } catch {
+      // Opaque cursors without a bounded numeric offset cannot prove continuity.
+    }
   }
   return null;
 }
@@ -1094,6 +1267,36 @@ function applyScopedProjection({ adapter, templateId, projection, readback, exec
       freshness_status: "fresh",
     });
     return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["tracks"] };
+  }
+  if (templateId === "template.automation.list_project_envelopes") {
+    const snapshot = adapter.snapshot();
+    const existingRows = snapshot.rows?.envelopes ?? [];
+    const incomingRows = projection.scopes.automation ?? [];
+    const observation = isObject(execution?.project_index_observation_context)
+      ? execution.project_index_observation_context
+      : {};
+    const input = isObject(observation.input) ? observation.input : {};
+    const projectedCoverage = projection.coverage.automation ?? "unknown";
+    const completeProjectRead = projectedCoverage === "complete"
+      && automationObservationCoversFullProject(input);
+    const rows = completeProjectRead
+      ? incomingRows
+      : mergeEnvelopeRowSets(existingRows, incomingRows);
+    const priorScope = snapshot.freshness_scopes?.automation ?? {};
+    const coverage = completeProjectRead
+      ? "complete"
+      : priorScope.status === "fresh" && priorScope.coverage_status === "complete"
+        ? "complete"
+        : projectedCoverage === "complete"
+          ? "partial"
+          : projectedCoverage;
+    const result = adapter.replaceEnvelopes({
+      ...common,
+      rows,
+      coverage_status: coverage,
+      freshness_status: "fresh",
+    });
+    return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["automation"] };
   }
   if (templateId === "template.fx.list_track_fx_chain" || templateId === "template.fx.list_take_fx_chain") {
     const rows = projection.scopes.fx ?? [];
@@ -1195,6 +1398,31 @@ function mergeTrackRowSets(existingRows, incomingRows) {
   return merged;
 }
 
+function mergeEnvelopeRowSets(existingRows, incomingRows) {
+  const incomingByRef = new Map(arrayOf(incomingRows).map((row) => [row.ref, row]));
+  const merged = arrayOf(existingRows).map((row) => incomingByRef.get(row.ref) ?? row);
+  const existingRefs = new Set(arrayOf(existingRows).map((row) => row.ref));
+  for (const row of arrayOf(incomingRows)) {
+    if (!existingRefs.has(row.ref)) merged.push(row);
+  }
+  return merged;
+}
+
+function automationObservationCoversFullProject(input) {
+  if (!isObject(input)) return true;
+  if (input.cursor !== undefined && input.cursor !== null && input.cursor !== "") return false;
+  if (input.only_visible === true || input.only_armed === true) return false;
+  if ([
+    "include_track_envelopes",
+    "include_take_envelopes",
+    "include_send_envelopes",
+    "include_fx_parameter_envelopes",
+  ].some((key) => input[key] === false)) return false;
+  if (!Array.isArray(input.parent_kinds)) return true;
+  const kinds = new Set(input.parent_kinds);
+  return ["track", "take", "send", "fx"].every((kind) => kinds.has(kind));
+}
+
 function projectReadback(templateId, readback, projectRef) {
   switch (templateId) {
     case "template.project.read_summary":
@@ -1229,7 +1457,7 @@ function projectReadback(templateId, readback, projectRef) {
     case "template.routing.read_project_routing_graph":
       return simpleProjection("routing", mapSends(readback.edges ?? readback.sends), coverageOf(readback, "complete"), arrayOf(readback.edges ?? readback.sends).length);
     case "template.automation.list_project_envelopes":
-      return simpleProjection("automation", mapEnvelopes(readback.envelopes ?? readback.automation), coverageOf(readback, "complete"), arrayOf(readback.envelopes ?? readback.automation).length);
+      return automationProjection(readback);
     case "template.project.list_markers_regions":
       return simpleProjection("markers_regions", mapMarkers(readback.items ?? readback.markers_regions), coverageOf(readback, "complete"), arrayOf(readback.items ?? readback.markers_regions).length);
     case "template.media.read_project_media_files":
@@ -1251,6 +1479,26 @@ function projectReadback(templateId, readback, projectRef) {
     default:
       return { blocker: { code: "REFRESH_TEMPLATE_NOT_ACCEPTED", message: "Template is not projectable." } };
   }
+}
+
+function automationProjection(readback) {
+  const sourceRows = arrayOf(readback.envelopes ?? readback.automation);
+  const rows = dedupeRows(mapEnvelopes(sourceRows));
+  if (sourceRows.length > 0 && rows.length === 0) {
+    return { blocker: { code: "NO_CANONICAL_ROWS", message: "Readback contained automation entries but none had canonical refs." } };
+  }
+  const returnedCount = nonNegativeIntegerOrNull(readback.returned_count);
+  const totalCount = nonNegativeIntegerOrNull(readback.total_count);
+  let coverage = normalizeCoverage(readback.coverage_status, readback.truncated === true ? "truncated" : "unknown");
+  if (coverage === "complete") {
+    const completeEvidence = readback.truncated === false
+      && (readback.next_cursor === null || readback.next_cursor === undefined)
+      && returnedCount === rows.length
+      && totalCount === rows.length
+      && sourceRows.length === rows.length;
+    if (!completeEvidence) coverage = "partial";
+  }
+  return { scopes: { automation: rows }, coverage: { automation: coverage } };
 }
 
 function projectMapPayload(overview, projectRef, coverage = {}) {

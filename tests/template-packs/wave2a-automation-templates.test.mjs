@@ -39,6 +39,7 @@ const ALLOWLIST = Object.freeze([
   "template.automation.read_automation_items",
   "template.automation.set_envelope_point",
   "template.automation.insert_envelope_points_batch",
+  "template.automation.delete_envelope_points",
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
@@ -49,8 +50,6 @@ const ALLOWLIST = Object.freeze([
 
 const BLOCKED = Object.freeze([
   "template.automation.resolve_fx_parameter_envelope",
-  "template.automation.clear_envelope_point_range",
-  "template.automation.delete_envelope_point",
   "template.automation.set_envelope_default_shape",
   "template.automation.set_automation_item_loop_state",
   "template.automation.select_envelope_point",
@@ -63,6 +62,10 @@ const BLOCKED = Object.freeze([
   "template.automation.add_fx_to_track",
   "template.automation.render_razor_edit_area",
   "template.automation.edit_item_lanes",
+]);
+
+const DESTRUCTIVE_IDS = new Set([
+  "template.automation.delete_envelope_points",
 ]);
 
 describe("Wave 2A automation template descriptors", () => {
@@ -99,7 +102,7 @@ describe("Wave 2A automation template descriptors", () => {
       assert.equal(descriptor.artifacts.mode, "none", descriptor.id);
       assert.deepEqual(descriptor.artifacts.input, [], descriptor.id);
       assert.deepEqual(descriptor.artifacts.output, [], descriptor.id);
-      assert.notEqual(descriptor.risk, "destructive", descriptor.id);
+      assert.equal(descriptor.risk === "destructive", DESTRUCTIVE_IDS.has(descriptor.id), descriptor.id);
     }
   });
 
@@ -115,7 +118,7 @@ describe("Wave 2A automation template descriptors", () => {
       "template.automation.read_automation_items",
       "template.automation.resolve_send_envelope",
     ];
-    const writeIds = ALLOWLIST.filter((id) => !readIds.includes(id));
+    const writeIds = ALLOWLIST.filter((id) => !readIds.includes(id) && !DESTRUCTIVE_IDS.has(id));
 
     for (const id of readIds) {
       const descriptor = byId.get(id);
@@ -137,8 +140,20 @@ describe("Wave 2A automation template descriptors", () => {
       assert.equal(descriptor.verification.checks.length > 0, true, id);
     }
 
+    for (const id of DESTRUCTIVE_IDS) {
+      const descriptor = byId.get(id);
+      assert.equal(descriptor.risk, "destructive", id);
+      assert.equal(descriptor.bridge.operation_family, "run_command", id);
+      assert.equal(descriptor.bridge.operation_name, "template.execute", id);
+      assert.equal(descriptor.bridge.idempotency, "none", id);
+      assert.equal(descriptor.expectedDelta.kind, "mutation", id);
+      assert.equal(descriptor.expectedDelta.entities[0].action, "delete", id);
+      assert.equal(descriptor.verification.mode, "required", id);
+      assert.equal(descriptor.verification.checks[0].name, "deleted_points_absent", id);
+    }
+
     const source = JSON.stringify(templates);
-    assert.doesNotMatch(source, /"risk":"destructive"/);
+    assert.equal(templates.filter((descriptor) => descriptor.risk === "destructive").length, 1);
     assert.doesNotMatch(source, /"operation_family":"run_action"/);
     assert.doesNotMatch(source, /"kind":"file"/);
     assert.doesNotMatch(source, /hardware/i);
@@ -283,7 +298,7 @@ describe("Wave 2A automation template descriptors", () => {
     assert.doesNotMatch(source, /REAPER\.app|child_process|spawn\(|execFile|reaper\//);
     assert.doesNotMatch(source, /\blive smoke\b/i);
     assert.doesNotMatch(source, /\brecipe\b/i);
-    assert.doesNotMatch(source, /resolve_fx_parameter_envelope|delete_envelope_point|clear_envelope_point_range/);
+    assert.doesNotMatch(source, /resolve_fx_parameter_envelope|clear_envelope_point_range/);
   });
 });
 
@@ -312,6 +327,8 @@ function sampleInput(id) {
           { time_seconds: 1, value: 1, shape: 0, tension: 0 },
         ],
       };
+    case "template.automation.delete_envelope_points":
+      return { mode: "range", autoitem_index: -1, start_seconds: 1, end_seconds: 2 };
     case "template.automation.insert_fx_parameter_envelope_points":
       return {
         param_index: 0,

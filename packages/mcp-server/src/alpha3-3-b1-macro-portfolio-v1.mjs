@@ -19,9 +19,7 @@ export const ALPHA3_3_B1_FINAL_TARGET_IDS = deepFreeze([
   "macro.render.targets",
 ]);
 
-export const ALPHA3_3_B1_INTERNAL_DRAFT_IDS = deepFreeze([
-  "macro.automation.apply",
-]);
+export const ALPHA3_3_B1_INTERNAL_DRAFT_IDS = deepFreeze([]);
 
 const INTERNAL_DRAFT_ID_SET = new Set(ALPHA3_3_B1_INTERNAL_DRAFT_IDS);
 
@@ -80,9 +78,9 @@ export function validateAlpha3_3B1MacroPortfolio(portfolio = ALPHA3_3_B1_MACRO_P
   const draftSet = new Set(draftIds);
 
   if (targetIds.length !== 15 || targetSet.size !== 15) errors.push("Alpha3.3 target portfolio must contain exactly 15 unique ids");
-  if (visibleIds.length !== 14 || visibleSet.size !== 14) errors.push("Alpha3.3-B1c visible portfolio must contain exactly 14 unique executable ids");
-  if (draftIds.length !== 1 || draftSet.size !== 1) errors.push("Alpha3.3-B1c must retain exactly one internal draft id");
-  if (aliasRows.length !== 5) errors.push("Alpha3.3-B1c must retain exactly five renamed compatibility aliases");
+  if (visibleIds.length !== 15 || visibleSet.size !== 15) errors.push("Alpha3.3-B1d visible portfolio must contain exactly 15 unique executable ids");
+  if (draftIds.length !== 0 || draftSet.size !== 0) errors.push("Alpha3.3-B1d must not retain an internal draft id");
+  if (aliasRows.length !== 5) errors.push("Alpha3.3-B1d must retain exactly five renamed compatibility aliases");
 
   for (const id of [...targetIds, ...visibleIds, ...draftIds]) {
     if (typeof id !== "string" || !id.startsWith("macro.")) errors.push(`Invalid Macro id: ${String(id)}`);

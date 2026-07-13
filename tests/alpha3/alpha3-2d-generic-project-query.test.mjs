@@ -185,28 +185,97 @@ describe("Alpha3.2-D generic macro.project.query", () => {
     assert.notEqual(plan.coverage.status, "complete");
   });
 
-  it("does not claim a definitive empty result from partial, paged, or unknown coverage", () => {
-    for (const coverageStatus of ["partial", "paged", "unknown"]) {
-      const index = freshIndex({ empty: true });
-      index.freshness_scopes.tracks = {
-        ...index.freshness_scopes.tracks,
-        coverage_status: coverageStatus,
-      };
+  it("does not claim a definitive empty track or automation result from partial, paged, or unknown coverage", () => {
+    for (const entity of ["tracks", "automation"]) {
+      for (const coverageStatus of ["partial", "paged", "unknown"]) {
+        const index = freshIndex({ empty: true });
+        index.freshness_scopes[entity] = {
+          ...index.freshness_scopes[entity],
+          coverage_status: coverageStatus,
+        };
 
-      const plan = planAlpha3_2DGenericProjectQuery({
-        entity: "tracks",
-        filters: { name: "not resident" },
-        refresh_policy: "if_stale",
-        limit: 1,
-      }, { projectIndex: index });
+        const plan = planAlpha3_2DGenericProjectQuery({
+          entity,
+          filters: { name: "not resident" },
+          refresh_policy: "if_stale",
+          limit: 1,
+        }, { projectIndex: index });
 
-      assert.equal(plan.ok, false, coverageStatus);
-      assert.deepEqual(plan.rows, [], coverageStatus);
-      assert.equal(plan.blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE"), true, coverageStatus);
-      assert.equal(plan.coverage.complete, false, coverageStatus);
-      assert.equal(plan.coverage.match_status, "no_match_not_definitive", coverageStatus);
-      assert.equal(plan.refresh_requests.length > 0, true, coverageStatus);
+        assert.equal(plan.ok, false, `${entity}:${coverageStatus}`);
+        assert.deepEqual(plan.rows, [], `${entity}:${coverageStatus}`);
+        assert.equal(plan.blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE"), true, `${entity}:${coverageStatus}`);
+        assert.equal(plan.coverage.complete, false, `${entity}:${coverageStatus}`);
+        assert.equal(plan.coverage.match_status, "no_match_not_definitive", `${entity}:${coverageStatus}`);
+        assert.equal(plan.refresh_requests.length > 0, true, `${entity}:${coverageStatus}`);
+      }
     }
+  });
+
+  it("keeps 14-envelope internal knowledge while compact public pages and exact queries reach the final envelope", () => {
+    const index = freshIndex();
+    index.rows.envelopes = Array.from({ length: 14 }, (_, offset) => {
+      const number = offset + 1;
+      return {
+        ref: `envelope:track:guid:{AUTO-${number}}:volume`,
+        owner_ref: `track:guid:{AUTO-${number}}`,
+        parent_kind: "track",
+        name: number === 14 ? "Automation Envelope 14 Exact" : `Automation Envelope ${number}`,
+        lane_kind: "volume",
+        visible: true,
+        point_count: number,
+        freshness_status: "fresh",
+        coverage_status: "complete",
+      };
+    });
+    const firstPage = planAlpha3_2DGenericProjectQuery({
+      entity: "automation",
+      refresh_policy: "never",
+      limit: 2,
+    }, { projectIndex: index });
+    assert.equal(firstPage.ok, true, JSON.stringify(firstPage.blockers));
+    assert.equal(firstPage.rows.length, 2);
+    assert.equal(firstPage.page.has_more, true);
+    assert.equal(firstPage.coverage.indexed_row_count, 14);
+    assert.equal(firstPage.coverage.known_total_row_count, 14);
+    assert.equal(firstPage.coverage.public_returned_row_count, 2);
+    assert.equal(Buffer.byteLength(JSON.stringify({
+      rows: firstPage.rows,
+      refs: firstPage.refs,
+      coverage: firstPage.coverage,
+      page: firstPage.page,
+    }), "utf8") < 2_048, true);
+
+    const lastRef = "envelope:track:guid:{AUTO-14}:volume";
+    const exactName = planAlpha3_2DGenericProjectQuery({
+      entity: "automation",
+      filters: { name: "Automation Envelope 14 Exact" },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(exactName.ok, true);
+    assert.deepEqual(exactName.refs, [lastRef]);
+    assert.equal(exactName.rows[0].name, "Automation Envelope 14 Exact");
+    assert.equal(exactName.coverage.indexed_row_count, 14);
+
+    const exactRef = planAlpha3_2DGenericProjectQuery({
+      entity: "automation",
+      selectors: { refs: [lastRef] },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(exactRef.ok, true);
+    assert.deepEqual(exactRef.refs, [lastRef]);
+
+    index.freshness_scopes.automation = { ...index.freshness_scopes.automation, status: "stale" };
+    const staleAfterWrite = planAlpha3_2DGenericProjectQuery({
+      entity: "automation",
+      filters: { name: "Automation Envelope 14 Exact" },
+      refresh_policy: "if_stale",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(staleAfterWrite.ok, false);
+    assert.deepEqual(staleAfterWrite.rows, []);
+    assert.equal(staleAfterWrite.refresh_requests.length > 0, true);
   });
 
   it("keeps ref hydration opt-in and returns candidate refs even when hydration is not requested", () => {

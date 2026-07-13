@@ -440,6 +440,7 @@ const E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_SPECS = Object.freeze([
   routeSpec("template.automation.read_automation_items", "query_state:automation.read_automation_items", "automation", "read", "automation.read_automation_items", "envelope", "automation_read"),
   routeSpec("template.automation.set_envelope_point", "run_command:template.execute", "automation", "write", "automation.set_envelope_point", "envelope", "automation_write", true),
   routeSpec("template.automation.insert_envelope_points_batch", "run_command:template.execute", "automation", "write", "automation.insert_envelope_points_batch", "envelope", "automation_write"),
+  routeSpec("template.automation.delete_envelope_points", "run_command:template.execute", "automation", "destructive", "automation.delete_envelope_points", "envelope", "automation_write"),
   routeSpec("template.automation.set_send_automation_mode", "run_command:template.execute", "automation", "write", "automation.set_send_automation_mode", "send", "automation_write", true),
   routeSpec("template.automation.create_automation_item", "run_command:template.execute", "automation", "write", "automation.create_automation_item", "envelope", "automation_write"),
   routeSpec("template.automation.set_automation_item_bounds", "run_command:template.execute", "automation", "write", "automation.set_automation_item_bounds", "envelope", "automation_write", true),
@@ -1130,6 +1131,7 @@ function selectRoute(argv, env) {
         "query_state:routing.project_graph.read",
         "query_state:routing.fx_pin_mapping.read",
         "query_state:automation.resolve_envelope_ref",
+        "query_state:automation.project_envelopes.list",
         "query_state:automation.read_envelope_summary",
         "query_state:automation.read_envelope_points",
         "query_state:automation.evaluate_envelope_at_time",
@@ -3842,6 +3844,11 @@ function e5RoutingAutomationRouteInput(spec, fixtureInputsForRun) {
         { time_seconds: 1, value: fixtureInputsForRun.point_value, shape: 0, tension: 0, selected: false },
         { time_seconds: 2, value: Math.min(1, fixtureInputsForRun.point_value + 0.1), shape: 0, tension: 0, selected: false },
       ],
+    },
+    "template.automation.delete_envelope_points": {
+      mode: "point",
+      autoitem_index: -1,
+      point_index: 0,
     },
     "template.automation.set_send_automation_mode": {
       mode: "use_track",

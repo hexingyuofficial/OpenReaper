@@ -37,7 +37,8 @@ export const ALPHA3_C3_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       next_cursor: nullableStringSchema(),
       truncated: { type: "boolean" },
       coverage_status: { enum: ["complete", "paged", "truncated", "unknown"] },
-    }, ["envelopes", "returned_count", "truncated", "coverage_status"]),
+      coverage: { type: "object" },
+    }, ["envelopes", "envelope_refs", "returned_count", "total_count", "next_cursor", "truncated", "coverage_status", "coverage"]),
     refs: refs({
       output: [ref("envelope_refs", "envelope", false, "Automation envelope refs returned for Project SQLite Index refresh.")],
     }),

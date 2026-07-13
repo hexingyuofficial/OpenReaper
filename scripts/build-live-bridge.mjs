@@ -94,6 +94,7 @@ export const E5_ROUTING_WRITE_TEMPLATE_IDS = Object.freeze([
 export const E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS = Object.freeze([
   "template.routing.read_fx_pin_mapping",
   "template.automation.resolve_envelope_ref",
+  "template.automation.list_project_envelopes",
   "template.automation.read_envelope_summary",
   "template.automation.read_envelope_points",
   "template.automation.evaluate_envelope_at_time",
@@ -104,6 +105,7 @@ export const E5_ROUTING_AUTOMATION_EXTRA_TEMPLATE_IDS = Object.freeze([
   "template.automation.read_automation_items",
   "template.automation.set_envelope_point",
   "template.automation.insert_envelope_points_batch",
+  "template.automation.delete_envelope_points",
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",

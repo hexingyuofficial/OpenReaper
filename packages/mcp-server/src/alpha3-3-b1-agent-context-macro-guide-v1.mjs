@@ -17,6 +17,10 @@ import {
   ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   createAlpha3_3B1cItemsApplyExactManual,
 } from "./alpha3-3-b1c-items-apply-v1.mjs";
+import {
+  ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID,
+  createAlpha3_3B1dAutomationApplyExactManual,
+} from "./alpha3-3-b1d-automation-apply-v1.mjs";
 
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_context_macro_guide.v1";
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
@@ -45,7 +49,7 @@ export function createAlpha3_3B1AgentContextMacroGuide({
   return deepFreeze({
     contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
     version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
-    phase: "Alpha3.3-B1c",
+    phase: "Alpha3.3-B1d",
     tool_surface: {
       count: 5,
       tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
@@ -134,6 +138,17 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   }
   if (id === ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID) {
     const expansion = createAlpha3_3B1cItemsApplyExactManual();
+    return deepFreeze({
+      ...expansion,
+      contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
+      guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+      guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+      implementation_status: "executable_registered_program",
+      runnable: true,
+    });
+  }
+  if (id === ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID) {
+    const expansion = createAlpha3_3B1dAutomationApplyExactManual();
     return deepFreeze({
       ...expansion,
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,

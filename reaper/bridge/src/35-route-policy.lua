@@ -59,6 +59,7 @@ local E5_AUTOMATION_WRITE_CAPABILITIES = {
   ["automation.set_track_automation_mode"] = { pack = "automation", risk = "write" },
   ["automation.set_envelope_point"] = { pack = "automation", risk = "write" },
   ["automation.insert_envelope_points_batch"] = { pack = "automation", risk = "write" },
+  ["automation.delete_envelope_points"] = { pack = "automation", risk = "destructive" },
   ["automation.set_send_automation_mode"] = { pack = "automation", risk = "write" },
   ["automation.create_automation_item"] = { pack = "automation", risk = "write" },
   ["automation.set_automation_item_bounds"] = { pack = "automation", risk = "write" },

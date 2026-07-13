@@ -172,6 +172,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       "actions.resolve_named_command",
       "actions.search_action_commands",
       "automation.evaluate_envelope_at_time",
+      "automation.project_envelopes.list",
       "automation.read_automation_items",
       "automation.read_envelope_points",
       "automation.read_envelope_summary",

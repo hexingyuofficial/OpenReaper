@@ -706,6 +706,203 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("atomically commits complete 14-envelope knowledge across hidden automation pages and marks it stale after a write", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.automation.list_project_envelopes", identity, {
+        envelopes: [{ envelope_ref: "envelope:track:guid:{OLD}:volume", owner_ref: "track:guid:{OLD}", name: "Old" }],
+        returned_count: 1,
+        total_count: 1,
+        next_cursor: null,
+        truncated: false,
+        coverage_status: "complete",
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, {
+        project_ref: identity.project_ref,
+        change_count: 51,
+      }));
+      const started = runtime.beginLogicalRefresh({
+        scopes: ["automation"],
+        expected_revision: "reaper-change-count:51",
+        declared_envelope_count: 14,
+        observed_at: NOW,
+      });
+      assert.equal(started.ok, true);
+      assert.equal(started.scope, "automation");
+      assert.equal(started.declared_envelope_count, 14);
+      const transactionId = started.transaction_id;
+
+      for (const [cursor, count] of [[0, 5], [5, 5], [10, 4]]) {
+        const nextCursor = cursor + count < 14 ? cursor + count : null;
+        const envelopes = Array.from({ length: count }, (_, offset) => {
+          const index = cursor + offset;
+          return {
+            envelope_ref: `envelope:track:guid:{AUTO-${index + 1}}:volume`,
+            owner_ref: `track:guid:{AUTO-${index + 1}}`,
+            name: index === 13 ? "Automation Envelope 14 Exact" : `Automation Envelope ${index + 1}`,
+            parent_kind: "track",
+            visible: true,
+            point_count: index,
+          };
+        });
+        const staged = runtime.observeSuccessfulTemplateExecution(execution(
+          "template.automation.list_project_envelopes",
+          identity,
+          {
+            envelopes,
+            returned_count: count,
+            total_count: 14,
+            next_cursor: nextCursor === null ? null : String(nextCursor),
+            truncated: nextCursor !== null,
+            coverage_status: nextCursor === null ? "complete" : "paged",
+          },
+          {
+            input: { cursor: cursor === 0 ? undefined : String(cursor), limit: 5 },
+            logical_refresh: {
+              transaction_id: transactionId,
+              scope: "automation",
+              envelope_cursor: cursor,
+              revision: "reaper-change-count:51",
+            },
+          },
+        ));
+        assert.equal(staged.ok, true, JSON.stringify(staged));
+        assert.equal(staged.status, "logical_refresh_page_staged");
+        assert.equal(staged.envelope_cursor, cursor);
+        assert.equal(staged.next_envelope_cursor, nextCursor);
+        assert.equal(staged.declared_envelope_count, 14);
+        assert.equal(staged.sqlite_updated, false);
+        assert.deepEqual(runtime.adapter.snapshot().rows.envelopes.map((row) => row.ref), ["envelope:track:guid:{OLD}:volume"]);
+      }
+
+      const committed = runtime.commitLogicalRefresh({
+        transaction_id: transactionId,
+        observed_revision: "reaper-change-count:51",
+        observed_at: NOW,
+      });
+      assert.equal(committed.ok, true, JSON.stringify(committed));
+      assert.equal(committed.scope, "automation");
+      assert.equal(committed.declared_envelope_count, 14);
+      assert.deepEqual(committed.applied_scopes, ["automation"]);
+      assert.deepEqual(committed.row_counts, { automation: 14 });
+      assert.deepEqual(committed.coverage, { automation: "complete" });
+      const snapshot = runtime.adapter.snapshot();
+      assert.equal(snapshot.rows.envelopes.length, 14);
+      assert.equal(snapshot.rows.envelopes.at(-1).ref, "envelope:track:guid:{AUTO-14}:volume");
+      assert.equal(snapshot.rows.envelopes.at(-1).name, "Automation Envelope 14 Exact");
+      assert.equal(snapshot.freshness_scopes.automation.status, "fresh");
+      assert.equal(snapshot.freshness_scopes.automation.coverage_status, "complete");
+
+      const publicPage = runtime.observeSuccessfulTemplateExecution(execution(
+        "template.automation.list_project_envelopes",
+        identity,
+        {
+          envelopes: snapshot.rows.envelopes.slice(0, 2).map((row) => ({
+            envelope_ref: row.ref,
+            owner_ref: row.owner_ref,
+            name: row.name,
+            parent_kind: row.parent_kind,
+            visible: row.visible,
+            point_count: row.point_count,
+          })),
+          returned_count: 2,
+          total_count: 14,
+          next_cursor: "2",
+          truncated: true,
+          coverage_status: "paged",
+        },
+        { input: { limit: 2 } },
+      ));
+      assert.equal(publicPage.ok, true, JSON.stringify(publicPage));
+      assert.equal(runtime.adapter.snapshot().rows.envelopes.length, 14);
+      assert.equal(runtime.adapter.snapshot().rows.envelopes.at(-1).ref, "envelope:track:guid:{AUTO-14}:volume");
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.automation.coverage_status, "complete");
+
+      const invalidated = runtime.invalidateScopes({ scopes: ["automation"], observed_at: NOW });
+      assert.equal(invalidated.ok, true);
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.automation.status, "stale");
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.automation.coverage_status, "complete");
+      assert.equal(runtime.adapter.snapshot().rows.envelopes.length, 14);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("discards gapped, incomplete, duplicate, and mixed-revision automation refreshes without replacing prior complete rows", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.automation.list_project_envelopes", identity, {
+        envelopes: [{ envelope_ref: "envelope:track:guid:{KEEP-AUTO}:volume", owner_ref: "track:guid:{KEEP-AUTO}", name: "Keep Automation" }],
+        returned_count: 1,
+        total_count: 1,
+        next_cursor: null,
+        truncated: false,
+        coverage_status: "complete",
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, { project_ref: identity.project_ref, change_count: 61 }));
+      const priorRows = () => runtime.adapter.snapshot().rows.envelopes.map((row) => row.ref);
+      const page = ({ transactionId, cursor, refs, totalCount, nextCursor, revision = "reaper-change-count:61", coverageStatus }) =>
+        runtime.observeSuccessfulTemplateExecution(execution(
+          "template.automation.list_project_envelopes",
+          identity,
+          {
+            envelopes: refs.map((ref, index) => ({ envelope_ref: ref, owner_ref: `track:guid:{OWNER-${cursor + index}}`, name: ref })),
+            returned_count: refs.length,
+            total_count: totalCount,
+            next_cursor: nextCursor === null ? null : String(nextCursor),
+            truncated: nextCursor !== null,
+            coverage_status: coverageStatus ?? (nextCursor === null ? "complete" : "paged"),
+          },
+          { logical_refresh: { transaction_id: transactionId, scope: "automation", envelope_cursor: cursor, revision } },
+        ));
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "auto-gap", scope: "automation", expected_revision: "reaper-change-count:61", declared_envelope_count: 3 }).ok, true);
+      assert.equal(page({ transactionId: "auto-gap", cursor: 0, refs: ["envelope:track:guid:{GAP-1}:volume", "envelope:track:guid:{GAP-2}:volume"], totalCount: 3, nextCursor: 2 }).ok, true);
+      assert.equal(page({ transactionId: "auto-gap", cursor: 3, refs: ["envelope:track:guid:{GAP-3}:volume"], totalCount: 3, nextCursor: null }).ok, true);
+      const gap = runtime.commitLogicalRefresh({ transaction_id: "auto-gap", observed_revision: "reaper-change-count:61" });
+      assert.equal(gap.ok, false);
+      assert.equal(gap.blockers[0].code, "LOGICAL_REFRESH_CURSOR_GAP");
+      assert.deepEqual(priorRows(), ["envelope:track:guid:{KEEP-AUTO}:volume"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "auto-incomplete", scope: "automation", expected_revision: "reaper-change-count:61", declared_envelope_count: 2 }).ok, true);
+      assert.equal(page({ transactionId: "auto-incomplete", cursor: 0, refs: ["envelope:track:guid:{INCOMPLETE}:volume"], totalCount: 2, nextCursor: 1 }).ok, true);
+      const incomplete = runtime.commitLogicalRefresh({ transaction_id: "auto-incomplete", observed_revision: "reaper-change-count:61" });
+      assert.equal(incomplete.ok, false);
+      assert.equal(incomplete.blockers[0].code, "LOGICAL_REFRESH_COVERAGE_INCOMPLETE");
+      assert.deepEqual(priorRows(), ["envelope:track:guid:{KEEP-AUTO}:volume"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "auto-duplicate", scope: "automation", expected_revision: "reaper-change-count:61", declared_envelope_count: 2 }).ok, true);
+      const duplicateRef = "envelope:track:guid:{DUPLICATE}:volume";
+      const duplicatePage = page({ transactionId: "auto-duplicate", cursor: 0, refs: [duplicateRef, duplicateRef], totalCount: 2, nextCursor: null });
+      assert.equal(duplicatePage.ok, false);
+      assert.equal(duplicatePage.blockers[0].code, "LOGICAL_REFRESH_RETURNED_COUNT_MISMATCH");
+      assert.deepEqual(priorRows(), ["envelope:track:guid:{KEEP-AUTO}:volume"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "auto-revision", scope: "automation", expected_revision: "reaper-change-count:61", declared_envelope_count: 2 }).ok, true);
+      assert.equal(page({ transactionId: "auto-revision", cursor: 0, refs: ["envelope:track:guid:{REV-1}:volume"], totalCount: 2, nextCursor: 1 }).ok, true);
+      const mixed = page({ transactionId: "auto-revision", cursor: 1, refs: ["envelope:track:guid:{REV-2}:volume"], totalCount: 2, nextCursor: null, revision: "reaper-change-count:62" });
+      assert.equal(mixed.ok, false);
+      assert.equal(mixed.blockers[0].code, "LOGICAL_REFRESH_REVISION_MISMATCH");
+      assert.deepEqual(priorRows(), ["envelope:track:guid:{KEEP-AUTO}:volume"]);
+
+      assert.equal(runtime.beginLogicalRefresh({ transaction_id: "auto-unknown", scope: "automation", expected_revision: "reaper-change-count:61", declared_envelope_count: 1 }).ok, true);
+      const unknown = page({ transactionId: "auto-unknown", cursor: 0, refs: ["envelope:track:guid:{UNKNOWN}:volume"], totalCount: 1, nextCursor: null, coverageStatus: "unknown" });
+      assert.equal(unknown.ok, false);
+      assert.equal(unknown.blockers[0].code, "LOGICAL_REFRESH_COVERAGE_INCOMPLETE");
+      assert.deepEqual(priorRows(), ["envelope:track:guid:{KEEP-AUTO}:volume"]);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("discards gapped, incomplete, duplicate-count, or revision-mismatched logical refreshes without replacing prior SQLite rows", async () => {
     const fixture = await makeFixture();
     let runtime;

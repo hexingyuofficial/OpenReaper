@@ -829,6 +829,7 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_track_automation_mode"] = set_track_automation_mode,
   ["automation.set_envelope_point"] = set_envelope_point,
   ["automation.insert_envelope_points_batch"] = insert_envelope_points_batch,
+  ["automation.delete_envelope_points"] = delete_envelope_points,
   ["automation.set_send_automation_mode"] = set_send_automation_mode,
   ["automation.create_automation_item"] = create_automation_item,
   ["automation.set_automation_item_bounds"] = set_automation_item_bounds,
@@ -1271,6 +1272,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:automation.resolve_envelope_ref"] = {
     pack = "automation",
     handler = resolve_envelope_ref,
+  },
+  ["query_state:automation.project_envelopes.list"] = {
+    pack = "automation",
+    handler = list_project_envelopes,
   },
   ["query_state:automation.read_envelope_summary"] = {
     pack = "automation",

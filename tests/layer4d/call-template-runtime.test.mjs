@@ -442,6 +442,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "macro.fx.apply_chain",
       "macro.fx.set_controls",
       "macro.controls.set",
+      "macro.automation.apply",
       "macro.render.targets",
     ]);
     assert.equal(runtimeMenu.items.some((item) => item.id === "macro.query_tracks" || item.id === "macro.index_status"), false);
@@ -728,7 +729,7 @@ describe("Layer 4D call_template runtime binding", () => {
       true,
     );
     const wave0Macros = liveMenu.items.filter((item) => item.action_kind === "macro");
-    assert.equal(wave0Macros.length, 14);
+    assert.equal(wave0Macros.length, 15);
     assert.equal(
       wave0Macros.every((item) => item.capability_truth.live_runnable_now === false),
       true,
@@ -782,7 +783,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 221);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 222);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -790,7 +791,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 221);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 222);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
@@ -1131,6 +1132,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.automation.read_automation_items",
       "template.automation.set_envelope_point",
       "template.automation.insert_envelope_points_batch",
+      "template.automation.delete_envelope_points",
       "template.automation.set_send_automation_mode",
       "template.automation.create_automation_item",
       "template.automation.set_automation_item_bounds",
@@ -1162,11 +1164,11 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 37);
+    assert.equal(bridge.seen.length, 38);
     assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 14);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 23);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 24);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 19);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 18);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 19);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
@@ -1200,7 +1202,22 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(fake.spawned_reaper, false);
     assert.equal(fake.live_pass_claimed, false);
     assert.deepEqual(fake.allowed_template_ids, CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS);
-    assert.equal(fake.executions.length, 37);
+    assert.deepEqual(fake.allowed_bridge_operations, [
+      "query_state:routing.track.read",
+      "query_state:routing.send.resolve_ref",
+      "query_state:routing.project_graph.read",
+      "query_state:routing.fx_pin_mapping.read",
+      "query_state:automation.resolve_envelope_ref",
+      "query_state:automation.project_envelopes.list",
+      "query_state:automation.read_envelope_summary",
+      "query_state:automation.read_envelope_points",
+      "query_state:automation.evaluate_envelope_at_time",
+      "query_state:automation.read_track_automation_mode",
+      "query_state:automation.read_automation_items",
+      "query_state:automation.resolve_send_envelope",
+      "run_command:template.execute",
+    ]);
+    assert.equal(fake.executions.length, 38);
     assert.equal(fake.executions.every((execution) => execution.ok), true);
     assert.equal(fake.executions.filter((execution) => execution.risk === "read").length, 14);
     assert.equal(fake.executions.filter((execution) => execution.risk === "write").length, 23);
@@ -1215,7 +1232,7 @@ describe("Layer 4D call_template runtime binding", () => {
       "e5_automation_point_value_invalid",
     ]);
     assert.equal(fake.routing_template_ids.length, 19);
-    assert.equal(fake.automation_template_ids.length, 18);
+    assert.equal(fake.automation_template_ids.length, 19);
 
     const root = mkdtempSync(join(tmpdir(), "openreaper-e5-routing-automation-"));
     const transportDir = join(root, "transport");
@@ -1912,6 +1929,7 @@ function e5RouteInput(id) {
         { time_seconds: 2, value: 0.85, shape: 0, tension: 0, selected: false },
       ],
     },
+    "template.automation.delete_envelope_points": { mode: "point", autoitem_index: -1, point_index: 0 },
     "template.automation.set_send_automation_mode": { mode: "use_track" },
     "template.automation.create_automation_item": { position_seconds: 1, length_seconds: 2, pool_mode: "new_empty" },
     "template.automation.set_automation_item_bounds": { automation_item_index: 0, position_seconds: 1, length_seconds: 2 },

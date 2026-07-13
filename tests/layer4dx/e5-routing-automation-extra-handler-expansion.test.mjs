@@ -55,11 +55,22 @@ describe("E5 routing/automation extra live handler expansion", () => {
 
     assert.match(HANDLER_SOURCE, /TrackFX_GetPinMappings/);
     assert.match(HANDLER_SOURCE, /GetTrackEnvelopeByName/);
-    assert.match(HANDLER_SOURCE, /InsertEnvelopePoint/);
-    assert.match(HANDLER_SOURCE, /GetFXEnvelope", track, slot_index, param_index, true/);
+    assert.match(HANDLER_SOURCE, /GetSetEnvelopeInfo_String/);
+    assert.match(HANDLER_SOURCE, /CountEnvelopePointsEx/);
+    assert.match(HANDLER_SOURCE, /GetEnvelopePointEx/);
+    assert.match(HANDLER_SOURCE, /InsertEnvelopePointEx/);
+    assert.match(HANDLER_SOURCE, /SetEnvelopePointEx/);
+    assert.match(HANDLER_SOURCE, /DeleteEnvelopePointEx/);
+    assert.match(HANDLER_SOURCE, /DeleteEnvelopePointRangeEx/);
+    assert.match(HANDLER_SOURCE, /Envelope_SortPointsEx/);
+    assert.match(HANDLER_SOURCE, /GetFXEnvelope", track, slot_index, param_index, false/);
     assert.match(HANDLER_SOURCE, /SetTrackAutomationMode/);
     assert.match(HANDLER_SOURCE, /InsertAutomationItem/);
+    assert.match(HANDLER_SOURCE, /GetSetAutomationItemInfo/);
+    assert.match(HANDLER_SOURCE, /SetTrackSendInfo_Value/);
+    assert.match(HANDLER_SOURCE, /GetTrackSendInfo_Value/);
     assert.match(HANDLER_SOURCE, /BR_GetMediaTrackSendInfo_Envelope|P_ENV:<VOLENV/);
+    assert.doesNotMatch(HANDLER_SOURCE, /GetFXEnvelope", track, slot_index, param_index, true/);
     assert.doesNotMatch(HANDLER_SOURCE, /track_ref = "track:index:0"/);
     assert.doesNotMatch(HANDLER_SOURCE, /\^fx:track:\(%d\+\)\$/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);

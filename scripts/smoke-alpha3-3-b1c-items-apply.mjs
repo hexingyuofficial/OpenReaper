@@ -307,7 +307,7 @@ async function resolveItemObject(itemRef) {
 
 function assertAlpha33Surface(value) {
   const visibleIds = value.menu?.items?.filter((item) => item.action_kind === "macro").map((item) => item.id) ?? [];
-  assert(visibleIds.length === 14, `Expected 14 visible executable Macros, got ${visibleIds.length}`);
+  assert(visibleIds.length === 15, `Expected 15 visible executable Macros, got ${visibleIds.length}`);
   assert(visibleIds.includes("macro.items.apply"), "macro.items.apply is not visible");
   const expansion = value.manual?.product_surface?.agent_context_macro_guide?.requested_expansions?.items?.[0];
   assert(expansion?.id === "macro.items.apply" && expansion.runnable === true, "Exact items.apply manual is not runnable");

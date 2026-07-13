@@ -222,6 +222,12 @@ import {
   executeAlpha3_3B1cItemsApplyMacro,
   isAlpha3_3B1cItemsApplyMacroId,
 } from "./alpha3-3-b1c-items-apply-v1.mjs";
+import {
+  ALPHA3_3_B1D_AUTOMATION_APPLY_REGISTRY,
+  createAlpha3_3B1dAutomationApplyDiscoveryItems,
+  executeAlpha3_3B1dAutomationApplyMacro,
+  isAlpha3_3B1dAutomationApplyMacroId,
+} from "./alpha3-3-b1d-automation-apply-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -563,6 +569,7 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.automation.read_automation_items",
   "template.automation.set_envelope_point",
   "template.automation.insert_envelope_points_batch",
+  "template.automation.delete_envelope_points",
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
@@ -778,6 +785,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
   "template.automation.list_project_envelopes",
+  "template.automation.delete_envelope_points",
   "template.items.set_active_take",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
@@ -811,6 +819,7 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
+  "template.automation.delete_envelope_points",
   ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
 ]);
 
@@ -928,6 +937,7 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
   ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
   ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY,
+  ALPHA3_3_B1D_AUTOMATION_APPLY_REGISTRY,
 ]);
 const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
@@ -1016,6 +1026,7 @@ export function createCallTemplateRuntime(options = {}) {
       createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
     ...macroDiscovery(ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID, (runtimeOptions) =>
       createAlpha3C5OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
+    ...macroDiscovery("macro.automation.apply", createAlpha3_3B1dAutomationApplyDiscoveryItems),
     ...macroDiscovery(ALPHA3_2E_RENDER_TARGETS_MACRO_ID, createAlpha3_2ERenderTargetsMacroDiscoveryItems),
     ...createAlpha3_2AContractMacroDiscoveryItems(),
     ...legacyProjectIndexCompatibilityDiscovery,
@@ -1110,6 +1121,16 @@ export function createCallTemplateRuntime(options = {}) {
       }
       if (isAlpha3_3B1cItemsApplyMacroId(id)) {
         const envelope = await executeAlpha3_3B1cItemsApplyMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_3B1dAutomationApplyMacroId(id)) {
+        const envelope = await executeAlpha3_3B1dAutomationApplyMacro({
           request: normalized,
           executeAtomic: macroAtomic,
           projectIndexRuntime,

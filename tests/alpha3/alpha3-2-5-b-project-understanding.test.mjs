@@ -219,6 +219,64 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("hydrates fourteen Automation rows losslessly and keeps the final GUID reachable after public paging", async () => {
+    const fixture = await makeFixture();
+    const automationNames = Array.from({ length: 14 }, (_, index) => index === 13 ? "Automation Envelope 14 Exact" : `Automation Envelope ${index + 1}`);
+    const state = { revision: 14, trackName: "Highway", automationNames, calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const publicBudget = { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 };
+      const cold = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "automation", fields: ["ref", "name", "point_count"], refresh_policy: "if_stale", limit: 2 },
+        budget: publicBudget,
+        context: callContext(1),
+      });
+
+      assert.equal(cold.ok, true, JSON.stringify(cold));
+      assert.equal(cold.result.data.rows.length, 2);
+      assert.equal(cold.result.data.coverage.known_total_row_count, 14);
+      assert.equal(cold.result.data.coverage.indexed_row_count, 14);
+      assert.equal(cold.result.data.coverage.public_returned_row_count, 2);
+      assert.equal(cold.result.data.refresh.logical_refresh.coverage.automation, "complete");
+      assert.equal(cold.result.data.refresh.logical_refresh.row_counts.automation, 14);
+      assert.equal(indexRuntime.adapter.snapshot().rows.envelopes.length, 14);
+      assert.deepEqual(
+        state.atomicRequests.filter((entry) => entry.operation.name === "automation.project_envelopes.list").map((entry) => entry.params.limit),
+        [32],
+      );
+
+      const publicPage = await runtime.call_template({
+        id: "template.automation.list_project_envelopes",
+        input: { parent_kinds: ["track"], limit: 1 },
+        budget: publicBudget,
+        context: callContext(2),
+      });
+      assert.equal(publicPage.ok, true, JSON.stringify(publicPage));
+      assert.equal(publicPage.result.summary.returned_count, 1);
+      assert.equal(publicPage.result.summary.coverage_status, "paged");
+      assert.equal(Buffer.byteLength(JSON.stringify(publicPage.result.summary), "utf8") < 2_048, true);
+      assert.equal(indexRuntime.adapter.snapshot().rows.envelopes.length, 14);
+      assert.equal(indexRuntime.adapter.snapshot().freshness_scopes.automation.coverage_status, "complete");
+
+      const finalRef = "envelope:guid:{AUTO-14}";
+      const exactLast = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "automation", selectors: { refs: [finalRef] }, refresh_policy: "never", limit: 1 },
+        budget: publicBudget,
+        context: callContext(3),
+      });
+      assert.equal(exactLast.ok, true, JSON.stringify(exactLast));
+      assert.equal(exactLast.result.data.rows[0].ref, finalRef);
+      assert.equal(exactLast.result.data.rows[0].name, automationNames.at(-1));
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("merges hidden physical pages before exposing one complete forty-track logical scope", async () => {
     const fixture = await makeFixture();
     const trackNames = Array.from({ length: 40 }, (_, index) => `Chunked ${String(index + 1).padStart(2, "0")}`);
@@ -540,6 +598,36 @@ function createRuntime({ fixture, indexRuntime, state }) {
         || request.operation.name === "tracks.read_mixer_controls"
       ) {
         response.result.readback = trackReadback(state.trackNames ?? [state.trackName]);
+      } else if (request.operation.name === "automation.project_envelopes.list") {
+        const names = state.automationNames ?? [];
+        const cursor = Number(request.params.cursor ?? 0);
+        const limit = request.params.limit ?? 32;
+        const end = Math.min(names.length, cursor + limit);
+        const truncated = end < names.length;
+        response.result.summary = {
+          envelopes: names.slice(cursor, end).map((name, offset) => {
+            const index = cursor + offset + 1;
+            return {
+              envelope_ref: `envelope:guid:{AUTO-${index}}`,
+              owner_ref: `track:guid:{TRACK-${index}}`,
+              parent_kind: "track",
+              envelope_type: "volume",
+              identity_kind: "guid",
+              name,
+              point_count: index,
+              automation_item_count: 0,
+              visible: true,
+            };
+          }),
+          envelope_refs: names.slice(cursor, end).map((_, offset) => `envelope:guid:{AUTO-${cursor + offset + 1}}`),
+          returned_count: end - cursor,
+          total_count: names.length,
+          next_cursor: truncated ? String(end) : null,
+          truncated,
+          coverage_status: truncated ? "paged" : "complete",
+          coverage: { internally_complete: true, retained_count: names.length },
+        };
+        response.result.readback = response.result.summary;
       } else if (request.operation.name === "fx.list_track_chain") {
         state.fxOwnerRefs.push(...request.refs.map((ref) => ({ kind: ref.kind, ref: ref.ref })));
         response.result.summary = {
@@ -602,9 +690,10 @@ function createRuntime({ fixture, indexRuntime, state }) {
 }
 
 function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTracks = 32) {
+  const projectMap = projectOverview(projectRef, trackNames, trackCursor, maxTracks);
   return {
     project_ref: projectRef,
-    project_map: projectOverview(projectRef, trackNames, trackCursor, maxTracks),
+    project_map: projectMap,
     markers_regions: {
       items: [{
         ref: "region:index:1",
@@ -615,7 +704,7 @@ function observationBundlePayload(projectRef, trackNames, trackCursor = 0, maxTr
       }],
     },
     coverage: {
-      project_map: "complete_page",
+      project_map: projectMap.truncated ? "paged" : "complete_page",
       markers_regions: "bounded",
     },
   };

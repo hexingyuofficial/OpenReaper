@@ -369,6 +369,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       "macro.fx.apply_chain",
       "macro.fx.set_controls",
       "macro.controls.set",
+      "macro.automation.apply",
       "macro.render.targets",
     ]);
   });

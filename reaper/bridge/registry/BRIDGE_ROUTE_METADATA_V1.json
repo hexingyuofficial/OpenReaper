@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 220,
+    "entryCount": 222,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 220,
+    "extractedHandlerCount": 222,
     "handlerModuleCount": 84,
     "routeCount": 33,
-    "operationCount": 101
+    "operationCount": 102
   },
   "routes": [
     {
@@ -693,14 +693,15 @@
     },
     {
       "route": "e5-routing-automation-extra-handlers",
-      "template_count": 18,
+      "template_count": 20,
       "handler_module_count": 1,
-      "operation_count": 18,
+      "operation_count": 20,
       "packs": [
         "automation",
         "routing"
       ],
       "risks": [
+        "destructive",
         "read",
         "write"
       ],
@@ -713,6 +714,7 @@
       "template_ids": [
         "template.routing.read_fx_pin_mapping",
         "template.automation.resolve_envelope_ref",
+        "template.automation.list_project_envelopes",
         "template.automation.read_envelope_summary",
         "template.automation.read_envelope_points",
         "template.automation.evaluate_envelope_at_time",
@@ -723,6 +725,7 @@
         "template.automation.read_automation_items",
         "template.automation.set_envelope_point",
         "template.automation.insert_envelope_points_batch",
+        "template.automation.delete_envelope_points",
         "template.automation.set_send_automation_mode",
         "template.automation.create_automation_item",
         "template.automation.set_automation_item_bounds",

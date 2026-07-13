@@ -27,10 +27,13 @@ const READ_SUMMARY_ID = "template.project.read_summary";
 const READ_DIRTY_ID = "template.project.read_dirty_state";
 const READ_RENDER_SETTINGS_ID = "template.render.read_settings";
 const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
+const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_RESULT_DATA_BYTES = 18_000;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
+const PROJECT_INDEX_HYDRATION_AUTOMATION_LIMIT = 32;
 const PROJECT_INDEX_MAX_TRACK_CHUNKS = 128;
+const PROJECT_INDEX_MAX_AUTOMATION_PAGES = 128;
 const PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS = 2;
 const PROJECT_INDEX_HYDRATION_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
@@ -676,8 +679,24 @@ async function hydrateForQuery({
   }
   const completeTracks = request.input?.entity === "tracks"
     && (forceColdBundle || forceRefresh || plan.ok !== true);
+  const completeAutomation = request.input?.entity === "automation"
+    && (forceColdBundle || forceRefresh || plan.ok !== true);
   if (completeTracks) {
     const cold = await runCompleteTrackRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision,
+      now,
+    });
+    if (!cold.ok) return cold;
+    executions.push(...cold.executions);
+    artifactRefs.push(...cold.artifactRefs);
+    evidenceRefs.push(...cold.evidenceRefs);
+    logicalRefresh = cold.logicalRefresh ?? null;
+    revisionProbeCount += cold.revisionProbeCount ?? 0;
+  } else if (completeAutomation) {
+    const cold = await runCompleteAutomationRefresh({
       request,
       projectIndexRuntime,
       executeAtomic,
@@ -960,6 +979,189 @@ async function runCompleteTrackRefresh({
   return hydrationFailure(
     "PROJECT_INDEX_LOGICAL_REFRESH_RETRY_EXHAUSTED",
     "Complete track hydration exhausted its bounded retry policy without a stable REAPER revision.",
+    [],
+    { executions, artifactRefs, evidenceRefs },
+  );
+}
+
+async function runCompleteAutomationRefresh({
+  request,
+  projectIndexRuntime,
+  executeAtomic,
+  expectedRevision,
+  now = () => new Date(),
+}) {
+  if (
+    typeof projectIndexRuntime?.beginLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.commitLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.abortLogicalRefresh !== "function"
+  ) {
+    return hydrationFailure(
+      "PROJECT_INDEX_LOGICAL_REFRESH_UNAVAILABLE",
+      "Complete Automation hydration requires the managed Project Index logical-refresh transaction runtime.",
+    );
+  }
+  if (typeof expectedRevision !== "string") {
+    return hydrationFailure(
+      "PROJECT_INDEX_REFRESH_REVISION_REQUIRED",
+      "Complete Automation hydration requires a validated REAPER revision before reading Envelope pages.",
+    );
+  }
+
+  const executions = [];
+  const artifactRefs = [];
+  const evidenceRefs = [];
+  let revisionProbeCount = 0;
+  let attemptRevision = expectedRevision;
+
+  for (let attempt = 1; attempt <= PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS; attempt += 1) {
+    const begun = projectIndexRuntime.beginLogicalRefresh({
+      scopes: ["automation"],
+      expected_revision: attemptRevision,
+      observed_at: safeNowIso(now),
+    });
+    if (begun?.ok !== true || typeof begun.transaction_id !== "string") {
+      return hydrationFailure(
+        begun?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_BEGIN_FAILED",
+        begun?.blockers?.[0]?.message ?? "Project Index logical Automation refresh could not begin.",
+        begun?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const transactionId = begun.transaction_id;
+    const attemptExecutionStart = executions.length;
+    let cursor = 0;
+    let declaredEnvelopeCount = null;
+    let completed = false;
+
+    for (let pageIndex = 0; pageIndex < PROJECT_INDEX_MAX_AUTOMATION_PAGES; pageIndex += 1) {
+      const child = automationInventoryRequest(cursor);
+      const execution = await executeAtomic({
+        id: child.id,
+        input: child.input,
+        refs: child.refs,
+        context: request.context,
+        budget: PROJECT_INDEX_HYDRATION_BUDGET,
+        observeProjectIndex: true,
+        projectIndexObservationContext: {
+          logical_refresh: {
+            transaction_id: transactionId,
+            scope: "automation",
+            envelope_cursor: cursor,
+            revision: attemptRevision,
+          },
+        },
+      });
+      executions.push(execution);
+      evidenceRefs.push(...executionEvidenceRefs(execution));
+      artifactRefs.push(...executionArtifactRefs(execution));
+      if (execution?.ok !== true || execution?.result?.project_index_observation?.ok !== true) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "automation_page_observation_failed", observed_at: safeNowIso(now) });
+        const failed = execution?.ok === true
+          ? {
+              error: {
+                code: execution.result?.project_index_observation?.blockers?.[0]?.code ?? "PROJECT_INDEX_OBSERVATION_FAILED",
+                message: "An Automation inventory page was not accepted into logical-refresh staging.",
+              },
+              blockers: execution.result?.project_index_observation?.blockers ?? [],
+            }
+          : readFailure(child.id, execution);
+        return hydrationFailure(failed.error.code, failed.error.message, failed.blockers, { executions, artifactRefs, evidenceRefs });
+      }
+
+      const readback = executionReadback(execution);
+      const pageFacts = automationPageFacts(readback, cursor, declaredEnvelopeCount);
+      if (!pageFacts.ok) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: pageFacts.code, observed_at: safeNowIso(now) });
+        return hydrationFailure(pageFacts.code, pageFacts.message, [pageFacts.blocker], { executions, artifactRefs, evidenceRefs });
+      }
+      declaredEnvelopeCount = pageFacts.envelope_count;
+      if (!pageFacts.truncated) {
+        completed = true;
+        break;
+      }
+      cursor = pageFacts.next_cursor;
+    }
+
+    if (!completed) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "automation_page_limit_exceeded", observed_at: safeNowIso(now) });
+      return hydrationFailure(
+        "PROJECT_INDEX_AUTOMATION_PAGE_LIMIT_EXCEEDED",
+        `Complete Automation hydration exceeded ${PROJECT_INDEX_MAX_AUTOMATION_PAGES} hidden pages and was not committed.`,
+        [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const postRevision = await runRevisionProbe({ request, projectIndexRuntime, executeAtomic });
+    revisionProbeCount += 1;
+    evidenceRefs.push(...(postRevision.evidenceRefs ?? []));
+    artifactRefs.push(...(postRevision.artifactRefs ?? []));
+    if (!postRevision.ok) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "post_revision_probe_failed", observed_at: safeNowIso(now) });
+      return hydrationFailure(postRevision.error.code, postRevision.error.message, postRevision.blockers, { executions, artifactRefs, evidenceRefs });
+    }
+
+    const observedRevision = revisionKey(postRevision);
+    if (observedRevision !== attemptRevision) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "revision_changed_during_refresh", observed_at: safeNowIso(now) });
+      if (attempt < PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS && typeof observedRevision === "string") {
+        attemptRevision = observedRevision;
+        continue;
+      }
+      return hydrationFailure(
+        "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+        "REAPER changed while Automation inventory pages were being read; the mixed snapshot was discarded.",
+        [{
+          code: "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+          message: `Expected ${attemptRevision}, observed ${String(observedRevision)} after hydration.`,
+          recoverable: true,
+        }],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const committed = projectIndexRuntime.commitLogicalRefresh({
+      transaction_id: transactionId,
+      observed_revision: observedRevision,
+      observed_at: safeNowIso(now),
+    });
+    if (committed?.ok !== true) {
+      return hydrationFailure(
+        committed?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_COMMIT_FAILED",
+        committed?.blockers?.[0]?.message ?? "Complete Automation hydration could not be committed atomically.",
+        committed?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+    return {
+      ok: true,
+      executions,
+      artifactRefs: unique(artifactRefs),
+      evidenceRefs: unique(evidenceRefs),
+      blockers: [],
+      error: null,
+      revisionProbeCount,
+      logicalRefresh: {
+        status: "committed",
+        transaction_id: transactionId,
+        attempt_count: attempt,
+        page_count: executions.length - attemptExecutionStart,
+        expected_revision: attemptRevision,
+        observed_revision: observedRevision,
+        declared_envelope_count: declaredEnvelopeCount,
+        applied_scopes: committed.applied_scopes ?? ["automation"],
+        row_counts: committed.row_counts ?? {},
+        coverage: committed.coverage ?? { automation: "complete" },
+      },
+      summary: `Merged ${executions.length - attemptExecutionStart} hidden Automation inventory page(s) and committed one complete logical scope.`,
+    };
+  }
+
+  return hydrationFailure(
+    "PROJECT_INDEX_LOGICAL_REFRESH_RETRY_EXHAUSTED",
+    "Complete Automation hydration exhausted its bounded retry policy without a stable REAPER revision.",
     [],
     { executions, artifactRefs, evidenceRefs },
   );
@@ -1434,6 +1636,19 @@ function coldObservationBundleRequest(trackCursor = 0) {
   };
 }
 
+function automationInventoryRequest(envelopeCursor = 0) {
+  return {
+    id: AUTOMATION_INVENTORY_ID,
+    input: {
+      parent_kinds: ["track", "take", "send", "fx"],
+      limit: PROJECT_INDEX_HYDRATION_AUTOMATION_LIMIT,
+      ...(envelopeCursor > 0 ? { cursor: String(envelopeCursor) } : {}),
+    },
+    refs: [],
+    read_only: true,
+  };
+}
+
 function revisionKey(probe) {
   const changeCount = probe?.readback?.change_count;
   return Number.isInteger(changeCount) && changeCount >= 0
@@ -1498,6 +1713,72 @@ function trackChunkFacts(readback, expectedCursor, priorTrackCount) {
     );
   }
   return { ok: true, track_count: trackCount, truncated: true, next_cursor: nextCursor };
+}
+
+function automationPageFacts(readback, expectedCursor, priorEnvelopeCount) {
+  const envelopeCount = readback?.total_count;
+  const returnedEnvelopeCount = readback?.returned_count;
+  const truncated = readback?.truncated;
+  const coverageStatus = readback?.coverage_status;
+  const internallyComplete = readback?.coverage?.internally_complete;
+  const rows = Array.isArray(readback?.envelopes) ? readback.envelopes : [];
+  const invalid = (code, message, details = {}) => ({
+    ok: false,
+    code,
+    message,
+    blocker: { code, message, recoverable: true, details },
+  });
+  if (!Number.isInteger(envelopeCount) || envelopeCount < 0) {
+    return invalid("PROJECT_INDEX_AUTOMATION_COUNT_INVALID", "A hidden Automation page did not report a non-negative total_count.");
+  }
+  if (priorEnvelopeCount !== null && envelopeCount !== priorEnvelopeCount) {
+    return invalid(
+      "PROJECT_INDEX_AUTOMATION_COUNT_CHANGED",
+      "REAPER Envelope total_count changed between hidden Automation pages.",
+      { expected_envelope_count: priorEnvelopeCount, observed_envelope_count: envelopeCount },
+    );
+  }
+  if (!Number.isInteger(returnedEnvelopeCount) || returnedEnvelopeCount < 0 || returnedEnvelopeCount !== rows.length) {
+    return invalid(
+      "PROJECT_INDEX_RETURNED_AUTOMATION_COUNT_INVALID",
+      "A hidden Automation page returned_count did not match its Envelope rows.",
+      { returned_count: returnedEnvelopeCount, row_count: rows.length },
+    );
+  }
+  if (typeof truncated !== "boolean" || internallyComplete !== true) {
+    return invalid(
+      "PROJECT_INDEX_AUTOMATION_COVERAGE_UNKNOWN",
+      "A hidden Automation page did not prove complete internal REAPER enumeration.",
+      { truncated, coverage_status: coverageStatus, internally_complete: internallyComplete },
+    );
+  }
+  const rawNextCursor = readback?.next_cursor;
+  const nextCursor = rawNextCursor === null || rawNextCursor === undefined
+    ? null
+    : typeof rawNextCursor === "string" && /^(?:0|[1-9][0-9]*)$/u.test(rawNextCursor)
+      ? Number(rawNextCursor)
+      : Number.isInteger(rawNextCursor)
+        ? rawNextCursor
+        : null;
+  if (truncated) {
+    const expectedNextCursor = expectedCursor + returnedEnvelopeCount;
+    if (coverageStatus !== "paged" || nextCursor !== expectedNextCursor || nextCursor > envelopeCount) {
+      return invalid(
+        "PROJECT_INDEX_AUTOMATION_CURSOR_NO_PROGRESS",
+        "A paged hidden Automation read did not provide the exact next Envelope cursor.",
+        { expected_cursor: expectedCursor, expected_next_cursor: expectedNextCursor, next_cursor: rawNextCursor, envelope_count: envelopeCount },
+      );
+    }
+    return { ok: true, envelope_count: envelopeCount, truncated: true, next_cursor: nextCursor };
+  }
+  if (coverageStatus !== "complete" || nextCursor !== null || expectedCursor + returnedEnvelopeCount !== envelopeCount) {
+    return invalid(
+      "PROJECT_INDEX_AUTOMATION_PAGE_INCOMPLETE",
+      "The final hidden Automation page did not end at the declared complete Envelope total.",
+      { expected_cursor: expectedCursor, returned_count: returnedEnvelopeCount, envelope_count: envelopeCount, coverage_status: coverageStatus, next_cursor: rawNextCursor },
+    );
+  }
+  return { ok: true, envelope_count: envelopeCount, truncated: false, next_cursor: null };
 }
 
 function inspectEntities(include) {

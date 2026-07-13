@@ -21,7 +21,7 @@ const CANONICAL_IDS = [
   "macro.fx.apply_chain",
   "macro.fx.set_controls",
 ];
-const DRAFT_IDS = ["macro.items.analyze", "macro.items.apply", "macro.automation.apply"];
+const DRAFT_IDS = [];
 const ALIAS_IDS = ["macro.midi.create_clip", "macro.fx.apply_native_chain", "macro.set_stock_plugin_controls"];
 
 await Promise.all([
@@ -52,7 +52,7 @@ try {
   assertGuide(calls.recipes.product_surface?.agent_context_macro_guide, "list_recipes");
 
   const visibleIds = calls.menu.items?.filter((item) => item.action_kind === "macro").map((item) => item.id) ?? [];
-  assert(visibleIds.length === 12, `Expected 12 visible canonical Macros, got ${visibleIds.length}`);
+  assert(visibleIds.length === 15, `Expected 15 visible canonical Macros, got ${visibleIds.length}`);
   for (const id of CANONICAL_IDS) assert(visibleIds.includes(id), `${id} is not visible`);
   for (const id of [...DRAFT_IDS, ...ALIAS_IDS]) assert(!visibleIds.includes(id), `${id} leaked into the menu`);
 
@@ -222,7 +222,7 @@ async function callTool(activeClient, name, args) {
 
 function assertGuide(guide, surface) {
   assert(guide?.contract === "alpha3.3.agent_context_macro_guide.v1", `${surface} returned the wrong guide`);
-  assert(Array.isArray(guide?.macro_menu?.macro_ids) && guide.macro_menu.macro_ids.length === 12, `${surface} returned no compact 12-Macro menu`);
+  assert(Array.isArray(guide?.macro_menu?.macro_ids) && guide.macro_menu.macro_ids.length === 15, `${surface} returned no compact 15-Macro menu`);
   assert(!Object.hasOwn(guide, "primary_spine") && !Object.hasOwn(guide, "secondary_menu"), `${surface} retained tier fields`);
 }
 

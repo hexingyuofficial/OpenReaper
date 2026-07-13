@@ -40,12 +40,11 @@ const EXPECTED_FINAL_IDS = [
 ];
 
 describe("Alpha3.3-B1 Macro portfolio", () => {
-  it("separates the final fifteen targets from fourteen visible executables and one internal draft", () => {
+  it("publishes all fifteen final targets as visible executables with no internal draft", () => {
     assert.deepEqual(validateAlpha3_3B1MacroPortfolio(), { valid: true, errors: [] });
     assert.deepEqual(ALPHA3_3_B1_FINAL_TARGET_IDS, EXPECTED_FINAL_IDS);
-    assert.deepEqual(ALPHA3_3_B1_INTERNAL_DRAFT_IDS, ["macro.automation.apply"]);
-    assert.deepEqual(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, EXPECTED_FINAL_IDS.filter((id) =>
-      !ALPHA3_3_B1_INTERNAL_DRAFT_IDS.includes(id)));
+    assert.deepEqual(ALPHA3_3_B1_INTERNAL_DRAFT_IDS, []);
+    assert.deepEqual(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, EXPECTED_FINAL_IDS);
   });
 
   it("keeps renamed ids as hidden aliases to canonical visible executables", () => {

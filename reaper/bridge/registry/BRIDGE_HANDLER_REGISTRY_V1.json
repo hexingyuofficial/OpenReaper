@@ -2586,6 +2586,22 @@
       ]
     },
     {
+      "template_id": "template.automation.list_project_envelopes",
+      "operation": {
+        "family": "query_state",
+        "name": "automation.project_envelopes.list"
+      },
+      "pack": "automation",
+      "risk": "read",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "list_project_envelopes",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.automation.read_envelope_summary",
       "operation": {
         "family": "query_state",
@@ -2745,6 +2761,23 @@
       "route": "e5-routing-automation-extra-handlers",
       "handler_file": "routing/e5_r1_routing_read_route.lua",
       "handler_export": "insert_envelope_points_batch",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.delete_envelope_points",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.delete_envelope_points",
+      "pack": "automation",
+      "risk": "destructive",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "delete_envelope_points",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
