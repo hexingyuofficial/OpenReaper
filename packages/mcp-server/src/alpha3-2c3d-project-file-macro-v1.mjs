@@ -220,6 +220,10 @@ export async function executeAlpha3_2_5CProjectFileMacro({
 
   let beforePath;
   let beforeDirty;
+  let afterPath;
+  let afterDirty;
+  let invalidation = null;
+  let verifiedChange = null;
   try {
     beforePath = readback(await run("file-read-before-path", READ_PATH_ID));
     beforeDirty = readback(await run("file-read-before-dirty", READ_DIRTY_ID));
@@ -237,18 +241,21 @@ export async function executeAlpha3_2_5CProjectFileMacro({
     const saveInput = input.operation === "save_as" ? { target_path: input.target_path, overwrite: true } : {};
     mutationAttempted = true;
     await run(input.operation === "save_current" ? "file-live-save-current" : "file-live-save-as", saveId, saveInput);
-    const afterPath = readback(await run("file-read-after-path", READ_PATH_ID));
-    const afterDirty = readback(await run("file-read-after-dirty", READ_DIRTY_ID));
+    afterPath = readback(await run("file-read-after-path", READ_PATH_ID));
+    afterDirty = readback(await run("file-read-after-dirty", READ_DIRTY_ID));
     const expectedPath = input.operation === "save_current" ? exactPath(beforePath) : input.target_path;
     if (exactPath(afterPath) !== expectedPath) throw macroError("PROJECT_FILE_PATH_READBACK_MISMATCH", "Project-file save completed but exact path readback did not match the required path.");
     if (!isCleanDirtyState(afterDirty)) throw macroError("PROJECT_FILE_DIRTY_READBACK_MISMATCH", "Project-file save completed but exact dirty-state readback was not clean.");
-    const invalidation = invalidateProjectFileIndex(projectIndexRuntime, input.operation, now);
+    verifiedChange = projectFileChange(input.operation, afterPath, afterDirty);
+    invalidation = invalidateProjectFileIndex(projectIndexRuntime, input.operation, now);
     if (invalidation?.ok === false) {
+      verifiedChange.index_maintenance = indexMaintenance("failed", invalidation);
       throw macroError(
         invalidation.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_INVALIDATION_FAILED",
         invalidation.blockers?.[0]?.message ?? "Project-file save completed but Project Index identity scopes could not be invalidated.",
       );
     }
+    verifiedChange.index_maintenance = indexMaintenance(invalidation ? "completed" : "skipped", invalidation);
     stages.push({ id: "file-result-project", kind: "result_project", status: "completed", summary: "Project-file save verified by exact path and dirty-state readback.", evidence_refs: collectedEvidence() });
     return fileEnvelope({
       entry,
@@ -267,18 +274,44 @@ export async function executeAlpha3_2_5CProjectFileMacro({
         dirty_after: dirtyProjection(afterDirty),
         atomic_calls: calls.length,
         index_update: compactIndexUpdate(invalidation),
+        outcome: projectFileOutcome(verifiedChange, invalidation),
       },
-      changes: [{ kind: "project_file", action: input.operation, path: exactPath(afterPath) }],
+      changes: [verifiedChange],
       sqlite: sqliteEvidence(projectIndexRuntime, invalidation),
       verificationEvidenceRefs: collectedEvidence(),
     });
   } catch (error) {
-    return fileEnvelope({ entry, request, startedAt, now, status: mutationAttempted ? "partial_failure" : "failed", stages, blockers: [blocker(error.code ?? "PROJECT_FILE_EXECUTION_FAILED", error.message ?? "Project-file Macro failed.")], summary: error.message ?? "Project-file Macro failed.", data: { operation: input.operation ?? null, path_before: exactPath(beforePath), dirty_before: dirtyProjection(beforeDirty), calls: calls.length } });
+    const readbackPassed = verifiedChange?.live_readback?.status === "passed";
+    return fileEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      status: mutationAttempted ? "partial_failure" : "failed",
+      stages,
+      blockers: [blocker(error.code ?? "PROJECT_FILE_EXECUTION_FAILED", error.message ?? "Project-file Macro failed.")],
+      summary: error.message ?? "Project-file Macro failed.",
+      data: {
+        operation: input.operation ?? null,
+        path_before: exactPath(beforePath),
+        path_after: exactPath(afterPath),
+        dirty_before: dirtyProjection(beforeDirty),
+        dirty_after: dirtyProjection(afterDirty),
+        calls: calls.length,
+        index_update: compactIndexUpdate(invalidation),
+        outcome: projectFileOutcome(verifiedChange, invalidation),
+      },
+      changes: verifiedChange ? [verifiedChange] : [],
+      sqlite: sqliteEvidence(projectIndexRuntime, invalidation),
+      verificationStatus: readbackPassed ? "passed" : undefined,
+      verificationEvidenceRefs: readbackPassed ? collectedEvidence() : [],
+    });
   }
 }
 
-function fileEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, changes = [], sqlite = null, verificationEvidenceRefs = [] }) {
+function fileEnvelope({ entry, request, startedAt, now, status, stages, blockers, summary, data = {}, changes = [], sqlite = null, verificationStatus = null, verificationEvidenceRefs = [] }) {
   const failed = status !== "completed" && status !== "dry_run_completed";
+  const resolvedVerificationStatus = verificationStatus ?? (failed ? "not_required" : "passed");
   const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: !failed,
@@ -286,7 +319,7 @@ function fileEnvelope({ entry, request, startedAt, now, status, stages, blockers
     request: { request_id: request.request_id ?? "macro.project.file", dry_run: failed ? false : request.input?.dry_run === true },
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: sqlite ?? { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false },
-    result: { summary, canonical_refs: [], changes, verification: { status: failed ? "not_required" : "passed", evidence_refs: failed ? [] : uniqueEvidenceRefs(verificationEvidenceRefs) }, artifact_refs: [], data },
+    result: { summary, canonical_refs: [], changes, verification: { status: resolvedVerificationStatus, evidence_refs: resolvedVerificationStatus === "passed" ? uniqueEvidenceRefs(verificationEvidenceRefs) : [] }, artifact_refs: [], data },
     blockers: failed ? blockers : [], error: failed ? { code: blockers[0]?.code ?? "PROJECT_FILE_FAILED", message: summary, recoverable: true } : null,
     recovery: failed ? { action: "Repair the typed blocker and retry the same registered Macro.", sqlite_rows_authorize_writes: false } : null,
     budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
@@ -303,6 +336,40 @@ function readback(execution) { return execution?.result?.readback ?? execution?.
 function exactPath(value) { return value?.project_path ?? value?.path ?? value?.current_project_path ?? null; }
 function isCleanDirtyState(value) { return value?.dirty === false && value?.dirty_state === "clean" && value?.raw_dirty_state === 0; }
 function dirtyProjection(value) { return { raw_dirty_state: value?.raw_dirty_state ?? null, dirty_state: value?.dirty_state ?? null, dirty: value?.dirty ?? null }; }
+function projectFileChange(operation, afterPath, afterDirty) {
+  return {
+    kind: "project_file",
+    action: operation,
+    path: exactPath(afterPath),
+    status: "applied",
+    mutation: { status: "completed" },
+    live_readback: {
+      status: "passed",
+      source: "live_project_path_and_dirty_readback",
+      path: exactPath(afterPath),
+      dirty: dirtyProjection(afterDirty),
+    },
+    index_maintenance: { status: "pending", scopes: [], blocker_code: null },
+  };
+}
+function indexMaintenance(status, invalidation) {
+  return {
+    status,
+    scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+    blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+  };
+}
+function projectFileOutcome(change, invalidation) {
+  return {
+    mutation: { status: change?.mutation?.status ?? "not_run" },
+    live_readback: { status: change?.live_readback?.status ?? "not_run" },
+    index_maintenance: {
+      status: change?.index_maintenance?.status ?? "not_run",
+      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+    },
+  };
+}
 function evidenceRefs(execution) { return uniqueEvidenceRefs([execution?.request?.id, ...(execution?.evidence_refs ?? []), ...(execution?.result?.evidence_refs ?? [])]); }
 function uniqueEvidenceRefs(values) { return [...new Set(values.filter((value) => typeof value === "string"))].slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count); }
 function invalidateProjectFileIndex(runtime, operation, now) {

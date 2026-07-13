@@ -86,6 +86,9 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     ]);
     assert.deepEqual(invalidations, [["fx"]]);
     assert.equal(result.result.verification.status, "passed");
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(result.result.data.outcome.index_maintenance.status, "completed");
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
@@ -111,6 +114,29 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.equal(calls.some((call) =>
       call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 22), false);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("keeps verified FX changes applied when only index maintenance fails", async () => {
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: { controls: { threshold_db: -18 }, dry_run: false },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: fxAtomic([], new Map()),
+      projectIndexRuntime: indexRuntime([], { fail: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "INDEX_WRITE_FAILED");
+    assert.equal(result.result.verification.status, "passed");
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "failed"), true);
+    assert.equal(result.result.data.outcome.live_readback.status, "passed");
+    assert.equal(result.result.data.outcome.index_maintenance.status, "failed");
   });
 
   it("keeps equally ranked non-wrapper parameter names ambiguous", async () => {
@@ -156,6 +182,7 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.equal(result.error.code, "NATIVE_FX_CHILD_VERIFICATION_FAILED");
     assert.equal(calls.some((call) => call.id === "template.fx.set_fx_parameter_normalized"), false);
     assert.equal(result.result.verification.status, "failed");
+    assert.equal(result.result.changes.every((change) => change.status !== "applied"), true);
   });
 
   it("rejects unsupported plugins and non-idempotent replay keys before dispatch", async () => {
@@ -255,11 +282,14 @@ function objectRef(kind, ref) {
   return { kind, ref, identity: { scheme: remainder.slice(0, separator), value: remainder.slice(separator + 1) } };
 }
 
-function indexRuntime(invalidations) {
+function indexRuntime(invalidations, { fail = false } = {}) {
   return {
     status: () => ({ snapshot_id: "snapshot:fx-d", revision: 4 }),
     invalidateScopes({ scopes }) {
       invalidations.push([...scopes]);
+      if (fail) {
+        return { ok: false, scopes, blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }] };
+      }
       return { ok: true, scopes, snapshot_id: "snapshot:fx-d", revision: 4 };
     },
   };

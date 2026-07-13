@@ -32,6 +32,11 @@ const ITEM_RESOLVER_ID = ITEM_ID_RESOLVER_ID;
 const MARKER_REGION_RESOLVER_ID = "template.project.list_markers_regions";
 const SEND_RESOLVER_ID = "template.routing.resolve_send_ref";
 const MAX_MUTATIONS = 256;
+const PROJECT_WRITE_INTERNAL_BUDGET = Object.freeze({
+  max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
+  max_items: MAX_MUTATIONS,
+  max_inline_value_bytes: MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
+});
 
 const PROGRAMS = Object.freeze({
   [ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID]: program({
@@ -132,6 +137,9 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     evidenceRefs: [],
     changes: [],
     canonicalRefs: [],
+    readbackRefs: new Set(),
+    readbackEvidenceRefs: [],
+    writeExecuted: false,
     sqlite: sqliteEvidence(),
     indexUpdate: null,
   };
@@ -154,7 +162,19 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     }
     if (dryRun) {
       recordStage(stages, stageIdFor(program, "result_project"), "result_project", "completed", "Validated bounded targets without mutation.", state.evidenceRefs);
-      return success(program, request, startedAt, now, stages, state, "dry_run_completed", "Validated the registered Macro selection and risk without mutating the project.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false });
+      const executableInput = {
+        ...(object(request.input) ? structuredClone(request.input) : {}),
+        dry_run: false,
+        ...(plan.required_confirm_scope ? { confirm_scope: structuredClone(plan.required_confirm_scope) } : {}),
+      };
+      return success(program, request, startedAt, now, stages, state, "dry_run_completed", "Validated the registered Macro selection and risk without mutating the project.", {
+        preview: plan.preview ?? {},
+        mutation_skipped: true,
+        required_confirm_scope: plan.required_confirm_scope ?? null,
+        executable_retry: { id: request.id, input: executableInput },
+        undo_policy: program.entry.undo_policy,
+        source_media_deleted: false,
+      });
     }
 
     if ((plan.mutation_requests ?? []).length > MAX_MUTATIONS) throw coded("PROJECT_WRITE_MUTATION_LIMIT", "The registered Macro exceeded its bounded mutation ceiling.");
@@ -164,7 +184,15 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: mutation.id, input: mutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(mutation.id)}`, kind: "template_execute", now });
       rememberRefs(state, execution);
       bindMutationLocalRef(plan, mutation, execution, state);
-      state.changes.push({ template_id: mutation.id, status: "applied" });
+      state.changes.push({
+        template_id: mutation.id,
+        purpose: mutation.purpose ?? null,
+        target_refs: unique([...refsInValue(resolvedRefs), ...collectedRefs(execution)]),
+        status: "mutation_completed",
+        mutation: { status: "completed", verification_status: "passed" },
+        live_readback: { status: "pending" },
+        index_maintenance: { status: "pending" },
+      });
     }
     if (program.entry.macro_id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) {
       await verifyDeletedTargets({ program, plan, request, executeAtomic, stages, state, now });
@@ -180,11 +208,15 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
           allowProducedObjectRefs: true,
           now,
         });
-        await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs, stageId: `verify-${stageToken(child.id)}`, kind: "verify", now });
+        const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs, stageId: `verify-${stageToken(child.id)}`, kind: "verify", now });
+        recordProjectWriteReadback(state, execution);
       }
+      applyProjectWriteReadbackToChanges(state);
     }
     const invalidation = invalidateProjectIndex(projectIndexRuntime, scopesFor(program.entry.macro_id, plan), now);
     if (invalidation?.ok === false) {
+      state.indexUpdate = invalidation;
+      applyProjectWriteIndexMaintenance(state.changes, "failed", invalidation);
       throw coded(
         invalidation.blockers?.[0]?.code ?? "PROJECT_WRITE_INDEX_INVALIDATION_FAILED",
         invalidation.blockers?.[0]?.message ?? "The write completed but affected Project Index scopes could not be marked stale.",
@@ -192,6 +224,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       );
     }
     state.indexUpdate = invalidation;
+    applyProjectWriteIndexMaintenance(state.changes, invalidation ? "completed" : "skipped", invalidation);
     if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
     recordStage(
       stages,
@@ -204,12 +237,14 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       [],
     );
     recordStage(stages, stageIdFor(program, "result_project"), "result_project", "completed", "Projected verified registered-write evidence.", state.evidenceRefs);
-    return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation) });
+    return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation), outcome: projectWriteOutcome(state) });
   } catch (error) {
-    const partial = state.changes.length > 0;
+    const partial = state.writeExecuted === true || state.changes.some((change) => change.mutation?.status === "completed");
     return failure(program, request, startedAt, now, stages, partial ? "partial_failure" : "failed", error.code ?? "PROJECT_WRITE_STAGE_FAILED", error.message ?? "A registered project-write stage failed.", error.blockers, {
-      applied_change_count: state.changes.length,
+      applied_change_count: state.changes.filter((change) => change.status === "applied").length,
       source_media_deleted: false,
+      index_update: compactIndexUpdate(state.indexUpdate),
+      outcome: projectWriteOutcome(state),
     }, state);
   }
 }
@@ -313,7 +348,7 @@ function resolverFor(key, ref) {
 }
 
 async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, now }) {
-  const execution = await executeAtomic({ id, input, refs: materializeRefs(refs, state), context: request.context, budget: request.budget, observeProjectIndex: false });
+  const execution = await executeAtomic({ id, input, refs: materializeRefs(refs, state), context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
   const evidence = evidenceRefs(execution);
   state.evidenceRefs.push(...evidence);
   const childVerification = execution?.verification ?? execution?.result?.verification;
@@ -323,8 +358,16 @@ async function atomicStage({ program, request, executeAtomic, stages, state, id,
     const childError = execution?.error ?? {};
     throw coded(childError.code ?? "PROJECT_WRITE_ATOMIC_FAILED", childError.message ?? `${id} failed through the managed atomic route.`, childError.blockers);
   }
+  if (kind === "template_execute") state.writeExecuted = true;
   if (!verified) {
-    state.changes.push({ template_id: id, status: "verification_failed" });
+    state.changes.push({
+      template_id: id,
+      target_refs: refsInValue(refs),
+      status: "mutation_unverified",
+      mutation: { status: "completed", verification_status: "failed" },
+      live_readback: { status: "not_run" },
+      index_maintenance: { status: "pending" },
+    });
     throw coded("PROJECT_WRITE_CHILD_VERIFICATION_FAILED", `${id} completed without passed accepted Template verification.`);
   }
   rememberRefs(state, execution);
@@ -346,11 +389,12 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
       input: { limit: 250, include_selection: true },
       refs: {},
       context: request.context,
-      budget: request.budget,
+      budget: PROJECT_WRITE_INTERNAL_BUDGET,
       observeProjectIndex: false,
     });
     evidence.push(...evidenceRefs(execution));
     if (execution?.ok !== true) throw childExecutionError("template.tracks.list_tracks", execution);
+    recordProjectWriteReadback(state, execution);
     const survivors = targets.tracks.filter((ref) => collectedRefs(execution).includes(ref));
     if (survivors.length > 0) throw coded("DELETE_TRACK_READBACK_SURVIVOR", "One or more confirmed track refs still exist after deletion.", survivors.map((ref) => ({ code: "DELETE_TRACK_READBACK_SURVIVOR", message: `Track survived deletion: ${ref}`, recoverable: true })));
   }
@@ -360,7 +404,7 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
       input: { ref: itemRef },
       refs: {},
       context: request.context,
-      budget: request.budget,
+      budget: PROJECT_WRITE_INTERNAL_BUDGET,
       observeProjectIndex: false,
     });
     evidence.push(...evidenceRefs(execution));
@@ -369,6 +413,7 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
     if (!["ITEM_NOT_FOUND", "ITEM_REF_NOT_FOUND", "REF_NOT_FOUND"].includes(code)) {
       throw childExecutionError(ITEM_ID_RESOLVER_ID, execution);
     }
+    state.readbackRefs.add(itemRef);
   }
   if (targets.markers.length > 0 || targets.regions.length > 0) {
     const execution = await executeAtomic({
@@ -376,14 +421,24 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
       input: { limit: 250 },
       refs: {},
       context: request.context,
-      budget: request.budget,
+      budget: PROJECT_WRITE_INTERNAL_BUDGET,
       observeProjectIndex: false,
     });
     evidence.push(...evidenceRefs(execution));
     if (execution?.ok !== true) throw childExecutionError(MARKER_REGION_RESOLVER_ID, execution);
+    recordProjectWriteReadback(state, execution);
     const returned = new Set(collectedRefs(execution));
     const survivors = [...targets.markers, ...targets.regions].filter((ref) => returned.has(ref));
     if (survivors.length > 0) throw coded("DELETE_MARKER_REGION_READBACK_SURVIVOR", "One or more confirmed marker/region refs still exist after deletion.", survivors.map((ref) => ({ code: "DELETE_MARKER_REGION_READBACK_SURVIVOR", message: `Project object survived deletion: ${ref}`, recoverable: true })));
+  }
+  for (const change of state.changes) {
+    if (change.mutation?.status !== "completed") continue;
+    change.status = "applied";
+    change.live_readback = {
+      status: "passed",
+      source: "live_absence_readback",
+      evidence_refs: unique(evidence),
+    };
   }
   state.evidenceRefs.push(...evidence);
   recordStage(
@@ -540,6 +595,87 @@ function requiresExactLiveIdentity(ref) {
   );
 }
 
+function refsInValue(value) {
+  const refs = [];
+  const visit = (entry) => {
+    if (typeof entry === "string" && /^(track|item|send|file|marker|region):/u.test(entry)) refs.push(entry);
+    else if (Array.isArray(entry)) entry.forEach(visit);
+    else if (object(entry)) {
+      if (typeof entry.ref === "string") visit(entry.ref);
+      else Object.values(entry).forEach(visit);
+    }
+  };
+  visit(value);
+  return unique(refs);
+}
+
+function recordProjectWriteReadback(state, execution) {
+  for (const ref of collectedRefs(execution)) state.readbackRefs.add(ref);
+  state.readbackEvidenceRefs.push(...evidenceRefs(execution));
+}
+
+function applyProjectWriteReadbackToChanges(state) {
+  const missing = [];
+  for (const change of state.changes) {
+    if (change.mutation?.status !== "completed") continue;
+    const matchedRefs = (change.target_refs ?? []).filter((ref) => state.readbackRefs.has(ref));
+    if (matchedRefs.length === 0) {
+      change.status = "readback_missing";
+      change.live_readback = { status: "failed", source: "live_project_readback", matched_refs: [] };
+      missing.push(change);
+      continue;
+    }
+    change.status = "applied";
+    change.live_readback = {
+      status: "passed",
+      source: "live_project_readback",
+      matched_refs: matchedRefs,
+      evidence_refs: unique(state.readbackEvidenceRefs),
+    };
+  }
+  if (missing.length > 0) {
+    throw coded(
+      "PROJECT_WRITE_ROW_READBACK_MISSING",
+      `${missing.length} mutation row(s) had no exact live readback match.`,
+      missing.map((change) => ({
+        code: "PROJECT_WRITE_ROW_READBACK_MISSING",
+        message: `No exact live readback matched ${change.template_id}.`,
+        recoverable: true,
+      })),
+    );
+  }
+}
+
+function applyProjectWriteIndexMaintenance(changes, status, invalidation) {
+  for (const change of changes) {
+    if (change.mutation?.status !== "completed") continue;
+    change.index_maintenance = {
+      status,
+      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+    };
+  }
+}
+
+function projectWriteOutcome(state) {
+  const changes = state.changes.filter((change) => change.mutation?.status === "completed");
+  const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
+  const indexStatuses = [...new Set(changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
+  return {
+    mutation: { status: changes.length > 0 ? "completed" : "not_run", completed_count: changes.length },
+    live_readback: {
+      status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
+      passed_count: readbackPassed,
+      total_count: changes.length,
+    },
+    index_maintenance: {
+      status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
+      scopes: Array.isArray(state.indexUpdate?.scopes) ? state.indexUpdate.scopes.slice(0, 16) : [],
+      blocker_code: state.indexUpdate?.blockers?.[0]?.code ?? null,
+    },
+  };
+}
+
 function success(program, request, startedAt, now, stages, state, status, summary, data) {
   return finalize({
     contract: MACRO_EXECUTION_CONTRACT,
@@ -554,13 +690,15 @@ function success(program, request, startedAt, now, stages, state, status, summar
 }
 
 function failure(program, request, startedAt, now, stages, status, code, message, blockers = [], data = {}, state = { evidenceRefs: [], changes: [], canonicalRefs: [] }) {
+  const verifiedByLiveReadback = state.changes.length > 0
+    && state.changes.every((change) => change.live_readback?.status === "passed");
   return finalize({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
     macro: identity(program), request: requestSummary(request, { forceNonDry: true }),
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary: message, canonical_refs: unique(state.canonicalRefs), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: "not_required", evidence_refs: unique(state.evidenceRefs) }, data: compactData(data) },
+    result: { summary: message, canonical_refs: unique(state.canonicalRefs), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? unique(state.evidenceRefs) : [] }, data: compactData(data) },
     blockers: boundedBlockers(blockers.length ? blockers : [{ code, message, recoverable: true }]),
     error: { code, message, recoverable: true },
     recovery: { undo_policy: program.entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: "Inspect reported stage evidence, use the project undo scope where available, then retry only after live refs are current." },

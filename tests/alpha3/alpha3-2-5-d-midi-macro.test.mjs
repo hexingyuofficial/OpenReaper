@@ -66,6 +66,9 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
     assert.deepEqual(calls[2].refs.take_ref, objectRef("take", TAKE));
     assert.deepEqual(calls[2].input.notes, NOTES);
     assert.deepEqual(index.invalidated, ["items", "takes", "selection"]);
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(response.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(response.result.data.outcome.index_maintenance.status, "completed");
   });
 
   it("uses one unique B-layer selector candidate and live-validates it before write", async () => {
@@ -82,6 +85,35 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
     assert.equal(response.result.data.track_ref, TRACK);
     assert.equal(response.result.data.sqlite_selector_used, true);
     assert.equal(calls.findIndex((call) => call.id === "template.tracks.resolve_track_ref") < calls.findIndex((call) => call.id === "template.midi.create_midi_item"), true);
+  });
+
+  it("keeps verified MIDI changes applied when only index maintenance fails", async () => {
+    const response = await executeAlpha3_2_5DMidiMacro({
+      request: request({ refs: { track_ref: TRACK } }),
+      projectIndexRuntime: fakeIndex({ invalidateFailure: true }),
+      executeAtomic: async (child) => executionFor(child.id,
+        child.id === "template.midi.create_midi_item"
+          ? { item_ref: ITEM, take_ref: TAKE }
+          : child.id === "template.midi.read_take_event_counts"
+            ? { take_ref: TAKE, note_count: NOTES.length, cc_count: 0, text_sysex_count: 0 }
+            : child.id === "template.midi.list_take_notes"
+              ? { take_ref: TAKE, notes: NOTES, returned_count: NOTES.length, truncated: false }
+              : child.id === "template.midi.resolve_midi_take_ref"
+                ? { take_ref: TAKE, item_ref: ITEM }
+                : child.id === "template.tracks.resolve_track_ref"
+                  ? { track_ref: TRACK }
+                  : { take_ref: TAKE, inserted_count: NOTES.length }),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "INDEX_WRITE_FAILED");
+    assert.equal(response.result.verification.status, "passed");
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(response.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(response.result.changes.every((change) => change.index_maintenance.status === "failed"), true);
+    assert.equal(response.result.data.outcome.live_readback.status, "passed");
+    assert.equal(response.result.data.outcome.index_maintenance.status, "failed");
   });
 
   it("supports dry_run without mutation", async () => {
@@ -113,6 +145,7 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
     assert.equal(failedChild.ok, false);
     assert.equal(failedChild.error.code, "MIDI_MACRO_CHILD_VERIFICATION_FAILED");
     assert.equal(failedChild.execution.status, "partial_failure");
+    assert.equal(failedChild.result.changes.every((change) => change.status !== "applied"), true);
 
     const replayCalls = [];
     const replay = await executeAlpha3_2_5DMidiMacro({
@@ -147,11 +180,16 @@ function objectRef(kind, ref) {
   };
 }
 
-function fakeIndex({ trackRows = [{ ref: TRACK, name: "Lead" }] } = {}) {
+function fakeIndex({ trackRows = [{ ref: TRACK, name: "Lead" }], invalidateFailure = false } = {}) {
   return {
     invalidated: [],
     status: () => ({ snapshot_id: "snapshot:d", revision: "revision:d", rows_available: true, row_counts: { tracks: trackRows.length } }),
-    invalidateScopes({ scopes }) { this.invalidated = scopes; return { ok: true, scopes }; },
+    invalidateScopes({ scopes }) {
+      this.invalidated = scopes;
+      return invalidateFailure
+        ? { ok: false, scopes, blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }] }
+        : { ok: true, scopes };
+    },
     adapter: {
       snapshot: () => ({ lifecycle: "ready", snapshot_id: "snapshot:d", freshness_scopes: { tracks: { status: "fresh", coverage_status: "complete" } }, rows: { tracks: trackRows } }),
     },

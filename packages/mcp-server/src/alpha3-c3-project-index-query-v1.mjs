@@ -4289,11 +4289,13 @@ export function planAlpha3_2DGenericProjectQuery(request = {}, options = {}) {
     };
   }
 
+  const coverageTruthBlockers = genericCoverageTruthBlockers({ query, legacyPlan });
   const refreshDecision = genericRefreshDecision({ query, indexState, legacyPlan, options });
   const forcedRefreshPending = refreshDecision.forced;
   const legacyBlockers = Array.isArray(legacyPlan.blockers) ? legacyPlan.blockers : [];
   const blockers = uniqueBlockers([
     ...legacyBlockers,
+    ...coverageTruthBlockers,
     ...(forcedRefreshPending
       ? [blocker("refresh_policy", "GENERIC_QUERY_REFRESH_REQUIRED", `${query.refresh_policy} requires the returned read-only refresh plan to complete before rows are usable.`)]
       : []),
@@ -4312,6 +4314,7 @@ export function planAlpha3_2DGenericProjectQuery(request = {}, options = {}) {
         offset: nextOffset,
       });
   const hydrate = genericHydrationPosture({ query, legacyPlan, refs });
+  const coverageFacts = genericCoverageFacts({ query, indexState, legacyPlan, rows, blockers });
   const plan = {
     contract: ALPHA3_2D_GENERIC_PROJECT_QUERY_CONTRACT,
     ok: blockers.length === 0,
@@ -4337,7 +4340,8 @@ export function planAlpha3_2DGenericProjectQuery(request = {}, options = {}) {
     coverage: {
       ...(isPlainObject(legacyPlan.coverage) ? cloneJson(legacyPlan.coverage) : {}),
       row_count: rows.length,
-      complete: blockers.length === 0 && legacyPlan.coverage?.complete === true,
+      ...coverageFacts,
+      complete: blockers.length === 0 && genericLegacyCoverageIsDefinitive(query.entity, legacyPlan),
     },
     page: {
       limit: query.limit,
@@ -4650,8 +4654,14 @@ function genericRefreshDecision({ query, indexState, legacyPlan, options }) {
   if (query.refresh_policy === "never") return { requests: [], forced: false };
   if (query.refresh_policy === "if_stale") {
     if (!genericIndexOrScopeNeedsRefresh(indexState, query.entity)) return { requests: [], forced: false };
-    return { requests: boundedReadOnlyRefreshRequests(legacyPlan.refresh_requests), forced: false };
+    const planned = boundedReadOnlyRefreshRequests(legacyPlan.refresh_requests);
+    if (planned.length > 0) return { requests: planned, forced: false };
+    return { requests: genericMissingIndexRefreshRequests(query, indexState, options), forced: false };
   }
+  return { requests: genericMissingIndexRefreshRequests(query, indexState, options), forced: true };
+}
+
+function genericMissingIndexRefreshRequests(query, indexState, options) {
   const refreshSourceId = query.entity === "duplicates"
     ? "macro.query_media"
     : (GENERIC_QUERY_ENTITY_TO_LEGACY_ID[query.entity] ?? "macro.index_status");
@@ -4667,7 +4677,7 @@ function genericRefreshDecision({ query, indexState, legacyPlan, options }) {
     });
     requests = boundedReadOnlyRefreshRequests(forcedPlan.refresh_requests);
   }
-  return { requests, forced: true };
+  return requests;
 }
 
 function genericIndexOrScopeNeedsRefresh(indexState, entity) {
@@ -4675,7 +4685,94 @@ function genericIndexOrScopeNeedsRefresh(indexState, entity) {
   const scopeName = ({ selected_context: "selection", markers_regions: "markers", media_sources: "media", duplicates: "media" })[entity] ?? entity;
   if (entity === "status" || entity === "changed_since") return false;
   const scope = freshnessScope(indexState, scopeName);
-  return !freshnessStatusSatisfies(scope.status, "fresh_enough");
+  return !freshnessStatusSatisfies(scope.status, "fresh_enough")
+    || !genericCoverageStatusIsDefinitive(entity, scope.coverage_status);
+}
+
+function genericCoverageTruthBlockers({ query, legacyPlan }) {
+  if (query.entity === "status" || query.entity === "changed_since") return [];
+  if (Array.isArray(legacyPlan.rows) && legacyPlan.rows.length > 0) return [];
+  if (genericLegacyCoverageIsDefinitive(query.entity, legacyPlan)) return [];
+  return [blocker(
+    "coverage",
+    "INDEX_COVERAGE_INCOMPLETE",
+    "Project Index coverage is incomplete, so an empty candidate page is not a definitive not-found result; refresh this scope from REAPER truth and retry.",
+  )];
+}
+
+function genericCoverageFacts({ query, indexState, legacyPlan, rows, blockers }) {
+  const indexedRows = genericIndexedRows(indexState, query.entity);
+  const indexedRowCount = query.entity === "status"
+    ? Array.isArray(legacyPlan.rows) ? legacyPlan.rows.length : 0
+    : indexedRows.length;
+  const knownTotalRowCount = genericKnownTotalRowCount(indexState, query.entity, indexedRowCount, legacyPlan);
+  const incompleteNoMatch = blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE");
+  const coverageComplete = genericLegacyCoverageIsDefinitive(query.entity, legacyPlan);
+  return {
+    known_total_row_count: knownTotalRowCount,
+    indexed_row_count: indexedRowCount,
+    public_returned_row_count: rows.length,
+    public_limit: query.limit,
+    public_offset: query.cursor_offset,
+    match_status: incompleteNoMatch
+      ? "no_match_not_definitive"
+      : rows.length === 0
+        ? coverageComplete ? "no_match_definitive" : "blocked_or_unknown"
+        : coverageComplete ? "matches_from_complete_coverage" : "candidate_matches_from_incomplete_coverage",
+  };
+}
+
+function genericIndexedRows(indexState, entity) {
+  const rowKey = ({
+    selected_context: "selection_state",
+    tracks: "tracks",
+    items: "items",
+    takes: "takes",
+    fx: "fx",
+    routing: "sends",
+    automation: "envelopes",
+    markers_regions: "markers_regions",
+    media_sources: "media_sources",
+    duplicates: "media_sources",
+    changed_since: "object_changes",
+  })[entity];
+  if (!rowKey) return [];
+  const rows = indexState.rows?.[rowKey];
+  if (!Array.isArray(rows)) return [];
+  return entity === "selected_context"
+    ? rows.filter((row) => row.scope_kind !== "project_head")
+    : rows;
+}
+
+function genericKnownTotalRowCount(indexState, entity, indexedRowCount, legacyPlan) {
+  if (entity === "duplicates") {
+    return Number.isInteger(legacyPlan.coverage?.duplicate_group_count)
+      ? legacyPlan.coverage.duplicate_group_count
+      : legacyPlan.coverage?.complete === true ? indexedRowCount : null;
+  }
+  const projectHead = indexState.rows?.selection_state?.find((row) => row.scope_kind === "project_head");
+  const summary = isPlainObject(projectHead?.summary) ? projectHead.summary : {};
+  const known = ({
+    selected_context: summary.selected_count,
+    tracks: summary.track_count,
+    items: summary.item_count,
+    markers_regions: Number.isInteger(summary.marker_count) && Number.isInteger(summary.region_count)
+      ? summary.marker_count + summary.region_count
+      : null,
+  })[entity];
+  if (Number.isInteger(known) && known >= 0) return known;
+  return legacyPlan.coverage?.complete === true ? indexedRowCount : null;
+}
+
+function genericCoverageStatusIsDefinitive(entity, status) {
+  if (status === "complete") return true;
+  return entity === "selected_context" && status === "selected_only";
+}
+
+function genericLegacyCoverageIsDefinitive(entity, legacyPlan) {
+  if (legacyPlan.coverage?.complete === true) return true;
+  const status = legacyPlan.coverage?.status ?? legacyPlan.freshness?.coverage_status;
+  return genericCoverageStatusIsDefinitive(entity, status);
 }
 
 function genericMissingIndexProjection(indexState) {

@@ -809,6 +809,13 @@ function projectReadback(templateId, readback, projectRef) {
 function projectMapPayload(overview, projectRef, coverage = {}) {
   if (!isObject(overview)) return { blocker: { code: "ARTIFACT_PAYLOAD_INVALID", message: "Project map artifact payload is missing overview rows." } };
   const tracks = mapTracks(overview.tracks, projectRef);
+  const declaredTrackCount = nonNegativeIntegerOrNull(overview.track_count);
+  const projectedTrackCoverage = normalizeCoverage(coverage.tracks, overview.truncated ? "paged" : "complete");
+  const trackCoverage = projectedTrackCoverage === "complete"
+    && declaredTrackCount !== null
+    && declaredTrackCount !== tracks.length
+    ? "partial"
+    : projectedTrackCoverage;
   const nestedItems = [];
   for (const track of arrayOf(overview.tracks)) {
     for (const item of arrayOf(track?.items)) nestedItems.push({ ...item, track_ref: item.track_ref ?? track.track_ref ?? track.ref });
@@ -817,12 +824,12 @@ function projectMapPayload(overview, projectRef, coverage = {}) {
   const itemSource = [...nestedItems, ...arrayOf(overview.selected_items)];
   const items = dedupeRows([...mapItems(nestedItems), ...selectedItems]);
   const takes = mapTakesFromItems(itemSource);
-  const selectedContext = projectHeadRows({ project_ref: overview.project_ref, selected_items: overview.selected_items }, projectRef, selectedItems.map((row) => ({
+  const selectedContext = projectHeadRows(overview, projectRef, selectedItems.map((row) => ({
     ref: row.ref, owner_ref: row.track_ref, scope_kind: "item", summary: { selected: true },
   })));
   const scopes = { tracks, items, selected_context: selectedContext };
   const projectedCoverage = {
-    tracks: normalizeCoverage(coverage.tracks, overview.truncated ? "paged" : "complete"),
+    tracks: trackCoverage,
     items: normalizeCoverage(coverage.track_items, overview.truncated ? "paged" : "partial"),
     takes: normalizeCoverage(coverage.track_items, overview.truncated ? "paged" : "partial"),
     selected_context: normalizeCoverage(coverage.selected_items, "selected_only"),

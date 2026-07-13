@@ -255,7 +255,10 @@ async function executeControlsSet({
       state.changes.push({
         template_id: child.id,
         fields: clone(child.fields ?? []),
-        status: "applied",
+        status: "mutation_completed",
+        mutation: { status: "completed", dispatch_status: "completed" },
+        live_readback: { status: "pending" },
+        index_maintenance: { status: "pending" },
       });
     }
     pushStage(
@@ -288,6 +291,7 @@ async function executeControlsSet({
         readbackVerification.blockers,
       );
     }
+    applyControlReadbackToChanges(state.changes, readbackVerification.rows);
     pushStage(
       stages,
       "controls-verify",
@@ -299,6 +303,8 @@ async function executeControlsSet({
 
     const invalidation = invalidateKnownScopes(projectIndexRuntime, controlScopes(input.target_kind), now);
     if (invalidation?.ok === false) {
+      state.indexUpdate = invalidation;
+      applyIndexMaintenanceToChanges(state.changes, "failed", invalidation);
       throw coded(
         invalidation.blockers?.[0]?.code ?? "CONTROL_INDEX_INVALIDATION_FAILED",
         invalidation.blockers?.[0]?.message ?? "The write completed but affected Project Index scopes could not be marked stale.",
@@ -306,6 +312,7 @@ async function executeControlsSet({
       );
     }
     state.indexUpdate = invalidation;
+    applyIndexMaintenanceToChanges(state.changes, invalidation ? "completed" : "skipped", invalidation);
     if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
     pushStage(
       stages,
@@ -327,6 +334,7 @@ async function executeControlsSet({
         readback: compactObject(state.readback),
         readback_verification: readbackVerification.rows,
         index_update: compactObject(invalidation),
+        outcome: outcomeEvidence(state),
       },
     });
   } catch (error) {
@@ -336,7 +344,13 @@ async function executeControlsSet({
       code: error.code ?? "CONTROL_EXECUTION_FAILED",
       message: error.message ?? "The registered control program failed.",
       blockers: error.blockers,
-      data: { target_kind: input.target_kind, target_refs: clone(target.refs) },
+      data: {
+        target_kind: input.target_kind,
+        target_refs: clone(target.refs),
+        readback: compactObject(state.readback),
+        index_update: compactObject(state.indexUpdate),
+        outcome: outcomeEvidence(state),
+      },
     });
   }
 }
@@ -534,8 +548,12 @@ async function executeStockPluginControls({
       state.changes.push({
         template_id: child.id,
         semantic_control: child.semantic_control?.id ?? null,
+        param_index: child.input?.param_index,
         normalized_value: child.input?.normalized_value,
-        status: "applied",
+        status: "mutation_completed",
+        mutation: { status: "completed", dispatch_status: "completed" },
+        live_readback: { status: "pending" },
+        index_maintenance: { status: "pending" },
       });
     }
     pushStage(stages, "stock-plugin-execute", "runtime_execute", "completed", `Executed ${plan.requests.length} fixed semantic parameter write(s).`, state.evidenceRefs);
@@ -561,12 +579,25 @@ async function executeStockPluginControls({
         observed_normalized_value: actual,
         tolerance,
       });
+      const change = state.changes[index];
+      if (change) {
+        change.status = "applied";
+        change.live_readback = {
+          status: "passed",
+          source: "live_parameter_readback",
+          requested_normalized_value: expected,
+          observed_normalized_value: actual,
+          tolerance,
+        };
+      }
     }
     state.readback = readbackRows;
     pushStage(stages, "stock-plugin-verify", "verify", "completed", `Verified ${readbackRows.length} parameter readback value(s).`, state.evidenceRefs);
 
     const invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
     if (invalidation?.ok === false) {
+      state.indexUpdate = invalidation;
+      applyIndexMaintenanceToChanges(state.changes, "failed", invalidation);
       throw coded(
         invalidation.blockers?.[0]?.code ?? "STOCK_PLUGIN_INDEX_INVALIDATION_FAILED",
         invalidation.blockers?.[0]?.message ?? "FX writes completed but the Project Index FX scope could not be marked stale.",
@@ -574,6 +605,7 @@ async function executeStockPluginControls({
       );
     }
     state.indexUpdate = invalidation;
+    applyIndexMaintenanceToChanges(state.changes, invalidation ? "completed" : "skipped", invalidation);
     if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
     pushStage(stages, "stock-plugin-index-update", "index_update", invalidation ? "completed" : "skipped", invalidation ? "Marked the Project Index FX scope stale." : "No configured Project Index runtime required invalidation.");
     pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected compact semantic controls and exact readback evidence.");
@@ -585,6 +617,7 @@ async function executeStockPluginControls({
         fx_ref: selected.fxRef,
         readback: readbackRows,
         index_update: compactObject(invalidation),
+        outcome: outcomeEvidence(state),
       },
     });
   } catch (error) {
@@ -594,7 +627,12 @@ async function executeStockPluginControls({
       code: error.code ?? "STOCK_PLUGIN_EXECUTION_FAILED",
       message: error.message ?? "The registered stock-plugin program failed.",
       blockers: error.blockers,
-      data: { fx_ref: selected.fxRef },
+      data: {
+        fx_ref: selected.fxRef,
+        readback: compactObject(state.readback),
+        index_update: compactObject(state.indexUpdate),
+        outcome: outcomeEvidence(state),
+      },
     });
   }
 }
@@ -1019,6 +1057,59 @@ const CONTROL_BATCH_READBACK_PATHS = Object.freeze({
   }),
 });
 
+function applyControlReadbackToChanges(changes, rows) {
+  const byField = new Map((rows ?? []).map((row) => [row.field, row]));
+  for (const change of changes) {
+    const fields = Array.isArray(change.fields) ? change.fields : [];
+    const evidence = fields.map((field) => byField.get(field)).filter(Boolean);
+    if (evidence.length !== fields.length || evidence.some((row) => !["passed", "verified_by_atomic_template"].includes(row.status))) {
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "live_control_readback" };
+      continue;
+    }
+    change.status = "applied";
+    change.live_readback = {
+      status: "passed",
+      source: evidence.some((row) => row.status === "passed")
+        ? "live_control_readback"
+        : "accepted_template_readback",
+      fields: evidence.map((row) => ({ field: row.field, status: row.status })),
+    };
+  }
+}
+
+function applyIndexMaintenanceToChanges(changes, status, invalidation) {
+  for (const change of changes) {
+    change.index_maintenance = {
+      status,
+      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+    };
+  }
+}
+
+function outcomeEvidence(state) {
+  const changes = Array.isArray(state.changes) ? state.changes : [];
+  const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
+  const indexStatuses = unique(changes.map((change) => change.index_maintenance?.status).filter(Boolean), 8);
+  return {
+    mutation: {
+      status: changes.length > 0 ? "completed" : "not_run",
+      completed_count: changes.filter((change) => change.mutation?.status === "completed").length,
+    },
+    live_readback: {
+      status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
+      passed_count: readbackPassed,
+      total_count: changes.length,
+    },
+    index_maintenance: {
+      status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
+      scopes: Array.isArray(state.indexUpdate?.scopes) ? state.indexUpdate.scopes.slice(0, 16) : [],
+      blocker_code: state.indexUpdate?.blockers?.[0]?.code ?? null,
+    },
+  };
+}
+
 function verifyControlReadback({ targetKind, requestedFields, targetRefs, readback }) {
   const target = controlReadbackTarget(targetKind, targetRefs, readback);
   if (!target.ok) return { ok: false, blockers: target.blockers, rows: [], compared_count: 0, atomic_only_count: 0 };
@@ -1234,6 +1325,8 @@ function failureEnvelope({
   data = {},
 }) {
   const bounded = boundedBlockers(blockers.length > 0 ? blockers : [{ code, message, recoverable: true }]);
+  const verifiedByLiveReadback = state.changes.length > 0
+    && state.changes.every((change) => change.live_readback?.status === "passed");
   return finalizeEnvelope({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
@@ -1252,8 +1345,10 @@ function failureEnvelope({
       canonical_refs: unique(state.canonicalRefs, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
-        status: status === "partial_failure" ? "failed" : "not_required",
-        evidence_refs: unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
+        status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required",
+        evidence_refs: verifiedByLiveReadback || status === "partial_failure"
+          ? unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count)
+          : [],
       },
       artifact_refs: unique(state.artifactRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
       data: compactData(data),

@@ -300,7 +300,15 @@ export async function executeAlpha3_2_5DNativeFxMacro({
     });
     collectAtomic(state, addExecution);
     if (addExecution?.ok !== true) throw childError(ADD_TRACK_FX_ID, addExecution);
-    state.changes.push({ template_id: ADD_TRACK_FX_ID, status: "applied", plugin_id: "reacomp" });
+    const addVerification = addExecution?.verification ?? addExecution?.result?.verification;
+    state.changes.push({
+      template_id: ADD_TRACK_FX_ID,
+      status: addVerification?.status === "passed" ? "mutation_completed" : "mutation_unverified",
+      plugin_id: "reacomp",
+      mutation: { status: "completed", verification_status: addVerification?.status ?? "missing" },
+      live_readback: { status: "pending" },
+      index_maintenance: { status: "pending" },
+    });
     requireWriteVerification(ADD_TRACK_FX_ID, addExecution);
     const fxRef = firstRef(addExecution, "fx:");
     if (!fxRef) throw coded("NATIVE_FX_REF_MISSING", "template.fx.add_track_fx returned no canonical FX ref.");
@@ -321,7 +329,12 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       now,
     });
     collectMacro(state, configured);
-    if (configured?.ok !== true) {
+    const configuredReadbackPassed = configured?.result?.verification?.status === "passed"
+      && (configured?.result?.changes?.length ?? 0) > 0
+      && configured.result.changes.every((change) => change.status === "applied" && change.live_readback?.status === "passed");
+    const configuredIndexFailed = configuredReadbackPassed
+      && configured?.result?.data?.outcome?.index_maintenance?.status === "failed";
+    if (configured?.ok !== true && !configuredIndexFailed) {
       throw coded(
         configured?.error?.code ?? "NATIVE_FX_CONFIGURATION_FAILED",
         configured?.error?.message ?? "The bounded ReaComp configuration program failed.",
@@ -331,9 +344,48 @@ export async function executeAlpha3_2_5DNativeFxMacro({
     if (configured?.result?.verification?.status !== "passed") {
       throw coded("NATIVE_FX_CONFIGURATION_UNVERIFIED", "The ReaComp parameter program did not return passed verification.");
     }
+    const addChange = state.changes.find((change) => change.template_id === ADD_TRACK_FX_ID);
+    if (addChange) {
+      addChange.status = "applied";
+      addChange.live_readback = {
+        status: "passed",
+        source: "live_fx_identity_and_parameter_readback",
+        fx_ref: fxRef,
+      };
+    }
     pushStage(stages, "native-fx-configure", "runtime_execute", "completed", "Applied the registered ReaComp semantic control program.", configured.result.verification.evidence_refs);
     pushStage(stages, "native-fx-verify", "verify", "completed", "Verified ReaComp identity and normalized parameter readback within each registered tolerance.", configured.result.verification.evidence_refs);
+    if (configuredIndexFailed) {
+      applyFxIndexMaintenance(state.changes, "failed", configured.result.data?.index_update);
+      pushStage(stages, "native-fx-index-update", "index_update", "failed", "FX mutation/readback passed, but Project Index maintenance failed.");
+      pushStage(stages, "native-fx-result", "result_project", "completed", "Projected verified FX changes separately from the failed cache-maintenance outcome.");
+      return failure({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages,
+        state,
+        status: "partial_failure",
+        code: configured?.error?.code ?? "NATIVE_FX_INDEX_MAINTENANCE_FAILED",
+        message: configured?.error?.message ?? "FX mutation and live readback passed, but Project Index maintenance failed.",
+        blockers: configured?.blockers,
+        data: {
+          track_ref: selected.trackRef,
+          fx_ref: fxRef,
+          plugin: { id: "reacomp", display_name: "ReaComp" },
+          readback: configured.result.data?.readback ?? [],
+          index_update: configured.result.data?.index_update ?? null,
+          outcome: fxOutcome(state),
+        },
+      });
+    }
     const indexUpdated = configured.sqlite?.used === true;
+    applyFxIndexMaintenance(
+      state.changes,
+      indexUpdated ? "completed" : "skipped",
+      configured.result.data?.index_update,
+    );
     pushStage(
       stages,
       "native-fx-index-update",
@@ -353,13 +405,17 @@ export async function executeAlpha3_2_5DNativeFxMacro({
         plugin: { id: "reacomp", display_name: "ReaComp" },
         readback: configured.result.data?.readback ?? [],
         index_update: configured.result.data?.index_update ?? null,
+        outcome: fxOutcome(state),
       },
     });
   } catch (error) {
     const invalidation = invalidateFxScope(projectIndexRuntime, now);
     if (invalidation?.ok === true) {
+      applyFxIndexMaintenance(state.changes, "completed", invalidation);
       state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
       pushStage(stages, "native-fx-index-update", "index_update", "completed", "Marked the Project Index FX scope stale after a partial write.");
+    } else if (invalidation?.ok === false) {
+      applyFxIndexMaintenance(state.changes, "failed", invalidation);
     }
     return failure({
       entry, request, startedAt, now, stages, state,
@@ -367,6 +423,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       code: error.code ?? "NATIVE_FX_EXECUTION_FAILED",
       message: error.message ?? "The registered native FX program failed.",
       blockers: error.blockers,
+      data: { index_update: compactData(invalidation), outcome: fxOutcome(state) },
     });
   }
 }
@@ -480,8 +537,10 @@ function success({ entry, request, startedAt, now, stages, state, status = "comp
   });
 }
 
-function failure({ entry, request, startedAt, now, stages, state, status = "blocked", code, message, blockers = [] }) {
+function failure({ entry, request, startedAt, now, stages, state, status = "blocked", code, message, blockers = [], data = {} }) {
   const normalized = boundedBlockers(blockers.length > 0 ? blockers : [codedBlocker(code, message)]);
+  const verifiedByLiveReadback = state.changes.length > 0
+    && state.changes.every((change) => change.live_readback?.status === "passed");
   return finalize({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
@@ -493,9 +552,9 @@ function failure({ entry, request, startedAt, now, stages, state, status = "bloc
       summary: message,
       canonical_refs: unique(state.canonicalRefs, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
-      verification: { status: status === "partial_failure" ? "failed" : "not_required", evidence_refs: unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) },
+      verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) : [] },
       artifact_refs: unique(state.artifactRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
-      data: {},
+      data: compactData(data),
     },
     blockers: normalized,
     error: { code: code ?? normalized[0]?.code ?? "NATIVE_FX_EXECUTION_FAILED", message, recoverable: normalized.every((item) => item.recoverable !== false) },
@@ -539,7 +598,7 @@ function collectMacro(state, envelope) {
   state.canonicalRefs.push(...(envelope?.result?.canonical_refs ?? []));
   state.evidenceRefs.push(...(envelope?.result?.verification?.evidence_refs ?? []));
   state.artifactRefs.push(...(envelope?.result?.artifact_refs ?? []));
-  state.changes.push(...(envelope?.result?.changes ?? []));
+  state.changes.push(...clone(envelope?.result?.changes ?? []));
   if (envelope?.sqlite?.used === true) state.sqlite = clone(envelope.sqlite);
 }
 
@@ -627,6 +686,37 @@ function normalizeNamedRefs(value) {
 function invalidateFxScope(runtime, now) {
   if (!runtime || typeof runtime.invalidateScopes !== "function") return null;
   return runtime.invalidateScopes({ scopes: ["fx"], reason: "macro.fx.apply_native_chain", observed_at: safeNowIso(now) });
+}
+
+function applyFxIndexMaintenance(changes, status, invalidation) {
+  for (const change of changes) {
+    change.index_maintenance = {
+      status,
+      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : status === "completed" ? ["fx"] : [],
+      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+    };
+  }
+}
+
+function fxOutcome(state) {
+  const changes = state.changes ?? [];
+  const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
+  const indexStatuses = [...new Set(changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
+  return {
+    mutation: {
+      status: changes.some((change) => change.mutation?.status === "completed") ? "completed" : "not_run",
+      completed_count: changes.filter((change) => change.mutation?.status === "completed").length,
+    },
+    live_readback: {
+      status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
+      passed_count: readbackPassed,
+      total_count: changes.length,
+    },
+    index_maintenance: {
+      status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
+      blocker_code: changes.find((change) => change.index_maintenance?.blocker_code)?.index_maintenance.blocker_code ?? null,
+    },
+  };
 }
 
 function sqliteEvidence(runtime, overrides = {}) {

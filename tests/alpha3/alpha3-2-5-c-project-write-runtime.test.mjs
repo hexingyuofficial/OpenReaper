@@ -51,6 +51,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.ok, true);
     assert.equal(result.execution.status, "completed");
     assert.equal(result.result.verification.status, "passed");
+    assert.equal(result.result.changes.length > 0, true);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.create_track_send"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.resolve_send_ref"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.read_track_routing"), true);
@@ -93,8 +96,41 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.ok, false);
     assert.equal(result.execution.status, "partial_failure");
     assert.equal(result.error.code, "PROJECT_WRITE_CHILD_VERIFICATION_FAILED");
+    assert.equal(result.result.changes.every((change) => change.status !== "applied"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.create_track_send"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.set_send_volume"), false);
+  });
+
+  it("reports verified mutation truth separately from failed index maintenance", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: {
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5 }],
+          dry_run: false,
+        },
+      },
+      executeAtomic: fakeAtomic(calls),
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:failed-index", revision: 1 }),
+        invalidateScopes: ({ scopes }) => ({
+          ok: false,
+          scopes,
+          blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }],
+        }),
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "INDEX_WRITE_FAILED");
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "failed"), true);
+    assert.equal(result.result.verification.status, "passed");
+    assert.equal(result.result.data.outcome.live_readback.status, "passed");
+    assert.equal(result.result.data.outcome.index_maintenance.status, "failed");
   });
 
   it("executes layout and media placement through probe/create/live-resolve/readback stages", async () => {
@@ -117,6 +153,31 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     }
   });
 
+  it("keeps fourteen-row layout readback complete behind a 2 KiB public budget", async () => {
+    const calls = [];
+    const layout = Array.from({ length: 14 }, (_, index) => ({
+      id: `track_${index + 1}`,
+      kind: "track",
+      name: `Highway ${String(index + 1).padStart(2, "0")}`,
+      index,
+    }));
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { layout, dry_run: false },
+        budget: { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 },
+      },
+      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 28);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(calls.every((call) => call.budget.max_inline_value_bytes === 24_576), true);
+    assert.equal(calls.every((call) => call.budget.max_items === 256), true);
+  });
+
   it("requires exact destructive confirmation and never dispatches a delete during the preview", async () => {
     const input = { refs: { items: ["item:guid:{ITEM}"] }, dry_run: true, delete_policy: "project_objects_only" };
     const preview = planAlpha3_2EProjectDeleteTargetsMacro(input);
@@ -124,11 +185,14 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const dryRun = await executeAlpha3_2_5CProjectWriteMacro({ request: { id: "macro.project.delete_targets", input }, executeAtomic: fakeAtomic(previewCalls), now: () => new Date(NOW) });
     assert.equal(dryRun.ok, true);
     assert.equal(dryRun.execution.status, "dry_run_completed");
+    assert.equal(dryRun.result.data.mutation_skipped, true);
+    assert.deepEqual(dryRun.result.data.required_confirm_scope, preview.required_confirm_scope);
+    assert.equal(dryRun.result.data.executable_retry.id, "macro.project.delete_targets");
     assert.equal(previewCalls.some((call) => call.id === "template.items.delete_items"), false);
 
     const calls = [];
     const completed = await executeAlpha3_2_5CProjectWriteMacro({
-      request: { id: "macro.project.delete_targets", input: { ...input, dry_run: false, confirm_scope: preview.required_confirm_scope } },
+      request: dryRun.result.data.executable_retry,
       executeAtomic: fakeAtomic(calls),
       now: () => new Date(NOW),
     });
@@ -140,8 +204,8 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
 });
 
 function fakeAtomic(calls, options = {}) {
-  return async ({ id, input = {}, refs = {} }) => {
-    calls.push({ id, input, refs });
+  return async ({ id, input = {}, refs = {}, budget }) => {
+    calls.push({ id, input, refs, budget });
     if (id === "template.items.resolve_item_ref" && calls.some((call) => call.id === "template.items.delete_items")) {
       return { ok: false, request: { id }, error: { code: "ITEM_NOT_FOUND", message: "Deleted item no longer resolves." }, result: {} };
     }
@@ -152,8 +216,23 @@ function fakeAtomic(calls, options = {}) {
     else if (id === "template.items.read_item_summary") summary.item_ref = ref;
     else if (id === "template.routing.resolve_send_ref") summary.send_ref = input.send_ref;
     else if (id === "template.routing.create_track_send") summary.send_ref = "send:guid:{CREATED}";
+    else if (id === "template.routing.read_track_routing") {
+      summary.tracks = [{ track_ref: "track:guid:{SRC}" }, { track_ref: "track:guid:{DST}" }];
+      summary.sends = [{ send_ref: "send:guid:{CREATED}", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }];
+    }
     else if (id === "template.media.probe_file") summary.file_ref = "file:guid:{PROBED}";
-    else if (id === "template.tracks.create_track" || id === "template.tracks.create_folder_track") summary.track_ref = "track:guid:{CREATED}";
+    else if (id === "template.tracks.create_track" || id === "template.tracks.create_folder_track") {
+      summary.track_ref = options.multiTrackRefs
+        ? `track:guid:{CREATED-${Number(input.index) + 1}}`
+        : "track:guid:{CREATED}";
+    }
+    else if (id === "template.tracks.list_tracks" || id === "template.tracks.read_folder_structure") {
+      summary.tracks = options.multiTrackRefs
+        ? calls
+            .filter((call) => call.id === "template.tracks.create_track" || call.id === "template.tracks.create_folder_track")
+            .map((call) => ({ track_ref: `track:guid:{CREATED-${Number(call.input.index) + 1}}`, name: call.input.name }))
+        : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
+    }
     else if (id.startsWith("template.media.import_file")) summary.imported_item_refs = ["item:guid:{IMPORTED}"];
     return {
       ok: true,

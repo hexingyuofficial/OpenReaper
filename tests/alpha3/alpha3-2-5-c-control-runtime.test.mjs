@@ -59,6 +59,9 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(response.sqlite.used, true);
     assert.equal(response.sqlite.freshness, "stale");
     assert.equal(response.result.verification.status, "passed");
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(response.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(response.result.data.outcome.index_maintenance.status, "completed");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
@@ -113,6 +116,36 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(response.error.code, "CONTROL_READBACK_MISMATCH");
     assert.equal(response.result.verification.status, "failed");
     assert.equal(response.blockers[0].code, "CONTROL_READBACK_MISMATCH");
+    assert.equal(response.result.changes.every((change) => change.status !== "applied"), true);
+  });
+
+  it("keeps verified control rows applied when only index maintenance fails", async () => {
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "track", fields: { volume: 0.75 }, dry_run: false },
+        refs: { track_ref: "track:guid:{TRACK-A}" },
+      },
+      executeAtomic: controlAtomic([]),
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:failed-index", revision: 1 }),
+        invalidateScopes: ({ scopes }) => ({
+          ok: false,
+          scopes,
+          blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }],
+        }),
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "INDEX_WRITE_FAILED");
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(response.result.changes.every((change) => change.index_maintenance.status === "failed"), true);
+    assert.equal(response.result.verification.status, "passed");
+    assert.equal(response.result.data.outcome.live_readback.status, "passed");
+    assert.equal(response.result.data.outcome.index_maintenance.status, "failed");
   });
 
   it("rejects a stable control GUID when the live resolver returns a different object", async () => {
@@ -172,6 +205,8 @@ describe("Alpha3.2.5-C executable controls", () => {
     );
     assert.equal(response.result.data.readback.length, 2);
     assert.equal(response.result.data.readback.every((row) => row.requested_normalized_value === row.observed_normalized_value), true);
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(response.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(response.result.verification.status, "passed");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });

@@ -29,6 +29,12 @@ const READ_RENDER_SETTINGS_ID = "template.render.read_settings";
 const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_RESULT_DATA_BYTES = 18_000;
+const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
+const PROJECT_INDEX_HYDRATION_BUDGET = Object.freeze({
+  max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
+  max_items: 128,
+  max_inline_value_bytes: MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
+});
 
 const INSPECT_STAGE_IDS = Object.freeze([
   "inspect-project-revision",
@@ -455,7 +461,7 @@ async function executeProjectInspect({
   });
   const hydration = needsHydration
     ? await runHydrationRequests({
-        requests: [coldObservationBundleRequest(validationPlan.limit)],
+        requests: [coldObservationBundleRequest()],
         request,
         projectIndexRuntime,
         executeAtomic,
@@ -639,7 +645,7 @@ async function hydrateForQuery({
   }
   if (forceColdBundle) {
     const cold = await runHydrationRequests({
-      requests: [coldObservationBundleRequest(request.input?.limit)],
+      requests: [coldObservationBundleRequest()],
       request,
       projectIndexRuntime,
       executeAtomic,
@@ -788,15 +794,16 @@ async function runHydrationRequests({ requests, request, projectIndexRuntime, ex
         { executions, artifactRefs, evidenceRefs },
       );
     }
-    const fingerprint = JSON.stringify([child.id, child.input ?? {}, child.refs ?? {}]);
+    const internalChild = internalHydrationRequest(child);
+    const fingerprint = JSON.stringify([internalChild.id, internalChild.input, internalChild.refs]);
     if (seen.has(fingerprint)) continue;
     seen.add(fingerprint);
     const execution = await executeAtomic({
-      id: child.id,
-      input: child.input ?? {},
-      refs: materializeHydrationRefs(child.refs ?? [], objectRefs),
+      id: internalChild.id,
+      input: internalChild.input,
+      refs: materializeHydrationRefs(internalChild.refs, objectRefs),
       context: request.context,
-      budget: request.budget,
+      budget: PROJECT_INDEX_HYDRATION_BUDGET,
       observeProjectIndex: true,
     });
     executions.push(execution);
@@ -863,6 +870,27 @@ function rememberHydrationObjectRefs(objectRefs, execution) {
   };
   visit(execution?.result?.refs);
   visit(execution?.result?.canonical_refs);
+}
+
+function internalHydrationRequest(child) {
+  const input = clone(child.input ?? {});
+  if (child.id === OBSERVATION_BUNDLE_ID || child.id === "template.project.create_project_map_snapshot") {
+    input.max_tracks = Math.max(
+      Number.isInteger(input.max_tracks) ? input.max_tracks : 0,
+      PROJECT_INDEX_HYDRATION_TRACK_LIMIT,
+    );
+  }
+  if (child.id === "template.tracks.list_tracks" || child.id === "template.tracks.read_mixer_controls") {
+    input.limit = Math.max(
+      Number.isInteger(input.limit) ? input.limit : 0,
+      PROJECT_INDEX_HYDRATION_TRACK_LIMIT,
+    );
+  }
+  return {
+    id: child.id,
+    input,
+    refs: clone(child.refs ?? []),
+  };
 }
 
 function refreshScopeForEntity(entity) {
@@ -1132,12 +1160,11 @@ function hydrationEvidence(hydration) {
   };
 }
 
-function coldObservationBundleRequest(limit) {
-  const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
+function coldObservationBundleRequest() {
   return {
     id: OBSERVATION_BUNDLE_ID,
     input: {
-      max_tracks: boundedLimit,
+      max_tracks: PROJECT_INDEX_HYDRATION_TRACK_LIMIT,
       max_items_per_track: 4,
       max_selected_items: 32,
       track_cursor: 0,
@@ -1166,6 +1193,7 @@ function hasNonRefreshBlockers(plan) {
   const refreshCodes = new Set([
     "INDEX_NOT_READY",
     "INDEX_REFRESH_REQUIRED",
+    "INDEX_COVERAGE_INCOMPLETE",
     "GENERIC_QUERY_REFRESH_REQUIRED",
   ]);
   return (plan?.blockers ?? []).some((entry) => !refreshCodes.has(entry?.code));

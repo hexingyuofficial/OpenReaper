@@ -185,6 +185,30 @@ describe("Alpha3.2-D generic macro.project.query", () => {
     assert.notEqual(plan.coverage.status, "complete");
   });
 
+  it("does not claim a definitive empty result from partial, paged, or unknown coverage", () => {
+    for (const coverageStatus of ["partial", "paged", "unknown"]) {
+      const index = freshIndex({ empty: true });
+      index.freshness_scopes.tracks = {
+        ...index.freshness_scopes.tracks,
+        coverage_status: coverageStatus,
+      };
+
+      const plan = planAlpha3_2DGenericProjectQuery({
+        entity: "tracks",
+        filters: { name: "not resident" },
+        refresh_policy: "if_stale",
+        limit: 1,
+      }, { projectIndex: index });
+
+      assert.equal(plan.ok, false, coverageStatus);
+      assert.deepEqual(plan.rows, [], coverageStatus);
+      assert.equal(plan.blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE"), true, coverageStatus);
+      assert.equal(plan.coverage.complete, false, coverageStatus);
+      assert.equal(plan.coverage.match_status, "no_match_not_definitive", coverageStatus);
+      assert.equal(plan.refresh_requests.length > 0, true, coverageStatus);
+    }
+  });
+
   it("keeps ref hydration opt-in and returns candidate refs even when hydration is not requested", () => {
     const compact = planAlpha3_2DGenericProjectQuery({ entity: "tracks", refresh_policy: "never", hydrate_refs: false }, { projectIndex: freshIndex() });
     assert.equal(compact.ok, true);

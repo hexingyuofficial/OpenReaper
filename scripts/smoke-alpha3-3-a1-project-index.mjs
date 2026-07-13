@@ -1,0 +1,303 @@
+#!/usr/bin/env node
+
+import { createHash } from "node:crypto";
+import { copyFile, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+
+const options = parseArgs(process.argv.slice(2));
+const ROOT = options.evidence_root;
+const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const SOURCE_PROJECT = options.source_project;
+const COPY_PROJECT = path.join(ROOT, "fixture", "Alpha33-A1-14Track.RPP");
+const BACKUP_PROJECT = path.join(ROOT, "recovery", "Untitled-before.RPP");
+const REPORT_PATH = path.join(ROOT, "reports", "alpha3-3-a1-project-index-live.json");
+const STDIO = path.join(REPO, "packages/mcp-server/src/openreaper-mcp-stdio.mjs");
+const PUBLIC_BUDGET = {
+  max_response_bytes: 65_536,
+  max_items: 50,
+  max_inline_value_bytes: 2_048,
+};
+const TRACK_NAMES = Array.from({ length: 14 }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
+const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+
+await mkdir(path.dirname(COPY_PROJECT), { recursive: true });
+await mkdir(path.dirname(BACKUP_PROJECT), { recursive: true });
+await mkdir(path.join(ROOT, "artifacts"), { recursive: true });
+await mkdir(path.join(ROOT, "reports"), { recursive: true });
+await mkdir(path.join(ROOT, "project-index-bootstrap"), { recursive: true });
+await mkdir(path.join(ROOT, "project-index-state"), { recursive: true });
+await copyFile(SOURCE_PROJECT, BACKUP_PROJECT);
+
+const before = {
+  source_sha256: await sha256(SOURCE_PROJECT),
+  source_size: (await stat(SOURCE_PROJECT)).size,
+  backup_sha256: await sha256(BACKUP_PROJECT),
+};
+const calls = {};
+const clients = [];
+let error = null;
+
+try {
+  const bootstrap = await connect("alpha33-a1-bootstrap", {
+    OPENREAPER_CURRENT_PROJECT_PATH: SOURCE_PROJECT,
+    OPENREAPER_PROJECT_INDEX_STATE_ROOT: path.join(ROOT, "project-index-bootstrap"),
+    OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "alpha33-a1-bootstrap",
+  });
+  clients.push(bootstrap);
+  const toolNames = (await bootstrap.listTools()).tools.map((tool) => tool.name).sort();
+  assert(JSON.stringify(toolNames) === JSON.stringify(EXACT_TOOLS), `Unexpected MCP tools: ${JSON.stringify(toolNames)}`);
+  calls.bootstrap_ping = await callTool(bootstrap, "ping", {});
+  calls.save_as = await callTemplate(bootstrap, "macro.project.file", {
+    operation: "save_as",
+    target_path: COPY_PROJECT,
+    overwrite: true,
+    dry_run: false,
+  });
+  assertMacroSuccess(calls.save_as, "macro.project.file");
+  assert(calls.save_as.result?.data?.path_after === COPY_PROJECT, "save_as did not switch to the evidence copy");
+  await bootstrap.close();
+  clients.pop();
+
+  const sharedEnv = {
+    OPENREAPER_CURRENT_PROJECT_PATH: COPY_PROJECT,
+    OPENREAPER_PROJECT_INDEX_STATE_ROOT: path.join(ROOT, "project-index-state"),
+    OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "alpha33-a1-shared",
+  };
+  const clientA = await connect("alpha33-a1-client-a", sharedEnv);
+  clients.push(clientA);
+  calls.client_a_ping = await callTool(clientA, "ping", {});
+
+  calls.initial_tracks = await queryTracks(clientA, { limit: 100, refresh_policy: "if_stale" });
+  assertMacroSuccess(calls.initial_tracks, "macro.project.query");
+  const initialRefs = calls.initial_tracks.result?.data?.rows?.map((row) => row.ref).filter(Boolean) ?? [];
+  if (initialRefs.length > 0) {
+    calls.delete_preview = await callTemplate(clientA, "macro.project.delete_targets", {
+      refs: { tracks: initialRefs },
+      delete_policy: "project_objects_only",
+      dry_run: true,
+    });
+    assertMacroSuccess(calls.delete_preview, "macro.project.delete_targets");
+    const retry = calls.delete_preview.result?.data?.executable_retry;
+    assert(retry?.id === "macro.project.delete_targets", "delete preview returned no public executable retry");
+    assert(calls.delete_preview.result?.data?.mutation_skipped === true, "delete preview did not report mutation_skipped");
+    calls.delete_initial = await callTemplate(clientA, retry.id, retry.input);
+    assertMacroSuccess(calls.delete_initial, "macro.project.delete_targets");
+    assertAppliedRows(calls.delete_initial);
+  }
+
+  calls.empty_tracks = await queryTracks(clientA, { limit: 10, refresh_policy: "if_stale" });
+  assertMacroSuccess(calls.empty_tracks, "macro.project.query");
+  assert(calls.empty_tracks.result?.data?.rows?.length === 0, "Project was not empty before the 14-track fixture build");
+  assert(calls.empty_tracks.result?.data?.coverage?.match_status === "no_match_definitive", "Empty complete scope was not definitive");
+
+  calls.create_layout = await callTemplate(clientA, "macro.project.apply_layout", {
+    layout: TRACK_NAMES.map((name, index) => ({ id: `track_${index + 1}`, kind: "track", name, index })),
+    match_policy: "create_only",
+    conflict_policy: "stop",
+    dry_run: false,
+  });
+  assertMacroSuccess(calls.create_layout, "macro.project.apply_layout");
+  assertAppliedRows(calls.create_layout);
+  assert(calls.create_layout.result?.data?.outcome?.live_readback?.status === "passed", "Layout live readback was not passed");
+
+  calls.cold_page = await queryTracks(clientA, { limit: 3, refresh_policy: "if_stale" });
+  assertMacroSuccess(calls.cold_page, "macro.project.query");
+  assertCoverage(calls.cold_page, 14, 14, 3);
+  assert(calls.cold_page.result?.data?.page?.has_more === true, "Public page did not expose has_more");
+
+  calls.exact_last = await queryTracks(clientA, {
+    limit: 1,
+    refresh_policy: "never",
+    filters: { name: TRACK_NAMES.at(-1) },
+  });
+  assertMacroSuccess(calls.exact_last, "macro.project.query");
+  assert(calls.exact_last.result?.data?.rows?.[0]?.name === TRACK_NAMES.at(-1), "Exact final track was not resolved");
+  assert(calls.exact_last.result?.data?.rows?.[0]?.index === 13, "Exact final track index was not 13");
+
+  calls.warm_last = await queryTracks(clientA, {
+    limit: 1,
+    refresh_policy: "if_stale",
+    filters: { name: TRACK_NAMES.at(-1) },
+  });
+  assertMacroSuccess(calls.warm_last, "macro.project.query");
+  assert(calls.warm_last.sqlite?.source === "warm_index", `Expected warm_index, got ${calls.warm_last.sqlite?.source}`);
+
+  const clientB = await connect("alpha33-a1-client-b", sharedEnv);
+  clients.push(clientB);
+  calls.client_b_last = await queryTracks(clientB, {
+    limit: 1,
+    refresh_policy: "if_stale",
+    filters: { name: TRACK_NAMES.at(-1) },
+  });
+  assertMacroSuccess(calls.client_b_last, "macro.project.query");
+  assert(calls.client_b_last.result?.data?.rows?.[0]?.name === TRACK_NAMES.at(-1), "Second client did not reuse/resolve the final track");
+
+  const lastRef = calls.exact_last.result.data.rows[0].ref;
+  const renamedLast = `${TRACK_NAMES.at(-1)} Refreshed`;
+  calls.rename_last = await callTemplate(clientA, "macro.project.apply_layout", {
+    layout: [{ id: "track_14", kind: "track", track_ref: lastRef, name: renamedLast, index: 13 }],
+    match_policy: "by_ref",
+    conflict_policy: "update_declared_fields",
+    dry_run: false,
+  });
+  assertMacroSuccess(calls.rename_last, "macro.project.apply_layout");
+  assertAppliedRows(calls.rename_last);
+
+  calls.refreshed_a = await queryTracks(clientA, { limit: 1, refresh_policy: "if_stale", filters: { name: renamedLast } });
+  assertMacroSuccess(calls.refreshed_a, "macro.project.query");
+  assert(calls.refreshed_a.result?.data?.rows?.[0]?.name === renamedLast, "Client A did not refresh after write invalidation");
+
+  calls.refreshed_b = await queryTracks(clientB, { limit: 1, refresh_policy: "if_stale", filters: { name: renamedLast } });
+  assertMacroSuccess(calls.refreshed_b, "macro.project.query");
+  assert(calls.refreshed_b.result?.data?.rows?.[0]?.name === renamedLast, "Client B did not refresh after another client's write");
+  assertCoverage(calls.refreshed_b, 14, 14, 1);
+
+  calls.save_current = await callTemplate(clientA, "macro.project.file", { operation: "save_current", dry_run: false });
+  assertMacroSuccess(calls.save_current, "macro.project.file");
+} catch (caught) {
+  error = { name: caught?.name ?? "Error", message: caught?.message ?? String(caught), stack: caught?.stack ?? null };
+} finally {
+  for (const client of clients.reverse()) {
+    try { await client.close(); } catch {}
+  }
+}
+
+const after = {
+  source_sha256: await sha256(SOURCE_PROJECT),
+  source_size: (await stat(SOURCE_PROJECT)).size,
+  copy_exists: await exists(COPY_PROJECT),
+  copy_sha256: await exists(COPY_PROJECT) ? await sha256(COPY_PROJECT) : null,
+  copy_size: await exists(COPY_PROJECT) ? (await stat(COPY_PROJECT)).size : null,
+};
+const report = {
+  contract: "alpha3.3.a1.project_index_live.v1",
+  ok: error === null,
+  evidence_root: ROOT,
+  source_project: SOURCE_PROJECT,
+  active_test_project: COPY_PROJECT,
+  public_budget: PUBLIC_BUDGET,
+  expected_track_count: 14,
+  expected_last_track_name: `${TRACK_NAMES.at(-1)} Refreshed`,
+  tests: {
+    cold_hydration: calls.cold_page?.sqlite?.source ?? null,
+    warm_reuse: calls.warm_last?.sqlite?.source ?? null,
+    write_invalidation_refresh_a: calls.refreshed_a?.sqlite?.source ?? null,
+    cross_client_refresh_b: calls.refreshed_b?.sqlite?.source ?? null,
+    exact_last_track_resolved: calls.refreshed_b?.result?.data?.rows?.[0]?.name === `${TRACK_NAMES.at(-1)} Refreshed`,
+    coverage: calls.refreshed_b?.result?.data?.coverage ?? null,
+    layout_outcome: calls.create_layout?.result?.data?.outcome ?? null,
+  },
+  project_changes: {
+    initial_track_count: calls.initial_tracks?.result?.data?.coverage?.known_total_row_count ?? null,
+    initial_tracks_deleted: calls.delete_initial?.result?.changes?.filter((change) => change.status === "applied").length ?? 0,
+    tracks_created: 14,
+    final_track_renamed: true,
+    saved_to_evidence_copy: calls.save_current?.ok === true,
+  },
+  rendered_files: [],
+  recovery_backup_posture: {
+    source_project_backup: BACKUP_PROJECT,
+    source_hash_unchanged: before.source_sha256 === after.source_sha256,
+    source_project_not_mutated_on_disk: before.source_sha256 === after.source_sha256,
+    evidence_copy_preserved: after.copy_exists,
+    source_media_deleted: false,
+  },
+  before,
+  after,
+  calls,
+  error,
+};
+await writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+process.stdout.write(`${JSON.stringify({ ok: report.ok, report: REPORT_PATH, error }, null, 2)}\n`);
+if (error) process.exit(1);
+
+async function connect(name, overrides) {
+  const client = new Client({ name, version: "0.0.0" });
+  await client.connect(new StdioClientTransport({
+    command: process.execPath,
+    args: [STDIO],
+    cwd: REPO,
+    env: {
+      ...process.env,
+      OPENREAPER_ARTIFACT_ROOT: path.join(ROOT, "artifacts"),
+      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: path.join(ROOT, "artifacts"),
+      ...overrides,
+    },
+  }));
+  return client;
+}
+
+async function queryTracks(client, { limit, refresh_policy, filters = undefined }) {
+  return callTemplate(client, "macro.project.query", {
+    entity: "tracks",
+    fields: ["ref", "name", "index"],
+    limit,
+    refresh_policy,
+    ...(filters ? { filters } : {}),
+  });
+}
+
+async function callTemplate(client, id, input, refs = undefined) {
+  return callTool(client, "call_template", {
+    id,
+    input,
+    ...(refs ? { refs } : {}),
+    budget: PUBLIC_BUDGET,
+  });
+}
+
+async function callTool(client, name, args) {
+  const response = await client.callTool({ name, arguments: args });
+  const text = response.content?.find((entry) => entry.type === "text")?.text;
+  if (typeof text !== "string") throw new Error(`${name} returned no JSON text`);
+  return JSON.parse(text);
+}
+
+function assertMacroSuccess(value, id) {
+  assert(value?.contract === "macro.execution.v1", `${id} returned ${value?.contract}`);
+  assert(value?.ok === true, `${id} failed: ${JSON.stringify(value?.error ?? value?.blockers)}`);
+  assert(value?.execution?.status === "completed" || value?.execution?.status === "dry_run_completed", `${id} status=${value?.execution?.status}`);
+}
+
+function assertAppliedRows(value) {
+  const changes = value?.result?.changes ?? [];
+  assert(changes.length > 0, "Mutation Macro returned no change rows");
+  assert(changes.every((change) => change.status === "applied"), `Non-applied change row: ${JSON.stringify(changes)}`);
+  assert(changes.every((change) => change.live_readback?.status === "passed"), `Change lacked live readback: ${JSON.stringify(changes)}`);
+}
+
+function assertCoverage(value, total, indexed, returned) {
+  const coverage = value?.result?.data?.coverage ?? {};
+  assert(coverage.known_total_row_count === total, `known_total_row_count=${coverage.known_total_row_count}`);
+  assert(coverage.indexed_row_count === indexed, `indexed_row_count=${coverage.indexed_row_count}`);
+  assert(coverage.public_returned_row_count === returned, `public_returned_row_count=${coverage.public_returned_row_count}`);
+}
+
+function parseArgs(argv) {
+  const result = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!value || value.startsWith("--")) throw new Error(`Missing value for ${key}`);
+    if (key === "--evidence-root") result.evidence_root = path.resolve(value);
+    else if (key === "--source-project") result.source_project = path.resolve(value);
+    else throw new Error(`Unknown option ${key}`);
+    index += 1;
+  }
+  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP>");
+  return result;
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function sha256(file) {
+  return createHash("sha256").update(await readFile(file)).digest("hex");
+}
+
+async function exists(file) {
+  try { await stat(file); return true; } catch { return false; }
+}

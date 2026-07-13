@@ -168,6 +168,72 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("downgrades impossible complete track coverage when an artifact contains fewer rows than its REAPER total", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      const artifactRef = "artifact:alpha3.2d:short-observation";
+      const pending = runtime.observeSuccessfulTemplateExecution({
+        ...execution("template.project.create_observation_bundle", identity, {
+          artifact_ref: artifactRef,
+          project_ref: identity.project_ref,
+          track_count: 14,
+          returned_track_count: 6,
+          map_truncated: false,
+        }),
+        result: {
+          readback: {
+            artifact_ref: artifactRef,
+            project_ref: identity.project_ref,
+            track_count: 14,
+            returned_track_count: 6,
+            map_truncated: false,
+          },
+          refs: [{ kind: "artifact", ref: artifactRef }],
+        },
+      });
+      assert.equal(pending.ok, false);
+      assert.equal(pending.blockers[0].code, "ARTIFACT_PAYLOAD_REQUIRED");
+
+      const observed = runtime.observeArtifactPayload({
+        ...identity,
+        templateId: "template.project.create_observation_bundle",
+        artifactRef,
+        validated: true,
+        payload: {
+          project_ref: identity.project_ref,
+          project_map: {
+            project_ref: identity.project_ref,
+            track_count: 14,
+            item_count: 0,
+            truncated: false,
+            tracks: Array.from({ length: 6 }, (_, index) => ({
+              track_ref: `track:guid:{SHORT-${index + 1}}`,
+              name: `Short ${index + 1}`,
+              index,
+              items: [],
+            })),
+            selected_items: [],
+          },
+          coverage: { project_map: "complete_page" },
+        },
+      });
+
+      assert.equal(observed.ok, true, JSON.stringify(observed));
+      const snapshot = runtime.adapter.snapshot();
+      assert.equal(snapshot.rows.tracks.length, 6);
+      assert.equal(snapshot.freshness_scopes.tracks.status, "fresh");
+      assert.equal(snapshot.freshness_scopes.tracks.coverage_status, "partial");
+      const projectHead = snapshot.rows.selection_state.find((row) => row.scope_kind === "project_head");
+      assert.equal(projectHead.summary.track_count, 14);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("preserves rich track counts across full and scoped mixer refreshes", async () => {
     const fixture = await makeFixture();
     try {

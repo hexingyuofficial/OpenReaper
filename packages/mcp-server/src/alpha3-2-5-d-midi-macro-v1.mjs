@@ -286,7 +286,15 @@ export async function executeAlpha3_2_5DMidiMacro({
     }
     state.canonicalRefs.push(itemRef, takeRef);
     state.created = { itemRef, takeRef };
-    state.changes.push({ template_id: CREATE_ITEM_ID, status: "applied", item_ref: itemRef, take_ref: takeRef });
+    state.changes.push({
+      template_id: CREATE_ITEM_ID,
+      status: "mutation_completed",
+      item_ref: itemRef,
+      take_ref: takeRef,
+      mutation: { status: "completed", verification_status: "passed" },
+      live_readback: { status: "pending" },
+      index_maintenance: { status: "pending" },
+    });
 
     const inserted = await runAtomic({
       request,
@@ -305,7 +313,15 @@ export async function executeAlpha3_2_5DMidiMacro({
     if (Number.isInteger(insertedCount) && insertedCount !== plan.notes.length) {
       throw coded("MIDI_INSERTED_COUNT_MISMATCH", `MIDI insertion reported ${insertedCount}; expected ${plan.notes.length}.`);
     }
-    state.changes.push({ template_id: INSERT_NOTES_ID, status: "applied", take_ref: takeRef, inserted_count: plan.notes.length });
+    state.changes.push({
+      template_id: INSERT_NOTES_ID,
+      status: "mutation_completed",
+      take_ref: takeRef,
+      inserted_count: plan.notes.length,
+      mutation: { status: "completed", verification_status: "passed" },
+      live_readback: { status: "pending" },
+      index_maintenance: { status: "pending" },
+    });
 
     const resolvedTake = await runAtomic({
       request,
@@ -358,9 +374,27 @@ export async function executeAlpha3_2_5DMidiMacro({
     if (listReadback.truncated === true || actualNotes.length !== plan.notes.length || !notesMatch(plan.notes, actualNotes)) {
       throw coded("MIDI_NOTE_LIST_READBACK_MISMATCH", "MIDI note list readback did not exactly match the bounded PPQ notes.");
     }
+    state.changes[0].status = "applied";
+    state.changes[0].live_readback = {
+      status: "passed",
+      source: "live_take_identity_and_note_readback",
+      item_ref: itemRef,
+      take_ref: resolvedTakeRef,
+      note_count: noteCount,
+    };
+    state.changes[1].status = "applied";
+    state.changes[1].live_readback = {
+      status: "passed",
+      source: "live_note_count_and_list_readback",
+      take_ref: resolvedTakeRef,
+      note_count: noteCount,
+      list_truncated: false,
+    };
 
     const invalidation = invalidateProjectIndex(projectIndexRuntime, now);
     if (invalidation?.ok === false) {
+      state.indexUpdate = invalidation;
+      applyMidiIndexMaintenance(state.changes, "failed", invalidation);
       throw coded(
         invalidation.blockers?.[0]?.code ?? "MIDI_INDEX_INVALIDATION_FAILED",
         invalidation.blockers?.[0]?.message ?? "MIDI creation completed but Project Index invalidation failed.",
@@ -368,6 +402,7 @@ export async function executeAlpha3_2_5DMidiMacro({
       );
     }
     state.indexUpdate = invalidation;
+    applyMidiIndexMaintenance(state.changes, invalidation ? "completed" : "skipped", invalidation);
     if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, "stale");
     pushStage(stages, "midi-create-clip-index-update", "index_update", invalidation ? "completed" : "skipped", invalidation ? "Marked items, takes, and selection Project Index scopes stale." : "No configured Project Index runtime required invalidation.");
     pushStage(stages, "midi-create-clip-result", "result_project", "completed", "Created the MIDI clip and passed exact count/list readback.");
@@ -383,6 +418,7 @@ export async function executeAlpha3_2_5DMidiMacro({
         notes: actualNotes,
         inserted_count: insertedCount ?? plan.notes.length,
         index_update: compact(invalidation),
+        outcome: midiOutcome(state),
       },
     });
   } catch (error) {
@@ -391,8 +427,12 @@ export async function executeAlpha3_2_5DMidiMacro({
       const invalidation = invalidateProjectIndex(projectIndexRuntime, now);
       if (invalidation?.ok === true) {
         state.indexUpdate = invalidation;
+        applyMidiIndexMaintenance(state.changes, "completed", invalidation);
         state.sqlite = sqliteEvidence(projectIndexRuntime, "stale");
         pushStage(stages, "midi-create-clip-index-update", "index_update", "completed", "Marked items, takes, and selection Project Index scopes stale after a partial write.");
+      } else if (invalidation?.ok === false) {
+        state.indexUpdate = invalidation;
+        applyMidiIndexMaintenance(state.changes, "failed", invalidation);
       }
     }
     return failureEnvelope({
@@ -401,7 +441,12 @@ export async function executeAlpha3_2_5DMidiMacro({
       code: error.code ?? "MIDI_MACRO_EXECUTION_FAILED",
       message: error.message ?? "The registered MIDI Macro failed.",
       blockers: error.blockers,
-      data: { track_ref: state.trackRef ?? null, created: state.created ?? null },
+      data: {
+        track_ref: state.trackRef ?? null,
+        created: state.created ?? null,
+        index_update: compact(state.indexUpdate),
+        outcome: midiOutcome(state),
+      },
     });
   }
 }
@@ -529,6 +574,35 @@ function invalidateProjectIndex(runtime, now) {
   return runtime.invalidateScopes({ scopes: TRACK_SCOPES, observed_at: safeNowIso(now) });
 }
 
+function applyMidiIndexMaintenance(changes, status, invalidation) {
+  for (const change of changes) {
+    change.index_maintenance = {
+      status,
+      scopes: Array.isArray(invalidation?.scopes) ? invalidation.scopes.slice(0, 16) : [],
+      blocker_code: invalidation?.blockers?.[0]?.code ?? null,
+    };
+  }
+}
+
+function midiOutcome(state) {
+  const changes = state.changes ?? [];
+  const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
+  const indexStatuses = [...new Set(changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
+  return {
+    mutation: { status: state.writeExecuted === true ? "completed" : "not_run", completed_count: changes.length },
+    live_readback: {
+      status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
+      passed_count: readbackPassed,
+      total_count: changes.length,
+    },
+    index_maintenance: {
+      status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
+      scopes: Array.isArray(state.indexUpdate?.scopes) ? state.indexUpdate.scopes.slice(0, 16) : [],
+      blocker_code: state.indexUpdate?.blockers?.[0]?.code ?? null,
+    },
+  };
+}
+
 function createState(runtime) {
   return {
     trackRef: null,
@@ -566,6 +640,8 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, status
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, status = "blocked", code, message, blockers = [], data = {} }) {
   const bounded = (blockers.length > 0 ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count);
+  const verifiedByLiveReadback = state.changes.length > 0
+    && state.changes.every((change) => change.live_readback?.status === "passed");
   return finalizeEnvelope({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
@@ -577,7 +653,7 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, status
       summary: message,
       canonical_refs: unique(state.canonicalRefs, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
-      verification: { status: status === "partial_failure" ? "failed" : "not_required", evidence_refs: unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) },
+      verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? unique(state.evidenceRefs, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) : [] },
       artifact_refs: [], data: compactData(data),
     },
     blockers: bounded,

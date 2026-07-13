@@ -137,6 +137,84 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("keeps a fourteen-track Project Index complete behind the default 2 KiB public budget and public pagination", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 14 }, (_, index) => `Highway ${String(index + 1).padStart(2, "0")}`);
+    const state = { revision: 14, trackName: trackNames[0], trackNames, calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const publicBudget = {
+        max_response_bytes: 65_536,
+        max_items: 50,
+        max_inline_value_bytes: 2_048,
+      };
+
+      const firstPage = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", fields: ["name", "index"], refresh_policy: "if_stale", limit: 1 },
+        budget: publicBudget,
+        context: callContext(1),
+      });
+
+      assert.equal(firstPage.ok, true, JSON.stringify(firstPage));
+      assert.equal(firstPage.result.data.rows.length, 1);
+      assert.equal(firstPage.result.data.page.has_more, true);
+      assert.equal(firstPage.result.data.coverage.known_total_row_count, 14);
+      assert.equal(firstPage.result.data.coverage.indexed_row_count, 14);
+      assert.equal(firstPage.result.data.coverage.public_returned_row_count, 1);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 14);
+
+      const observationRequest = state.atomicRequests.find((entry) => entry.operation.name === "project.create_observation_bundle");
+      assert.equal(observationRequest.budget.max_inline_value_bytes, 24_576);
+      assert.equal(observationRequest.params.max_tracks, 32);
+
+      const exactLast = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          fields: ["name", "index"],
+          filters: { name: trackNames.at(-1) },
+          refresh_policy: "never",
+          limit: 1,
+        },
+        budget: publicBudget,
+        context: callContext(2),
+      });
+
+      assert.equal(exactLast.ok, true, JSON.stringify(exactLast));
+      assert.equal(exactLast.result.data.rows[0].name, trackNames.at(-1));
+      assert.equal(exactLast.result.data.rows[0].index, 13);
+      assert.equal(exactLast.result.data.coverage.indexed_row_count, 14);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 14);
+
+      indexRuntime.close();
+      indexRuntime = await openIndex(fixture);
+      assert.equal(indexRuntime.backend, "sqlite_file_adapter");
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 14);
+      const reopened = createRuntime({ fixture, indexRuntime, state });
+      const reopenedExactLast = await reopened.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          fields: ["name", "index"],
+          filters: { name: trackNames.at(-1) },
+          refresh_policy: "never",
+          limit: 1,
+        },
+        budget: publicBudget,
+        context: callContext(3),
+      });
+      assert.equal(reopenedExactLast.ok, true, JSON.stringify(reopenedExactLast));
+      assert.equal(reopenedExactLast.result.data.rows[0].name, trackNames.at(-1));
+      assert.equal(reopenedExactLast.result.data.coverage.indexed_row_count, 14);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("detects a changed REAPER revision, refreshes the affected query scope, and never uses stale rows as write authority", async () => {
     const fixture = await makeFixture();
     const state = { revision: 1, trackName: "Kick", calls: [] };
@@ -322,6 +400,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
   const executor = {
     dispatch(request) {
       state.calls.push(request.operation.name);
+      if (Array.isArray(state.atomicRequests)) state.atomicRequests.push(structuredClone(request));
       const response = structuredClone(fake.dispatch(request));
       const projectRef = indexRuntime.identity.project_ref;
       if (request.operation.name === "project.read_summary") {
@@ -330,7 +409,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
           name: "Trial",
           path: fixture.projectPath,
           change_count: state.revision,
-          track_count: 1,
+          track_count: state.trackNames?.length ?? 1,
           item_count: 1,
           marker_count: 0,
           region_count: 1,
@@ -357,7 +436,7 @@ function createRuntime({ fixture, indexRuntime, state }) {
         request.operation.name === "tracks.list_tracks"
         || request.operation.name === "tracks.read_mixer_controls"
       ) {
-        response.result.readback = trackReadback(state.trackName);
+        response.result.readback = trackReadback(state.trackNames ?? [state.trackName]);
       } else if (request.operation.name === "fx.list_track_chain") {
         state.fxOwnerRefs.push(...request.refs.map((ref) => ({ kind: ref.kind, ref: ref.ref })));
         response.result.summary = {
@@ -402,8 +481,8 @@ function createRuntime({ fixture, indexRuntime, state }) {
     projectIndexRuntime: indexRuntime,
     projectIndexArtifactReader: async ({ template_id }) => ({
       payload: template_id === "template.project.create_observation_bundle"
-        ? observationBundlePayload(indexRuntime.identity.project_ref, state.trackName)
-        : projectMapPayload(indexRuntime.identity.project_ref, state.trackName),
+        ? observationBundlePayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName])
+        : projectMapPayload(indexRuntime.identity.project_ref, state.trackNames ?? [state.trackName]),
     }),
     live: {
       opted_in: true,
@@ -414,10 +493,10 @@ function createRuntime({ fixture, indexRuntime, state }) {
   });
 }
 
-function observationBundlePayload(projectRef, trackName) {
+function observationBundlePayload(projectRef, trackNames) {
   return {
     project_ref: projectRef,
-    project_map: projectOverview(projectRef, trackName),
+    project_map: projectOverview(projectRef, trackNames),
     markers_regions: {
       items: [{
         ref: "region:index:1",
@@ -434,10 +513,10 @@ function observationBundlePayload(projectRef, trackName) {
   };
 }
 
-function projectMapPayload(projectRef, trackName) {
+function projectMapPayload(projectRef, trackNames) {
   return {
     project_ref: projectRef,
-    overview: projectOverview(projectRef, trackName),
+    overview: projectOverview(projectRef, trackNames),
     coverage: {
       tracks: "complete_page",
       track_items: "bounded_per_track",
@@ -446,36 +525,40 @@ function projectMapPayload(projectRef, trackName) {
   };
 }
 
-function projectOverview(projectRef, trackName) {
+function projectOverview(projectRef, trackNames) {
+  const names = Array.isArray(trackNames) ? trackNames : [trackNames];
   return {
     project_ref: projectRef,
-    track_count: 1,
+    track_count: names.length,
     item_count: 1,
     truncated: false,
-    tracks: [{
-      track_ref: "track:guid:{TRACK-1}",
-      name: trackName,
-      index: 0,
-      items: [{
+    tracks: names.map((name, index) => ({
+      track_ref: `track:guid:{TRACK-${index + 1}}`,
+      name,
+      index,
+      items: index === 0 ? [{
         item_ref: "item:guid:{ITEM-1}",
         track_ref: "track:guid:{TRACK-1}",
         start_seconds: 0,
         end_seconds: 4,
         active_take_ref: "take:guid:{TAKE-1}",
-      }],
-    }],
+      }] : [],
+    })),
     selected_items: [],
   };
 }
 
-function trackReadback(trackName) {
+function trackReadback(trackNames) {
+  const names = Array.isArray(trackNames) ? trackNames : [trackNames];
   return {
-    tracks: [{
-      track_ref: "track:guid:{TRACK-1}",
-      name: trackName,
-      index: 0,
+    tracks: names.map((name, index) => ({
+      track_ref: `track:guid:{TRACK-${index + 1}}`,
+      name,
+      index,
       selected: false,
-    }],
+    })),
+    track_count: names.length,
+    truncated: false,
     coverage: "complete",
   };
 }

@@ -150,8 +150,55 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
       "template.project.read_dirty_state",
     ]);
     assert.equal(response.result.data.path_after, "/tmp/trial.RPP");
+    assert.equal(response.result.changes[0].status, "applied");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "skipped");
     assert.deepEqual(response.result.verification.evidence_refs, ["child-1", "child-2", "child-3", "child-4", "child-5"]);
     assert.deepEqual(response.execution.stages.at(-1).evidence_refs, response.result.verification.evidence_refs);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("keeps an exact verified save applied when only Project Index maintenance fails", async () => {
+    let pathReads = 0;
+    let dirtyReads = 0;
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-index-fail", input: { operation: "save_as", target_path: "/tmp/trial-index-fail.RPP", overwrite: true, dry_run: false } },
+      now,
+      executeAtomic: async ({ id }) => {
+        if (id === "template.project.read_current_project_path") {
+          pathReads += 1;
+          return atomicExecution({ readback: pathReads === 1
+            ? { has_project_path: true, path_state: "saved_project", path: "/tmp/original.RPP" }
+            : { has_project_path: true, path_state: "saved_project", path: "/tmp/trial-index-fail.RPP" } });
+        }
+        if (id === "template.project.read_dirty_state") {
+          dirtyReads += 1;
+          return atomicExecution({ readback: dirtyReads === 1
+            ? { raw_dirty_state: 1, dirty_state: "dirty", dirty: true }
+            : { raw_dirty_state: 0, dirty_state: "clean", dirty: false } });
+        }
+        return atomicExecution({ summary: { saved: true } });
+      },
+      projectIndexRuntime: {
+        status: () => ({ lifecycle: "degraded" }),
+        invalidateScopes: ({ scopes }) => ({
+          ok: false,
+          scopes,
+          blockers: [{ code: "RUNTIME_NOT_OPEN", message: "Project Index runtime did not open.", recoverable: true }],
+        }),
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "RUNTIME_NOT_OPEN");
+    assert.equal(response.result.verification.status, "passed");
+    assert.equal(response.result.changes[0].status, "applied");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "failed");
+    assert.equal(response.result.data.path_after, "/tmp/trial-index-fail.RPP");
+    assert.equal(response.result.data.outcome.live_readback.status, "passed");
+    assert.equal(response.result.data.outcome.index_maintenance.status, "failed");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
