@@ -104,6 +104,20 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     ]);
   });
 
+  it("expands the current executable Media manual instead of the historical plan-only guide", () => {
+    const guide = createAlpha3_3B1AgentContextMacroGuide({ requested_ids: ["macro.media.place_assets"] });
+    const [media] = guide.requested_expansions.items;
+
+    assert.equal(media.id, "macro.media.place_assets");
+    assert.equal(media.runnable, true);
+    assert.equal(media.implementation_status, "executable_registered_program");
+    assert.match(media.action_manual.input_shape.placement, /sequence_on_one_track/u);
+    assert.match(media.action_manual.input_shape.placement, /append_after_existing/u);
+    assert.match(media.action_manual.input_shape.track_policy, /one_new_track_per_asset/u);
+    assert.match(media.action_manual.input_shape.mode, /relink_sources/u);
+    assert.match(media.action_manual.readback_steps.join(" "), /dispatch success alone never marks applied/iu);
+  });
+
   it("ranks one to three canonical Macros from ordinary English and Chinese intent", () => {
     assert.deepEqual(rankAlpha3_3B1MacroIntents("create a MIDI clip and add a compressor"), [
       "macro.midi.apply",
@@ -114,6 +128,8 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
       "macro.project.file",
     ]);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("设置项目 BPM 和轨道音量"), ["macro.controls.set"]);
+    assert.deepEqual(rankAlpha3_3B1MacroIntents("set the project grid and enable snap"), ["macro.controls.set"]);
+    assert.deepEqual(rankAlpha3_3B1MacroIntents("创建 Intro 标记和 Chorus 区域"), ["macro.project.apply_layout"]);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("quantize existing MIDI notes"), ["macro.midi.apply"]);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("render MP3"), []);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("open project"), []);

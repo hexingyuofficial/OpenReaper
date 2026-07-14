@@ -167,6 +167,11 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     assert.doesNotMatch(HANDLER, /os\.remove\(project_copy_path\)/);
     assert.doesNotMatch(HANDLER, /os\.remove\(output\.absolute_path\)/);
     assert.match(HANDLER, /render_target_collision/);
+    assert.match(HANDLER, /requested_basename or/);
+    assert.match(HANDLER, /request\.params\.output_basename/);
+    assert.match(HANDLER, /OUTPUT_BASENAME_INVALID/);
+    assert.match(HANDLER, /root_ready, root_blocker, root_message = d31_root_ready\(\)/);
+    assert.match(HANDLER, /restoration = \{ render_settings = true, track_selection = true, item_selection = true \}/);
     assert.match(ARTIFACT_HELPER, /\["run_job:render\.targets"\] = true/);
     assert.match(ROUTE_POLICY, /\["run_job:render\.targets"\] = \{ pack = "render", risk = "write" \}/);
     assert.match(ROUTE_POLICY, /operation_key == "run_job:render\.targets" or template_execute_write_capability/);

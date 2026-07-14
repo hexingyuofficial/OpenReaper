@@ -87,7 +87,7 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(controls.inputSchema.properties.changes.maxItems, 8);
     assert.deepEqual(controls.inputSchema.properties.changes.items.required, ["id", "target_kind", "fields"]);
     assert.deepEqual(controls.target_kinds, ["project", "track", "item", "take", "transport", "send"]);
-    assert.deepEqual(controls.fields_by_target.project, ["bpm"]);
+    assert.deepEqual(controls.fields_by_target.project, ["bpm", "grid_division", "grid_swing", "snap_enabled"]);
     assert.equal(controls.expectedDelta.kind, "write");
   });
 
@@ -120,11 +120,43 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.deepEqual(tempoPlan.requests[0].input, { bpm: 126 });
   });
 
+  it("plans project grid and snap through accepted atoms without requiring BPM", () => {
+    const plan = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { grid_division: " 1 / 8 ", grid_swing: 0.25, snap_enabled: true },
+    });
+
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.normalized_fields, { grid_division: "1/8", grid_swing: 0.25, snap_enabled: true });
+    assert.deepEqual(plan.requests.map((request) => request.id), [
+      "template.project.set_grid",
+      "template.project.set_snap",
+    ]);
+    assert.deepEqual(plan.requests[0].input, { division: "1/8", swing: 0.25 });
+    assert.deepEqual(plan.requests[1].input, { enabled: true });
+  });
+
+  it("makes the accepted grid atom's zero-swing default explicit in projected truth", () => {
+    const plan = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { grid_division: "0.5" },
+    });
+
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.normalized_fields, { grid_division: "0.5", grid_swing: 0 });
+    assert.deepEqual(plan.requests[0].input, { division: "0.5", swing: 0 });
+    assert.deepEqual(plan.requests[0].fields, ["grid_division", "grid_swing"]);
+  });
+
   it("returns typed project BPM field errors before emitting child requests", () => {
     const cases = [
-      [{ target_kind: "project", fields: {} }, "CONTROL_BPM_REQUIRED"],
+      [{ target_kind: "project", fields: {} }, "CONTROL_FIELDS_REQUIRED"],
       [{ target_kind: "project", fields: { bpm: 19 } }, "CONTROL_BPM_INVALID"],
       [{ target_kind: "project", fields: { bpm: 120, tempo: 121 } }, "CONTROL_FIELD_ALIAS_CONFLICT"],
+      [{ target_kind: "project", fields: { grid_division: "1/0" } }, "CONTROL_GRID_DIVISION_INVALID"],
+      [{ target_kind: "project", fields: { grid_swing: 0.25 } }, "CONTROL_GRID_DIVISION_REQUIRED"],
+      [{ target_kind: "project", fields: { grid_division: "1/8", grid_swing: 1.1 } }, "CONTROL_GRID_SWING_INVALID"],
+      [{ target_kind: "project", fields: { snap_enabled: 1 } }, "CONTROL_SNAP_ENABLED_INVALID"],
       [{ target_kind: "project", fields: { bpm: 120, time_signature: "4/4" } }, "FIELD_NOT_SUPPORTED"],
     ];
     for (const [input, code] of cases) {

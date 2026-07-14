@@ -101,6 +101,80 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
+  it("executes project grid and snap with row-specific accepted Template readback", async () => {
+    const calls = [];
+    const invalidations = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          target_kind: "project",
+          fields: { grid_division: "1/8", grid_swing: 0.2, snap_enabled: true },
+          dry_run: false,
+        },
+        refs: [],
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: projectIndexInvalidator(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.project.read_tempo_map",
+      "template.project.set_grid",
+      "template.project.set_snap",
+      "template.project.read_tempo_map",
+    ]);
+    assert.deepEqual(calls[1].input, { division: "1/8", swing: 0.2 });
+    assert.deepEqual(calls[2].input, { enabled: true });
+    assert.deepEqual(invalidations, [["project_head"]]);
+    assert.equal(response.result.changes.length, 2);
+    assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
+    assert.deepEqual(
+      response.result.changes.flatMap((change) => change.live_readback.fields.map((field) => [field.field, field.observed_value])),
+      [["grid_division", "1/8"], ["grid_swing", 0.2], ["snap_enabled", true]],
+    );
+    assert.equal(response.result.data.outcome.live_readback.status, "passed");
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("fails project grid truth when accepted atomic live readback disagrees", async () => {
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "project", fields: { grid_division: "1/8" }, dry_run: false },
+        refs: [],
+      },
+      executeAtomic: controlAtomic([], { gridReadbackDivision: "1/4" }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "CONTROL_READBACK_MISMATCH");
+    assert.equal(response.result.changes[0].status, "readback_failed");
+    assert.equal(response.result.changes[0].live_readback.status, "failed");
+  });
+
+  it("fails project snap truth when the atomic result omits passed readback status", async () => {
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "project", fields: { snap_enabled: true }, dry_run: false },
+        refs: [],
+      },
+      executeAtomic: controlAtomic([], { omitSnapReadbackStatus: true }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "CONTROL_READBACK_MISMATCH");
+    assert.equal(response.result.changes[0].status, "readback_failed");
+  });
+
   it("executes bounded changes rows with independent target resolution, readback, and index truth", async () => {
     const calls = [];
     const invalidations = [];
@@ -534,6 +608,25 @@ function controlAtomic(calls, options = {}) {
         requested_bpm: input.bpm,
         updated: true,
         readback_status: "passed",
+      });
+    }
+    if (id === "template.project.set_grid") {
+      return execution(id, {
+        project_ref: "project:current",
+        division: options.gridReadbackDivision ?? input.division,
+        division_qn: 0.5,
+        swingmode: input.swing > 0 ? 1 : 0,
+        swing: options.gridReadbackSwing ?? input.swing ?? 0,
+        updated: true,
+        readback_status: "passed",
+      });
+    }
+    if (id === "template.project.set_snap") {
+      return execution(id, {
+        project_ref: "project:current",
+        enabled: options.snapReadbackEnabled ?? input.enabled,
+        updated: true,
+        ...(!options.omitSnapReadbackStatus ? { readback_status: "passed" } : {}),
       });
     }
     if (id === "template.tracks.resolve_track_ref") {

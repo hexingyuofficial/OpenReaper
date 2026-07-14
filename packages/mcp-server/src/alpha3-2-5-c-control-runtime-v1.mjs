@@ -1286,6 +1286,11 @@ const CONTROL_BATCH_READBACK_PATHS = Object.freeze({
 });
 
 const CONTROL_REQUIRED_ATOMIC_READBACK_PATHS = Object.freeze({
+  project: Object.freeze({
+    grid_division: ["division"],
+    grid_swing: ["swing"],
+    snap_enabled: ["enabled"],
+  }),
   take: Object.freeze({
     pan: ["pan"],
   }),
@@ -1419,7 +1424,7 @@ function captureRequiredAtomicControlReadback({ targetKind, fields = [], request
     const observed = valueAtPath(readback, path);
     return [{
       field,
-      status: observed !== undefined && controlValuesMatch(requested, observed) ? "passed" : "mismatch",
+      status: readback?.readback_status === "passed" && observed !== undefined && controlValuesMatch(requested, observed) ? "passed" : "mismatch",
       source: "accepted_template_live_readback",
       requested,
       observed,

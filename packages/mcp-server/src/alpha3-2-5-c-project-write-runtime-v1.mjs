@@ -16,7 +16,6 @@ import {
 } from "./alpha3-2e-project-delete-targets-v1.mjs";
 import {
   ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
-  planAlpha3_2EMediaPlaceAssetsMacro,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
 import {
   ALPHA3_2E_ROUTING_APPLY_MACRO_ID,
@@ -36,6 +35,8 @@ const MAX_MUTATIONS = 256;
 const LAYOUT_EVIDENCE_REF_MAX_COUNT = 16;
 const LAYOUT_EVIDENCE_REF_MAX_BYTES = 128;
 const LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER = "track:guid:{00000000-0000-4000-8000-000000000000}";
+const MARKER_TARGET_REF_BUDGET_PLACEHOLDER = "marker:index:2147483647";
+const REGION_TARGET_REF_BUDGET_PLACEHOLDER = "region:index:2147483647";
 const LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES = 1_024;
 const PROJECT_WRITE_INTERNAL_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
@@ -54,7 +55,8 @@ const PROGRAMS = Object.freeze({
       "template.tracks.list_tracks", "template.tracks.read_folder_structure", TRACK_RESOLVER_ID,
       "template.tracks.create_track", "template.tracks.create_folder_track", "template.tracks.rename_track",
       "template.tracks.set_color", "template.tracks.move_track", "template.tracks.set_folder_depth",
-      "template.tracks.nest_tracks_in_folder",
+      "template.tracks.nest_tracks_in_folder", MARKER_REGION_RESOLVER_ID,
+      "template.project.create_marker", "template.project.create_region",
     ],
     dryReads: [read("template.tracks.list_tracks", { limit: 100 }), read("template.tracks.read_folder_structure", {})],
   }),
@@ -70,19 +72,6 @@ const PROGRAMS = Object.freeze({
     ],
     dryReads: [read("template.tracks.list_tracks", { limit: 100 }), read(MARKER_REGION_RESOLVER_ID, { limit: 250 })],
     confirmRequired: true,
-  }),
-  [ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID]: program({
-    macroId: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
-    programId: "openreaper.macro.media.place_assets",
-    risk: "write",
-    undoPolicy: "single_undo",
-    planner: planAlpha3_2EMediaPlaceAssetsMacro,
-    templateIds: [
-      "template.media.probe_file", TRACK_RESOLVER_ID, "template.tracks.create_track",
-      "template.media.import_file_to_track", "template.media.import_file_section_to_track",
-      ITEM_RESOLVER_ID, "template.project.create_region", MARKER_REGION_RESOLVER_ID,
-    ],
-    dryReads: [read("template.media.probe_file", null)],
   }),
   [ALPHA3_2E_ROUTING_APPLY_MACRO_ID]: program({
     macroId: ALPHA3_2E_ROUTING_APPLY_MACRO_ID,
@@ -143,6 +132,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     changes: [],
     canonicalRefs: [],
     readbackRefs: new Set(),
+    markerRegionReadbackRows: new Map(),
     readbackEvidenceRefs: [],
     writeExecuted: false,
     sqlite: sqliteEvidence(),
@@ -177,6 +167,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       if (readRequest === null) continue;
       const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs: child.refs ?? {}, stageId: `select-${stageToken(child.id)}`, kind: "selector_resolve", now });
       bindPreflightLocalRef(plan, child, execution, state);
+      validateLayoutAnnotationPreflight(program, plan, child, execution);
     }
     if (dryRun && request.id === ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) {
       for (const asset of request.input?.assets ?? []) {
@@ -226,12 +217,18 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
           now,
         });
         const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs, stageId: `verify-${stageToken(child.id)}`, kind: "verify", now });
+        try {
+          validateLayoutAnnotationVerification(program, plan, child, execution);
+        } catch (error) {
+          readbackFailure ??= error;
+          continue;
+        }
         recordProjectWriteReadback(state, execution);
       }
       try {
         applyProjectWriteReadbackToChanges(state);
       } catch (error) {
-        readbackFailure = error;
+        readbackFailure ??= error;
       }
     }
     const invalidation = invalidateProjectIndex(projectIndexRuntime, scopesFor(program.entry.macro_id, plan), now);
@@ -408,6 +405,7 @@ function verificationReads(program, plan, state) {
 }
 
 function dryReadsForPlan(program, plan) {
+  if (program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) return plan.preflight_requests ?? [];
   if (program.entry.macro_id !== ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) return program.dryReads;
   const reads = [...program.dryReads];
   for (const itemRef of plan.preview?.refs_by_kind?.items ?? []) {
@@ -423,6 +421,66 @@ function dryReadsForPlan(program, plan) {
     });
   }
   return reads;
+}
+
+function validateLayoutAnnotationPreflight(program, plan, child, execution) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || child.id !== MARKER_REGION_RESOLVER_ID) return;
+  const expected = (plan.preview?.rows ?? []).filter((row) => row.annotation === true);
+  if (expected.length === 0) return;
+  const summary = executionSummary(execution);
+  const items = completeMarkerRegionItems(summary);
+  if (items === null) {
+    throw coded(
+      "LAYOUT_ANNOTATION_PREFLIGHT_INCOMPLETE",
+      "Timeline annotations require a complete non-truncated live Marker/Region read before any mutation.",
+    );
+  }
+  if (items.length + expected.length > 50) {
+    throw coded(
+      "LAYOUT_ANNOTATION_READBACK_CAPACITY_EXCEEDED",
+      "Creating these annotations would exceed the accepted Marker/Region read atom's 50-row complete-read ceiling, so row-specific post-write truth cannot be guaranteed.",
+    );
+  }
+  for (const row of expected) {
+    const sameName = items.find((item) => item?.kind === row.kind && item?.name === row.name);
+    if (!sameName) continue;
+    if (layoutAnnotationFieldsMatch(row, sameName)) {
+      throw coded(
+        "LAYOUT_ANNOTATION_ALREADY_EXISTS",
+        `${row.kind} annotation ${row.id} already exists at the declared time; duplicate creation is blocked.`,
+      );
+    }
+    throw coded(
+      "LAYOUT_ANNOTATION_UPDATE_UNSUPPORTED",
+      `${row.kind} annotation ${row.id} conflicts with an existing same-name row, and no accepted atom can move its position or change its bounds.`,
+    );
+  }
+}
+
+function validateLayoutAnnotationVerification(program, plan, child, execution) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || child.id !== MARKER_REGION_RESOLVER_ID) return;
+  if (!(plan.preview?.rows ?? []).some((row) => row.annotation === true)) return;
+  if (completeMarkerRegionItems(executionSummary(execution)) === null) {
+    throw coded(
+      "LAYOUT_ANNOTATION_READBACK_INCOMPLETE",
+      "Timeline annotation writes completed, but the final live Marker/Region read was incomplete or truncated.",
+    );
+  }
+}
+
+function completeMarkerRegionItems(summary) {
+  const items = Array.isArray(summary.items) ? summary.items : null;
+  const markerCount = summary.marker_count;
+  const regionCount = summary.region_count;
+  return items !== null
+    && summary.truncated === false
+    && Number.isInteger(markerCount)
+    && markerCount >= 0
+    && Number.isInteger(regionCount)
+    && regionCount >= 0
+    && items.length === markerCount + regionCount
+    ? items
+    : null;
 }
 
 async function verifyDeletedTargets({ program, plan, request, executeAtomic, stages, state, now }) {
@@ -551,9 +609,13 @@ function bindMutationLocalRef(plan, mutation, execution, state) {
   const trackRef = firstCanonicalWithPrefix(execution, "track:");
   const itemRef = firstCanonicalWithPrefix(execution, "item:");
   const sendRef = firstCanonicalWithPrefix(execution, "send:");
+  const markerRef = firstCanonicalWithPrefix(execution, "marker:");
+  const regionRef = firstCanonicalWithPrefix(execution, "region:");
   if (mutation.produces_local_id && trackRef) state.localRefs.set(`track:planned:${mutation.produces_local_id}`, trackRef);
   if (mutation.produces_local_id && itemRef) state.localRefs.set(`item:planned:${mutation.produces_local_id}`, itemRef);
   if (mutation.produces_local_id && sendRef) state.localRefs.set(`send:planned:${mutation.produces_local_id}`, sendRef);
+  if (mutation.produces_local_id && markerRef) state.localRefs.set(`marker:planned:${mutation.produces_local_id}`, markerRef);
+  if (mutation.produces_local_id && regionRef) state.localRefs.set(`region:planned:${mutation.produces_local_id}`, regionRef);
   const assetId = /asset ([^ .]+)\.?$/u.exec(mutation.purpose ?? "")?.[1] ?? null;
   if (assetId && mutation.id === "template.tracks.create_track" && trackRef) state.localRefs.set(`track:planned:${assetId}`, trackRef);
   if (assetId && mutation.id.startsWith("template.media.import_file") && itemRef) state.localRefs.set(`item:planned:${assetId}`, itemRef);
@@ -586,7 +648,8 @@ function buildLayoutOperationProjection(plan, { projectedApplied = false } = {})
     const totalCount = rowMutations.length;
     return {
       operation_id: row.id,
-      target_ref: row.track_ref ?? (projectedApplied ? LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER : null),
+      target_kind: row.annotation === true ? row.kind : "track",
+      target_ref: row.track_ref ?? (projectedApplied ? projectedLayoutTargetRef(row) : null),
       status: projectedApplied ? "applied" : "pending",
       template_ids: uniqueUnbounded(rowMutations.map((mutation) => mutation.id)),
       mutation: {
@@ -686,14 +749,20 @@ function layoutChangesForMutation(state, mutation) {
 
 function canonicalLayoutTargetRef(row, state, resolvedRefs, execution) {
   if (!row) return null;
-  const plannedRef = `track:planned:${row.id}`;
+  const prefix = row.annotation === true ? `${row.kind}:` : "track:";
+  const plannedRef = `${prefix}planned:${row.id}`;
   const candidates = [
     state.localRefs.get(plannedRef),
     row.track_ref,
     ...refsInValue(resolvedRefs),
     ...collectedRefs(execution),
   ];
-  return candidates.find((ref) => typeof ref === "string" && ref.startsWith("track:") && !ref.startsWith("track:planned:")) ?? null;
+  return candidates.find((ref) => typeof ref === "string" && ref.startsWith(prefix) && !ref.startsWith(`${prefix}planned:`)) ?? null;
+}
+
+function projectedLayoutTargetRef(row) {
+  if (row.annotation !== true) return LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER;
+  return row.kind === "region" ? REGION_TARGET_REF_BUDGET_PLACEHOLDER : MARKER_TARGET_REF_BUDGET_PLACEHOLDER;
 }
 
 function firstCanonicalWithPrefix(execution, prefix) {
@@ -794,7 +863,72 @@ function refsInValue(value) {
 
 function recordProjectWriteReadback(state, execution) {
   for (const ref of collectedRefs(execution)) state.readbackRefs.add(ref);
+  const summary = executionSummary(execution);
+  for (const row of Array.isArray(summary.items) ? summary.items : []) {
+    const ref = row?.kind === "region" ? row.region_ref : row?.marker_ref;
+    if (typeof ref === "string") state.markerRegionReadbackRows.set(ref, structuredClone(row));
+  }
   state.readbackEvidenceRefs.push(...evidenceRefs(execution));
+}
+
+function executionSummary(execution) {
+  return execution?.result?.summary ?? execution?.result?.readback ?? {};
+}
+
+function verifyLayoutAnnotationRow(expected, targetRef, rowsByRef) {
+  if (typeof targetRef !== "string") {
+    return {
+      ok: false,
+      status: "readback_missing",
+      code: "PROJECT_WRITE_ROW_READBACK_MISSING",
+      message: `Created annotation ${expected.id} returned no exact canonical ref.`,
+      mismatchedFields: ["target_ref"],
+    };
+  }
+  const observed = rowsByRef.get(targetRef);
+  if (!observed) {
+    return {
+      ok: false,
+      status: "readback_missing",
+      code: "PROJECT_WRITE_ROW_READBACK_MISSING",
+      message: `No exact live Marker/Region row matched ${expected.id} at ${targetRef}.`,
+      mismatchedFields: ["target_ref"],
+    };
+  }
+  const mismatchedFields = annotationMismatchedFields(expected, observed);
+  if (mismatchedFields.length > 0) {
+    return {
+      ok: false,
+      status: "readback_mismatch",
+      code: "PROJECT_WRITE_ROW_READBACK_MISMATCH",
+      message: `Live Marker/Region fields did not match ${expected.id}: ${mismatchedFields.join(", ")}.`,
+      mismatchedFields,
+    };
+  }
+  return { ok: true, mismatchedFields: [] };
+}
+
+function layoutAnnotationFieldsMatch(expected, observed) {
+  return annotationMismatchedFields(expected, observed).length === 0;
+}
+
+function annotationMismatchedFields(expected, observed) {
+  const mismatched = [];
+  if (observed?.kind !== expected.kind) mismatched.push("kind");
+  if (observed?.name !== expected.name) mismatched.push("name");
+  if (expected.kind === "marker") {
+    if (!numbersMatch(observed?.position_seconds, expected.position_seconds)) mismatched.push("position_seconds");
+  } else {
+    if (!numbersMatch(observed?.position_seconds, expected.start_seconds)) mismatched.push("start_seconds");
+    if (!numbersMatch(observed?.end_seconds, expected.end_seconds)) mismatched.push("end_seconds");
+  }
+  return mismatched;
+}
+
+function numbersMatch(left, right) {
+  return typeof left === "number" && Number.isFinite(left)
+    && typeof right === "number" && Number.isFinite(right)
+    && Math.abs(left - right) <= 0.000001;
 }
 
 function applyProjectWriteReadbackToChanges(state) {
@@ -803,6 +937,19 @@ function applyProjectWriteReadbackToChanges(state) {
     if (change.mutation?.status !== "completed") continue;
     if (change.live_readback?.status === "passed") continue;
     const targetRefs = typeof change.target_ref === "string" ? [change.target_ref] : change.target_refs ?? [];
+    const layoutRow = change.operation_id ? state.layoutOperations?.rowsById.get(change.operation_id) : null;
+    if (layoutRow?.annotation === true) {
+      const annotation = verifyLayoutAnnotationRow(layoutRow, change.target_ref, state.markerRegionReadbackRows);
+      if (!annotation.ok) {
+        change.status = annotation.status;
+        change.live_readback = { status: "failed", source: "live_marker_region_readback", mismatched_fields: annotation.mismatchedFields };
+        missing.push({ ...change, readbackCode: annotation.code, readbackMessage: annotation.message });
+        continue;
+      }
+      change.status = "applied";
+      change.live_readback = { status: "passed", source: "live_marker_region_readback", observed_ref: change.target_ref };
+      continue;
+    }
     const matchedRefs = targetRefs.filter((ref) => state.readbackRefs.has(ref));
     if (matchedRefs.length === 0) {
       change.status = "readback_missing";
@@ -823,12 +970,13 @@ function applyProjectWriteReadbackToChanges(state) {
         };
   }
   if (missing.length > 0) {
+    const mismatch = missing.find((change) => change.readbackCode === "PROJECT_WRITE_ROW_READBACK_MISMATCH");
     throw coded(
-      "PROJECT_WRITE_ROW_READBACK_MISSING",
-      `${missing.length} mutation row(s) had no exact live readback match.`,
+      mismatch ? "PROJECT_WRITE_ROW_READBACK_MISMATCH" : "PROJECT_WRITE_ROW_READBACK_MISSING",
+      mismatch?.readbackMessage ?? `${missing.length} mutation row(s) had no exact live readback match.`,
       missing.map((change) => ({
-        code: "PROJECT_WRITE_ROW_READBACK_MISSING",
-        message: `No exact live readback matched ${change.operation_id ?? change.template_id}.`,
+        code: change.readbackCode ?? "PROJECT_WRITE_ROW_READBACK_MISSING",
+        message: change.readbackMessage ?? `No exact live readback matched ${change.operation_id ?? change.template_id}.`,
         recoverable: true,
       })),
     );
@@ -1028,7 +1176,12 @@ function stageIdFor(program, kind) {
   return `${program.stagePrefix}-result`;
 }
 function scopesFor(macroId, plan) {
-  if (macroId === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) return ["tracks"];
+  if (macroId === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
+    const scopes = [];
+    if ((plan.preview?.target_counts?.layout_rows ?? 0) > 0) scopes.push("tracks");
+    if ((plan.preview?.target_counts?.annotations ?? 0) > 0) scopes.push("markers");
+    return scopes;
+  }
   if (macroId === ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) return ["tracks", "items", "takes", "markers", "media"];
   if (macroId === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) return ["routing", "tracks"];
   const targets = deleteTargetsFromPlan(plan);

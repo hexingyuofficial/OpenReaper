@@ -42,7 +42,7 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(exact.items[3].support_status, "executable_runtime_bound");
     assert.equal(exact.items[3].capability_truth.support_state, "supported_with_readback");
     assert.equal(exact.items[4].support_status, "executable_runtime_bound");
-    assert.equal(exact.items[4].capability_truth.support_state, "supported_with_readback");
+    assert.equal(exact.items[4].capability_truth.support_state, "supported_with_exact_live_readback");
     assert.equal(exact.items[5].support_status, "executable_runtime_bound");
     assert.equal(exact.items[5].capability_truth.support_state, "supported_with_readback");
   });
@@ -142,12 +142,16 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
       assert.equal(inspectResult.contract, "macro.execution.v1");
       assert.equal(inspectResult.execution.status, "blocked");
       assert.equal(inspectResult.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
-      for (const result of [deletePreview, layoutPreview, routingPreview, mediaPreview]) {
+      for (const result of [deletePreview, layoutPreview, routingPreview]) {
         assert.equal(result.ok, false);
         assert.equal(result.contract, "macro.execution.v1");
         assert.equal(result.execution.status, "blocked");
         assert.equal(result.error.code, "PROJECT_WRITE_EXECUTOR_UNAVAILABLE");
       }
+      assert.equal(mediaPreview.ok, false);
+      assert.equal(mediaPreview.contract, "macro.execution.v1");
+      assert.equal(mediaPreview.execution.status, "blocked");
+      assert.equal(mediaPreview.error.code, "MEDIA_LIVE_EXECUTOR_REQUIRED");
       assert.equal(renderPreview.ok, false);
       assert.equal(renderPreview.contract, "macro.execution.v1");
       assert.equal(renderPreview.execution.status, "blocked");

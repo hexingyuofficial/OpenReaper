@@ -24,6 +24,7 @@ describe("Alpha3.2-E render target planner", () => {
       sample_rate_hz: 44_100,
       channel_count: 1,
       wav_bit_depth: 16,
+      output_basename: "Field Test Mix",
       output_policy: "openreaper_managed_render_root",
       collision_policy: "fail_if_exists",
       max_targets: 2,
@@ -40,6 +41,8 @@ describe("Alpha3.2-E render target planner", () => {
     assert.equal(plan.preview.output_policy.root, "openreaper_managed_render_root");
     assert.equal(plan.preview.output_policy.collision_policy, "fail_if_exists");
     assert.equal(plan.preview.output_policy.overwrite_allowed, false);
+    assert.equal(plan.preview.render_settings.output_basename, "Field Test Mix");
+    assert.equal(plan.preview.output_policy.basename_owner, "user_request");
     assert.deepEqual(plan.child_requests, []);
     assert.equal(plan.safety.server_executes_children, false);
     assert.equal(plan.safety.hidden_executor, false);
@@ -55,6 +58,7 @@ describe("Alpha3.2-E render target planner", () => {
         ogg_quality: 0.8,
         sample_rate_hz: 48_000,
         channel_count: 2,
+        output_basename: "Regions",
         dry_run: false,
       },
       { refs: { regions: ["region:index:3", "region:name:Outro"] } },
@@ -80,6 +84,7 @@ describe("Alpha3.2-E render target planner", () => {
       sample_rate_hz: 48_000,
       channel_count: 2,
       max_targets: 16,
+      output_basename: "Regions",
       ogg_quality: 0.8,
     });
     assert.equal(plan.mutation_requests[0].callable_now, true);
@@ -115,6 +120,9 @@ describe("Alpha3.2-E render target planner", () => {
       [{ target_kind: "whole_project", format: "wav", wav_bit_depth: 32 }, "RENDER_WAV_BIT_DEPTH_UNSUPPORTED"],
       [{ target_kind: "whole_project", format: "ogg", ogg_quality: 0.7 }, "RENDER_OGG_QUALITY_UNSUPPORTED"],
       [{ target_kind: "whole_project", format: "ogg", wav_bit_depth: 16 }, "RENDER_OGG_BIT_DEPTH_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "wav", output_basename: "../mix" }, "RENDER_OUTPUT_BASENAME_INVALID"],
+      [{ target_kind: "whole_project", format: "wav", output_basename: "mix.wav" }, "RENDER_OUTPUT_BASENAME_INVALID"],
+      [{ target_kind: "whole_project", format: "wav", output_basename: "$project" }, "RENDER_OUTPUT_BASENAME_INVALID"],
     ];
 
     for (const [input, expectedCode] of cases) {

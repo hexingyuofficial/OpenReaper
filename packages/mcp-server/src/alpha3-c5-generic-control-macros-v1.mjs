@@ -57,7 +57,7 @@ export const ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
 const PROJECT_CONTROL_DEFINITION = deepFreeze({
   id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
   user_label: "Set project controls",
-  task_intents: ["set project BPM", "change project tempo"],
+  task_intents: ["set project BPM", "change project tempo", "set project grid", "enable or disable project snap"],
   scope: "project",
   refs: [],
   freshness_requires: ["project_tempo"],
@@ -69,6 +69,9 @@ const PROJECT_CONTROL_DEFINITION = deepFreeze({
   },
   fields: [
     field("bpm", "number", "template.project.set_bpm", "bpm", { min: 20, max: 400, unit: "bpm" }),
+    field("grid_division", "string", "template.project.set_grid", "division"),
+    field("grid_swing", "number", "template.project.set_grid", "swing", { min: 0, max: 1 }),
+    field("snap_enabled", "boolean", "template.project.set_snap", "enabled"),
   ],
   blocked_fields: [],
 });
@@ -615,12 +618,12 @@ function officialControlsSetDiscoveryItem(options = {}) {
   return deepFreeze({
     id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
     title: "Set project controls",
-    summary: "Set bounded project BPM plus track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
+    summary: "Set bounded project BPM, grid, snap, track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
     pack: "core",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.controls.set",
-    tags: ["macro", "controls", "project", "bpm", "tempo", "track", "item", "take", "transport", "send", "sqlite", "executable"],
+    tags: ["macro", "controls", "project", "bpm", "grid", "snap", "track", "item", "take", "transport", "send", "executable"],
     kind: ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND,
     action_kind: "macro",
     macro_kind: "generic_control",
@@ -628,7 +631,7 @@ function officialControlsSetDiscoveryItem(options = {}) {
     execution_shape: "registered_macro_program",
     user_label: "Set project controls",
     task_intents: [
-      "set project BPM or tempo",
+      "set project BPM tempo grid or snap",
       "set track controls",
       "set item controls",
       "set take controls",
@@ -708,7 +711,7 @@ function officialControlsSetDiscoveryItem(options = {}) {
       {
         input: {
           target_kind: "project",
-          fields: { bpm: 128 },
+          fields: { bpm: 128, grid_division: "1/8", snap_enabled: true },
           dry_run: false,
         },
       },
@@ -935,7 +938,7 @@ function normalizeControlFields(targetKind, fields) {
     return {
       ok: false,
       fields: {},
-      blockers: [blocker("fields", "CONTROL_FIELDS_REQUIRED", "macro.controls.set target_kind=project requires fields.bpm.")],
+      blockers: [blocker("fields", "CONTROL_FIELDS_REQUIRED", "macro.controls.set target_kind=project requires at least one supported field.")],
     };
   }
   const normalized = { ...fields };
@@ -950,21 +953,76 @@ function normalizeControlFields(targetKind, fields) {
   }
   if (!hasBpm && hasTempo) normalized.bpm = normalized.tempo;
   delete normalized.tempo;
-  if (!Object.prototype.hasOwnProperty.call(normalized, "bpm")) {
+  if (Object.keys(normalized).length === 0) {
     return {
       ok: false,
       fields: normalized,
-      blockers: [blocker("bpm", "CONTROL_BPM_REQUIRED", "macro.controls.set target_kind=project requires fields.bpm.")],
+      blockers: [blocker("fields", "CONTROL_FIELDS_REQUIRED", "macro.controls.set target_kind=project requires at least one supported field.")],
     };
   }
-  if (typeof normalized.bpm !== "number" || !Number.isFinite(normalized.bpm) || normalized.bpm < 20 || normalized.bpm > 400) {
+  if (hasOwn(normalized, "bpm") && (typeof normalized.bpm !== "number" || !Number.isFinite(normalized.bpm) || normalized.bpm < 20 || normalized.bpm > 400)) {
     return {
       ok: false,
       fields: normalized,
       blockers: [blocker("bpm", "CONTROL_BPM_INVALID", "Project BPM must be a finite number between 20 and 400.")],
     };
   }
+  if (hasOwn(normalized, "grid_division")) {
+    const division = normalizeProjectGridDivision(normalized.grid_division);
+    if (division === null) {
+      return {
+        ok: false,
+        fields: normalized,
+        blockers: [blocker("grid_division", "CONTROL_GRID_DIVISION_INVALID", "Project grid division must be a positive numeric string or N/D fraction no greater than 64 quarter notes.")],
+      };
+    }
+    normalized.grid_division = division;
+  }
+  if (hasOwn(normalized, "grid_swing") && !hasOwn(normalized, "grid_division")) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("grid_swing", "CONTROL_GRID_DIVISION_REQUIRED", "Project grid swing requires grid_division because the accepted grid Template writes both together.")],
+    };
+  }
+  if (hasOwn(normalized, "grid_swing") && (typeof normalized.grid_swing !== "number" || !Number.isFinite(normalized.grid_swing) || normalized.grid_swing < 0 || normalized.grid_swing > 1)) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("grid_swing", "CONTROL_GRID_SWING_INVALID", "Project grid swing must be a finite number between 0 and 1.")],
+    };
+  }
+  if (hasOwn(normalized, "grid_division") && !hasOwn(normalized, "grid_swing")) normalized.grid_swing = 0;
+  if (hasOwn(normalized, "snap_enabled") && typeof normalized.snap_enabled !== "boolean") {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("snap_enabled", "CONTROL_SNAP_ENABLED_INVALID", "Project snap enabled state must be boolean.")],
+    };
+  }
   return { ok: true, fields: normalized, blockers: [] };
+}
+
+function normalizeProjectGridDivision(value) {
+  if (typeof value !== "string") return null;
+  const fraction = /^\s*(\d+)\s*\/\s*(\d+)\s*$/u.exec(value);
+  if (fraction) {
+    const numerator = Number(fraction[1]);
+    const denominator = Number(fraction[2]);
+    if (!Number.isSafeInteger(numerator) || !Number.isSafeInteger(denominator) || numerator <= 0 || denominator <= 0) return null;
+    const quarterNotes = (numerator / denominator) * 4;
+    return Number.isFinite(quarterNotes) && quarterNotes > 0 && quarterNotes <= 64
+      ? `${numerator}/${denominator}`
+      : null;
+  }
+  const trimmed = value.trim();
+  if (!/^(?:\d+(?:\.\d*)?|\.\d+)$/u.test(trimmed)) return null;
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) && numeric > 0 && numeric <= 64 ? String(numeric) : null;
+}
+
+function hasOwn(value, key) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function controlFieldValuesMatch(left, right) {

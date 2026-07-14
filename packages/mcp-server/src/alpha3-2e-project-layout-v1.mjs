@@ -7,12 +7,16 @@ export async function executeAlpha3_2EProjectLayoutMacro(options) {
   return executeAlpha3_2_5CProjectWriteMacro(options);
 }
 
-const ALLOWED_INPUT_FIELDS = new Set(["layout", "match_policy", "conflict_policy", "dry_run", "compact_response"]);
+const ALLOWED_INPUT_FIELDS = new Set(["layout", "annotations", "match_policy", "conflict_policy", "dry_run", "compact_response"]);
 const ALLOWED_ROW_FIELDS = new Set(["id", "kind", "name", "track_ref", "color", "parent_id", "index", "folder_depth"]);
+const ALLOWED_ANNOTATION_FIELDS = new Set(["id", "kind", "name", "position_seconds", "start_seconds", "end_seconds", "color", "marker_ref", "region_ref"]);
 const ALLOWED_KINDS = new Set(["track", "folder"]);
+const ALLOWED_ANNOTATION_KINDS = new Set(["marker", "region"]);
 const ALLOWED_MATCH_POLICIES = new Set(["by_ref", "exact_name", "create_only"]);
 const ALLOWED_CONFLICT_POLICIES = new Set(["skip", "update_declared_fields", "stop"]);
 const MAX_LAYOUT_ROWS = 100;
+const MAX_ANNOTATION_ROWS = 50;
+const MAX_OPERATION_ROWS = 100;
 const MAX_NAME_BYTES = 160;
 const MAX_ID_BYTES = 96;
 const UNKNOWN_FIELD_DETAIL_LIMIT = 8;
@@ -26,6 +30,9 @@ const SET_COLOR_ID = "template.tracks.set_color";
 const MOVE_TRACK_ID = "template.tracks.move_track";
 const SET_FOLDER_DEPTH_ID = "template.tracks.set_folder_depth";
 const NEST_TRACKS_ID = "template.tracks.nest_tracks_in_folder";
+const LIST_MARKERS_REGIONS_ID = "template.project.list_markers_regions";
+const CREATE_MARKER_ID = "template.project.create_marker";
+const CREATE_REGION_ID = "template.project.create_region";
 
 export function isAlpha3_2EProjectLayoutMacroId(id) {
   return id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID;
@@ -38,19 +45,23 @@ export function planAlpha3_2EProjectLayoutMacro(input = {}, requestPosture = {})
     ...validateInput(input, normalized),
   ];
   const rows = normalizeRows(normalized.layout);
+  const annotations = normalizeAnnotations(normalized.annotations);
   blockers.push(...rows.blockers);
+  blockers.push(...annotations.blockers);
+  blockers.push(...validateOperationIds(rows.rows, annotations.rows));
   const matchPolicy = normalizeMatchPolicy(normalized.match_policy);
   const conflictPolicy = normalizeConflictPolicy(normalized.conflict_policy);
   const dryRun = normalized.dry_run !== false;
-  const preview = buildPreview(rows.rows, { matchPolicy, conflictPolicy });
+  const preview = buildPreview(rows.rows, annotations.rows, { matchPolicy, conflictPolicy });
 
   if (blockers.length > 0) return blockedPlan(blockers, preview);
-  if (rows.rows.length === 0) return blockedPlan([blocker("LAYOUT_EMPTY", "macro.project.apply_layout requires at least one layout row.")], preview);
+  if (rows.rows.length + annotations.rows.length === 0) return blockedPlan([blocker("LAYOUT_EMPTY", "macro.project.apply_layout requires at least one layout or annotations row.")], preview);
   if (dryRun) return dryRunPlan(preview);
 
-  const mutationRequests = buildMutationRequests(rows.rows, { matchPolicy, conflictPolicy });
-  const readback = readbackRequests();
-  const childRequests = [...preflightRequests(), ...mutationRequests, ...readback];
+  const mutationRequests = buildMutationRequests(rows.rows, annotations.rows);
+  const preflight = preflightRequests(preview);
+  const readback = readbackRequests(preview);
+  const childRequests = [...preflight, ...mutationRequests, ...readback];
   return deepFreeze({
     contract: ALPHA3_2E_PROJECT_LAYOUT_MACRO_CONTRACT,
     version: ALPHA3_2E_PROJECT_LAYOUT_MACRO_VERSION,
@@ -61,7 +72,7 @@ export function planAlpha3_2EProjectLayoutMacro(input = {}, requestPosture = {})
     match_policy: matchPolicy,
     conflict_policy: conflictPolicy,
     preview,
-    preflight_requests: preflightRequests(),
+    preflight_requests: preflight,
     mutation_requests: mutationRequests,
     readback_requests: readback,
     child_requests: childRequests,
@@ -125,19 +136,19 @@ export function createAlpha3_2EProjectLayoutMacroDiscoveryItems(options = {}) {
   return [deepFreeze({
     id: ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID,
     title: "Apply project layout",
-    summary: "Preview or execute bounded track/folder create, rename, color, move, and nesting through one registered Macro with structural readback.",
+    summary: "Preview or execute bounded track/folder layout plus create-only Marker/Region timeline annotations with structural live readback.",
     pack: "project",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.project.apply_layout",
-    tags: ["macro", "project", "layout", "tracks", "folders", "alpha3_2e", "executable"],
+    tags: ["macro", "project", "layout", "tracks", "folders", "markers", "regions", "timeline", "executable"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "project_apply_layout",
     menu_group: "primary",
     execution_shape: "registered_macro_program",
     user_label: "Apply project layout",
-    task_intents: ["create track layout", "organize track folders", "apply track colors", "arrange track order"],
+    task_intents: ["create track layout", "organize track folders", "apply track colors", "arrange track order", "create timeline markers", "create timeline regions"],
     support_status: "executable_runtime_bound",
     implementation_status: "executable",
     support_state: "supported_with_readback",
@@ -148,10 +159,10 @@ export function createAlpha3_2EProjectLayoutMacroDiscoveryItems(options = {}) {
     allowed_live_group: null,
     inputSchema: {
       type: "object",
-      required: ["layout"],
       additionalProperties: false,
       properties: {
         layout: { type: "array" },
+        annotations: { type: "array", maxItems: MAX_ANNOTATION_ROWS },
         match_policy: { enum: [...ALLOWED_MATCH_POLICIES] },
         conflict_policy: { enum: [...ALLOWED_CONFLICT_POLICIES] },
         dry_run: { type: "boolean" },
@@ -169,15 +180,16 @@ export function createAlpha3_2EProjectLayoutMacroDiscoveryItems(options = {}) {
         result: { type: "object" },
       },
     },
-    refs: { input: ["track_ref"], output: ["track_ref"] },
+    refs: { input: ["track_ref"], output: ["track_ref", "marker_ref", "region_ref"] },
     expectedDelta: {
       kind: "write",
       action: "apply_project_layout",
-      entities: ["track", "folder"],
-      summary: "Executes the fixed bounded layout program and verifies the resulting track/folder structure.",
+      entities: ["track", "folder", "marker", "region"],
+      summary: "Executes the fixed bounded layout program and verifies track/folder structure plus created timeline annotations.",
     },
     examples: [
       { input: { layout: [{ id: "drums", kind: "folder", name: "Drums" }, { id: "kick", kind: "track", name: "Kick", parent_id: "drums", color: "#C00000" }], dry_run: true } },
+      { input: { annotations: [{ id: "intro", kind: "marker", name: "Intro", position_seconds: 0 }, { id: "chorus", kind: "region", name: "Chorus", start_seconds: 8, end_seconds: 16 }], dry_run: true } },
     ],
   })];
 }
@@ -193,10 +205,10 @@ function dryRunPlan(preview) {
     match_policy: preview.match_policy,
     conflict_policy: preview.conflict_policy,
     preview,
-    preflight_requests: preflightRequests(),
+    preflight_requests: preflightRequests(preview),
     mutation_requests: [],
-    readback_requests: readbackRequests(),
-    child_requests: preflightRequests(),
+    readback_requests: readbackRequests(preview),
+    child_requests: preflightRequests(preview),
     success_criteria: successCriteriaFor(preview),
     agent_execution_flow: { instruction: "Run preflight reads, show the layout diff, then retry with dry_run:false to receive mutation child requests.", child_request_policy: "preflight_only_on_dry_run", stop_on_blocker: true },
     blockers: [],
@@ -242,6 +254,9 @@ function validateInput(original, normalized) {
   if (unknown.length > 0) blockers.push(blocker("LAYOUT_INPUT_FIELDS_UNSUPPORTED", "macro.project.apply_layout input contains unsupported fields.", { fields: unknown.slice(0, UNKNOWN_FIELD_DETAIL_LIMIT), omitted_count: Math.max(0, unknown.length - UNKNOWN_FIELD_DETAIL_LIMIT) }));
   if (normalized.layout !== undefined && !Array.isArray(normalized.layout)) blockers.push(blocker("LAYOUT_ROWS_INVALID", "layout must be an array."));
   if (Array.isArray(normalized.layout) && normalized.layout.length > MAX_LAYOUT_ROWS) blockers.push(blocker("LAYOUT_TOO_LARGE", `layout accepts at most ${MAX_LAYOUT_ROWS} rows.`));
+  if (normalized.annotations !== undefined && !Array.isArray(normalized.annotations)) blockers.push(blocker("LAYOUT_ANNOTATIONS_INVALID", "annotations must be an array."));
+  if (Array.isArray(normalized.annotations) && normalized.annotations.length > MAX_ANNOTATION_ROWS) blockers.push(blocker("LAYOUT_ANNOTATIONS_TOO_LARGE", `annotations accepts at most ${MAX_ANNOTATION_ROWS} rows so one complete native read can verify every row.`));
+  if ((Array.isArray(normalized.layout) ? normalized.layout.length : 0) + (Array.isArray(normalized.annotations) ? normalized.annotations.length : 0) > MAX_OPERATION_ROWS) blockers.push(blocker("LAYOUT_OPERATIONS_TOO_LARGE", `layout and annotations accept at most ${MAX_OPERATION_ROWS} total rows.`));
   if (normalized.match_policy !== undefined && !ALLOWED_MATCH_POLICIES.has(normalized.match_policy)) blockers.push(blocker("LAYOUT_MATCH_POLICY_INVALID", "match_policy must be by_ref, exact_name, or create_only."));
   if (normalized.conflict_policy !== undefined && !ALLOWED_CONFLICT_POLICIES.has(normalized.conflict_policy)) blockers.push(blocker("LAYOUT_CONFLICT_POLICY_INVALID", "conflict_policy must be skip, update_declared_fields, or stop."));
   if (normalized.dry_run !== undefined && typeof normalized.dry_run !== "boolean") blockers.push(blocker("LAYOUT_DRY_RUN_INVALID", "dry_run must be boolean when supplied."));
@@ -284,6 +299,61 @@ function normalizeRows(layout) {
   return { rows: deepFreeze(rows), blockers };
 }
 
+function normalizeAnnotations(annotations) {
+  const rows = [];
+  const blockers = [];
+  if (!Array.isArray(annotations)) return { rows, blockers };
+  const ids = new Set();
+  for (const [index, row] of annotations.entries()) {
+    if (!isPlainObject(row)) {
+      blockers.push(blocker("LAYOUT_ANNOTATION_INVALID", "Each annotation row must be an object.", { index }));
+      continue;
+    }
+    const unknown = Object.keys(row).filter((key) => !ALLOWED_ANNOTATION_FIELDS.has(key));
+    if (unknown.length > 0) blockers.push(blocker("LAYOUT_ANNOTATION_FIELDS_UNSUPPORTED", "Annotation row contains unsupported fields.", { index, fields: unknown.slice(0, UNKNOWN_FIELD_DETAIL_LIMIT) }));
+    const id = row.id;
+    if (typeof id !== "string" || id.length === 0 || Buffer.byteLength(id) > MAX_ID_BYTES || /[\u0000-\u001f\u007f]/u.test(id)) {
+      blockers.push(blocker("LAYOUT_ANNOTATION_ID_INVALID", "Each annotation row requires a bounded string id without control characters.", { index }));
+      continue;
+    }
+    if (ids.has(id)) blockers.push(blocker("LAYOUT_ANNOTATION_ID_DUPLICATE", "Annotation row ids must be unique.", { id }));
+    ids.add(id);
+    if (!ALLOWED_ANNOTATION_KINDS.has(row.kind)) blockers.push(blocker("LAYOUT_ANNOTATION_KIND_INVALID", "Annotation kind must be marker or region.", { id, kind: row.kind }));
+    if (typeof row.name !== "string" || row.name.length === 0 || Buffer.byteLength(row.name) > MAX_NAME_BYTES || /[\u0000-\u001f\u007f]/u.test(row.name)) blockers.push(blocker("LAYOUT_ANNOTATION_NAME_INVALID", "Annotation name must be a bounded non-empty string without control characters.", { id }));
+    if (row.marker_ref !== undefined || row.region_ref !== undefined) blockers.push(blocker("LAYOUT_ANNOTATION_UPDATE_UNSUPPORTED", "Existing Marker/Region timing updates are not exposed because no accepted atom can move a Marker or change Region bounds.", { id }));
+    if (row.color !== undefined) blockers.push(blocker("LAYOUT_ANNOTATION_COLOR_READBACK_UNSUPPORTED", "Annotation color is not exposed until a portable live readback can compare #RRGGBB with REAPER native color.", { id }));
+    if (row.kind === "marker") {
+      if (!finiteNonNegative(row.position_seconds)) blockers.push(blocker("LAYOUT_MARKER_POSITION_INVALID", "Marker position_seconds must be a finite non-negative number.", { id }));
+      if (row.start_seconds !== undefined || row.end_seconds !== undefined) blockers.push(blocker("LAYOUT_MARKER_FIELDS_INVALID", "Marker rows use position_seconds, not Region bounds.", { id }));
+    }
+    if (row.kind === "region") {
+      if (!finiteNonNegative(row.start_seconds)) blockers.push(blocker("LAYOUT_REGION_START_INVALID", "Region start_seconds must be a finite non-negative number.", { id }));
+      if (!finiteNonNegative(row.end_seconds) || !(row.end_seconds > row.start_seconds)) blockers.push(blocker("LAYOUT_REGION_END_INVALID", "Region end_seconds must be finite and greater than start_seconds.", { id }));
+      if (row.position_seconds !== undefined) blockers.push(blocker("LAYOUT_REGION_FIELDS_INVALID", "Region rows use start_seconds and end_seconds, not position_seconds.", { id }));
+    }
+    rows.push({
+      id,
+      kind: row.kind,
+      name: row.name,
+      ...(row.kind === "marker" ? { position_seconds: row.position_seconds } : { start_seconds: row.start_seconds, end_seconds: row.end_seconds }),
+    });
+  }
+  const identityKeys = new Set();
+  for (const row of rows) {
+    const key = `${row.kind}\u0000${row.name}`;
+    if (identityKeys.has(key)) blockers.push(blocker("LAYOUT_ANNOTATION_REQUEST_CONFLICT", "One request cannot create multiple same-kind annotations with the same name.", { id: row.id, kind: row.kind, name: row.name }));
+    identityKeys.add(key);
+  }
+  return { rows: deepFreeze(rows), blockers };
+}
+
+function validateOperationIds(layoutRows, annotationRows) {
+  const layoutIds = new Set(layoutRows.map((row) => row.id));
+  return annotationRows
+    .filter((row) => layoutIds.has(row.id))
+    .map((row) => blocker("LAYOUT_OPERATION_ID_DUPLICATE", "Layout and annotation operation ids must be unique across the whole request.", { id: row.id }));
+}
+
 function detectCycles(rows) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   const blockers = [];
@@ -302,9 +372,13 @@ function detectCycles(rows) {
   return blockers;
 }
 
-function buildPreview(rows, { matchPolicy, conflictPolicy }) {
+function buildPreview(rows, annotations, { matchPolicy, conflictPolicy }) {
   const counts = {
-    rows: rows.length,
+    rows: rows.length + annotations.length,
+    layout_rows: rows.length,
+    annotations: annotations.length,
+    markers: annotations.filter((row) => row.kind === "marker").length,
+    regions: annotations.filter((row) => row.kind === "region").length,
     folders: rows.filter((row) => row.kind === "folder").length,
     tracks: rows.filter((row) => row.kind === "track").length,
     create: rows.filter((row) => !row.track_ref).length,
@@ -317,30 +391,42 @@ function buildPreview(rows, { matchPolicy, conflictPolicy }) {
     match_policy: matchPolicy,
     conflict_policy: conflictPolicy,
     target_counts: counts,
-    rows: rows.map((row) => ({ id: row.id, kind: row.kind, name: row.name, track_ref: row.track_ref, parent_id: row.parent_id, index: row.index, color: row.color, folder_depth: row.folder_depth })),
-    local_ref_map: Object.fromEntries(rows.map((row) => [row.id, row.track_ref ?? `track:planned:${row.id}`])),
+    rows: [
+      ...rows.map((row) => ({ id: row.id, kind: row.kind, name: row.name, track_ref: row.track_ref, parent_id: row.parent_id, index: row.index, color: row.color, folder_depth: row.folder_depth })),
+      ...annotations.map((row) => ({ ...row, annotation: true })),
+    ],
+    local_ref_map: Object.fromEntries([
+      ...rows.map((row) => [row.id, row.track_ref ?? `track:planned:${row.id}`]),
+      ...annotations.map((row) => [row.id, `${row.kind}:planned:${row.id}`]),
+    ]),
   });
 }
 
 function emptyPreview() {
-  return buildPreview([], { matchPolicy: "by_ref", conflictPolicy: "stop" });
+  return buildPreview([], [], { matchPolicy: "by_ref", conflictPolicy: "stop" });
 }
 
-function preflightRequests() {
-  return deepFreeze([
-    childRequest(1, "preflight", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read current tracks before planning layout changes."),
-    childRequest(2, "preflight", READ_FOLDERS_ID, {}, {}, "Read current folder structure before planning nesting/order changes."),
-  ]);
+function preflightRequests(preview) {
+  const requests = [];
+  if (preview.target_counts.layout_rows > 0) {
+    requests.push(childRequest(requests.length + 1, "preflight", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read current tracks before planning layout changes."));
+    requests.push(childRequest(requests.length + 1, "preflight", READ_FOLDERS_ID, {}, {}, "Read current folder structure before planning nesting/order changes."));
+  }
+  if (preview.target_counts.annotations > 0) requests.push(childRequest(requests.length + 1, "preflight", LIST_MARKERS_REGIONS_ID, {}, { limit: MAX_ANNOTATION_ROWS }, "Read every current Marker/Region before creating timeline annotations."));
+  return deepFreeze(requests);
 }
 
-function readbackRequests() {
-  return deepFreeze([
-    childRequest(1, "readback", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read tracks after layout changes."),
-    childRequest(2, "readback", READ_FOLDERS_ID, {}, {}, "Read folder structure after layout changes."),
-  ]);
+function readbackRequests(preview) {
+  const requests = [];
+  if (preview.target_counts.layout_rows > 0) {
+    requests.push(childRequest(requests.length + 1, "readback", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read tracks after layout changes."));
+    requests.push(childRequest(requests.length + 1, "readback", READ_FOLDERS_ID, {}, {}, "Read folder structure after layout changes."));
+  }
+  if (preview.target_counts.annotations > 0) requests.push(childRequest(requests.length + 1, "readback", LIST_MARKERS_REGIONS_ID, {}, { limit: MAX_ANNOTATION_ROWS }, "Read every Marker/Region and verify each created annotation by exact ref and fields."));
+  return deepFreeze(requests);
 }
 
-function buildMutationRequests(rows) {
+function buildMutationRequests(rows, annotations) {
   const requests = [];
   let sequence = 1;
   for (const row of [...rows].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id))) {
@@ -359,6 +445,12 @@ function buildMutationRequests(rows) {
     if (!parent) continue;
     requests.push(childRequest(sequence++, "mutation", NEST_TRACKS_ID, { folder_track_ref: parent.track_ref ?? `track:planned:${parent.id}`, track_ref: [row.track_ref ?? `track:planned:${row.id}`] }, {}, `Nest ${row.id} under ${parent.id}.`, { depends_on_local_ids: [parent.id, row.id] }));
   }
+  for (const row of annotations) {
+    const input = row.kind === "marker"
+      ? { name: row.name, position_seconds: row.position_seconds }
+      : { name: row.name, start_seconds: row.start_seconds, end_seconds: row.end_seconds };
+    requests.push(childRequest(sequence++, "mutation", row.kind === "marker" ? CREATE_MARKER_ID : CREATE_REGION_ID, {}, input, `Create ${row.kind} annotation ${row.id}.`, { produces_local_id: row.id, produces_kind: row.kind }));
+  }
   return deepFreeze(requests);
 }
 
@@ -374,7 +466,7 @@ function successCriteriaFor(preview) {
   return deepFreeze({
     declared_rows: preview.target_counts.rows,
     no_delete: "Unmatched existing tracks are not deleted or repurposed by this macro.",
-    readback: "Agent must execute readback requests and compare actual order, names, colors, and nesting against declared rows before claiming success.",
+    readback: "Agent must execute readback requests and compare track structure plus exact Marker/Region refs, names, and time bounds before claiming success.",
     no_executor: "Server executor_call_count remains 0; the agent executes child requests explicitly.",
   });
 }
@@ -404,4 +496,5 @@ function summarizeRuntimeRequest(request) { return { id: request.id ?? ALPHA3_2E
 function blocker(code, message, details = undefined) { return { code, message, recoverable: true, ...(details === undefined ? {} : { details }) }; }
 function safeNowIso(now) { try { const value = now(); return (value instanceof Date ? value : new Date(value)).toISOString(); } catch { return new Date(0).toISOString(); } }
 function isPlainObject(value) { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
+function finiteNonNegative(value) { return typeof value === "number" && Number.isFinite(value) && value >= 0; }
 function deepFreeze(value) { if (!value || typeof value !== "object") return value; Object.freeze(value); for (const child of Object.values(value)) deepFreeze(child); return value; }

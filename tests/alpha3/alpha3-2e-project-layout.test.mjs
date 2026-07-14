@@ -31,7 +31,7 @@ describe("Alpha3.2-E project apply_layout planner", () => {
     assert.equal(plan.mode, "dry_run_preview");
     assert.equal(plan.mutation_requests.length, 0);
     assert.deepEqual(plan.child_requests.map((request) => request.id), ["template.tracks.list_tracks", "template.tracks.read_folder_structure"]);
-    assert.deepEqual(plan.preview.target_counts, { rows: 2, folders: 1, tracks: 1, create: 2, update: 0, color: 1, nesting: 1 });
+    assert.deepEqual(plan.preview.target_counts, { rows: 2, layout_rows: 2, annotations: 0, markers: 0, regions: 0, folders: 1, tracks: 1, create: 2, update: 0, color: 1, nesting: 1 });
     assert.equal(plan.safety.server_executes_children, false);
     assert.equal(plan.safety.deletes_existing_tracks, false);
   });
@@ -65,6 +65,53 @@ describe("Alpha3.2-E project apply_layout planner", () => {
     assert.equal(plan.child_requests.length, 12);
     assert.equal(plan.safety.server_executes_children, false);
     assert.equal(plan.safety.raw_action_lua_shell_ui, false);
+  });
+
+  it("plans create-only Marker and Region annotations with complete live reads", () => {
+    const plan = planAlpha3_2EProjectLayoutMacro({
+      annotations: [
+        { id: "intro", kind: "marker", name: "Intro", position_seconds: 0 },
+        { id: "chorus", kind: "region", name: "Chorus", start_seconds: 8, end_seconds: 16 },
+      ],
+      dry_run: false,
+    });
+
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.preview.target_counts, { rows: 2, layout_rows: 0, annotations: 2, markers: 1, regions: 1, folders: 0, tracks: 0, create: 0, update: 0, color: 0, nesting: 0 });
+    assert.deepEqual(plan.preflight_requests.map((request) => request.id), ["template.project.list_markers_regions"]);
+    assert.deepEqual(plan.mutation_requests.map((request) => request.id), ["template.project.create_marker", "template.project.create_region"]);
+    assert.deepEqual(plan.mutation_requests[0].input, { name: "Intro", position_seconds: 0 });
+    assert.deepEqual(plan.mutation_requests[1].input, { name: "Chorus", start_seconds: 8, end_seconds: 16 });
+    assert.deepEqual(plan.readback_requests.map((request) => request.id), ["template.project.list_markers_regions"]);
+  });
+
+  it("blocks update-shaped, colored, and invalid annotation rows before child calls", () => {
+    const plan = planAlpha3_2EProjectLayoutMacro({
+      annotations: [
+        { id: "move", kind: "marker", name: "Move", marker_ref: "marker:index:1", position_seconds: 2 },
+        { id: "color", kind: "marker", name: "Color", position_seconds: 3, color: "#112233" },
+        { id: "bounds", kind: "region", name: "Bounds", start_seconds: 8, end_seconds: 8 },
+      ],
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((entry) => entry.code === "LAYOUT_ANNOTATION_UPDATE_UNSUPPORTED"), true);
+    assert.equal(plan.blockers.some((entry) => entry.code === "LAYOUT_ANNOTATION_COLOR_READBACK_UNSUPPORTED"), true);
+    assert.equal(plan.blockers.some((entry) => entry.code === "LAYOUT_REGION_END_INVALID"), true);
+    assert.deepEqual(plan.child_requests, []);
+  });
+
+  it("blocks duplicate annotation identities within one request", () => {
+    const plan = planAlpha3_2EProjectLayoutMacro({
+      annotations: [
+        { id: "intro_a", kind: "marker", name: "Intro", position_seconds: 0 },
+        { id: "intro_b", kind: "marker", name: "Intro", position_seconds: 4 },
+      ],
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.some((entry) => entry.code === "LAYOUT_ANNOTATION_REQUEST_CONFLICT"), true);
+    assert.deepEqual(plan.child_requests, []);
   });
 
   it("fails closed for invalid layout rows and cycles", () => {

@@ -408,6 +408,71 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("lets a second client refresh an exact new Item ref after a shared write invalidation", async () => {
+    const fixture = await makeFixture();
+    const newItemRef = "item:guid:{ITEM-AFTER-WRITE}";
+    const state = {
+      revision: 1,
+      trackName: "Media",
+      calls: [],
+      atomicRequests: [],
+      liveItems: new Map(),
+      itemReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+
+      const initial = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "items", refresh_policy: "if_stale", limit: 25 },
+        context: callContext(1, "client-b"),
+      });
+      assert.equal(initial.ok, true, JSON.stringify(initial));
+      assert.equal(initial.result.data.rows.some((row) => row.ref === newItemRef), false);
+
+      state.liveItems.set(newItemRef, {
+        item_ref: newItemRef,
+        track_ref: "track:guid:{TRACK-1}",
+        position_seconds: 8,
+        length_seconds: 2,
+        take_count: 0,
+      });
+      state.revision = 2;
+      const invalidation = indexRuntime.invalidateScopes({ scopes: ["items"], observed_at: NOW });
+      assert.equal(invalidation.ok, true, JSON.stringify(invalidation));
+
+      const exact = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "items",
+          fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+          selectors: { refs: [newItemRef] },
+          refresh_policy: "if_stale",
+          limit: 1,
+        },
+        context: callContext(1, "client-b-after-client-a-write"),
+      });
+
+      assert.equal(exact.ok, true, JSON.stringify(exact));
+      assert.equal(exact.result.data.rows.length, 1);
+      assert.equal(exact.result.data.rows[0].ref, newItemRef);
+      assert.equal(exact.result.data.rows[0].track_ref, "track:guid:{TRACK-1}");
+      assert.equal(exact.result.data.rows[0].start_seconds, 8);
+      assert.equal(exact.result.data.rows[0].length_seconds, 2);
+      assert.deepEqual(state.itemReadRefs, [{
+        kind: "item",
+        ref: newItemRef,
+        identity: { scheme: "guid", value: "{ITEM-AFTER-WRITE}" },
+      }]);
+      assert.equal(indexRuntime.adapter.snapshot().rows.items.some((row) => row.ref === newItemRef), true);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("materializes live track object refs across staged FX hydration", async () => {
     const fixture = await makeFixture();
     const state = { revision: 1, trackName: "Source", calls: [], fxOwnerRefs: [] };
@@ -648,6 +713,15 @@ function createRuntime({ fixture, indexRuntime, state }) {
           ref: "fx:track:guid:{TRACK-1}:0",
           identity: { scheme: "track_fx", value: "track:guid:{TRACK-1}:0" },
         }];
+      } else if (request.operation.name === "items.read_item_summary") {
+        const itemRef = request.refs[0]?.ref;
+        const item = state.liveItems?.get(itemRef);
+        if (item) {
+          state.itemReadRefs?.push(structuredClone(request.refs[0]));
+          response.result.summary = structuredClone(item);
+          response.result.readback = structuredClone(item);
+          response.result.refs = [structuredClone(request.refs[0])];
+        }
       } else if (request.operation.name === "project.read_dirty_state") {
         response.result.summary = {
           project_ref: projectRef,
@@ -793,10 +867,10 @@ function openIndex(fixture) {
   });
 }
 
-function callContext(requestSequence) {
+function callContext(requestSequence, clientId = "alpha325-b-test") {
   return {
-    client_id: "alpha325-b-test",
-    session_id: "alpha325-b-client",
+    client_id: clientId,
+    session_id: `${clientId}-session`,
     expected_owner: OWNER,
     expected_generation: GENERATION,
     created_at: NOW,

@@ -40,6 +40,12 @@ const PROJECT_INDEX_HYDRATION_BUDGET = Object.freeze({
   max_items: 128,
   max_inline_value_bytes: MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
 });
+const EXACT_GUID_HYDRATION_REF_KINDS = new Set([
+  "track",
+  "item",
+  "take",
+  "envelope",
+]);
 
 const INSPECT_STAGE_IDS = Object.freeze([
   "inspect-project-revision",
@@ -1301,7 +1307,7 @@ function materializeHydrationRefs(refs, objectRefs) {
   const visit = (value) => {
     if (typeof value === "string") {
       const objectRef = objectRefs.get(value);
-      return objectRef ? structuredClone(objectRef) : value;
+      return objectRef ? structuredClone(objectRef) : exactGuidHydrationObjectRef(value) ?? value;
     }
     if (Array.isArray(value)) return value.map(visit);
     if (isObject(value) && typeof value.kind === "string" && typeof value.ref === "string") return structuredClone(value);
@@ -1309,6 +1315,18 @@ function materializeHydrationRefs(refs, objectRefs) {
     return value;
   };
   return visit(refs);
+}
+
+function exactGuidHydrationObjectRef(ref) {
+  const match = typeof ref === "string"
+    ? /^([a-z_]+):guid:(\{[^{}\r\n]{1,128}\})$/u.exec(ref)
+    : null;
+  if (!match || !EXACT_GUID_HYDRATION_REF_KINDS.has(match[1])) return null;
+  return {
+    kind: match[1],
+    ref,
+    identity: { scheme: "guid", value: match[2] },
+  };
 }
 
 function rememberHydrationObjectRefs(objectRefs, execution) {

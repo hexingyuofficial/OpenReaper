@@ -9,9 +9,8 @@ import { planAlpha3_2EProjectDeleteTargetsMacro } from "../../packages/mcp-serve
 const NOW = "2026-07-12T00:00:00.000Z";
 
 describe("Alpha3.2.5-C executable project-write Macros", () => {
-  it("registers exactly the four fixed project-write programs", () => {
+  it("registers the three remaining shared project-write programs after media gets a dedicated executor", () => {
     assert.deepEqual([...ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY.ids].sort(), [
-      "macro.media.place_assets",
       "macro.project.apply_layout",
       "macro.project.delete_targets",
       "macro.routing.apply",
@@ -22,7 +21,6 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const calls = [];
     for (const request of [
       { id: "macro.project.apply_layout", input: { layout: [{ id: "fx", kind: "track", name: "FX" }], dry_run: true } },
-      { id: "macro.media.place_assets", input: { assets: [{ id: "one", path: "/Users/Shared/OpenReaper/one.wav", track_ref: "track:guid:{ONE}", position_seconds: 0 }], dry_run: true } },
       { id: "macro.routing.apply", input: { routes: [{ id: "a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }], dry_run: true } },
     ]) {
       const result = await executeAlpha3_2_5CProjectWriteMacro({ request, executeAtomic: fakeAtomic(calls), now: () => new Date(NOW) });
@@ -133,24 +131,119 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.data.outcome.index_maintenance.status, "failed");
   });
 
-  it("executes layout and media placement through probe/create/live-resolve/readback stages", async () => {
-    for (const request of [
-      { id: "macro.project.apply_layout", input: { layout: [{ id: "fx", kind: "track", name: "FX", color: "#224466", index: 0 }], dry_run: false } },
-      { id: "macro.media.place_assets", input: { assets: [{ id: "one", path: "/Users/Shared/OpenReaper/one.wav", track_ref: "track:guid:{ONE}", position_seconds: 0 }], dry_run: false } },
-    ]) {
+  it("executes layout through create/live-resolve/readback stages", async () => {
+    const request = { id: "macro.project.apply_layout", input: { layout: [{ id: "fx", kind: "track", name: "FX", color: "#224466", index: 0 }], dry_run: false } };
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({ request, executeAtomic: fakeAtomic(calls), now: () => new Date(NOW) });
+    assert.equal(result.ok, true);
+    assert.equal(result.execution.status, "completed");
+    assert.equal(result.result.verification.status, "passed");
+    assert.equal(calls.some((call) => call.id === "template.tracks.resolve_track_ref"), true);
+    assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
+  });
+
+  it("creates Marker and Region annotations and applies rows only after exact field readback", async () => {
+    const calls = [];
+    const invalidations = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: {
+          annotations: [
+            { id: "intro", kind: "marker", name: "Intro", position_seconds: 0 },
+            { id: "chorus", kind: "region", name: "Chorus", start_seconds: 8, end_seconds: 16 },
+          ],
+          dry_run: false,
+        },
+      },
+      executeAtomic: fakeAtomic(calls),
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:annotations", revision: 1 }),
+        invalidateScopes: ({ scopes }) => {
+          invalidations.push(scopes);
+          return { ok: true, scopes, snapshot_id: "snapshot:annotations", revision: 2 };
+        },
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.project.list_markers_regions",
+      "template.project.create_marker",
+      "template.project.create_region",
+      "template.project.list_markers_regions",
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => [change.operation_id, change.target_ref, change.status]), [
+      ["intro", "marker:index:1", "applied"],
+      ["chorus", "region:index:2", "applied"],
+    ]);
+    assert.equal(result.result.changes.every((change) => change.live_readback.source === "live_marker_region_readback"), true);
+    assert.deepEqual(invalidations, [["markers"]]);
+  });
+
+  it("blocks annotation mutation when preflight coverage is incomplete or a same-name row exists", async () => {
+    for (const options of [{ markerRegionTruncated: true }, { existingMarker: true }]) {
       const calls = [];
-      const result = await executeAlpha3_2_5CProjectWriteMacro({ request, executeAtomic: fakeAtomic(calls), now: () => new Date(NOW) });
-      assert.equal(result.ok, true);
-      assert.equal(result.execution.status, "completed");
-      assert.equal(result.result.verification.status, "passed");
-      assert.equal(calls.some((call) => call.id === "template.tracks.resolve_track_ref"), true);
-      assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
-      if (request.id === "macro.media.place_assets") {
-        assert.equal(calls.some((call) => call.id === "template.items.resolve_item_ref"), false);
-        const readback = calls.find((call) => call.id === "template.items.read_item_summary");
-        assert.equal(readback.refs.item_ref.ref, "item:guid:{IMPORTED}");
-      }
+      const result = await executeAlpha3_2_5CProjectWriteMacro({
+        request: {
+          id: "macro.project.apply_layout",
+          input: { annotations: [{ id: "intro", kind: "marker", name: "Intro", position_seconds: 0 }], dry_run: false },
+        },
+        executeAtomic: fakeAtomic(calls, options),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.execution.status, "failed");
+      assert.equal(calls.some((call) => call.id === "template.project.create_marker"), false);
     }
+  });
+
+  it("does not apply an annotation when its exact ref reads back with different fields", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { annotations: [{ id: "intro", kind: "marker", name: "Intro", position_seconds: 0 }], dry_run: false },
+      },
+      executeAtomic: fakeAtomic(calls, { markerReadbackPosition: 1 }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "PROJECT_WRITE_ROW_READBACK_MISMATCH");
+    assert.equal(result.result.changes[0].status, "readback_mismatch");
+    assert.deepEqual(result.result.changes[0].live_readback.mismatched_fields, ["position_seconds"]);
+  });
+
+  it("keeps mutation, incomplete live readback, and index maintenance separate", async () => {
+    const invalidations = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { annotations: [{ id: "intro", kind: "marker", name: "Intro", position_seconds: 0 }], dry_run: false },
+      },
+      executeAtomic: fakeAtomic([], { markerRegionReadbackTruncatedAfterWrite: true }),
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:annotation-incomplete", revision: 1 }),
+        invalidateScopes: ({ scopes }) => {
+          invalidations.push(scopes);
+          return { ok: true, scopes, snapshot_id: "snapshot:annotation-incomplete", revision: 2 };
+        },
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "LAYOUT_ANNOTATION_READBACK_INCOMPLETE");
+    assert.equal(result.result.changes[0].mutation.status, "completed");
+    assert.equal(result.result.changes[0].status, "readback_missing");
+    assert.equal(result.result.changes[0].live_readback.status, "failed");
+    assert.equal(result.result.changes[0].index_maintenance.status, "completed");
+    assert.deepEqual(invalidations, [["markers"]]);
   });
 
   it("keeps fourteen-row layout readback complete behind a 2 KiB public budget", async () => {
@@ -452,6 +545,32 @@ function fakeAtomic(calls, options = {}) {
             .filter((call) => Number(call.input.index) !== options.omitReadbackTrackIndex)
             .map((call) => ({ track_ref: createdTrackRef(Number(call.input.index), options), name: call.input.name }))
         : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
+    }
+    else if (id === "template.project.create_marker") {
+      summary.marker_ref = "marker:index:1";
+      summary.name = input.name;
+      summary.position_seconds = input.position_seconds;
+    }
+    else if (id === "template.project.create_region") {
+      summary.region_ref = "region:index:2";
+      summary.name = input.name;
+      summary.start_seconds = input.start_seconds;
+      summary.end_seconds = input.end_seconds;
+    }
+    else if (id === "template.project.list_markers_regions") {
+      const existing = options.existingMarker
+        ? [{ kind: "marker", marker_ref: "marker:index:0", name: "Intro", position_seconds: 0 }]
+        : [];
+      const created = calls.flatMap((call) => {
+        if (call.id === "template.project.create_marker") return [{ kind: "marker", marker_ref: "marker:index:1", name: call.input.name, position_seconds: options.markerReadbackPosition ?? call.input.position_seconds }];
+        if (call.id === "template.project.create_region") return [{ kind: "region", region_ref: "region:index:2", name: call.input.name, position_seconds: call.input.start_seconds, end_seconds: call.input.end_seconds }];
+        return [];
+      });
+      summary.items = [...existing, ...created];
+      summary.marker_count = summary.items.filter((row) => row.kind === "marker").length;
+      summary.region_count = summary.items.filter((row) => row.kind === "region").length;
+      summary.truncated = options.markerRegionTruncated === true
+        || (options.markerRegionReadbackTruncatedAfterWrite === true && created.length > 0);
     }
     else if (id.startsWith("template.media.import_file")) summary.imported_item_refs = ["item:guid:{IMPORTED}"];
     return {

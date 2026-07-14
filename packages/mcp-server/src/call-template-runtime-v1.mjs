@@ -166,8 +166,10 @@ import {
 } from "./alpha3-2e-routing-apply-v1.mjs";
 import {
   ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
+  ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY,
   createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems,
   createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope,
+  executeAlpha3_3MediaPlaceAssetsMacro,
   isAlpha3_2EMediaPlaceAssetsMacroId,
   planAlpha3_2EMediaPlaceAssetsMacro,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
@@ -954,6 +956,7 @@ const DEFAULT_EVIDENCE_LIMIT = 100;
 const MAX_EVIDENCE_LIMIT = 1_000;
 const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
+  ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY,
   ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY,
   ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
   ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,
@@ -1259,6 +1262,16 @@ export function createCallTemplateRuntime(options = {}) {
           projectIndexRuntime,
           catalog,
           executeAtomic: macroAtomic,
+          now,
+        });
+        retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+        return envelope;
+      }
+      if (isAlpha3_2EMediaPlaceAssetsMacroId(id)) {
+        const envelope = await executeAlpha3_3MediaPlaceAssetsMacro({
+          request: normalized,
+          executeAtomic: macroAtomic,
+          projectIndexRuntime,
           now,
         });
         retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);

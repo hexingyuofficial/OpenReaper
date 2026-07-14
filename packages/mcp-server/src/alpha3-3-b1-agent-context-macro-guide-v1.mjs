@@ -24,6 +24,10 @@ import {
 import {
   createAlpha3_3MidiApplyExactManual,
 } from "./alpha3-3-midi-apply-v1.mjs";
+import {
+  ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
+  createAlpha3_3MediaPlaceAssetsExactManual,
+} from "./alpha3-2e-media-place-assets-v1.mjs";
 
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_context_macro_guide.v1";
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
@@ -44,8 +48,8 @@ const INTENT_ROUTES = deepFreeze([
     term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("删除fx", 10), term("移除效果器", 9), term("移除轨道", 8), term("清理项目", 6),
   ]),
   intent("macro.project.apply_layout", [
-    term("create track", 9), term("create folder", 9), term("track layout", 8), term("organize tracks", 8),
-    term("创建轨道", 9), term("创建文件夹", 9), term("轨道布局", 8), term("整理轨道", 8),
+    term("create track", 9), term("create folder", 9), term("track layout", 8), term("organize tracks", 8), term("create marker", 10), term("create region", 10), term("timeline marker", 9),
+    term("创建轨道", 9), term("创建文件夹", 9), term("轨道布局", 8), term("整理轨道", 8), term("创建标记", 10), term("创建区域", 10), term("时间线标记", 9), term("标记", 8), term("区域", 8),
   ]),
   intent("macro.project.file", [
     term("save as", 10), term("save project", 9), term("save", 6), term("另存为", 10), term("保存项目", 9), term("保存", 6),
@@ -79,8 +83,8 @@ const INTENT_ROUTES = deepFreeze([
     term("调整压缩器", 10), term("压缩器参数", 9), term("效果参数", 8), term("插件参数", 8), term("阈值", 7), term("压缩比", 6),
   ]),
   intent("macro.controls.set", [
-    term("project bpm", 10), term("set bpm", 9), term("tempo", 8), term("track volume", 8), term("track pan", 8), term("transport", 6),
-    term("项目bpm", 10), term("设置bpm", 9), term("速度", 7), term("轨道音量", 8), term("轨道声像", 8), term("传输控制", 6),
+    term("project bpm", 10), term("set bpm", 9), term("tempo", 8), term("project grid", 10), term("set grid", 9), term("snap", 8), term("track volume", 8), term("track pan", 8), term("transport", 6),
+    term("项目bpm", 10), term("设置bpm", 9), term("速度", 7), term("项目网格", 10), term("设置网格", 9), term("吸附", 8), term("轨道音量", 8), term("轨道声像", 8), term("传输控制", 6),
   ]),
   intent("macro.automation.apply", [
     term("automation item", 10), term("automation", 9), term("automate", 9), term("envelope", 8), term("automation curve", 9), term("automation points", 9),
@@ -231,6 +235,17 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   }
   if (id === ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID) {
     const expansion = createAlpha3_3B1dAutomationApplyExactManual();
+    return deepFreeze({
+      ...expansion,
+      contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
+      guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
+      guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
+      implementation_status: "executable_registered_program",
+      runnable: true,
+    });
+  }
+  if (id === ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) {
+    const expansion = createAlpha3_3MediaPlaceAssetsExactManual();
     return deepFreeze({
       ...expansion,
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,

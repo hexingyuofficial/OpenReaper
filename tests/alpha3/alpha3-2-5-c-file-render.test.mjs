@@ -277,6 +277,31 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assertExecutableRenderEnvelope(response);
   });
 
+  it("passes a user-owned basename to D31 and rejects mismatched output naming", async () => {
+    const calls = [];
+    const request = { request_id: "render-named", input: { target_kind: "whole_project", format: "wav", output_basename: "Client Mix", dry_run: false } };
+    const run = async (outputBasename) => executeAlpha3_2_5CRenderTargetsMacro({
+      request,
+      now,
+      managedRenderRoot,
+      executeAtomic: async ({ id, input }) => {
+        calls.push({ id, input });
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+        return atomicExecution(verifiedRenderResult({ data: { outputs: [{ absolute_path: `/managed/renders/${outputBasename}.wav`, output_basename: outputBasename, size: 4096, extension: "wav" }] } }));
+      },
+    });
+
+    const passed = await run("Client Mix");
+    assert.equal(passed.ok, true, JSON.stringify(passed));
+    assert.equal(calls.find(({ id }) => id === "template.render.render_targets").input.output_basename, "Client Mix");
+    assert.equal(passed.result.data.outputs[0].output_basename, "Client Mix");
+
+    calls.length = 0;
+    const failed = await run("internal_request_name");
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "RENDER_OUTPUT_BASENAME_MISMATCH");
+  });
+
   it("retains completed render evidence when post-render dirty readback fails", async () => {
     let dirtyReads = 0;
     const response = await executeAlpha3_2_5CRenderTargetsMacro({

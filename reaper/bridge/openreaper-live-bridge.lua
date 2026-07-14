@@ -15733,6 +15733,7 @@ local D31_ERROR_CODE_MAP = {
   TARGET_KIND_INVALID = "PARAMS_INVALID",
   MAX_TARGETS_INVALID = "PARAMS_INVALID",
   TARGET_COUNT_EXCEEDED = "PARAMS_INVALID",
+  OUTPUT_BASENAME_INVALID = "PARAMS_INVALID",
   RESTORE_FAILED = "VERIFY_FAILED",
 }
 
@@ -15761,6 +15762,21 @@ local function d31_safe_name(value, fallback)
   text = text:gsub("_+", "_"):gsub("^_+", ""):gsub("_+$", "")
   if text == "" then text = fallback or "target" end
   return text:sub(1, 64)
+end
+
+local function d31_output_basename(value)
+  if value == nil then return nil end
+  if type(value) ~= "string" or value == "" or #value > 96 or value == "." or value == ".." then
+    return nil, "output_basename must be a safe 1-96 byte filename stem."
+  end
+  if value ~= value:match("^%s*(.-)%s*$") or value:find("[<>:\"/\\|%?%*%$]") or value:find("[%z\1-\31\127]") or value:find("[%. ]$") then
+    return nil, "output_basename contains a path, wildcard, reserved, control, or unsafe trailing character."
+  end
+  local lower = value:lower()
+  if lower:match("%.wav$") or lower:match("%.ogg$") then
+    return nil, "output_basename is a filename stem and must not include the output extension."
+  end
+  return value
 end
 
 local function d31_root_ready()
@@ -16084,13 +16100,13 @@ local function d31_resolve_targets(project, request, groups)
   return targets
 end
 
-local function d31_plan_outputs(request, targets, extension)
+local function d31_plan_outputs(request, targets, extension, requested_basename)
   local suffix = d31_safe_name(request.idempotency_key or request.id or "request", "request"):sub(1, 48)
   local project_name = d31_safe_name(d31_project_name(), "current_project")
   local outputs = json_array({})
   for index = 1, #targets do
     local target = targets[index]
-    local basename = project_name .. "_" .. d31_safe_name(target.source_name, "target") .. "_" .. d31_safe_name(target.label, "target") .. "_" .. suffix
+    local basename = requested_basename or (project_name .. "_" .. d31_safe_name(target.source_name, "target") .. "_" .. d31_safe_name(target.label, "target") .. "_" .. suffix)
     if #targets > 1 then basename = basename .. "_" .. string.format("%02d", index) end
     basename = basename:sub(1, 180)
     outputs[#outputs + 1] = { source_name = bounded_string(target.source_name, 160), output_basename = basename, absolute_path = path_join(RENDER_ROOT, basename .. "." .. extension), extension = extension, target = target }
@@ -16161,6 +16177,10 @@ local function d31_render_targets(request)
   if not max_targets or max_targets ~= math.floor(max_targets) or max_targets < 1 or max_targets > D31_MAX_TARGETS then return d31_error("MAX_TARGETS_INVALID", "max_targets must be an integer from 1 through 16.", { max_targets = request.params.max_targets }, false) end
   local format, format_error = d31_format(request.params)
   if not format then return nil, format_error end
+  local requested_basename, basename_error = d31_output_basename(request.params.output_basename)
+  if basename_error then return d31_error("OUTPUT_BASENAME_INVALID", basename_error, { field = "output_basename" }, false) end
+  local root_ready, root_blocker, root_message = d31_root_ready()
+  if not root_ready then return d31_error("FILE_NOT_FOUND", root_message, { blocker = root_blocker, render_root_env = RENDER_ROOT_ENV }, false) end
   local project = d31_project()
   local groups, groups_error = d31_refs(request)
   if not groups then return nil, groups_error end
@@ -16169,7 +16189,7 @@ local function d31_render_targets(request)
   local targets, targets_error = d31_resolve_targets(project, request, groups)
   if not targets then return nil, targets_error end
   if #targets < 1 or #targets > max_targets or #targets > D31_MAX_TARGETS then return d31_error("TARGET_COUNT_EXCEEDED", "Resolved targets exceed max_targets.", { resolved_target_count = #targets, max_targets = max_targets, hard_max_targets = D31_MAX_TARGETS }, false) end
-  local outputs = d31_plan_outputs(request, targets, format.extension)
+  local outputs = d31_plan_outputs(request, targets, format.extension, requested_basename)
   local preflight_ok, preflight_error = d31_preflight(request, outputs)
   if not preflight_ok then return nil, preflight_error end
 
@@ -16212,13 +16232,13 @@ local function d31_render_targets(request)
   if outcome.failure then return d31_error(outcome.failure.code, outcome.failure.message, outcome.failure.details, outcome.failure.recoverable) end
 
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
   local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
   if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
   if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
-  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
+  return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end
 return {
   exports = { d31_render_targets = d31_render_targets },

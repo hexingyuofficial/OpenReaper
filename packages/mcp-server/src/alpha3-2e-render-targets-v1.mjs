@@ -38,6 +38,7 @@ const ALLOWED_INPUT_FIELDS = new Set([
   "channel_count",
   "wav_bit_depth",
   "ogg_quality",
+  "output_basename",
   "output_policy",
   "collision_policy",
   "max_targets",
@@ -313,7 +314,13 @@ export async function executeAlpha3_2_5CRenderTargetsMacro({ request = {}, execu
     if (!childVerification || childVerification.status !== "passed") {
       throw coded("RENDER_VERIFICATION_FAILED", "The audited render route did not return passed verification.");
     }
-    const completion = requireRenderCompletion({ result, payload, readback, artifactRefs });
+    const completion = requireRenderCompletion({
+      result,
+      payload,
+      readback,
+      artifactRefs,
+      requestedOutputBasename: plan.preview.render_settings.output_basename ?? null,
+    });
     const canonicalRefs = uniqueStrings([
       ...resolved.canonical_refs,
       completion.job_ref,
@@ -585,7 +592,7 @@ function renderArtifactRefs(result, payload) {
   ]);
 }
 
-function requireRenderCompletion({ result, payload, readback, artifactRefs }) {
+function requireRenderCompletion({ result, payload, readback, artifactRefs, requestedOutputBasename = null }) {
   const manifestRef = payload.output_artifact_ref;
   const evidenceRef = payload.evidence_artifact_ref;
   if (typeof manifestRef !== "string" || !manifestRef.startsWith("artifact:") || !artifactRefs.includes(manifestRef)) {
@@ -611,6 +618,15 @@ function requireRenderCompletion({ result, payload, readback, artifactRefs }) {
   }
   if (outputs.some((output) => !isPlainObject(output) || typeof output.absolute_path !== "string" || output.absolute_path.length === 0)) {
     throw coded("RENDER_OUTPUT_ROW_INVALID", "The audited render route returned an invalid output row.");
+  }
+  if (requestedOutputBasename !== null) {
+    const expected = outputs.map((_, index) => fileCount === 1
+      ? requestedOutputBasename
+      : `${requestedOutputBasename}_${String(index + 1).padStart(2, "0")}`);
+    const mismatch = outputs.findIndex((output, index) => output.output_basename !== expected[index]);
+    if (mismatch >= 0) {
+      throw coded("RENDER_OUTPUT_BASENAME_MISMATCH", `The audited render route did not preserve the requested managed basename for output ${mismatch + 1}.`);
+    }
   }
   const audioOutputs = outputs.map((output) => ({
     absolute_path: output.absolute_path,
@@ -740,7 +756,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID,
     title: "Render targets",
-    summary: "Execute bounded managed-root WAV/OGG exports through the audited render route with output and project-state evidence.",
+    summary: "Execute bounded managed-root WAV/OGG exports with an optional user-owned output basename through the audited render route.",
     pack: "render",
     lifecycle: "experimental",
     risk: "write",
@@ -772,6 +788,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
         channel_count: { enum: [...ALPHA3_2E_RENDER_CHANNEL_COUNTS] },
         wav_bit_depth: { enum: [...ALPHA3_2E_RENDER_WAV_BIT_DEPTHS] },
         ogg_quality: { enum: [...ALPHA3_2E_RENDER_OGG_QUALITIES] },
+        output_basename: { type: "string", description: "Optional safe filename stem without an extension. Multi-target renders append _01, _02, and so on." },
         output_policy: { const: "openreaper_managed_render_root" },
         collision_policy: { const: "fail_if_exists" },
         max_targets: { type: "integer", minimum: 1, maximum: ALPHA3_2E_RENDER_MAX_TARGETS },
@@ -792,7 +809,7 @@ export function createAlpha3_2ERenderTargetsMacroDiscoveryItems(options = {}) {
       additionalProperties: true,
     },
     examples: [
-      { name: "whole_project_wav_preview", input: { target_kind: "whole_project", format: "wav", sample_rate_hz: 48_000, channel_count: 2, wav_bit_depth: 24, dry_run: true } },
+      { name: "whole_project_wav_preview", input: { target_kind: "whole_project", format: "wav", output_basename: "my_mix", sample_rate_hz: 48_000, channel_count: 2, wav_bit_depth: 24, dry_run: true } },
       { name: "explicit_regions_ogg_plan", input: { target_kind: "regions", refs: ["region:project:3"], format: "ogg", ogg_quality: 0.6, collision_policy: "fail_if_exists", dry_run: false } },
     ],
   }]);
@@ -899,11 +916,13 @@ function normalizeSettings(input) {
   const maxTargets = input.max_targets ?? ALPHA3_2E_RENDER_MAX_TARGETS;
   const outputPolicy = input.output_policy ?? "openreaper_managed_render_root";
   const collisionPolicy = input.collision_policy ?? "fail_if_exists";
+  const outputBasename = normalizeOutputBasename(input.output_basename);
   if (!ALPHA3_2E_RENDER_SAMPLE_RATES.includes(sampleRate)) blockers.push(blocker("RENDER_SAMPLE_RATE_UNSUPPORTED", "sample_rate_hz must be 44100 or 48000."));
   if (!ALPHA3_2E_RENDER_CHANNEL_COUNTS.includes(channels)) blockers.push(blocker("RENDER_CHANNELS_UNSUPPORTED", "channel_count must be 1 or 2."));
   if (!Number.isInteger(maxTargets) || maxTargets < 1 || maxTargets > ALPHA3_2E_RENDER_MAX_TARGETS) blockers.push(blocker("RENDER_MAX_TARGETS_INVALID", `max_targets must be an integer from 1 to ${ALPHA3_2E_RENDER_MAX_TARGETS}.`));
   if (outputPolicy !== "openreaper_managed_render_root") blockers.push(blocker("RENDER_OUTPUT_POLICY_REQUIRED", "output_policy must be openreaper_managed_render_root."));
   if (collisionPolicy !== "fail_if_exists") blockers.push(blocker("RENDER_COLLISION_POLICY_REQUIRED", "collision_policy must be fail_if_exists; overwrite and suffix fallback are not supported."));
+  if (input.output_basename !== undefined && outputBasename === null) blockers.push(blocker("RENDER_OUTPUT_BASENAME_INVALID", "output_basename must be a safe 1-96 byte filename stem without an extension, path separator, control character, surrounding whitespace, or reserved dot name."));
 
   const settings = {
     format: input.format,
@@ -912,6 +931,7 @@ function normalizeSettings(input) {
     max_targets: maxTargets,
     output_policy: "openreaper_managed_render_root",
     collision_policy: "fail_if_exists",
+    ...(outputBasename === null ? {} : { output_basename: outputBasename }),
   };
   if (input.format === "wav") {
     const bitDepth = input.wav_bit_depth ?? 24;
@@ -946,7 +966,8 @@ function buildPreview({ targetKind, targetRefs, refs, settings }) {
       arbitrary_path_allowed: false,
       overwrite_allowed: false,
       external_encoder_allowed: false,
-      deterministic_handler_naming: true,
+      basename_owner: settings.output_basename === undefined ? "deterministic_compatibility_default" : "user_request",
+      deterministic_handler_naming: settings.output_basename === undefined,
     },
     runtime_binding: "bound_plan_only_child_route",
   });
@@ -965,11 +986,20 @@ function buildMutationRequest(preview) {
     sample_rate_hz: preview.render_settings.sample_rate_hz,
     channel_count: preview.render_settings.channel_count,
     max_targets: preview.max_targets,
+    ...(preview.render_settings.output_basename === undefined ? {} : { output_basename: preview.render_settings.output_basename }),
     ...(preview.format === "wav" ? { wav_bit_depth: preview.render_settings.wav_bit_depth } : { ogg_quality: preview.render_settings.ogg_quality }),
   };
   return childRequest(1, "mutation", "template.render.render_targets", namedRefs, input,
     "Run the single audited D31 project-render route; the child performs collision preflight, settings/selection restoration, output header verification, and manifest/evidence emission.",
     { callable_now: true, binding_status: "runtime_bound_live_evidenced" });
+}
+
+function normalizeOutputBasename(value) {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.length === 0 || value !== value.trim()) return null;
+  if (Buffer.byteLength(value, "utf8") > 96 || value === "." || value === "..") return null;
+  if (/[\u0000-\u001f\u007f<>:"/\\|?*$]/u.test(value) || /[. ]$/u.test(value) || /\.(?:wav|ogg)$/iu.test(value)) return null;
+  return value;
 }
 
 function childObjectRef(kind, ref) {

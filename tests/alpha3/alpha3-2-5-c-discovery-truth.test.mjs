@@ -6,6 +6,7 @@ import { ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS } from "../../packages/mcp-server/sr
 import { ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-b-project-understanding-v1.mjs";
 import { ALPHA3_2_5_C_CONTROL_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-c-control-runtime-v1.mjs";
 import { ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-c-project-write-runtime-v1.mjs";
+import { ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY } from "../../packages/mcp-server/src/alpha3-2e-media-place-assets-v1.mjs";
 import { ALPHA3_2_5_C_FILE_MACRO_REGISTRY } from "../../packages/mcp-server/src/alpha3-2c3d-project-file-macro-v1.mjs";
 import { ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY } from "../../packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs";
 import { ALPHA3_2_5_D_MIDI_MACRO_REGISTRY } from "../../packages/mcp-server/src/alpha3-2-5-d-midi-macro-v1.mjs";
@@ -22,6 +23,7 @@ import {
 
 const REGISTRIES = [
   ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY,
+  ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY,
   ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY,
   ALPHA3_2_5_C_FILE_MACRO_REGISTRY,
   ALPHA3_2_5_C_RENDER_TARGETS_REGISTRY,

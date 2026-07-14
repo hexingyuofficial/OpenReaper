@@ -208,6 +208,7 @@ export const CRITICAL_RENDER_TEMPLATES = deepFreeze([
       channel_count: { enum: [1, 2] },
       wav_bit_depth: { enum: [16, 24] },
       ogg_quality: { enum: [0.3, 0.5, 0.6, 0.8, 1.0] },
+      output_basename: { type: "string", minLength: 1, maxLength: 96 },
       max_targets: { type: "integer" },
     }, ["target_kind", "format", "output_policy", "collision_policy", "sample_rate_hz", "channel_count", "max_targets"]),
     outputSchema: objectSchema({
@@ -219,8 +220,9 @@ export const CRITICAL_RENDER_TEMPLATES = deepFreeze([
       collision_policy: { const: "fail_if_exists" },
       file_count: { type: "integer" },
       outputs: { type: "array" },
+      restoration: { type: "object" },
       truncated: { type: "boolean" },
-    }, ["job_ref", "output_artifact_ref", "evidence_artifact_ref", "format", "output_policy", "collision_policy", "file_count", "outputs", "truncated"]),
+    }, ["job_ref", "output_artifact_ref", "evidence_artifact_ref", "format", "output_policy", "collision_policy", "file_count", "outputs", "restoration", "truncated"]),
     refs: {
       input: [
         ref("region_refs", "region", false, "Explicit region refs when target_kind is regions."),

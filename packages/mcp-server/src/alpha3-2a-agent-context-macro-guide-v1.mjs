@@ -335,12 +335,12 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   }),
   primaryDefinition({
     id: "macro.project.apply_layout",
-    title: "Apply track and folder layout",
-    summary: "Create or update a declared folder/track hierarchy, colors, order, and nesting with structural readback.",
+    title: "Apply project layout",
+    summary: "Create or update a declared folder/track hierarchy and create exact Marker/Region timeline annotations with live readback.",
     pack: "tracks",
     risk: "write",
     entity_kind: "macro.project.apply_layout",
-    task_intents: ["build folder layout", "create tracks", "organize track order", "apply colors"],
+    task_intents: ["build folder layout", "create tracks", "organize track order", "apply colors", "create marker", "create region"],
     rollout_slice: "3.2-E",
     known_blocker: null,
     implementation_status: "executable",
@@ -349,6 +349,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       when_to_use: [
         "Apply an explicit JSON layout of folder tracks and child tracks to the current project.",
         "Reconcile an existing track structure using an explicit matching policy.",
+        "Create bounded exact Marker/Region annotations on the project timeline.",
       ],
       when_not_to_use: [
         "Do not use it as a genre, arrangement, composition, or music-style generator.",
@@ -361,6 +362,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       input_shape: {
         layout: "Ordered folders/tracks with local ids, names, colors, children, and optional desired refs.",
+        annotations: "Optional create-only Marker/Region rows with stable ids, names, and exact position or start/end seconds.",
         match_policy: "by_ref | exact_name | create_only; ambiguous matches are blocked.",
         conflict_policy: "skip | update_declared_fields | stop; no implicit delete.",
         dry_run: "Boolean; previews create/update/move/nesting actions.",
@@ -368,6 +370,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       },
       preflight_steps: [
         "Read existing tracks and folder structure.",
+        "For annotations, require one complete non-truncated live Marker/Region inventory before any write.",
         "Validate layout acyclicity, unique local ids, color/name bounds, and deterministic order.",
         "Resolve exact matches and return a dry-run diff for creates, updates, moves, and nesting.",
       ],
@@ -380,9 +383,11 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "template.tracks.set_color",
         "template.tracks.move_track or template.tracks.move_tracks",
         "template.tracks.set_folder_depth or template.tracks.nest_tracks_in_folder",
+        "template.project.list_markers_regions plus create_marker/create_region for timeline annotations",
       ],
       readback_steps: [
         "Read tracks and folder structure after writes.",
+        "Read the complete Marker/Region inventory and compare each new canonical ref, kind, name, and timeline boundary.",
         "Map each declared local id to a canonical track ref and actual position/depth.",
         "Report any name, color, order, parent, or folder-depth mismatch.",
       ],
@@ -396,6 +401,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("LAYOUT_INVALID", "The layout contains duplicate ids, cycles, invalid nesting, or invalid fields."),
         blocker("MATCH_AMBIGUOUS", "More than one existing track matches a declared row."),
         blocker("READBACK_MISMATCH", "The resulting folder depth/order differs from the declared layout."),
+        blocker("LAYOUT_ANNOTATION_UPDATE_UNSUPPORTED", "The accepted owner can create annotations but cannot yet move Markers or change Region bounds."),
       ],
       recovery_steps: [
         "For preview blockers, rerun dry-run, then call the same registered Macro after repairing the typed blocker.",
@@ -415,6 +421,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       examples: [
         example("create drum folder", { layout: [{ id: "drums", kind: "folder", name: "DRUMS", color: "#E05A47", children: [{ id: "kick", kind: "track", name: "Kick" }, { id: "snare", kind: "track", name: "Snare" }] }], match_policy: "exact_name", conflict_policy: "update_declared_fields", dry_run: true }),
         example("create-only utility tracks", { layout: [{ id: "print", kind: "track", name: "PRINT" }, { id: "ref", kind: "track", name: "REFERENCE" }], match_policy: "create_only", conflict_policy: "stop", dry_run: false }),
+        example("create timeline annotations", { annotations: [{ id: "intro", kind: "marker", name: "Intro", position_seconds: 0 }, { id: "chorus", kind: "region", name: "Chorus", start_seconds: 8, end_seconds: 16 }], dry_run: true }),
       ],
     }),
   }),
@@ -600,7 +607,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.render.targets",
     title: "Render declared targets",
-    summary: "Preview or execute bounded managed-root WAV/OGG exports through one audited D31 route with verification evidence.",
+    summary: "Preview or execute bounded managed-root WAV/OGG exports with an optional user-owned basename through one audited D31 route.",
     pack: "render",
     risk: "write",
     entity_kind: "macro.render.targets",
@@ -612,7 +619,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
     manual: actionManual({
       when_to_use: [
         "Render a bounded whole project, time selection, explicit regions, selected/explicit items, or selected/explicit tracks to WAV or OGG.",
-        "Require managed-root output, deterministic handler naming, fail-if-exists collision policy, settings restoration, and verified output artifacts.",
+        "Require managed-root output, an optional safe visible basename, fail-if-exists collision policy, settings restoration, and verified output artifacts.",
       ],
       when_not_to_use: [
         "Do not provide an arbitrary output path, overwrite route, external encoder, shell/process, raw action/Lua, or hidden executor fallback.",
@@ -631,6 +638,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         channel_count: "1 | 2; defaults to 2.",
         wav_bit_depth: "16 | 24 for WAV only; defaults to 24.",
         ogg_quality: "0.3 | 0.5 | 0.6 | 0.8 | 1.0 for OGG only; defaults to 0.5.",
+        output_basename: "Optional safe 1-96 byte filename stem without an extension; multiple targets become stem_01, stem_02, and so on.",
         output_policy: "openreaper_managed_render_root only.",
         collision_policy: "fail_if_exists only; overwrite and suffix fallback are forbidden.",
         max_targets: "Integer from 1 through 16.",
@@ -639,7 +647,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Normalize canonical refs and enforce exact target-kind/ref matching.",
         "Validate managed-root-only output, fail_if_exists, max_targets, sample rate, channels, and format-specific WAV/OGG settings.",
-        "D31 resolves live targets and checks every expected output/artifact collision before its first render action.",
+        "D31 resolves live targets, validates the requested filename stem, and checks every expected output/artifact collision before its first render action.",
       ],
       underlying_actions: [
         "template.project.read_dirty_state before and after the render mutation",
@@ -648,7 +656,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       readback_steps: [
         "Return the exact effective managed root before execution, then label audio outputs separately from retained recovery project copies.",
-        "Return dirty-before/after plus save recommendation and require every output plus manifest/evidence artifact refs.",
+        "Return dirty-before/after plus save recommendation and require every output basename plus manifest/evidence artifact refs.",
         "Confirm the registered render stage reports render-setting and item/track-selection restoration.",
         "Do not infer success from dry-run or a partial stage; accept only the completed Macro envelope and retained evidence.",
       ],
@@ -661,6 +669,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("RENDER_ROOT_NOT_READY", "The managed render root is absent, unwritable, or outside policy."),
         blocker("RENDER_TARGET_KIND_OR_REFS_INVALID", "Target kind and canonical refs do not match the strict target contract."),
         blocker("RENDER_FORMAT_SETTINGS_UNSUPPORTED", "Sample rate, channels, WAV bit depth, or OGG quality is outside the bounded enum."),
+        blocker("RENDER_OUTPUT_BASENAME_INVALID", "The requested filename stem is unsafe, includes an extension/path token, or exceeds the bounded length."),
         blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists and fail_if_exists rejected the whole batch before rendering."),
       ],
       recovery_steps: [
@@ -680,7 +689,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         hard_stop: "Stop on unmanaged path, overwrite request, explicit-ref mismatch, unsupported setting, or restoration failure.",
       },
       examples: [
-        example("whole project WAV preview", { target_kind: "whole_project", format: "wav", sample_rate_hz: 48000, channel_count: 2, wav_bit_depth: 24, dry_run: true }),
+        example("whole project WAV preview", { target_kind: "whole_project", format: "wav", output_basename: "Client Mix", sample_rate_hz: 48000, channel_count: 2, wav_bit_depth: 24, dry_run: true }),
         example("explicit region OGG plan", { target_kind: "regions", refs: ["region:index:3"], format: "ogg", ogg_quality: 0.6, collision_policy: "fail_if_exists", max_targets: 16, dry_run: false }),
       ],
     }),
@@ -722,22 +731,22 @@ const PROJECT_FILE_DEFINITION = deepFreeze(primaryDefinition({
 const CONTROLS_SET_DEFINITION = deepFreeze(primaryDefinition({
   id: "macro.controls.set",
   title: "Set bounded controls",
-  summary: "Execute bounded track/item/take/transport/send controls with SQLite candidate selectors, live re-resolution, and verified readback.",
+  summary: "Execute bounded Project/track/item/take/transport/send controls with SQLite candidate selectors, live re-resolution, and verified readback.",
   pack: "core",
   risk: "write",
   entity_kind: "macro.controls.set",
-  task_intents: ["set track controls", "set item controls", "set take controls", "set transport controls", "set send controls"],
+  task_intents: ["set project BPM", "set project grid", "set project snap", "set track controls", "set item controls", "set take controls", "set transport controls", "set send controls"],
   rollout_slice: "3.2.5-C",
   guide_tier: "secondary",
   known_blocker: null,
   implementation_status: "executable_registered_program",
   runnable: true,
   manual: actionManual({
-    when_to_use: ["Use one task-shaped Macro call for accepted track/item/take/transport/send control edits instead of hand-assembling atomic write chains."],
+    when_to_use: ["Use one task-shaped Macro call for accepted Project/track/item/take/transport/send control edits instead of hand-assembling atomic write chains."],
     when_not_to_use: ["Do not use it for MIDI note editing, FX chains, hardware/device I/O, or unsupported write domains outside the accepted control schema."],
     required_readiness: ["The managed OpenReaper live route must be ready.", "When selectors are used, rely on fresh SQLite candidates and let the Macro live-resolve the final canonical write target."],
     input_shape: {
-      target_kind: "track | item | take | transport | send",
+      target_kind: "project | track | item | take | transport | send",
       fields: "Required allowlisted field object for the chosen target_kind; use exact names from the expanded discovery item.",
       selector: "Optional singular bounded Project Index selector when canonical refs are not supplied.",
       refs: "Optional top-level call_template refs: track_ref, item_ref, or send_ref as required by target_kind.",
@@ -747,11 +756,11 @@ const CONTROLS_SET_DEFINITION = deepFreeze(primaryDefinition({
     underlying_actions: ["macro.project.query for compact candidate lookup when selectors are used", "accepted atomic control templates owned by the fixed registered program", "readback templates for the affected target kind"],
     readback_steps: ["Return the resolved canonical target ref, bounded changed fields, and exact readback values in macro.execution.v1."],
     success_criteria: ["Only accepted control fields changed on one exact live-resolved target and readback matches the requested values."],
-    common_blockers: [blocker("CONTROL_TARGET_REF_REQUIRED", "macro.controls.set needs one exact ref or one unambiguous selector."), blocker("CONTROL_TARGET_KIND_UNSUPPORTED", "target_kind must be track, item, take, transport, or send."), blocker("SELECTOR_TARGET_AMBIGUOUS", "The bounded selector matched more than one candidate."), blocker("CONTROL_READBACK_MISMATCH", "The post-write control readback did not match the requested values.")],
+    common_blockers: [blocker("CONTROL_TARGET_REF_REQUIRED", "Non-Project macro.controls.set targets need one exact ref or one unambiguous selector."), blocker("CONTROL_TARGET_KIND_UNSUPPORTED", "target_kind must be project, track, item, take, transport, or send."), blocker("SELECTOR_TARGET_AMBIGUOUS", "The bounded selector matched more than one candidate."), blocker("CONTROL_READBACK_MISMATCH", "The post-write control readback did not match the requested values.")],
     recovery_steps: ["Use macro.project.query to narrow candidates or pass the exact canonical ref returned by a prior read.", "Repair the typed blocker, then retry the same registered Macro; never treat SQLite rows as write authority."],
     dry_run_shape: { supported: true, output: ["target_preview", "accepted_fields", "resolution_path"] },
     resume_or_retry_policy: { resume_from: "latest successful candidate set and exact target resolution", retry: "Retry after selector narrowing or live-readiness repair.", hard_stop: "Stop on repeated ambiguity, unsupported fields, or readback mismatch." },
-    examples: [example("set track volume", { target_kind: "track", selector: { name: "Bass" }, fields: { volume: 0.75 }, dry_run: true }), example("set transport repeat", { target_kind: "transport", fields: { repeat: true }, dry_run: false })],
+    examples: [example("set project grid and snap", { target_kind: "project", fields: { grid_division: "1/8", grid_swing: 0.15, snap_enabled: true }, dry_run: true }), example("set track volume", { target_kind: "track", selector: { name: "Bass" }, fields: { volume: 0.75 }, dry_run: true }), example("set transport repeat", { target_kind: "transport", fields: { repeat: true }, dry_run: false })],
   }),
 }));
 
@@ -1213,7 +1222,7 @@ function compactPrimaryUnderlyingActions(id) {
     "macro.project.inspect": ["template.project.read_summary", "template.project.create_observation_bundle", "template.project.read_dirty_state", "template.render.read_settings"],
     "macro.project.query": ["template.project.read_summary", "template.project.create_observation_bundle", "entity-specific accepted read templates", "SQLite query runtime"],
     "macro.project.delete_targets": ["template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region", "template.fx.delete_fx"],
-    "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.tracks.read_folder_structure"],
+    "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.project.create_marker", "template.project.create_region", "template.project.list_markers_regions"],
     "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.remove_send", "template.routing.read_track_routing"],
     "macro.media.place_assets": ["template.media.probe_file", "template.tracks.resolve_track_ref", "template.media.import_file_to_track", "template.items.read_item_summary"],
     "macro.render.targets": ["template.project.read_dirty_state", "template.render.render_targets"],
