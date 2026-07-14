@@ -163,7 +163,46 @@ try {
   assert(valuesMatch(calls.after_properties[0].position_seconds, calls.after_take_pan[0].position_seconds), "Property writes changed Item position");
   assert(calls.after_properties[0].active_take_ref === activeTakeBefore, "Property writes changed the Active Take identity");
 
-  const heldBefore = calls.after_properties[0];
+  calls.apply_fades = await callTemplate("macro.items.apply", {
+    mode: "apply_fades",
+    target_refs: [itemRefs[0]],
+    fade_in_seconds: 0.02,
+    fade_out_seconds: 0.08,
+    dry_run: false,
+  });
+  assertItemsApplySuccess(calls.apply_fades, 1);
+
+  calls.trim_exact = await callTemplate("macro.items.apply", {
+    mode: "trim_exact",
+    target_refs: [itemRefs[0]],
+    length_seconds: 1.25,
+    dry_run: false,
+  });
+  assertItemsApplySuccess(calls.trim_exact, 1);
+
+  calls.set_take_playback = await callTemplate("macro.items.apply", {
+    mode: "set_take_playback",
+    target_refs: [itemRefs[0]],
+    playrate: 1.25,
+    preserve_pitch: true,
+    dry_run: false,
+  });
+  assertItemsApplySuccess(calls.set_take_playback, 1);
+
+  calls.set_snap_offset = await callTemplate("macro.items.apply", {
+    mode: "set_snap_offset",
+    target_refs: [itemRefs[0]],
+    snap_offset_seconds: 0.05,
+    dry_run: false,
+  });
+  assertItemsApplySuccess(calls.set_snap_offset, 1);
+  calls.after_extended_item_apply = await readItemSummaries([itemRefs[0]]);
+  assert(valuesMatch(calls.after_extended_item_apply[0].fade_in_seconds, 0.02), "Fade-in live summary mismatch");
+  assert(valuesMatch(calls.after_extended_item_apply[0].fade_out_seconds, 0.08), "Fade-out live summary mismatch");
+  assert(valuesMatch(calls.after_extended_item_apply[0].length_seconds, 1.25), "Exact trim live summary mismatch");
+  assert(valuesMatch(calls.after_extended_item_apply[0].snap_offset_seconds, 0.05), "Snap offset live summary mismatch");
+
+  const heldBefore = calls.after_extended_item_apply[0];
   calls.held_mode = await callTemplate("macro.items.apply", {
     mode: "normalize_lufs",
     target_refs: [itemRefs[0]],
@@ -210,6 +249,10 @@ const report = {
     withdrawn_item_pan: outcome(calls.withdrawn_item_pan),
     active_take_pan: outcome(calls.set_active_take_pan),
     set_properties: outcome(calls.set_properties),
+    apply_fades: outcome(calls.apply_fades),
+    trim_exact: outcome(calls.trim_exact),
+    set_take_playback: outcome(calls.set_take_playback),
+    set_snap_offset: outcome(calls.set_snap_offset),
     held_mode: outcome(calls.held_mode),
     final_positions: calls.after_arrangement?.map((row) => row.position_seconds) ?? [],
     final_properties: propertyChangeProjection(calls.set_properties),
@@ -220,6 +263,8 @@ const report = {
     blocked_item_pan_mutation_rows: calls.item_pan_block?.result?.changes?.length ?? null,
     active_take_pan_rows_applied: appliedCount(calls.set_active_take_pan),
     property_rows_applied: appliedCount(calls.set_properties),
+    extended_item_rows_applied: [calls.apply_fades, calls.trim_exact, calls.set_take_playback, calls.set_snap_offset]
+      .reduce((total, value) => total + appliedCount(value), 0),
     held_mode_mutation_rows: calls.held_mode?.result?.changes?.length ?? null,
     saved_to_evidence_copy: calls.save_current?.ok === true,
   },

@@ -25,7 +25,13 @@ import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/ma
 const NOW = "2026-07-13T16:00:00.000Z";
 const ITEM_A = itemRef("{ITEM-A}");
 const ITEM_B = itemRef("{ITEM-B}");
+const TAKE_A0 = takeRef("{TAKE-A0}");
+const TAKE_A1 = takeRef("{TAKE-A1}");
+const TAKE_B0 = takeRef("{TAKE-B0}");
+const TAKE_B1 = takeRef("{TAKE-B1}");
 const RUNTIME_ITEM_OBJECT = createObjectRef("item", { scheme: "guid", value: "{ITEM-A}" }, { ref: ITEM_A.ref });
+const RUNTIME_TAKE_A0_OBJECT = createObjectRef("take", { scheme: "guid", value: "{TAKE-A0}" }, { ref: TAKE_A0.ref });
+const RUNTIME_TAKE_A1_OBJECT = createObjectRef("take", { scheme: "guid", value: "{TAKE-A1}" }, { ref: TAKE_A1.ref });
 
 describe("Alpha3.3-B1c executable macro.items.apply", () => {
   it("registers one fixed allowlisted write program and truthfully holds unfinished modes and Take fields", () => {
@@ -40,7 +46,9 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(entry.dry_run_supported, true);
     assert.deepEqual(entry.dependencies.template_ids, ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS);
     assert.equal(entry.dependencies.template_ids.includes("template.items.set_item_pan"), false);
+    assert.equal(entry.dependencies.template_ids.includes("template.items.set_active_take"), true);
     assert.equal(JSON.stringify(entry.input_schema).includes("steps"), false);
+    assert.equal(entry.input_schema.properties.active_take_assignments.maxItems, 8);
 
     const discovery = createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow: true })[0];
     assert.deepEqual(discovery.supported_modes, ALPHA3_3_B1C_ITEMS_APPLY_MODES);
@@ -49,12 +57,15 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.deepEqual(discovery.held_property_fields, ALPHA3_3_B1C_ITEMS_APPLY_HELD_PROPERTY_FIELDS);
     assert.equal(discovery.supported_property_fields.includes("pan"), false);
     assert.equal(discovery.held_property_fields.includes("pan"), true);
+    assert.equal(discovery.supported_modes.includes("set_active_take"), true);
+    assert.equal(discovery.held_modes.includes("set_active_take"), false);
     const manual = createAlpha3_3B1cItemsApplyExactManual().action_manual;
-    assert.match(manual.when_not_to_use.join(" "), /Take-level fields/u);
+    assert.match(manual.when_to_use.join(" "), /explicit item_ref\/take_ref assignment rows/u);
     assert.match(manual.when_not_to_use.join(" "), /no REAPER Item-level pan control is proven/u);
     assert.match(manual.recovery_steps.join(" "), /macro\.controls\.set with target_kind=take/u);
     assert.match(manual.recovery_steps.join(" "), /multi-Take Item/u);
     assert.match(manual.readback_steps.join(" "), /row by row/u);
+    assert.match(manual.readback_steps.join(" "), /native GetActiveTake readback/u);
   });
 
   it("executes through the public createCallTemplateRuntime facade and verifies the final live Item position", async () => {
@@ -99,6 +110,49 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
       status: "passed",
       source: "live_item_summary",
       observed_value: 9,
+    });
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("executes set_active_take through the public runtime facade and forwards the paired exact refs", async () => {
+    const bridge = new ItemsApplyRuntimeBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const result = await runtime.call_template({
+      id: "macro.items.apply",
+      input: {
+        mode: "set_active_take",
+        active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }],
+        dry_run: false,
+      },
+      context: {
+        request_id: "request:alpha33:b1c:active-take-runtime",
+        session_id: "session:alpha33:b1c:active-take-runtime",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: NOW,
+        request_sequence: 1,
+      },
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.activeTakeRef, TAKE_A1.ref);
+    assert.deepEqual(bridge.capabilities, [
+      "items.resolve_item_ref",
+      "items.read_item_summary",
+      "items.set_active_take",
+    ]);
+    assert.deepEqual(bridge.activeTakeRequestRefs, [ITEM_A.ref, TAKE_A1.ref]);
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.deepEqual(result.result.changes[0].live_readback, {
+      status: "passed",
+      source: "exact_active_take_readback",
+      observed_value: TAKE_A1.ref,
     });
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
@@ -178,6 +232,256 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(result.result.changes.every((change) => change.live_readback.source === "accepted_template_live_readback"), true);
     assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);
     assert.equal(result.sqlite.used, false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("sets paired exact Active Takes without selection and applies only native exact readback rows", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 2, 1, { active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref, TAKE_A1.ref] }),
+      item(ITEM_B, 4, 1, { active_take_ref: TAKE_B0.ref, take_refs: [TAKE_B0.ref, TAKE_B1.ref] }),
+    ]);
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "set_active_take",
+        active_take_assignments: [
+          { item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref },
+          { item_ref: ITEM_B.ref, take_ref: TAKE_B1.ref },
+        ],
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.items.get(ITEM_A.ref).active_take_ref, TAKE_A1.ref);
+    assert.equal(bridge.items.get(ITEM_B.ref).active_take_ref, TAKE_B1.ref);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.items.read_item_summary",
+      "template.items.set_active_take",
+      "template.items.set_active_take",
+    ]);
+    assert.equal(bridge.calls.some((call) => call.id === "template.items.list_selected_items"), false);
+    assert.deepEqual(bridge.calls.slice(-2).map((call) => [call.refs.item_ref.ref, call.refs.take_ref.ref]), [
+      [ITEM_A.ref, TAKE_A1.ref],
+      [ITEM_B.ref, TAKE_B1.ref],
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["applied", "applied"]);
+    assert.deepEqual(result.result.changes.map((change) => change.live_readback), [
+      { status: "passed", source: "exact_active_take_readback", observed_value: TAKE_A1.ref },
+      { status: "passed", source: "exact_active_take_readback", observed_value: TAKE_B1.ref },
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => change.index_maintenance.scopes), [
+      ["items", "takes"],
+      ["items", "takes"],
+    ]);
+    assert.deepEqual(invalidations, [["items", "takes"]]);
+    assert.deepEqual(result.result.data.outcome, {
+      mutation: { status: "completed", completed_count: 2, total_count: 2 },
+      live_readback: { status: "passed", passed_count: 2, total_count: 2 },
+      index_maintenance: { status: "completed", scopes: ["items", "takes"] },
+    });
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("applies fades, exact trim, Take playback, and snap offset through fixed accepted atoms", async () => {
+    const cases = [
+      {
+        input: { mode: "apply_fades", target_refs: [ITEM_A.ref], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false },
+        template: "template.items.set_item_fades",
+        requested: { fade_in_seconds: 0.02, fade_out_seconds: 0.08 },
+        scopes: ["items"],
+      },
+      {
+        input: { mode: "trim_exact", target_refs: [ITEM_A.ref], length_seconds: 1.25, dry_run: false },
+        template: "template.items.trim_item",
+        requested: 1.25,
+        scopes: ["items"],
+      },
+      {
+        input: { mode: "set_take_playback", target_refs: [ITEM_A.ref], playrate: 1.25, preserve_pitch: true, dry_run: false },
+        template: "template.items.set_take_playrate",
+        requested: { playrate: 1.25, preserve_pitch: true },
+        scopes: ["items", "takes"],
+      },
+      {
+        input: { mode: "set_snap_offset", target_refs: [ITEM_A.ref], snap_offset_seconds: 0.1, dry_run: false },
+        template: "template.items.set_item_snap_offset",
+        requested: 0.1,
+        scopes: ["items"],
+      },
+    ];
+    for (const testCase of cases) {
+      const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 2)]);
+      const invalidations = [];
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request(testCase.input),
+        executeAtomic: bridge.executeAtomic,
+        projectIndexRuntime: projectIndex(invalidations),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal(result.result.changes.length, 1);
+      assert.equal(result.result.changes[0].template_id, testCase.template);
+      assert.equal(result.result.changes[0].status, "applied");
+      assert.equal(result.result.changes[0].mutation.status, "completed");
+      assert.deepEqual(result.result.changes[0].live_readback, {
+        status: "passed",
+        source: "accepted_template_live_readback",
+        observed_value: testCase.requested,
+      });
+      assert.deepEqual(result.result.changes[0].index_maintenance.scopes, testCase.scopes);
+      assert.deepEqual(invalidations, [testCase.scopes]);
+      assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+    }
+  });
+
+  it("defaults new Item application modes to dry-run and dispatches no write", async () => {
+    const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 2)]);
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "apply_fades", target_refs: [ITEM_A.ref], fade_in_seconds: 0.05, fade_out_seconds: null }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "dry_run_completed");
+    assert.equal(result.request.dry_run, true);
+    assert.deepEqual(result.result.changes[0].requested_value, { fade_in_seconds: 0.05, fade_out_seconds: 0 });
+    assert.equal(bridge.calls.some((call) => isWrite(call.id)), false);
+  });
+
+  it("fails new Item modes closed on absent Active Take, invalid ranges, and grouped readback mismatch", async () => {
+    const preflightCases = [
+      { item: item(ITEM_A, 0, 2, { active_take_ref: null, take_refs: [] }), input: { mode: "set_take_playback", target_refs: [ITEM_A.ref], playrate: 1.25, preserve_pitch: true, dry_run: false }, code: "ITEM_APPLY_ACTIVE_TAKE_REQUIRED" },
+      { item: item(ITEM_A, 0, 2), input: { mode: "set_snap_offset", target_refs: [ITEM_A.ref], snap_offset_seconds: 2.5, dry_run: false }, code: "ITEM_APPLY_SNAP_OFFSET_OUTSIDE_ITEM" },
+      { item: item(ITEM_A, 0, 2), input: { mode: "trim_exact", target_refs: [ITEM_A.ref], length_seconds: 0, dry_run: false }, code: "ITEM_APPLY_LENGTH_INVALID" },
+      { item: item(ITEM_A, 0, 2), input: { mode: "set_take_playback", target_refs: [ITEM_A.ref], playrate: 1, dry_run: false }, code: "ITEM_APPLY_PRESERVE_PITCH_REQUIRED" },
+    ];
+    for (const testCase of preflightCases) {
+      const bridge = new FakeFoundationBridge([testCase.item]);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request(testCase.input),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, testCase.code);
+      assert.equal(bridge.calls.some((call) => isWrite(call.id)), false);
+      assert.equal(result.result.changes.length, 0);
+    }
+
+    const mismatchBridge = new FakeFoundationBridge([item(ITEM_A, 0, 2)], { propertyReadbackMismatch: "fade_out_seconds" });
+    const invalidations = [];
+    const mismatch = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "apply_fades", target_refs: [ITEM_A.ref], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false }),
+      executeAtomic: mismatchBridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.execution.status, "partial_failure");
+    assert.equal(mismatch.error.code, "ITEM_APPLY_READBACK_MISMATCH");
+    assert.equal(mismatch.result.changes[0].status, "readback_failed");
+    assert.equal(mismatch.result.changes[0].mutation.status, "completed");
+    assert.equal(mismatch.result.changes[0].live_readback.status, "failed");
+    assert.deepEqual(invalidations, [["items"]]);
+  });
+
+  it("defaults Active Take assignment rows to dry-run and performs no selection or mutation", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 2, 1, { active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref, TAKE_A1.ref] }),
+    ]);
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_active_take", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }] }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "dry_run_completed");
+    assert.equal(result.request.dry_run, true);
+    assert.equal(bridge.items.get(ITEM_A.ref).active_take_ref, TAKE_A0.ref);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+    ]);
+    assert.deepEqual(result.result.changes[0], {
+      operation_id: "item-1-active_take_ref",
+      template_id: "template.items.set_active_take",
+      target_ref: ITEM_A.ref,
+      related_ref: TAKE_A1.ref,
+      field: "active_take_ref",
+      before_value: TAKE_A0.ref,
+      requested_value: TAKE_A1.ref,
+      status: "planned",
+      mutation: { status: "not_run" },
+      live_readback: { status: "not_run" },
+      index_maintenance: { status: "skipped", scopes: [] },
+    });
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("delegates Take ownership to the exact atom and never applies a Take to the wrong Item", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 2, 1, { active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref, TAKE_A1.ref] }),
+      item(ITEM_B, 4, 1, { active_take_ref: TAKE_B0.ref, take_refs: [TAKE_B0.ref, TAKE_B1.ref] }),
+    ]);
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "set_active_take",
+        active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_B1.ref }],
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "failed");
+    assert.equal(result.error.code, "REF_INVALID");
+    assert.equal(bridge.items.get(ITEM_A.ref).active_take_ref, TAKE_A0.ref);
+    assert.equal(bridge.items.get(ITEM_B.ref).active_take_ref, TAKE_B0.ref);
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["pending"]);
+    assert.deepEqual(result.result.changes.map((change) => change.mutation.status), ["failed"]);
+    assert.equal(bridge.calls.some((call) => call.id === "template.items.list_selected_items"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("never marks Active Take applied when the atom response lacks the requested exact readback", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 2, 1, { active_take_ref: TAKE_A0.ref, take_refs: [TAKE_A0.ref, TAKE_A1.ref] }),
+    ], { activeTakeReadbackMismatch: true });
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "set_active_take",
+        active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }],
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "ITEM_APPLY_READBACK_MISMATCH");
+    assert.equal(result.result.changes[0].status, "readback_failed");
+    assert.equal(result.result.changes[0].mutation.status, "completed");
+    assert.deepEqual(result.result.changes[0].live_readback, {
+      status: "failed",
+      source: "exact_active_take_readback",
+      observed_value: TAKE_A0.ref,
+      observed_item_ref: ITEM_A.ref,
+    });
+    assert.deepEqual(invalidations, [["items", "takes"]]);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
@@ -266,6 +570,29 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     }
   });
 
+  it("rejects ambiguous, duplicate, malformed, or oversized Active Take rows before the first child call", async () => {
+    const invalidInputs = [
+      { mode: "set_active_take", target: "selected", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }], dry_run: false },
+      { mode: "set_active_take", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: TAKE_A1.ref }, { item_ref: ITEM_A.ref, take_ref: TAKE_A0.ref }], dry_run: false },
+      { mode: "set_active_take", active_take_assignments: [{ item_ref: ITEM_A.ref, take_ref: "take:selected:0" }], dry_run: false },
+      { mode: "set_active_take", active_take_assignments: Array.from({ length: 9 }, (_, index) => ({ item_ref: `item:guid:{ITEM-${index}}`, take_ref: `take:guid:{TAKE-${index}}` })), dry_run: false },
+      { mode: "set_active_take", dry_run: false },
+    ];
+    for (const input of invalidInputs) {
+      const bridge = new FakeFoundationBridge([item(ITEM_A, 0, 1)]);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request(input),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, "ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID");
+      assert.equal(bridge.calls.length, 0);
+      assert.equal(result.result.changes.length, 0);
+      assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+    }
+  });
+
   it("preflights a compact response budget after reads but before every mutation", async () => {
     const bridge = new FakeFoundationBridge([item(ITEM_A, 0, 1)]);
     const result = await executeAlpha3_3B1cItemsApplyMacro({
@@ -339,6 +666,8 @@ class ItemsApplyRuntimeBridge extends RuntimeFoundationBridge {
   constructor() {
     super();
     this.positionSeconds = 1;
+    this.activeTakeRef = TAKE_A0.ref;
+    this.activeTakeRequestRefs = [];
     this.capabilities = [];
   }
 
@@ -348,19 +677,26 @@ class ItemsApplyRuntimeBridge extends RuntimeFoundationBridge {
     this.capabilities.push(capability);
     request.params = { ...(request.params ?? {}) };
     if (capability === "items.move_item") this.positionSeconds = request.params.position_seconds;
-    request.params.emits = runtimeOutput([RUNTIME_ITEM_OBJECT], {
-      item_ref: ITEM_A.ref,
-      track_ref: "track:guid:{TRACK-A}",
-      position_seconds: this.positionSeconds,
-      length_seconds: 2,
-      volume_db: 0,
-      muted: false,
-      locked: false,
-      loop_source: false,
-      active_take_ref: "take:guid:{TAKE-A}",
-      take_count: 1,
-      ...(capability === "items.move_item" ? { readback_status: "passed" } : {}),
-    });
+    if (capability === "items.set_active_take") {
+      this.activeTakeRef = TAKE_A1.ref;
+      this.activeTakeRequestRefs = request.refs.map((ref) => ref.ref);
+    }
+    request.params.emits = runtimeOutput(
+      capability === "items.set_active_take" ? [RUNTIME_ITEM_OBJECT, RUNTIME_TAKE_A1_OBJECT] : [RUNTIME_ITEM_OBJECT, RUNTIME_TAKE_A0_OBJECT],
+      {
+        item_ref: ITEM_A.ref,
+        track_ref: "track:guid:{TRACK-A}",
+        position_seconds: this.positionSeconds,
+        length_seconds: 2,
+        volume_db: 0,
+        muted: false,
+        locked: false,
+        loop_source: false,
+        active_take_ref: this.activeTakeRef,
+        take_count: 2,
+        ...(["items.move_item", "items.set_active_take"].includes(capability) ? { readback_status: "passed" } : {}),
+      },
+    );
     return super.dispatch(request);
   }
 }
@@ -406,6 +742,49 @@ class FakeFoundationBridge {
       entry.position_seconds = input.position_seconds;
       return execution(id, { ...summary(entry), readback_status: "passed" }, [entry.item_ref]);
     }
+    if (id === "template.items.set_active_take") {
+      const takeReference = refs.take_ref;
+      const takeRefString = typeof takeReference === "string" ? takeReference : takeReference?.ref;
+      if (!entry.take_refs.includes(takeRefString)) {
+        return failure(id, "REF_INVALID", "The exact Take does not belong to the exact Item.");
+      }
+      const previous = entry.active_take_ref;
+      entry.active_take_ref = takeRefString;
+      const observed = this.options.activeTakeReadbackMismatch ? previous : takeRefString;
+      return execution(id, {
+        ...summary(entry),
+        active_take_ref: observed,
+        changed: previous !== takeRefString,
+        readback_status: "passed",
+      }, [entry.item_ref, takeReference]);
+    }
+    if (id === "template.items.set_item_fades") {
+      entry.fade_in_seconds = input.fade_in_seconds ?? 0;
+      entry.fade_out_seconds = input.fade_out_seconds ?? 0;
+      const row = { ...summary(entry), readback_status: "passed" };
+      if (this.options.propertyReadbackMismatch === "fade_out_seconds") row.fade_out_seconds += 0.25;
+      return execution(id, row, [entry.item_ref]);
+    }
+    if (id === "template.items.trim_item") {
+      entry.length_seconds = input.length_seconds;
+      const row = { ...summary(entry), readback_status: "passed" };
+      if (this.options.propertyReadbackMismatch === "length_seconds") row.length_seconds += 0.25;
+      return execution(id, row, [entry.item_ref]);
+    }
+    if (id === "template.items.set_take_playrate") {
+      if (!entry.active_take_ref) return failure(id, "TAKE_NOT_FOUND", "No Active Take.");
+      entry.playrate = input.playrate;
+      entry.preserve_pitch = input.preserve_pitch;
+      const row = { ...summary(entry), readback_status: "passed" };
+      if (this.options.propertyReadbackMismatch === "playrate") row.playrate += 0.25;
+      return execution(id, row, [entry.item_ref]);
+    }
+    if (id === "template.items.set_item_snap_offset") {
+      entry.snap_offset_seconds = input.snap_offset_seconds;
+      const row = { ...summary(entry), readback_status: "passed" };
+      if (this.options.propertyReadbackMismatch === "snap_offset_seconds") row.snap_offset_seconds += 0.25;
+      return execution(id, row, [entry.item_ref]);
+    }
     const field = propertyField(id);
     if (field) {
       entry[field] = input[field];
@@ -432,6 +811,10 @@ function itemRef(value) {
   return { kind: "item", ref: `item:guid:${value}`, identity: { scheme: "guid", value } };
 }
 
+function takeRef(value) {
+  return { kind: "take", ref: `take:guid:${value}`, identity: { scheme: "guid", value } };
+}
+
 function item(itemReference, positionSeconds, lengthSeconds, extra = {}) {
   return {
     item_ref: itemReference,
@@ -442,6 +825,13 @@ function item(itemReference, positionSeconds, lengthSeconds, extra = {}) {
     muted: false,
     locked: false,
     loop_source: false,
+    fade_in_seconds: 0,
+    fade_out_seconds: 0,
+    snap_offset_seconds: 0,
+    playrate: 1,
+    preserve_pitch: true,
+    active_take_ref: TAKE_A0.ref,
+    take_refs: [TAKE_A0.ref],
     selected: false,
     ...extra,
   };
@@ -457,8 +847,13 @@ function summary(entry) {
     muted: entry.muted,
     locked: entry.locked,
     loop_source: entry.loop_source,
-    active_take_ref: "take:guid:{TAKE-A}",
-    take_count: 1,
+    fade_in_seconds: entry.fade_in_seconds,
+    fade_out_seconds: entry.fade_out_seconds,
+    snap_offset_seconds: entry.snap_offset_seconds,
+    playrate: entry.playrate,
+    preserve_pitch: entry.preserve_pitch,
+    active_take_ref: entry.active_take_ref,
+    take_count: entry.take_refs.length,
   };
 }
 
@@ -498,7 +893,14 @@ function propertyField(id) {
 }
 
 function isWrite(id) {
-  return id === "template.items.move_item" || propertyField(id) !== null;
+  return [
+    "template.items.move_item",
+    "template.items.set_active_take",
+    "template.items.set_item_fades",
+    "template.items.trim_item",
+    "template.items.set_take_playrate",
+    "template.items.set_item_snap_offset",
+  ].includes(id) || propertyField(id) !== null;
 }
 
 function projectIndex(invalidations, { fail = false } = {}) {
