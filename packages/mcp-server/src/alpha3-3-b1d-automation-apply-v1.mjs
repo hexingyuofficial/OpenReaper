@@ -20,12 +20,10 @@ export const ALPHA3_3_B1D_AUTOMATION_APPLY_MODES = deepFreeze([
   "set_automation_item_bounds",
   "delete_point",
   "delete_point_range",
+  "delete_automation_item",
+  "insert_fx_parameter_points",
 ]);
 export const ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES = deepFreeze([
-  "delete_automation_item",
-  "insert_take_points",
-  "insert_take_fx_parameter_points",
-  "insert_fx_parameter_points",
   "create_envelope",
   "set_send_mode",
   "draw_sine",
@@ -43,6 +41,9 @@ export const ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.automation.read_automation_items",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
+  "template.automation.delete_automation_item",
+  "template.fx.parameter_to_envelope_mapping",
+  "template.automation.ensure_fx_parameter_envelope",
 ]);
 
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
@@ -57,18 +58,26 @@ const READ_TRACK_MODE_ID = "template.automation.read_track_automation_mode";
 const READ_AUTOMATION_ITEMS_ID = "template.automation.read_automation_items";
 const CREATE_AUTOMATION_ITEM_ID = "template.automation.create_automation_item";
 const SET_AUTOMATION_ITEM_BOUNDS_ID = "template.automation.set_automation_item_bounds";
+const DELETE_AUTOMATION_ITEM_ID = "template.automation.delete_automation_item";
+const MAP_FX_PARAMETER_ENVELOPE_ID = "template.fx.parameter_to_envelope_mapping";
+const ENSURE_FX_PARAMETER_ENVELOPE_ID = "template.automation.ensure_fx_parameter_envelope";
 const MAX_TARGETS = 8;
 const MAX_NEW_POINTS = 32;
 const MAX_COMPLETE_READ_POINTS = 64;
 const MAX_AUTOMATION_ITEMS = 64;
 const EPSILON = 0.000001;
 const MIN_RESPONSE_BUDGET = 2_048;
-const DESTRUCTIVE_MODES = new Set(["delete_point", "delete_point_range"]);
-const NON_IDEMPOTENT_MODES = new Set(["insert_points", "create_automation_item", ...DESTRUCTIVE_MODES]);
+const DESTRUCTIVE_MODES = new Set(["delete_point", "delete_point_range", "delete_automation_item"]);
+const NON_IDEMPOTENT_MODES = new Set(["insert_points", "insert_fx_parameter_points", "create_automation_item", ...DESTRUCTIVE_MODES]);
+const MODE_ALIASES = new Map([
+  ["insert_take_points", "insert_points"],
+  ["insert_take_fx_parameter_points", "insert_fx_parameter_points"],
+]);
 const INPUT_FIELDS = new Set([
   "mode",
   "envelope_refs",
   "track_refs",
+  "fx_refs",
   "points",
   "point_update",
   "point_delete",
@@ -77,6 +86,8 @@ const INPUT_FIELDS = new Set([
   "track_mode",
   "automation_item",
   "automation_item_bounds",
+  "automation_item_delete",
+  "fx_parameter",
   "dry_run",
   "confirmation_token",
 ]);
@@ -90,7 +101,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID,
   program_id: "openreaper.macro.automation.apply",
-  program_version: "1.0.0",
+  program_version: "1.1.0",
   implementation_status: "executable",
   risk: "write",
   input_schema: {
@@ -100,6 +111,7 @@ const REGISTRY_ENTRY = deepFreeze({
       mode: { type: "string", enum: ALPHA3_3_B1D_AUTOMATION_APPLY_MODES },
       envelope_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
       track_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+      fx_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
       points: { type: "array", maxItems: MAX_NEW_POINTS },
       point_update: { type: "object" },
       point_delete: { type: "object" },
@@ -108,6 +120,8 @@ const REGISTRY_ENTRY = deepFreeze({
       track_mode: { type: "string", enum: ["trim_read", "read"] },
       automation_item: { type: "object" },
       automation_item_bounds: { type: "object" },
+      automation_item_delete: { type: "object" },
+      fx_parameter: { type: "object" },
       dry_run: { type: "boolean" },
       confirmation_token: { type: "string" },
     },
@@ -121,7 +135,7 @@ const REGISTRY_ENTRY = deepFreeze({
   sqlite_policy: {
     mode: "invalidate_after_write",
     write_authority: false,
-    identity_fields: ["envelope_ref", "track_ref"],
+    identity_fields: ["envelope_ref", "track_ref", "fx_ref"],
   },
   dependencies: { template_ids: ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS, runtime_capabilities: [] },
   stages: [
@@ -173,14 +187,15 @@ export function createAlpha3_3B1dAutomationApplyDiscoveryItems({ liveRunnableNow
     support_state: "supported_with_exact_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Insert/update/delete bounded Envelope points, set proven lane or Track modes, and create or move existing Automation Items on exact live targets.",
+    summary: "Apply bounded Track/Take/FX Envelope points, lane and Track modes, and Automation Item create/update/delete with exact live readback.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1D_AUTOMATION_APPLY_MODES,
     held_modes: ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES,
-    limits: { envelope_targets: MAX_TARGETS, track_targets: MAX_TARGETS, total_inserted_points: MAX_NEW_POINTS },
+    limits: { envelope_targets: MAX_TARGETS, track_targets: MAX_TARGETS, fx_targets: MAX_TARGETS, total_inserted_points: MAX_NEW_POINTS },
     examples: [
       { name: "preview_volume_ramp", input: { mode: "insert_points", envelope_refs: ["envelope:guid:{ENVELOPE-GUID}"], points: [{ time_seconds: 0, value: 0.25 }, { time_seconds: 2, value: 1 }], dry_run: true } },
       { name: "preview_point_delete", input: { mode: "delete_point", envelope_refs: ["envelope:guid:{ENVELOPE-GUID}"], point_delete: { autoitem_index: -1, point_index: 2 } } },
+      { name: "write_take_fx_parameter", input: { mode: "insert_fx_parameter_points", fx_refs: ["fx:take:guid:{TAKE-GUID}:0"], fx_parameter: { param_index: 0, create_if_missing: true }, points: [{ time_seconds: 1, value: 0.5 }], dry_run: false } },
       { name: "set_track_read", input: { mode: "set_track_mode", track_refs: ["track:guid:{TRACK}"], track_mode: "read", dry_run: false } },
     ],
   }]);
@@ -192,24 +207,26 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
     rollout_slice: "Alpha3.3-B1d",
     action_manual: {
       when_to_use: [
-        "Use insert_points or update_point for raw-value points on an existing exact Envelope when its complete lane remains within 64 points.",
+        "Use insert_points or update_point for raw-value points on an existing exact Track or ordinary Take Envelope when its complete lane remains within 64 points; all time_seconds are project-absolute and Take conversion is native/read back.",
         "Use set_lane_state only when the live bridge proves BR/SWS Envelope properties are available.",
-        "Use set_track_mode for trim_read or read; create_automation_item for a new empty Automation Item; or set_automation_item_bounds for existing Item position/length.",
-        "Use delete_point or delete_point_range only through dry-run preview followed by the exact returned confirmation_token retry.",
+        "Use set_track_mode for trim_read or read; create_automation_item for a new empty Automation Item; or set_automation_item_bounds for existing Item position, length, start offset, or playrate.",
+        "Use delete_point, delete_point_range, or delete_automation_item only through dry-run preview followed by the exact returned confirmation_token retry; Automation Item deletion uses fixed Action 42086 with Master/Track/Take/FX selection restoration.",
+        "Use insert_fx_parameter_points for exact Track-FX or Take-FX refs; missing parameter Envelopes are created only by the audited false-first native ensure route, then points are written through the generic GUID Envelope atom.",
       ],
       when_not_to_use: [
-        "Do not use this slice for Automation Item deletion, Take/Take-FX Automation, missing Envelope creation, FX-parameter Envelope creation, real-time touch/write/latch modes, or model-supplied steps.",
-        "Do not guess semantic dB/pan/plugin values: insert_points accepts already-known raw REAPER Envelope values only, and negative Pan Automation is held because the accepted atom clamps values below zero.",
+        "Do not use this slice to create missing ordinary Track or Take Volume/Pan/Mute/Pitch Envelopes, create send Envelopes, operate Take Automation Items, run real-time touch/write/latch, or supply model-authored steps.",
+        "Do not guess semantic dB/pan/plugin values: insert_points accepts already-known raw REAPER Envelope values inside the exact live min/max range; FX parameter points are normalized 0..1.",
       ],
       required_readiness: [
         "Prefer canonical envelope:guid:{GUID} refs from live inventory. Older exact track/send or fingerprint refs are hidden compatibility inputs only and are never taught as the default.",
-        "Provide at most eight exact Envelope refs or at most eight exact Track GUID refs; ambiguous discovery is not accepted here.",
+        "Provide at most eight exact Envelope, Track GUID, or Track/Take-FX refs; ambiguous discovery is not accepted here.",
         "The Macro resolves and reads every exact target from REAPER live. SQLite may be absent or stale and is never write authority.",
       ],
       input_shape: {
         mode: ALPHA3_3_B1D_AUTOMATION_APPLY_MODES.join(" | "),
         envelope_refs: "Existing exact Envelope refs; canonical envelope:guid:{GUID} is preferred.",
         track_refs: "Exact track:guid refs for set_track_mode.",
+        fx_refs: "Exact fx:track:guid:{TRACK}:slot or fx:take:guid:{TAKE}:slot refs for insert_fx_parameter_points.",
         points: "For insert_points: 1-32 raw points; total points across all target Envelopes must be <=32.",
         lane_state: "For set_lane_state: one or more booleans from active, armed, visible, show_lane.",
         point_update: "For update_point: autoitem_index (default -1), exact point_index, and at least one updated point field.",
@@ -217,18 +234,21 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
         point_range: "For delete_point_range: autoitem_index (default -1), start_seconds, end_seconds; deletion is half-open [start,end).",
         track_mode: "trim_read | read. Real-time touch/write/latch modes are held.",
         automation_item: "For create_automation_item: position_seconds>=0, length_seconds>0, pool_mode=new_empty.",
-        automation_item_bounds: "For set_automation_item_bounds: exact automation_item_index plus position_seconds and/or length_seconds. Offset/playrate remain held until independently readable.",
+        automation_item_bounds: "For set_automation_item_bounds: exact automation_item_index plus one or more of position_seconds, length_seconds, start_offset_seconds, or playrate; every requested field is independently read back.",
+        automation_item_delete: "For delete_automation_item: exact automation_item_index from a complete live Automation Item page.",
+        fx_parameter: "For insert_fx_parameter_points: param_index, optional exact param_ident, and create_if_missing (defaults true).",
         dry_run: "Defaults to true.",
         confirmation_token: "Destructive retry string returned by the immediately preceding dry-run preview. Boolean confirmation is insufficient.",
       },
       preflight_steps: [
-        "Reject held modes, non-exact targets, oversized point work, unsupported value domains, incomplete point/Automation Item readback, stale/missing destructive tokens, and response-budget overflow before mutation.",
+        "Reject held modes, non-exact targets, oversized point work, live value-range violations, incomplete point/Automation Item readback, stale/missing destructive tokens, and response-budget overflow before mutation.",
         "Resolve exact refs live and capture complete pre-mutation facts without consulting SQLite identity.",
       ],
       underlying_actions: ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS,
       readback_steps: [
         "insert_points/update_point/delete_point/delete_point_range compare complete pre/post point tuples and counts; half-open range readback proves [start,end) absence while preserving end_seconds points.",
-        "set_lane_state re-reads exact BR/SWS-backed state, set_track_mode calls the native read Template, and Automation Item modes independently read exact live Item rows.",
+        "set_lane_state re-reads exact BR/SWS-backed state, set_track_mode calls the native read Template, and Automation Item modes independently read complete exact live Item rows.",
+        "FX parameter mode independently re-runs the read-only FX mapping, requires a GUID Envelope, and reads the complete point lane after native ensure and generic insertion.",
         "Each changes[] row reports mutation, exact live readback, and Automation index maintenance separately; applied requires that row's readback to pass.",
       ],
       success_criteria: [
@@ -239,14 +259,15 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
       common_blockers: [
         blocker("AUTOMATION_CONFIRMATION_TOKEN_REQUIRED", "Point/range deletion requires the exact deterministic token from a current dry-run preview."),
         blocker("AUTOMATION_CONFIRMATION_TOKEN_STALE", "The supplied token no longer matches current exact target/point/range state."),
-        blocker("AUTOMATION_TAKE_ROUTE_MISSING", "Ordinary Take and Take-FX parameter Envelope write routes are not accepted."),
-        blocker("AUTOMATION_ENVELOPE_CREATE_MISSING", "Safe create-if-missing Envelope behavior is not accepted."),
+        blocker("TRACK_ENVELOPE_CREATE_UNAVAILABLE", "Missing ordinary Track/Take/send Envelopes have no accepted native create route; only Track/Take-FX parameter Envelope ensure is supported."),
+        blocker("AUTOMATION_FX_ENVELOPE_MISSING", "The exact FX parameter has no Envelope and create_if_missing was disabled."),
+        blocker("TAKE_ENVELOPE_TIME_OUT_OF_BOUNDS", "Take Envelope project time must fall inside the parent Item; conversion uses Item position and Take playrate."),
         blocker("AUTOMATION_COMPLETE_READBACK_REQUIRED", "This Macro requires one complete <=64-point lane for independent tuple/count verification."),
         blocker("AUTOMATION_LANE_BR_REQUIRED", "Lane-state truth requires working BR/SWS Envelope property APIs."),
       ],
       recovery_steps: [
         "Use exact refs from a live read, reduce targets/points to the reported bound, or split the request before retrying.",
-        "For Automation Item deletion, Take/Take-FX, create-if-missing, FX-parameter, start-offset, or playrate work, wait for the named accepted atomic repair/read route; do not use raw Actions or chunk edits.",
+        "For missing ordinary Track/Take/send Envelopes, Take Automation Items, or broader curve generation, stop at the typed blocker; do not use raw Actions or chunk edits.",
         "If index maintenance alone fails, keep the verified REAPER change truth and refresh only the Automation/Track index scopes.",
       ],
       dry_run_shape: {
@@ -304,7 +325,9 @@ export async function executeAlpha3_3B1dAutomationApplyMacro({
 
   const prepared = normalized.input.mode === "set_track_mode"
     ? await prepareTrackOperations({ request, input: normalized.input, executeAtomic, state })
-    : await prepareEnvelopeOperations({ request, input: normalized.input, executeAtomic, state });
+    : normalized.input.mode === "insert_fx_parameter_points"
+      ? await prepareFxOperations({ request, input: normalized.input, executeAtomic, state })
+      : await prepareEnvelopeOperations({ request, input: normalized.input, executeAtomic, state });
   if (!prepared.ok) {
     pushStage(stages, "automation-apply-targets", "live_ref_resolve", "blocked", prepared.message, state.evidenceRefs);
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: prepared.code, message: prepared.message, blockers: prepared.blockers, data: targetData(state) });
@@ -397,10 +420,10 @@ async function prepareEnvelopeMode({ request, input, executeAtomic, state, envel
   if (input.mode === "insert_points") {
     const before = await readCompletePoints({ request, executeAtomic, state, envelopeRef, autoitemIndex: -1 });
     if (!before.ok) return before;
-    if (before.summary.envelope_type === "pan") return failed("AUTOMATION_POINT_VALUE_DOMAIN_UNSUPPORTED", "Pan Envelope point insertion is held because the accepted atom does not prove the full negative raw-value domain.");
-    if (before.summary.envelope_type === "mute" && input.points.some((point) => point.value !== 0 && point.value !== 1)) return failed("AUTOMATION_POINT_VALUE_DOMAIN_UNSUPPORTED", "Mute Envelope raw point values must be exactly 0 or 1.");
+    const valueDomain = validateEnvelopePointValues(input.points, before.summary);
+    if (!valueDomain.ok) return valueDomain;
     if (before.points.length + input.points.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `Envelope ${envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
-    return { ok: true, operation: { template_id: INSERT_POINTS_ID, input: { autoitem_index: -1, points: input.points }, requested: { autoitem_index: -1, point_count: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds }, autoitem_index: -1, before_points: before.points } };
+    return { ok: true, operation: { template_id: INSERT_POINTS_ID, input: { autoitem_index: -1, points: input.points }, requested: { autoitem_index: -1, point_count: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds, time_basis: "project", value_range: valueDomain.range }, autoitem_index: -1, before_points: before.points } };
   }
   if (["update_point", "delete_point", "delete_point_range"].includes(input.mode)) {
     const spec = input.mode === "update_point" ? input.point_update : input.mode === "delete_point" ? input.point_delete : input.point_range;
@@ -411,6 +434,8 @@ async function prepareEnvelopeMode({ request, input, executeAtomic, state, envel
       if (!current) return failed("AUTOMATION_POINT_INDEX_OUT_OF_RANGE", `point_index ${spec.point_index} is outside ${envelopeRef.ref} lane count ${before.points.length}.`);
       const desired = { ...current, ...spec.fields };
       delete desired.point_index;
+      const valueDomain = validateEnvelopePointValues([desired], before.summary);
+      if (!valueDomain.ok) return valueDomain;
       return { ok: true, operation: { template_id: SET_POINT_ID, input: { autoitem_index: spec.autoitem_index, point_index: spec.point_index, ...spec.fields }, requested: { autoitem_index: spec.autoitem_index, original_point_index: spec.point_index, current_point: current, desired_point: desired, before_count: before.points.length }, autoitem_index: spec.autoitem_index, before_points: before.points, current_point: current, desired_point: desired } };
     }
     if (input.mode === "delete_point") {
@@ -433,6 +458,13 @@ async function prepareEnvelopeMode({ request, input, executeAtomic, state, envel
     const current = before.items.find((item) => item.automation_item_index === input.automation_item_bounds.automation_item_index);
     if (!current) return failed("AUTOMATION_ITEM_INDEX_OUT_OF_RANGE", `automation_item_index ${input.automation_item_bounds.automation_item_index} is outside ${envelopeRef.ref}.`);
     return { ok: true, operation: { template_id: SET_AUTOMATION_ITEM_BOUNDS_ID, input: input.automation_item_bounds, requested: { current_item: current, fields: clone(input.automation_item_bounds) }, before_items: before.items } };
+  }
+  if (input.mode === "delete_automation_item") {
+    const before = await readCompleteAutomationItems({ request, executeAtomic, state, envelopeRef });
+    if (!before.ok) return before;
+    const current = before.items.find((item) => item.automation_item_index === input.automation_item_delete.automation_item_index);
+    if (!current) return failed("AUTOMATION_ITEM_INDEX_OUT_OF_RANGE", `automation_item_index ${input.automation_item_delete.automation_item_index} is outside ${envelopeRef.ref}.`);
+    return { ok: true, operation: { template_id: DELETE_AUTOMATION_ITEM_ID, destructive: true, input: input.automation_item_delete, requested: { current_item: current, before_count: before.items.length }, before_items: before.items, current_item: current } };
   }
   return failed("AUTOMATION_MODE_HELD", `${input.mode} is not executable in Alpha3.3-B1d.`);
 }
@@ -462,10 +494,72 @@ async function prepareTrackOperations({ request, input, executeAtomic, state }) 
   return { ok: true, operations };
 }
 
+async function prepareFxOperations({ request, input, executeAtomic, state }) {
+  const direct = collectObjectRefs(request.refs, "fx");
+  const candidates = [...direct.map((ref) => ref.ref), ...input.fx_refs];
+  if (candidates.length < 1) return failed("AUTOMATION_EXACT_FX_REQUIRED", "insert_fx_parameter_points requires at least one exact Track-FX or Take-FX ref.");
+  if (candidates.length > MAX_TARGETS) return failed("AUTOMATION_TARGET_LIMIT_EXCEEDED", `FX targets exceed ${MAX_TARGETS}.`);
+  if (new Set(candidates).size !== candidates.length) return failed("AUTOMATION_TARGETS_DUPLICATED", "FX targets must resolve once each.");
+  if (candidates.length * input.points.length > MAX_NEW_POINTS) return failed("AUTOMATION_POINT_LIMIT_EXCEEDED", `Total inserted point work exceeds ${MAX_NEW_POINTS} across all target FX.`);
+  if (input.points.some((point) => point.value < 0 || point.value > 1)) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", "FX parameter Envelope values must be normalized within 0..1.");
+  const operations = [];
+  for (const [index, token] of candidates.entries()) {
+    if (!isExactFxRef(token)) return failed("AUTOMATION_EXACT_FX_REQUIRED", `FX target ${token} must be an exact fx:track:guid or fx:take:guid ref.`);
+    const fxRef = fxObjectRef(token);
+    const mapping = await readFxParameterMapping({ request, executeAtomic, state, fxRef, fxParameter: input.fx_parameter });
+    if (!mapping.ok) return mapping;
+    let envelopeRef = null;
+    let beforePoints = [];
+    if (mapping.exists) {
+      envelopeRef = mapping.envelopeRef;
+      const before = await readCompletePoints({ request, executeAtomic, state, envelopeRef, autoitemIndex: -1 });
+      if (!before.ok) return before;
+      if (before.points.length + input.points.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
+      beforePoints = before.points;
+      state.canonicalRefs.push(envelopeRef.ref);
+    } else if (input.fx_parameter.create_if_missing !== true) {
+      return failed("AUTOMATION_FX_ENVELOPE_MISSING", `FX parameter ${input.fx_parameter.param_index} has no existing Envelope; set create_if_missing=true to use the audited native ensure route.`);
+    }
+    operations.push({
+      operation_id: `automation-${index + 1}-insert_fx_parameter_points`,
+      mode: input.mode,
+      template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID,
+      target_ref: fxRef.ref,
+      refs: { fx_ref: fxRef },
+      input: { param_index: input.fx_parameter.param_index, ...(input.fx_parameter.param_ident ? { param_ident: input.fx_parameter.param_ident } : {}) },
+      requested: {
+        param_index: input.fx_parameter.param_index,
+        param_ident: mapping.paramIdent,
+        owner_kind: mapping.ownerKind,
+        create_if_missing: input.fx_parameter.create_if_missing,
+        envelope_existed_before: mapping.exists,
+        point_count: input.points.length,
+        time_basis: "project",
+        value_range: { min: 0, max: 1 },
+      },
+      fx_ref: fxRef,
+      envelope_ref: envelopeRef,
+      mapping_before: mapping,
+      before_points: beforePoints,
+      points: input.points,
+      autoitem_index: -1,
+    });
+    state.canonicalRefs.push(fxRef.ref);
+  }
+  state.targetKind = "fx";
+  state.targetCount = operations.length;
+  return { ok: true, operations };
+}
+
 async function executeOperations({ request, executeAtomic, state }) {
   for (const operation of state.operations) {
     const change = pendingChange(operation);
     state.changes.push(change);
+    if (operation.mode === "insert_fx_parameter_points") {
+      const failure = await executeFxOperation({ operation, change, request, executeAtomic, state });
+      if (failure) return failure;
+      continue;
+    }
     let mutation;
     let childFailure = null;
     try {
@@ -502,6 +596,88 @@ async function executeOperations({ request, executeAtomic, state }) {
     change.status = "applied";
     change.live_readback = { status: "passed", source: verified.source, ...verified.facts };
   }
+  return null;
+}
+
+async function executeFxOperation({ operation, change, request, executeAtomic, state }) {
+  let ensured;
+  try {
+    ensured = await runAtomic(executeAtomic, request, { id: ENSURE_FX_PARAMETER_ENVELOPE_ID, input: operation.input, refs: { fx_ref: operation.fx_ref } });
+  } catch (error) {
+    change.mutation = { status: "unknown_or_partial", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: "live_fx_parameter_mapping" };
+    return executionError(error, ENSURE_FX_PARAMETER_ENVELOPE_ID, "mutation");
+  }
+  collectEvidence(state, ensured);
+  if (ensured?.ok !== true) {
+    const failure = atomicFailure(ensured, ENSURE_FX_PARAMETER_ENVELOPE_ID);
+    change.mutation = { status: "unknown_or_partial", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope", ...(ensured?.error?.details ? { details: clone(ensured.error.details) } : {}) };
+    const verified = await verifyOperation({ operation, request, executeAtomic, state });
+    change.status = verified.ok ? "applied" : "readback_failed";
+    change.live_readback = verified.ok ? { status: "passed", source: verified.source, ...verified.facts } : { status: "failed", source: verified.source ?? "live_fx_parameter_mapping" };
+    return { ...failure, phase: "mutation" };
+  }
+
+  const mapping = await readFxParameterMapping({ request, executeAtomic, state, fxRef: operation.fx_ref, fxParameter: operation.input });
+  if (!mapping.ok || !mapping.exists || !mapping.envelopeRef) {
+    change.mutation = { status: "unknown_or_partial", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: "live_fx_parameter_mapping" };
+    return { ...(mapping.ok ? failed("AUTOMATION_FX_ENVELOPE_READBACK_MISSING", "Ensured FX parameter Envelope was not independently resolved by the read mapping.") : mapping), phase: "readback" };
+  }
+  operation.envelope_ref = mapping.envelopeRef;
+  operation.refs.envelope_ref = mapping.envelopeRef;
+  state.canonicalRefs.push(mapping.envelopeRef.ref);
+  const baseline = await readCompletePoints({ request, executeAtomic, state, envelopeRef: mapping.envelopeRef, autoitemIndex: -1 });
+  if (!baseline.ok) {
+    change.mutation = { status: "unknown_or_partial", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: "live_envelope_points" };
+    return { ...baseline, phase: "readback" };
+  }
+  if (operation.mapping_before.exists && !pointMultisetEquals(baseline.points.map(stripPointIndex), operation.before_points.map(stripPointIndex))) {
+    change.mutation = { status: "not_completed", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "stale_preflight" };
+    change.status = "blocked";
+    change.live_readback = { status: "failed", source: "live_envelope_points" };
+    return { ...failed("AUTOMATION_PRECONDITION_STALE", `FX parameter Envelope ${mapping.envelopeRef.ref} changed after preflight; no points were inserted.`), phase: "readback" };
+  }
+  operation.before_points = baseline.points;
+  if (baseline.points.length + operation.points.length > MAX_COMPLETE_READ_POINTS) {
+    change.mutation = { status: operation.mapping_before.exists ? "not_completed" : "completed", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
+    change.status = "blocked";
+    change.live_readback = { status: "failed", source: "live_envelope_points" };
+    return { ...failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${mapping.envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`), phase: "readback" };
+  }
+
+  let inserted;
+  try {
+    inserted = await runAtomic(executeAtomic, request, { id: INSERT_POINTS_ID, input: { autoitem_index: -1, points: operation.points }, refs: { envelope_ref: mapping.envelopeRef } });
+  } catch (error) {
+    change.mutation = { status: "unknown_or_partial", template_id: INSERT_POINTS_ID, stage: "insert_points", ensure_template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID };
+    const verified = await verifyOperation({ operation, request, executeAtomic, state });
+    change.status = verified.ok ? "applied" : "readback_failed";
+    change.live_readback = verified.ok ? { status: "passed", source: verified.source, ...verified.facts } : { status: "failed", source: verified.source ?? "live_envelope_points" };
+    return executionError(error, INSERT_POINTS_ID, "mutation");
+  }
+  collectEvidence(state, inserted);
+  if (inserted?.ok !== true) {
+    const failure = atomicFailure(inserted, INSERT_POINTS_ID);
+    change.mutation = { status: "unknown_or_partial", template_id: INSERT_POINTS_ID, stage: "insert_points", ensure_template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, ...(inserted?.error?.details ? { details: clone(inserted.error.details) } : {}) };
+    const verified = await verifyOperation({ operation, request, executeAtomic, state });
+    change.status = verified.ok ? "applied" : "readback_failed";
+    change.live_readback = verified.ok ? { status: "passed", source: verified.source, ...verified.facts } : { status: "failed", source: verified.source ?? "live_envelope_points" };
+    return { ...failure, phase: "mutation" };
+  }
+  change.mutation = { status: "completed", template_id: INSERT_POINTS_ID, ensure_template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID };
+  const verified = await verifyOperation({ operation, request, executeAtomic, state });
+  if (!verified.ok) {
+    change.status = "readback_failed";
+    change.live_readback = { status: "failed", source: verified.source ?? "live_envelope_points" };
+    return { ...verified, phase: "readback" };
+  }
+  change.status = "applied";
+  change.live_readback = { status: "passed", source: verified.source, ...verified.facts };
   return null;
 }
 
@@ -569,6 +745,22 @@ async function verifyOperation({ operation, request, executeAtomic, state }) {
     if (!countMatches || !fieldsMatch) return failed("AUTOMATION_READBACK_MISMATCH", `Automation Item bounds did not read back exactly on ${operation.target_ref}.`);
     return { ok: true, source: "live_automation_items", facts: pick(observed, Object.keys(operation.input)) };
   }
+  if (operation.mode === "delete_automation_item") {
+    const after = await readCompleteAutomationItems({ request, executeAtomic, state, envelopeRef: operation.refs.envelope_ref });
+    if (!after.ok) return { ...after, source: "live_automation_items" };
+    const expected = operation.before_items.filter((item) => item.automation_item_index !== operation.current_item.automation_item_index);
+    if (after.items.length !== expected.length || !automationItemRowsMatchAfterDeletion(after.items, expected)) return failed("AUTOMATION_READBACK_MISMATCH", `Deleted Automation Item tuple/count did not read back absent on ${operation.target_ref}.`);
+    return { ok: true, source: "live_automation_items", facts: { automation_item_index: operation.current_item.automation_item_index, deleted_count: 1, before_count: operation.before_items.length, after_count: after.items.length, target_absent: true } };
+  }
+  if (operation.mode === "insert_fx_parameter_points") {
+    const mapping = await readFxParameterMapping({ request, executeAtomic, state, fxRef: operation.fx_ref, fxParameter: operation.input });
+    if (!mapping.ok) return { ...mapping, source: "live_fx_parameter_mapping" };
+    if (!mapping.exists || !mapping.envelopeRef || operation.envelope_ref && mapping.envelopeRef.ref !== operation.envelope_ref.ref) return failed("AUTOMATION_READBACK_MISMATCH", `FX parameter Envelope identity did not independently round-trip ${operation.target_ref}.`);
+    const after = await readCompletePoints({ request, executeAtomic, state, envelopeRef: mapping.envelopeRef, autoitemIndex: -1 });
+    if (!after.ok) return { ...after, source: "live_envelope_points" };
+    if (after.points.length !== operation.before_points.length + operation.points.length || !pointMultisetDeltaMatches(operation.before_points, after.points, operation.points)) return failed("AUTOMATION_READBACK_MISMATCH", `Exact FX parameter point readback did not prove all inserted points on ${operation.target_ref}.`);
+    return { ok: true, source: "live_fx_parameter_mapping_and_points", facts: { fx_ref: operation.fx_ref.ref, envelope_ref: mapping.envelopeRef.ref, owner_kind: mapping.ownerKind, param_index: mapping.paramIndex, param_ident: mapping.paramIdent, inserted_count: operation.points.length, total_count: after.points.length, created_envelope: operation.mapping_before.exists === false } };
+  }
   return failed("AUTOMATION_MODE_HELD", `${operation.mode} has no verifier.`);
 }
 
@@ -603,6 +795,22 @@ async function readTrackMode({ request, executeAtomic, state, trackRef }) {
   return { ok: true, summary };
 }
 
+async function readFxParameterMapping({ request, executeAtomic, state, fxRef, fxParameter }) {
+  const input = { param_index: fxParameter.param_index, ...(fxParameter.param_ident ? { param_ident: fxParameter.param_ident } : {}) };
+  const execution = await runAtomic(executeAtomic, request, { id: MAP_FX_PARAMETER_ENVELOPE_ID, input, refs: { fx_ref: fxRef } });
+  collectEvidence(state, execution);
+  if (execution?.ok !== true) return atomicFailure(execution, MAP_FX_PARAMETER_ENVELOPE_ID);
+  const summary = executionSummary(execution);
+  const returnedFx = executionObjectRefs(execution).find((ref) => ref.kind === "fx");
+  const envelopeRef = executionObjectRefs(execution).find((ref) => ref.kind === "envelope") ?? null;
+  const exists = summary.envelope_exists === true || summary.envelope_available === true;
+  if (!returnedFx || returnedFx.ref !== fxRef.ref || summary.fx_ref !== fxRef.ref || summary.param_index !== fxParameter.param_index || !["track", "take"].includes(summary.owner_kind) || typeof summary.param_ident !== "string" || summary.param_ident.length === 0) return failed("AUTOMATION_TARGET_IDENTITY_MISMATCH", `FX parameter mapping did not exactly round-trip ${fxRef.ref}.`);
+  if (fxParameter.param_ident && summary.param_ident !== fxParameter.param_ident) return failed("AUTOMATION_TARGET_IDENTITY_MISMATCH", `FX parameter mapping changed param_ident for ${fxRef.ref}.`);
+  if (exists && (!envelopeRef || !/^envelope:guid:.+/u.test(envelopeRef.ref) || summary.envelope_ref !== envelopeRef.ref)) return failed("AUTOMATION_TARGET_IDENTITY_MISMATCH", `Existing FX parameter mapping did not return one canonical GUID Envelope ref for ${fxRef.ref}.`);
+  if (!exists && envelopeRef) return failed("AUTOMATION_TARGET_IDENTITY_MISMATCH", `Missing FX parameter mapping unexpectedly returned an Envelope ref for ${fxRef.ref}.`);
+  return { ok: true, exists, envelopeRef, ownerKind: summary.owner_kind, ownerRef: summary.owner_ref, slotIndex: summary.slot_index, paramIndex: summary.param_index, paramIdent: summary.param_ident, paramName: summary.parameter_name ?? summary.param_name ?? "" };
+}
+
 async function readCompleteAutomationItems({ request, executeAtomic, state, envelopeRef }) {
   const execution = await runAtomic(executeAtomic, request, { id: READ_AUTOMATION_ITEMS_ID, input: { limit: MAX_AUTOMATION_ITEMS }, refs: { envelope_ref: envelopeRef } });
   collectEvidence(state, execution);
@@ -619,7 +827,8 @@ function normalizeInput(input) {
   if (Object.hasOwn(input, "confirmation")) return failed("AUTOMATION_CONFIRMATION_TOKEN_REQUIRED", "Boolean confirmation is insufficient; destructive modes require confirmation_token from a current dry-run preview.");
   const unknown = Object.keys(input).filter((field) => !INPUT_FIELDS.has(field));
   if (unknown.length > 0) return failed("AUTOMATION_REQUEST_INVALID", `Unsupported input field(s): ${unknown.join(", ")}. Model-supplied steps are forbidden.`);
-  const mode = input.mode === "delete_points" ? "delete_point" : input.mode;
+  const requestedMode = input.mode === "delete_points" ? "delete_point" : input.mode;
+  const mode = MODE_ALIASES.get(requestedMode) ?? requestedMode;
   if (!ALPHA3_3_B1D_AUTOMATION_APPLY_MODES.includes(mode)) {
     const code = ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES.includes(mode) ? heldModeCode(mode) : "AUTOMATION_MODE_UNSUPPORTED";
     return failed(code, `mode=${String(mode)} is not executable in Alpha3.3-B1d; supported modes are ${ALPHA3_3_B1D_AUTOMATION_APPLY_MODES.join(", ")}.`);
@@ -630,48 +839,63 @@ function normalizeInput(input) {
   if (!envelopeRefs.ok) return envelopeRefs;
   const trackRefs = normalizeStringArray(input.track_refs, "track_refs", MAX_TARGETS);
   if (!trackRefs.ok) return trackRefs;
-  const normalized = { mode, envelope_refs: envelopeRefs.value, track_refs: trackRefs.value, points: null, point_update: null, point_delete: null, point_range: null, lane_state: null, track_mode: null, automation_item: null, automation_item_bounds: null, dry_run: input.dry_run !== false, confirmation_token: input.confirmation_token ?? null };
+  const fxRefs = normalizeStringArray(input.fx_refs, "fx_refs", MAX_TARGETS);
+  if (!fxRefs.ok) return fxRefs;
+  const normalized = { mode, envelope_refs: envelopeRefs.value, track_refs: trackRefs.value, fx_refs: fxRefs.value, points: null, point_update: null, point_delete: null, point_range: null, lane_state: null, track_mode: null, automation_item: null, automation_item_bounds: null, automation_item_delete: null, fx_parameter: null, dry_run: input.dry_run !== false, confirmation_token: input.confirmation_token ?? null };
   if (mode === "insert_points") {
     const points = normalizePoints(input.points);
     if (!points.ok) return points;
     normalized.points = points.value;
-    if (hasAny(input, ["point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "insert_points accepts only Envelope targets and points.");
+    if (hasAny(input, ["point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "insert_points accepts only Envelope targets and points.");
   } else if (mode === "update_point") {
     const update = normalizePointUpdate(input.point_update);
     if (!update.ok) return update;
     normalized.point_update = update.value;
-    if (hasAny(input, ["points", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "update_point accepts only Envelope targets and point_update.");
+    if (hasAny(input, ["points", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "update_point accepts only Envelope targets and point_update.");
   } else if (mode === "delete_point") {
     const deletion = normalizePointDelete(input.point_delete);
     if (!deletion.ok) return deletion;
     normalized.point_delete = deletion.value;
-    if (hasAny(input, ["points", "point_update", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_point accepts only Envelope targets, point_delete, and confirmation_token.");
+    if (hasAny(input, ["points", "point_update", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_point accepts only Envelope targets, point_delete, and confirmation_token.");
   } else if (mode === "delete_point_range") {
     const range = normalizePointRange(input.point_range);
     if (!range.ok) return range;
     normalized.point_range = range.value;
-    if (hasAny(input, ["points", "point_update", "point_delete", "lane_state", "track_mode", "automation_item", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_point_range accepts only Envelope targets, point_range, and confirmation_token.");
+    if (hasAny(input, ["points", "point_update", "point_delete", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_point_range accepts only Envelope targets, point_range, and confirmation_token.");
   } else if (mode === "set_lane_state") {
     const lane = normalizeLaneState(input.lane_state);
     if (!lane.ok) return lane;
     normalized.lane_state = lane.value;
-    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "track_mode", "automation_item", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "set_lane_state accepts only Envelope targets and lane_state.");
+    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "set_lane_state accepts only Envelope targets and lane_state.");
   } else if (mode === "set_track_mode") {
     if (!["trim_read", "read"].includes(input.track_mode)) return failed(["touch", "write", "latch", "latch_preview"].includes(input.track_mode) ? "AUTOMATION_REALTIME_MODE_HELD" : "AUTOMATION_TRACK_MODE_INVALID", "set_track_mode supports only trim_read or read; real-time touch/write/latch modes are held.");
     normalized.track_mode = input.track_mode;
-    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "automation_item", "automation_item_bounds"]) || envelopeRefs.value.length > 0 || input.confirmation_token !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "set_track_mode accepts only Track targets and track_mode.");
+    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "automation_item", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || envelopeRefs.value.length > 0 || fxRefs.value.length > 0 || input.confirmation_token !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "set_track_mode accepts only Track targets and track_mode.");
   } else if (mode === "create_automation_item") {
     const automationItem = normalizeCreateAutomationItem(input.automation_item);
     if (!automationItem.ok) return automationItem;
     normalized.automation_item = automationItem.value;
-    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item_bounds"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "create_automation_item accepts only Envelope targets and automation_item.");
-  } else {
+    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item_bounds", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "create_automation_item accepts only Envelope targets and automation_item.");
+  } else if (mode === "set_automation_item_bounds") {
     const bounds = normalizeAutomationItemBounds(input.automation_item_bounds);
     if (!bounds.ok) return bounds;
     normalized.automation_item_bounds = bounds.value;
-    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item"]) || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "set_automation_item_bounds accepts only Envelope targets and automation_item_bounds.");
+    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_delete", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "set_automation_item_bounds accepts only Envelope targets and automation_item_bounds.");
+  } else if (mode === "delete_automation_item") {
+    const deletion = normalizeAutomationItemDelete(input.automation_item_delete);
+    if (!deletion.ok) return deletion;
+    normalized.automation_item_delete = deletion.value;
+    if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_automation_item accepts only Envelope targets, automation_item_delete, and confirmation_token.");
+  } else {
+    const points = normalizePoints(input.points);
+    if (!points.ok) return points;
+    const fxParameter = normalizeFxParameter(input.fx_parameter);
+    if (!fxParameter.ok) return fxParameter;
+    normalized.points = points.value;
+    normalized.fx_parameter = fxParameter.value;
+    if (hasAny(input, ["point_update", "point_delete", "point_range", "lane_state", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete"]) || envelopeRefs.value.length > 0 || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "insert_fx_parameter_points accepts only FX targets, fx_parameter, and points.");
   }
-  if (!DESTRUCTIVE_MODES.has(mode) && input.confirmation_token !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "confirmation_token is valid only for destructive point deletion modes.");
+  if (!DESTRUCTIVE_MODES.has(mode) && input.confirmation_token !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "confirmation_token is valid only for destructive point or Automation Item deletion modes.");
   return { ok: true, input: normalized };
 }
 
@@ -687,7 +911,7 @@ function normalizePoints(value) {
     const shape = point.shape ?? 0;
     const tension = point.tension ?? 0;
     const selected = point.selected ?? false;
-    if (!Number.isFinite(time) || time < 0 || !Number.isFinite(rawValue) || rawValue < 0 || rawValue > 4 || !Number.isInteger(shape) || shape < 0 || shape > 5 || !Number.isFinite(tension) || tension < -1 || tension > 1 || typeof selected !== "boolean") return failed("AUTOMATION_POINTS_INVALID", `points[${index}] must use time>=0, raw value 0..4, shape 0..5, tension -1..1, and boolean selected.`);
+    if (!Number.isFinite(time) || time < 0 || !Number.isFinite(rawValue) || !Number.isInteger(shape) || shape < 0 || shape > 5 || !Number.isFinite(tension) || tension < -1 || tension > 1 || typeof selected !== "boolean") return failed("AUTOMATION_POINTS_INVALID", `points[${index}] must use project time>=0, a finite raw value, shape 0..5, tension -1..1, and boolean selected.`);
     points.push({ time_seconds: time, value: rawValue, shape, tension, selected });
   }
   return { ok: true, value: points };
@@ -729,13 +953,31 @@ function normalizePointRange(value) {
 
 function normalizeAutomationItemBounds(value) {
   if (!isPlainObject(value)) return failed("AUTOMATION_ITEM_BOUNDS_REQUIRED", "set_automation_item_bounds requires automation_item_bounds.");
-  if (Object.hasOwn(value, "start_offset_seconds") || Object.hasOwn(value, "playrate")) return failed("AUTOMATION_ITEM_BOUNDS_FIELD_HELD", "start_offset_seconds and playrate remain held because read_automation_items does not independently expose them.");
-  const unknown = Object.keys(value).filter((field) => !["automation_item_index", "position_seconds", "length_seconds"].includes(field));
-  if (unknown.length > 0 || !Number.isInteger(value.automation_item_index) || value.automation_item_index < 0) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "automation_item_bounds requires a non-negative automation_item_index and only position_seconds/length_seconds fields.");
-  if (value.position_seconds === undefined && value.length_seconds === undefined) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "automation_item_bounds requires position_seconds and/or length_seconds.");
+  const fields = ["position_seconds", "length_seconds", "start_offset_seconds", "playrate"];
+  const unknown = Object.keys(value).filter((field) => field !== "automation_item_index" && !fields.includes(field));
+  if (unknown.length > 0 || !Number.isInteger(value.automation_item_index) || value.automation_item_index < 0) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "automation_item_bounds requires a non-negative automation_item_index and only supported bounds fields.");
+  if (!fields.some((field) => value[field] !== undefined)) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "automation_item_bounds requires at least one bounds field.");
   if (value.position_seconds !== undefined && (!Number.isFinite(value.position_seconds) || value.position_seconds < 0)) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "position_seconds must be finite and non-negative.");
   if (value.length_seconds !== undefined && (!Number.isFinite(value.length_seconds) || value.length_seconds <= 0)) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "length_seconds must be finite and positive.");
+  if (value.start_offset_seconds !== undefined && !Number.isFinite(value.start_offset_seconds)) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "start_offset_seconds must be finite.");
+  if (value.playrate !== undefined && (!Number.isFinite(value.playrate) || value.playrate <= 0)) return failed("AUTOMATION_ITEM_BOUNDS_INVALID", "playrate must be finite and positive.");
   return { ok: true, value: clone(value) };
+}
+
+function normalizeAutomationItemDelete(value) {
+  if (!isPlainObject(value)) return failed("AUTOMATION_ITEM_DELETE_REQUIRED", "delete_automation_item requires automation_item_delete.");
+  const unknown = Object.keys(value).filter((field) => field !== "automation_item_index");
+  if (unknown.length > 0 || !Number.isInteger(value.automation_item_index) || value.automation_item_index < 0) return failed("AUTOMATION_ITEM_DELETE_INVALID", "automation_item_delete accepts only a non-negative automation_item_index.");
+  return { ok: true, value: { automation_item_index: value.automation_item_index } };
+}
+
+function normalizeFxParameter(value) {
+  if (!isPlainObject(value)) return failed("AUTOMATION_FX_PARAMETER_REQUIRED", "insert_fx_parameter_points requires fx_parameter.");
+  const unknown = Object.keys(value).filter((field) => !["param_index", "param_ident", "create_if_missing"].includes(field));
+  if (unknown.length > 0 || !Number.isInteger(value.param_index) || value.param_index < 0) return failed("AUTOMATION_FX_PARAMETER_INVALID", "fx_parameter requires a non-negative integer param_index and optional param_ident/create_if_missing.");
+  if (value.param_ident !== undefined && (typeof value.param_ident !== "string" || value.param_ident.length === 0 || value.param_ident.length > 160)) return failed("AUTOMATION_FX_PARAMETER_INVALID", "fx_parameter.param_ident must be a non-empty string up to 160 characters.");
+  if (value.create_if_missing !== undefined && typeof value.create_if_missing !== "boolean") return failed("AUTOMATION_FX_PARAMETER_INVALID", "fx_parameter.create_if_missing must be boolean.");
+  return { ok: true, value: { param_index: value.param_index, ...(value.param_ident ? { param_ident: value.param_ident } : {}), create_if_missing: value.create_if_missing !== false } };
 }
 
 function hasAny(value, fields) {
@@ -774,7 +1016,11 @@ function buildDestructiveConfirmation(input, operations) {
   const retryInput = {
     mode: input.mode,
     envelope_refs: operations.map((operation) => operation.target_ref),
-    ...(input.mode === "delete_point" ? { point_delete: clone(input.point_delete) } : { point_range: clone(input.point_range) }),
+    ...(input.mode === "delete_point"
+      ? { point_delete: clone(input.point_delete) }
+      : input.mode === "delete_point_range"
+        ? { point_range: clone(input.point_range) }
+        : { automation_item_delete: clone(input.automation_item_delete) }),
     dry_run: false,
     confirmation_token: token,
   };
@@ -894,14 +1140,41 @@ function pointMatches(actual, expected) {
   return valuesMatch(actual.time_seconds, expected.time_seconds) && valuesMatch(actual.value, expected.value) && actual.shape === expected.shape && valuesMatch(actual.tension, expected.tension) && actual.selected === expected.selected;
 }
 
+function validateEnvelopePointValues(points, summary) {
+  const min = summary.min_value;
+  const max = summary.max_value;
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max < min) return failed("AUTOMATION_POINT_VALUE_DOMAIN_UNAVAILABLE", "Live Envelope readback did not expose a valid raw min/max value range.");
+  if (summary.envelope_type === "mute" && points.some((point) => point.value !== 0 && point.value !== 1)) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", "Mute Envelope raw point values must be exactly 0 or 1.");
+  if (points.some((point) => point.value < min - EPSILON || point.value > max + EPSILON)) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", `Envelope raw point values must stay within the live range ${min}..${max}.`);
+  return { ok: true, range: { min, max } };
+}
+
 function normalizeReadPoint(value) {
   if (!isPlainObject(value) || !Number.isInteger(value.point_index) || !Number.isFinite(value.time_seconds) || !Number.isFinite(value.value) || !Number.isInteger(value.shape) || !Number.isFinite(value.tension) || typeof value.selected !== "boolean") return { ok: false };
   return { ok: true, value: { point_index: value.point_index, time_seconds: value.time_seconds, value: value.value, shape: value.shape, tension: value.tension, selected: value.selected } };
 }
 
 function normalizeAutomationItem(value) {
-  if (!isPlainObject(value) || !Number.isInteger(value.automation_item_index) || !Number.isFinite(value.position_seconds) || !Number.isFinite(value.length_seconds) || !Number.isInteger(value.pool_id)) return { ok: false };
-  return { ok: true, value: { automation_item_index: value.automation_item_index, position_seconds: value.position_seconds, length_seconds: value.length_seconds, pool_id: value.pool_id } };
+  if (!isPlainObject(value) || !Number.isInteger(value.automation_item_index) || !Number.isFinite(value.position_seconds) || !Number.isFinite(value.length_seconds) || !Number.isInteger(value.pool_id) || !Number.isFinite(value.start_offset_seconds) || !Number.isFinite(value.playrate) || !Number.isFinite(value.baseline) || !Number.isFinite(value.amplitude) || typeof value.loop_source !== "boolean" || typeof value.selected !== "boolean" || typeof value.muted !== "boolean") return { ok: false };
+  return { ok: true, value: { automation_item_index: value.automation_item_index, position_seconds: value.position_seconds, length_seconds: value.length_seconds, pool_id: value.pool_id, start_offset_seconds: value.start_offset_seconds, playrate: value.playrate, baseline: value.baseline, amplitude: value.amplitude, loop_source: value.loop_source, selected: value.selected, muted: value.muted } };
+}
+
+function automationItemRowsMatchAfterDeletion(actual, expected) {
+  if (actual.length !== expected.length) return false;
+  return actual.every((row, index) => row.automation_item_index === index && automationItemIdentityMatches(row, expected[index]));
+}
+
+function automationItemIdentityMatches(actual, expected) {
+  return valuesMatch(actual.position_seconds, expected.position_seconds)
+    && valuesMatch(actual.length_seconds, expected.length_seconds)
+    && actual.pool_id === expected.pool_id
+    && valuesMatch(actual.start_offset_seconds, expected.start_offset_seconds)
+    && valuesMatch(actual.playrate, expected.playrate)
+    && valuesMatch(actual.baseline, expected.baseline)
+    && valuesMatch(actual.amplitude, expected.amplitude)
+    && actual.loop_source === expected.loop_source
+    && actual.selected === expected.selected
+    && actual.muted === expected.muted;
 }
 
 function normalizeStringArray(value, field, max) {
@@ -946,6 +1219,17 @@ function isExactEnvelopeRef(value) {
 
 function isExactTrackRef(value) {
   return typeof value === "string" && /^track:guid:.+/u.test(value);
+}
+
+function isExactFxRef(value) {
+  return typeof value === "string" && /^fx:(?:track|take):guid:.+:\d+$/u.test(value);
+}
+
+function fxObjectRef(ref) {
+  const match = /^fx:(track|take):guid:(.+):(\d+)$/u.exec(ref);
+  if (!match) throw new TypeError(`Invalid exact FX ref: ${ref}`);
+  const ownerRef = `${match[1]}:guid:${match[2]}`;
+  return createObjectRef("fx", { scheme: `${match[1]}_fx`, value: `${ownerRef}:${match[3]}` }, { ref });
 }
 
 function envelopeObjectRef(ref) {

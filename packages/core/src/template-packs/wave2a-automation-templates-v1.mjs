@@ -16,7 +16,9 @@ export const WAVE2A_AUTOMATION_TEMPLATE_IDS = Object.freeze([
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
+  "template.automation.delete_automation_item",
   "template.automation.resolve_send_envelope",
+  "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
   "template.automation.insert_sine_wave_points",
 ]);
@@ -568,6 +570,50 @@ export const WAVE2A_AUTOMATION_TEMPLATES = deepFreeze([
       },
     ],
   }),
+  commandDescriptor({
+    id: "template.automation.delete_automation_item",
+    title: "Delete automation item",
+    summary: "Delete one exact Automation Item through audited fixed Action 42086 with complete UI-state restoration and absence readback.",
+    entity_kind: "automation_item",
+    tags: ["automation", "automation_item", "delete", "action", "wave2a"],
+    capability: "automation.delete_automation_item",
+    risk: "destructive",
+    bridge: bridge({
+      capability: "automation.delete_automation_item",
+      idempotency: "none",
+    }),
+    inputSchema: objectSchema({
+      automation_item_index: { type: "integer" },
+    }, ["automation_item_index"]),
+    outputSchema: objectSchema({
+      envelope_ref: { type: "string" },
+      automation_item_index: { type: "integer" },
+      deleted_count: { type: "integer" },
+      before_count: { type: "integer" },
+      after_count: { type: "integer" },
+      fixed_action_id: { type: "integer" },
+      target_absent: { type: "boolean" },
+      state_restoration_status: { enum: ["passed"] },
+    }, ["envelope_ref", "automation_item_index", "deleted_count", "before_count", "after_count", "fixed_action_id", "target_absent", "state_restoration_status"]),
+    refs: envelopeRefs(),
+    expectedDelta: mutationDelta({
+      summary: "Deletes one exact Automation Item without leaving changed Envelope, selection, time-selection, or edit-cursor UI state.",
+      entities: [entity("automation_item", "delete", "One exact Automation Item is deleted.")],
+      idempotent: false,
+    }),
+    verification: requiredVerification({
+      name: "automation_item_absent_and_ui_state_restored",
+      kind: "state_delta",
+      summary: "The exact Automation Item tuple/count is absent and all audited UI state reads back restored.",
+    }),
+    examples: [
+      {
+        name: "delete_one_automation_item",
+        summary: "Delete Automation Item zero from one exact Envelope.",
+        input: { automation_item_index: 0 },
+      },
+    ],
+  }),
   readDescriptor({
     id: "template.automation.resolve_send_envelope",
     title: "Resolve send envelope",
@@ -597,6 +643,51 @@ export const WAVE2A_AUTOMATION_TEMPLATES = deepFreeze([
         name: "resolve_send_volume_envelope",
         summary: "Resolve the volume envelope for an existing send.",
         input: { envelope_type: "volume" },
+      },
+    ],
+  }),
+  commandDescriptor({
+    id: "template.automation.ensure_fx_parameter_envelope",
+    title: "Ensure FX parameter envelope",
+    summary: "Resolve or natively create one exact Track-FX or Take-FX parameter Envelope without editing points.",
+    entity_kind: "envelope",
+    tags: ["automation", "fx", "parameter", "envelope", "create", "wave2a"],
+    capability: "automation.ensure_fx_parameter_envelope",
+    inputSchema: objectSchema({
+      param_index: { type: "integer" },
+      param_ident: { type: "string" },
+    }, ["param_index"]),
+    outputSchema: objectSchema({
+      fx_ref: { type: "string" },
+      envelope_ref: { type: "string" },
+      owner_kind: { enum: ["track", "take"] },
+      param_index: { type: "integer" },
+      param_ident: { type: "string" },
+      param_name: { type: "string" },
+      created: { type: "boolean" },
+    }, ["fx_ref", "envelope_ref", "owner_kind", "param_index", "param_ident", "param_name", "created"]),
+    refs: refs({
+      input: [ref("fx_ref", "fx", true, "Exact Track-FX or Take-FX ref whose parameter Envelope is resolved or created.")],
+      output: [
+        ref("fx_ref", "fx", true, "Same exact FX ref after Envelope resolution or creation."),
+        ref("envelope_ref", "envelope", true, "Canonical GUID Envelope ref independently read back after ensure."),
+      ],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Creates only a genuinely missing FX parameter Envelope through the native create flag; existing Envelope state is left untouched.",
+      entities: [entity("envelope", "create", "A missing Track-FX or Take-FX parameter Envelope may be created.")],
+      idempotent: true,
+    }),
+    verification: requiredVerification({
+      name: "fx_parameter_envelope_identity_matches",
+      kind: "state_delta",
+      summary: "A create=false live read resolves the same GUID Envelope, owner, FX slot, parameter index, ident, and name.",
+    }),
+    examples: [
+      {
+        name: "ensure_track_fx_parameter_envelope",
+        summary: "Resolve or create parameter zero for one exact Track FX.",
+        input: { param_index: 0 },
       },
     ],
   }),

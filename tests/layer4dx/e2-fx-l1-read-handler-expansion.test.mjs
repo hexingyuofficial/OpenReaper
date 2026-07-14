@@ -215,6 +215,8 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /fx:" \.\. tostring\(owner_ref\) \.\. ":" \.\. tostring\(slot_index\)/);
     assert.match(HANDLER_SOURCE, /scheme == "track_fx"/);
     assert.match(HANDLER_SOURCE, /scheme == "take_fx"/);
+    assert.match(HANDLER_SOURCE, /local fx_ref = e2_fx_read_fx_object_ref\([\s\S]*?fx_ref = fx_ref\.ref/);
+    assert.match(HANDLER_SOURCE, /e2_fx_read_refs\(fx_ref, envelope_ref\)/);
     assert.doesNotMatch(HANDLER_SOURCE, /GetTrack", 0, 0/);
     assert.doesNotMatch(HANDLER_SOURCE, /GetSelectedMediaItem", 0, 0/);
     assert.deepEqual(

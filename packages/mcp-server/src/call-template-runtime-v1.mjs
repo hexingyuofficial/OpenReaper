@@ -573,7 +573,9 @@ export const CALL_TEMPLATE_RUNTIME_E5_ROUTING_AUTOMATION_ROUTE_TEMPLATE_IDS = de
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
+  "template.automation.delete_automation_item",
   "template.automation.resolve_send_envelope",
+  "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
   "template.automation.insert_sine_wave_points",
 ]);
@@ -740,6 +742,11 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS =
   "template.project.save_project_as",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS = deepFreeze([
+  "template.automation.delete_automation_item",
+  "template.automation.ensure_fx_parameter_envelope",
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -789,6 +796,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.items.set_active_take",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -820,6 +828,7 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS,
   "template.automation.delete_envelope_points",
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
 ]);
 

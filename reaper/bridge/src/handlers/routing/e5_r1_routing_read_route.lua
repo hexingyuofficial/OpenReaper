@@ -179,6 +179,46 @@ local function e5_routing_fx_from_request_refs(request)
   return nil, nil
 end
 
+local function e5_routing_fx_owner_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "fx" then
+    return nil, nil, nil, nil
+  end
+  local track_ref, track_slot = ref.ref:match("^fx:(track:[^:]+:.+):(%d+)$")
+  if track_ref and track_slot then
+    local track = e5_routing_resolve_track_token(track_ref)
+    return track and "track" or nil, track, tonumber(track_slot), track_ref
+  end
+  local take_ref, take_slot = ref.ref:match("^fx:(take:[^:]+:.+):(%d+)$")
+  if take_ref and take_slot then
+    local take = READ_B_MEDIA.resolve_take_token(take_ref)
+    return take and "take" or nil, take, tonumber(take_slot), take_ref
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local owner_ref, slot_text
+  if identity.scheme == "track_fx" then
+    owner_ref, slot_text = tostring(identity.value or ""):match("^(track:[^:]+:.+):(%d+)$")
+    local track = owner_ref and e5_routing_resolve_track_token(owner_ref) or nil
+    return track and "track" or nil, track, tonumber(slot_text), owner_ref
+  elseif identity.scheme == "take_fx" then
+    owner_ref, slot_text = tostring(identity.value or ""):match("^(take:[^:]+:.+):(%d+)$")
+    local take = owner_ref and READ_B_MEDIA.resolve_take_token(owner_ref) or nil
+    return take and "take" or nil, take, tonumber(slot_text), owner_ref
+  end
+  return nil, nil, nil, nil
+end
+
+local function e5_routing_fx_owner_from_request_refs(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local owner_kind, owner, slot_index, owner_ref = e5_routing_fx_owner_from_ref_object(request.refs[index])
+      if owner then
+        return owner_kind, owner, math.floor(slot_index), owner_ref, request.refs[index].ref
+      end
+    end
+  end
+  return nil, nil, nil, nil, nil
+end
+
 local function e5_routing_resolve_track_from_ref_object(ref)
   if not is_object(ref) or ref.kind ~= "track" then
     return nil
@@ -1063,6 +1103,65 @@ local function e5_automation_each_project_envelope(visitor)
     end
   end
 
+  local ok_master, master_track = call_reaper("GetMasterTrack", 0)
+  if not ok_master or not master_track then
+    mark_incomplete("MASTER_TRACK_READ_FAILED")
+  else
+    local master_ref = e5_routing_track_ref_string(master_track)
+    local ok_master_fx_count, master_fx_count = call_reaper("TrackFX_GetCount", master_track)
+    master_fx_count = ok_master_fx_count and math.max(0, math.floor(first_number(master_fx_count) or 0)) or 0
+    if not ok_master_fx_count then
+      mark_incomplete("MASTER_FX_COUNT_UNAVAILABLE")
+    end
+    for fx_index = 0, master_fx_count - 1 do
+      local ok_param_count, param_count = call_reaper("TrackFX_GetNumParams", master_track, fx_index)
+      param_count = ok_param_count and math.max(0, math.floor(first_number(param_count) or 0)) or 0
+      if not ok_param_count then
+        mark_incomplete("MASTER_FX_PARAMETER_COUNT_UNAVAILABLE")
+      end
+      for param_index = 0, param_count - 1 do
+        local ok_envelope, envelope = call_reaper("GetFXEnvelope", master_track, fx_index, param_index, false)
+        if not ok_envelope then
+          mark_incomplete("MASTER_FX_ENVELOPE_READ_FAILED")
+        elseif envelope then
+          local ok_name, _, param_name = call_reaper("TrackFX_GetParamName", master_track, fx_index, param_index, "")
+          param_name = bounded_string(ok_name and first_string(param_name) or "Master FX parameter", 160)
+          local fingerprint = e5_automation_envelope_fingerprint(envelope, param_name, "fx_parameter", "fx", master_track)
+          visit(envelope, {
+            parent_kind = "fx",
+            owner_kind = "track",
+            owner = master_track,
+            owner_ref = "fx:" .. master_ref .. ":" .. tostring(fx_index),
+            key = "fx_parameter",
+            name = param_name,
+            fallback_ref = "envelope:fx:" .. master_ref .. ":" .. tostring(fx_index) .. ":param:" .. tostring(param_index) .. ":fingerprint:" .. fingerprint,
+          })
+        end
+      end
+    end
+    local ok_master_envelope_count, master_envelope_count = call_reaper("CountTrackEnvelopes", master_track)
+    master_envelope_count = ok_master_envelope_count and math.max(0, math.floor(first_number(master_envelope_count) or 0)) or 0
+    if not ok_master_envelope_count then
+      mark_incomplete("MASTER_ENVELOPE_COUNT_UNAVAILABLE")
+    end
+    for envelope_index = 0, master_envelope_count - 1 do
+      local ok_envelope, envelope = call_reaper("GetTrackEnvelope", master_track, envelope_index)
+      if not ok_envelope or not envelope then
+        mark_incomplete("MASTER_ENVELOPE_READ_FAILED")
+      else
+        local fingerprint, name, _, key = e5_automation_envelope_fingerprint(envelope, "Master envelope", "track", "track", master_track)
+        visit(envelope, {
+          parent_kind = "track",
+          track = master_track,
+          owner_ref = master_ref,
+          key = key,
+          name = name,
+          fallback_ref = "envelope:track:" .. master_ref .. ":index:" .. tostring(envelope_index) .. ":fingerprint:" .. fingerprint,
+        })
+      end
+    end
+  end
+
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
   track_count = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
   if not ok_tracks then
@@ -1096,6 +1195,8 @@ local function e5_automation_each_project_envelope(visitor)
             local fingerprint = e5_automation_envelope_fingerprint(envelope, param_name, "fx_parameter", "fx", track)
             visit(envelope, {
               parent_kind = "fx",
+              owner_kind = "track",
+              owner = track,
               owner_ref = "fx:" .. track_ref .. ":" .. tostring(fx_index),
               key = "fx_parameter",
               name = param_name,
@@ -1117,6 +1218,7 @@ local function e5_automation_each_project_envelope(visitor)
             local fingerprint = e5_automation_envelope_fingerprint(envelope, display_name, key, "send", track)
             visit(envelope, {
               parent_kind = "send",
+              track = track,
               owner_ref = e5_routing_send_ref(track, send_index),
               key = key,
               name = display_name,
@@ -1140,6 +1242,7 @@ local function e5_automation_each_project_envelope(visitor)
           local fingerprint, name, _, key = e5_automation_envelope_fingerprint(envelope, "Track envelope", "track", "track", track)
           visit(envelope, {
             parent_kind = "track",
+            track = track,
             owner_ref = track_ref,
             key = key,
             name = name,
@@ -1171,6 +1274,38 @@ local function e5_automation_each_project_envelope(visitor)
           mark_incomplete("TAKE_READ_FAILED")
         else
           local take_ref = READ_B_MEDIA.take_ref_string(take)
+          local ok_take_fx_count, take_fx_count = call_reaper("TakeFX_GetCount", take)
+          take_fx_count = ok_take_fx_count and math.max(0, math.floor(first_number(take_fx_count) or 0)) or 0
+          if not ok_take_fx_count then
+            mark_incomplete("TAKE_FX_COUNT_UNAVAILABLE")
+          end
+          for fx_index = 0, take_fx_count - 1 do
+            local ok_param_count, param_count = call_reaper("TakeFX_GetNumParams", take, fx_index)
+            param_count = ok_param_count and math.max(0, math.floor(first_number(param_count) or 0)) or 0
+            if not ok_param_count then
+              mark_incomplete("TAKE_FX_PARAMETER_COUNT_UNAVAILABLE")
+            end
+            for param_index = 0, param_count - 1 do
+              local ok_envelope, envelope = call_reaper("TakeFX_GetEnvelope", take, fx_index, param_index, false)
+              if not ok_envelope then
+                mark_incomplete("TAKE_FX_ENVELOPE_READ_FAILED")
+              elseif envelope then
+                local ok_name, _, param_name = call_reaper("TakeFX_GetParamName", take, fx_index, param_index, "")
+                param_name = bounded_string(ok_name and first_string(param_name) or "Take FX parameter", 160)
+                local fingerprint = e5_automation_envelope_fingerprint(envelope, param_name, "fx_parameter", "fx", take)
+                visit(envelope, {
+                  parent_kind = "fx",
+                  owner_kind = "take",
+                  owner = take,
+                  take = take,
+                  owner_ref = "fx:" .. take_ref .. ":" .. tostring(fx_index),
+                  key = "fx_parameter",
+                  name = param_name,
+                  fallback_ref = "envelope:fx:" .. take_ref .. ":" .. tostring(fx_index) .. ":param:" .. tostring(param_index) .. ":fingerprint:" .. fingerprint,
+                })
+              end
+            end
+          end
           local ok_envelope_count, envelope_count = call_reaper("CountTakeEnvelopes", take)
           envelope_count = ok_envelope_count and math.max(0, math.floor(first_number(envelope_count) or 0)) or 0
           if not ok_envelope_count then
@@ -1184,6 +1319,7 @@ local function e5_automation_each_project_envelope(visitor)
               local fingerprint, name, _, key = e5_automation_envelope_fingerprint(envelope, "Take envelope", "take", "take", take)
               visit(envelope, {
                 parent_kind = "take",
+                take = take,
                 owner_ref = take_ref,
                 key = key,
                 name = name,
@@ -1236,7 +1372,7 @@ local function e5_automation_envelope_from_ref_string(ref)
     if not envelope then
       return nil
     end
-    return envelope, ref, info.parent_kind, info.key, info.name
+    return envelope, ref, info.parent_kind, info.key, info.name, info
   end
   local key = ref:match("^envelope:track:(%a+)$")
   if key then
@@ -1244,7 +1380,8 @@ local function e5_automation_envelope_from_ref_string(ref)
     if not track then
       return nil
     end
-    return e5_automation_track_envelope(track, key)
+    local envelope, envelope_ref, parent_kind, resolved_key, name = e5_automation_track_envelope(track, key)
+    return envelope, envelope_ref, parent_kind, resolved_key, name, { track = track, owner_ref = e5_routing_track_ref_string(track) }
   end
   local track_ref, track_key = ref:match("^envelope:track:(track:[^:]+:.+):(%a+)$")
   if track_ref and track_key then
@@ -1252,7 +1389,8 @@ local function e5_automation_envelope_from_ref_string(ref)
     if not track then
       return nil
     end
-    return e5_automation_track_envelope(track, track_key)
+    local envelope, envelope_ref, parent_kind, resolved_key, name = e5_automation_track_envelope(track, track_key)
+    return envelope, envelope_ref, parent_kind, resolved_key, name, { track = track, owner_ref = e5_routing_track_ref_string(track) }
   end
   local snapshot_track_ref, snapshot_index, snapshot_fingerprint = ref:match("^envelope:track:(track:[^:]+:.+):index:(%d+):fingerprint:(%d+)$")
   if snapshot_track_ref then
@@ -1263,7 +1401,7 @@ local function e5_automation_envelope_from_ref_string(ref)
     end
     if ok_envelope and envelope and e5_automation_snapshot_ref_matches(envelope, snapshot_fingerprint, "Track envelope", "track", "track", track) then
       local _, name, _, key = e5_automation_envelope_fingerprint(envelope, "Track envelope", "track", "track", track)
-      return envelope, ref, "track", key, name
+      return envelope, ref, "track", key, name, { track = track, owner_ref = snapshot_track_ref }
     end
     return nil
   end
@@ -1276,7 +1414,7 @@ local function e5_automation_envelope_from_ref_string(ref)
     end
     if ok_envelope and envelope and e5_automation_snapshot_ref_matches(envelope, take_fingerprint, "Take envelope", "take", "take", take) then
       local _, name, _, key = e5_automation_envelope_fingerprint(envelope, "Take envelope", "take", "take", take)
-      return envelope, ref, "take", key, name
+      return envelope, ref, "take", key, name, { take = take, owner_ref = take_ref }
     end
     return nil
   end
@@ -1289,7 +1427,20 @@ local function e5_automation_envelope_from_ref_string(ref)
     end
     if ok_envelope and envelope and e5_automation_snapshot_ref_matches(envelope, fx_fingerprint, "FX parameter", "fx_parameter", "fx", track) then
       local _, name = e5_automation_envelope_fingerprint(envelope, "FX parameter", "fx_parameter", "fx", track)
-      return envelope, ref, "fx", "fx_parameter", name
+      return envelope, ref, "fx", "fx_parameter", name, { owner_kind = "track", owner = track, owner_ref = fx_track_ref, slot_index = tonumber(fx_index), param_index = tonumber(param_index) }
+    end
+    return nil
+  end
+  local fx_take_ref, take_fx_index, take_param_index, take_fx_fingerprint = ref:match("^envelope:fx:(take:[^:]+:.+):(%d+):param:(%d+):fingerprint:(%d+)$")
+  if fx_take_ref then
+    local take = READ_B_MEDIA.resolve_take_token(fx_take_ref)
+    local ok_envelope, envelope = false, nil
+    if take then
+      ok_envelope, envelope = call_reaper("TakeFX_GetEnvelope", take, tonumber(take_fx_index), tonumber(take_param_index), false)
+    end
+    if ok_envelope and envelope and e5_automation_snapshot_ref_matches(envelope, take_fx_fingerprint, "Take FX parameter", "fx_parameter", "fx", take) then
+      local _, name = e5_automation_envelope_fingerprint(envelope, "Take FX parameter", "fx_parameter", "fx", take)
+      return envelope, ref, "fx", "fx_parameter", name, { owner_kind = "take", owner = take, take = take, owner_ref = fx_take_ref, slot_index = tonumber(take_fx_index), param_index = tonumber(take_param_index) }
     end
     return nil
   end
@@ -1298,7 +1449,7 @@ local function e5_automation_envelope_from_ref_string(ref)
     local source_track, send_index = e5_routing_send_index_from_ref(send_ref)
     local envelope, _, parent_kind, key_name, display_name = source_track and e5_automation_send_envelope(source_track, send_index, send_key) or nil
     if envelope and e5_automation_snapshot_ref_matches(envelope, send_fingerprint, display_name, key_name, "send", source_track) then
-      return envelope, ref, parent_kind, key_name, display_name
+      return envelope, ref, parent_kind, key_name, display_name, { track = source_track, owner_ref = send_ref, send_index = send_index }
     end
     return nil
   end
@@ -1308,7 +1459,8 @@ local function e5_automation_envelope_from_ref_string(ref)
     if not source_track then
       return nil
     end
-    return e5_automation_send_envelope(source_track, send_index, send_key)
+    local envelope, envelope_ref, parent_kind, key_name, display_name = e5_automation_send_envelope(source_track, send_index, send_key)
+    return envelope, envelope_ref, parent_kind, key_name, display_name, { track = source_track, owner_ref = send_ref, send_index = send_index }
   end
   return nil
 end
@@ -1329,7 +1481,8 @@ local function e5_automation_envelope_from_request(request)
   if parent_kind == "track" or parent_kind == nil or parent_kind == JSON_NULL then
     local track = e5_routing_track_from_request_refs(request) or e5_routing_resolve_track_token("track:index:0")
     if track then
-      return e5_automation_track_envelope(track, request.params.envelope_name or "Volume")
+      local envelope, envelope_ref, resolved_parent_kind, key, name = e5_automation_track_envelope(track, request.params.envelope_name or "Volume")
+      return envelope, envelope_ref, resolved_parent_kind, key, name, { track = track, owner_ref = e5_routing_track_ref_string(track) }
     end
   end
   return nil
@@ -1419,6 +1572,9 @@ local function e5_automation_summary(request, envelope, envelope_ref, parent_kin
     point_count = e5_automation_envelope_point_count(envelope),
     automation_item_count = e5_automation_item_count(envelope),
     br_available = props.br_available,
+    min_value = props.min_value,
+    max_value = props.max_value,
+    center_value = props.center_value,
   }
   if is_object(extra) then
     for k, v in pairs(extra) do
@@ -1429,12 +1585,81 @@ local function e5_automation_summary(request, envelope, envelope_ref, parent_kin
 end
 
 local function e5_automation_resolve_or_error(request, message)
-  local envelope, envelope_ref, parent_kind, key, display_name = e5_automation_envelope_from_request(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, context = e5_automation_envelope_from_request(request)
   if not envelope then
     local _, err = e5_routing_error("ENVELOPE_NOT_FOUND", message or "E5 automation requires a resolvable envelope ref.", {})
-    return nil, nil, nil, nil, nil, err
+    return nil, nil, nil, nil, nil, err, nil
   end
-  return envelope, envelope_ref, parent_kind, key, display_name
+  return envelope, envelope_ref, parent_kind, key, display_name, nil, context
+end
+
+local function e5_automation_take_time_context(envelope)
+  local ok_parent, take, fx_index, param_index = call_reaper("Envelope_GetParentTake", envelope)
+  if not ok_parent or not take then
+    return nil
+  end
+  local ok_item, item = call_reaper("GetMediaItemTake_Item", take)
+  local ok_position, item_position = false, nil
+  local ok_length, item_length = false, nil
+  if ok_item and item then
+    ok_position, item_position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+    ok_length, item_length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  end
+  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")
+  item_position = ok_position and first_number(item_position) or nil
+  item_length = ok_length and first_number(item_length) or nil
+  playrate = ok_playrate and first_number(playrate) or nil
+  if not ok_item or not item or item_position == nil or item_length == nil or item_length < 0 or playrate == nil or playrate <= 0 then
+    return false, {
+      code = "TAKE_ENVELOPE_TIME_CONTEXT_UNAVAILABLE",
+      message = "Take Envelope project-time conversion requires a valid parent Item position/length and positive Take playrate.",
+      details = {},
+    }
+  end
+  return {
+    take = take,
+    item = item,
+    item_position = item_position,
+    item_length = item_length,
+    playrate = playrate,
+    fx_index = math.floor(first_number(fx_index) or -1),
+    param_index = math.floor(first_number(param_index) or -1),
+  }
+end
+
+local function e5_automation_project_to_native_time(envelope, project_time)
+  local context, context_error = e5_automation_take_time_context(envelope)
+  if context == false then
+    return nil, context_error
+  end
+  if not context then
+    return project_time, nil
+  end
+  local end_time = context.item_position + context.item_length
+  if project_time < context.item_position - 0.000000001 or project_time > end_time + 0.000000001 then
+    return nil, {
+      code = "TAKE_ENVELOPE_TIME_OUT_OF_BOUNDS",
+      message = "Take Envelope time_seconds must fall inside the parent Item project-time bounds.",
+      details = {
+        requested_time_seconds = project_time,
+        item_start_seconds = context.item_position,
+        item_end_seconds = end_time,
+        take_playrate = context.playrate,
+      },
+    }
+  end
+  return (project_time - context.item_position) * context.playrate, nil
+end
+
+local function e5_automation_native_to_project_time(envelope, native_time)
+  local context, context_error = e5_automation_take_time_context(envelope)
+  if context == false then
+    return nil, context_error
+  end
+  if not context then
+    return native_time, nil
+  end
+  return context.item_position + native_time / context.playrate, nil
 end
 
 local function e5_automation_cursor(value)
@@ -1770,6 +1995,11 @@ local function read_envelope_points(request)
         point_index = index,
       })
     end
+    local project_time, time_error = e5_automation_native_to_project_time(envelope, row.time_seconds)
+    if project_time == nil then
+      return e5_routing_error(time_error.code, time_error.message, time_error.details)
+    end
+    row.time_seconds = project_time
     if (start_seconds == nil or row.time_seconds >= start_seconds)
       and (end_seconds == nil or row.time_seconds <= end_seconds) then
       matching[#matching + 1] = row
@@ -1795,6 +2025,7 @@ local function read_envelope_points(request)
     next_cursor = has_more and tostring(last) or JSON_NULL,
     truncated = has_more,
     coverage_status = has_more and "paged" or "complete",
+    time_basis = "project",
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
@@ -1804,9 +2035,13 @@ local function evaluate_envelope_at_time(request)
     return nil, err
   end
   local time_seconds = e5_routing_finite_number(request.params.time_seconds, 0)
+  local native_time, time_error = e5_automation_project_to_native_time(envelope, time_seconds)
+  if native_time == nil then
+    return e5_routing_error(time_error.code, time_error.message, time_error.details)
+  end
   local sample_rate = e5_routing_finite_number(request.params.sample_rate, 48000)
   local samples_requested = math.max(0, math.floor(tonumber(request.params.samples_requested) or 0))
-  local ok, valid_samples, value, dvds, ddvds, dddvds = call_reaper("Envelope_Evaluate", envelope, time_seconds, sample_rate, samples_requested)
+  local ok, valid_samples, value, dvds, ddvds, dddvds = call_reaper("Envelope_Evaluate", envelope, native_time, sample_rate, samples_requested)
   if not ok then
     return e5_routing_error("COMMAND_FAILED", "REAPER rejected Envelope_Evaluate.", {
       envelope_ref = envelope_ref,
@@ -1815,6 +2050,7 @@ local function evaluate_envelope_at_time(request)
   end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     time_seconds = time_seconds,
+    time_basis = "project",
     value = first_number(value) or 0,
     valid_samples = math.floor(first_number(valid_samples) or 0),
     dVdS = first_number(dvds) or 0,
@@ -1899,6 +2135,10 @@ local function insert_envelope_point(request)
       reason_code = "POINT_FIELDS_INVALID",
     })
   end
+  local native_time, time_error = e5_automation_project_to_native_time(envelope, time_seconds)
+  if native_time == nil then
+    return e5_routing_error(time_error.code, time_error.message, time_error.details)
+  end
   local selected = request.params.selected == true
   local before = e5_automation_point_count_ex(envelope, autoitem_index)
   if before == nil then
@@ -1906,7 +2146,7 @@ local function insert_envelope_point(request)
       reason_code = "POINT_COUNT_UNAVAILABLE",
     })
   end
-  local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, time_seconds, value, shape, tension, selected, false)
+  local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, selected, false)
   local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
   if not call_ok or inserted ~= true or not sort_ok then
     return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx or lane sorting.", {
@@ -1927,7 +2167,7 @@ local function insert_envelope_point(request)
     }, false)
   end
   local point_index, readback = e5_automation_find_matching_point(envelope, autoitem_index, {
-    time_seconds = time_seconds,
+    time_seconds = native_time,
     value = value,
     shape = shape,
     tension = tension,
@@ -1944,7 +2184,8 @@ local function insert_envelope_point(request)
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     autoitem_index = autoitem_index,
     point_index = point_index,
-    time_seconds = readback.time_seconds,
+    time_seconds = time_seconds,
+    time_basis = "project",
     value = readback.value,
     shape = readback.shape,
     tension = readback.tension,
@@ -2029,25 +2270,48 @@ local function read_automation_items(request)
     return nil, err
   end
   local total = e5_automation_item_count(envelope)
+  local cursor = e5_automation_cursor(request.params.cursor)
+  if cursor == nil or cursor > total then
+    return e5_routing_error("PARAMS_INVALID", "Automation Item cursor must be a non-negative integer string within the current Item count.", {
+      reason_code = "CURSOR_INVALID",
+      cursor = bounded_string(request.params.cursor, 80),
+      total_count = total,
+    })
+  end
   local limit = READ_B_MEDIA.bounded_limit(request, request.params.limit, 16, 64)
   local items = json_array({})
-  for index = 0, math.min(total, limit) - 1 do
+  local last = math.min(total, cursor + limit)
+  for index = cursor, last - 1 do
     local position = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_POSITION", 0, false))
     local length = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_LENGTH", 0, false))
     local pool_id = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_POOL_ID", 0, false))
+    local start_offset = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_STARTOFFS", 0, false))
+    local playrate = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_PLAYRATE", 0, false))
+    local baseline = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_BASELINE", 0, false))
+    local amplitude = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_AMPLITUDE", 0, false))
+    local loop_source = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_LOOPSRC", 0, false))
+    local selected = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_UISEL", 0, false))
+    local muted = select(2, call_reaper("GetSetAutomationItemInfo", envelope, index, "D_MUTE", 0, false))
     items[#items + 1] = {
       automation_item_index = index,
       position_seconds = first_number(position) or 0,
       length_seconds = first_number(length) or 0,
       pool_id = math.floor(first_number(pool_id) or -1),
+      start_offset_seconds = first_number(start_offset) or 0,
+      playrate = first_number(playrate) or 1,
+      baseline = first_number(baseline) or 0,
+      amplitude = first_number(amplitude) or 1,
+      loop_source = (first_number(loop_source) or 0) ~= 0,
+      selected = (first_number(selected) or 0) ~= 0,
+      muted = (first_number(muted) or 0) ~= 0,
     }
   end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     items = items,
     returned_count = #items,
     total_count = total,
-    next_cursor = total > limit and tostring(limit) or JSON_NULL,
-    truncated = total > limit,
+    next_cursor = last < total and tostring(last) or JSON_NULL,
+    truncated = last < total,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
@@ -2088,7 +2352,20 @@ local function set_envelope_point(request)
       point_index = point_index,
     })
   end
-  local time_seconds = request.params.time_seconds == nil and current.time_seconds or e5_automation_finite_number(request.params.time_seconds)
+  local requested_time = request.params.time_seconds == nil and nil or e5_automation_finite_number(request.params.time_seconds)
+  if request.params.time_seconds ~= nil and requested_time == nil then
+    return e5_routing_error("PARAMS_INVALID", "Updated Envelope point time_seconds must be finite.", {
+      reason_code = "POINT_TIME_INVALID",
+    })
+  end
+  local time_seconds = current.time_seconds
+  if requested_time ~= nil then
+    local native_time, time_error = e5_automation_project_to_native_time(envelope, requested_time)
+    if native_time == nil then
+      return e5_routing_error(time_error.code, time_error.message, time_error.details)
+    end
+    time_seconds = native_time
+  end
   local value = request.params.value == nil and current.value or e5_automation_finite_number(request.params.value)
   local shape = request.params.shape == nil and current.shape or tonumber(request.params.shape)
   local tension = request.params.tension == nil and current.tension or e5_automation_finite_number(request.params.tension)
@@ -2135,10 +2412,18 @@ local function set_envelope_point(request)
       index_maintenance_applied = true,
     }, false)
   end
+  local project_time, time_error = e5_automation_native_to_project_time(envelope, readback.time_seconds)
+  if project_time == nil then
+    return e5_routing_error(time_error.code, time_error.message, {
+      mutation_applied = true,
+      index_maintenance_applied = true,
+    }, false)
+  end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     autoitem_index = autoitem_index,
     point_index = readback_index,
-    time_seconds = readback.time_seconds,
+    time_seconds = project_time,
+    time_basis = "project",
     value = readback.value,
     shape = readback.shape,
     tension = readback.tension,
@@ -2180,6 +2465,8 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
     })
   end
   local normalized = {}
+  local first_project_time = nil
+  local last_project_time = nil
   local min_value = nil
   local max_value = nil
   for index = 1, #points do
@@ -2194,15 +2481,23 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
         point_index = index - 1,
       })
     end
+    local native_time, time_error = e5_automation_project_to_native_time(envelope, time_seconds)
+    if native_time == nil then
+      local details = time_error.details or {}
+      details.point_index = index - 1
+      return e5_routing_error(time_error.code, time_error.message, details)
+    end
     local normalized_point = {
-      time_seconds = time_seconds,
+      time_seconds = native_time,
       value = value,
       shape = shape,
       tension = tension,
       selected = point.selected == true,
     }
     normalized[#normalized + 1] = normalized_point
-    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, time_seconds, value, shape, tension, normalized_point.selected, true)
+    first_project_time = first_project_time and math.min(first_project_time, time_seconds) or time_seconds
+    last_project_time = last_project_time and math.max(last_project_time, time_seconds) or time_seconds
+    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, normalized_point.selected, true)
     if not call_ok or inserted ~= true then
       return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx in point batch.", {
         reason_code = "POINT_BATCH_INSERT_FAILED",
@@ -2260,8 +2555,9 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
     requested_count = #points,
     inserted_count = #normalized,
     processed_count = #normalized,
-    first_time_seconds = readback[1].time_seconds,
-    last_time_seconds = readback[#readback].time_seconds,
+    first_time_seconds = first_project_time,
+    last_time_seconds = last_project_time,
+    time_basis = "project",
     min_value = min_value or 0,
     max_value = max_value or 0,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
@@ -2364,6 +2660,14 @@ local function delete_envelope_points(request)
         reason_code = "POINT_RANGE_INVALID",
       })
     end
+    local native_start, start_error = e5_automation_project_to_native_time(envelope, start_seconds)
+    if native_start == nil then
+      return e5_routing_error(start_error.code, start_error.message, start_error.details)
+    end
+    local native_end, end_error = e5_automation_project_to_native_time(envelope, end_seconds)
+    if native_end == nil then
+      return e5_routing_error(end_error.code, end_error.message, end_error.details)
+    end
     local expected_deleted = 0
     for index = 0, before_count - 1 do
       local row = e5_automation_point_row_ex(envelope, autoitem_index, index)
@@ -2373,11 +2677,11 @@ local function delete_envelope_points(request)
           point_index = index,
         })
       end
-      if row.time_seconds >= start_seconds and row.time_seconds < end_seconds then
+      if row.time_seconds >= native_start and row.time_seconds < native_end then
         expected_deleted = expected_deleted + 1
       end
     end
-    local call_ok, deleted = call_reaper("DeleteEnvelopePointRangeEx", envelope, autoitem_index, start_seconds, end_seconds)
+    local call_ok, deleted = call_reaper("DeleteEnvelopePointRangeEx", envelope, autoitem_index, native_start, native_end)
     local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
     if not call_ok or deleted == false or not sort_ok then
       return e5_routing_error("COMMAND_FAILED", "REAPER rejected DeleteEnvelopePointRangeEx or lane sorting.", {
@@ -2407,7 +2711,7 @@ local function delete_envelope_points(request)
           index_maintenance_applied = true,
         }, false)
       end
-      if row.time_seconds >= start_seconds and row.time_seconds < end_seconds then
+      if row.time_seconds >= native_start and row.time_seconds < native_end then
         return e5_routing_error("VERIFY_FAILED", "A point remained inside the deleted half-open time range.", {
           reason_code = "POINT_RANGE_NOT_ABSENT",
           point_index = index,
@@ -2427,7 +2731,145 @@ local function delete_envelope_points(request)
     before_count = before_count,
     after_count = after_count,
     range_absent = true,
+    time_basis = "project",
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local function e5_automation_fx_ref_object(owner_kind, owner_ref, slot_index, fx_ref)
+  return {
+    kind = "fx",
+    ref = fx_ref,
+    identity = {
+      scheme = owner_kind .. "_fx",
+      value = owner_ref .. ":" .. tostring(slot_index),
+    },
+  }
+end
+
+local function e5_automation_fx_parameter_count(owner_kind, owner, slot_index)
+  local api = owner_kind == "take" and "TakeFX_GetNumParams" or "TrackFX_GetNumParams"
+  local ok, count = call_reaper(api, owner, slot_index)
+  count = ok and first_number(count) or nil
+  return count and math.max(0, math.floor(count)) or nil
+end
+
+local function e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index)
+  local api = owner_kind == "take" and "TakeFX_GetParamName" or "TrackFX_GetParamName"
+  local ok, _, name = call_reaper(api, owner, slot_index, param_index, "")
+  return bounded_string(ok and first_string(name) or "", 160)
+end
+
+local function e5_automation_fx_parameter_ident(owner_kind, owner, slot_index, param_index)
+  local api = owner_kind == "take" and "TakeFX_GetParamIdent" or "TrackFX_GetParamIdent"
+  local ok, _, ident = call_reaper(api, owner, slot_index, param_index, "")
+  ident = ok and first_string(ident) or nil
+  return ident and ident ~= "" and bounded_string(ident, 160) or nil
+end
+
+local function e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, create)
+  local api = owner_kind == "take" and "TakeFX_GetEnvelope" or "GetFXEnvelope"
+  return call_reaper(api, owner, slot_index, param_index, create)
+end
+
+local function ensure_fx_parameter_envelope(request)
+  local owner_kind, owner, slot_index, owner_ref, fx_ref = e5_routing_fx_owner_from_request_refs(request)
+  local param_index = tonumber(request.params and request.params.param_index)
+  if not owner or type(param_index) ~= "number" or param_index ~= math.floor(param_index) or param_index < 0 then
+    return e5_routing_error("FX_REF_NOT_FOUND", "FX parameter Envelope ensure requires one exact Track-FX or Take-FX ref and a non-negative integer param_index.", {})
+  end
+  local parameter_count = e5_automation_fx_parameter_count(owner_kind, owner, slot_index)
+  if parameter_count == nil or param_index >= parameter_count then
+    return e5_routing_error("FX_PARAMETER_NOT_FOUND", "FX parameter index is outside the exact live parameter count.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+      parameter_count = parameter_count or JSON_NULL,
+    })
+  end
+  local param_ident = e5_automation_fx_parameter_ident(owner_kind, owner, slot_index, param_index)
+  if not param_ident then
+    return e5_routing_error("FX_PARAMETER_IDENTITY_UNAVAILABLE", "REAPER did not return a stable parameter ident for the exact FX parameter.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+    })
+  end
+  if is_string(request.params.param_ident) and request.params.param_ident ~= param_ident then
+    return e5_routing_error("FX_PARAMETER_IDENTITY_MISMATCH", "Requested param_ident does not match the exact live FX parameter.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+      requested_param_ident = bounded_string(request.params.param_ident, 160),
+      live_param_ident = param_ident,
+    })
+  end
+  local ok_existing, existing = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
+  if not ok_existing then
+    return e5_routing_error("COMMAND_FAILED", "REAPER failed the create=false FX parameter Envelope lookup.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+    })
+  end
+  local created = false
+  local envelope = existing
+  if not envelope then
+    local ok_created, created_envelope = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, true)
+    if not ok_created or not created_envelope then
+      return e5_routing_error("COMMAND_FAILED", "REAPER rejected native FX parameter Envelope creation.", {
+        fx_ref = fx_ref,
+        param_index = param_index,
+        mutation_applied = false,
+      })
+    end
+    envelope = created_envelope
+    created = true
+  end
+  local ok_readback, readback = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  local ok_valid, valid = false, false
+  if ok_project and project and readback then
+    ok_valid, valid = call_reaper("ValidatePtr2", project, readback, "TrackEnvelope*")
+  end
+  if not ok_readback or not readback or readback ~= envelope or not ok_project or not project or not ok_valid or valid ~= true then
+    return e5_routing_error("VERIFY_FAILED", "FX parameter Envelope did not pass independent create=false pointer readback.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+      mutation_applied = created,
+    }, false)
+  end
+  local ok_parent, parent, parent_fx_index, parent_param_index
+  if owner_kind == "take" then
+    ok_parent, parent, parent_fx_index, parent_param_index = call_reaper("Envelope_GetParentTake", readback)
+  else
+    ok_parent, parent, parent_fx_index, parent_param_index = call_reaper("Envelope_GetParentTrack", readback)
+  end
+  if not ok_parent or parent ~= owner or math.floor(first_number(parent_fx_index) or -1) ~= slot_index or math.floor(first_number(parent_param_index) or -1) ~= param_index then
+    return e5_routing_error("VERIFY_FAILED", "FX parameter Envelope parent identity did not match the requested owner, slot, and parameter.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+      mutation_applied = created,
+    }, false)
+  end
+  local guid = e5_automation_envelope_guid(readback)
+  if not guid then
+    return e5_routing_error("VERIFY_FAILED", "FX parameter Envelope did not expose a canonical GUID after ensure.", {
+      fx_ref = fx_ref,
+      param_index = param_index,
+      mutation_applied = created,
+    }, false)
+  end
+  local envelope_ref = "envelope:guid:" .. guid
+  local param_name = e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index)
+  return e5_automation_summary(request, readback, envelope_ref, "fx", "fx_parameter", param_name, {
+    fx_ref = fx_ref,
+    owner_kind = owner_kind,
+    owner_ref = owner_ref,
+    slot_index = slot_index,
+    param_index = param_index,
+    param_ident = param_ident,
+    param_name = param_name,
+    created = created,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(
+    e5_automation_fx_ref_object(owner_kind, owner_ref, slot_index, fx_ref),
+    e5_routing_envelope_object_ref(readback, envelope_ref)
+  )
 end
 
 local function e5_automation_fx_parameter_envelope_from_request(request)
@@ -2583,7 +3025,13 @@ local function e5_automation_item_readback(envelope, item_index)
   local pool_id = e5_automation_item_info(envelope, item_index, "D_POOL_ID")
   local start_offset = e5_automation_item_info(envelope, item_index, "D_STARTOFFS")
   local playrate = e5_automation_item_info(envelope, item_index, "D_PLAYRATE")
-  if position == nil or length == nil or pool_id == nil or start_offset == nil or playrate == nil then
+  local baseline = e5_automation_item_info(envelope, item_index, "D_BASELINE")
+  local amplitude = e5_automation_item_info(envelope, item_index, "D_AMPLITUDE")
+  local loop_source = e5_automation_item_info(envelope, item_index, "D_LOOPSRC")
+  local selected = e5_automation_item_info(envelope, item_index, "D_UISEL")
+  local muted = e5_automation_item_info(envelope, item_index, "D_MUTE")
+  if position == nil or length == nil or pool_id == nil or start_offset == nil or playrate == nil
+    or baseline == nil or amplitude == nil or loop_source == nil or selected == nil or muted == nil then
     return nil
   end
   return {
@@ -2593,6 +3041,11 @@ local function e5_automation_item_readback(envelope, item_index)
     length_seconds = length,
     start_offset_seconds = start_offset,
     playrate = playrate,
+    baseline = baseline,
+    amplitude = amplitude,
+    loop_source = loop_source ~= 0,
+    selected = selected ~= 0,
+    muted = muted ~= 0,
   }
 end
 
@@ -2733,6 +3186,266 @@ local function set_automation_item_bounds(request)
     end
   end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, readback), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
+end
+
+local ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID = 42086
+
+local function e5_automation_item_identity_matches(actual, expected)
+  return actual and expected
+    and e5_automation_numbers_match(actual.position_seconds, expected.position_seconds)
+    and e5_automation_numbers_match(actual.length_seconds, expected.length_seconds)
+    and actual.pool_id == expected.pool_id
+    and e5_automation_numbers_match(actual.start_offset_seconds, expected.start_offset_seconds)
+    and e5_automation_numbers_match(actual.playrate, expected.playrate)
+    and e5_automation_numbers_match(actual.baseline, expected.baseline)
+    and e5_automation_numbers_match(actual.amplitude, expected.amplitude)
+    and actual.loop_source == expected.loop_source
+    and actual.muted == expected.muted
+end
+
+local function e5_automation_pointer_lists_match(actual, expected)
+  if #actual ~= #expected then return false end
+  for index = 1, #actual do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function e5_automation_selected_tracks(project)
+  local ok_count, count = call_reaper("CountSelectedTracks2", project, true)
+  count = ok_count and math.max(0, math.floor(first_number(count) or 0)) or nil
+  if count == nil then return nil end
+  local tracks = {}
+  for index = 0, count - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", project, index, true)
+    if not ok_track or not track then return nil end
+    tracks[#tracks + 1] = track
+  end
+  return tracks
+end
+
+local function e5_automation_selected_items(project)
+  local ok_count, count = call_reaper("CountSelectedMediaItems", project)
+  count = ok_count and math.max(0, math.floor(first_number(count) or 0)) or nil
+  if count == nil then return nil end
+  local items = {}
+  for index = 0, count - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", project, index)
+    if not ok_item or not item then return nil end
+    items[#items + 1] = item
+  end
+  return items
+end
+
+local function e5_automation_snapshot_delete_ui_state(project)
+  local ok_context, cursor_context = call_reaper("GetCursorContext2", true)
+  local ok_envelope, selected_envelope = call_reaper("GetSelectedEnvelope", project)
+  local selected_tracks = e5_automation_selected_tracks(project)
+  local selected_items = e5_automation_selected_items(project)
+  local ok_time, time_start, time_end = call_reaper("GetSet_LoopTimeRange2", project, false, false, 0, 0, false)
+  local ok_loop, loop_start, loop_end = call_reaper("GetSet_LoopTimeRange2", project, false, true, 0, 0, false)
+  local ok_cursor, edit_cursor = call_reaper("GetCursorPositionEx", project)
+  if not ok_context or not ok_envelope or not selected_tracks or not selected_items or not ok_time or not ok_loop or not ok_cursor then
+    return nil
+  end
+  return {
+    cursor_context = math.floor(first_number(cursor_context) or 0),
+    selected_envelope = selected_envelope,
+    selected_tracks = selected_tracks,
+    selected_items = selected_items,
+    time_start = first_number(time_start) or 0,
+    time_end = first_number(time_end) or 0,
+    loop_start = first_number(loop_start) or 0,
+    loop_end = first_number(loop_end) or 0,
+    edit_cursor = first_number(edit_cursor) or 0,
+  }
+end
+
+local function e5_automation_restore_delete_ui_state(project, snapshot, envelope_snapshots, target_envelope, target_index, target_deleted)
+  call_reaper("SetCursorContext", 2, snapshot.selected_envelope)
+  if snapshot.cursor_context ~= 2 then
+    call_reaper("SetCursorContext", snapshot.cursor_context, nil)
+  end
+
+  local ok_master, master = call_reaper("GetMasterTrack", project)
+  if ok_master and master then call_reaper("SetTrackSelected", master, false) end
+  local ok_tracks, track_count = call_reaper("CountTracks", project)
+  track_count = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
+  for index = 0, track_count - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    if ok_track and track then call_reaper("SetTrackSelected", track, false) end
+  end
+  for index = 1, #snapshot.selected_tracks do
+    call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true)
+  end
+
+  local ok_items, item_count = call_reaper("CountMediaItems", project)
+  item_count = ok_items and math.max(0, math.floor(first_number(item_count) or 0)) or 0
+  for index = 0, item_count - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", project, index)
+    if ok_item and item then call_reaper("SetMediaItemSelected", item, false) end
+  end
+  for index = 1, #snapshot.selected_items do
+    call_reaper("SetMediaItemSelected", snapshot.selected_items[index], true)
+  end
+
+  call_reaper("GetSet_LoopTimeRange2", project, true, false, snapshot.time_start, snapshot.time_end, false)
+  call_reaper("GetSet_LoopTimeRange2", project, true, true, snapshot.loop_start, snapshot.loop_end, false)
+  call_reaper("SetEditCurPos2", project, snapshot.edit_cursor, false, false)
+
+  local selection_restored = true
+  for envelope_index = 1, #envelope_snapshots do
+    local envelope_snapshot = envelope_snapshots[envelope_index]
+    local current_count = e5_automation_item_count_exact(envelope_snapshot.envelope) or 0
+    for current_index = 0, current_count - 1 do
+      local original_index = current_index
+      if target_deleted and envelope_snapshot.envelope == target_envelope and current_index >= target_index then
+        original_index = current_index + 1
+      end
+      local original = envelope_snapshot.items[original_index + 1]
+      local desired = original and original.selected and 1 or 0
+      local set_ok = call_reaper("GetSetAutomationItemInfo", envelope_snapshot.envelope, current_index, "D_UISEL", desired, true)
+      local readback = e5_automation_item_info(envelope_snapshot.envelope, current_index, "D_UISEL")
+      if not set_ok or readback == nil or (readback ~= 0) ~= (desired ~= 0) then
+        selection_restored = false
+      end
+    end
+  end
+
+  local ok_context, cursor_context = call_reaper("GetCursorContext2", true)
+  local ok_envelope, selected_envelope = call_reaper("GetSelectedEnvelope", project)
+  local selected_tracks = e5_automation_selected_tracks(project)
+  local selected_items = e5_automation_selected_items(project)
+  local ok_time, time_start, time_end = call_reaper("GetSet_LoopTimeRange2", project, false, false, 0, 0, false)
+  local ok_loop, loop_start, loop_end = call_reaper("GetSet_LoopTimeRange2", project, false, true, 0, 0, false)
+  local ok_cursor, edit_cursor = call_reaper("GetCursorPositionEx", project)
+  return selection_restored
+    and ok_context and math.floor(first_number(cursor_context) or -1) == snapshot.cursor_context
+    and ok_envelope and selected_envelope == snapshot.selected_envelope
+    and selected_tracks and e5_automation_pointer_lists_match(selected_tracks, snapshot.selected_tracks)
+    and selected_items and e5_automation_pointer_lists_match(selected_items, snapshot.selected_items)
+    and ok_time and e5_automation_numbers_match(first_number(time_start), snapshot.time_start)
+    and e5_automation_numbers_match(first_number(time_end), snapshot.time_end)
+    and ok_loop and e5_automation_numbers_match(first_number(loop_start), snapshot.loop_start)
+    and e5_automation_numbers_match(first_number(loop_end), snapshot.loop_end)
+    and ok_cursor and e5_automation_numbers_match(first_number(edit_cursor), snapshot.edit_cursor)
+end
+
+local function delete_automation_item(request)
+  local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
+  if not envelope then return nil, err end
+  local item_index = tonumber(request.params.automation_item_index)
+  if type(item_index) ~= "number" or item_index ~= math.floor(item_index) or item_index < 0 then
+    return e5_routing_error("PARAMS_INVALID", "automation_item_index must be a non-negative integer.", {
+      reason_code = "AUTOMATION_ITEM_INDEX_INVALID",
+    })
+  end
+  local ok_project, project = call_reaper("EnumProjects", -1, "")
+  if not ok_project or not project then
+    return e5_routing_error("COMMAND_FAILED", "Current REAPER project identity is unavailable before Automation Item deletion.", {
+      reason_code = "PROJECT_IDENTITY_UNAVAILABLE",
+    })
+  end
+  local ui_snapshot = e5_automation_snapshot_delete_ui_state(project)
+  if not ui_snapshot then
+    return e5_routing_error("COMMAND_FAILED", "Automation Item deletion could not snapshot the complete audited UI state.", {
+      reason_code = "AUTOMATION_ITEM_UI_SNAPSHOT_FAILED",
+    })
+  end
+  local envelope_snapshots = {}
+  local target_snapshot = nil
+  local enumeration_complete, enumeration_reasons = e5_automation_each_project_envelope(function(candidate)
+    local count = e5_automation_item_count_exact(candidate)
+    local rows = {}
+    if count == nil then
+      rows = nil
+    else
+      for index = 0, count - 1 do
+        local row = e5_automation_item_readback(candidate, index)
+        if not row then rows = nil break end
+        rows[#rows + 1] = row
+      end
+    end
+    envelope_snapshots[#envelope_snapshots + 1] = { envelope = candidate, items = rows, count = count }
+    if candidate == envelope then target_snapshot = envelope_snapshots[#envelope_snapshots] end
+  end)
+  if not enumeration_complete or not target_snapshot or not target_snapshot.items then
+    return e5_routing_error("COMMAND_FAILED", "Automation Item deletion requires complete Master/Track/Take/FX Envelope coverage and full Item rows.", {
+      reason_code = "AUTOMATION_ITEM_SELECTION_COVERAGE_INCOMPLETE",
+      coverage_reasons = enumeration_reasons,
+    })
+  end
+  for index = 1, #envelope_snapshots do
+    if not envelope_snapshots[index].items then
+      return e5_routing_error("COMMAND_FAILED", "Automation Item deletion could not snapshot every Item row before selection changes.", {
+        reason_code = "AUTOMATION_ITEM_READBACK_INCOMPLETE",
+      })
+    end
+  end
+  if item_index >= target_snapshot.count then
+    return e5_routing_error("REF_INVALID", "automation_item_index is outside the exact target Envelope Item count.", {
+      reason_code = "AUTOMATION_ITEM_INDEX_OUT_OF_RANGE",
+      automation_item_index = item_index,
+      automation_item_count = target_snapshot.count,
+    })
+  end
+  local target_item = target_snapshot.items[item_index + 1]
+  for envelope_index = 1, #envelope_snapshots do
+    local envelope_snapshot = envelope_snapshots[envelope_index]
+    for index = 0, envelope_snapshot.count - 1 do
+      local clear_ok = call_reaper("GetSetAutomationItemInfo", envelope_snapshot.envelope, index, "D_UISEL", 0, true)
+      local cleared = e5_automation_item_info(envelope_snapshot.envelope, index, "D_UISEL")
+      if not clear_ok or cleared == nil or cleared ~= 0 then
+        e5_automation_restore_delete_ui_state(project, ui_snapshot, envelope_snapshots, envelope, item_index, false)
+        return e5_routing_error("COMMAND_FAILED", "Automation Item selection could not be cleared completely before fixed Action 42086.", {
+          reason_code = "AUTOMATION_ITEM_SELECTION_CLEAR_FAILED",
+        })
+      end
+    end
+  end
+  local select_ok = call_reaper("GetSetAutomationItemInfo", envelope, item_index, "D_UISEL", 1, true)
+  local selected = e5_automation_item_info(envelope, item_index, "D_UISEL")
+  if not select_ok or selected == nil or selected == 0 then
+    e5_automation_restore_delete_ui_state(project, ui_snapshot, envelope_snapshots, envelope, item_index, false)
+    return e5_routing_error("COMMAND_FAILED", "Exact Automation Item selection did not read back before fixed Action 42086.", {
+      reason_code = "AUTOMATION_ITEM_TARGET_SELECTION_FAILED",
+    })
+  end
+  local action_ok = call_reaper("Main_OnCommandEx", ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID, 0, 0)
+  local after_count = e5_automation_item_count_exact(envelope)
+  local ordered_absence = action_ok and after_count == target_snapshot.count - 1
+  if ordered_absence then
+    for index = 0, after_count - 1 do
+      local actual = e5_automation_item_readback(envelope, index)
+      local expected = target_snapshot.items[(index < item_index and index or index + 1) + 1]
+      if not e5_automation_item_identity_matches(actual, expected) then
+        ordered_absence = false
+        break
+      end
+    end
+  end
+  local target_deleted = after_count == target_snapshot.count - 1
+  local state_restored = e5_automation_restore_delete_ui_state(project, ui_snapshot, envelope_snapshots, envelope, item_index, target_deleted)
+  if not action_ok or not ordered_absence or not state_restored then
+    return e5_routing_error("VERIFY_FAILED", "Fixed Action 42086 did not prove exact Item absence with complete UI-state restoration.", {
+      reason_code = "AUTOMATION_ITEM_DELETE_READBACK_MISMATCH",
+      before_count = target_snapshot.count,
+      after_count = after_count or JSON_NULL,
+      target_absent = ordered_absence,
+      state_restored = state_restored,
+      mutation_applied = action_ok,
+    }, false)
+  end
+  return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
+    automation_item_index = item_index,
+    deleted_count = 1,
+    before_count = target_snapshot.count,
+    after_count = after_count,
+    fixed_action_id = ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID,
+    target_absent = true,
+    state_restoration_status = "passed",
+    deleted_item = target_item,
+  }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
 local function resolve_send_envelope(request)

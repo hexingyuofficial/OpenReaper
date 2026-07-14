@@ -1147,22 +1147,65 @@ local function parameter_to_envelope_mapping(request)
   end
   local ok, envelope = e2_fx_get_parameter_envelope(owner_kind, owner, slot_index, param_index)
   local owner_ref = e2_fx_read_owner_ref(owner_kind, owner)
+  local fx_ref = e2_fx_read_fx_object_ref(
+    owner_kind,
+    owner_ref,
+    slot_index,
+    e2_fx_read_name(owner_kind, owner, slot_index)
+  )
   local param_name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index)
+  local ident_api = owner_kind == "take" and "TakeFX_GetParamIdent" or "TrackFX_GetParamIdent"
+  local ok_ident, _, param_ident = call_reaper(ident_api, owner, slot_index, param_index, "")
+  param_ident = ok_ident and first_string(param_ident) or nil
+  if not param_ident or param_ident == "" then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_UNAVAILABLE", "REAPER did not return a stable parameter ident for the exact FX parameter.", {
+      fx_ref = e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index),
+      param_index = param_index,
+    })
+  end
+  if is_string(request.params and request.params.param_ident) and request.params.param_ident ~= param_ident then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_MISMATCH", "Requested param_ident does not match the exact live FX parameter.", {
+      requested_param_ident = bounded_string(request.params.param_ident, 160),
+      live_param_ident = bounded_string(param_ident, 160),
+    })
+  end
   local envelope_available = ok and envelope ~= nil
   local envelope_name = e2_fx_envelope_name(envelope_available and envelope or nil, param_name)
-  local envelope_ref = e2_fx_envelope_object_ref(owner_kind, owner_ref, slot_index, param_index, envelope_name)
+  local envelope_ref = nil
+  if envelope_available then
+    local ok_guid, _, guid = call_reaper("GetSetEnvelopeInfo_String", envelope, "GUID", "", false)
+    guid = ok_guid and first_string(guid) or nil
+    if not guid or guid == "" then
+      return e2_fx_read_error("ENVELOPE_IDENTITY_UNAVAILABLE", "Existing FX parameter Envelope did not expose a canonical GUID.", {
+        fx_ref = e2_fx_read_fx_ref_string(owner_kind, owner_ref, slot_index),
+        param_index = param_index,
+      })
+    end
+    envelope_ref = {
+      kind = "envelope",
+      ref = "envelope:guid:" .. guid,
+      identity = { scheme = "guid", value = guid },
+      display = {
+        name = bounded_string(envelope_name or "", 200),
+        owner_ref = owner_ref,
+        fx_slot_index = slot_index,
+        param_index = param_index,
+      },
+    }
+  end
   local summary = e2_fx_read_summary(request, {
     owner_kind = owner_kind,
     owner_ref = owner_ref,
+    fx_ref = fx_ref.ref,
     slot_index = slot_index,
     param_index = param_index,
-    param_ident = request.params and request.params.param_ident or JSON_NULL,
+    param_ident = bounded_string(param_ident, 160),
     parameter_count = count,
     parameter_name = param_name,
     envelope_available = envelope_available,
+    envelope_exists = envelope_available,
     envelope_ref = envelope_available and envelope_ref.ref or JSON_NULL,
-    potential_envelope_ref = envelope_ref.ref,
     envelope_name = envelope_name,
   })
-  return summary, nil, json_array({}), json_array({}), envelope_available and e2_fx_read_refs(envelope_ref) or e2_fx_read_refs()
+  return summary, nil, json_array({}), json_array({}), e2_fx_read_refs(fx_ref, envelope_ref)
 end

@@ -43,7 +43,9 @@ const ALLOWLIST = Object.freeze([
   "template.automation.set_send_automation_mode",
   "template.automation.create_automation_item",
   "template.automation.set_automation_item_bounds",
+  "template.automation.delete_automation_item",
   "template.automation.resolve_send_envelope",
+  "template.automation.ensure_fx_parameter_envelope",
   "template.automation.insert_fx_parameter_envelope_points",
   "template.automation.insert_sine_wave_points",
 ]);
@@ -66,6 +68,7 @@ const BLOCKED = Object.freeze([
 
 const DESTRUCTIVE_IDS = new Set([
   "template.automation.delete_envelope_points",
+  "template.automation.delete_automation_item",
 ]);
 
 describe("Wave 2A automation template descriptors", () => {
@@ -147,17 +150,19 @@ describe("Wave 2A automation template descriptors", () => {
       assert.equal(descriptor.bridge.operation_name, "template.execute", id);
       assert.equal(descriptor.bridge.idempotency, "none", id);
       assert.equal(descriptor.expectedDelta.kind, "mutation", id);
-      assert.equal(descriptor.expectedDelta.entities[0].action, "delete", id);
+      assert.equal(descriptor.expectedDelta.entities.some((entry) => entry.action === "delete"), true, id);
       assert.equal(descriptor.verification.mode, "required", id);
-      assert.equal(descriptor.verification.checks[0].name, "deleted_points_absent", id);
+      assert.match(descriptor.verification.checks[0].name, /absent/u, id);
     }
 
     const source = JSON.stringify(templates);
-    assert.equal(templates.filter((descriptor) => descriptor.risk === "destructive").length, 1);
+    assert.equal(templates.filter((descriptor) => descriptor.risk === "destructive").length, 2);
     assert.doesNotMatch(source, /"operation_family":"run_action"/);
     assert.doesNotMatch(source, /"kind":"file"/);
     assert.doesNotMatch(source, /hardware/i);
     assert.equal(byId.get("template.automation.create_automation_item").expectedDelta.entities[0].action, "create");
+    assert.equal(byId.get("template.automation.delete_automation_item").bridge.idempotency, "none");
+    assert.equal(byId.get("template.automation.ensure_fx_parameter_envelope").expectedDelta.entities[0].action, "create");
     assert.equal(byId.get("template.automation.set_envelope_point").expectedDelta.entities[0].action, "update");
     assert.equal(byId.get("template.automation.resolve_send_envelope").refs.input[0].kind, "send");
     assert.deepEqual(
@@ -354,6 +359,10 @@ function sampleInput(id) {
       return { position_seconds: 2, length_seconds: 1, pool_mode: "new_empty" };
     case "template.automation.set_automation_item_bounds":
       return { automation_item_index: 0, position_seconds: 4, length_seconds: 2 };
+    case "template.automation.delete_automation_item":
+      return { automation_item_index: 0 };
+    case "template.automation.ensure_fx_parameter_envelope":
+      return { param_index: 0 };
     case "template.automation.resolve_send_envelope":
       return { envelope_type: "volume" };
     default:

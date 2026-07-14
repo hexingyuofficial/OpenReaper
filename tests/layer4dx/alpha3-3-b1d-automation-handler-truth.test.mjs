@@ -68,20 +68,25 @@ end
 function install_fake(config)
   config = config or {}
   track = { guid = "{TRACK}" }
+  master_track = { guid = "{MASTER}" }
   item = {}
   take = { guid = "{TAKE}" }
   track_env = { id = "track" }
   track_env_b = { id = "track_b" }
   take_env = { id = "take" }
+  take_fx_env = { id = "take_fx" }
   send_env = { id = "send" }
   fx_env = { id = "fx" }
+  master_env = { id = "master" }
   track_envelopes = config.two_track_envelopes and { track_env, track_env_b } or { track_env }
   envelope_guids = {
     [track_env] = "{ENV-TRACK}",
     [track_env_b] = "{ENV-TRACK-B}",
     [take_env] = "{ENV-TAKE}",
+    [take_fx_env] = "{ENV-TAKE-FX}",
     [send_env] = "{ENV-SEND}",
     [fx_env] = "{ENV-FX}",
+    [master_env] = "{ENV-MASTER}",
   }
   if config.no_envelope_guids then
     envelope_guids[track_env] = nil
@@ -91,8 +96,10 @@ function install_fake(config)
     [track_env] = "Track Volume",
     [track_env_b] = "Track Pan",
     [take_env] = "Take Volume",
+    [take_fx_env] = "Take FX Gain",
     [send_env] = "Send Volume",
     [fx_env] = "FX Gain",
+    [master_env] = "Master Volume",
   }
   points = {
     [track_env] = {
@@ -108,15 +115,31 @@ function install_fake(config)
       },
     },
     [track_env_b] = { [-1] = {} },
-    [take_env] = { [-1] = {} },
+    [take_env] = { [-1] = config.take_points or {} },
+    [take_fx_env] = { [-1] = {} },
     [send_env] = { [-1] = {} },
     [fx_env] = { [-1] = {} },
+    [master_env] = { [-1] = {} },
   }
   automation_items = {
     [track_env] = {
-      { D_POSITION = 10, D_LENGTH = 2, D_POOL_ID = 7, D_STARTOFFS = 0, D_PLAYRATE = 1 },
+      { D_POSITION = 10, D_LENGTH = 2, D_POOL_ID = 7, D_STARTOFFS = 0, D_PLAYRATE = 1, D_BASELINE = 0, D_AMPLITUDE = 1, D_LOOPSRC = 0, D_UISEL = 0, D_MUTE = 0 },
     },
   }
+  if config.master_ai_sentinel then
+    automation_items[master_env] = {
+      { D_POSITION = 30, D_LENGTH = 2, D_POOL_ID = 11, D_STARTOFFS = 0, D_PLAYRATE = 1, D_BASELINE = 0, D_AMPLITUDE = 1, D_LOOPSRC = 0, D_UISEL = 1, D_MUTE = 0 },
+    }
+  end
+  track_fx_exists = config.track_fx_missing ~= true
+  take_fx_exists = config.take_fx_missing ~= true
+  cursor_context = config.cursor_context or 1
+  selected_envelope = config.selected_envelope_nil and nil or track_env
+  track_selected = true
+  item_selected = true
+  time_start, time_end = 4, 6
+  loop_start, loop_end = 8, 10
+  edit_cursor = 3
   lane_state = { active = true, visible = false, armed = false, show_lane = false }
   send_mode = 0
   track_mode = 0
@@ -132,33 +155,47 @@ function install_fake(config)
   end
 
   reaper = {}
+  reaper.GetMasterTrack = function(project) assert(project == 0); return master_track end
   reaper.CountTracks = function(project) assert(project == 0); return 1 end
   reaper.GetTrack = function(project, index) assert(project == 0); if index == 0 then return track end end
-  reaper.GetTrackGUID = function(actual) assert(actual == track); return track.guid end
+  reaper.GetTrackGUID = function(actual) assert(actual == track or actual == master_track); return actual.guid end
   reaper.GetMediaTrackInfo_Value = function(actual, key)
-    assert(actual == track)
+    assert(actual == track or actual == master_track)
     if key == "IP_TRACKNUMBER" then return 1 end
     if key == "P_ENV:<VOLENV" then return track_env end
     return 0
   end
-  reaper.CountTrackEnvelopes = function(actual) assert(actual == track); return #track_envelopes end
-  reaper.GetTrackEnvelope = function(actual, index) assert(actual == track); return track_envelopes[index + 1] end
+  reaper.CountTrackEnvelopes = function(actual)
+    assert(actual == track or actual == master_track)
+    if actual == master_track then return config.master_ai_sentinel and 1 or 0 end
+    return #track_envelopes
+  end
+  reaper.GetTrackEnvelope = function(actual, index)
+    assert(actual == track or actual == master_track)
+    if actual == master_track then return index == 0 and master_env or nil end
+    return track_envelopes[index + 1]
+  end
   reaper.GetTrackEnvelopeByName = function(actual, name)
-    assert(actual == track)
+    assert(actual == track or actual == master_track)
     if name == "Volume" then return track_env end
   end
   reaper.GetTrackEnvelopeByChunkName = function(actual, name)
-    assert(actual == track)
+    assert(actual == track or actual == master_track)
+    if actual == master_track then return name == "<VOLENV" and master_env or nil end
     if name == "<VOLENV" then return track_env end
   end
-  reaper.TrackFX_GetCount = function(actual) assert(actual == track); return 1 end
+  reaper.TrackFX_GetCount = function(actual) assert(actual == track or actual == master_track); return actual == master_track and 0 or 1 end
   reaper.TrackFX_GetNumParams = function(actual, fx_index) assert(actual == track and fx_index == 0); return 1 end
   reaper.GetFXEnvelope = function(actual, fx_index, param_index, create)
-    assert(actual == track and fx_index == 0 and param_index == 0 and create == false)
-    return fx_env
+    assert(actual == track and fx_index == 0 and param_index == 0)
+    if create then track_fx_exists = true end
+    return track_fx_exists and fx_env or nil
   end
   reaper.TrackFX_GetParamName = function(actual, fx_index, param_index)
     assert(actual == track and fx_index == 0 and param_index == 0); return true, "FX Gain"
+  end
+  reaper.TrackFX_GetParamIdent = function(actual, fx_index, param_index)
+    assert(actual == track and fx_index == 0 and param_index == 0); return true, "gain"
   end
   reaper.GetTrackNumSends = function(actual, category)
     assert(actual == track)
@@ -194,6 +231,19 @@ function install_fake(config)
   reaper.CountTakes = function(actual) assert(actual == item); return 1 end
   reaper.GetTake = function(actual, index) assert(actual == item); if index == 0 then return take end end
   reaper.CountTakeEnvelopes = function(actual) assert(actual == take); return 1 end
+  reaper.TakeFX_GetCount = function(actual) assert(actual == take); return config.take_fx and 1 or 0 end
+  reaper.TakeFX_GetNumParams = function(actual, fx_index) assert(actual == take and fx_index == 0); return 1 end
+  reaper.TakeFX_GetEnvelope = function(actual, fx_index, param_index, create)
+    assert(actual == take and fx_index == 0 and param_index == 0)
+    if create then take_fx_exists = true end
+    return take_fx_exists and take_fx_env or nil
+  end
+  reaper.TakeFX_GetParamName = function(actual, fx_index, param_index)
+    assert(actual == take and fx_index == 0 and param_index == 0); return true, "Take FX Gain"
+  end
+  reaper.TakeFX_GetParamIdent = function(actual, fx_index, param_index)
+    assert(actual == take and fx_index == 0 and param_index == 0); return true, "take_gain"
+  end
   reaper.GetTakeEnvelope = function(actual, index) assert(actual == take); if index == 0 then return take_env end end
   reaper.GetTakeEnvelopeByName = function(actual, name)
     assert(actual == take)
@@ -205,6 +255,25 @@ function install_fake(config)
   end
   reaper.GetEnvelopeName = function(envelope) return true, envelope_names[envelope] end
   reaper.GetEnvelopeScalingMode = function() return 0 end
+  reaper.Envelope_GetParentTake = function(envelope)
+    if envelope == take_env then return take, -1, -1 end
+    if envelope == take_fx_env then return take, 0, 0 end
+    return nil, -1, -1
+  end
+  reaper.Envelope_GetParentTrack = function(envelope)
+    if envelope == fx_env then return track, 0, 0 end
+    if envelope == track_env or envelope == track_env_b then return track, -1, -1 end
+    if envelope == master_env then return master_track, -1, -1 end
+    return nil, -1, -1
+  end
+  reaper.GetMediaItemTake_Item = function(actual) assert(actual == take); return item end
+  reaper.GetMediaItemInfo_Value = function(actual, key)
+    assert(actual == item)
+    if key == "D_POSITION" then return config.item_position or 0 end
+    if key == "D_LENGTH" then return config.item_length or 30 end
+    return 0
+  end
+  reaper.GetMediaItemTakeInfo_Value = function(actual, key) assert(actual == take and key == "D_PLAYRATE"); return config.take_playrate or 1 end
   reaper.CountEnvelopePoints = function(envelope) return #lane(envelope, -1) end
   reaper.CountEnvelopePointsEx = function(envelope, autoitem_index) return #lane(envelope, autoitem_index) end
   reaper.GetEnvelopePointEx = function(envelope, autoitem_index, index)
@@ -246,7 +315,7 @@ function install_fake(config)
     automation_items[envelope] = automation_items[envelope] or {}
     local rows = automation_items[envelope]
     local actual_pool_id = pool_id == -1 and (#rows + 1) or pool_id
-    rows[#rows + 1] = { D_POSITION = position, D_LENGTH = length, D_POOL_ID = actual_pool_id, D_STARTOFFS = 0, D_PLAYRATE = 1 }
+    rows[#rows + 1] = { D_POSITION = position, D_LENGTH = length, D_POOL_ID = actual_pool_id, D_STARTOFFS = 0, D_PLAYRATE = 1, D_BASELINE = 0, D_AMPLITUDE = 1, D_LOOPSRC = 0, D_UISEL = 0, D_MUTE = 0 }
     return #rows - 1
   end
   reaper.GetSetAutomationItemInfo = function(envelope, index, key, value, set_new)
@@ -255,6 +324,33 @@ function install_fake(config)
     if set_new then row[key] = value end
     if config.item_readback_mismatch and key == "D_LENGTH" then return row[key] + 1 end
     return row[key]
+  end
+  reaper.EnumProjects = function(index) assert(index == -1); return 0, "fixture.RPP" end
+  reaper.ValidatePtr2 = function(project, pointer, kind) assert(project == 0 and kind == "TrackEnvelope*"); return pointer ~= nil end
+  reaper.GetCursorContext2 = function() return cursor_context end
+  reaper.GetSelectedEnvelope = function(project) assert(project == 0); return selected_envelope end
+  reaper.SetCursorContext = function(mode, envelope) cursor_context = mode; if mode == 2 then selected_envelope = envelope end end
+  reaper.CountSelectedTracks2 = function(project, include_master) assert(project == 0 and include_master == true); return track_selected and 1 or 0 end
+  reaper.GetSelectedTrack2 = function(project, index, include_master) assert(project == 0 and include_master == true); if track_selected and index == 0 then return track end end
+  reaper.SetTrackSelected = function(actual, selected) if actual == track then track_selected = selected end end
+  reaper.CountSelectedMediaItems = function(project) assert(project == 0); return item_selected and 1 or 0 end
+  reaper.GetSelectedMediaItem = function(project, index) assert(project == 0); if item_selected and index == 0 then return item end end
+  reaper.SetMediaItemSelected = function(actual, selected) assert(actual == item); item_selected = selected end
+  reaper.GetSet_LoopTimeRange2 = function(project, set_new, is_loop, start_value, end_value)
+    assert(project == 0)
+    if set_new then
+      if is_loop then loop_start, loop_end = start_value, end_value else time_start, time_end = start_value, end_value end
+    end
+    if is_loop then return loop_start, loop_end end
+    return time_start, time_end
+  end
+  reaper.GetCursorPositionEx = function(project) assert(project == 0); return edit_cursor end
+  reaper.SetEditCurPos2 = function(project, value) assert(project == 0); edit_cursor = value end
+  reaper.Main_OnCommandEx = function(command_id, flag, project)
+    assert(command_id == 42086 and flag == 0 and project == 0)
+    for _, rows in pairs(automation_items) do
+      for index = #rows, 1, -1 do if rows[index].D_UISEL ~= 0 then table.remove(rows, index) end end
+    end
   end
   reaper.BR_EnvAlloc = function(envelope)
     if not config.br_available then return nil end
@@ -439,6 +535,97 @@ summary, failure = delete_envelope_points(make_request("automation.delete_envelo
 assert(failure == nil and summary.deleted_count == 1 and summary.range_absent == true)
 for _, row in ipairs(points[track_env][-1]) do assert(not (row[1] >= 2 and row[1] < 3)) end
 assert(points[track_env][-1][2][1] == 3)
+`);
+  });
+
+  it("converts ordinary Take Envelope points between project time and take-local native time", () => {
+    runLua(`
+install_fake({ item_position = 10, item_length = 8, take_playrate = 2, take_points = {
+  { 2, 0.5, 0, 0, false },
+} })
+local ref = "envelope:guid:{ENV-TAKE}"
+local request = make_request("automation.read_envelope_points", { limit = 8 }, ref)
+request.pack.risk = "read"
+local summary, failure = read_envelope_points(request)
+assert(failure == nil and summary.time_basis == "project")
+close(summary.points[1].time_seconds, 11)
+
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = { { time_seconds = 12, value = 0.75, shape = 0, tension = 0 } },
+}, ref))
+assert(failure == nil and summary.time_basis == "project")
+close(points[take_env][-1][2][1], 4)
+
+request = make_request("automation.read_envelope_points", { limit = 8 }, ref)
+request.pack.risk = "read"
+summary = read_envelope_points(request)
+close(summary.points[2].time_seconds, 12)
+
+summary, failure = delete_envelope_points(make_request("automation.delete_envelope_points", {
+  mode = "range", start_seconds = 10.5, end_seconds = 11.5,
+}, ref))
+assert(failure == nil and summary.deleted_count == 1)
+assert(#points[take_env][-1] == 1 and points[take_env][-1][1][1] == 4)
+
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = { { time_seconds = 9, value = 0.5, shape = 0, tension = 0 } },
+}, ref))
+assert(summary == nil and failure.code == "TAKE_ENVELOPE_TIME_OUT_OF_BOUNDS")
+`);
+  });
+
+  it("ensures exact Track-FX and Take-FX parameter Envelopes through false-first native creation", () => {
+    runLua(`
+local function fx_request(ref, scheme, ident)
+  return {
+    refs = { { kind = "fx", ref = ref, identity = { scheme = scheme, value = string.sub(ref, 4) } } },
+    params = { param_index = 0, param_ident = ident },
+    pack = { id = "automation", capability = "automation.ensure_fx_parameter_envelope", risk = "write" },
+    budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 2048 },
+  }
+end
+
+install_fake()
+local summary, failure, _, _, refs = ensure_fx_parameter_envelope(fx_request("fx:track:guid:{TRACK}:0", "track_fx", "gain"))
+assert(failure == nil and summary.created == false and summary.owner_kind == "track")
+assert(summary.envelope_ref == "envelope:guid:{ENV-FX}" and summary.param_ident == "gain")
+assert(refs[2].identity.scheme == "guid")
+
+install_fake({ track_fx_missing = true })
+summary, failure = ensure_fx_parameter_envelope(fx_request("fx:track:guid:{TRACK}:0", "track_fx", "gain"))
+assert(failure == nil and summary.created == true and track_fx_exists == true)
+
+install_fake({ take_fx = true })
+summary, failure = ensure_fx_parameter_envelope(fx_request("fx:take:guid:{TAKE}:0", "take_fx", "take_gain"))
+assert(failure == nil and summary.created == false and summary.owner_kind == "take")
+assert(summary.envelope_ref == "envelope:guid:{ENV-TAKE-FX}")
+
+install_fake({ take_fx = true, take_fx_missing = true })
+summary, failure = ensure_fx_parameter_envelope(fx_request("fx:take:guid:{TAKE}:0", "take_fx", "take_gain"))
+assert(failure == nil and summary.created == true and take_fx_exists == true)
+`);
+  });
+
+  it("deletes one exact Automation Item while preserving a selected Master AI and audited UI state", () => {
+    runLua(`
+install_fake({ master_ai_sentinel = true })
+local before_context = cursor_context
+local before_envelope = selected_envelope
+local before_time_start, before_time_end = time_start, time_end
+local before_loop_start, before_loop_end = loop_start, loop_end
+local before_cursor = edit_cursor
+local summary, failure = delete_automation_item(make_request("automation.delete_automation_item", {
+  automation_item_index = 0,
+}, "envelope:guid:{ENV-TRACK}"))
+assert(failure == nil and summary.deleted_count == 1 and summary.target_absent == true)
+assert(summary.fixed_action_id == 42086 and summary.state_restoration_status == "passed")
+assert(#automation_items[track_env] == 0)
+assert(#automation_items[master_env] == 1 and automation_items[master_env][1].D_UISEL == 1)
+assert(cursor_context == before_context and selected_envelope == before_envelope)
+assert(track_selected == true and item_selected == true)
+assert(time_start == before_time_start and time_end == before_time_end)
+assert(loop_start == before_loop_start and loop_end == before_loop_end)
+assert(edit_cursor == before_cursor)
 `);
   });
 

@@ -19,6 +19,10 @@ const NOW = "2026-07-14T02:00:00.000Z";
 const ENV_A = "envelope:guid:{ENV-A}";
 const ENV_B = "envelope:guid:{ENV-B}";
 const TRACK_A = "track:guid:{TRACK-A}";
+const FX_TRACK = "fx:track:guid:{TRACK-A}:0";
+const FX_TAKE = "fx:take:guid:{TAKE-A}:0";
+const ENV_FX_TRACK = "envelope:guid:{ENV-FX-TRACK}";
+const ENV_FX_TAKE = "envelope:guid:{ENV-FX-TAKE}";
 
 describe("Alpha3.3-B1d executable macro.automation.apply", () => {
   it("registers one fixed exact-live program and publishes explicit held atomic gaps", () => {
@@ -36,9 +40,10 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     const discovery = createAlpha3_3B1dAutomationApplyDiscoveryItems({ liveRunnableNow: true })[0];
     assert.deepEqual(discovery.supported_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_MODES);
     assert.deepEqual(discovery.held_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES);
-    assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, total_inserted_points: 32 });
+    assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, fx_targets: 8, total_inserted_points: 32 });
     const manual = createAlpha3_3B1dAutomationApplyExactManual().action_manual;
-    assert.match(manual.when_not_to_use.join(" "), /Automation Item deletion, Take\/Take-FX Automation/u);
+    assert.match(manual.when_to_use.join(" "), /Automation Item deletion/u);
+    assert.match(manual.when_to_use.join(" "), /Take-FX/u);
     assert.match(manual.readback_steps.join(" "), /complete pre\/post point tuples/u);
     assert.match(manual.common_blockers.map((row) => row.code).join(" "), /AUTOMATION_CONFIRMATION_TOKEN_REQUIRED/u);
     assert.match(manual.common_blockers.map((row) => row.code).join(" "), /AUTOMATION_COMPLETE_READBACK_REQUIRED/u);
@@ -173,6 +178,85 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_automation_items", automation_item_index: 0, position_seconds: 3, length_seconds: 2, pool_id: 1 });
   });
 
+  it("writes an existing ordinary Take Pan Envelope with project-time and live negative range truth", async () => {
+    const bridge = new FakeAutomationBridge();
+    const env = bridge.envelopes.get(ENV_B);
+    env.parent_kind = "take";
+    env.envelope_type = "pan";
+    env.min_value = -1;
+    env.max_value = 1;
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_take_points", envelope_refs: [ENV_B], points: [point(3, -0.5)], dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(bridge.envelopes.get(ENV_B).points[0].value, -0.5);
+    assert.equal(result.result.changes[0].requested.time_basis, "project");
+  });
+
+  it("previews and deletes one exact Automation Item with a current confirmation token", async () => {
+    const bridge = new FakeAutomationBridge({ initialItems: [
+      { automation_item_index: 0, position_seconds: 1, length_seconds: 2, pool_id: 7, selected: true },
+      { automation_item_index: 1, position_seconds: 5, length_seconds: 1, pool_id: 8 },
+    ] });
+    const preview = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "delete_automation_item", envelope_refs: [ENV_A], automation_item_delete: { automation_item_index: 0 } }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(preview.ok, true, JSON.stringify(preview));
+    assert.match(preview.result.data.confirmation.token, /^automation-confirmation:v1:[a-f0-9]{64}$/u);
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request(preview.result.data.confirmation.retry.input),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_automation_items", automation_item_index: 0, deleted_count: 1, before_count: 2, after_count: 1, target_absent: true });
+    assert.equal(bridge.envelopes.get(ENV_A).items[0].pool_id, 8);
+  });
+
+  it("inserts Track-FX parameter points through independent mapping, ensure, GUID readback, and generic point write", async () => {
+    const bridge = new FakeAutomationBridge({ initialFxPoints: [point(0, 0.2)] });
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_fx_parameter_points", fx_refs: [FX_TRACK], fx_parameter: { param_index: 0, param_ident: "gain" }, points: [point(2, 0.8)], dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(result.result.changes[0].live_readback.envelope_ref, ENV_FX_TRACK);
+    assert.equal(result.result.changes[0].live_readback.created_envelope, false);
+    assert.equal(bridge.envelopes.get(ENV_FX_TRACK).points.length, 2);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.fx.parameter_to_envelope_mapping",
+      "template.automation.read_envelope_points",
+      "template.automation.ensure_fx_parameter_envelope",
+      "template.fx.parameter_to_envelope_mapping",
+      "template.automation.read_envelope_points",
+      "template.automation.insert_envelope_points_batch",
+      "template.fx.parameter_to_envelope_mapping",
+      "template.automation.read_envelope_points",
+    ]);
+  });
+
+  it("creates a missing Take-FX parameter Envelope natively, then writes and independently proves its GUID points", async () => {
+    const bridge = new FakeAutomationBridge({ missingTakeFxEnvelope: true });
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_take_fx_parameter_points", fx_refs: [FX_TAKE], fx_parameter: { param_index: 0, param_ident: "take_gain" }, points: [point(4, 0.6)], dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes[0].live_readback.owner_kind, "take");
+    assert.equal(result.result.changes[0].live_readback.created_envelope, true);
+    assert.equal(result.result.changes[0].live_readback.envelope_ref, ENV_FX_TAKE);
+    assert.equal(bridge.envelopes.get(ENV_FX_TAKE).points[0].value, 0.6);
+  });
+
   it("updates one existing point and independently proves the full tuple/count transition", async () => {
     const bridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.25), point(1, 0.5)] });
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
@@ -188,16 +272,29 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assertCallsValidateThroughHarness(bridge.calls, ["template.automation.set_envelope_point"]);
   });
 
-  it("updates existing Automation Item position/length with independent Item-list readback", async () => {
+  it("blocks an out-of-range point update from the live Envelope value domain before mutation", async () => {
+    const bridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.25)] });
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "update_point", envelope_refs: [ENV_A], point_update: { point_index: 0, value: 5 }, dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "AUTOMATION_POINT_VALUE_OUT_OF_RANGE");
+    assert.deepEqual(bridge.calls.map((call) => call.id), ["template.automation.read_envelope_points"]);
+    assert.equal(bridge.envelopes.get(ENV_A).points[0].value, 0.25);
+  });
+
+  it("updates every supported Automation Item bounds field with independent Item-list readback", async () => {
     const bridge = new FakeAutomationBridge({ initialItems: [{ automation_item_index: 0, position_seconds: 1, length_seconds: 2, pool_id: -1 }] });
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
-      request: request({ mode: "set_automation_item_bounds", envelope_refs: [ENV_A], automation_item_bounds: { automation_item_index: 0, position_seconds: 4, length_seconds: 3 }, dry_run: false }),
+      request: request({ mode: "set_automation_item_bounds", envelope_refs: [ENV_A], automation_item_bounds: { automation_item_index: 0, position_seconds: 4, length_seconds: 3, start_offset_seconds: 0.5, playrate: 1.25 }, dry_run: false }),
       executeAtomic: bridge.executeAtomic,
       now: () => new Date(NOW),
     });
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(bridge.calls.map((call) => call.id), ["template.automation.read_automation_items", "template.automation.set_automation_item_bounds", "template.automation.read_automation_items"]);
-    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_automation_items", automation_item_index: 0, position_seconds: 4, length_seconds: 3 });
+    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_automation_items", automation_item_index: 0, position_seconds: 4, length_seconds: 3, start_offset_seconds: 0.5, playrate: 1.25 });
     assertCallsValidateThroughHarness(bridge.calls, ["template.automation.set_automation_item_bounds"]);
   });
 
@@ -341,9 +438,8 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
 
   it("blocks destructive and missing-atom surfaces before every live child call", async () => {
     const cases = [
-      [{ mode: "delete_automation_item", envelope_refs: [ENV_A], dry_run: false }, "AUTOMATION_MODE_HELD"],
-      [{ mode: "insert_take_points", envelope_refs: [ENV_A], dry_run: false }, "AUTOMATION_TAKE_ROUTE_MISSING"],
-      [{ mode: "insert_fx_parameter_points", envelope_refs: [ENV_A], dry_run: false }, "AUTOMATION_ENVELOPE_CREATE_MISSING"],
+      [{ mode: "delete_automation_item", envelope_refs: [ENV_A], dry_run: false }, "AUTOMATION_ITEM_DELETE_REQUIRED"],
+      [{ mode: "insert_fx_parameter_points", envelope_refs: [ENV_A], points: [point(1, 0.5)], fx_parameter: { param_index: 0 }, dry_run: false }, "AUTOMATION_REQUEST_INVALID"],
       [{ mode: "set_track_mode", track_refs: [TRACK_A], track_mode: "write", dry_run: false }, "AUTOMATION_REALTIME_MODE_HELD"],
       [{ mode: "delete_point", envelope_refs: [ENV_A], point_delete: { point_index: 0 }, confirmation: true, dry_run: false }, "AUTOMATION_CONFIRMATION_TOKEN_REQUIRED"],
       [{ mode: "insert_points", envelope_refs: [ENV_A], points: [point(1, 0.5)], steps: [], dry_run: false }, "AUTOMATION_REQUEST_INVALID"],
@@ -400,8 +496,14 @@ class FakeAutomationBridge {
       [ENV_A, envelope(ENV_A, "volume", options.initialPoints ?? [])],
       [ENV_B, envelope(ENV_B, "mute", [])],
     ]);
-    if (Array.isArray(options.initialItems)) this.envelopes.get(ENV_A).items = options.initialItems.map((row) => ({ ...row }));
+    if (Array.isArray(options.initialItems)) this.envelopes.get(ENV_A).items = options.initialItems.map(automationItem);
     this.tracks = new Map([[TRACK_A, { track_ref: TRACK_A, mode: "trim_read" }]]);
+    this.fx = new Map([
+      [FX_TRACK, { fx_ref: FX_TRACK, owner_kind: "track", owner_ref: TRACK_A, slot_index: 0, param_index: 0, param_ident: "gain", parameter_name: "Gain", envelope_ref: options.missingTrackFxEnvelope ? null : ENV_FX_TRACK }],
+      [FX_TAKE, { fx_ref: FX_TAKE, owner_kind: "take", owner_ref: "take:guid:{TAKE-A}", slot_index: 0, param_index: 0, param_ident: "take_gain", parameter_name: "Take Gain", envelope_ref: options.missingTakeFxEnvelope ? null : ENV_FX_TAKE }],
+    ]);
+    if (!options.missingTrackFxEnvelope) this.envelopes.set(ENV_FX_TRACK, envelope(ENV_FX_TRACK, "fx_parameter", options.initialFxPoints ?? []));
+    if (!options.missingTakeFxEnvelope) this.envelopes.set(ENV_FX_TAKE, envelope(ENV_FX_TAKE, "fx_parameter", options.initialTakeFxPoints ?? []));
     this.executeAtomic = this.executeAtomic.bind(this);
   }
 
@@ -422,6 +524,21 @@ class FakeAutomationBridge {
       if (!track) return failure(id, "TRACK_NOT_FOUND");
       track.mode = input.mode;
       return execution(id, track, [trackRef(track.track_ref)]);
+    }
+    if (id === "template.fx.parameter_to_envelope_mapping") {
+      const fx = this.fx.get(refs.fx_ref?.ref);
+      if (!fx || fx.param_index !== input.param_index || input.param_ident && input.param_ident !== fx.param_ident) return failure(id, "FX_PARAMETER_NOT_FOUND");
+      return execution(id, { ...fx, envelope_exists: fx.envelope_ref !== null }, [fxRef(fx.fx_ref), ...(fx.envelope_ref ? [envelopeRef(fx.envelope_ref)] : [])]);
+    }
+    if (id === "template.automation.ensure_fx_parameter_envelope") {
+      const fx = this.fx.get(refs.fx_ref?.ref);
+      if (!fx || fx.param_index !== input.param_index || input.param_ident && input.param_ident !== fx.param_ident) return failure(id, "FX_PARAMETER_NOT_FOUND");
+      const created = fx.envelope_ref === null;
+      if (created) {
+        fx.envelope_ref = fx.owner_kind === "take" ? ENV_FX_TAKE : ENV_FX_TRACK;
+        this.envelopes.set(fx.envelope_ref, envelope(fx.envelope_ref, "fx_parameter", []));
+      }
+      return execution(id, { ...fx, envelope_exists: true, created }, [fxRef(fx.fx_ref), envelopeRef(fx.envelope_ref)]);
     }
 
     const ref = refs.envelope_ref?.ref;
@@ -462,7 +579,7 @@ class FakeAutomationBridge {
     if (id === "template.automation.read_automation_items") return execution(id, itemsSummary(env), [envelopeRef(ref)]);
     if (id === "template.automation.create_automation_item") {
       const nextPoolId = Math.max(0, ...env.items.map((item) => item.pool_id)) + 1;
-      env.items.push({ automation_item_index: env.items.length, position_seconds: input.position_seconds, length_seconds: input.length_seconds, pool_id: nextPoolId });
+      env.items.push(automationItem({ automation_item_index: env.items.length, position_seconds: input.position_seconds, length_seconds: input.length_seconds, pool_id: nextPoolId }));
       return execution(id, { ...envelopeSummary(env), ...env.items.at(-1) }, [envelopeRef(ref)]);
     }
     if (id === "template.automation.set_automation_item_bounds") {
@@ -470,6 +587,13 @@ class FakeAutomationBridge {
       if (!item) return failure(id, "REF_INVALID");
       if (!this.options.boundsReadbackMismatch) Object.assign(item, Object.fromEntries(Object.entries(input).filter(([field]) => field !== "automation_item_index")));
       return execution(id, { ...envelopeSummary(env), ...item }, [envelopeRef(ref)]);
+    }
+    if (id === "template.automation.delete_automation_item") {
+      const index = input.automation_item_index;
+      if (!env.items[index]) return failure(id, "REF_INVALID");
+      env.items.splice(index, 1);
+      env.items.forEach((item, itemIndex) => { item.automation_item_index = itemIndex; });
+      return execution(id, { ...envelopeSummary(env), automation_item_index: index, deleted_count: 1, target_absent: true }, [envelopeRef(ref)]);
     }
     throw new Error(`Unexpected fake Template ${id}`);
   }
@@ -480,13 +604,14 @@ function request(input) {
 }
 
 function envelope(ref, envelopeType, points) {
-  const env = { envelope_ref: ref, envelope_type: envelopeType, active: true, armed: false, visible: false, show_lane: false, br_available: true, points: points.map((row) => structuredClone(row)), items: [] };
+  const range = envelopeType === "volume" ? { min_value: 0, max_value: 4, center_value: 1 } : envelopeType === "mute" ? { min_value: 0, max_value: 1, center_value: 0 } : envelopeType === "pan" ? { min_value: -1, max_value: 1, center_value: 0 } : { min_value: 0, max_value: 1, center_value: 0.5 };
+  const env = { envelope_ref: ref, envelope_type: envelopeType, parent_kind: "track", active: true, armed: false, visible: false, show_lane: false, br_available: true, ...range, points: points.map((row) => structuredClone(row)), items: [] };
   sortPoints(env.points);
   return env;
 }
 
 function envelopeSummary(env) {
-  return { envelope_ref: env.envelope_ref, envelope_type: env.envelope_type, parent_kind: "track", active: env.active, armed: env.armed, visible: env.visible, show_lane: env.show_lane, br_available: env.br_available, point_count: env.points.length, automation_item_count: env.items.length };
+  return { envelope_ref: env.envelope_ref, envelope_type: env.envelope_type, parent_kind: env.parent_kind, active: env.active, armed: env.armed, visible: env.visible, show_lane: env.show_lane, br_available: env.br_available, min_value: env.min_value, max_value: env.max_value, center_value: env.center_value, point_count: env.points.length, automation_item_count: env.items.length };
 }
 
 function pointsSummary(env, autoitemIndex) {
@@ -495,6 +620,10 @@ function pointsSummary(env, autoitemIndex) {
 
 function itemsSummary(env) {
   return { ...envelopeSummary(env), items: env.items.map((row) => ({ ...row })), returned_count: env.items.length, total_count: env.items.length, next_cursor: null, truncated: false };
+}
+
+function automationItem(row) {
+  return { start_offset_seconds: 0, playrate: 1, baseline: 0, amplitude: 1, loop_source: false, selected: false, muted: false, ...row };
 }
 
 function point(timeSeconds, value, extra = {}) {
@@ -514,6 +643,11 @@ function trackRef(ref) {
   return { kind: "track", ref, identity: { scheme: "guid", value: ref.slice("track:guid:".length) } };
 }
 
+function fxRef(ref) {
+  const match = /^fx:(track|take):guid:(.+):(\d+)$/u.exec(ref);
+  return createObjectRef("fx", { scheme: `${match[1]}_fx`, value: `${match[1]}:guid:${match[2]}:${match[3]}` }, { ref });
+}
+
 function execution(id, summary, refs) {
   return { contract: "template.execution.v1", ok: true, template: { id }, request: { id: `evidence:${id}:${summary.envelope_ref ?? summary.track_ref}` }, result: { summary: structuredClone(summary), refs: structuredClone(refs) }, error: null };
 }
@@ -531,6 +665,8 @@ function isMutation(id) {
     "template.automation.set_track_automation_mode",
     "template.automation.create_automation_item",
     "template.automation.set_automation_item_bounds",
+    "template.automation.delete_automation_item",
+    "template.automation.ensure_fx_parameter_envelope",
   ].includes(id);
 }
 

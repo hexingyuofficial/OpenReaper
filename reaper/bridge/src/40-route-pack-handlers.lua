@@ -833,6 +833,8 @@ local E5_AUTOMATION_WRITE_HANDLERS = {
   ["automation.set_send_automation_mode"] = set_send_automation_mode,
   ["automation.create_automation_item"] = create_automation_item,
   ["automation.set_automation_item_bounds"] = set_automation_item_bounds,
+  ["automation.delete_automation_item"] = delete_automation_item,
+  ["automation.ensure_fx_parameter_envelope"] = ensure_fx_parameter_envelope,
   ["automation.insert_fx_parameter_envelope_points"] = insert_fx_parameter_envelope_points,
   ["automation.insert_sine_wave_points"] = insert_sine_wave_points,
 }

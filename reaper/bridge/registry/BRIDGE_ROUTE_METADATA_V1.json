@@ -3,9 +3,9 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 222,
+    "entryCount": 224,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 222,
+    "extractedHandlerCount": 224,
     "handlerModuleCount": 84,
     "routeCount": 33,
     "operationCount": 102
@@ -693,9 +693,9 @@
     },
     {
       "route": "e5-routing-automation-extra-handlers",
-      "template_count": 20,
+      "template_count": 22,
       "handler_module_count": 1,
-      "operation_count": 20,
+      "operation_count": 22,
       "packs": [
         "automation",
         "routing"
@@ -729,7 +729,9 @@
         "template.automation.set_send_automation_mode",
         "template.automation.create_automation_item",
         "template.automation.set_automation_item_bounds",
+        "template.automation.delete_automation_item",
         "template.automation.resolve_send_envelope",
+        "template.automation.ensure_fx_parameter_envelope",
         "template.automation.insert_fx_parameter_envelope_points",
         "template.automation.insert_sine_wave_points"
       ]

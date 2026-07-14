@@ -783,7 +783,7 @@ describe("Layer 4D call_template runtime binding", () => {
         CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)),
       false,
     );
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 222);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 224);
     const currentProductRuntime = createCallTemplateRuntime({
       live: {
         opted_in: true,
@@ -791,7 +791,7 @@ describe("Layer 4D call_template runtime binding", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 222);
+    assert.equal(currentProductRuntime.live_gate.allowed_template_ids.length, 224);
     assert.equal(
       currentProductRuntime.list_templates({
         ids: CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
@@ -1136,7 +1136,9 @@ describe("Layer 4D call_template runtime binding", () => {
       "template.automation.set_send_automation_mode",
       "template.automation.create_automation_item",
       "template.automation.set_automation_item_bounds",
+      "template.automation.delete_automation_item",
       "template.automation.resolve_send_envelope",
+      "template.automation.ensure_fx_parameter_envelope",
       "template.automation.insert_fx_parameter_envelope_points",
       "template.automation.insert_sine_wave_points",
     ]);
@@ -1164,11 +1166,11 @@ describe("Layer 4D call_template runtime binding", () => {
       assert.equal(response.ok, true, id);
     }
 
-    assert.equal(bridge.seen.length, 38);
+    assert.equal(bridge.seen.length, 40);
     assert.equal(bridge.seen.filter((request) => request.operation.family === "query_state").length, 14);
-    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 24);
+    assert.equal(bridge.seen.filter((request) => request.operation.family === "run_command").length, 26);
     assert.equal(bridge.seen.filter((request) => request.pack.id === "routing").length, 19);
-    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 19);
+    assert.equal(bridge.seen.filter((request) => request.pack.id === "automation").length, 21);
     for (const request of bridge.seen.filter((entry) => entry.pack.risk === "read")) {
       assert.equal(request.undo.mode, "none");
       assert.equal(request.artifacts.allow, false);
@@ -1933,7 +1935,9 @@ function e5RouteInput(id) {
     "template.automation.set_send_automation_mode": { mode: "use_track" },
     "template.automation.create_automation_item": { position_seconds: 1, length_seconds: 2, pool_mode: "new_empty" },
     "template.automation.set_automation_item_bounds": { automation_item_index: 0, position_seconds: 1, length_seconds: 2 },
+    "template.automation.delete_automation_item": { automation_item_index: 0 },
     "template.automation.resolve_send_envelope": { envelope_type: "volume" },
+    "template.automation.ensure_fx_parameter_envelope": { param_index: 0 },
     "template.automation.insert_fx_parameter_envelope_points": {
       param_index: 0,
       points: [
@@ -1987,6 +1991,9 @@ function e5RouteRefs(id) {
   if (id === "template.routing.read_fx_pin_mapping") {
     return { track_ref: trackRef, fx_ref: fxRef };
   }
+  if (id === "template.automation.ensure_fx_parameter_envelope") {
+    return { fx_ref: fxRef };
+  }
   if (id === "template.automation.insert_fx_parameter_envelope_points") {
     return { fx_ref: fxRef, envelope_ref: envelopeRef };
   }
@@ -2030,6 +2037,7 @@ function e5RouteIdempotencyKey(id) {
     "template.automation.set_envelope_point",
     "template.automation.set_send_automation_mode",
     "template.automation.set_automation_item_bounds",
+    "template.automation.ensure_fx_parameter_envelope",
   ].includes(id) ? `e5-routing-automation:${id}` : undefined;
 }
 

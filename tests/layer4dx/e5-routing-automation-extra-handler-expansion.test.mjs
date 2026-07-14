@@ -36,6 +36,8 @@ describe("E5 routing/automation extra live handler expansion", () => {
       "automation.set_send_automation_mode",
       "automation.create_automation_item",
       "automation.set_automation_item_bounds",
+      "automation.delete_automation_item",
+      "automation.ensure_fx_parameter_envelope",
     ]) {
       assert.match(ROUTE_SOURCE, new RegExp(`\\["${capability.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")}"\\]`));
     }
@@ -67,12 +69,20 @@ describe("E5 routing/automation extra live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /SetTrackAutomationMode/);
     assert.match(HANDLER_SOURCE, /InsertAutomationItem/);
     assert.match(HANDLER_SOURCE, /GetSetAutomationItemInfo/);
+    assert.match(HANDLER_SOURCE, /ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID = 42086/);
+    assert.match(HANDLER_SOURCE, /Main_OnCommandEx", ALPHA3_3_B1D_DELETE_AUTOMATION_ITEM_ACTION_ID, 0, 0/);
+    assert.match(HANDLER_SOURCE, /GetMasterTrack/);
+    assert.match(HANDLER_SOURCE, /TakeFX_GetEnvelope/);
+    assert.match(HANDLER_SOURCE, /TakeFX_GetParamIdent/);
+    assert.match(HANDLER_SOURCE, /TrackFX_GetParamIdent/);
+    assert.match(HANDLER_SOURCE, /Envelope_GetParentTake/);
+    assert.match(HANDLER_SOURCE, /GetMediaItemTake_Item/);
+    assert.match(HANDLER_SOURCE, /GetMediaItemTakeInfo_Value", take, "D_PLAYRATE/);
     assert.match(HANDLER_SOURCE, /SetTrackSendInfo_Value/);
     assert.match(HANDLER_SOURCE, /GetTrackSendInfo_Value/);
     assert.match(HANDLER_SOURCE, /BR_GetMediaTrackSendInfo_Envelope|P_ENV:<VOLENV/);
-    assert.doesNotMatch(HANDLER_SOURCE, /GetFXEnvelope", track, slot_index, param_index, true/);
     assert.doesNotMatch(HANDLER_SOURCE, /track_ref = "track:index:0"/);
     assert.doesNotMatch(HANDLER_SOURCE, /\^fx:track:\(%d\+\)\$/);
-    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
+    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand(?!Ex)|NamedCommandLookup|os\.execute|io\.popen|loadstring)\b/);
   });
 });

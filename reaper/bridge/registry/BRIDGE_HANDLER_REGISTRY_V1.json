@@ -2835,6 +2835,23 @@
       ]
     },
     {
+      "template_id": "template.automation.delete_automation_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.delete_automation_item",
+      "pack": "automation",
+      "risk": "destructive",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "delete_automation_item",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
       "template_id": "template.automation.resolve_send_envelope",
       "operation": {
         "family": "query_state",
@@ -2845,6 +2862,23 @@
       "route": "e5-routing-automation-extra-handlers",
       "handler_file": "routing/e5_r1_routing_read_route.lua",
       "handler_export": "resolve_send_envelope",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.ensure_fx_parameter_envelope",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "capability": "automation.ensure_fx_parameter_envelope",
+      "pack": "automation",
+      "risk": "write",
+      "route": "e5-routing-automation-extra-handlers",
+      "handler_file": "routing/e5_r1_routing_read_route.lua",
+      "handler_export": "ensure_fx_parameter_envelope",
       "artifact_policy": "none",
       "tests": [
         "tests/layer4dx/e5-routing-automation-extra-handler-expansion.test.mjs"
