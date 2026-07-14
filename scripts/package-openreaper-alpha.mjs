@@ -12,8 +12,9 @@ import {
   createAcceptedOfficialTemplateCatalogTemplates,
 } from "../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import {
-  ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS,
-} from "../packages/mcp-server/src/alpha3-2-5-0-macro-inventory-v1.mjs";
+  ALPHA3_3_B1_DEPRECATED_ALIASES,
+  ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
+} from "../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
   createArtifactStateStoreEnvelope,
@@ -37,8 +38,13 @@ const vitalAgentRoot = path.resolve(options.vital_agent_root ?? path.join(repoRo
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
-const OPENREAPER_PRODUCT_VERSION = "3.2.5-alpha.0";
+const OPENREAPER_PRODUCT_VERSION = "3.3-alpha.0";
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
+const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
+  accepted_macro_count: 15,
+  accepted_template_count: 227,
+  bridge_handler_count: 87,
+});
 const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;
 const projectIndexSmokeOnly = options.project_index_smoke_only === true;
@@ -49,14 +55,12 @@ const EXACT_MCP_TOOLS = Object.freeze([
   "list_templates",
   "ping",
 ]);
-const REQUIRED_MACRO_IDS = Object.freeze([
-  "macro.project.inspect",
-  "macro.project.query",
-]);
+const REQUIRED_MACRO_IDS = ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS;
 const PROJECT_INDEX_FLOW_MACRO_IDS = Object.freeze(["macro.project.query"]);
 const FORMER_PUBLIC_MACRO_IDS = Object.freeze([
   "macro.index_status",
   "macro.query_tracks",
+  ...ALPHA3_3_B1_DEPRECATED_ALIASES.map((entry) => entry.id),
 ]);
 const REQUIRED_FX_TEMPLATE_IDS = Object.freeze([
   "template.fx.read_fx_summary",
@@ -169,9 +173,7 @@ async function writePackageProvenanceManifest() {
   } catch {
     throw new Error("Package provenance could not read the bridge handler registry.");
   }
-  if (handlerRegistry?.contract !== "openreaper.bridge_handler_registry.v1" || !Array.isArray(handlerRegistry.entries)) {
-    throw new Error("Package provenance bridge handler registry is invalid.");
-  }
+  const catalogFacts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
   const manifest = {
     contract: PACKAGE_PROVENANCE_CONTRACT,
     product: "OpenReaper alpha",
@@ -180,14 +182,35 @@ async function writePackageProvenanceManifest() {
     openreaper_git_commit: gitCommit,
     build_time_utc: new Date().toISOString(),
     source_tree_clean: true,
-    accepted_macro_count: ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS.executable_official,
-    accepted_template_count: createAcceptedOfficialTemplateCatalogTemplates().length,
-    bridge_handler_count: handlerRegistry.entries.length,
+    ...catalogFacts,
   };
   const manifestPath = path.join(packageRoot, "provenance.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
   await chmod(manifestPath, 0o444);
   return manifest;
+}
+
+export function createOpenReaperAlphaPackageCatalogFacts(handlerRegistry) {
+  if (handlerRegistry?.contract !== "openreaper.bridge_handler_registry.v1" || !Array.isArray(handlerRegistry.entries)) {
+    throw new Error("Package provenance bridge handler registry is invalid.");
+  }
+  const handlerFiles = handlerRegistry.entries.map((entry) => entry?.handler_file);
+  if (handlerFiles.some((handlerFile) => typeof handlerFile !== "string" || handlerFile.trim() === "")) {
+    throw new Error("Package provenance bridge handler registry has an invalid handler_file entry.");
+  }
+  const facts = {
+    accepted_macro_count: new Set(REQUIRED_MACRO_IDS).size,
+    accepted_template_count: createAcceptedOfficialTemplateCatalogTemplates().length,
+    bridge_handler_count: new Set(handlerFiles).size,
+  };
+  if (
+    facts.accepted_macro_count !== REQUIRED_MACRO_IDS.length
+    || handlerRegistry.entries.length !== facts.accepted_template_count
+    || Object.entries(ALPHA3_3_PACKAGE_CATALOG_COUNTS).some(([key, value]) => facts[key] !== value)
+  ) {
+    throw new Error(`Package provenance Alpha3.3 catalog facts do not match the frozen product: ${JSON.stringify(facts)}.`);
+  }
+  return Object.freeze(facts);
 }
 
 async function validatePackageProvenanceManifest(expected) {
@@ -332,6 +355,7 @@ async function writeReadme() {
 
 What this package does:
 - installs OpenReaper alpha to ~/.openreaper/current
+- exposes the flat fifteen-Macro Alpha3.3 menu, with full manuals only on exact id expansion
 - registers MCP server name "openreaper" for Codex, Cursor, and Claude Desktop where their config files live at standard macOS paths
 - writes MCP config snippets for other clients, including Trae, under ~/.openreaper/current/config-snippets
 - registers a REAPER action named "OpenReaper: Start MCP bridge"
@@ -3735,6 +3759,7 @@ function packageFilter(src) {
 function vitalAgentPackageFilter(src) {
   const base = path.basename(src);
   if (base === ".git" || base === ".DS_Store" || base === "node_modules" || base === "dist" || base === "coverage") return false;
+  if (isPackagedRuntimeDirectoryName(base)) return false;
   if (base === "tests" || base === "docs") return false;
   if (src.includes(`${path.sep}.git${path.sep}`)) return false;
   if (src.includes(`${path.sep}node_modules${path.sep}`)) return false;
@@ -3773,28 +3798,81 @@ async function removeDsStore(root) {
 }
 
 export async function scrubPackagedRuntimeState(root) {
-  await rm(path.join(root, "session"), { recursive: true, force: true });
-  return assertPackagedRuntimeStateClean(root);
+  const removedDirectories = await removePackagedRuntimeDirectories(root);
+  const clean = await assertPackagedRuntimeStateClean(root);
+  return Object.freeze({
+    ...clean,
+    removed_runtime_directory_count: removedDirectories.length,
+    removed_runtime_directories: Object.freeze(removedDirectories),
+  });
 }
 
 export async function assertPackagedRuntimeStateClean(root) {
-  const forbidden = await collectNamedFiles(root, (name) => {
-    const lower = name.toLowerCase();
-    return lower.endsWith(".sqlite")
-      || lower.endsWith(".sqlite-wal")
-      || lower.endsWith(".sqlite-shm")
-      || lower.endsWith(".db")
-      || lower.endsWith(".rpp")
-      || lower.endsWith(".rpp-bak");
-  });
+  const forbidden = await collectPackagedRuntimeStatePaths(root);
   if (forbidden.length > 0) {
-    throw new Error(`Package contains runtime state: ${forbidden.map((entry) => path.relative(root, entry)).join(", ")}`);
+    throw new Error(`Package contains runtime state: ${forbidden.join(", ")}`);
   }
   return Object.freeze({
     ok: true,
     session_state_removed: true,
     forbidden_runtime_file_count: 0,
   });
+}
+
+async function removePackagedRuntimeDirectories(root, relativeRoot = "") {
+  const removed = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    const relativePath = path.join(relativeRoot, entry.name);
+    if (isPackagedRuntimeDirectoryName(entry.name)) {
+      await rm(fullPath, { recursive: true, force: true });
+      removed.push(relativePath);
+    } else if (entry.isDirectory()) {
+      removed.push(...await removePackagedRuntimeDirectories(fullPath, relativePath));
+    }
+  }
+  return removed.sort();
+}
+
+async function collectPackagedRuntimeStatePaths(root, relativeRoot = "") {
+  const forbidden = [];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(root, entry.name);
+    const relativePath = path.join(relativeRoot, entry.name);
+    if (isPackagedRuntimeDirectoryName(entry.name)) {
+      forbidden.push(relativePath);
+    } else if (entry.isDirectory()) {
+      forbidden.push(...await collectPackagedRuntimeStatePaths(fullPath, relativePath));
+    } else if ((entry.isFile() || entry.isSymbolicLink()) && isPackagedRuntimeFileName(entry.name)) {
+      forbidden.push(relativePath);
+    }
+  }
+  return forbidden.sort();
+}
+
+function isPackagedRuntimeDirectoryName(name) {
+  const lower = name.toLowerCase();
+  return lower === "session"
+    || lower === "runtime-state"
+    || lower === "backup"
+    || lower === "backups"
+    || lower === "dist-package"
+    || (lower.startsWith(".openreaper-") && /-(?:backup|preservation)-/u.test(lower));
+}
+
+function isPackagedRuntimeFileName(name) {
+  const lower = name.toLowerCase();
+  return /\.(?:sqlite|sqlite3|db)(?:-(?:wal|shm|journal))?$/u.test(lower)
+    || lower.endsWith(".rpp")
+    || lower.endsWith(".rpp-bak")
+    || lower.endsWith(".bak")
+    || lower.endsWith(".backup")
+    || lower === "reaper.pid"
+    || lower === "owner.meta"
+    || lower === "managed-render-root.path"
+    || lower === LIVE_BRIDGE_HEARTBEAT_FILENAME;
 }
 
 async function assertReadable(filePath) {

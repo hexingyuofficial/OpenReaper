@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -11,6 +11,7 @@ import { createAlpha3_2B3DoctorTaskResult } from "../../packages/mcp-server/src/
 import { executeAlpha3_2_5CRenderTargetsMacro } from "../../packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs";
 import {
   assertPackagedRuntimeStateClean,
+  createOpenReaperAlphaPackageCatalogFacts,
   scrubPackagedRuntimeState,
 } from "../../scripts/package-openreaper-alpha.mjs";
 
@@ -18,29 +19,91 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 const execFileAsync = promisify(execFile);
 
 describe("Alpha3.2.5-F product truth", () => {
-  it("removes package-smoke session state and rejects DB or project leakage before zip", async () => {
+  it("recursively removes packaged runtime state and rejects reinjected leakage before zip", async () => {
     const fixture = await mkdtemp(path.join(await realpath(os.tmpdir()), "openreaper-alpha33-package-clean-"));
     try {
       const packageRoot = path.join(fixture, "OpenReaper-alpha");
       const stateRoot = path.join(packageRoot, "session", "project-index-state");
+      const companionSession = path.join(packageRoot, "vendor", "vital-agent-mcp", "dist-package", "vital-agent-mcp-0.1.0", "session");
+      const normalRuntime = path.join(packageRoot, "node_modules", "ajv", "dist", "runtime");
       await mkdir(stateRoot, { recursive: true });
+      await mkdir(companionSession, { recursive: true });
+      await mkdir(path.join(packageRoot, "vendor", "openreaper-kernel", "runtime-state"), { recursive: true });
+      await mkdir(path.join(packageRoot, "backups"), { recursive: true });
+      await mkdir(path.join(packageRoot, ".openreaper-install-backup-fixture", "previous-install", "session"), { recursive: true });
+      await mkdir(normalRuntime, { recursive: true });
       await writeFile(path.join(stateRoot, "openreaper-project-index.sqlite"), "smoke-db", "utf8");
       await writeFile(path.join(packageRoot, "session", "Package Smoke.RPP"), "<REAPER_PROJECT 0.1>\n", "utf8");
+      await writeFile(path.join(companionSession, "companion.sqlite3-wal"), "smoke-db", "utf8");
+      await writeFile(path.join(packageRoot, "vendor", "openreaper-kernel", "runtime-state", "owner.meta"), "runtime", "utf8");
+      await writeFile(path.join(packageRoot, "backups", "Package Smoke.RPP-bak"), "backup", "utf8");
+      await writeFile(path.join(normalRuntime, "parseJson.js"), "product-runtime", "utf8");
       await writeFile(path.join(packageRoot, "README.txt"), "product", "utf8");
 
       const scrubbed = await scrubPackagedRuntimeState(packageRoot);
       assert.equal(scrubbed.ok, true);
       assert.equal(scrubbed.session_state_removed, true);
+      assert.ok(scrubbed.removed_runtime_directory_count >= 5);
+      for (const removed of [
+        "session",
+        path.join("vendor", "vital-agent-mcp", "dist-package"),
+        path.join("vendor", "openreaper-kernel", "runtime-state"),
+        "backups",
+        ".openreaper-install-backup-fixture",
+      ]) assert.ok(scrubbed.removed_runtime_directories.includes(removed), removed);
+      await assert.rejects(stat(stateRoot), { code: "ENOENT" });
+      await assert.rejects(stat(path.join(packageRoot, "vendor", "vital-agent-mcp", "dist-package")), { code: "ENOENT" });
       assert.equal(await readFile(path.join(packageRoot, "README.txt"), "utf8"), "product");
+      assert.equal(await readFile(path.join(normalRuntime, "parseJson.js"), "utf8"), "product-runtime");
 
-      await writeFile(path.join(packageRoot, "leaked.sqlite-wal"), "leak", "utf8");
-      await assert.rejects(
-        assertPackagedRuntimeStateClean(packageRoot),
-        /Package contains runtime state: leaked\.sqlite-wal/u,
-      );
+      for (const leakedName of [
+        "leaked.sqlite-journal",
+        "leaked.sqlite3-shm",
+        "leaked.db-wal",
+        "leaked.RPP",
+        "leaked.bak",
+        "leaked.backup",
+        "reaper.pid",
+        "owner.meta",
+        "managed-render-root.path",
+        "openreaper-bridge-liveness-v1.json",
+      ]) await writeFile(path.join(packageRoot, leakedName), "leak", "utf8");
+      await mkdir(path.join(packageRoot, "runtime-state"), { recursive: true });
+      await assert.rejects(assertPackagedRuntimeStateClean(packageRoot), (error) => {
+        assert.match(error.message, /Package contains runtime state:/u);
+        for (const leakedName of [
+          "leaked.sqlite-journal",
+          "leaked.sqlite3-shm",
+          "leaked.db-wal",
+          "leaked.RPP",
+          "leaked.bak",
+          "leaked.backup",
+          "reaper.pid",
+          "owner.meta",
+          "managed-render-root.path",
+          "openreaper-bridge-liveness-v1.json",
+          "runtime-state",
+        ]) assert.match(error.message, new RegExp(leakedName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
+        return true;
+      });
     } finally {
       await rm(fixture, { recursive: true, force: true });
     }
+  });
+
+  it("reports frozen Alpha3.3 catalog facts from unique bridge handler modules", async () => {
+    const handlerRegistry = JSON.parse(await readFile(
+      path.join(root, "reaper", "bridge", "registry", "BRIDGE_HANDLER_REGISTRY_V1.json"),
+      "utf8",
+    ));
+    const facts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
+    assert.deepEqual(facts, {
+      accepted_macro_count: 15,
+      accepted_template_count: 227,
+      bridge_handler_count: 87,
+    });
+    assert.equal(handlerRegistry.entries.length, 227);
+    assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 87);
   });
 
   it("scrubs inherited session identity and keeps only explicit start overrides", async () => {
@@ -237,8 +300,15 @@ sleep 0.1
     assert.match(source, /validatePackageProvenanceManifest/);
     assert.match(source, /smokePackagedProvenanceManifest/);
     assert.match(source, /openreaper_git_commit/);
+    assert.equal(source.match(/openreaper_git_commit:/gu)?.length, 2);
     assert.match(source, /accepted_template_count/);
     assert.match(source, /bridge_handler_count/);
+    assert.match(source, /OPENREAPER_PRODUCT_VERSION = "3\.3-alpha\.0"/);
+    assert.match(source, /ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS/);
+    assert.match(source, /ALPHA3_3_B1_DEPRECATED_ALIASES/);
+    assert.match(source, /createOpenReaperAlphaPackageCatalogFacts/);
+    assert.match(source, /exposes the flat fifteen-Macro Alpha3\.3 menu/);
+    assert.equal(source.includes("ALPHA3_2_5_0_MACRO_INVENTORY_COUNTS"), false);
     assert.match(source, /0o444/);
     assert.match(source, /source_tree_clean/);
     assert.match(source, /status", "--porcelain=v1"/);
