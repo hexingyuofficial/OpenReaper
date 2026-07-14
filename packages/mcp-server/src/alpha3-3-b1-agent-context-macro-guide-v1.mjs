@@ -21,12 +21,76 @@ import {
   ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID,
   createAlpha3_3B1dAutomationApplyExactManual,
 } from "./alpha3-3-b1d-automation-apply-v1.mjs";
+import {
+  createAlpha3_3MidiApplyExactManual,
+} from "./alpha3-3-midi-apply-v1.mjs";
 
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_context_macro_guide.v1";
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
 export const ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT = "alpha3.3.agent_context_macro_guide.requested_expansions.v1";
 
 const MENU_ROWS = deepFreeze(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.map((id) => compactMenuRow(id)));
+const INTENT_ROUTES = deepFreeze([
+  intent("macro.project.inspect", [
+    term("inspect project", 8), term("project overview", 8), term("project map", 7), term("what is in this project", 9),
+    term("检查项目", 8), term("项目概览", 8), term("项目地图", 7), term("项目里有什么", 9),
+  ]),
+  intent("macro.project.query", [
+    term("find track", 8), term("find item", 8), term("find fx", 8), term("search project", 7), term("locate", 5), term("query", 5),
+    term("查找", 6), term("搜索", 6), term("查询", 6), term("定位", 5),
+  ]),
+  intent("macro.project.delete_targets", [
+    term("delete target", 9), term("delete track", 9), term("delete item", 9), term("remove track", 8), term("remove item", 8), term("cleanup project", 6),
+    term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("移除轨道", 8), term("清理项目", 6),
+  ]),
+  intent("macro.project.apply_layout", [
+    term("create track", 9), term("create folder", 9), term("track layout", 8), term("organize tracks", 8),
+    term("创建轨道", 9), term("创建文件夹", 9), term("轨道布局", 8), term("整理轨道", 8),
+  ]),
+  intent("macro.project.file", [
+    term("save as", 10), term("save project", 9), term("save", 6), term("另存为", 10), term("保存项目", 9), term("保存", 6),
+  ], ["new project", "open project", "create project", "新建项目", "打开项目", "创建项目"]),
+  intent("macro.routing.apply", [
+    term("routing", 8), term("route track", 8), term("create send", 9), term("send to", 7), term("sidechain", 8), term("bus", 5),
+    term("路由", 8), term("发送到", 7), term("创建send", 9), term("侧链", 8), term("总线", 5),
+  ]),
+  intent("macro.media.place_assets", [
+    term("import audio", 10), term("import media", 10), term("import sample", 9), term("place assets", 9), term("place media", 9),
+    term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入采样", 9), term("放置素材", 9),
+  ]),
+  intent("macro.items.analyze", [
+    term("analyze item", 9), term("analyze audio", 9), term("loudness", 8), term("transient", 8), term("silence", 7), term("peak analysis", 8),
+    term("分析 item", 9), term("分析item", 9), term("分析音频", 9), term("分析", 7), term("响度", 8), term("瞬态", 8), term("静音检测", 7), term("峰值分析", 8),
+  ]),
+  intent("macro.items.apply", [
+    term("arrange items", 10), term("align items", 9), term("align item starts", 9), term("align starts", 9), term("sequence items", 9), term("move items", 8), term("item properties", 7),
+    term("排列 item", 10), term("排列item", 10), term("对齐 item", 9), term("对齐item", 9), term("对齐开头", 9), term("排序 item", 9), term("排序item", 9), term("移动 item", 8), term("移动item", 8), term("item属性", 7),
+  ], ["normalize", "normalise", "lufs", "fade", "标准化", "归一化", "淡入", "淡出"]),
+  intent("macro.midi.apply", [
+    term("midi clip", 10), term("create midi", 9), term("midi note", 8), term("midi", 6), term("quantize", 10), term("edit midi", 10), term("edit existing notes", 10), term("write cc", 10), term("control change", 9),
+    term("midi片段", 10), term("创建midi", 9), term("midi音符", 8), term("音符片段", 8), term("量化", 10), term("编辑midi", 10), term("编辑现有音符", 10), term("写入cc", 10), term("控制器", 9),
+  ]),
+  intent("macro.fx.apply_chain", [
+    term("add compressor", 10), term("add a compressor", 10), term("apply compressor", 10), term("apply a compressor", 10), term("compressor chain", 9), term("add reacomp", 10), term("apply reacomp", 10), term("add fx chain", 8),
+    term("添加压缩器", 10), term("应用压缩器", 10), term("压缩器链", 9), term("添加reacomp", 10), term("添加效果链", 8),
+  ]),
+  intent("macro.fx.set_controls", [
+    term("adjust compressor", 10), term("compressor controls", 9), term("fx controls", 8), term("plugin controls", 8), term("threshold", 7), term("ratio", 6),
+    term("调整压缩器", 10), term("压缩器参数", 9), term("效果参数", 8), term("插件参数", 8), term("阈值", 7), term("压缩比", 6),
+  ]),
+  intent("macro.controls.set", [
+    term("project bpm", 10), term("set bpm", 9), term("tempo", 8), term("track volume", 8), term("track pan", 8), term("transport", 6),
+    term("项目bpm", 10), term("设置bpm", 9), term("速度", 7), term("轨道音量", 8), term("轨道声像", 8), term("传输控制", 6),
+  ]),
+  intent("macro.automation.apply", [
+    term("automation item", 10), term("automation", 9), term("automate", 9), term("envelope", 8), term("automation curve", 9), term("automation points", 9),
+    term("自动化项", 10), term("自动化", 9), term("包络", 8), term("自动化曲线", 9), term("自动化点", 9),
+  ]),
+  intent("macro.render.targets", [
+    term("render", 9), term("export audio", 9), term("bounce", 8), term("render wav", 10), term("render ogg", 10),
+    term("渲染", 9), term("导出音频", 9), term("导出wav", 10), term("导出ogg", 10),
+  ], ["mp3"]),
+]);
 
 export function createAlpha3_3B1AgentContextMacroGuide({
   requested_ids = [],
@@ -105,6 +169,24 @@ export function createAlpha3_3B1AgentContextMacroGuide({
   });
 }
 
+export function rankAlpha3_3B1MacroIntents(taskText, { limit = 3 } = {}) {
+  if (typeof taskText !== "string" || taskText.trim() === "") return [];
+  const normalized = normalizeIntentText(taskText);
+  const boundedLimit = Number.isInteger(limit) ? Math.max(1, Math.min(limit, 3)) : 3;
+  return INTENT_ROUTES
+    .map((route, index) => ({
+      id: route.id,
+      index,
+      score: route.blocked_by.some((entry) => normalized.includes(entry))
+        ? 0
+        : route.terms.reduce((score, entry) => score + (normalized.includes(entry.text) ? entry.weight : 0), 0),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .slice(0, boundedLimit)
+    .map((entry) => entry.id);
+}
+
 export function attachAlpha3_3B1AgentContextProductMetadata(response) {
   if (!isPlainObject(response)) return response;
   const requestedIds = response.mode === "ids" && Array.isArray(response.applied?.ids)
@@ -173,25 +255,152 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   canonical.action_manual = stripTierFields(canonical.action_manual);
 
   if (id === "macro.midi.apply") {
+    const createClipReadiness = canonical.action_manual.required_readiness ?? [];
+    const createClipRecovery = canonical.action_manual.recovery_steps ?? [];
+    const editing = createAlpha3_3MidiApplyExactManual().action_manual;
     canonical.action_manual.input_shape = {
-      mode: "create_clips only in Alpha3.3-B1a; omitted defaults to create_clips. Other modes return MIDI_APPLY_MODE_UNSUPPORTED without mutation.",
-      ...canonical.action_manual.input_shape,
+      mode: "create_clips | edit_notes | quantize | write_cc; create_clips remains the compatibility mode, while existing-Take modes require operations[].",
+      create_clips: canonical.action_manual.input_shape,
+      ...editing.input_shape,
     };
     canonical.action_manual.when_to_use = [
-      "Use mode=create_clips to create one bounded PPQ-backed MIDI clip with verified item, take, count, and exact note-list readback.",
+      "Use create_clips for one new bounded MIDI Item, edit_notes for indexed existing-note fields, quantize for existing notes, and write_cc for PPQ CC insertion.",
+      ...editing.when_to_use,
     ];
-    canonical.action_manual.when_not_to_use = [
-      "Do not request existing-note edits, CC edits, musical-time batches, or other macro.midi.apply modes before their runtime slices are accepted.",
+    canonical.action_manual.when_not_to_use = editing.when_not_to_use;
+    canonical.action_manual.required_readiness = [
+      ...createClipReadiness,
+      "For existing-Take modes, use macro.project.query to obtain exact take:guid refs; do not assemble Take GUID refs manually.",
+      ...editing.required_readiness,
     ];
+    canonical.action_manual.readback_steps = editing.readback_steps;
+    canonical.action_manual.success_criteria = editing.success_criteria;
+    canonical.action_manual.common_blockers = editing.common_blockers;
+    canonical.action_manual.recovery_steps = [...createClipRecovery, ...editing.recovery_steps];
+    canonical.action_manual.dry_run_shape = editing.dry_run_shape;
   }
   if (id === "macro.fx.apply_chain") {
     canonical.action_manual.when_to_use = [
-      "Use the Alpha3.3-B1a accepted ReaComp chain task; broader installed-FX chain search and application remain held.",
+      "Use one fixed call to search REAPER's installed inventory and apply a bounded ordered Track or Take FX chain with final complete-chain readback.",
+    ];
+    canonical.action_manual.when_not_to_use = [
+      "Do not use it to install plugins, delete FX, load external preset files, control hardware, or configure unsupported third-party semantic controls.",
+    ];
+    canonical.action_manual.required_readiness = [
+      "The live route must be ready and the target must be one exact Take ref, one exact Track ref, or one unambiguous fresh Track selector.",
+      "Installed-inventory search and both initial and final FX-chain reads must be complete; incomplete coverage fails closed.",
+    ];
+    canonical.action_manual.input_shape = {
+      owner_kind: "track | take; inferred from take_ref when omitted, otherwise track.",
+      chain: "Required canonical mode: 1-8 ordered nodes. Each node supplies exactly one plugin_name or plugin_query.",
+      chain_node: "Optional duplicate_policy=allow|reuse_exact|skip_exact|fail_if_present, insert_at_index, preset_name or preset_index, enabled, target_index, and reviewed ReaComp controls.",
+      selector: "Optional singular fresh Project Index Track selector; not accepted for Take owners.",
+      refs: "Supply exact track_ref or take_ref when already known.",
+      dry_run: "Defaults true for chain[]; set false to mutate. The legacy one-node ReaComp input remains compatible.",
+    };
+    canonical.action_manual.preflight_steps = [
+      "Live-resolve the exact owner and read its complete initial FX chain.",
+      "Resolve every requested node to one exact identity from REAPER EnumInstalledFX authority.",
+      "Apply duplicate policy before any node mutation and reject ambiguous or incomplete inventory results.",
+    ];
+    canonical.action_manual.underlying_actions = [
+      "template.fx.search_installed_fx",
+      "template.fx.list_track_fx_chain or template.fx.list_take_fx_chain",
+      "template.fx.add_track_fx or template.fx.add_take_fx",
+      "optional accepted preset, bypass, reorder, and reviewed ReaComp semantic-control Templates",
+      "complete final owner-chain readback",
+    ];
+    canonical.action_manual.readback_steps = [
+      "Read the complete final owner chain and match every requested node by exact installed name, owner, slot/order, enabled state, and canonical fx_ref.",
+      "Report mutation, live readback, and Project Index maintenance independently for each node.",
+    ];
+    canonical.action_manual.success_criteria = [
+      "Every requested node is present or intentionally reused/skipped according to duplicate_policy and every successful row has exact final live readback.",
+    ];
+    canonical.action_manual.common_blockers = [
+      { code: "FX_INSTALLED_MATCH_NOT_FOUND", summary: "No installed FX matched; choose an exact identity returned by REAPER inventory search." },
+      { code: "FX_INSTALLED_MATCH_AMBIGUOUS", summary: "The search matched more than one installed FX; retry with one exact plugin_name." },
+      { code: "FX_INVENTORY_COVERAGE_INCOMPLETE", summary: "Installed inventory coverage was incomplete, so OpenReaper did not guess." },
+      { code: "FX_CHAIN_COVERAGE_INCOMPLETE", summary: "Initial or final chain readback was incomplete, so no definitive chain result was returned." },
+      { code: "FX_CHAIN_FINAL_READBACK_MISMATCH", summary: "At least one final live chain row did not match the requested result." },
+    ];
+    canonical.action_manual.recovery_steps = [
+      "Use the exact installed-name suggestions from the blocker, then retry the same Macro with dry_run first if needed.",
+      "If a mutation completed but final verification failed, inspect the returned partial changes and use per-stage undo before retrying only the remaining work.",
+    ];
+    canonical.action_manual.dry_run_shape = {
+      supported: true,
+      default_for_chain: true,
+      output: ["exact_owner", "resolved_installed_names", "duplicate_policy", "planned_chain", "initial_chain"],
+    };
+    canonical.action_manual.resume_or_retry_policy = {
+      resume_from: "exact live owner plus current complete chain",
+      retry: "Retry with one exact installed plugin_name or after restoring complete chain coverage.",
+      hard_stop: "Stop on incomplete inventory/chain coverage or repeated live-readback mismatch.",
+    };
+    canonical.action_manual.examples = [
+      {
+        name: "apply a two-node Track chain",
+        input: {
+          owner_kind: "track",
+          selector: { name: "Lead Vox" },
+          chain: [
+            { plugin_query: "ReaEQ", duplicate_policy: "reuse_exact" },
+            { plugin_name: "VST: ReaComp (Cockos)", controls: { threshold_db: -18, ratio: 3 } },
+          ],
+          dry_run: false,
+        },
+      },
+      {
+        name: "preview a Take FX insertion",
+        refs: { take_ref: "take:guid:{TAKE-GUID}" },
+        input: {
+          owner_kind: "take",
+          chain: [{ plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "fail_if_present" }],
+        },
+      },
     ];
   }
   if (id === "macro.fx.set_controls") {
     canonical.action_manual.when_to_use = [
       "Adjust accepted semantic controls on an existing supported FX; Alpha3.3-B1a evidence remains bounded to the accepted ReaComp mapping.",
+    ];
+  }
+  if (id === "macro.controls.set") {
+    canonical.action_manual.when_to_use = [
+      "Use one task-shaped Macro call for project BPM or accepted Track, Item, Take, Transport, and Send control edits instead of hand-assembling atomic write chains.",
+      "Use changes[] for one to eight independent common control targets when one public call should preserve per-row resolution, mutation, live readback, and index truth.",
+    ];
+    canonical.action_manual.input_shape = {
+      target_kind: "project | track | item | take | transport | send",
+      fields: "Required allowlisted field object. For target_kind=project use bpm from 20 through 400; tempo is accepted only as a normalized alias.",
+      selector: "Optional singular bounded Project Index selector for object targets when canonical refs are not supplied; project and transport do not use selectors.",
+      refs: "Optional top-level call_template refs: track_ref, item_ref, or send_ref as required by object target kinds. Project BPM needs no ref.",
+      changes: "Alternative to the single-target shape: 1-8 rows of {id,target_kind,fields,selector?,refs?}. Top-level refs/target fields cannot be mixed in. Defaults to dry-run.",
+      dry_run: "Boolean; returns target resolution and accepted field writes without mutating. changes[] defaults true; set false to execute the preflighted rows serially.",
+    };
+    canonical.action_manual.preflight_steps = [
+      "Validate target_kind and its allowlisted fields before any write.",
+      "For project BPM, read the live tempo at project time zero; for object targets, live-resolve one exact ref from the request or fresh SQLite candidate set.",
+      "For changes[], preflight and live-resolve every row before the first mutation; duplicate row ids or any blocked row stop the batch with zero writes.",
+    ];
+    canonical.action_manual.readback_steps = [
+      "Read the affected live target after mutation and compare each requested field, including effective project BPM at time zero.",
+      "Report mutation, live readback, and Project Index maintenance independently; applied never comes from dispatch success alone.",
+      "For changes[], stop at the first failed row, preserve earlier row truth, and mark every later row not_run.",
+    ];
+    canonical.action_manual.common_blockers = [
+      { code: "CONTROL_PROJECT_TEMPO_UNAVAILABLE", summary: "The active project BPM could not be read before mutation." },
+      { code: "CONTROL_BPM_INVALID", summary: "Project BPM must be a finite number from 20 through 400." },
+      { code: "CONTROL_TARGET_REF_REQUIRED", summary: "An object control target needs one exact ref or one unambiguous selector." },
+      { code: "CONTROL_BATCH_PREFLIGHT_FAILED", summary: "At least one changes[] row did not pass complete preflight; no batch mutation started." },
+      { code: "SELECTOR_TARGET_AMBIGUOUS", summary: "The bounded selector matched more than one candidate." },
+      { code: "CONTROL_READBACK_MISMATCH", summary: "Post-write live readback did not match every requested value." },
+    ];
+    canonical.action_manual.examples = [
+      { name: "set project BPM", input: { target_kind: "project", fields: { bpm: 128 }, dry_run: false } },
+      { name: "set Track volume", input: { target_kind: "track", selector: { name: "Bass" }, fields: { volume: 0.75 }, dry_run: true } },
+      { name: "preview two Track controls", input: { changes: [{ id: "lead", target_kind: "track", selector: { name: "Lead Vocal" }, fields: { volume: 0.75 } }, { id: "bass", target_kind: "track", selector: { name: "Bass" }, fields: { pan: -0.1 } }], dry_run: true } },
     ];
   }
 
@@ -208,6 +417,27 @@ function compactMenuRow(id) {
     implementation_status: "executable",
     expand: { tool: "list_templates", ids: [id] },
   };
+}
+
+function intent(id, terms, blockedBy = []) {
+  return {
+    id,
+    terms,
+    blocked_by: blockedBy.map(normalizeIntentText),
+  };
+}
+
+function term(text, weight) {
+  return { text: normalizeIntentText(text), weight };
+}
+
+function normalizeIntentText(value) {
+  return String(value)
+    .normalize("NFKC")
+    .toLocaleLowerCase()
+    .replace(/[_/.-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
 }
 
 function riskFor(id) {

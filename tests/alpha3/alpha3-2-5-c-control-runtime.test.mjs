@@ -65,6 +65,254 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
   });
 
+  it("executes project BPM without refs and verifies it through a separate live tempo read", async () => {
+    const calls = [];
+    const invalidations = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "project", fields: { bpm: 128 }, dry_run: false },
+        refs: [],
+      },
+      executeAtomic: controlAtomic(calls, { initialProjectBpm: 120 }),
+      projectIndexRuntime: projectIndexInvalidator(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.project.read_tempo_map",
+      "template.project.set_bpm",
+      "template.project.read_tempo_map",
+    ]);
+    assert.deepEqual(calls.map((call) => call.refs), [{}, {}, {}]);
+    assert.deepEqual(calls[1].input, { bpm: 128 });
+    assert.deepEqual(invalidations, [["project_head"]]);
+    assert.deepEqual(response.result.data.target_refs, {});
+    assert.deepEqual(response.result.data.fields, { bpm: 128 });
+    assert.equal(response.result.changes[0].status, "applied");
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].live_readback.fields[0].observed_value, 128);
+    assert.equal(response.result.changes[0].index_maintenance.status, "completed");
+    assert.equal(response.result.data.outcome.mutation.status, "completed");
+    assert.equal(response.result.data.outcome.live_readback.status, "passed");
+    assert.equal(response.result.data.outcome.index_maintenance.status, "completed");
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("executes bounded changes rows with independent target resolution, readback, and index truth", async () => {
+    const calls = [];
+    const invalidations = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          changes: [
+            { id: "lead_volume", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-A}" }, fields: { volume: 0.75 } },
+            { id: "take_pan", target_kind: "take", refs: { item_ref: "item:guid:{ITEM-A}" }, fields: { pan: 0.25 } },
+          ],
+          dry_run: false,
+        },
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: projectIndexInvalidator(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.deepEqual(response.result.changes.map((row) => row.operation_id), ["lead_volume", "take_pan"]);
+    assert.equal(response.result.changes.every((row) => row.status === "applied"), true);
+    assert.equal(response.result.changes.every((row) => row.mutation.status === "completed"), true);
+    assert.equal(response.result.changes.every((row) => row.live_readback.status === "passed"), true);
+    assert.equal(response.result.changes.every((row) => row.index_maintenance.status === "completed"), true);
+    assert.deepEqual(invalidations, [["tracks"], ["items", "takes"]]);
+    assert.equal(response.result.data.total_count, 2);
+    assert.equal(response.result.data.applied_count, 2);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("preflights every changes row before mutation and defaults the batch to dry-run", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          changes: [
+            { id: "track_a", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-A}" }, fields: { mute: true } },
+            { id: "track_b", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-B}" }, fields: { pan: -0.2 } },
+          ],
+        },
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.execution.status, "dry_run_completed");
+    assert.equal(calls.filter((call) => call.id === "template.tracks.resolve_track_ref").length, 2);
+    assert.equal(calls.some((call) => call.id === "template.tracks.set_mute" || call.id === "template.tracks.set_pan"), false);
+    assert.equal(response.result.changes.every((row) => row.status === "planned" && row.mutation.status === "not_run"), true);
+    assert.equal(response.result.data.mutation_skipped, true);
+    assert.equal(response.result.data.executable_retry.input.dry_run, false);
+  });
+
+  it("keeps earlier verified changes applied and stops later rows after one batch readback failure", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          changes: [
+            { id: "first", target_kind: "take", refs: { item_ref: "item:guid:{ITEM-A}" }, fields: { pan: 0.25 } },
+            { id: "bad", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-A}" }, fields: { volume: 0.75 } },
+            { id: "never", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-B}" }, fields: { mute: true } },
+          ],
+          dry_run: false,
+        },
+      },
+      executeAtomic: controlAtomic(calls, { readbackVolume: 0.5 }),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "CONTROL_READBACK_MISMATCH");
+    assert.equal(response.result.changes[0].status, "applied");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[1].status, "failed");
+    assert.equal(response.result.changes[1].mutation.status, "completed");
+    assert.equal(response.result.changes[1].live_readback.status, "failed");
+    assert.equal(response.result.changes[2].status, "not_run");
+    assert.equal(response.result.changes[2].mutation.status, "not_run");
+    const executedWriteIds = calls.filter((call) => call.id.startsWith("template.tracks.set_") || call.id === "template.items.set_take_pan").map((call) => call.id);
+    assert.deepEqual(executedWriteIds, ["template.items.set_take_pan", "template.tracks.set_volume"]);
+  });
+
+  it("keeps a verified batch row applied when only its index maintenance fails", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: {
+          changes: [
+            { id: "verified", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-A}" }, fields: { volume: 0.75 } },
+            { id: "later", target_kind: "track", refs: { track_ref: "track:guid:{TRACK-B}" }, fields: { mute: true } },
+          ],
+          dry_run: false,
+        },
+      },
+      executeAtomic: controlAtomic(calls),
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:batch-index-failed", revision: 1 }),
+        invalidateScopes: ({ scopes }) => ({
+          ok: false,
+          scopes,
+          blockers: [{ code: "INDEX_WRITE_FAILED", message: "Index maintenance failed.", recoverable: true }],
+        }),
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "INDEX_WRITE_FAILED");
+    assert.equal(response.result.changes[0].status, "applied");
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "failed");
+    assert.equal(response.result.changes[1].status, "not_run");
+    assert.equal(response.result.data.applied_count, 1);
+    assert.equal(calls.some((call) => call.id === "template.tracks.set_mute"), false);
+  });
+
+  it("rejects malformed or conflicting changes rows before any live call", async () => {
+    for (const input of [
+      { changes: [], dry_run: false },
+      { changes: [{ id: "dup", target_kind: "track", fields: { mute: true } }, { id: "dup", target_kind: "track", fields: { mute: false } }] },
+      { changes: [{ id: "row", target_kind: "track", fields: { mute: true }, steps: [] }] },
+      { changes: [{ id: "row", target_kind: "track", fields: { mute: true } }], target_kind: "track" },
+    ]) {
+      const calls = [];
+      const response = await executeAlpha3_2_5CControlMacro({
+        request: { id: "macro.controls.set", input },
+        executeAtomic: controlAtomic(calls),
+        now: () => new Date(NOW),
+      });
+      assert.equal(response.ok, false);
+      assert.deepEqual(calls, []);
+    }
+  });
+
+  it("normalizes project tempo during dry_run and performs no mutation", async () => {
+    const calls = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "project", fields: { tempo: 126 }, dry_run: true },
+        refs: [],
+      },
+      executeAtomic: controlAtomic(calls),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.execution.status, "dry_run_completed");
+    assert.deepEqual(calls.map((call) => call.id), ["template.project.read_tempo_map"]);
+    assert.deepEqual(response.result.data.fields, { bpm: 126 });
+    assert.deepEqual(response.result.data.registered_template_ids, ["template.project.set_bpm"]);
+    assert.deepEqual(response.result.changes, []);
+  });
+
+  it("does not mark project BPM applied when dispatch succeeds but live readback differs", async () => {
+    const calls = [];
+    const invalidations = [];
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.controls.set",
+        input: { target_kind: "project", fields: { bpm: 128 }, dry_run: false },
+        refs: [],
+      },
+      executeAtomic: controlAtomic(calls, { projectReadbackBpm: 127 }),
+      projectIndexRuntime: projectIndexInvalidator(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "CONTROL_READBACK_MISMATCH");
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].status, "readback_failed");
+    assert.equal(response.result.changes[0].live_readback.status, "failed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "completed");
+    assert.deepEqual(invalidations, [["project_head"]]);
+    assert.equal(response.result.data.outcome.mutation.status, "completed");
+    assert.equal(response.result.data.outcome.live_readback.status, "not_passed");
+    assert.equal(response.result.data.outcome.index_maintenance.status, "completed");
+    assert.equal(response.result.changes.some((change) => change.status === "applied"), false);
+  });
+
+  it("rejects invalid project BPM fields before any live call", async () => {
+    for (const [fields, code] of [
+      [{ bpm: 401 }, "CONTROL_BPM_INVALID"],
+      [{ bpm: 120, tempo: 121 }, "CONTROL_FIELD_ALIAS_CONFLICT"],
+      [{ bpm: 120, grid: "1/16" }, "FIELD_NOT_SUPPORTED"],
+    ]) {
+      const calls = [];
+      const response = await executeAlpha3_2_5CControlMacro({
+        request: { id: "macro.controls.set", input: { target_kind: "project", fields, dry_run: false }, refs: [] },
+        executeAtomic: controlAtomic(calls),
+        now: () => new Date(NOW),
+      });
+      assert.equal(response.ok, false);
+      assert.equal(response.execution.status, "blocked");
+      assert.equal(response.error.code, code);
+      assert.deepEqual(calls, []);
+    }
+  });
+
   it("uses the fresh Project Index for an unambiguous selector, then live-resolves it", async () => {
     const calls = [];
     const projectIndexRuntime = readyTrackIndexRuntime();
@@ -265,10 +513,28 @@ describe("Alpha3.2.5-C executable controls", () => {
 });
 
 function controlAtomic(calls, options = {}) {
+  let projectBpm = options.initialProjectBpm ?? 120;
   return async ({ id, input = {}, refs = {} }) => {
     calls.push({ id, input, refs });
     if (id === "template.project.read_summary") {
       return execution(id, { project_ref: "project:active", change_count: 1 });
+    }
+    if (id === "template.project.read_tempo_map") {
+      return execution(id, {
+        tempo_markers: [],
+        effective: [{ time_seconds: 0, bpm: options.projectReadbackBpm ?? projectBpm, time_sig_num: 4, time_sig_denom: 4 }],
+        truncated: false,
+      });
+    }
+    if (id === "template.project.set_bpm") {
+      projectBpm = input.bpm;
+      return execution(id, {
+        project_ref: "project:current",
+        bpm: input.bpm,
+        requested_bpm: input.bpm,
+        updated: true,
+        readback_status: "passed",
+      });
     }
     if (id === "template.tracks.resolve_track_ref") {
       return execution(id, { track_ref: options.resolvedTrackRef ?? input.track_ref, name: "Lead Vocal" });

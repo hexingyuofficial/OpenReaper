@@ -40,6 +40,7 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
 
     assert.deepEqual(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS, EXPECTED_DEFAULT_MENU_MACRO_IDS);
     assert.deepEqual(macroIds, EXPECTED_DEFAULT_MENU_MACRO_IDS);
+    assert.equal(menu.items.filter((item) => item.action_kind === "macro").every((item) => !Object.hasOwn(item, "menu_group")), true);
     assert.equal(Buffer.byteLength(JSON.stringify(menu)) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
 
     const guide = menu.product_surface.agent_context_macro_guide;
@@ -49,6 +50,7 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
     assert.equal(menu.product_surface.macro_first_routing.contract, ALPHA3_2_5_E_MACRO_FIRST_ROUTING_CONTRACT);
     assert.equal(menu.product_surface.macro_first_routing.route, "macro_first");
     assert.deepEqual(menu.product_surface.macro_first_routing.selected_macro_ids, EXPECTED_DEFAULT_MENU_MACRO_IDS);
+    assert.deepEqual(guide.recommended_macro_ids, []);
     assert.equal(menu.product_surface.macro_first_routing.fallback_gap, null);
   });
 
@@ -85,15 +87,41 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
       "template.midi.quantize_notes",
       "template.midi.quantize_selected_notes",
     ]);
-    assert.equal(fallback.product_surface.macro_first_routing.route, "template_fallback");
-    assert.equal(fallback.product_surface.macro_first_routing.fallback_gap.recorded, true);
-    assert.equal(fallback.product_surface.macro_first_routing.fallback_gap.reason, "macro_task_out_of_scope");
+    assert.equal(fallback.product_surface.macro_first_routing.route, "macro_first");
+    assert.deepEqual(fallback.product_surface.macro_first_routing.selected_macro_ids, ["macro.midi.apply"]);
+    assert.equal(fallback.product_surface.macro_first_routing.fallback_gap, null);
     assert.equal(fallback.product_surface.macro_first_routing.task_text_persisted, false);
 
     const uncovered = runtime.list_templates({ surface: "catalog", query: "unmapped_spectral_surgery", limit: 10 });
     assert.deepEqual(uncovered.items, []);
     assert.equal(uncovered.product_surface.macro_first_routing.route, "no_match");
     assert.equal(uncovered.product_surface.macro_first_routing.fallback_gap.reason, "macro_missing_for_task");
+  });
+
+  it("returns useful Macro recommendations for ordinary multi-intent task text", () => {
+    const runtime = createCallTemplateRuntime();
+    const music = runtime.list_templates({ query: "create a MIDI clip and add a compressor", limit: 25 });
+    assert.equal(music.product_surface.macro_first_routing.route, "macro_first");
+    assert.deepEqual(music.product_surface.agent_context_macro_guide.recommended_macro_ids, [
+      "macro.midi.apply",
+      "macro.fx.apply_chain",
+    ]);
+    assert.deepEqual(music.product_surface.macro_first_routing.selected_macro_ids, [
+      "macro.midi.apply",
+      "macro.fx.apply_chain",
+    ]);
+
+    const edit = runtime.list_templates({ query: "导入音频，排列 item，分析并做音量自动化", limit: 25 });
+    assert.equal(edit.product_surface.macro_first_routing.route, "macro_first");
+    assert.deepEqual(edit.product_surface.agent_context_macro_guide.recommended_macro_ids, [
+      "macro.media.place_assets",
+      "macro.items.apply",
+      "macro.automation.apply",
+    ]);
+
+    const fallback = runtime.list_templates({ surface: "catalog", query: "quantize", limit: 10 });
+    assert.equal(fallback.product_surface.macro_first_routing.route, "macro_first");
+    assert.deepEqual(fallback.product_surface.agent_context_macro_guide.recommended_macro_ids, ["macro.midi.apply"]);
   });
 
   it("makes SQLite candidates and live re-resolution the convenient project-aware path without low-level ref assembly", () => {
@@ -114,7 +142,9 @@ describe("Alpha3.2.5-E macro-first routing and compact results", () => {
     assert.match(byId.get("macro.midi.apply").recovery_steps.join(" "), /do not assemble take refs manually/i);
     assert.equal(byId.get("macro.midi.apply").dry_run_shape.supported, true);
     assert.match(byId.get("macro.fx.apply_chain").input_shape.selector, /Project Index track selector/i);
-    assert.match(byId.get("macro.fx.apply_chain").input_shape.plugin, /reacomp/i);
+    assert.match(byId.get("macro.fx.apply_chain").input_shape.chain, /1-8 ordered nodes/i);
+    assert.match(byId.get("macro.fx.apply_chain").input_shape.chain, /plugin_name or plugin_query/i);
+    assert.match(byId.get("macro.fx.apply_chain").input_shape.chain_node, /ReaComp controls/i);
   });
 
   it("keeps representative Macro envelopes compact under offline blockers", async () => {

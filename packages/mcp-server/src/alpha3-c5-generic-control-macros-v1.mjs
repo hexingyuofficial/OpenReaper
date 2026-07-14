@@ -24,6 +24,11 @@ export const ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID = deepFreeze({
   send: "macro.set_send_controls",
 });
 
+export const ALPHA3_2_5_C_CONTROL_TARGET_KINDS = deepFreeze([
+  "project",
+  ...Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID),
+]);
+
 export const ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS = deepFreeze([
   ...Object.values(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID),
 ]);
@@ -43,11 +48,30 @@ export const ALPHA3_C5_GENERIC_CONTROL_DISCOVERY_SUMMARY = deepFreeze({
   macro_ids: [ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID],
   consolidated_legacy_ids: ALPHA3_2_5_C_LEGACY_CONTROL_MACRO_IDS,
   withdrawn_ids: ["macro.set_midi_controls"],
-  target_kinds: Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID),
-  rule: "Use macro.controls.set for bounded track, item, take, transport, and send controls. The fixed program live-resolves targets, executes accepted Templates serially, reads back the result, and invalidates affected Project Index scopes.",
+  target_kinds: ALPHA3_2_5_C_CONTROL_TARGET_KINDS,
+  rule: "Use macro.controls.set for bounded project, track, item, take, transport, and send controls. The fixed program live-resolves targets, executes accepted Templates serially, reads back the result, and invalidates affected Project Index scopes.",
 });
 
 export const ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND = "official_macro";
+
+const PROJECT_CONTROL_DEFINITION = deepFreeze({
+  id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+  user_label: "Set project controls",
+  task_intents: ["set project BPM", "change project tempo"],
+  scope: "project",
+  refs: [],
+  freshness_requires: ["project_tempo"],
+  risk_domain: "write_project_reversible",
+  readback: {
+    template_id: "template.project.read_tempo_map",
+    refs_from: [],
+    evidence_required: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+  },
+  fields: [
+    field("bpm", "number", "template.project.set_bpm", "bpm", { min: 20, max: 400, unit: "bpm" }),
+  ],
+  blocked_fields: [],
+});
 
 const MACRO_DEFINITIONS = deepFreeze([
   {
@@ -280,6 +304,10 @@ export function targetKindForAlpha3_2_5CLegacyControlMacro(id) {
 }
 
 export function getAlpha3_2_5CControlTargetDefinition(targetKind, options = {}) {
+  if (targetKind === "project") {
+    const catalog = options.catalog ?? createAlpha3C5AcceptedCatalog();
+    return annotateMacro(PROJECT_CONTROL_DEFINITION, catalog);
+  }
   const legacyId = ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind];
   return legacyId ? getAlpha3C5GenericControlMacro(legacyId, options) : null;
 }
@@ -287,8 +315,8 @@ export function getAlpha3_2_5CControlTargetDefinition(targetKind, options = {}) 
 export function planAlpha3_2_5CControlsSetMacro(input = {}, refs = {}, options = {}) {
   const normalized = isPlainObject(input) ? input : {};
   const targetKind = normalized.target_kind;
-  const legacyId = ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind];
-  if (!legacyId) {
+  const macro = getAlpha3_2_5CControlTargetDefinition(targetKind, options);
+  if (!macro) {
     return deepFreeze({
       contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
       ok: false,
@@ -300,19 +328,34 @@ export function planAlpha3_2_5CControlsSetMacro(input = {}, refs = {}, options =
       blockers: [blocker(
         "target_kind",
         "CONTROL_TARGET_KIND_UNSUPPORTED",
-        "macro.controls.set target_kind must be track, item, take, transport, or send.",
+        "macro.controls.set target_kind must be project, track, item, take, transport, or send.",
       )],
     });
   }
-  const plan = planAlpha3C5GenericControlMacro(legacyId, {
+  const normalizedFields = normalizeControlFields(targetKind, normalized.fields);
+  if (!normalizedFields.ok) {
+    return deepFreeze({
+      contract: ALPHA3_C5_GENERIC_CONTROL_MACROS_CONTRACT,
+      ok: false,
+      id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+      target_kind: targetKind,
+      legacy_id: ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind] ?? null,
+      normalized_fields: normalizedFields.fields,
+      requests: [],
+      readback: null,
+      blockers: normalizedFields.blockers,
+    });
+  }
+  const plan = planAlpha3C5GenericControlDefinition(macro, {
     refs,
-    fields: normalized.fields,
-  }, options);
+    fields: normalizedFields.fields,
+  });
   return deepFreeze({
     ...plan,
     id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
     target_kind: targetKind,
-    legacy_id: legacyId,
+    legacy_id: ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID[targetKind] ?? null,
+    normalized_fields: normalizedFields.fields,
   });
 }
 
@@ -328,6 +371,10 @@ export function planAlpha3C5GenericControlMacro(id, request = {}, options = {}) 
     });
   }
 
+  return planAlpha3C5GenericControlDefinition(macro, request);
+}
+
+function planAlpha3C5GenericControlDefinition(macro, request = {}) {
   const suppliedFields = isPlainObject(request.fields) ? request.fields : {};
   const suppliedFieldNames = Object.keys(suppliedFields);
   const selectedFields = macro.fields
@@ -560,7 +607,7 @@ function officialMacroDiscoveryItem(macro) {
 }
 
 function officialControlsSetDiscoveryItem(options = {}) {
-  const targetKinds = Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID);
+  const targetKinds = ALPHA3_2_5_C_CONTROL_TARGET_KINDS;
   const fieldsByTarget = Object.fromEntries(targetKinds.map((targetKind) => {
     const macro = getAlpha3_2_5CControlTargetDefinition(targetKind, options);
     return [targetKind, macro?.fields.map((fieldDef) => fieldDef.name) ?? []];
@@ -568,12 +615,12 @@ function officialControlsSetDiscoveryItem(options = {}) {
   return deepFreeze({
     id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
     title: "Set project controls",
-    summary: "Set bounded track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
+    summary: "Set bounded project BPM plus track, item, take, transport, or send controls through one registered executable Macro with live target resolution and readback.",
     pack: "core",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.controls.set",
-    tags: ["macro", "controls", "track", "item", "take", "transport", "send", "sqlite", "executable"],
+    tags: ["macro", "controls", "project", "bpm", "tempo", "track", "item", "take", "transport", "send", "sqlite", "executable"],
     kind: ALPHA3_C5_OFFICIAL_MACRO_ENTRY_KIND,
     action_kind: "macro",
     macro_kind: "generic_control",
@@ -581,6 +628,7 @@ function officialControlsSetDiscoveryItem(options = {}) {
     execution_shape: "registered_macro_program",
     user_label: "Set project controls",
     task_intents: [
+      "set project BPM or tempo",
       "set track controls",
       "set item controls",
       "set take controls",
@@ -597,8 +645,11 @@ function officialControlsSetDiscoveryItem(options = {}) {
     risk_domain: "write_project_reversible",
     inputSchema: {
       type: "object",
-      required: ["target_kind", "fields"],
       additionalProperties: false,
+      oneOf: [
+        { required: ["target_kind", "fields"], not: { required: ["changes"] } },
+        { required: ["changes"], not: { anyOf: [{ required: ["target_kind"] }, { required: ["fields"] }, { required: ["selector"] }] } },
+      ],
       properties: {
         target_kind: { enum: targetKinds },
         fields: { type: "object", additionalProperties: true },
@@ -606,6 +657,24 @@ function officialControlsSetDiscoveryItem(options = {}) {
           type: "object",
           description: "Optional bounded Project Index selector used when canonical refs are not supplied.",
           additionalProperties: true,
+        },
+        changes: {
+          type: "array",
+          minItems: 1,
+          maxItems: 8,
+          description: "Bounded fixed multi-target control rows. Each row resolves, writes, reads back, and reports index maintenance independently.",
+          items: {
+            type: "object",
+            required: ["id", "target_kind", "fields"],
+            additionalProperties: false,
+            properties: {
+              id: { type: "string", minLength: 1, maxLength: 64 },
+              target_kind: { enum: targetKinds },
+              fields: { type: "object", additionalProperties: true },
+              selector: { type: "object", additionalProperties: true },
+              refs: { type: ["object", "array"] },
+            },
+          },
         },
         dry_run: { type: "boolean" },
       },
@@ -638,10 +707,26 @@ function officialControlsSetDiscoveryItem(options = {}) {
     examples: [
       {
         input: {
+          target_kind: "project",
+          fields: { bpm: 128 },
+          dry_run: false,
+        },
+      },
+      {
+        input: {
           target_kind: "track",
           fields: { volume: 0.75, pan: -0.1 },
           selector: { name: "Lead Vocal" },
           dry_run: false,
+        },
+      },
+      {
+        input: {
+          changes: [
+            { id: "lead", target_kind: "track", selector: { name: "Lead Vocal" }, fields: { volume: 0.75 } },
+            { id: "bass", target_kind: "track", selector: { name: "Bass" }, fields: { pan: -0.1 } },
+          ],
+          dry_run: true,
         },
       },
     ],
@@ -827,6 +912,9 @@ function planReadbackRequest(macro, refs) {
 }
 
 function readbackInputFor(macro) {
+  if (macro.readback.template_id === "template.project.read_tempo_map") {
+    return { limit: 1, effective_at_seconds: [0] };
+  }
   if (macro.readback.template_id === "template.tracks.read_mixer_controls") {
     return { include_selected: true, limit: 50 };
   }
@@ -837,6 +925,53 @@ function readbackInputFor(macro) {
     return { include_receives: true, include_master_parent: true, max_routes: 100 };
   }
   return {};
+}
+
+function normalizeControlFields(targetKind, fields) {
+  if (targetKind !== "project") {
+    return { ok: true, fields: isPlainObject(fields) ? fields : {}, blockers: [] };
+  }
+  if (!isPlainObject(fields)) {
+    return {
+      ok: false,
+      fields: {},
+      blockers: [blocker("fields", "CONTROL_FIELDS_REQUIRED", "macro.controls.set target_kind=project requires fields.bpm.")],
+    };
+  }
+  const normalized = { ...fields };
+  const hasBpm = Object.prototype.hasOwnProperty.call(normalized, "bpm");
+  const hasTempo = Object.prototype.hasOwnProperty.call(normalized, "tempo");
+  if (hasBpm && hasTempo && !controlFieldValuesMatch(normalized.bpm, normalized.tempo)) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("tempo", "CONTROL_FIELD_ALIAS_CONFLICT", "fields.tempo aliases fields.bpm and must not disagree with it.")],
+    };
+  }
+  if (!hasBpm && hasTempo) normalized.bpm = normalized.tempo;
+  delete normalized.tempo;
+  if (!Object.prototype.hasOwnProperty.call(normalized, "bpm")) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("bpm", "CONTROL_BPM_REQUIRED", "macro.controls.set target_kind=project requires fields.bpm.")],
+    };
+  }
+  if (typeof normalized.bpm !== "number" || !Number.isFinite(normalized.bpm) || normalized.bpm < 20 || normalized.bpm > 400) {
+    return {
+      ok: false,
+      fields: normalized,
+      blockers: [blocker("bpm", "CONTROL_BPM_INVALID", "Project BPM must be a finite number between 20 and 400.")],
+    };
+  }
+  return { ok: true, fields: normalized, blockers: [] };
+}
+
+function controlFieldValuesMatch(left, right) {
+  if (typeof left === "number" && typeof right === "number") {
+    return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) <= 0.0001;
+  }
+  return Object.is(left, right);
 }
 
 function createAlpha3C5AcceptedCatalog() {

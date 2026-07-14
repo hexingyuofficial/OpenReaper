@@ -14,7 +14,7 @@ import {
 } from "./alpha3-c3-project-index-query-v1.mjs";
 import {
   ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
-  ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID,
+  ALPHA3_2_5_C_CONTROL_TARGET_KINDS,
   getAlpha3_2_5CControlTargetDefinition,
   planAlpha3_2_5CControlsSetMacro,
 } from "./alpha3-c5-generic-control-macros-v1.mjs";
@@ -40,6 +40,7 @@ const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
 const RESOLVE_SEND_ID = "template.routing.resolve_send_ref";
 const READ_TRANSPORT_ID = "template.transport.read_state";
+const READ_PROJECT_TEMPO_ID = "template.project.read_tempo_map";
 const READ_FX_SUMMARY_ID = "template.fx.read_fx_summary";
 const RESOLVE_FX_ID = "template.fx.resolve_fx_ref";
 const RESOLVE_MIDI_TAKE_ID = "template.midi.resolve_midi_take_ref";
@@ -47,12 +48,14 @@ const LIST_FX_PARAMETERS_ID = "template.fx.list_fx_parameters";
 const SET_FX_PARAMETER_ID = "template.fx.set_fx_parameter_normalized";
 const READ_FX_PARAMETER_ID = "template.fx.read_fx_parameter";
 
-const CONTROL_INPUT_FIELDS = new Set(["target_kind", "fields", "selector", "dry_run"]);
+const CONTROL_INPUT_FIELDS = new Set(["target_kind", "fields", "selector", "changes", "dry_run"]);
+const CONTROL_BATCH_ROW_FIELDS = new Set(["id", "target_kind", "fields", "selector", "refs"]);
+const CONTROL_BATCH_MAX_ROWS = 8;
 const STOCK_INPUT_FIELDS = new Set([
   "plugin", "plugin_id", "plugin_name", "controls", "starter_action",
   "action_parameters", "control_overrides", "parameter_metadata", "selector", "dry_run",
 ]);
-const CONTROL_TARGET_KINDS = Object.freeze(Object.keys(ALPHA3_2_5_C_CONTROL_TARGET_TO_LEGACY_ID));
+const CONTROL_TARGET_KINDS = ALPHA3_2_5_C_CONTROL_TARGET_KINDS;
 const SQLITE_IDENTITY_FIELDS = Object.freeze([
   "project", "bridge_owner", "bridge_generation", "snapshot", "revision",
 ]);
@@ -152,6 +155,21 @@ async function executeControlsSet({
   const state = executionState();
   rememberInputObjectRefs(state, request.refs);
 
+  if (Object.hasOwn(input, "changes")) {
+    return executeControlsBatch({
+      request,
+      input,
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+      entry,
+      startedAt,
+      stages,
+      state,
+    });
+  }
+
   const inputBlockers = validateInputFields(input, CONTROL_INPUT_FIELDS, "CONTROL_INPUT_FIELD_UNSUPPORTED");
   const requestValidation = validateMacroProgramRequest({
     macro_id: request.id,
@@ -222,6 +240,7 @@ async function executeControlsSet({
       data: { target_kind: input.target_kind },
     });
   }
+  const requestedFields = plan.normalized_fields ?? input.fields;
 
   if (dryRun) {
     pushStage(stages, "controls-execute", "runtime_execute", "skipped", "Mutation skipped during dry_run.");
@@ -234,7 +253,7 @@ async function executeControlsSet({
       summary: `Validated ${input.target_kind} control changes without mutation.`,
       data: {
         target_kind: input.target_kind,
-        fields: clone(input.fields),
+        fields: clone(requestedFields),
         target_refs: clone(target.refs),
         registered_template_ids: plan.requests.map((child) => child.id),
         sqlite_selector_used: target.sqliteUsed,
@@ -255,7 +274,7 @@ async function executeControlsSet({
       const atomicReadback = captureRequiredAtomicControlReadback({
         targetKind: input.target_kind,
         fields: child.fields,
-        requestedFields: input.fields,
+        requestedFields,
         readback: executionReadback(execution),
       });
       state.changes.push({
@@ -287,19 +306,45 @@ async function executeControlsSet({
     state.readback = executionReadback(readbackExecution);
     const readbackVerification = verifyControlReadback({
       targetKind: input.target_kind,
-      requestedFields: input.fields,
+      requestedFields,
       targetRefs: target.refs,
       readback: state.readback,
       atomicChanges: state.changes,
     });
+    applyControlReadbackToChanges(state.changes, readbackVerification.rows);
     if (!readbackVerification.ok) {
+      pushStage(
+        stages,
+        "controls-verify",
+        "verify",
+        "failed",
+        "One or more requested control fields did not match live readback.",
+        executionEvidenceRefs(readbackExecution),
+      );
+      const invalidation = invalidateKnownScopes(projectIndexRuntime, controlScopes(input.target_kind), now);
+      state.indexUpdate = invalidation;
+      applyIndexMaintenanceToChanges(state.changes, invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped", invalidation);
+      if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+      pushStage(
+        stages,
+        "controls-index-update",
+        "index_update",
+        invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+        invalidation?.ok === false
+          ? "Live readback failed and affected Project Index scopes could not be marked stale."
+          : invalidation
+            ? `Live readback failed; marked ${invalidation.scopes.length} affected Project Index scope(s) stale.`
+            : "Live readback failed; no configured Project Index runtime required invalidation.",
+      );
       throw coded(
         "CONTROL_READBACK_MISMATCH",
         "One or more batch-readable control fields did not match the requested values.",
-        readbackVerification.blockers,
+        [
+          ...readbackVerification.blockers,
+          ...(invalidation?.ok === false ? invalidation.blockers ?? [] : []),
+        ],
       );
     }
-    applyControlReadbackToChanges(state.changes, readbackVerification.rows);
     pushStage(
       stages,
       "controls-verify",
@@ -337,7 +382,7 @@ async function executeControlsSet({
       summary: `Applied and read back ${input.target_kind} controls.`,
       data: {
         target_kind: input.target_kind,
-        fields: clone(input.fields),
+        fields: clone(requestedFields),
         target_refs: clone(target.refs),
         readback: compactObject(state.readback),
         readback_verification: readbackVerification.rows,
@@ -361,6 +406,162 @@ async function executeControlsSet({
       },
     });
   }
+}
+
+async function executeControlsBatch({
+  request,
+  input,
+  executeAtomic,
+  projectIndexRuntime,
+  catalog,
+  now,
+  entry,
+  startedAt,
+  stages,
+  state,
+}) {
+  const normalized = normalizeControlBatchInput(input, request.refs);
+  if (!normalized.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: normalized.blockers[0].code,
+      message: normalized.blockers[0].message,
+      blockers: normalized.blockers,
+    });
+  }
+  if (typeof executeAtomic !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: "CONTROL_LIVE_EXECUTOR_UNAVAILABLE",
+      message: "macro.controls.set changes[] needs the managed OpenReaper atomic route.",
+    });
+  }
+
+  const preflights = [];
+  for (const row of normalized.rows) {
+    const preview = await executeControlsSet({
+      request: controlBatchChildRequest(request, row, true),
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+    });
+    collectMacroEnvelopeEvidence(state, preview);
+    if (preview?.ok !== true || preview?.execution?.status !== "dry_run_completed") {
+      pushStage(stages, "controls-select-target", "selector_resolve", "failed", `Batch preflight failed for ${row.id}.`, preview?.result?.verification?.evidence_refs);
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        code: preview?.error?.code ?? "CONTROL_BATCH_PREFLIGHT_FAILED",
+        message: `Control batch preflight failed for ${row.id}: ${preview?.error?.message ?? preview?.result?.summary ?? "unknown blocker"}`,
+        blockers: preview?.blockers,
+        data: {
+          mode: "changes",
+          failed_operation_id: row.id,
+          preflighted_count: preflights.length,
+          total_count: normalized.rows.length,
+          mutation_skipped: true,
+        },
+      });
+    }
+    preflights.push(preview);
+  }
+
+  state.changes = normalized.rows.map((row, index) => controlBatchChangeFromEnvelope({
+    row,
+    envelope: preflights[index],
+    status: "planned",
+  }));
+  pushStage(stages, "controls-select-target", "selector_resolve", "completed", `Preflighted ${normalized.rows.length} independent live control target(s).`, state.evidenceRefs);
+  pushStage(stages, "controls-live-resolve", "live_ref_resolve", "completed", "Every batch row resolved its own live target before mutation.", state.evidenceRefs);
+
+  if (normalized.dryRun) {
+    pushStage(stages, "controls-execute", "runtime_execute", "skipped", "All batch mutations were skipped during dry_run.");
+    pushStage(stages, "controls-verify", "verify", "skipped", "Mutation readback is not required for a non-mutating batch preview.");
+    pushStage(stages, "controls-index-update", "index_update", "skipped", "No Project Index scope changed during dry_run.");
+    pushStage(stages, "controls-result", "result_project", "completed", "Projected the bounded multi-target control preview.");
+    return successEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "dry_run_completed",
+      summary: `Validated ${normalized.rows.length} independent control change row(s) without mutation.`,
+      data: {
+        mode: "changes",
+        total_count: normalized.rows.length,
+        planned_count: normalized.rows.length,
+        mutation_skipped: true,
+        executable_retry: {
+          id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+          input: { changes: clone(input.changes), dry_run: false },
+        },
+      },
+    });
+  }
+
+  let failed = null;
+  for (let index = 0; index < normalized.rows.length; index += 1) {
+    const row = normalized.rows[index];
+    const result = await executeControlsSet({
+      request: controlBatchChildRequest(request, row, false),
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+    });
+    collectMacroEnvelopeEvidence(state, result);
+    state.changes[index] = controlBatchChangeFromEnvelope({ row, envelope: result });
+    if (result?.ok !== true) {
+      failed = { row, result, index };
+      for (let later = index + 1; later < normalized.rows.length; later += 1) {
+        state.changes[later] = {
+          ...state.changes[later],
+          status: "not_run",
+          mutation: { status: "not_run" },
+          live_readback: { status: "not_run" },
+          index_maintenance: { status: "not_run", scopes: [] },
+        };
+      }
+      break;
+    }
+  }
+
+  const appliedCount = state.changes.filter((row) => row.status === "applied").length;
+  const readbackPassedCount = state.changes.filter((row) => row.live_readback?.status === "passed").length;
+  const scopes = unique(state.changes.flatMap((row) => row.index_maintenance?.scopes ?? []));
+  if (failed) {
+    pushStage(stages, "controls-execute", "runtime_execute", appliedCount > 0 ? "completed" : "failed", `Stopped after ${failed.row.id}; ${appliedCount} earlier row(s) have row-specific live truth.`, state.evidenceRefs);
+    pushStage(stages, "controls-verify", "verify", readbackPassedCount > 0 ? "completed" : "failed", `${readbackPassedCount} batch row(s) passed independent live readback.`, state.evidenceRefs);
+    pushStage(stages, "controls-index-update", "index_update", "completed", `Preserved each executed row's independent index-maintenance outcome across ${scopes.length} scope(s).`, state.evidenceRefs);
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: appliedCount > 0 || failed.result?.execution?.status === "partial_failure" ? "partial_failure" : "failed",
+      code: failed.result?.error?.code ?? "CONTROL_BATCH_ROW_FAILED",
+      message: `Control batch stopped at ${failed.row.id}: ${failed.result?.error?.message ?? failed.result?.result?.summary ?? "row failed"}`,
+      blockers: failed.result?.blockers,
+      data: {
+        mode: "changes",
+        failed_operation_id: failed.row.id,
+        total_count: normalized.rows.length,
+        applied_count: appliedCount,
+        live_readback_passed_count: readbackPassedCount,
+        index_scopes: scopes,
+      },
+    });
+  }
+
+  pushStage(stages, "controls-execute", "runtime_execute", "completed", `Executed ${normalized.rows.length} fixed control row(s) serially.`, state.evidenceRefs);
+  pushStage(stages, "controls-verify", "verify", "completed", `Every batch row passed its own live readback.`, state.evidenceRefs);
+  pushStage(stages, "controls-index-update", "index_update", "completed", `Preserved row-specific index maintenance across ${scopes.length} affected scope(s).`, state.evidenceRefs);
+  pushStage(stages, "controls-result", "result_project", "completed", "Projected per-row mutation, live-readback, and index-maintenance truth.");
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state,
+    summary: `Applied and verified ${appliedCount} independent control change row(s).`,
+    data: {
+      mode: "changes",
+      total_count: normalized.rows.length,
+      applied_count: appliedCount,
+      live_readback_passed_count: readbackPassedCount,
+      index_scopes: scopes,
+    },
+  });
 }
 
 async function executeStockPluginControls({
@@ -648,7 +849,23 @@ async function executeStockPluginControls({
 async function resolveControlTarget(options) {
   const targetKind = options.targetKind;
   if (!CONTROL_TARGET_KINDS.includes(targetKind)) {
-    return blocked("CONTROL_TARGET_KIND_UNSUPPORTED", "target_kind must be track, item, take, transport, or send.");
+    return blocked("CONTROL_TARGET_KIND_UNSUPPORTED", "target_kind must be project, track, item, take, transport, or send.");
+  }
+  if (targetKind === "project") {
+    const execution = await runAtomic({
+      executeAtomic: options.executeAtomic,
+      request: options.request,
+      state: options.state,
+      child: { id: READ_PROJECT_TEMPO_ID, input: { limit: 1, effective_at_seconds: [0] }, refs: {} },
+    });
+    collectExecution(options.state, execution);
+    const readback = executionReadback(execution);
+    if (!projectTempoReadback(readback)) {
+      return blocked("CONTROL_PROJECT_TEMPO_UNAVAILABLE", "The active project BPM could not be read before mutation.");
+    }
+    pushStage(options.stages, "controls-select-target", "selector_resolve", "completed", "Read the active project tempo target.", executionEvidenceRefs(execution));
+    pushStage(options.stages, "controls-live-resolve", "live_ref_resolve", "completed", "Project controls target the active project without an object ref.", executionEvidenceRefs(execution));
+    return { ok: true, refs: {}, sqliteUsed: false };
   }
   if (targetKind === "transport") {
     const execution = await runAtomic({
@@ -1030,6 +1247,9 @@ function pluginIdentityMatches(pluginMap, liveName) {
 }
 
 const CONTROL_BATCH_READBACK_PATHS = Object.freeze({
+  project: Object.freeze({
+    bpm: ["bpm"],
+  }),
   track: Object.freeze({
     volume: ["volume"],
     pan: ["pan"],
@@ -1216,6 +1436,12 @@ function requiredAtomicEvidenceForField(changes, field) {
 }
 
 function controlReadbackTarget(targetKind, targetRefs, readback) {
+  if (targetKind === "project") {
+    const value = projectTempoReadback(readback);
+    return value
+      ? { ok: true, value }
+      : blocked("CONTROL_READBACK_TARGET_MISSING", "Project control readback did not contain effective BPM at project time zero.");
+  }
   if (targetKind === "track") {
     const rows = Array.isArray(readback?.tracks) ? readback.tracks : [];
     const value = rows.find((row) => row?.track_ref === targetRefs?.track_ref);
@@ -1236,6 +1462,11 @@ function controlReadbackTarget(targetKind, targetRefs, readback) {
       : blocked("CONTROL_READBACK_TARGET_MISSING", "Send control readback did not contain the live-resolved target send.");
   }
   return { ok: true, value: readback ?? {} };
+}
+
+function projectTempoReadback(readback) {
+  const rows = Array.isArray(readback?.effective) ? readback.effective : [];
+  return rows.find((row) => row?.time_seconds === 0 && typeof row?.bpm === "number" && Number.isFinite(row.bpm)) ?? null;
 }
 
 function valueAtPath(value, path) {
@@ -1497,6 +1728,111 @@ function rememberInputObjectRefs(state, refs) {
   visit(refs);
 }
 
+function normalizeControlBatchInput(input, requestRefs) {
+  const blockers = [];
+  if (!Array.isArray(input.changes) || input.changes.length < 1 || input.changes.length > CONTROL_BATCH_MAX_ROWS) {
+    blockers.push(blockedRow("CONTROL_BATCH_SIZE_INVALID", `changes must contain 1-${CONTROL_BATCH_MAX_ROWS} rows.`));
+    return { ok: false, blockers };
+  }
+  if (input.target_kind !== undefined || input.fields !== undefined || input.selector !== undefined) {
+    blockers.push(blockedRow("CONTROL_BATCH_SHAPE_CONFLICT", "changes[] cannot be combined with top-level target_kind, fields, or selector."));
+  }
+  if (input.dry_run !== undefined && typeof input.dry_run !== "boolean") {
+    blockers.push(blockedRow("CONTROL_BATCH_DRY_RUN_INVALID", "changes[] dry_run must be boolean when supplied."));
+  }
+  if (Array.isArray(requestRefs) ? requestRefs.length > 0 : object(requestRefs) && Object.keys(requestRefs).length > 0) {
+    blockers.push(blockedRow("CONTROL_BATCH_REFS_CONFLICT", "changes[] keeps refs inside each row; top-level refs are not accepted."));
+  }
+  const ids = new Set();
+  const rows = [];
+  for (let index = 0; index < input.changes.length; index += 1) {
+    const value = input.changes[index];
+    if (!object(value)) {
+      blockers.push(blockedRow("CONTROL_BATCH_ROW_INVALID", `changes[${index}] must be an object.`));
+      continue;
+    }
+    const unknown = Object.keys(value).filter((field) => !CONTROL_BATCH_ROW_FIELDS.has(field));
+    if (unknown.length > 0) blockers.push(blockedRow("CONTROL_BATCH_ROW_FIELD_UNSUPPORTED", `changes[${index}] contains unsupported field(s): ${unknown.join(", ")}.`));
+    const id = typeof value.id === "string" && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u.test(value.id)
+      ? value.id
+      : null;
+    if (!id) blockers.push(blockedRow("CONTROL_BATCH_ROW_ID_INVALID", `changes[${index}].id must be a stable 1-64 character token.`));
+    else if (ids.has(id)) blockers.push(blockedRow("CONTROL_BATCH_ROW_ID_DUPLICATE", `changes[] contains duplicate id=${id}.`));
+    else ids.add(id);
+    if (!CONTROL_TARGET_KINDS.includes(value.target_kind)) blockers.push(blockedRow("CONTROL_TARGET_KIND_UNSUPPORTED", `changes[${index}].target_kind must be project, track, item, take, transport, or send.`));
+    if (!object(value.fields) || Object.keys(value.fields).length === 0) blockers.push(blockedRow("CONTROL_FIELDS_REQUIRED", `changes[${index}].fields must be a non-empty object.`));
+    if (value.selector !== undefined && !object(value.selector)) blockers.push(blockedRow("CONTROL_BATCH_SELECTOR_INVALID", `changes[${index}].selector must be an object when supplied.`));
+    if (value.refs !== undefined && !object(value.refs) && !Array.isArray(value.refs)) blockers.push(blockedRow("CONTROL_BATCH_ROW_REFS_INVALID", `changes[${index}].refs must be named refs or MCP object refs.`));
+    rows.push({
+      id: id ?? `row-${index + 1}`,
+      target_kind: value.target_kind,
+      fields: clone(value.fields),
+      selector: clone(value.selector),
+      refs: clone(value.refs ?? {}),
+    });
+  }
+  return blockers.length > 0
+    ? { ok: false, blockers }
+    : { ok: true, rows, dryRun: input.dry_run !== false };
+}
+
+function controlBatchChildRequest(request, row, dryRun) {
+  return {
+    id: ALPHA3_2_5_C_CONTROLS_SET_MACRO_ID,
+    input: {
+      target_kind: row.target_kind,
+      fields: clone(row.fields),
+      ...(row.selector === undefined ? {} : { selector: clone(row.selector) }),
+      dry_run: dryRun,
+    },
+    refs: clone(row.refs),
+    context: request.context,
+    budget: request.budget,
+    ...(!dryRun && typeof request.idempotency_key === "string" && request.idempotency_key.length > 0
+      ? { idempotency_key: `${request.idempotency_key}:change:${row.id}` }
+      : {}),
+    request_id: `${request.request_id ?? requestSummary(request, dryRun).request_id}:change:${row.id}:${dryRun ? "preview" : "execute"}`,
+  };
+}
+
+function collectMacroEnvelopeEvidence(state, envelope) {
+  state.evidenceRefs.push(...(envelope?.result?.verification?.evidence_refs ?? []));
+  state.artifactRefs.push(...(envelope?.result?.artifact_refs ?? []));
+  state.canonicalRefs.push(...(envelope?.result?.canonical_refs ?? []));
+}
+
+function controlBatchChangeFromEnvelope({ row, envelope, status }) {
+  const childRows = Array.isArray(envelope?.result?.changes) ? envelope.result.changes : [];
+  const allApplied = childRows.length > 0 && childRows.every((entry) => entry.status === "applied" && entry.live_readback?.status === "passed");
+  const dryRun = envelope?.execution?.status === "dry_run_completed";
+  const targetRefs = object(envelope?.result?.data?.target_refs) ? envelope.result.data.target_refs : {};
+  return {
+    operation_id: row.id,
+    target_kind: row.target_kind,
+    target_refs: clone(targetRefs),
+    fields: Object.keys(row.fields),
+    status: status ?? (allApplied ? "applied" : envelope?.ok === true ? "readback_failed" : "failed"),
+    mutation: {
+      status: dryRun ? "not_run" : allApplied ? "completed" : childRows.some((entry) => entry.mutation?.status === "completed") ? "completed" : "not_run",
+    },
+    live_readback: {
+      status: dryRun ? "not_run" : allApplied ? "passed" : childRows.some((entry) => entry.live_readback?.status === "failed") ? "failed" : "not_run",
+      source: dryRun ? null : "row_specific_macro_live_readback",
+    },
+    index_maintenance: {
+      status: dryRun ? "not_run" : childRows.length > 0 && childRows.every((entry) => ["completed", "skipped"].includes(entry.index_maintenance?.status)) ? "completed" : childRows.some((entry) => entry.index_maintenance?.status === "failed") ? "failed" : "not_run",
+      scopes: Array.isArray(envelope?.result?.data?.index_update?.scopes)
+        ? envelope.result.data.index_update.scopes
+        : controlScopes(row.target_kind),
+    },
+    blocker_code: envelope?.error?.code ?? null,
+  };
+}
+
+function blockedRow(code, message) {
+  return { code, message, recoverable: true };
+}
+
 function executionObjectRefs(execution) {
   const result = [];
   const visit = (value) => {
@@ -1608,6 +1944,7 @@ function refKind(ref) {
 }
 
 function hasRequiredControlRefs(targetKind, refs) {
+  if (targetKind === "project") return true;
   if (targetKind === "track") return typeof refs.track_ref === "string";
   if (targetKind === "item" || targetKind === "take") return typeof refs.item_ref === "string";
   if (targetKind === "send") return typeof refs.send_ref === "string" && typeof refs.track_ref === "string";
@@ -1615,6 +1952,7 @@ function hasRequiredControlRefs(targetKind, refs) {
 }
 
 function entityForTargetKind(targetKind) {
+  if (targetKind === "project") return "status";
   if (targetKind === "track") return "tracks";
   if (targetKind === "item") return "items";
   if (targetKind === "take") return "takes";
@@ -1623,6 +1961,7 @@ function entityForTargetKind(targetKind) {
 }
 
 function controlScopes(targetKind) {
+  if (targetKind === "project") return ["project_head"];
   if (targetKind === "track") return ["tracks"];
   if (targetKind === "item") return ["items", "takes"];
   if (targetKind === "take") return ["items", "takes"];

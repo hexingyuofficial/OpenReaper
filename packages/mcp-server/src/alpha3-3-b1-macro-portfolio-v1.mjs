@@ -145,19 +145,18 @@ export function adaptAlpha3_3B1CanonicalExecutionRequest(request = {}) {
 
   if (canonicalId === "macro.midi.apply") {
     const mode = input.mode ?? "create_clips";
-    if (mode !== "create_clips") {
+    if (!["create_clips", "edit_notes", "quantize", "write_cc"].includes(mode)) {
       return deepFreeze({
         ok: false,
         code: "MIDI_APPLY_MODE_UNSUPPORTED",
-        message: "Alpha3.3-B1a macro.midi.apply supports only mode=create_clips.",
+        message: `macro.midi.apply does not support mode=${String(mode)}.`,
         details: {
           requested_mode: mode,
-          supported_modes: ["create_clips"],
-          replacement_input: { ...input, mode: "create_clips" },
+          supported_modes: ["create_clips", "edit_notes", "quantize", "write_cc"],
         },
       });
     }
-    delete input.mode;
+    if (mode === "create_clips") delete input.mode;
   }
 
   return deepFreeze({
@@ -180,21 +179,12 @@ export function canonicalizeAlpha3_3B1MacroDiscoveryItem(item, canonicalId) {
   if (canonicalId === "macro.midi.apply") {
     canonical.title = "Apply bounded MIDI changes";
     canonical.user_label = "Apply MIDI";
-    canonical.summary = "Create one bounded verified MIDI clip through mode=create_clips; broader modes remain held until implemented.";
+    canonical.summary = "Create a MIDI clip or edit, quantize, and write CC to one to eight exact MIDI Takes with independent live readback.";
     canonical.macro_kind = "midi_apply";
-    canonical.inputSchema = isPlainObject(canonical.inputSchema) ? canonical.inputSchema : { type: "object" };
-    canonical.inputSchema.properties = {
-      mode: { type: "string", enum: ["create_clips"], default: "create_clips" },
-      ...(isPlainObject(canonical.inputSchema.properties) ? canonical.inputSchema.properties : {}),
-    };
-    canonical.examples = arrayOf(canonical.examples).map((example) => ({
-      ...example,
-      input: { mode: "create_clips", ...(isPlainObject(example.input) ? example.input : {}) },
-    }));
   } else if (canonicalId === "macro.fx.apply_chain") {
     canonical.title = "Apply bounded FX chain";
     canonical.user_label = "Apply FX chain";
-    canonical.summary = "Apply the currently accepted ReaComp chain task with verified controls; broader installed-chain modes remain held.";
+    canonical.summary = "Apply one or a bounded ordered Track/Take FX chain from REAPER's installed inventory with duplicate policy, optional preset/bypass/reorder, supported initial controls, and complete final-chain readback.";
     canonical.macro_kind = "fx_apply_chain";
   } else if (canonicalId === "macro.fx.set_controls") {
     canonical.title = "Set supported FX controls";

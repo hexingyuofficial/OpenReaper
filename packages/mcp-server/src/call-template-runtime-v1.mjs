@@ -209,6 +209,7 @@ import {
 } from "./alpha3-3-b1-macro-portfolio-v1.mjs";
 import {
   createAlpha3_3B1AgentContextMacroGuide,
+  rankAlpha3_3B1MacroIntents,
 } from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import {
   ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
@@ -228,6 +229,11 @@ import {
   executeAlpha3_3B1dAutomationApplyMacro,
   isAlpha3_3B1dAutomationApplyMacroId,
 } from "./alpha3-3-b1d-automation-apply-v1.mjs";
+import {
+  ALPHA3_3_MIDI_APPLY_REGISTRY,
+  createAlpha3_3MidiApplyDiscoveryItems,
+  executeAlpha3_3MidiApplyMacro,
+} from "./alpha3-3-midi-apply-v1.mjs";
 
 export const CALL_TEMPLATE_RUNTIME_CONTRACT = "call_template.runtime.v1";
 export const CALL_TEMPLATE_RUNTIME_EVIDENCE_CONTRACT = "template.runtime.evidence.v1";
@@ -944,6 +950,7 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_REGISTRY,
   ALPHA3_2_5_D_MIDI_MACRO_REGISTRY,
   ALPHA3_2_5_D_NATIVE_FX_REGISTRY,
+  ALPHA3_3_MIDI_APPLY_REGISTRY,
   ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
   ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY,
   ALPHA3_3_B1D_AUTOMATION_APPLY_REGISTRY,
@@ -992,6 +999,41 @@ export function createAcceptedOfficialTemplateDiscovery() {
   });
 }
 
+function createCanonicalMidiApplyDiscoveryItems(runtimeOptions = {}) {
+  const createClip = createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions);
+  const editing = createAlpha3_3MidiApplyDiscoveryItems(runtimeOptions)[0];
+  const createClipExample = createClip.examples?.[0] ?? { input: {} };
+  return [deepFreeze({
+    ...editing,
+    summary: "Create a MIDI clip or edit, quantize, and write CC to one to eight exact MIDI Takes with independent live readback.",
+    tags: [...new Set([...(createClip.tags ?? []), ...(editing.tags ?? [])])],
+    task_intents: [...new Set([...(createClip.task_intents ?? []), ...(editing.task_intents ?? [])])],
+    inputSchema: {
+      oneOf: [
+        {
+          ...cloneJson(createClip.inputSchema),
+          properties: {
+            mode: { const: "create_clips" },
+            ...cloneJson(createClip.inputSchema?.properties ?? {}),
+          },
+          required: ["mode", ...(createClip.inputSchema?.required ?? [])],
+        },
+        cloneJson(editing.inputSchema),
+      ],
+    },
+    outputSchema: cloneJson(createClip.outputSchema),
+    refs: cloneJson(createClip.refs),
+    supported_modes: ["create_clips", ...editing.supported_modes],
+    examples: [
+      {
+        ...cloneJson(createClipExample),
+        input: { mode: "create_clips", ...cloneJson(createClipExample.input ?? {}) },
+      },
+      ...cloneJson(editing.examples),
+    ],
+  })];
+}
+
 export function createCallTemplateRuntime(options = {}) {
   const catalog = createAcceptedOfficialTemplateCatalog();
   const retainedEvidence = [];
@@ -1028,8 +1070,7 @@ export function createCallTemplateRuntime(options = {}) {
     ...macroDiscovery(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems),
     ...macroDiscovery("macro.items.analyze", createAlpha3_3B1bItemsAnalyzeDiscoveryItems),
     ...macroDiscovery("macro.items.apply", createAlpha3_3B1cItemsApplyDiscoveryItems),
-    ...macroDiscovery("macro.midi.apply", (runtimeOptions) =>
-      [createAlpha3_2_5DMidiMacroDiscoveryItem(runtimeOptions)]),
+    ...macroDiscovery("macro.midi.apply", createCanonicalMidiApplyDiscoveryItems),
     ...macroDiscovery("macro.fx.apply_chain", createAlpha3_2_5DNativeFxMacroDiscoveryItems),
     ...macroDiscovery("macro.fx.set_controls", (runtimeOptions) =>
       createAlpha3E1OfficialMacroDiscoveryItems({ catalog, ...runtimeOptions })),
@@ -1149,6 +1190,16 @@ export function createCallTemplateRuntime(options = {}) {
         return envelope;
       }
       if (["macro.midi.apply", "macro.fx.apply_chain", "macro.fx.set_controls"].includes(id)) {
+        if (id === "macro.midi.apply" && ["edit_notes", "quantize", "write_cc"].includes(normalized.input?.mode)) {
+          const envelope = await executeAlpha3_3MidiApplyMacro({
+            request: normalized,
+            executeAtomic: macroAtomic,
+            projectIndexRuntime,
+            now,
+          });
+          retainEvidence(retainedEvidence, evidenceFromExecution(envelope, live.evidence), evidenceLimit);
+          return envelope;
+        }
         const adapted = adaptAlpha3_3B1CanonicalExecutionRequest(normalized);
         if (!adapted.ok) {
           throw new CallTemplateRuntimeError(
@@ -2272,25 +2323,27 @@ function runtimeMacroLiveReadiness({ id, live, projectIndexRuntime }) {
     });
   }
 
-  const executorSourceId = alpha3_3B1ExecutorSourceId(id);
-  const entry = PUBLIC_MACRO_PROGRAM_REGISTRIES
+  const executorSourceIds = id === "macro.midi.apply"
+    ? [ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID, "macro.midi.apply"]
+    : [alpha3_3B1ExecutorSourceId(id)];
+  const entries = executorSourceIds.map((executorSourceId) => PUBLIC_MACRO_PROGRAM_REGISTRIES
     .map((registry) => registry.get(executorSourceId))
-    .find(Boolean) ?? null;
-  if (!entry) {
+    .find(Boolean) ?? null);
+  if (entries.some((entry) => entry === null)) {
     return deepFreeze({
       live_runnable_now: false,
       known_blocker: "macro_program_not_registered",
     });
   }
 
-  const missingTemplateIds = entry.dependencies.template_ids
+  const missingTemplateIds = entries.flatMap((entry) => entry.dependencies.template_ids)
     .filter((templateId) => !live.allowedTemplateIdSet.has(templateId));
   const availableRuntimeCapabilities = new Set(IN_PROCESS_MACRO_RUNTIME_CAPABILITIES);
   if (projectIndexRuntimeReady(projectIndexRuntime)) {
     availableRuntimeCapabilities.add(ALPHA3_2_5_B_PROJECT_INDEX_RUNTIME_CAPABILITY);
     availableRuntimeCapabilities.add(ALPHA3_2_5_C_PROJECT_UNDERSTANDING_CAPABILITY);
   }
-  const missingRuntimeCapabilities = entry.dependencies.runtime_capabilities
+  const missingRuntimeCapabilities = entries.flatMap((entry) => entry.dependencies.runtime_capabilities)
     .filter((capability) => !availableRuntimeCapabilities.has(capability));
 
   if (missingTemplateIds.length > 0 || missingRuntimeCapabilities.length > 0) {
@@ -2451,17 +2504,23 @@ function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
   const templateIds = ids.filter((id) => id.startsWith("template."));
   const queryPresent = isPlainObject(request) && typeof request.query === "string" && request.query.trim() !== "";
   const exactIds = response.mode === "ids";
+  const intentMacroIds = queryPresent && !exactIds
+    ? rankAlpha3_3B1MacroIntents(request.query)
+    : [];
+  const selectedMacroIds = queryPresent
+    ? [...new Set([...macroIds, ...intentMacroIds])].slice(0, 3)
+    : macroIds;
   let route = "macro_first";
   let fallbackGap = null;
 
-  if (macroIds.length === 0 && templateIds.length > 0) {
+  if (selectedMacroIds.length === 0 && templateIds.length > 0) {
     route = "template_fallback";
     fallbackGap = {
       recorded: true,
       reason: ALPHA3_2_5_E_FALLBACK_GAP_REASONS[1],
       next_action: "Use the returned bounded Template ids directly or expand exact ids; do not invent a Macro or raw execution path.",
     };
-  } else if (macroIds.length === 0 && templateIds.length === 0) {
+  } else if (selectedMacroIds.length === 0 && templateIds.length === 0) {
     route = "no_match";
     fallbackGap = {
       recorded: true,
@@ -2479,9 +2538,9 @@ function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
     mode: response.mode,
     query_present: queryPresent,
     exact_ids: exactIds,
-    macro_match_count: macroIds.length,
+    macro_match_count: selectedMacroIds.length,
     template_match_count: templateIds.length,
-    selected_macro_ids: macroIds,
+    selected_macro_ids: selectedMacroIds,
     fallback_gap: fallbackGap,
     task_text_persisted: false,
   };
@@ -2500,7 +2559,9 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideReques
     agent_context_macro_guide: createAlpha3_3B1AgentContextMacroGuide({
       requested_ids: guideRequest.requested_ids,
       missing_ids: guideRequest.missing_ids,
-      recommended_macro_ids: macroFirstRouting?.selected_macro_ids?.slice(0, 3) ?? [],
+      recommended_macro_ids: macroFirstRouting?.query_present === true
+        ? macroFirstRouting.selected_macro_ids?.slice(0, 3) ?? []
+        : [],
     }),
     macro_first_routing: macroFirstRouting,
     item_schema: {
@@ -2617,7 +2678,6 @@ function runtimeActionMetadata(item) {
     template_id: item.id,
     action_kind: item.action_kind,
     macro_kind: item.macro_kind,
-    menu_group: item.menu_group,
     execution_shape: item.execution_shape,
     user_label: item.user_label,
     task_intents: item.task_intents,

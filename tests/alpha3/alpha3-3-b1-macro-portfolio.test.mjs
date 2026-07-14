@@ -89,7 +89,7 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
     });
   });
 
-  it("adapts canonical execution to the fixed accepted executors without widening MIDI modes", () => {
+  it("adapts create_clips to its accepted compatibility executor and recognizes extended MIDI modes", () => {
     assert.equal(alpha3_3B1ExecutorSourceId("macro.midi.apply"), "macro.midi.create_clip");
     assert.equal(alpha3_3B1ExecutorSourceId("macro.fx.apply_chain"), "macro.fx.apply_native_chain");
     assert.equal(alpha3_3B1ExecutorSourceId("macro.fx.set_controls"), "macro.set_stock_plugin_controls");
@@ -102,10 +102,14 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
     assert.equal(accepted.request.id, "macro.midi.create_clip");
     assert.deepEqual(accepted.request.input, { start_seconds: 0, end_seconds: 1, notes: [] });
 
-    const held = adaptAlpha3_3B1CanonicalExecutionRequest({
+    const extended = adaptAlpha3_3B1CanonicalExecutionRequest({
       id: "macro.midi.apply",
       input: { mode: "edit_notes" },
     });
+    assert.equal(extended.ok, true);
+    assert.equal(extended.request.input.mode, "edit_notes");
+
+    const held = adaptAlpha3_3B1CanonicalExecutionRequest({ id: "macro.midi.apply", input: { mode: "edit_cc" } });
     assert.equal(held.ok, false);
     assert.equal(held.code, "MIDI_APPLY_MODE_UNSUPPORTED");
   });
@@ -153,6 +157,27 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
     assert.equal(setControls.result.verification.status, "passed");
   });
 
+  it("routes extended MIDI modes through the canonical executor and publishes all accepted modes", async () => {
+    const runtime = createFacadeRuntime();
+    const midi = runtime.list_templates({ ids: ["macro.midi.apply"], fields: ["id", "inputSchema"] }).items[0];
+    assert.deepEqual(midi.inputSchema.oneOf[0].properties.mode, { const: "create_clips" });
+    assert.deepEqual(midi.inputSchema.oneOf[1].properties.mode.enum, ["edit_notes", "quantize", "write_cc"]);
+
+    const edited = await runtime.call_template({
+      id: "macro.midi.apply",
+      input: {
+        mode: "edit_notes",
+        operations: [{ take_ref: TAKE_REF, notes: [{ index: 0, velocity: 100 }] }],
+        dry_run: false,
+      },
+      context: context(4),
+    });
+    assert.equal(edited.ok, true, JSON.stringify(edited));
+    assert.equal(edited.macro.id, "macro.midi.apply");
+    assert.equal(edited.result.changes[0].status, "applied");
+    assert.equal(edited.result.changes[0].live_readback.status, "passed");
+  });
+
   it("hides aliases and drafts while returning exact typed replacement and held errors", async () => {
     const runtime = createCallTemplateRuntime();
     const menuIds = runtime.list_templates().items
@@ -189,7 +214,7 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
 
     const unsupported = await runtime.call_template({
       id: "macro.midi.apply",
-      input: { mode: "edit_notes" },
+      input: { mode: "edit_cc" },
     });
     assert.equal(unsupported.error.code, "CALL_TEMPLATE_REQUEST_INVALID");
     assert.equal(unsupported.error.details.blocker_code, "MIDI_APPLY_MODE_UNSUPPORTED");
@@ -239,24 +264,29 @@ class FacadeBridge extends FakeFoundationBridge {
   constructor() {
     super();
     this.parameterValues = new Map();
+    this.midiVelocity = 96;
   }
 
   dispatch(input) {
     const request = structuredClone(input);
     const capability = request.pack?.capability;
     request.params = { ...(request.params ?? {}) };
-    request.params.emits = emitted(capability, request, this.parameterValues);
+    request.params.emits = emitted(capability, request, this.parameterValues, this);
     return super.dispatch(request);
   }
 }
 
-function emitted(capability, request, parameterValues) {
+function emitted(capability, request, parameterValues, bridge) {
   if (capability === "track.resolve_ref") return output([TRACK_OBJECT], { track_ref: TRACK_REF, name: "Alpha3.3 B1" });
   if (capability === "midi.create_midi_item") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF });
   if (capability === "midi.insert_notes_batch") return output([TAKE_OBJECT], { take_ref: TAKE_REF, inserted_count: 1, note_count: 1, take_hash: "hash:alpha33-b1" });
   if (capability === "midi.resolve_midi_take_ref") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF, event_count: 1, ppq_start: 0, ppq_end: 480 });
-  if (capability === "midi.read_take_event_counts") return output([TAKE_OBJECT], { take_ref: TAKE_REF, note_count: 1, cc_count: 0, text_sysex_count: 0 });
-  if (capability === "midi.list_take_notes") return output([TAKE_OBJECT], { take_ref: TAKE_REF, notes: [{ start_ppq: 0, end_ppq: 480, pitch: 60, velocity: 96, channel: 0 }], returned_count: 1, truncated: false });
+  if (capability === "midi.read_take_event_counts") return output([TAKE_OBJECT], { take_ref: TAKE_REF, note_count: 1, cc_count: 0, text_sysex_count: 0, take_hash: "hash:alpha33-b1" });
+  if (capability === "midi.list_take_notes") return output([TAKE_OBJECT], { take_ref: TAKE_REF, notes: [{ index: 0, selected: false, muted: false, start_ppq: 0, end_ppq: 480, pitch: 60, velocity: bridge.midiVelocity, channel: 0 }], returned_count: 1, truncated: false });
+  if (capability === "midi.set_notes_batch") {
+    bridge.midiVelocity = request.params.notes[0].velocity;
+    return output([TAKE_OBJECT], { take_ref: TAKE_REF, updated_count: 1, take_hash: "hash:alpha33-b1" });
+  }
   if (capability === "fx.add_track") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });
   if (capability === "fx.resolve_ref") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });
   if (capability === "fx.read_summary") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });

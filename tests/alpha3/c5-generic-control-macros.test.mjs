@@ -7,6 +7,7 @@ import {
   createAlpha3C5OfficialMacroDiscoveryItems,
   getAlpha3C5GenericControlMacro,
   listAlpha3C5GenericControlMacros,
+  planAlpha3_2_5CControlsSetMacro,
   planAlpha3C5GenericControlMacro,
 } from "../../packages/mcp-server/src/alpha3-c5-generic-control-macros-v1.mjs";
 import {
@@ -80,9 +81,59 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(controls.live_runnable_now, false);
     assert.equal(controls.support_status, "executable_runtime_bound");
     assert.equal(controls.known_blocker, null);
-    assert.deepEqual(controls.inputSchema.required, ["target_kind", "fields"]);
-    assert.deepEqual(controls.target_kinds, ["track", "item", "take", "transport", "send"]);
+    assert.equal(controls.inputSchema.required, undefined);
+    assert.equal(controls.inputSchema.oneOf.length, 2);
+    assert.equal(controls.inputSchema.properties.changes.minItems, 1);
+    assert.equal(controls.inputSchema.properties.changes.maxItems, 8);
+    assert.deepEqual(controls.inputSchema.properties.changes.items.required, ["id", "target_kind", "fields"]);
+    assert.deepEqual(controls.target_kinds, ["project", "track", "item", "take", "transport", "send"]);
+    assert.deepEqual(controls.fields_by_target.project, ["bpm"]);
     assert.equal(controls.expectedDelta.kind, "write");
+  });
+
+  it("plans project BPM without refs and normalizes the tempo alias", () => {
+    const bpmPlan = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { bpm: 128 },
+    });
+    const tempoPlan = planAlpha3_2_5CControlsSetMacro({
+      target_kind: "project",
+      fields: { tempo: 126 },
+    });
+
+    for (const plan of [bpmPlan, tempoPlan]) {
+      assert.equal(plan.ok, true);
+      assert.equal(plan.target_kind, "project");
+      assert.equal(plan.legacy_id, null);
+      assert.deepEqual(plan.requests.map((request) => request.id), ["template.project.set_bpm"]);
+      assert.deepEqual(plan.requests[0].refs, {});
+      assert.deepEqual(plan.readback, {
+        tool: "call_template",
+        id: "template.project.read_tempo_map",
+        refs: {},
+        input: { limit: 1, effective_at_seconds: [0] },
+        expected_evidence: ["request_id", "canonical_refs", "readback_status", "typed_blockers"],
+      });
+    }
+    assert.deepEqual(bpmPlan.normalized_fields, { bpm: 128 });
+    assert.deepEqual(tempoPlan.normalized_fields, { bpm: 126 });
+    assert.deepEqual(tempoPlan.requests[0].input, { bpm: 126 });
+  });
+
+  it("returns typed project BPM field errors before emitting child requests", () => {
+    const cases = [
+      [{ target_kind: "project", fields: {} }, "CONTROL_BPM_REQUIRED"],
+      [{ target_kind: "project", fields: { bpm: 19 } }, "CONTROL_BPM_INVALID"],
+      [{ target_kind: "project", fields: { bpm: 120, tempo: 121 } }, "CONTROL_FIELD_ALIAS_CONFLICT"],
+      [{ target_kind: "project", fields: { bpm: 120, time_signature: "4/4" } }, "FIELD_NOT_SUPPORTED"],
+    ];
+    for (const [input, code] of cases) {
+      const plan = planAlpha3_2_5CControlsSetMacro(input);
+      assert.equal(plan.ok, false);
+      assert.equal(plan.blockers[0].code, code);
+      assert.deepEqual(plan.requests, []);
+      assert.equal(plan.readback, null);
+    }
   });
 
   it("keeps generic controls as partial schemas over accepted per-field templates", () => {
@@ -290,7 +341,8 @@ describe("Alpha3 C5 generic control macro schemas", () => {
     assert.equal(byLabel.items[0].current_status, "needs_live");
     assert.equal(byIntent.items.some((item) => item.id === "macro.controls.set"), true);
     assert.equal(exact.items[0].id, "macro.controls.set");
-    assert.deepEqual(exact.items[0].inputSchema.required, ["target_kind", "fields"]);
+    assert.equal(exact.items[0].inputSchema.oneOf.length, 2);
+    assert.equal(exact.items[0].inputSchema.properties.changes.maxItems, 8);
     assert.equal(exact.items[0].expectedDelta.kind, "write");
     assert.equal(exact.items[0].capability_truth.kind, "official_macro");
   });

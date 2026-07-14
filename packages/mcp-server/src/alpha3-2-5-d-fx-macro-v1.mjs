@@ -28,7 +28,15 @@ export const ALPHA3_2_5_D_NATIVE_FX_RUNTIME_CONTRACT =
   "alpha3.2.5.d.native_fx_runtime.v1";
 
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
+const SEARCH_INSTALLED_FX_ID = "template.fx.search_installed_fx";
+const LIST_TRACK_FX_CHAIN_ID = "template.fx.list_track_fx_chain";
+const LIST_TAKE_FX_CHAIN_ID = "template.fx.list_take_fx_chain";
 const ADD_TRACK_FX_ID = "template.fx.add_track_fx";
+const ADD_TAKE_FX_ID = "template.fx.add_take_fx";
+const SET_FX_BYPASS_ID = "template.fx.set_fx_bypass";
+const SET_FX_PRESET_BY_NAME_ID = "template.fx.set_fx_preset_by_name";
+const SET_FX_PRESET_BY_INDEX_ID = "template.fx.set_fx_preset_by_index";
+const REORDER_FX_ID = "template.fx.reorder_fx";
 const TRANSITIVE_STOCK_TEMPLATE_IDS = Object.freeze([
   "template.fx.resolve_fx_ref",
   "template.fx.read_fx_summary",
@@ -38,7 +46,15 @@ const TRANSITIVE_STOCK_TEMPLATE_IDS = Object.freeze([
 ]);
 const TEMPLATE_IDS = Object.freeze([
   RESOLVE_TRACK_ID,
+  SEARCH_INSTALLED_FX_ID,
+  LIST_TRACK_FX_CHAIN_ID,
+  LIST_TAKE_FX_CHAIN_ID,
   ADD_TRACK_FX_ID,
+  ADD_TAKE_FX_ID,
+  SET_FX_BYPASS_ID,
+  SET_FX_PRESET_BY_NAME_ID,
+  SET_FX_PRESET_BY_INDEX_ID,
+  REORDER_FX_ID,
   ...TRANSITIVE_STOCK_TEMPLATE_IDS,
 ]);
 const RUNTIME_CAPABILITIES = Object.freeze([
@@ -56,6 +72,8 @@ const STAGE_IDS = Object.freeze([
   "native-fx-result",
 ]);
 const INPUT_FIELDS = new Set([
+  "owner_kind",
+  "chain",
   "plugin",
   "controls",
   "starter_action",
@@ -67,6 +85,22 @@ const INPUT_FIELDS = new Set([
 ]);
 const DEFAULT_STARTER_ACTION = "gentle_vocal_compression";
 const REACOMP_ADD_NAME = "ReaComp (Cockos)";
+const CHAIN_MAX_NODES = 8;
+const CHAIN_NODE_FIELDS = new Set([
+  "plugin_name",
+  "plugin_query",
+  "duplicate_policy",
+  "insert_at_index",
+  "preset_name",
+  "preset_index",
+  "enabled",
+  "target_index",
+  "controls",
+  "starter_action",
+  "action_parameters",
+  "control_overrides",
+]);
+const DUPLICATE_POLICIES = new Set(["allow", "reuse_exact", "skip_exact", "fail_if_present"]);
 
 const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
@@ -123,12 +157,12 @@ export function createAlpha3_2_5DNativeFxMacroDiscoveryItems(options = {}) {
   return [deepFreeze({
     id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
     title: "Apply native FX chain",
-    summary: "Add one live-accepted ReaComp instance to a track and apply verified musical controls in one registered Macro call.",
+    summary: "Apply one or a bounded ordered Track/Take FX chain from REAPER's installed inventory, then verify the final live chain.",
     pack: "core",
     lifecycle: "experimental",
     risk: "write",
     entity_kind: "macro.fx",
-    tags: ["macro", "fx", "native_fx", "reacomp", "compression", "alpha3_2_5_d"],
+    tags: ["macro", "fx", "chain", "installed_inventory", "track", "take", "preset", "bypass", "reorder", "reacomp"],
     kind: "official_macro",
     action_kind: "macro",
     macro_kind: "native_fx_chain",
@@ -148,6 +182,13 @@ export function createAlpha3_2_5DNativeFxMacroDiscoveryItems(options = {}) {
       type: "object",
       required: [],
       properties: {
+        owner_kind: { enum: ["track", "take"] },
+        chain: {
+          type: "array",
+          minItems: 1,
+          maxItems: CHAIN_MAX_NODES,
+          items: { type: "object", additionalProperties: false },
+        },
         plugin: { enum: ["reacomp"] },
         controls: { type: "object", additionalProperties: true },
         starter_action: { enum: [DEFAULT_STARTER_ACTION] },
@@ -171,17 +212,28 @@ export function createAlpha3_2_5DNativeFxMacroDiscoveryItems(options = {}) {
       },
     },
     refs: {
-      input: [{ name: "track_ref", kind: "track", required: false, summary: "Optional exact track ref; an unambiguous Project Index selector may be used instead." }],
-      output: [{ name: "fx_ref", kind: "fx", required: true, summary: "The newly created owner-scoped ReaComp ref." }],
+      input: [
+        { name: "track_ref", kind: "track", required: false, summary: "Exact Track ref, or use one unambiguous Track selector." },
+        { name: "take_ref", kind: "take", required: false, summary: "Exact Take ref for owner_kind=take." },
+      ],
+      output: [{ name: "fx_refs", kind: "fx", required: true, summary: "The verified owner-scoped FX refs in final chain order." }],
     },
     expectedDelta: {
       kind: "write",
       action: "apply_native_fx_chain",
       entities: ["track", "fx", "fx_parameter"],
-      summary: "Creates one ReaComp instance, applies a bounded semantic control set, and verifies exact parameter readback.",
+      summary: "Adds or reuses a bounded ordered FX chain, applies supported initial state, and verifies the final live chain.",
     },
     examples: [{
-      input: { selector: { name: "Lead Vocal" }, starter_action: DEFAULT_STARTER_ACTION, dry_run: false },
+      input: {
+        owner_kind: "track",
+        selector: { name: "Lead Vocal" },
+        chain: [
+          { plugin_query: "ReaEQ", duplicate_policy: "reuse_exact" },
+          { plugin_name: REACOMP_ADD_NAME, controls: { threshold_db: -18, ratio: 3 } },
+        ],
+        dry_run: false,
+      },
       refs: {},
     }],
     live_runnable_now: options.liveRunnableNow === true,
@@ -205,7 +257,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
   const entry = ALPHA3_2_5_D_NATIVE_FX_REGISTRY.get(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID);
   const startedAt = safeNowIso(now);
   const input = object(request.input) ? request.input : {};
-  const dryRun = input.dry_run === true;
+  const dryRun = Array.isArray(input.chain) ? input.dry_run !== false : input.dry_run === true;
   const state = executionState();
   const stages = [];
 
@@ -230,6 +282,21 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       entry, request, startedAt, now, stages, state,
       code: "NATIVE_FX_EXECUTOR_UNAVAILABLE",
       message: "macro.fx.apply_native_chain needs the managed OpenReaper atomic route.",
+    });
+  }
+
+  if (Array.isArray(input.chain)) {
+    return executeBoundedFxChain({
+      entry,
+      request,
+      input,
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+      startedAt,
+      state,
+      stages,
     });
   }
 
@@ -428,6 +495,594 @@ export async function executeAlpha3_2_5DNativeFxMacro({
   }
 }
 
+async function executeBoundedFxChain({
+  entry,
+  request,
+  input,
+  executeAtomic,
+  projectIndexRuntime,
+  catalog,
+  now,
+  startedAt,
+  state,
+  stages,
+}) {
+  const dryRun = input.dry_run !== false;
+  let finalChain = null;
+  let owner = null;
+  try {
+    owner = await resolveFxChainOwner({
+      request,
+      input,
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+      state,
+      stages,
+    });
+    if (!owner.ok) {
+      return failure({
+        entry, request, startedAt, now, stages, state,
+        code: owner.blockers[0].code,
+        message: owner.blockers[0].message,
+        blockers: owner.blockers,
+      });
+    }
+
+    const initialExecution = await executeFxAtomic({
+      id: owner.listTemplateId,
+      input: { include_preset: true },
+      refs: owner.refs,
+      request,
+      executeAtomic,
+      state,
+    });
+    const initialChain = requireCompleteFxChain(initialExecution, "initial");
+    const knownRows = initialChain.fx.map((row) => ({ ...row }));
+    const operations = [];
+
+    for (let index = 0; index < input.chain.length; index += 1) {
+      const node = input.chain[index];
+      const installed = await resolveInstalledFx({ node, request, executeAtomic, state });
+      const duplicatePolicy = node.duplicate_policy ?? "allow";
+      const duplicateRows = knownRows.filter((row) => fxNamesEqual(row.name, installed.name));
+      let fxRef = null;
+      let fxObject = null;
+      let skipped = false;
+      let preferredSlot = null;
+      const atomicChecks = [];
+      const mutationActions = [];
+      const change = {
+        operation_id: `fx-chain-${index + 1}`,
+        template_id: "macro.fx.apply_chain",
+        target_ref: owner.ownerRef,
+        related_ref: null,
+        plugin_name: installed.name,
+        duplicate_policy: duplicatePolicy,
+        status: dryRun ? "planned" : "pending",
+        mutation: {
+          status: "not_run",
+          actions: mutationActions,
+        },
+        live_readback: { status: dryRun ? "not_run" : "pending" },
+        index_maintenance: { status: "pending", scopes: [] },
+      };
+      state.changes.push(change);
+
+      if (duplicateRows.length > 0 && duplicatePolicy === "fail_if_present") {
+        throw coded(
+          "FX_CHAIN_DUPLICATE_PRESENT",
+          `${installed.name} already exists on the target and duplicate_policy=fail_if_present.`,
+        );
+      }
+      if (duplicateRows.length > 0 && ["reuse_exact", "skip_exact"].includes(duplicatePolicy)) {
+        const reused = duplicateRows[0];
+        fxRef = reused.fx_ref;
+        preferredSlot = reused.slot_index;
+        skipped = duplicatePolicy === "skip_exact";
+        change.related_ref = fxRef;
+        change.status = skipped ? "unchanged" : "pending";
+      }
+
+      if (!fxRef && !dryRun) {
+        const addExecution = await executeFxAtomic({
+          id: owner.addTemplateId,
+          input: pruneUndefined({
+            plugin_name: installed.name,
+            insert_at_index: node.insert_at_index,
+          }),
+          refs: owner.refs,
+          request,
+          executeAtomic,
+          state,
+          write: true,
+        });
+        const addReadback = executionReadback(addExecution);
+        fxRef = firstRef(addExecution, "fx:") ?? addReadback.fx_ref ?? null;
+        fxObject = objectRefs(addExecution).find((entry) => entry.kind === "fx" && entry.ref === fxRef) ?? null;
+        preferredSlot = integerOrNull(addReadback.slot_index);
+        if (!fxRef || !fxObject || !fxNamesEqual(addReadback.name, installed.name)) {
+          throw coded("FX_CHAIN_ADD_READBACK_MISMATCH", `The added FX did not read back as ${installed.name}.`);
+        }
+        mutationActions.push({ template_id: owner.addTemplateId, status: "completed" });
+        change.mutation.status = "completed";
+        change.related_ref = fxRef;
+        atomicChecks.push(true);
+        knownRows.push({ fx_ref: fxRef, fx_object: fxObject, slot_index: preferredSlot, name: installed.name });
+      }
+
+      if (!dryRun && !skipped && !fxRef) {
+        throw coded("FX_CHAIN_REF_MISSING", `No exact FX ref is available for ${installed.name}.`);
+      }
+      if (!dryRun && !skipped && !fxObject) {
+        fxObject = await resolveExactFxObject({
+          fxRef,
+          owner,
+          preferredSlot,
+          request,
+          executeAtomic,
+          state,
+        });
+      }
+
+      if (!dryRun && !skipped && node.preset_name !== undefined) {
+        const execution = await executeFxAtomic({
+          id: SET_FX_PRESET_BY_NAME_ID,
+          input: { preset_name: node.preset_name },
+          refs: { fx_ref: fxObject },
+          request,
+          executeAtomic,
+          state,
+          write: true,
+        });
+        const readback = executionReadback(execution);
+        atomicChecks.push(readback.preset_name === node.preset_name);
+        mutationActions.push({ template_id: SET_FX_PRESET_BY_NAME_ID, status: "completed" });
+        change.mutation.status = "completed";
+      }
+      if (!dryRun && !skipped && node.preset_index !== undefined) {
+        const execution = await executeFxAtomic({
+          id: SET_FX_PRESET_BY_INDEX_ID,
+          input: { preset_index: node.preset_index },
+          refs: { fx_ref: fxObject },
+          request,
+          executeAtomic,
+          state,
+          write: true,
+        });
+        const readback = executionReadback(execution);
+        atomicChecks.push(readback.preset_index === node.preset_index);
+        mutationActions.push({ template_id: SET_FX_PRESET_BY_INDEX_ID, status: "completed" });
+        change.mutation.status = "completed";
+      }
+      if (!dryRun && !skipped && node.enabled !== undefined) {
+        const execution = await executeFxAtomic({
+          id: SET_FX_BYPASS_ID,
+          input: { enabled: node.enabled },
+          refs: { fx_ref: fxObject },
+          request,
+          executeAtomic,
+          state,
+          write: true,
+        });
+        const readback = executionReadback(execution);
+        atomicChecks.push(readback.enabled === node.enabled);
+        mutationActions.push({ template_id: SET_FX_BYPASS_ID, status: "completed" });
+        change.mutation.status = "completed";
+      }
+      if (!dryRun && !skipped && node.target_index !== undefined) {
+        const execution = await executeFxAtomic({
+          id: REORDER_FX_ID,
+          input: { target_index: node.target_index },
+          refs: { fx_ref: fxObject },
+          request,
+          executeAtomic,
+          state,
+          write: true,
+        });
+        const readback = executionReadback(execution);
+        fxRef = firstRef(execution, "fx:") ?? readback.fx_ref ?? fxRef;
+        fxObject = objectRefs(execution).find((entry) => entry.kind === "fx" && entry.ref === fxRef) ?? fxObject;
+        change.related_ref = fxRef;
+        preferredSlot = integerOrNull(readback.slot_index);
+        atomicChecks.push(readback.slot_index === node.target_index);
+        mutationActions.push({ template_id: REORDER_FX_ID, status: "completed" });
+        change.mutation.status = "completed";
+      }
+      if (!dryRun && !skipped && object(node.controls) && Object.keys(node.controls).length > 0) {
+        if (!normalizeFxName(installed.name).includes("reacomp")) {
+          throw coded(
+            "FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED",
+            `Initial semantic controls are accepted only for the reviewed ReaComp mapping; ${installed.name} must be configured through macro.fx.set_controls or direct normalized controls.`,
+          );
+        }
+        const configured = await executeAlpha3_2_5CControlMacro({
+          request: {
+            id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
+            input: pruneUndefined({
+              plugin: "reacomp",
+              controls: node.controls,
+              starter_action: node.starter_action,
+              action_parameters: node.action_parameters,
+              control_overrides: node.control_overrides,
+              dry_run: false,
+            }),
+            refs: { fx_ref: fxObject },
+            context: request.context,
+            budget: request.budget,
+          },
+          executeAtomic,
+          projectIndexRuntime,
+          catalog,
+          now,
+        });
+        collectMacro(state, configured);
+        if (configured?.ok !== true || configured?.result?.verification?.status !== "passed") {
+          throw coded(
+            configured?.error?.code ?? "FX_CHAIN_INITIAL_CONTROLS_FAILED",
+            configured?.error?.message ?? "The supported initial FX controls did not pass live readback.",
+            configured?.blockers,
+          );
+        }
+        atomicChecks.push(true);
+        mutationActions.push({ template_id: ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, status: "completed" });
+        change.mutation.status = "completed";
+      }
+      operations.push({
+        node,
+        change,
+        installedName: installed.name,
+        fxRef,
+        preferredSlot,
+        atomicChecks,
+        skipped,
+      });
+    }
+
+    pushStage(
+      stages,
+      "native-fx-add",
+      "template_execute",
+      dryRun ? "skipped" : "completed",
+      dryRun
+        ? `Validated ${operations.length} installed FX node(s) without mutation.`
+        : `Applied ${operations.length} bounded FX chain node(s).`,
+    );
+    pushStage(
+      stages,
+      "native-fx-configure",
+      "runtime_execute",
+      dryRun ? "skipped" : "completed",
+      dryRun ? "Optional FX state changes were not run during dry_run." : "Applied requested duplicate, preset, bypass, reorder, and supported initial-control policies.",
+    );
+
+    if (dryRun) {
+      applyFxIndexMaintenance(state.changes, "skipped", null);
+      pushStage(stages, "native-fx-verify", "verify", "skipped", "No mutation requires final chain readback during dry_run.");
+      pushStage(stages, "native-fx-index-update", "index_update", "skipped", "No Project Index scope changed during dry_run.");
+      pushStage(stages, "native-fx-result", "result_project", "completed", "Projected the bounded installed-FX chain plan.");
+      return success({
+        entry, request, startedAt, now, stages, state,
+        status: "dry_run_completed",
+        summary: `Validated ${operations.length} installed FX chain node(s) without mutating REAPER.`,
+        data: {
+          owner_kind: owner.ownerKind,
+          owner_ref: owner.ownerRef,
+          planned_chain: operations.map((operation) => ({
+            plugin_name: operation.installedName,
+            duplicate_policy: operation.node.duplicate_policy ?? "allow",
+            insert_at_index: operation.node.insert_at_index ?? null,
+            target_index: operation.node.target_index ?? null,
+          })),
+          initial_chain: compactFxChain(initialChain),
+        },
+      });
+    }
+
+    const finalExecution = await executeFxAtomic({
+      id: owner.listTemplateId,
+      input: { include_preset: true },
+      refs: owner.refs,
+      request,
+      executeAtomic,
+      state,
+    });
+    finalChain = requireCompleteFxChain(finalExecution, "final");
+    let orderedCursor = 0;
+    let readbackFailed = false;
+    for (const operation of operations) {
+      const matched = matchFinalFxRow(finalChain.fx, operation, orderedCursor);
+      if (matched.row) orderedCursor = Math.max(orderedCursor, matched.row.slot_index + 1);
+      const enabledMatches = operation.node.enabled === undefined || matched.row?.enabled === operation.node.enabled;
+      const targetMatches = operation.node.target_index === undefined || matched.row?.slot_index === operation.node.target_index;
+      const atomicMatches = operation.atomicChecks.every(Boolean);
+      const passed = Boolean(matched.row) && enabledMatches && targetMatches && atomicMatches;
+      operation.change.related_ref = matched.row?.fx_ref ?? operation.fxRef;
+      operation.change.status = passed
+        ? operation.skipped || operation.change.mutation.status === "not_run" ? "unchanged" : "applied"
+        : "readback_failed";
+      operation.change.live_readback = {
+        status: passed ? "passed" : "failed",
+        source: "complete_final_chain_plus_atomic_state_readback",
+        observed_ref: matched.row?.fx_ref ?? null,
+        observed_slot_index: matched.row?.slot_index ?? null,
+        observed_name: matched.row?.name ?? null,
+        observed_enabled: matched.row?.enabled ?? null,
+      };
+      readbackFailed ||= !passed;
+    }
+    pushStage(
+      stages,
+      "native-fx-verify",
+      "verify",
+      readbackFailed ? "failed" : "completed",
+      readbackFailed
+        ? "One or more FX nodes did not match the complete final live chain and atomic state readback."
+        : `Verified all ${operations.length} FX node(s) in the complete final live chain.`,
+      evidenceRefs(finalExecution),
+    );
+    if (readbackFailed) {
+      throw coded("FX_CHAIN_FINAL_READBACK_MISMATCH", "The final live FX chain did not match every requested node.");
+    }
+
+    const invalidation = invalidateFxScope(projectIndexRuntime, now);
+    applyFxIndexMaintenance(
+      state.changes,
+      invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+      invalidation,
+    );
+    if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+    pushStage(
+      stages,
+      "native-fx-index-update",
+      "index_update",
+      invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+      invalidation?.ok === false
+        ? "FX mutation/readback passed, but Project Index FX invalidation failed."
+        : invalidation
+          ? "Marked the Project Index FX scope stale after verified chain mutation."
+          : "No configured Project Index runtime required FX invalidation.",
+    );
+    pushStage(stages, "native-fx-result", "result_project", "completed", "Projected the complete verified final FX chain.");
+    const resultData = {
+      owner_kind: owner.ownerKind,
+      owner_ref: owner.ownerRef,
+      final_chain: compactFxChain(finalChain),
+      outcome: fxOutcome(state),
+      index_update: compactData(invalidation),
+    };
+    if (invalidation?.ok === false) {
+      return failure({
+        entry, request, startedAt, now, stages, state,
+        status: "partial_failure",
+        code: invalidation.blockers?.[0]?.code ?? "FX_CHAIN_INDEX_MAINTENANCE_FAILED",
+        message: "FX chain mutation and live readback passed, but Project Index maintenance failed.",
+        blockers: invalidation.blockers,
+        data: resultData,
+      });
+    }
+    return success({
+      entry, request, startedAt, now, stages, state,
+      summary: `Applied and verified ${operations.length} FX chain node(s).`,
+      data: resultData,
+    });
+  } catch (error) {
+    const mutated = state.changes.some((change) => change.mutation?.status === "completed");
+    const invalidation = mutated ? invalidateFxScope(projectIndexRuntime, now) : null;
+    if (invalidation) {
+      applyFxIndexMaintenance(state.changes, invalidation.ok === false ? "failed" : "completed", invalidation);
+      state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+    }
+    if (!stages.some((stageEntry) => stageEntry.id === "native-fx-index-update")) {
+      pushStage(
+        stages,
+        "native-fx-index-update",
+        "index_update",
+        invalidation?.ok === false ? "failed" : invalidation ? "completed" : "skipped",
+        invalidation
+          ? "Marked the Project Index FX scope stale after a blocked or partial chain mutation."
+          : "No mutation required Project Index maintenance.",
+      );
+    }
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      status: mutated ? "partial_failure" : "blocked",
+      code: error.code ?? "FX_CHAIN_EXECUTION_FAILED",
+      message: error.message ?? "The bounded FX chain program failed.",
+      blockers: error.blockers,
+      data: {
+        owner_kind: owner?.ownerKind ?? null,
+        owner_ref: owner?.ownerRef ?? null,
+        final_chain: finalChain ? compactFxChain(finalChain) : null,
+        outcome: fxOutcome(state),
+        index_update: compactData(invalidation),
+      },
+    });
+  }
+}
+
+async function resolveFxChainOwner({ request, input, executeAtomic, projectIndexRuntime, catalog, now, state, stages }) {
+  const refs = normalizeNamedRefs(request.refs);
+  const ownerKind = input.owner_kind ?? (refs.take_ref ? "take" : "track");
+  if (ownerKind === "track") {
+    const selected = await selectTrack({ request, input, executeAtomic, projectIndexRuntime, catalog, now, state, stages });
+    if (!selected.ok) return selected;
+    return {
+      ok: true,
+      ownerKind,
+      ownerRef: selected.trackRef,
+      refs: { track_ref: selected.trackObject },
+      listTemplateId: LIST_TRACK_FX_CHAIN_ID,
+      addTemplateId: ADD_TRACK_FX_ID,
+    };
+  }
+  pushStage(stages, "native-fx-select-track", "runtime_execute", "completed", "Used the supplied exact Take ref.");
+  if (typeof refs.take_ref !== "string" || !refs.take_ref.startsWith("take:guid:")) {
+    return blocked("FX_CHAIN_TAKE_REF_REQUIRED", "owner_kind=take requires one exact canonical take:guid ref.");
+  }
+  const probe = await executeFxAtomic({
+    id: LIST_TAKE_FX_CHAIN_ID,
+    input: { include_preset: true },
+    refs: { take_ref: refs.take_ref },
+    request,
+    executeAtomic,
+    state,
+  });
+  const chain = requireCompleteFxChain(probe, "owner preflight");
+  if (chain.owner_ref !== refs.take_ref) {
+    return blocked("FX_CHAIN_TAKE_IDENTITY_MISMATCH", `The live Take chain resolved as ${chain.owner_ref ?? "unknown"} instead of ${refs.take_ref}.`);
+  }
+  state.canonicalRefs.push(refs.take_ref);
+  pushStage(stages, "native-fx-live-resolve", "live_ref_resolve", "completed", "Live-resolved the exact Take through its FX chain readback.", evidenceRefs(probe));
+  return {
+    ok: true,
+    ownerKind,
+    ownerRef: refs.take_ref,
+    refs: { take_ref: refs.take_ref },
+    listTemplateId: LIST_TAKE_FX_CHAIN_ID,
+    addTemplateId: ADD_TAKE_FX_ID,
+  };
+}
+
+async function resolveInstalledFx({ node, request, executeAtomic, state }) {
+  const query = node.plugin_name ?? node.plugin_query;
+  const execution = await executeFxAtomic({
+    id: SEARCH_INSTALLED_FX_ID,
+    input: { query, limit: 8, offset: 0 },
+    refs: {},
+    request,
+    executeAtomic,
+    state,
+  });
+  const readback = executionReadback(execution);
+  const rows = Array.isArray(readback.rows) ? readback.rows : [];
+  if (readback.truncated === true) {
+    throw coded(
+      "FX_INVENTORY_COVERAGE_INCOMPLETE",
+      `Installed FX search for ${query} was truncated; no exact plugin selection was authorized.`,
+    );
+  }
+  let matches;
+  if (node.plugin_name !== undefined) {
+    matches = rows.filter((row) => fxNamesEqual(row.name, node.plugin_name) || fxNamesEqual(row.ident, node.plugin_name));
+  } else {
+    matches = Number(readback.matched_count) === 1 && rows.length === 1 ? rows : [];
+  }
+  if (matches.length !== 1) {
+    const suggestions = rows.slice(0, 3).map((row) => row.name).filter(Boolean).join(", ");
+    throw coded(
+      rows.length === 0 ? "FX_INSTALLED_MATCH_NOT_FOUND" : "FX_INSTALLED_MATCH_AMBIGUOUS",
+      rows.length === 0
+        ? `No installed FX matched ${query}.`
+        : `Installed FX search for ${query} is not exact; use one exact plugin_name${suggestions ? ` such as ${suggestions}` : ""}.`,
+    );
+  }
+  return { name: matches[0].name, ident: matches[0].ident ?? matches[0].name };
+}
+
+async function resolveExactFxObject({ fxRef, owner, preferredSlot, request, executeAtomic, state }) {
+  let slotIndex = preferredSlot;
+  if (!Number.isInteger(slotIndex)) {
+    const parsed = Number(String(fxRef).slice(String(fxRef).lastIndexOf(":") + 1));
+    slotIndex = Number.isInteger(parsed) ? parsed : null;
+  }
+  if (!Number.isInteger(slotIndex)) {
+    throw coded("FX_CHAIN_SLOT_IDENTITY_MISSING", `No exact live slot is available for ${fxRef}.`);
+  }
+  const execution = await executeFxAtomic({
+    id: "template.fx.resolve_fx_ref",
+    input: { owner_kind: owner.ownerKind, slot_index: slotIndex },
+    refs: owner.refs,
+    request,
+    executeAtomic,
+    state,
+  });
+  const resolvedRef = firstRef(execution, "fx:");
+  const resolvedObject = objectRefs(execution).find((entry) => entry.kind === "fx" && entry.ref === resolvedRef) ?? null;
+  if (resolvedRef !== fxRef || !resolvedObject) {
+    throw coded("FX_CHAIN_IDENTITY_MISMATCH", `The live FX resolver returned ${resolvedRef ?? "no ref"} instead of ${fxRef}.`);
+  }
+  return resolvedObject;
+}
+
+async function executeFxAtomic({ id, input, refs, request, executeAtomic, state, write = false }) {
+  const execution = await executeAtomic({
+    id,
+    input,
+    refs,
+    context: request.context,
+    budget: request.budget,
+    observeProjectIndex: false,
+  });
+  collectAtomic(state, execution);
+  if (execution?.ok !== true) throw childError(id, execution);
+  if (write) requireWriteVerification(id, execution);
+  return execution;
+}
+
+function requireCompleteFxChain(execution, label) {
+  const readback = executionReadback(execution);
+  const rows = Array.isArray(readback.fx) ? readback.fx : [];
+  if (readback.truncated === true || Number(readback.fx_count) !== rows.length) {
+    throw coded(
+      "FX_CHAIN_COVERAGE_INCOMPLETE",
+      `The ${label} FX chain readback is incomplete (${rows.length}/${readback.fx_count ?? "unknown"}); no definitive chain result is allowed.`,
+    );
+  }
+  return { ...readback, fx: rows };
+}
+
+function matchFinalFxRow(rows, operation, orderedCursor) {
+  if (Number.isInteger(operation.node.target_index)) {
+    const row = rows.find((entry) => entry.slot_index === operation.node.target_index && fxNamesEqual(entry.name, operation.installedName));
+    return { row: row ?? null };
+  }
+  if (Number.isInteger(operation.preferredSlot)) {
+    const preferred = rows.find((entry) => entry.slot_index === operation.preferredSlot && fxNamesEqual(entry.name, operation.installedName));
+    if (preferred) return { row: preferred };
+  }
+  return {
+    row: rows.find((entry) => entry.slot_index >= orderedCursor && fxNamesEqual(entry.name, operation.installedName)) ?? null,
+  };
+}
+
+function compactFxChain(chain) {
+  return {
+    owner_kind: chain.owner_kind ?? null,
+    owner_ref: chain.owner_ref ?? null,
+    fx_count: chain.fx_count ?? chain.fx.length,
+    truncated: chain.truncated === true,
+    fx: chain.fx.map((row) => ({
+      fx_ref: row.fx_ref ?? null,
+      slot_index: row.slot_index ?? null,
+      name: row.name ?? null,
+      enabled: row.enabled ?? null,
+      parameter_count: row.parameter_count ?? null,
+    })),
+  };
+}
+
+function executionReadback(execution) {
+  return object(execution?.result?.readback)
+    ? execution.result.readback
+    : object(execution?.result?.summary)
+      ? execution.result.summary
+      : {};
+}
+
+function normalizeFxName(value) {
+  return String(value ?? "").trim().toLocaleLowerCase();
+}
+
+function fxNamesEqual(left, right) {
+  return normalizeFxName(left) === normalizeFxName(right);
+}
+
+function integerOrNull(value) {
+  return Number.isInteger(value) ? value : null;
+}
+
 async function selectTrack({ request, input, executeAtomic, projectIndexRuntime, catalog, now, state, stages }) {
   const refs = normalizeNamedRefs(request.refs);
   let candidate = refs.track_ref;
@@ -495,6 +1150,47 @@ function validateInput(input, request) {
   const unknown = Object.keys(input).filter((field) => !INPUT_FIELDS.has(field));
   if (unknown.length > 0) return codedBlocker("NATIVE_FX_INPUT_FIELD_UNSUPPORTED", `Unsupported native FX input field: ${unknown[0]}.`);
   if (request.idempotency_key !== undefined) return codedBlocker("NATIVE_FX_IDEMPOTENCY_UNSUPPORTED", "Adding a new FX instance is non-idempotent; omit idempotency_key.");
+  if (input.chain !== undefined) {
+    if (!Array.isArray(input.chain) || input.chain.length < 1 || input.chain.length > CHAIN_MAX_NODES) {
+      return codedBlocker("FX_CHAIN_NODES_INVALID", `chain must contain 1 through ${CHAIN_MAX_NODES} FX nodes.`);
+    }
+    if (input.owner_kind !== undefined && !["track", "take"].includes(input.owner_kind)) {
+      return codedBlocker("FX_CHAIN_OWNER_KIND_INVALID", "owner_kind must be track or take.");
+    }
+    for (let index = 0; index < input.chain.length; index += 1) {
+      const node = input.chain[index];
+      if (!object(node)) return codedBlocker("FX_CHAIN_NODE_INVALID", `chain[${index}] must be an object.`);
+      const nodeUnknown = Object.keys(node).filter((field) => !CHAIN_NODE_FIELDS.has(field));
+      if (nodeUnknown.length > 0) return codedBlocker("FX_CHAIN_NODE_FIELD_UNSUPPORTED", `Unsupported chain[${index}] field: ${nodeUnknown[0]}.`);
+      const hasName = typeof node.plugin_name === "string" && node.plugin_name.trim().length > 0;
+      const hasQuery = typeof node.plugin_query === "string" && node.plugin_query.trim().length > 0;
+      if (hasName === hasQuery) return codedBlocker("FX_CHAIN_PLUGIN_SELECTOR_INVALID", `chain[${index}] requires exactly one non-empty plugin_name or plugin_query.`);
+      if (node.duplicate_policy !== undefined && !DUPLICATE_POLICIES.has(node.duplicate_policy)) {
+        return codedBlocker("FX_CHAIN_DUPLICATE_POLICY_INVALID", `chain[${index}].duplicate_policy must be allow, reuse_exact, skip_exact, or fail_if_present.`);
+      }
+      for (const field of ["insert_at_index", "target_index", "preset_index"]) {
+        if (node[field] !== undefined && (!Number.isInteger(node[field]) || node[field] < 0 || node[field] > 127)) {
+          return codedBlocker("FX_CHAIN_INDEX_INVALID", `chain[${index}].${field} must be an integer from 0 through 127.`);
+        }
+      }
+      if (node.preset_name !== undefined && (typeof node.preset_name !== "string" || node.preset_name.trim().length === 0)) {
+        return codedBlocker("FX_CHAIN_PRESET_NAME_INVALID", `chain[${index}].preset_name must be a non-empty string.`);
+      }
+      if (node.preset_name !== undefined && node.preset_index !== undefined) {
+        return codedBlocker("FX_CHAIN_PRESET_SELECTOR_CONFLICT", `chain[${index}] must not supply both preset_name and preset_index.`);
+      }
+      if (node.enabled !== undefined && typeof node.enabled !== "boolean") {
+        return codedBlocker("FX_CHAIN_ENABLED_INVALID", `chain[${index}].enabled must be boolean.`);
+      }
+      if (node.controls !== undefined && !object(node.controls)) {
+        return codedBlocker("FX_CHAIN_CONTROLS_INVALID", `chain[${index}].controls must be an object.`);
+      }
+    }
+    const legacyFields = ["plugin", "controls", "starter_action", "action_parameters", "control_overrides", "insert_at_index"];
+    const conflict = legacyFields.find((field) => input[field] !== undefined);
+    if (conflict) return codedBlocker("FX_CHAIN_LEGACY_INPUT_CONFLICT", `Top-level ${conflict} cannot be combined with chain[].`);
+    return null;
+  }
   if (input.plugin !== undefined && input.plugin !== "reacomp") return codedBlocker("NATIVE_FX_PLUGIN_NOT_ACCEPTED", "Alpha3.2.5-D currently adds only plugin=reacomp.");
   if (input.starter_action !== undefined && input.starter_action !== DEFAULT_STARTER_ACTION) return codedBlocker("NATIVE_FX_STARTER_NOT_ACCEPTED", `Alpha3.2.5-D currently accepts only starter_action=${DEFAULT_STARTER_ACTION}.`);
   if (input.insert_at_index !== undefined && (!Number.isInteger(input.insert_at_index) || input.insert_at_index < 0 || input.insert_at_index > 127)) {
@@ -673,19 +1369,28 @@ function queryParts(selector) {
 
 function normalizeNamedRefs(value) {
   if (Array.isArray(value)) {
-    const match = value.find((entry) => (typeof entry === "string" ? entry : entry?.ref)?.startsWith("track:"));
-    const ref = typeof match === "string" ? match : match?.ref;
-    return typeof ref === "string" ? { track_ref: ref } : {};
+    const result = {};
+    for (const entry of value) {
+      const ref = typeof entry === "string" ? entry : entry?.ref;
+      if (typeof ref !== "string") continue;
+      if (ref.startsWith("track:") && !result.track_ref) result.track_ref = ref;
+      if (ref.startsWith("take:") && !result.take_ref) result.take_ref = ref;
+    }
+    return result;
   }
   if (!object(value)) return {};
-  const raw = value.track_ref;
-  const ref = typeof raw === "string" ? raw : raw?.ref;
-  return typeof ref === "string" ? { track_ref: ref } : {};
+  const result = {};
+  for (const [field, prefix] of [["track_ref", "track:"], ["take_ref", "take:"]]) {
+    const raw = value[field];
+    const ref = typeof raw === "string" ? raw : raw?.ref;
+    if (typeof ref === "string" && ref.startsWith(prefix)) result[field] = ref;
+  }
+  return result;
 }
 
 function invalidateFxScope(runtime, now) {
   if (!runtime || typeof runtime.invalidateScopes !== "function") return null;
-  return runtime.invalidateScopes({ scopes: ["fx"], reason: "macro.fx.apply_native_chain", observed_at: safeNowIso(now) });
+  return runtime.invalidateScopes({ scopes: ["fx"], reason: "macro.fx.apply_chain", observed_at: safeNowIso(now) });
 }
 
 function applyFxIndexMaintenance(changes, status, invalidation) {

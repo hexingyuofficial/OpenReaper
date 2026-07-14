@@ -11,6 +11,7 @@ import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/ma
 const NOW = "2026-07-12T10:00:00.000Z";
 const TRACK_REF = "track:guid:{TRACK-A}";
 const FX_REF = `fx:${TRACK_REF}:0`;
+const TAKE_REF = "take:guid:{TAKE-A}";
 
 describe("Alpha3.2.5-D native FX Macro", () => {
   it("registers and discovers one executable ReaComp task program", () => {
@@ -18,6 +19,9 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     const entry = ALPHA3_2_5_D_NATIVE_FX_REGISTRY.get(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID);
     assert.equal(entry.implementation_status, "executable");
     assert.equal(entry.dependencies.template_ids.includes("template.fx.add_track_fx"), true);
+    assert.equal(entry.dependencies.template_ids.includes("template.fx.search_installed_fx"), true);
+    assert.equal(entry.dependencies.template_ids.includes("template.fx.add_take_fx"), true);
+    assert.equal(entry.dependencies.template_ids.includes("template.fx.reorder_fx"), true);
     assert.equal(entry.dependencies.runtime_capabilities.includes("stock_plugin.semantic_parameter_program.v1"), true);
 
     const [item] = createAlpha3_2_5DNativeFxMacroDiscoveryItems({ liveRunnableNow: true });
@@ -25,6 +29,163 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.equal(item.execution_shape, "registered_macro_program");
     assert.equal(item.live_runnable_now, true);
     assert.deepEqual(item.inputSchema.properties.plugin.enum, ["reacomp"]);
+    assert.equal(item.inputSchema.properties.chain.maxItems, 8);
+  });
+
+  it("defaults the canonical bounded chain to dry-run after exact installed-inventory search", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [
+            { plugin_query: "ReaEQ", duplicate_policy: "reuse_exact" },
+            { plugin_name: "VST: ReaComp (Cockos)", enabled: false },
+          ],
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "dry_run_completed");
+    assert.equal(result.request.dry_run, true);
+    assert.deepEqual(result.result.data.planned_chain.map((row) => row.plugin_name), [
+      "VST: ReaEQ (Cockos)",
+      "VST: ReaComp (Cockos)",
+    ]);
+    assert.equal(bridge.writes.length, 0);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.tracks.resolve_track_ref",
+      "template.fx.list_track_fx_chain",
+      "template.fx.search_installed_fx",
+      "template.fx.search_installed_fx",
+    ]);
+    assert.equal(result.result.changes.every((change) => change.status === "planned"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "not_run"), true);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("applies a bounded ordered Track chain with duplicate, preset, bypass, reorder, and final complete readback", async () => {
+    const bridge = chainAtomic({
+      initial: [{ name: "VST: ReaEQ (Cockos)", enabled: true }],
+    });
+    const invalidations = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          owner_kind: "track",
+          chain: [
+            { plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "reuse_exact", preset_index: 0 },
+            { plugin_query: "ReaComp", duplicate_policy: "allow", enabled: false, target_index: 0 },
+          ],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: indexRuntime(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "completed");
+    assert.deepEqual(bridge.writes.map((call) => call.id), [
+      "template.fx.set_fx_preset_by_index",
+      "template.fx.add_track_fx",
+      "template.fx.set_fx_bypass",
+      "template.fx.reorder_fx",
+    ]);
+    assert.deepEqual(result.result.data.final_chain.fx.map((row) => row.name), [
+      "VST: ReaComp (Cockos)",
+      "VST: ReaEQ (Cockos)",
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["applied", "applied"]);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "completed"), true);
+    assert.deepEqual(invalidations, [["fx"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("targets an exact Take without touching selection and verifies its final chain", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          owner_kind: "take",
+          chain: [{ plugin_name: "VST: ReaEQ (Cockos)" }],
+          dry_run: false,
+        },
+        refs: { take_ref: TAKE_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(bridge.writes.map((call) => call.id), ["template.fx.add_take_fx"]);
+    assert.equal(bridge.calls.some((call) => call.id.includes("selected")), false);
+    assert.equal(result.result.data.owner_ref, TAKE_REF);
+    assert.equal(result.result.data.final_chain.fx[0].fx_ref, `fx:${TAKE_REF}:0`);
+  });
+
+  it("fails closed on incomplete inventory or chain coverage and never treats dispatch as applied", async () => {
+    for (const options of [
+      { inventoryTruncated: true },
+      { finalChainTruncated: true },
+      { finalNameMismatch: true },
+    ]) {
+      const bridge = chainAtomic(options);
+      const result = await executeAlpha3_2_5DNativeFxMacro({
+        request: {
+          id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+          input: { chain: [{ plugin_name: "VST: ReaEQ (Cockos)" }], dry_run: false },
+          refs: { track_ref: TRACK_REF },
+        },
+        executeAtomic: bridge.executeAtomic,
+        projectIndexRuntime: indexRuntime([]),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.result.changes.every((change) => change.status !== "applied"), true);
+      if (bridge.writes.length > 0) {
+        assert.equal(result.execution.status, "partial_failure");
+        assert.equal(result.result.changes.some((change) => change.mutation.status === "completed"), true);
+      } else {
+        assert.equal(result.execution.status, "blocked");
+      }
+    }
+  });
+
+  it("rejects malformed bounded-chain requests before any live call", async () => {
+    const invalidInputs = [
+      { chain: [] },
+      { owner_kind: "master", chain: [{ plugin_query: "ReaEQ" }] },
+      { chain: [{ plugin_name: "ReaEQ", plugin_query: "ReaEQ" }] },
+      { chain: [{ plugin_query: "ReaEQ", duplicate_policy: "maybe" }] },
+      { chain: [{ plugin_query: "ReaEQ", preset_name: "A", preset_index: 0 }] },
+      { chain: [{ plugin_query: "ReaEQ", enabled: "yes" }] },
+      { chain: Array.from({ length: 9 }, () => ({ plugin_query: "ReaEQ" })) },
+    ];
+    for (const input of invalidInputs) {
+      const calls = [];
+      const result = await executeAlpha3_2_5DNativeFxMacro({
+        request: { id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID, input, refs: { track_ref: TRACK_REF } },
+        executeAtomic: async (request) => {
+          calls.push(request);
+          throw new Error("must not dispatch");
+        },
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.execution.status, "blocked");
+      assert.equal(calls.length, 0);
+    }
   });
 
   it("dry-runs the default gentle ReaComp chain after live track resolution", async () => {
@@ -245,6 +406,127 @@ function fxAtomic(calls, values, options = {}) {
   };
 }
 
+function chainAtomic(options = {}) {
+  const calls = [];
+  const writes = [];
+  const installed = [
+    { index: 10, name: "VST: ReaEQ (Cockos)", ident: "VST: ReaEQ (Cockos)" },
+    { index: 11, name: "VST: ReaComp (Cockos)", ident: "VST: ReaComp (Cockos)" },
+  ];
+  const chains = {
+    track: (options.initial ?? []).map((row, index) => fxRow("track", index, row)),
+    take: [],
+  };
+  let chainReadCount = 0;
+
+  const executeAtomic = async ({ id, input = {}, refs = {} }) => {
+    const call = { id, input: structuredClone(input), refs: structuredClone(refs) };
+    calls.push(call);
+    if (id === "template.tracks.resolve_track_ref") {
+      return execution(id, { track_ref: TRACK_REF }, [objectRef("track", TRACK_REF)]);
+    }
+    if (id === "template.fx.search_installed_fx") {
+      const needle = input.query.toLocaleLowerCase();
+      const rows = installed.filter((row) => row.name.toLocaleLowerCase().includes(needle));
+      return execution(id, {
+        query: input.query,
+        rows,
+        row_count: rows.length,
+        matched_count: rows.length,
+        truncated: options.inventoryTruncated === true,
+      });
+    }
+    if (id === "template.fx.list_track_fx_chain" || id === "template.fx.list_take_fx_chain") {
+      const kind = id.includes("track") ? "track" : "take";
+      const ownerRef = kind === "track" ? TRACK_REF : TAKE_REF;
+      chainReadCount += 1;
+      const finalRead = chainReadCount > (kind === "take" ? 1 : 1);
+      const source = chains[kind].map((row) => ({ ...row }));
+      if (options.finalNameMismatch && finalRead && source.length > 0) source[source.length - 1].name = "VST: Wrong FX";
+      return execution(id, {
+        owner_kind: kind,
+        owner_ref: ownerRef,
+        fx_count: source.length + (options.finalChainTruncated && finalRead ? 1 : 0),
+        fx: source,
+        fx_refs: source.map((row) => row.fx_ref),
+        truncated: options.finalChainTruncated === true && finalRead,
+      }, source.map((row) => objectRef("fx", row.fx_ref)));
+    }
+    if (id === "template.fx.resolve_fx_ref") {
+      const kind = input.owner_kind === "take" ? "take" : "track";
+      const row = chains[kind][input.slot_index];
+      return row
+        ? execution(id, { ...row }, [objectRef("fx", row.fx_ref)])
+        : failure(id, "FX_REF_NOT_FOUND", "FX not found");
+    }
+    const ownerKind = id === "template.fx.add_take_fx" ? "take" : "track";
+    if (id === "template.fx.add_track_fx" || id === "template.fx.add_take_fx") {
+      writes.push(call);
+      const row = fxRow(ownerKind, chains[ownerKind].length, { name: input.plugin_name, enabled: true });
+      chains[ownerKind].push(row);
+      return execution(id, { ...row, readback_status: "passed" }, [objectRef("fx", row.fx_ref)], { status: "passed" });
+    }
+    const fxRef = refValue(refs.fx_ref);
+    const located = locateFx(chains, fxRef);
+    if (!located) return failure(id, "FX_REF_NOT_FOUND", "FX not found");
+    if (id === "template.fx.set_fx_bypass") {
+      writes.push(call);
+      located.row.enabled = input.enabled;
+      return execution(id, { ...located.row, readback_status: "passed" }, [objectRef("fx", located.row.fx_ref)], { status: "passed" });
+    }
+    if (id === "template.fx.set_fx_preset_by_index") {
+      writes.push(call);
+      located.row.preset_index = input.preset_index;
+      return execution(id, { ...located.row, readback_status: "passed" }, [objectRef("fx", located.row.fx_ref)], { status: "passed" });
+    }
+    if (id === "template.fx.set_fx_preset_by_name") {
+      writes.push(call);
+      located.row.preset_name = input.preset_name;
+      return execution(id, { ...located.row, readback_status: "passed" }, [objectRef("fx", located.row.fx_ref)], { status: "passed" });
+    }
+    if (id === "template.fx.reorder_fx") {
+      writes.push(call);
+      const [row] = chains[located.kind].splice(located.index, 1);
+      chains[located.kind].splice(input.target_index, 0, row);
+      reindexChain(chains[located.kind], located.kind);
+      const moved = chains[located.kind][input.target_index];
+      return execution(id, { ...moved, readback_status: "passed" }, [objectRef("fx", moved.fx_ref)], { status: "passed" });
+    }
+    throw new Error(`Unexpected chain Template ${id}`);
+  };
+
+  return { calls, writes, chains, executeAtomic };
+}
+
+function fxRow(kind, index, values = {}) {
+  const ownerRef = kind === "track" ? TRACK_REF : TAKE_REF;
+  return {
+    owner_kind: kind,
+    owner_ref: ownerRef,
+    fx_ref: `fx:${ownerRef}:${index}`,
+    slot_index: index,
+    name: values.name,
+    enabled: values.enabled ?? true,
+    parameter_count: values.parameter_count ?? 4,
+    ...(values.preset_index !== undefined ? { preset_index: values.preset_index } : {}),
+    ...(values.preset_name !== undefined ? { preset_name: values.preset_name } : {}),
+  };
+}
+
+function locateFx(chains, ref) {
+  for (const kind of ["track", "take"]) {
+    const index = chains[kind].findIndex((row) => row.fx_ref === ref);
+    if (index >= 0) return { kind, index, row: chains[kind][index] };
+  }
+  return null;
+}
+
+function reindexChain(chain, kind) {
+  for (let index = 0; index < chain.length; index += 1) {
+    Object.assign(chain[index], fxRow(kind, index, chain[index]));
+  }
+}
+
 function duplicateReaCompWetRows() {
   return [
     { param_index: 0, name: "Threshold", normalized_value: 0.5 },
@@ -267,6 +549,16 @@ function execution(id, readback, refs = [], verification = undefined) {
     ...(verification ? { verification } : {}),
     result: { readback, refs },
     error: null,
+  };
+}
+
+function failure(id, code, message) {
+  return {
+    contract: "template.execution.v1",
+    ok: false,
+    request: { id: `evidence:${id}` },
+    result: { readback: null, refs: [] },
+    error: { code, message },
   };
 }
 

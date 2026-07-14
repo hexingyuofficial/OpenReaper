@@ -114,6 +114,45 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(oldFx.error.code, "CALL_TEMPLATE_ID_REPLACED");
     assert.equal(oldFx.error.details.replacement, "macro.fx.apply_chain");
   });
+
+  it("executes the canonical installed-inventory FX chain mode through call_template", async () => {
+    const bridge = new DRuntimeBridge();
+    const invalidations = [];
+    const runtime = createRuntime({ bridge, invalidations });
+    const result = await runtime.call_template({
+      id: "macro.fx.apply_chain",
+      input: {
+        owner_kind: "track",
+        chain: [{
+          plugin_name: "VST: ReaEQ (Cockos)",
+          duplicate_policy: "fail_if_present",
+          enabled: false,
+        }],
+        dry_run: false,
+      },
+      refs: { track_ref: TRACK_REF },
+      context: context(1),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.macro.id, "macro.fx.apply_chain");
+    assert.equal(result.macro.program_id, "openreaper.macro.fx.apply_chain");
+    assert.equal(result.result.data.final_chain.fx_count, 1);
+    assert.deepEqual(result.result.data.final_chain.fx.map((row) => [row.name, row.enabled]), [
+      ["VST: ReaEQ (Cockos)", false],
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["applied"]);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.deepEqual(invalidations, [["fx"]]);
+    assert.deepEqual(bridge.seen.map((request) => request.pack.capability), [
+      "track.resolve_ref",
+      "fx.list_track_chain",
+      "fx.installed.search",
+      "fx.add_track",
+      "fx.set_bypass",
+      "fx.list_track_chain",
+    ]);
+  });
 });
 
 function createRuntime({ bridge = new DRuntimeBridge(), invalidations = [] } = {}) {
@@ -147,25 +186,71 @@ class DRuntimeBridge extends FakeFoundationBridge {
   constructor() {
     super();
     this.parameterValues = new Map();
+    this.fxChain = [];
   }
 
   dispatch(input) {
     const request = structuredClone(input);
     const capability = request.pack?.capability;
     request.params = { ...(request.params ?? {}) };
-    request.params.emits = emitted(capability, request, this.parameterValues);
+    request.params.emits = emitted(capability, request, this.parameterValues, this.fxChain);
     return super.dispatch(request);
   }
 }
 
-function emitted(capability, request, parameterValues) {
+function emitted(capability, request, parameterValues, fxChain) {
   if (capability === "track.resolve_ref") return output([TRACK_OBJECT], { track_ref: TRACK_REF, name: "D Runtime Track" });
   if (capability === "midi.create_midi_item") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF });
   if (capability === "midi.insert_notes_batch") return output([TAKE_OBJECT], { take_ref: TAKE_REF, inserted_count: NOTES.length, note_count: NOTES.length, take_hash: "hash:d-runtime" });
   if (capability === "midi.resolve_midi_take_ref") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF, event_count: NOTES.length, ppq_start: 0, ppq_end: 960 });
   if (capability === "midi.read_take_event_counts") return output([TAKE_OBJECT], { take_ref: TAKE_REF, note_count: NOTES.length, cc_count: 0, text_sysex_count: 0 });
   if (capability === "midi.list_take_notes") return output([TAKE_OBJECT], { take_ref: TAKE_REF, notes: NOTES, returned_count: NOTES.length, truncated: false });
-  if (capability === "fx.add_track") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });
+  if (capability === "fx.installed.search") {
+    const installed = ["VST: ReaEQ (Cockos)", "VST: ReaComp (Cockos)"];
+    const query = String(request.params.query ?? "").toLocaleLowerCase();
+    const rows = installed
+      .filter((name) => name.toLocaleLowerCase().includes(query))
+      .map((name, index) => ({ index, name, ident: name }));
+    return output([], {
+      query: request.params.query,
+      rows,
+      row_count: rows.length,
+      matched_count: rows.length,
+      scanned_count: installed.length,
+      truncated: false,
+    });
+  }
+  if (capability === "fx.list_track_chain") {
+    return output(fxChain.map((row) => fxObject(row.fx_ref)), {
+      owner_kind: "track",
+      owner_ref: TRACK_REF,
+      fx_count: fxChain.length,
+      fx: structuredClone(fxChain),
+      fx_refs: fxChain.map((row) => row.fx_ref),
+      truncated: false,
+    });
+  }
+  if (capability === "fx.add_track") {
+    const slotIndex = fxChain.length;
+    const fxRef = `fx:${TRACK_REF}:${slotIndex}`;
+    const row = {
+      fx_ref: fxRef,
+      owner_kind: "track",
+      owner_ref: TRACK_REF,
+      slot_index: slotIndex,
+      name: request.params.plugin_name,
+      enabled: true,
+      parameter_count: 2,
+    };
+    fxChain.push(row);
+    return output([fxObject(fxRef)], structuredClone(row));
+  }
+  if (capability === "fx.set_bypass") {
+    const ref = request.refs.find((entry) => entry.kind === "fx")?.ref;
+    const row = fxChain.find((entry) => entry.fx_ref === ref);
+    if (row) row.enabled = request.params.enabled;
+    return output(row ? [fxObject(row.fx_ref)] : [], row ? structuredClone(row) : {});
+  }
   if (capability === "fx.resolve_ref") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });
   if (capability === "fx.read_summary") return output([FX_OBJECT], { fx_ref: FX_REF, owner_kind: "track", slot_index: 0, name: "VST: ReaComp (Cockos)", parameter_count: 2 });
   if (capability === "fx.list_parameters") return output([], {
@@ -186,6 +271,10 @@ function emitted(capability, request, parameterValues) {
 
 function output(refs, readback) {
   return { refs, readback };
+}
+
+function fxObject(ref) {
+  return createObjectRef("fx", { scheme: "track_fx", value: ref.slice("fx:".length) }, { ref });
 }
 
 function context(requestSequence) {

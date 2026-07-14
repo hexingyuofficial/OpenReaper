@@ -16,6 +16,10 @@ const HANDLER_SOURCE = readFileSync(
   new URL("../../reaper/bridge/src/handlers/project/tempo_write.lua", import.meta.url),
   "utf8",
 );
+const READ_HANDLER_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/handlers/project/read_tempo_map.lua", import.meta.url),
+  "utf8",
+);
 
 describe("D6 project tempo/grid live handler expansion", () => {
   it("registers the bounded project tempo/BPM/grid handler batch", () => {
@@ -45,6 +49,17 @@ describe("D6 project tempo/grid live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /GetTempoTimeSigMarker/);
     assert.match(HANDLER_SOURCE, /Master_GetTempo|TimeMap_GetTimeSigAtTime/);
     assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|os\.execute|io\.popen|loadstring)\b/);
+  });
+
+  it("maps native effective time-signature fields before BPM", () => {
+    assert.match(
+      READ_HANDLER_SOURCE,
+      /local ok_effective, timesig_num, timesig_denom, bpm = call_reaper\("TimeMap_GetTimeSigAtTime"/,
+    );
+    assert.doesNotMatch(
+      READ_HANDLER_SOURCE,
+      /local ok_effective, bpm, timesig_num, timesig_denom = call_reaper\("TimeMap_GetTimeSigAtTime"/,
+    );
   });
 
   it("binds grid writes to fixed REAPER primitives without exposing raw action input", () => {

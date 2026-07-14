@@ -85,6 +85,33 @@ try {
   assert(typeof midiTrackRef === "string", "MIDI track ref missing");
   assert(typeof fxTrackRef === "string", "FX track ref missing");
 
+  const controlChanges = [
+    { id: "midi_track_volume", target_kind: "track", refs: { track_ref: midiTrackRef }, fields: { volume: 0.7 } },
+    { id: "fx_track_pan", target_kind: "track", refs: { track_ref: fxTrackRef }, fields: { pan: -0.15 } },
+  ];
+  calls.controls_batch_preview = await callTemplate("macro.controls.set", { changes: controlChanges });
+  assert(calls.controls_batch_preview?.ok === true, "Control changes[] preview failed");
+  assert(calls.controls_batch_preview.execution?.status === "dry_run_completed", "Control changes[] did not default to dry-run");
+  assert(calls.controls_batch_preview.result?.changes?.every((row) => row.status === "planned" && row.mutation?.status === "not_run"), "Control changes[] preview reported mutation");
+  calls.controls_batch = await callTemplate("macro.controls.set", { changes: controlChanges, dry_run: false });
+  assertCanonicalSuccess(calls.controls_batch, "macro.controls.set");
+  assert(calls.controls_batch.result?.changes?.length === 2, "Control changes[] returned the wrong row count");
+  assert(calls.controls_batch.result.changes.every((row) =>
+    row.status === "applied"
+      && row.mutation?.status === "completed"
+      && row.live_readback?.status === "passed"
+      && ["completed", "skipped"].includes(row.index_maintenance?.status)), "Control changes[] row truth failed");
+
+  calls.project_bpm = await callTemplate("macro.controls.set", {
+    target_kind: "project",
+    fields: { bpm: 127 },
+    dry_run: false,
+  });
+  assertCanonicalSuccess(calls.project_bpm, "macro.controls.set");
+  assert(calls.project_bpm.result?.data?.fields?.bpm === 127, "Project BPM result did not retain the requested value");
+  assert(calls.project_bpm.result?.changes?.every((row) =>
+    row.status === "applied" && row.live_readback?.status === "passed"), "Project BPM row-level live readback failed");
+
   calls.midi_apply = await callTemplate("macro.midi.apply", {
     mode: "create_clips",
     start_seconds: 0,
@@ -94,14 +121,53 @@ try {
   }, { track_ref: midiTrackRef });
   assertCanonicalSuccess(calls.midi_apply, "macro.midi.apply");
   assert(calls.midi_apply.result?.data?.note_count === 1, "MIDI note readback did not return one note");
+  const midiTakeRef = calls.midi_apply.result?.data?.take_ref;
+  assert(typeof midiTakeRef === "string" && midiTakeRef.startsWith("take:guid:"), "MIDI clip returned no exact Take ref");
+
+  calls.midi_edit_preview = await callTemplate("macro.midi.apply", {
+    mode: "edit_notes",
+    operations: [{ operation_id: "edit-created-note", take_ref: midiTakeRef, notes: [{ index: 0, start_ppq: 60, end_ppq: 540, velocity: 100 }] }],
+  });
+  assert(calls.midi_edit_preview?.ok === true && calls.midi_edit_preview.execution?.status === "dry_run_completed", "MIDI edit did not default to dry-run");
+  assert(calls.midi_edit_preview.result?.changes?.[0]?.mutation?.status === "not_run", "MIDI edit dry-run reported mutation");
+
+  calls.midi_edit = await callTemplate("macro.midi.apply", {
+    mode: "edit_notes",
+    operations: [{ operation_id: "edit-created-note", take_ref: midiTakeRef, notes: [{ index: 0, start_ppq: 60, end_ppq: 540, velocity: 100 }] }],
+    dry_run: false,
+  });
+  assertCanonicalRows(calls.midi_edit, "macro.midi.apply", 1);
+
+  calls.midi_quantize = await callTemplate("macro.midi.apply", {
+    mode: "quantize",
+    operations: [{ operation_id: "quantize-created-note", take_ref: midiTakeRef, grid_unit: "ppq", grid_ppq: 120, strength: 1, preserve_duration: true }],
+    dry_run: false,
+  });
+  assertCanonicalRows(calls.midi_quantize, "macro.midi.apply", 1);
+
+  calls.midi_write_cc = await callTemplate("macro.midi.apply", {
+    mode: "write_cc",
+    operations: [{ operation_id: "write-mod-wheel", take_ref: midiTakeRef, events: [{ ppq: 120, channel: 0, controller: 1, value: 64 }] }],
+    dry_run: false,
+  });
+  assertCanonicalRows(calls.midi_write_cc, "macro.midi.apply", 1);
 
   calls.fx_apply_chain = await callTemplate("macro.fx.apply_chain", {
-    controls: { threshold_db: -18, ratio: 3 },
+    owner_kind: "track",
+    chain: [
+      { plugin_query: "ReaEQ", duplicate_policy: "fail_if_present", enabled: false },
+      { plugin_query: "ReaComp", duplicate_policy: "fail_if_present", controls: { threshold_db: -18, ratio: 3 } },
+    ],
     dry_run: false,
   }, { track_ref: fxTrackRef });
   assertCanonicalSuccess(calls.fx_apply_chain, "macro.fx.apply_chain");
-  const fxRef = calls.fx_apply_chain.result?.data?.fx_ref;
+  const finalFxRows = calls.fx_apply_chain.result?.data?.final_chain?.fx ?? [];
+  assert(finalFxRows.length >= 2, `FX chain returned only ${finalFxRows.length} final rows`);
+  assert(finalFxRows.some((row) => String(row.name).toLowerCase().includes("reaeq") && row.enabled === false), "ReaEQ bypass readback did not match");
+  const fxRef = finalFxRows.find((row) => String(row.name).toLowerCase().includes("reacomp"))?.fx_ref;
   assert(typeof fxRef === "string" && fxRef.startsWith("fx:"), "FX chain returned no canonical fx_ref");
+  assert(calls.fx_apply_chain.result?.changes?.every((row) =>
+    row.status === "applied" && row.live_readback?.status === "passed"), "FX chain row-level readback failed");
 
   calls.fx_set_controls = await callTemplate("macro.fx.set_controls", {
     plugin: "reacomp",
@@ -153,6 +219,13 @@ const report = {
     three_product_surfaces_share_alpha33_guide: [calls.ping, calls.menu, calls.recipes].every((value) =>
       value?.product_surface?.agent_context_macro_guide?.contract === "alpha3.3.agent_context_macro_guide.v1"),
     midi_apply: outcome(calls.midi_apply),
+    midi_edit_preview: outcome(calls.midi_edit_preview),
+    midi_edit: outcome(calls.midi_edit),
+    midi_quantize: outcome(calls.midi_quantize),
+    midi_write_cc: outcome(calls.midi_write_cc),
+    controls_batch_preview: outcome(calls.controls_batch_preview),
+    controls_batch: outcome(calls.controls_batch),
+    project_bpm: outcome(calls.project_bpm),
     fx_apply_chain: outcome(calls.fx_apply_chain),
     fx_set_controls: outcome(calls.fx_set_controls),
     aliases_replaced: Object.values(calls.aliases ?? {}).every((value) => value?.error?.code === "CALL_TEMPLATE_ID_REPLACED"),
@@ -161,6 +234,11 @@ const report = {
   project_changes: {
     tracks_created: calls.layout?.result?.changes?.filter((row) => row.status === "applied").length ?? 0,
     midi_clip_created: calls.midi_apply?.ok === true,
+    midi_existing_take_rows_applied: [calls.midi_edit, calls.midi_quantize, calls.midi_write_cc]
+      .flatMap((value) => value?.result?.changes ?? [])
+      .filter((row) => row.status === "applied").length,
+    control_rows_applied: calls.controls_batch?.result?.changes?.filter((row) => row.status === "applied").length ?? 0,
+    project_bpm_set: calls.project_bpm?.ok === true,
     fx_chain_applied: calls.fx_apply_chain?.ok === true,
     fx_controls_updated: calls.fx_set_controls?.ok === true,
     saved_to_evidence_copy: calls.save_current?.ok === true,
@@ -237,6 +315,16 @@ function assertCanonicalSuccess(value, id) {
   assert(value.macro?.id === id, `${id} returned macro identity ${value.macro?.id}`);
   assert(value.result?.verification?.status === "passed", `${id} verification did not pass`);
   assert(value.budget?.truncated === false, `${id} result was truncated`);
+}
+
+function assertCanonicalRows(value, id, count) {
+  assertCanonicalSuccess(value, id);
+  const rows = value.result?.changes ?? [];
+  assert(rows.length === count, `${id} returned ${rows.length} change rows instead of ${count}`);
+  assert(rows.every((row) => row.status === "applied"
+    && ["completed", "unknown_or_partial"].includes(row.mutation?.status)
+    && row.live_readback?.status === "passed"
+    && ["completed", "skipped"].includes(row.index_maintenance?.status)), `${id} row truth failed`);
 }
 
 function outcome(value) {

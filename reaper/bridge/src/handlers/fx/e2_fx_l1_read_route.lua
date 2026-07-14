@@ -588,21 +588,52 @@ local function e2_fx_non_negative_integer(value, fallback)
   return number
 end
 
+local E2_FX_INSTALLED_INVENTORY_CACHE = nil
+
 local function e2_fx_enum_installed_name(index)
-  local ok, first, second = call_reaper("EnumInstalledFX", index, "")
+  local ok, present, name, ident = call_reaper("EnumInstalledFX", index)
   if not ok then
-    return nil, "missing"
+    return nil, nil, "missing"
   end
-  if first == false or first == nil then
-    return nil, nil
+  if present == false or present == nil then
+    return nil, nil, nil
   end
-  if type(first) == "string" then
-    return bounded_string(first, 240), nil
+  if type(present) == "string" then
+    local legacy_name = bounded_string(present, 240)
+    local legacy_ident = type(name) == "string" and bounded_string(name, 240) or legacy_name
+    return legacy_name, legacy_ident, nil
   end
-  if type(second) == "string" then
-    return bounded_string(second, 240), nil
+  if type(name) == "string" then
+    local bounded_name = bounded_string(name, 240)
+    local bounded_ident = type(ident) == "string" and bounded_string(ident, 240) or bounded_name
+    return bounded_name, bounded_ident, nil
   end
-  return nil, nil
+  return nil, nil, nil
+end
+
+local function e2_fx_installed_inventory()
+  if E2_FX_INSTALLED_INVENTORY_CACHE then
+    return E2_FX_INSTALLED_INVENTORY_CACHE, nil
+  end
+  local inventory = json_array({})
+  local index = 0
+  while true do
+    local name, ident, blocker = e2_fx_enum_installed_name(index)
+    if blocker then
+      return nil, blocker
+    end
+    if not name then
+      break
+    end
+    inventory[#inventory + 1] = {
+      index = index,
+      name = name,
+      ident = ident,
+    }
+    index = index + 1
+  end
+  E2_FX_INSTALLED_INVENTORY_CACHE = inventory
+  return inventory, nil
 end
 
 local function search_installed_fx(request)
@@ -617,26 +648,22 @@ local function search_installed_fx(request)
   local needle = query:lower()
   local rows = json_array({})
   local matched = 0
-  local scanned = 0
   local truncated = false
-  local max_scan = 2048
-  for index = 0, max_scan - 1 do
-    local name, blocker = e2_fx_enum_installed_name(index)
-    if blocker == "missing" then
-      return e2_fx_read_error("API_UNAVAILABLE", "REAPER EnumInstalledFX API is not available in this bridge runtime.", {
-        api = "EnumInstalledFX",
-      })
-    end
-    if not name then
-      break
-    end
-    scanned = scanned + 1
+  local inventory, blocker = e2_fx_installed_inventory()
+  if blocker then
+    return e2_fx_read_error("API_UNAVAILABLE", "REAPER EnumInstalledFX API is not available in this bridge runtime.", {
+      api = "EnumInstalledFX",
+    })
+  end
+  for inventory_index = 1, #inventory do
+    local candidate = inventory[inventory_index]
+    local name = candidate.name
     if name:lower():find(needle, 1, true) then
       if matched >= offset and #rows < limit then
         rows[#rows + 1] = {
-          index = index,
+          index = candidate.index,
           name = name,
-          ident = name,
+          ident = candidate.ident,
         }
       elseif matched >= offset and #rows >= limit then
         truncated = true
@@ -644,18 +671,17 @@ local function search_installed_fx(request)
       matched = matched + 1
     end
   end
-  if scanned >= max_scan then
-    truncated = true
-  end
   return e2_fx_read_summary(request, {
     query = query,
     rows = rows,
     row_count = #rows,
     matched_count = matched,
-    scanned_count = scanned,
+    scanned_count = #inventory,
     limit = limit,
     offset = offset,
     truncated = truncated,
+    inventory_complete = true,
+    coverage_status = "complete",
   }), nil, json_array({}), json_array({}), e2_fx_read_refs()
 end
 

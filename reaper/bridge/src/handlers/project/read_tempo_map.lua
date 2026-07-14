@@ -53,7 +53,7 @@ local function read_tempo_map(request)
   for index = 1, math.min(#requested_times, effective_limit) do
     local time_seconds = requested_times[index]
     if type(time_seconds) == "number" then
-      local ok_effective, bpm, timesig_num, timesig_denom = call_reaper("TimeMap_GetTimeSigAtTime", project, time_seconds)
+      local ok_effective, timesig_num, timesig_denom, bpm = call_reaper("TimeMap_GetTimeSigAtTime", project, time_seconds)
       effective[#effective + 1] = {
         time_seconds = time_seconds,
         bpm = ok_effective and first_number(bpm) or 0,

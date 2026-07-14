@@ -217,6 +217,12 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /scheme == "take_fx"/);
     assert.match(HANDLER_SOURCE, /local fx_ref = e2_fx_read_fx_object_ref\([\s\S]*?fx_ref = fx_ref\.ref/);
     assert.match(HANDLER_SOURCE, /e2_fx_read_refs\(fx_ref, envelope_ref\)/);
+    assert.match(HANDLER_SOURCE, /local E2_FX_INSTALLED_INVENTORY_CACHE = nil/);
+    assert.match(HANDLER_SOURCE, /local ok, present, name, ident = call_reaper\("EnumInstalledFX", index\)/);
+    assert.match(HANDLER_SOURCE, /while true do[\s\S]*?E2_FX_INSTALLED_INVENTORY_CACHE = inventory/);
+    assert.match(HANDLER_SOURCE, /ident = candidate\.ident/);
+    assert.match(HANDLER_SOURCE, /inventory_complete = true/);
+    assert.doesNotMatch(HANDLER_SOURCE, /max_scan\s*=\s*2048/);
     assert.doesNotMatch(HANDLER_SOURCE, /GetTrack", 0, 0/);
     assert.doesNotMatch(HANDLER_SOURCE, /GetSelectedMediaItem", 0, 0/);
     assert.deepEqual(
