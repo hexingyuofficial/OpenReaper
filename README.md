@@ -1,15 +1,44 @@
 # OpenReaper
 
-OpenReaper is an evidence-bound MCP bridge for REAPER. It lets an MCP-capable
-agent inspect a REAPER project, call reviewed template capabilities, and read
-retained artifacts through a small fixed tool surface.
+OpenReaper is an evidence-bound MCP bridge and task runtime for REAPER. It lets
+an MCP-capable agent inspect a project, execute reviewed task Macros and atomic
+Templates, verify changes from live REAPER readback, and retain bounded
+artifacts through five fixed tools.
 
-V1 is intentionally narrow. It is a manual-bridge release for local macOS
-workflows with reviewed evidence. It does not automatically start REAPER, does
-not expose raw Lua or shell execution, and does not claim arbitrary project,
-media, plugin, hardware, UI, operating system, or REAPER-version support.
+The current Alpha3.3 product is a local macOS alpha with an installable startup
+helper. It does not expose raw Lua, arbitrary REAPER Actions, shell execution,
+hardware/device I/O, or SQLite write authority, and it does not claim arbitrary
+plugin, operating-system, or REAPER-version support.
 
-## Current V1 Status
+## Current Alpha3.3 Status
+
+Default discovery presents fifteen flat, visible, executable Macros and ranks
+one to three recommendations for the current intent. Full manuals expand only
+for exact ids. Renamed legacy ids are hidden compatibility mappings rather than
+duplicate menu entries.
+
+The preferred task surface is:
+
+```text
+macro.project.inspect        macro.project.query
+macro.project.delete_targets macro.project.apply_layout
+macro.project.file           macro.routing.apply
+macro.media.place_assets     macro.items.analyze
+macro.items.apply            macro.midi.apply
+macro.fx.apply_chain         macro.fx.set_controls
+macro.controls.set           macro.automation.apply
+macro.render.targets
+```
+
+The current accepted atomic catalog contains 227 Templates with registered
+bridge handlers across 87 handler modules. Direct Templates remain available
+as typed, reason-recorded fallback for long-tail work. SQLite is a navigation
+and engineering-cognition layer only: every write target is live-resolved and
+every successful change is accepted only from REAPER readback.
+
+## Historical V1 Status
+
+The historical V1 baseline remains intentionally narrow and evidence-bound.
 
 OpenReaper V1 currently supports the declared local macOS manual-bridge path
 for evidenced rows. The supported recipe-level V1 claim is:
@@ -53,10 +82,11 @@ evidence-bound to the declared setup, fixture, REAPER state, and typed blockers.
 
 ## Product Surface
 
-Agents should start with `list_templates` and `list_recipes`, not raw ids. In a
-configured live session, `list_templates({ surface: "executable" })` returns
-only actions that are visible for the current bounded runtime. Each action
-includes beginner-facing status fields such as:
+Agents should start with compact `list_templates` discovery rather than guessed
+raw ids. In a configured live session, the default response leads with the
+fifteen Macro menu; exact-id expansion returns the complete action manual.
+Direct Template discovery remains available when no Macro owns the requested
+long-tail operation. Each action includes beginner-facing status fields such as:
 
 ```text
 beginner_label

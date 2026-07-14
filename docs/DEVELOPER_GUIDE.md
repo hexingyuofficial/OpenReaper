@@ -1,6 +1,6 @@
 # OpenReaper Developer Guide
 
-Status: Alpha3 first-product draft.
+Status: Alpha3.3 portfolio-complete, package/trial closeout-active developer guide.
 
 This guide is for maintainers, worker agents, reviewers, macro/pack authors,
 and future contributors. It explains the Phase 3 architecture boundaries and
@@ -106,36 +106,42 @@ fix the handler/template first in a bounded window.
 Recipes compose known powers. They must not define raw Lua, raw actions, shell
 commands, unreviewed templates, or bypass paths.
 
-### Primary and secondary macro tiers
+### Flat Alpha3.3 Macro portfolio
 
-The default agent context has two tiers:
+The default agent context has one flat menu of fifteen executable Macros:
 
-- **Primary macro spine:** `macro.project.inspect`,
-  `macro.project.query`, `macro.project.delete_targets`,
-  `macro.project.apply_layout`, `macro.routing.apply`, and
-  `macro.media.place_assets`. `macro.render.targets` remains visible as a
-  contract-only/deferred entry, not as a claim of complete rendering.
-- **Secondary/on-demand menu:** audited project-file save/save-as operations
-  and the existing track, item, take, transport, send, MIDI, and stock-plugin
-  controls. Project new/open/create remain held pending their own evidence. Show
-  compact purpose/safety rows by default and expand full manuals only when
-  needed.
+```text
+project.inspect / query / delete_targets / apply_layout / file
+routing.apply
+media.place_assets
+items.analyze / apply
+midi.apply
+fx.apply_chain / set_controls
+controls.set
+automation.apply
+render.targets
+```
 
-A public macro must have an action manual covering inputs, preflights, child
-requests, readback, blockers, and recovery. Where the macro is plan-only, it
-returns bounded child template requests for the agent to execute through the
-existing `call_template` path after authorization; it must not create a hidden
-executor or imply that a plan already ran.
+Discovery ranks one to three recommendations for the current intent and expands
+full action manuals only for exact ids. There is no Primary/Secondary product
+tier. Renamed ids remain hidden compatibility mappings. Direct Templates are a
+typed, reason-recorded long-tail fallback, not a competing default menu.
+
+A public Macro must execute a fixed code-owned program and expose inputs,
+preflights, mutation or read stages, live readback, blockers, recovery, and
+bounded results. Plan-only behavior is not accepted as a completed public
+Macro.
 
 The retained macro portfolio targets roughly 80% of ordinary agent REAPER
 operations. The remaining work belongs in audited templates, recipes, or
 extension packs rather than a growing list of narrow public macros.
 
-Covered-legacy rule: when a primary macro fully replaces a legacy macro and
+Covered-legacy rule: when a canonical Macro fully replaces a legacy Macro and
 replacement tests pass, remove the covered legacy id from public discovery. A
 temporary alias is only a bounded migration aid for an accepted package/test
-gate and is not a recommended agent-facing macro. Keep a legacy id secondary
-only while it still has distinct behavior.
+gate and is not a recommended agent-facing macro. Distinct behavior must use a
+canonical visible Macro or a typed direct-Template fallback; it must not create
+a secondary legacy menu.
 
 ## 4. Discovery / Search
 
@@ -195,7 +201,7 @@ payload_ref
 `payload_ref` points to Artifact Store evidence. Do not copy full payloads into
 SQLite by default.
 
-`macro.project.query` is the single primary Project SQLite Index query and
+`macro.project.query` is the single Project SQLite Index query and
 navigation surface. It returns compact candidate rows with entity fields,
 freshness, coverage, and canonical refs; it is not raw SQL, a write executor,
 or a render/save surface. Refresh ownership stays with OpenReaper. Before a
@@ -210,19 +216,15 @@ This layer organizes safe, fast work:
 - readback;
 - batch readback;
 - safe parallel reads;
-- secondary/on-demand controls;
+- serial authorized mutations;
+- fixed executable control and task Macros;
 - risk gates;
 - recovery and cleanup.
 
-Two current deferrals are product constraints, not escape-hatch invitations:
-
-- `macro.render.targets` remains contract-only/deferred because current-project
-  and time-selection mix rendering, explicit-region/OGG coverage, deterministic
-  naming/collision behavior, and bounded WAV/OGG live output evidence are not
-  all closed.
-- A consolidated `macro.controls.set` remains deferred because one
-  high-confidence cross-target-kind contract for inputs, refs, and verification
-  has not been established; existing control macros stay secondary/on-demand.
+`macro.render.targets` and `macro.controls.set` are executable registered
+programs with bounded evidence. Unsupported render formats, target modes,
+control fields, project new/open/create operations, arbitrary plugins, and
+hardware/device routing still fail closed instead of becoming bypass paths.
 
 Write path:
 
@@ -325,6 +327,6 @@ notes.
 Do not turn the user guide into an architecture manual, and do not hide
 architecture rules in the user guide.
 
-For Alpha3.2, do not publish raw SQL, direct SQLite writes, raw Lua/actions,
+For Alpha3.3, do not publish raw SQL, direct SQLite writes, raw Lua/actions,
 shell or UI bypasses, a hidden executor, or public `call_recipe` as a workaround
-for a missing macro or deferred render/control evidence.
+for a missing Macro or held mode.

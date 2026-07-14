@@ -1,6 +1,6 @@
 # OpenReaper 开发者指南
 
-状态：Alpha3 首个产品版本草案。
+状态：Alpha3.3 能力组合已闭合、package/trial 收口仍在进行的开发者指南。
 
 本指南面向 OpenReaper 维护者、worker agent、reviewer、macro 作者、extension pack 作者和未来贡献者。它说明改动应该放在哪里、哪个层级拥有某类决策，以及如何扩展 OpenReaper，同时避免制造双重真相、隐藏执行路径或没有证据的产品支持声明。
 
@@ -115,32 +115,39 @@ REAPER handler -> template -> macro -> recipe -> agent/user
 
 如果 macro 或 recipe 需要缺失能力，不要用 raw Lua、raw action、shell、UI automation 或私有 executor 隐藏它。应打开有边界的 handler/template 窗口，添加经过审查的能力，运行相关 gate，然后再连接更高层产品面。
 
-### Primary / Secondary Macro 分层
+### Alpha3.3 平级 Macro 组合
 
-默认 agent context 分成两层：
+默认 agent context 只有一个平级的十五 Macro 菜单：
 
-- **Primary macro spine：** `macro.project.inspect`、`macro.project.query`、
-  `macro.project.delete_targets`、`macro.project.apply_layout`、
-  `macro.routing.apply`、`macro.media.place_assets`。
-  `macro.render.targets` 仍是 contract-only/deferred 条目，不代表完整 render 已支持。
-- **Secondary/on-demand menu：** 已审查的 project-file save/save-as，以及现有
-  track、item、take、transport、send、MIDI 和 stock-plugin controls。project
-  new/open/create 在各自证据闭合前仍保持 held。默认只展示紧凑的用途/安全等级行，
-  需要时再展开完整 manual。
+```text
+project.inspect / query / delete_targets / apply_layout / file
+routing.apply
+media.place_assets
+items.analyze / apply
+midi.apply
+fx.apply_chain / set_controls
+controls.set
+automation.apply
+render.targets
+```
 
-每个 public macro 都必须有 action manual，说明 inputs、preflights、child
-requests、readback、blockers 和 recovery。plan-only macro 只能返回有边界的
-child template requests，由 agent 在授权后通过现有 `call_template` 路径执行；
-不得借此创建 hidden executor，也不得把 plan 说成已经执行。
+Discovery 按当前意图推荐一到三个 Macro；只有精确 id 才展开完整 action
+manual。产品不再有 Primary/Secondary 等级。旧名称只保留隐藏兼容映射；Direct
+Template 是带类型和原因记录的长尾 fallback，不与 Macro 默认入口竞争。
+
+每个 public Macro 都必须执行固定、代码拥有的程序，并说明 inputs、preflights、
+mutation/read stages、live readback、blockers、recovery 和有界结果。Plan-only
+行为不能作为已完成的 public Macro。
 
 保留的 macro portfolio 目标是覆盖约 80% 的普通 agent REAPER 操作。其余能力
 应放在经过审查的 templates、recipes 或 extension packs 中，而不是继续增加
 狭窄的 public macro。
 
-Covered-legacy 规则：当 primary macro 完整替代旧 macro 且 replacement tests
+Covered-legacy 规则：当 canonical Macro 完整替代旧 Macro 且 replacement tests
 通过后，从 public discovery 移除被覆盖的旧 id。temporary alias 只能作为已接受
-package/test gate 的有边界迁移手段，不能作为推荐的 agent-facing macro；只有仍有
-独立行为的旧 id 才可暂留 secondary。
+package/test gate 的有边界迁移手段，不能作为推荐的 agent-facing macro。仍有独立
+行为时，必须进入 canonical 可见 Macro 或带类型原因的 direct-Template fallback，
+不能再建立 secondary legacy menu。
 
 ### 4. Discovery / Search
 
@@ -175,7 +182,7 @@ Project SQLite Index：
 - 支持 selected context、changed-since、paging 和轻量 searchable fields；
 - 只有完整匹配 project/session/bridge identity 时，持久化 rows 才可用。
 
-`macro.project.query` 是唯一的 primary Project SQLite Index query/navigation
+`macro.project.query` 是唯一的 Project SQLite Index query/navigation
 surface。它返回带 entity fields、freshness、coverage 和 canonical refs 的紧凑候选
 rows；不是 raw SQL、write executor、render 或 save surface。refresh 由 OpenReaper
 负责；写操作前 agent 必须按需 hydrate，并在 REAPER 中 live re-resolve 候选。
@@ -205,7 +212,7 @@ Orchestration Layer 组织安全、快速的工作：
 - batch readback；
 - safe parallel reads；
 - serial authorized mutations；
-- secondary/on-demand controls；
+- 固定可执行的 controls 和 task Macros；
 - recovery 和 cleanup planning；
 - risk gates 和 typed blockers。
 
@@ -305,7 +312,9 @@ Project SQLite Index 的目标是让用户级 query 和 macro flows 更快、更
 
 已接受的 Alpha3 覆盖包括 resident/project index helpers、optional SQLite persistence、identity guards、freshness/coverage rows、selected context、tracks、items、takes、FX、routing、markers/regions、media、changed-since、hydrate-ref planning、catalog-drift blockers 和有序 next-action guidance。
 
-Broad customer-usable `query_automation` 仍被缺失的 lower-layer read-only automation envelope inventory template 阻塞。不要在 query 代码里隐藏这个缺口。
+Automation inventory 已通过 GUID-first、完整逻辑分页和 revision 检查接入
+`macro.project.query`。任何 incomplete coverage 仍必须 fail closed，不能返回
+definitive not-found。
 
 规则：
 
@@ -336,15 +345,11 @@ Artifacts 是保留证据和大 payload。它们通过 refs 寻址，不是文�
 
 产品应该快，但不能鲁莽。
 
-已接受的 Alpha3 orchestration 当前是 execution scheduling 的 plan-only 能力：它可以组织 safe parallel reads、serial authorized mutations、batch readback、hard stops、recovery 和 concise reporting。它本身不扩大 live support，也不创建新 executor。
-
-当前有两个明确 defer，不是邀请开发 escape hatch：
-
-- `macro.render.targets` 仍是 contract-only/deferred，因为 current-project 和
-  time-selection mix render、explicit-region/OGG 覆盖、确定性命名/冲突处理，以及
-  WAV/OGG 的有边界 live 输出证据尚未全部闭合。
-- 统一的 `macro.controls.set` 仍 defer，因为跨 target kind 的 inputs、refs 和
-  verification 尚未形成一个高置信度契约；现有 controls macro 继续留在 secondary/on-demand。
+Alpha3.3 orchestration 执行固定 Macro 程序，组织 safe parallel reads、serial
+authorized mutations、batch readback、hard stops、recovery 和 concise reporting。
+`macro.render.targets` 与 `macro.controls.set` 已是可执行 registered programs。
+不支持的 render format/target mode、control field、project new/open/create、任意
+plugin 和 hardware/device routing 仍应 fail closed，不能变成 escape hatch。
 
 Risk policy 应支持 scoped authorization，例如：
 
@@ -428,8 +433,8 @@ Support wording 必须绑定匹配证据。Static docs、fake smoke、draft reci
 - 本地 macOS manual-bridge support 仍是 evidence-bound live baseline；
 - true customer-ready one-click/app-wrapper startup 仍需要 bounded live startup evidence；
 - extension-pack enable/disable/update/uninstall/global alias execution 仍是 readiness-gated；
-- generic controls 和 orchestration 在没有 live execution evidence promoted 的地方仍是 plan-only；
-- broad `query_automation` 被缺失的 lower-layer read inventory 阻塞；
+- 十五个公开 Macro 必须保持 registered execution 与 live readback 语义；
+- Automation query 只有在完整 logical coverage 与稳定 revision 下才可声明完整；
 - ReaComp 是当前唯一有 bounded live macro evidence 的 stock-plugin 行；
 - recipe-level live/local portability 仅对 `recipe.project.cleanup_fingerprint_report` 接受；
 - remote-clone/new-machine portability 尚未证明；
@@ -448,4 +453,4 @@ Support wording 必须绑定匹配证据。Static docs、fake smoke、draft reci
 - 是否避免没有证据的 broad support wording？
 - 是否报告未 commit 和剩余风险？
 
-对 docs，还要检查 `docs/USER_GUIDE.md` 是否保持 task-first 和 beginner-readable，而本指南是否承载 architecture 和 extension 规则。Alpha3.2 不得用 raw SQL、直接 SQLite 写入、raw Lua/action、shell/UI bypass、hidden executor 或公开 `call_recipe` 绕过缺失 macro 或 defer 的 render/control 证据。
+对 docs，还要检查 `docs/USER_GUIDE.md` 是否保持 task-first 和 beginner-readable，而本指南是否承载 architecture 和 extension 规则。Alpha3.3 不得用 raw SQL、直接 SQLite 写入、raw Lua/action、shell/UI bypass、hidden executor 或公开 `call_recipe` 绕过缺失 macro 或 defer 的 render/control 证据。

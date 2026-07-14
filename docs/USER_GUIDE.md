@@ -1,226 +1,248 @@
 # OpenReaper User Guide
 
-Status: Alpha3 first-product draft.
+Status: Alpha3.3 executable product guide. Support remains evidence-bound.
 
-This guide is for musicians, producers, and creators who want to use
-OpenReaper by talking to an agent. You do not need to understand templates,
-macros, SQLite, artifacts, bridge internals, or the architecture layers to use
-the product.
+OpenReaper lets you work with a live REAPER project by talking to an agent. You
+do not need to understand Macros, Templates, SQLite, object refs, artifacts, or
+bridge internals. Describe the result you want; the agent should choose a
+supported route, perform the work, and verify the result in REAPER.
 
-The goal is that you can use OpenReaper without reading this manual. Read it
-when you want more precise control over what to ask, what the agent may do
-after authorization, and how to share or reuse work.
+## Basic Flow
 
-Some Phase 3 features described here are still being built. Support claims must
-stay tied to evidence in the repository and control-tower records.
+Most sessions should be simple:
 
-## What OpenReaper Does
+1. Describe the task in normal language.
+2. Let the agent inspect the current project or selection.
+3. Approve a bounded scope when the task crosses a real safety boundary.
+4. Let the agent execute ordinary reversible work without stopping after a
+   plan.
+5. Read the concise result: what changed, what REAPER verified, and what still
+   needs attention.
 
-OpenReaper helps an agent work with a REAPER project through a small reviewed
-tool surface. The agent can inspect the project, run accepted actions, read
-back what changed, and keep evidence for recovery and review.
+Useful prompts:
 
-The intended first-product experience is:
+```text
+Inspect this project and tell me what is selected.
+Arrange these selected items so their starts line up.
+Add the accepted gentle ReaComp chain to the vocal track.
+Render the selected tracks as WAV files.
+Save the current project.
+```
 
-- ask in normal language;
-- let the agent inspect the project;
-- approve a bounded safe scope when needed;
-- let the agent carry out ordinary reversible work;
-- receive concise readback and recovery guidance.
+The agent must not report a plan, preview, or successful dispatch as completed
+work. A successful write requires live REAPER readback.
 
-## How The Agent Chooses Common Operations
+## The Alpha3.3 Macro Highway
 
-You can stay task-first. For ordinary project work, the agent mainly uses a
-small macro spine:
+Alpha3.3 has 15 visible, executable Macros. They are one flat product surface;
+there is no Primary/Secondary tier.
 
-- inspect the current project;
-- query project targets;
-- delete confirmed project targets;
-- apply track and folder layout;
-- apply internal routing;
-- place or import media.
+| Macro | Current role |
+|---|---|
+| `macro.project.inspect` | Read a compact live project overview. |
+| `macro.project.query` | Search indexed project candidates, coverage, and changed state. |
+| `macro.project.delete_targets` | Preview and perform supported, confirmed target deletion with absence readback. |
+| `macro.project.apply_layout` | Apply supported track and folder creation, order, color, and nesting. |
+| `macro.project.file` | Save the current project or use the accepted save-as path. |
+| `macro.routing.apply` | Apply supported internal routing changes and verify the live graph. |
+| `macro.media.place_assets` | Place approved media through the accepted bounded placement modes. |
+| `macro.items.analyze` | Read Item/take facts and supported audio or timing measurements. |
+| `macro.items.apply` | Arrange Items, choose Active Takes, or apply accepted properties, fades, exact trims, Take playback, and snap offsets. |
+| `macro.midi.apply` | Create bounded clips, edit or quantize existing notes, or insert CC events with exact Take readback. |
+| `macro.fx.apply_chain` | Apply a bounded Track/Take chain from REAPER's installed FX inventory and verify the complete final chain. |
+| `macro.fx.set_controls` | Set accepted controls on an existing supported FX and verify every value. |
+| `macro.controls.set` | Set accepted project, track, transport, and send controls, including project BPM. |
+| `macro.automation.apply` | Apply supported Envelope points, lane/Track modes, FX-parameter points, and Automation Item operations. |
+| `macro.render.targets` | Render supported project, selection, region, Item, or Track targets as managed-root WAV/OGG output. |
 
-Render is still contract-only/deferred. Seeing a render contract in discovery
-does not mean that complete current-project WAV/OGG rendering is supported.
-When a task needs project-file work or more detailed controls, the agent can
-expand secondary/on-demand capabilities. Audited save/save-as flows are
-available there; new/open/create remain held until their own evidence closes.
-Existing track, item, take, transport, send, MIDI, and stock-plugin controls are
-also expanded only when needed.
+Each Macro has a bounded schema. "Executable" does not mean that every imagined
+mode is accepted. The exact Macro manual is the authority for supported fields,
+limits, risk, confirmation, readback, and held modes.
+
+## How Discovery Works
+
+By default, the agent receives one compact menu containing all 15 Macros and an
+intent-based recommendation of the best one to three for the current request.
+This keeps ordinary work fast without hiding the full product surface.
+
+The complete action manual is expanded only when the agent requests an exact
+Macro ID. Old Macro IDs do not appear in the menu; supported old IDs remain
+hidden compatibility mappings to a current canonical Macro.
+
+A direct Template is a valid long-tail fallback, not the normal route. The
+agent should use one only when no visible Macro covers the task, then record a
+typed reason such as:
+
+- the Macro does not cover this task;
+- the requested mode is outside the accepted Macro scope;
+- the target cannot be resolved safely through the Macro;
+- the domain is not accepted yet;
+- one bounded atomic Template is the more appropriate response-budget route.
+
+The fallback must still be an accepted, discoverable Template. OpenReaper does
+not expose raw Lua, raw REAPER Actions, arbitrary shell execution, raw SQL, or a
+hidden recipe executor.
 
 ## Starting Or Reconnecting
 
-You should be able to ask:
+You can say:
 
 ```text
-Open OpenReaper.
 Open REAPER with OpenReaper.
 Reconnect to my REAPER session.
 Check whether OpenReaper is healthy.
 ```
 
-For the installable macOS alpha package, the agent should help with startup:
+For the installable macOS alpha package, the agent should:
 
-1. Run `~/.openreaper/current/bin/openreaper-start` for you.
-2. Wait for REAPER to stay alive and read the printed pid/log/action guidance.
-3. Try to run the REAPER Action `OpenReaper: Start MCP bridge`.
-4. If the agent cannot operate the REAPER UI, ask you for one small assist:
-   open REAPER Actions, search `OpenReaper: Start MCP bridge`, and click Run.
+1. Run `~/.openreaper/current/bin/openreaper-start`.
+2. Wait for REAPER to remain alive and read the printed guidance.
+3. Run the REAPER Action `OpenReaper: Start MCP bridge` when possible.
+4. Ask for one small UI assist only if it cannot run that Action itself.
 5. Reconnect the MCP server named `openreaper`.
-6. Run a bounded live probe, such as
-   `call_template(template.transport.read_state)`, before saying the bridge is
-   connected.
+6. Run a bounded live probe before claiming that the bridge is connected.
 
-You should not need to find a bridge file or understand bridge paths. SWS is
-not required for this startup route.
+OpenReaper may automatically close only the known Project Settings / Notes
+"show notes on project load" window. License, recovery, plugin, version, and
+unknown windows remain user-choice blockers. SWS is not required for this
+startup route.
 
-Startup window handling is intentionally narrow. OpenReaper may automatically
-close only the known Project Settings / Notes "show notes on project load"
-window. License/evaluation, recovery, plugin/FX, version, and unknown REAPER
-windows are user-choice blockers. If the live probe does not connect, the
-agent should check whether REAPER has a waiting window or ask you to resolve it,
-then run the bridge Action and reconnect again.
+## Project Index And Live Truth
 
-The product should explain blockers in plain language:
+SQLite is a fast navigation and project-understanding layer. It is not the
+project and never has write authority. REAPER live state is the source of truth.
 
-- REAPER is not open.
-- The bridge is not ready.
-- A REAPER startup window is waiting for user or agent action.
-- The session is stale.
-- The project or selection is not what the agent expected.
+For large projects, OpenReaper can keep complete internal index knowledge while
+returning compact public pages. Public response limits must not silently remove
+later tracks or other targets from internal knowledge. An incomplete index
+cannot prove that a target does not exist; the agent must refresh or report
+incomplete coverage instead of returning a definitive not-found answer.
 
-You should not need to reason about run roots, transport paths,
-owner/generation values, or session ids in normal use.
+Before a write, the agent must resolve the exact live target again. After the
+write, it must read back the affected rows from REAPER. The result should report
+these separately:
 
-## Asking About The Project
+- whether the mutation was dispatched;
+- whether live readback matched the requested change;
+- whether Project Index refresh or invalidation succeeded.
 
-Useful prompts:
+An index-maintenance problem must not rewrite the truth of a verified REAPER
+change, and a successful dispatch alone must not set a change to `applied`.
+
+## Common Work
+
+You can stay task-first:
 
 ```text
-What is in this project?
-Show me the selected items.
-Find tracks that look like vocals.
-Show tracks with compressors or EQ.
-What changed since the last step?
 Give me a compact project map.
+Find the last track named Backing Vox.
+Set the project tempo to 126 BPM.
+Create and arrange these tracks and folders.
+Place these approved audio files on the selected tracks.
+Show the peaks and timing facts for the selected items.
+Sequence the selected items with a short gap.
+Create this bounded MIDI clip, then quantize its existing notes.
+Add ReaEQ and ReaComp to Lead Vox, reuse an exact ReaEQ if present, then verify the chain.
+Insert these automation points and read them back.
+Render these explicit items as OGG files.
 ```
 
-For large projects, OpenReaper should summarize first and hydrate details only
-when needed. It should not dump every FX parameter, automation point, media
-analysis result, or routing graph by default.
-
-Project Index rows are compact candidate search results for the agent. They are
-not a second project database that you need to maintain. Before any write, the
-agent must refresh or live re-resolve the candidate in REAPER, then read back the
-result. You do not need to edit SQLite, refs, or artifacts.
-
-## Asking For Creative Work
-
-Useful prompts:
-
-```text
-Create a recording track for vocals.
-Make a quick vocal cleanup chain.
-Turn the selected item into a reverse riser.
-Align these selected item starts.
-Make a starter beat from slices of the selected audio.
-Make the selected vocal brighter.
-Lower the selected track a little.
-```
-
-The agent should choose the right reviewed action or workflow. You should not
-need to choose between a template, macro, recipe, artifact, or SQLite query.
+OpenReaper should summarize first and expand only the details needed for the
+task. You should not need to construct refs or choose between a Macro, Template,
+artifact, or SQLite query yourself.
 
 ## Authorization And Safety
 
-OpenReaper should not ask you to approve every tiny reversible step.
+OpenReaper should not ask you to approve every small reversible step. A good
+flow is one bounded approval followed by execution and concise checkpoints.
 
-A good flow:
-
-1. The agent explains the scope and likely consequences.
-2. You approve the bounded scope.
-3. The agent performs ordinary reversible work inside that scope.
-4. The agent reads back concise checkpoints.
-5. The agent stops only if the request crosses a real risk boundary.
-
-The agent should still stop for:
+The agent must still stop for:
 
 - destructive deletion;
-- overwrite or export;
-- hardware/input/output routing;
+- overwrite, save-as, or render consequences that need confirmation;
+- hardware, device, input, or output routing;
 - privacy-sensitive scans;
 - paid or licensed downloads;
-- ambiguous irreversible actions.
+- an ambiguous irreversible action;
+- a stale or unresolved write target.
 
-## Readback And Recovery
+Project-internal routing does not authorize hardware/device I/O. Media and
+project-file paths must pass their accepted path and managed-root rules; this
+guide does not promise arbitrary filesystem access. `macro.project.file` does
+not make new/open/create-project operations supported.
+
+## Result And Recovery
 
 After work, the agent should tell you:
 
-- what changed;
-- what was verified;
+- what it attempted;
+- which exact targets changed;
+- what REAPER read back;
+- whether index maintenance succeeded;
 - what was not verified;
-- whether any blocker occurred;
-- how to retry, refresh, undo, or clean up when available.
+- how to retry, refresh, undo, or clean up.
 
-If the agent says it needs to refresh or re-resolve a target, that means the
-project state may have changed and OpenReaper is checking REAPER again before
-acting.
+A dry run must say that mutation was skipped and provide an exact executable
+retry when appropriate. If readback differs from the request, the agent should
+return a blocker or partial result, not a success claim.
 
-## Workflows
+## Workflows And Packs
 
-Workflows are reusable creative or utility flows over reviewed OpenReaper
-actions. Internally, OpenReaper may store them as recipe files, but normal
-product language should stay simple: workflow.
+Workflows are reusable OpenReaper processes assembled from reviewed actions.
+Normal product language should stay "workflow" even when the internal portable
+format is a recipe file. Before sharing, machine-specific paths, request IDs,
+project refs, private notes, secrets, and non-portable assumptions must be
+scrubbed.
 
-Planned first-product flows:
-
-```text
-Save this as a workflow.
-Scrub this workflow before sharing.
-Share this workflow.
-Install this workflow.
-Fork and tweak this workflow.
-```
-
-Before sharing, OpenReaper should remove private or machine-specific details
-such as local paths, request ids, project refs, private notes, and assumptions
-that will not work on another machine.
-
-## Packs
-
-Packs extend OpenReaper with reviewed capability or domain-specific controls.
-For example, a synth/plugin pack may expose musical controls for a plugin such
-as Vital, and a sound-library pack may help search, preview, and import sounds.
-
-A pack should clearly report:
-
-- whether it is official, partner, experimental, or local;
-- what plugins or versions it needs;
-- what actions it adds;
-- what evidence supports it;
-- what is not supported yet.
+Packs may add reviewed plugin controls, media-library help, or domain-specific
+workflows. A pack should state its origin, dependencies, permissions, evidence,
+aliases, and unsupported areas. Pack metadata or portability does not imply
+that arbitrary extension execution, global alias execution, or every plugin is
+supported.
 
 ## Common Blockers
 
-| Blocker | What It Means | What To Do |
+| Blocker | Meaning | Recovery |
 |---|---|---|
-| REAPER not ready | The agent cannot reach the live session. | Ask the agent to run `openreaper-start`; if a REAPER window is waiting, resolve it, run `OpenReaper: Start MCP bridge`, reconnect, and probe. |
-| Stale session | The bridge/session does not match the current run. | Reconnect or restart the session. |
-| Wrong selection | The action needs selected tracks/items/takes. | Select the intended target and retry. |
-| Missing plugin | A requested plugin is not installed or not found. | Install it or choose a supported stock tool. |
-| Needs confirmation | The action crosses a hard risk boundary. | Review the consequence and approve only if intended. |
-| Needs refresh | Cached state may be stale. | Let the agent refresh before acting. |
+| REAPER not ready | The live bridge cannot be reached. | Start or reconnect, resolve any waiting REAPER window, run the bridge Action, and probe again. |
+| Stale session | The bridge identity no longer matches the current run. | Reconnect before writing. |
+| Wrong or ambiguous target | The request does not resolve to one accepted live target set. | Narrow the request, select the intended objects, or let the agent query and refresh. |
+| Needs refresh | Index or cached facts may be stale or incomplete. | Refresh from REAPER before deciding or writing. |
+| Missing plugin | The exact requested plugin is not installed or accepted. | Choose an installed supported plugin; do not silently substitute one. |
+| Mode held | The Macro exists, but that exact mode is not accepted. | Use an accepted mode or an explicitly discovered direct-Template fallback with a typed reason. |
+| Needs confirmation | The operation crosses a hard risk boundary. | Review the concrete consequence and approve only if intended. |
 
-## What Is Supported
+## Current Evidence Boundary
 
-OpenReaper support is evidence-bound.
+The current Alpha3.3 surface contains 15 visible executable Macros and 227
+accepted Templates with registered bridge handlers across 87 handler modules.
+Support remains narrower than the names of some Macro families:
 
-The current repo contains V1 and Alpha2 evidence plus the accepted Alpha3.2
-query, inspect, delete, layout, routing, media, startup, and recovery work.
-Project-file and detailed control capabilities remain secondary/on-demand.
-Render remains contract-only/deferred pending truthful current-project and
-time-selection behavior, deterministic naming/collision handling, and bounded
-WAV/OGG live evidence. Broad stock-plugin live support is not implied.
+- MIDI supports bounded `create_clips`, indexed existing-note edits,
+  quantization, and PPQ CC insertion. It does not support arbitrary note
+  creation in an existing Take, existing-CC edits, text/sysex, or implicit
+  instrument insertion.
+- FX-chain apply can search the installed inventory and manage bounded Track or
+  Take chains with duplicate, preset, bypass, and reorder policies. Initial
+  semantic controls and `macro.fx.set_controls` remain limited to reviewed
+  mappings such as the accepted ReaComp mapping; arbitrary plugin semantics are
+  not promised.
+- Item analysis supports the published `quick`, `audio`, `timing`, and `full`
+  profiles; compare, MIDI, and loop profiles remain held.
+- Item apply supports alignment, sequencing, distribution, anchoring, moving
+  exact Items onto existing Tracks, accepted Item properties, exact Active Take
+  selection, fades, exact trims, Take playback, and snap offsets. Loudness,
+  onset/transient processing, silence trimming, and adjacent crossfade modes
+  remain held. Item-level pan is not a proven field; explicit Active Take pan
+  uses the accepted Take-control route instead.
+- Automation supports the exact modes published by its manual; real-time
+  touch/write/latch behavior, arbitrary curves, and raw Action/chunk mutation
+  are not exposed.
+- Render uses the managed render root and accepted WAV/OGG target modes. It
+  does not promise arbitrary output paths, overwrite, external encoders, or
+  every format.
+- Project save/save-as is accepted; project new/open/create remains held.
+- Hardware/device I/O remains outside the product boundary.
 
-If the guide, README, agent, or pack claims a feature is supported, that
-claim should point to matching evidence.
+When a guide, agent, or pack claims support, the claim should match the exact
+manual and current evidence rather than a planned future mode.
