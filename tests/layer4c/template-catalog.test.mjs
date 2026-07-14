@@ -28,8 +28,10 @@ import {
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
   createTemplateCatalogAlpha3C3Templates,
+  createTemplateCatalogAlpha3_3LifecycleAtomTemplates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -244,7 +246,7 @@ describe("Layer 4C template catalog and smoke gate", () => {
     assert.equal(menu.items.every((item) => !Object.hasOwn(item, "artifacts")), true);
   });
 
-  it("loads the official Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, and Alpha3 C3 catalog without duplicate ids", () => {
+  it("loads the official Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, Alpha3 C3, and Alpha3.3 lifecycle catalog without duplicate ids", () => {
     const templates = [
       ...createTemplateCatalogWave1aTemplates(),
       ...createTemplateCatalogWave2aTemplates(),
@@ -252,6 +254,7 @@ describe("Layer 4C template catalog and smoke gate", () => {
       ...createTemplateCatalogCriticalFillTemplates(),
       ...createTemplateCatalogP1Templates(),
       ...createTemplateCatalogAlpha3C3Templates(),
+      ...createTemplateCatalogAlpha3_3LifecycleAtomTemplates(),
     ];
     const validation = validateTemplateCatalog({ templates });
     const catalog = createTemplateCatalog({ templates });
@@ -265,7 +268,8 @@ describe("Layer 4C template catalog and smoke gate", () => {
         TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS.length +
         TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS.length +
         TEMPLATE_CATALOG_P1_TEMPLATE_IDS.length +
-        TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length,
+        TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length +
+        TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length,
     );
     assert.deepEqual(catalog.ids.slice(0, TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS.length), TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS);
     assert.deepEqual(
@@ -298,12 +302,22 @@ describe("Layer 4C template catalog and smoke gate", () => {
     );
     assert.deepEqual(
       catalog.ids.slice(
-        -TEMPLATE_CATALOG_P1_TEMPLATE_IDS.length - TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length,
-        -TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length,
+        -TEMPLATE_CATALOG_P1_TEMPLATE_IDS.length - TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length - TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length,
+        -TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length - TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length,
       ),
       TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
     );
-    assert.deepEqual(catalog.ids.slice(-TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length), TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS);
+    assert.deepEqual(
+      catalog.ids.slice(
+        -TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS.length - TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length,
+        -TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length,
+      ),
+      TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
+    );
+    assert.deepEqual(
+      catalog.ids.slice(-TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS.length),
+      TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
+    );
     assert.equal(new Set(catalog.ids).size, catalog.ids.length);
 
     const discovery = createTemplateCatalogDiscovery(catalog, createDiscoveryCatalog);

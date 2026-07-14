@@ -32,7 +32,7 @@ describe("Alpha3.2-E project delete_targets planner", () => {
     assert.equal(plan.ok, true);
     assert.equal(plan.mode, "dry_run_preview");
     assert.equal(plan.mutation_requests.length, 0);
-    assert.deepEqual(plan.preview.target_counts_by_kind, { tracks: 1, items: 2, markers: 1, regions: 0 });
+    assert.deepEqual(plan.preview.target_counts_by_kind, { tracks: 1, items: 2, markers: 1, regions: 0, fx: 0 });
     assert.equal(plan.preview.total_count, 4);
     assert.match(plan.required_confirm_scope.token, /^delete:4:/);
     assert.equal(plan.blockers.some((blocker) => blocker.code === "CONFIRM_SCOPE_REQUIRED"), true);
@@ -73,6 +73,46 @@ describe("Alpha3.2-E project delete_targets planner", () => {
     assert.equal(plan.safety.server_executes_children, false);
     assert.equal(plan.safety.public_call_recipe, false);
     assert.equal(plan.safety.raw_action_lua_shell_ui, false);
+  });
+
+  it("collapses Track/Track-FX overlap and emits remaining FX deletes in descending owner-slot order", () => {
+    const preview = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: {
+        tracks: ["track:guid:{TRACK-A}"],
+        fx: [
+          "fx:track:guid:{TRACK-A}:2",
+          "fx:track:guid:{TRACK-B}:1",
+          "fx:track:guid:{TRACK-B}:4",
+        ],
+      },
+      dry_run: true,
+    });
+    assert.equal(preview.preview.requested_total_count, 4);
+    assert.equal(preview.preview.total_count, 3);
+    assert.deepEqual(preview.preview.collapsed_targets, [{
+      ref: "fx:track:guid:{TRACK-A}:2",
+      parent_ref: "track:guid:{TRACK-A}",
+      reason: "owning_track_delete_cascades_fx",
+    }]);
+
+    const plan = planAlpha3_2EProjectDeleteTargetsMacro({
+      refs: preview.preview.refs_by_kind,
+      dry_run: false,
+      confirm_scope: preview.required_confirm_scope,
+    });
+    assert.deepEqual(plan.mutation_requests.map((request) => request.id), [
+      "template.fx.delete_fx",
+      "template.fx.delete_fx",
+      "template.tracks.delete_tracks",
+    ]);
+    assert.deepEqual(plan.mutation_requests.slice(0, 2).map((request) => request.refs.fx_ref.ref), [
+      "fx:track:guid:{TRACK-B}:4",
+      "fx:track:guid:{TRACK-B}:1",
+    ]);
+    assert.deepEqual(plan.mutation_requests[0].refs.fx_ref.identity, {
+      scheme: "track_fx",
+      value: "track:guid:{TRACK-B}:4",
+    });
   });
 
   it("fails closed on missing or mismatched confirmation", () => {

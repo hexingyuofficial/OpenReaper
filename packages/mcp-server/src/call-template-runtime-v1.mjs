@@ -15,12 +15,14 @@ import {
 import {
   TEMPLATE_CATALOG_SEED_TEMPLATE_IDS,
   TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
+  TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
   TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE1A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE2A_TEMPLATE_IDS,
   TEMPLATE_CATALOG_WAVE3B_TEMPLATE_IDS,
   createTemplateCatalogAlpha3C3Templates,
+  createTemplateCatalogAlpha3_3LifecycleAtomTemplates,
   createTemplateCatalogCriticalFillTemplates,
   createTemplateCatalogP1Templates,
   createTemplateCatalogWave1aTemplates,
@@ -397,7 +399,7 @@ export const CALL_TEMPLATE_RUNTIME_PRODUCT_BLOCKER_GUIDANCE = deepFreeze([
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_CATALOG_SOURCE = Object.freeze({
   kind: "accepted_official_template_catalog",
-  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1", "alpha3_c3"]),
+  waves: Object.freeze(["wave1a", "wave2a", "wave3b", "critical_fill", "p1", "alpha3_c3", "alpha3_3_lifecycle_atoms"]),
 });
 
 export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
@@ -407,6 +409,7 @@ export const CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS = deepFreeze([
   ...TEMPLATE_CATALOG_CRITICAL_FILL_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_P1_TEMPLATE_IDS,
   ...TEMPLATE_CATALOG_ALPHA3_C3_TEMPLATE_IDS,
+  ...TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
 ]);
 
 const ACCEPTED_TEMPLATE_ID_SET = new Set(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS);
@@ -753,6 +756,10 @@ export const CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS = deepFr
   "template.automation.ensure_fx_parameter_envelope",
 ]);
 
+export const CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS = deepFreeze([
+  ...TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
+]);
+
 export const CALL_TEMPLATE_RUNTIME_LIVE_TEMPLATE_IDS = deepFreeze([
   ...CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
@@ -792,6 +799,7 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["d30_project_container", CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS],
   ["alpha3_2c3a_project_file_read", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS],
   ["alpha3_2c3bc_project_file_save", CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS],
+  ["alpha3_3_lifecycle_atoms", CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS],
 ]);
 
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
@@ -803,6 +811,7 @@ const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS = deepFreeze(
@@ -836,9 +845,10 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   "template.automation.delete_envelope_points",
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
 ]);
 
-// Alpha3.2-C3A reads and C3B+C3C saves have control-tower live evidence accepted on 2026-07-11.
+// Alpha3.3 lifecycle atoms passed fresh-root native/Macro live smoke on 2026-07-14.
 const ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET = new Set([]);
 
 const LIVE_EVIDENCED_TEMPLATE_ID_SET = new Set(
@@ -979,6 +989,7 @@ export function createAcceptedOfficialTemplateCatalogTemplates() {
     ...createTemplateCatalogCriticalFillTemplates(),
     ...createTemplateCatalogP1Templates(),
     ...createTemplateCatalogAlpha3C3Templates(),
+    ...createTemplateCatalogAlpha3_3LifecycleAtomTemplates(),
   ];
 }
 
@@ -2663,6 +2674,9 @@ function runtimeKnownBlocker(descriptor) {
   if (Object.hasOwn(RUNTIME_KNOWN_TEMPLATE_BLOCKERS, descriptor.id)) {
     return RUNTIME_KNOWN_TEMPLATE_BLOCKERS[descriptor.id];
   }
+  if (ROUTE_DEFINED_PENDING_LIVE_EVIDENCE_TEMPLATE_ID_SET.has(descriptor.id)) {
+    return null;
+  }
   if (LIVE_EVIDENCED_TEMPLATE_ID_SET.has(descriptor.id)) {
     return null;
   }
@@ -3062,6 +3076,7 @@ function normalizeLiveAllowedTemplateIds(value) {
     CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
+    CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS,
     CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   ];

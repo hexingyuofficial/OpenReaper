@@ -71,8 +71,8 @@ function recordingBridge() {
 describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
   it("adds exactly two descriptors while preserving historical and C3A count truth", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
-    assert.equal(catalog.size, 224);
-    assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length, 224);
+    assert.equal(catalog.size, 227);
+    assert.equal(CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS.length, 227);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS, [
       "template.project.read_current_project_path",
       "template.project.read_dirty_state",
@@ -80,7 +80,7 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS, IDS);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 224);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 227);
 
     const [saveCurrent, saveAs] = IDS.map((id) => catalog.get(id));
     for (const descriptor of [saveCurrent, saveAs]) {
@@ -310,10 +310,9 @@ describe("Alpha3.2-C3B+C3C project-file save implementation", () => {
     for (const forbidden of ["Main_OnCommand", "os.execute", "io.open", "ShowMessageBox", "GetUserInputs", "RecursiveCreateDirectory"]) {
       assert.doesNotMatch(HANDLER_SOURCE, new RegExp(forbidden), forbidden);
     }
-    assert.match(CATALOG_SUMMARY_SOURCE, /template_count = 133/);
-    assert.match(CATALOG_SUMMARY_SOURCE, /template_count = 77/);
-    assert.match(CATALOG_SUMMARY_SOURCE, /project = 12/);
-    assert.match(CATALOG_SUMMARY_SOURCE, /write = 56/);
+    assert.match(CATALOG_SUMMARY_SOURCE, /template_count = 227/);
+    assert.match(CATALOG_SUMMARY_SOURCE, /project = 30/);
+    assert.match(CATALOG_SUMMARY_SOURCE, /write = 122/);
   });
 
   it("extends package actual-stdio fake save smoke with request identity metadata", () => {

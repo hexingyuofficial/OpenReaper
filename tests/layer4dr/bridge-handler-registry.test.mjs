@@ -319,6 +319,11 @@ const EXTRACTED_SAFE_WRITE_A_HANDLERS = Object.freeze(new Map([
   ["template.midi.insert_cc_batch", ["midi/insert_cc_batch.lua", "safe_write_insert_cc_batch"]],
   ["template.midi.insert_text_sysex_events", ["midi/insert_text_sysex_events.lua", "safe_write_insert_text_sysex_events"]],
 ]));
+const EXTRACTED_ALPHA3_3_LIFECYCLE_ATOM_HANDLERS = Object.freeze(new Map([
+  ["template.fx.delete_fx", ["fx/delete_fx.lua", "alpha33_delete_fx"]],
+  ["template.routing.remove_send", ["routing/remove_send.lua", "alpha33_remove_send"]],
+  ["template.items.move_item_to_track", ["items/move_item_to_track.lua", "alpha33_move_item_to_track"]],
+]));
 const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_WAVE0_HANDLERS,
   ...EXTRACTED_WAVE1A_HANDLERS,
@@ -351,12 +356,13 @@ const EXTRACTED_HANDLER_ROWS = Object.freeze(new Map([
   ...EXTRACTED_D23_FX_DISCOVERY_READ_HANDLERS,
   ...EXTRACTED_FIRST_REAL_A_HANDLERS,
   ...EXTRACTED_SAFE_WRITE_A_HANDLERS,
+  ...EXTRACTED_ALPHA3_3_LIFECYCLE_ATOM_HANDLERS,
 ]));
 
 describe("Layer 4D.R bridge handler registry", () => {
   it("defines one standard registered handler entry shape", () => {
     assert.equal(REGISTRY.contract, "openreaper.bridge_handler_registry.v1");
-    assert.equal(REGISTRY.entries.length, 224);
+    assert.equal(REGISTRY.entries.length, 227);
     for (const entry of REGISTRY.entries) {
       for (const field of REQUIRED_ENTRY_FIELDS) {
         assert.equal(Object.hasOwn(entry, field), true, `${entry.template_id}:${field}`);
@@ -388,11 +394,11 @@ describe("Layer 4D.R bridge handler registry", () => {
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname });
     assert.deepEqual(summary, {
       contract: "openreaper.bridge_handler_registry.v1",
-      entryCount: 224,
+      entryCount: 227,
       legacyMonolithCount: 0,
-      extractedHandlerCount: 224,
-      handlerModuleCount: 84,
-      routeCount: 33,
+      extractedHandlerCount: 227,
+      handlerModuleCount: 87,
+      routeCount: 34,
       operationCount: 102,
     });
 
@@ -595,6 +601,12 @@ describe("Layer 4D.R bridge handler registry", () => {
         .map((entry) => entry.template_id),
       [...EXTRACTED_SAFE_WRITE_A_HANDLERS.keys()],
     );
+    assert.deepEqual(
+      REGISTRY.entries
+        .filter((entry) => entry.route === "alpha3-3-lifecycle-atom-handlers" && entry.handler_file !== "legacy_monolith")
+        .map((entry) => entry.template_id),
+      [...EXTRACTED_ALPHA3_3_LIFECYCLE_ATOM_HANDLERS.keys()],
+    );
 
     for (const [templateId, [file, handlerExport]] of EXTRACTED_HANDLER_ROWS) {
       const moduleSource = readFileSync(new URL(`../../${handlerSourceRoot}/${file}`, import.meta.url), "utf8");
@@ -743,6 +755,9 @@ describe("Layer 4D.R bridge handler registry", () => {
         "midi.insert_notes_batch",
         "midi.insert_cc_batch",
         "midi.insert_text_sysex_events",
+        "fx.delete_fx",
+        "routing.remove_send",
+        "items.move_item_to_track",
       ],
     );
     assert.match(BRIDGE_SOURCE, /D12_TRANSPORT_FIXED_ACTION_IDS = \{/);
@@ -761,7 +776,7 @@ describe("Layer 4D.R bridge handler registry", () => {
   it("keeps the generated bundle deterministic and registry-stamped", () => {
     const rebuilt = buildLiveBridgeBundle({ cwd: ROOT.pathname });
     assert.equal(rebuilt, BRIDGE_SOURCE);
-    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(224 registered template handler row\(s\); 0 legacy_monolith row\(s\); 224 extracted handler row\(s\); 84 handler module file\(s\)\)\./);
+    assert.match(BRIDGE_SOURCE, /Handler registry: reaper\/bridge\/registry\/BRIDGE_HANDLER_REGISTRY_V1\.json \(227 registered template handler row\(s\); 0 legacy_monolith row\(s\); 227 extracted handler row\(s\); 87 handler module file\(s\)\)\./);
     let lastIndex = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
     assert.notEqual(lastIndex, -1);
     assert.match(BRIDGE_SOURCE, /local OPENREAPER_HANDLER_EXPORTS = \{\}/);

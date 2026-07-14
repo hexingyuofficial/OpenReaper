@@ -15,6 +15,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "sequence_with_gap",
   "distribute_evenly",
   "move_to_anchor",
+  "stack_on_existing_tracks",
   "set_properties",
   "set_active_take",
   "apply_fades",
@@ -24,7 +25,6 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
 ]);
 export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES = deepFreeze([
   "align_onsets",
-  "stack_on_existing_tracks",
   "set_snap_offset_to_onset",
   "normalize_peak",
   "normalize_lufs",
@@ -66,6 +66,8 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.trim_item",
   "template.items.set_take_playrate",
   "template.items.set_item_snap_offset",
+  "template.tracks.resolve_track_ref",
+  "template.items.move_item_to_track",
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
@@ -77,6 +79,8 @@ const SET_ITEM_FADES_ID = "template.items.set_item_fades";
 const TRIM_ITEM_ID = "template.items.trim_item";
 const SET_TAKE_PLAYRATE_ID = "template.items.set_take_playrate";
 const SET_ITEM_SNAP_OFFSET_ID = "template.items.set_item_snap_offset";
+const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
+const MOVE_ITEM_TO_TRACK_ID = "template.items.move_item_to_track";
 const MAX_TARGETS = 8;
 const DEFAULT_TARGET_LIMIT = 4;
 const POSITION_TOLERANCE = 0.000001;
@@ -91,6 +95,7 @@ const INPUT_FIELDS = new Set([
   "gap_seconds",
   "properties",
   "active_take_assignments",
+  "track_assignments",
   "fade_in_seconds",
   "fade_out_seconds",
   "length_seconds",
@@ -114,7 +119,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.1.0",
+  program_version: "1.2.0",
   implementation_status: "executable",
   risk: "write",
   input_schema: {
@@ -151,6 +156,20 @@ const REGISTRY_ENTRY = deepFreeze({
             take_ref: { type: "string" },
           },
           required: ["item_ref", "take_ref"],
+        },
+      },
+      track_assignments: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_TARGETS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            item_ref: { type: "string" },
+            target_track_ref: { type: "string" },
+          },
+          required: ["item_ref", "target_track_ref"],
         },
       },
       fade_in_seconds: { type: ["number", "null"], minimum: 0 },
@@ -225,7 +244,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     support_state: "supported_with_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Arrange selected or exact Items, set accepted properties, choose exact Active Takes, or apply bounded fades, exact trims, Take playback, and snap offsets.",
+    summary: "Arrange selected or exact Items, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, or apply bounded fades, exact trims, Take playback, and snap offsets.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1C_ITEMS_APPLY_MODES,
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
@@ -235,6 +254,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
       { name: "sequence_selected_items", input: { mode: "sequence_with_gap", target: "selected", gap_seconds: 0.1, dry_run: true } },
       { name: "mute_exact_items", input: { mode: "set_properties", target_refs: ["item:guid:{ITEM-GUID}"], properties: { muted: true }, dry_run: false } },
       { name: "choose_exact_active_take", input: { mode: "set_active_take", active_take_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", take_ref: "take:guid:{TAKE-GUID}" }], dry_run: false } },
+      { name: "stack_on_existing_tracks", input: { mode: "stack_on_existing_tracks", track_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", target_track_ref: "track:guid:{TRACK-GUID}" }], dry_run: false } },
       { name: "fade_exact_items", input: { mode: "apply_fades", target_refs: ["item:guid:{ITEM-GUID}"], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false } },
       { name: "set_take_playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{ITEM-GUID}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
     ],
@@ -250,10 +270,12 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use one fixed arrangement mode for selected or exact Items, with dry_run first when the calculated positions should be inspected.",
         "Use set_properties for Item-level volume_db, muted, locked, or loop_source only.",
         "Use set_active_take with one to eight explicit item_ref/take_ref assignment rows; each exact Take is applied only to its paired exact Item.",
+        "Use stack_on_existing_tracks with one to eight explicit item_ref/target_track_ref rows; every destination must already exist.",
         "Use apply_fades, trim_exact, set_take_playback, or set_snap_offset for bounded common edits backed by accepted native Item/Take atoms.",
       ],
       when_not_to_use: [
-        "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, transient splitting, crossfades, onset alignment, and existing-track moves remain held.",
+        "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, transient splitting, crossfades, and onset alignment remain held.",
+        "stack_on_existing_tracks never creates Tracks or folders; use macro.project.apply_layout first when the destination layout does not exist.",
         "Do not request Take fields through set_properties; use set_active_take or set_take_playback so each mode keeps a bounded schema and readback contract.",
         "Do not request pan as an Item-level field: no REAPER Item-level pan control is proven here, and macro.items.apply will not silently redirect it to the current Active Take.",
       ],
@@ -271,6 +293,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         gap_seconds: "Non-negative gap for sequence_with_gap; defaults to 0.",
         properties: "For set_properties only: one or more of volume_db, muted, locked, loop_source. pan is held and fails closed.",
         active_take_assignments: "For set_active_take only: 1-8 rows shaped {item_ref:'item:guid:{GUID}', take_ref:'take:guid:{GUID}'}. Selection and unpaired refs are forbidden.",
+        track_assignments: "For stack_on_existing_tracks only: 1-8 rows shaped {item_ref:'item:guid:{GUID}', target_track_ref:'track:guid:{GUID}'}. Selection and implicit Track creation are forbidden.",
         fades: "apply_fades accepts fade_in_seconds and/or fade_out_seconds as null or non-negative seconds; an omitted/null side clears to zero.",
         trim: "trim_exact requires positive length_seconds and does not analyze silence or change source media on disk.",
         take_playback: "set_take_playback requires positive playrate (max 16) plus explicit preserve_pitch and an existing Active Take.",
@@ -280,12 +303,14 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Reject unknown fields, held modes, held property fields, ambiguous target coverage, and impossible response budgets before mutation.",
         "Resolve every target live, read exact Item position/length/Active Take facts, then calculate the full deterministic operation list.",
         "For set_active_take, preserve each explicit Item/Take pair. The atom validates live Take ownership before SetActiveTake; the Macro never infers a Take from selection.",
+        "For stack_on_existing_tracks, resolve both sides live, preserve every explicit Item/Track pair, and refuse missing or duplicate destinations before any move.",
       ],
       underlying_actions: ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS,
       readback_steps: [
         "Arrangement modes read every exact Item summary after all moves and compare the requested position row by row.",
         "Property/fade/trim/Take-playback/snap modes require the accepted atomic Template to return the exact Item ref and every live REAPER field value that it just read back.",
         "set_active_take marks a row applied only when the atom returns the paired exact item_ref, requested active_take_ref, and passed native GetActiveTake readback.",
+        "stack_on_existing_tracks marks a row applied only when the atom returns the exact Item and target Track plus passed identity/take/Track-count readback.",
         "Index invalidation is reported separately and never changes an already verified mutation into an unverified applied claim.",
       ],
       success_criteria: [
@@ -297,6 +322,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         blocker("ITEM_APPLY_MODE_HELD", "The requested mode is outside the executable B1c allowlist."),
         blocker("ITEM_APPLY_ITEM_PAN_UNSUPPORTED", "Item-level pan is not a proven REAPER field and is never redirected to an Active Take."),
         blocker("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", "set_active_take requires 1-8 unique exact Item/Take assignment rows and never uses selection."),
+        blocker("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", "stack_on_existing_tracks requires 1-8 unique exact Item/existing-Track assignment rows and never creates Tracks."),
         blocker("ITEM_APPLY_ACTIVE_TAKE_REQUIRED", "set_take_playback requires an existing exact Active Take and does not choose one implicitly."),
         blocker("ITEM_APPLY_SNAP_OFFSET_OUTSIDE_ITEM", "The requested item-local snap offset exceeds the live Item length."),
         blocker("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "The selected target set exceeds the bounded write limit and was not partially mutated."),
@@ -323,6 +349,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         { name: "move group", input: { mode: "move_to_anchor", target_refs: ["item:guid:{A}", "item:guid:{B}"], anchor_seconds: 12, dry_run: true } },
         { name: "set Item properties", input: { mode: "set_properties", target: "selected", properties: { volume_db: -3, muted: false }, dry_run: false } },
         { name: "set Active Takes", input: { mode: "set_active_take", active_take_assignments: [{ item_ref: "item:guid:{ITEM-A}", take_ref: "take:guid:{TAKE-A2}" }], dry_run: false } },
+        { name: "stack on existing Tracks", input: { mode: "stack_on_existing_tracks", track_assignments: [{ item_ref: "item:guid:{ITEM-A}", target_track_ref: "track:guid:{TRACK-B}" }], dry_run: false } },
         { name: "set Item fades", input: { mode: "apply_fades", target_refs: ["item:guid:{A}"], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false } },
         { name: "trim exact visible length", input: { mode: "trim_exact", target_refs: ["item:guid:{A}"], length_seconds: 1.25, dry_run: false } },
         { name: "set Active Take playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{A}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
@@ -397,7 +424,7 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
 
   let executionFailure = null;
-  if (normalized.input.mode === "set_properties" || normalized.input.mode === "set_active_take") {
+  if (["set_properties", "set_active_take", "stack_on_existing_tracks"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
   } else if (["apply_fades", "trim_exact", "set_take_playback", "set_snap_offset"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
@@ -477,6 +504,9 @@ async function resolveTargets({ request, input, executeAtomic, state }) {
   if (input.mode === "set_active_take") {
     return resolveActiveTakeAssignments({ request, assignments: input.active_take_assignments, executeAtomic, state });
   }
+  if (input.mode === "stack_on_existing_tracks") {
+    return resolveTrackAssignments({ request, assignments: input.track_assignments, executeAtomic, state });
+  }
   const directRefs = collectItemObjectRefs(request.refs);
   const tokens = input.target_refs;
   if (directRefs.length + tokens.length > input.limit || directRefs.length + tokens.length > MAX_TARGETS) {
@@ -550,6 +580,37 @@ async function resolveActiveTakeAssignments({ request, assignments, executeAtomi
   return { ok: true, refs: resolved.map((row) => row.item_ref), assignments: resolved };
 }
 
+async function resolveTrackAssignments({ request, assignments, executeAtomic, state }) {
+  if (Object.keys(plainObject(request.refs)).length > 0) {
+    return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", "stack_on_existing_tracks accepts only track_assignments rows; separate request refs cannot preserve explicit Item/Track pairing.");
+  }
+  state.targetScope = "exact_item_track_assignments";
+  state.totalTargetCount = assignments.length;
+  state.targetsTruncated = false;
+  const resolved = [];
+  for (const assignment of assignments) {
+    const itemExecution = await runAtomic(executeAtomic, request, { id: RESOLVE_ITEM_ID, input: { ref: assignment.item_ref }, refs: [] });
+    collectExecutionEvidence(state, itemExecution);
+    if (itemExecution?.ok !== true) return atomicFailure(itemExecution, RESOLVE_ITEM_ID);
+    const itemRef = executionObjectRefs(itemExecution).find((entry) => entry.kind === "item");
+    if (!itemRef || itemRef.ref !== assignment.item_ref) {
+      return failed("ITEM_APPLY_TARGET_IDENTITY_MISMATCH", `Live Item resolution did not exactly preserve ${assignment.item_ref}; no move was run.`);
+    }
+
+    const trackExecution = await runAtomic(executeAtomic, request, { id: RESOLVE_TRACK_ID, input: { track_ref: assignment.target_track_ref }, refs: [] });
+    collectExecutionEvidence(state, trackExecution);
+    if (trackExecution?.ok !== true) return atomicFailure(trackExecution, RESOLVE_TRACK_ID);
+    const targetTrackRef = executionObjectRefs(trackExecution).find((entry) => entry.kind === "track");
+    if (!targetTrackRef || targetTrackRef.ref !== assignment.target_track_ref) {
+      return failed("ITEM_APPLY_TARGET_IDENTITY_MISMATCH", `Live Track resolution did not exactly preserve ${assignment.target_track_ref}; no move was run.`);
+    }
+    resolved.push({ item_ref: itemRef, target_track_ref: targetTrackRef });
+  }
+  state.returnedTargetCount = resolved.length;
+  state.canonicalRefs.push(...resolved.flatMap((row) => [row.item_ref.ref, row.target_track_ref.ref]));
+  return { ok: true, refs: resolved.map((row) => row.item_ref), assignments: resolved };
+}
+
 async function readTargetFacts({ targets, assignments = [], request, executeAtomic, state }) {
   const rows = [];
   for (const [index, itemRef] of targets.entries()) {
@@ -567,6 +628,7 @@ async function readTargetFacts({ targets, assignments = [], request, executeAtom
     }
     rows.push({
       item_ref: itemRef,
+      source_track_ref: stringOrNull(summary.track_ref),
       position_seconds: summary.position_seconds,
       length_seconds: summary.length_seconds,
       end_seconds: summary.position_seconds + summary.length_seconds,
@@ -575,6 +637,7 @@ async function readTargetFacts({ targets, assignments = [], request, executeAtom
       fade_in_seconds: finiteOrNull(summary.fade_in_seconds),
       fade_out_seconds: finiteOrNull(summary.fade_out_seconds),
       requested_take_ref: assignments[index]?.take_ref ?? null,
+      requested_track_ref: assignments[index]?.target_track_ref ?? null,
       target_order: index,
     });
   }
@@ -582,6 +645,24 @@ async function readTargetFacts({ targets, assignments = [], request, executeAtom
 }
 
 function buildOperationPlan(input, facts) {
+  if (input.mode === "stack_on_existing_tracks") {
+    const missingOwner = facts.find((fact) => typeof fact.source_track_ref !== "string" || !fact.source_track_ref.startsWith("track:") || !fact.requested_track_ref);
+    if (missingOwner) return failed("ITEM_APPLY_ITEM_FACTS_INVALID", `${missingOwner.item_ref.ref} did not return an exact live source Track or destination assignment; no move was run.`);
+    return {
+      ok: true,
+      operations: facts.map((fact) => ({
+        operation_id: `item-${fact.target_order + 1}-target_track_ref`,
+        kind: "move_item_to_track",
+        template_id: MOVE_ITEM_TO_TRACK_ID,
+        item_ref: fact.item_ref,
+        target_track_ref: fact.requested_track_ref,
+        field: "target_track_ref",
+        before_value: fact.source_track_ref,
+        requested_value: fact.requested_track_ref.ref,
+        input: {},
+      })),
+    };
+  }
   if (input.mode === "set_active_take") {
     return {
       ok: true,
@@ -736,7 +817,7 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
       execution = await runAtomic(executeAtomic, request, {
         id: operation.template_id,
         input: operation.input,
-        refs: compactObject({ item_ref: operation.item_ref, take_ref: operation.take_ref }),
+        refs: compactObject({ item_ref: operation.item_ref, take_ref: operation.take_ref, target_track_ref: operation.target_track_ref }),
       });
     } catch (error) {
       change.mutation = { status: "failed" };
@@ -758,11 +839,12 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
     const valueMatches = Array.isArray(operation.verify_fields)
       ? operation.verify_fields.every((field) => valuesMatch(summary[field], operation.requested_value[field]))
       : valuesMatch(observed, operation.requested_value);
-    if (!targetMatches || !valueMatches || summary.readback_status !== "passed") {
+    const preservationMatches = operation.kind !== "move_item_to_track" || summary.track_count_unchanged === true;
+    if (!targetMatches || !valueMatches || !preservationMatches || summary.readback_status !== "passed") {
       change.status = "readback_failed";
       change.live_readback = compactObject({
         status: "failed",
-        source: operation.kind === "set_active_take" ? "exact_active_take_readback" : "accepted_template_live_readback",
+        source: operation.kind === "set_active_take" ? "exact_active_take_readback" : operation.kind === "move_item_to_track" ? "exact_item_track_readback" : "accepted_template_live_readback",
         observed_value: observed,
         observed_item_ref: stringOrNull(summary.item_ref),
       });
@@ -771,7 +853,7 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
     change.status = "applied";
     change.live_readback = {
       status: "passed",
-      source: operation.kind === "set_active_take" ? "exact_active_take_readback" : "accepted_template_live_readback",
+      source: operation.kind === "set_active_take" ? "exact_active_take_readback" : operation.kind === "move_item_to_track" ? "exact_item_track_readback" : "accepted_template_live_readback",
       observed_value: observed,
     };
   }
@@ -863,12 +945,16 @@ function normalizeInput(input) {
 
   let properties = null;
   let activeTakeAssignments = null;
+  let trackAssignments = null;
   let fadeInSeconds = null;
   let fadeOutSeconds = null;
   let lengthSeconds = null;
   let playrate = null;
   let preservePitch = null;
   let snapOffsetSeconds = null;
+  if (mode !== "stack_on_existing_tracks" && input.track_assignments !== undefined) {
+    return failed("ITEM_APPLY_REQUEST_INVALID", "track_assignments is valid only for stack_on_existing_tracks.");
+  }
   if (mode === "set_properties") {
     const normalizedProperties = normalizeProperties(input.properties);
     if (!normalizedProperties.ok) return normalizedProperties;
@@ -881,6 +967,14 @@ function normalizeInput(input) {
     activeTakeAssignments = normalizedAssignments.value;
     if (input.target !== undefined || targetRefs.length > 0 || input.limit !== undefined || input.properties !== undefined || anchor.value !== null || gap.value !== null) {
       return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", "set_active_take accepts only active_take_assignments and dry_run; selection, target_refs, limit, properties, anchor_seconds, and gap_seconds are forbidden.");
+    }
+  } else if (mode === "stack_on_existing_tracks") {
+    const normalizedAssignments = normalizeTrackAssignments(input.track_assignments);
+    if (!normalizedAssignments.ok) return normalizedAssignments;
+    trackAssignments = normalizedAssignments.value;
+    const unsupported = Object.keys(input).filter((field) => !["mode", "track_assignments", "dry_run"].includes(field));
+    if (unsupported.length > 0) {
+      return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `stack_on_existing_tracks accepts only track_assignments and dry_run; unsupported field(s): ${unsupported.join(", ")}.`);
     }
   } else if (mode === "apply_fades") {
     if (input.properties !== undefined || input.active_take_assignments !== undefined || anchor.value !== null || gap.value !== null) return failed("ITEM_APPLY_REQUEST_INVALID", "apply_fades accepts targets, fade_in_seconds, fade_out_seconds, limit, and dry_run only.");
@@ -923,6 +1017,7 @@ function normalizeInput(input) {
       gap_seconds: mode === "sequence_with_gap" ? gap.value ?? 0 : null,
       properties,
       active_take_assignments: activeTakeAssignments,
+      track_assignments: trackAssignments,
       fade_in_seconds: fadeInSeconds,
       fade_out_seconds: fadeOutSeconds,
       length_seconds: lengthSeconds,
@@ -949,6 +1044,26 @@ function normalizeActiveTakeAssignments(value) {
     if (seenItems.has(row.item_ref)) return failed("ITEM_APPLY_ACTIVE_TAKE_ASSIGNMENTS_INVALID", `active_take_assignments repeats ${row.item_ref}; each Item may receive exactly one requested Active Take.`);
     seenItems.add(row.item_ref);
     assignments.push({ item_ref: row.item_ref, take_ref: row.take_ref });
+  }
+  return { ok: true, value: assignments };
+}
+
+function normalizeTrackAssignments(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_TARGETS) {
+    return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `track_assignments must contain 1-${MAX_TARGETS} rows.`);
+  }
+  const assignments = [];
+  const seenItems = new Set();
+  for (const [index, row] of value.entries()) {
+    if (!isPlainObject(row)) return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `track_assignments[${index}] must be an object.`);
+    const unknown = Object.keys(row).filter((field) => !["item_ref", "target_track_ref"].includes(field));
+    if (unknown.length > 0) return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `track_assignments[${index}] has unsupported field(s): ${unknown.join(", ")}.`);
+    if (!isExactGuidRef(row.item_ref, "item") || !isExactGuidRef(row.target_track_ref, "track")) {
+      return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `track_assignments[${index}] requires exact canonical item:guid and track:guid refs.`);
+    }
+    if (seenItems.has(row.item_ref)) return failed("ITEM_APPLY_TRACK_ASSIGNMENTS_INVALID", `track_assignments repeats ${row.item_ref}; each Item may receive exactly one destination Track.`);
+    seenItems.add(row.item_ref);
+    assignments.push({ item_ref: row.item_ref, target_track_ref: row.target_track_ref });
   }
   return { ok: true, value: assignments };
 }
@@ -1040,6 +1155,7 @@ function maintainProjectIndex(runtime, state, now) {
 }
 
 function affectedScopes(state) {
+  if (state.operations.some((operation) => operation.kind === "move_item_to_track")) return ["items", "tracks", "takes"];
   return state.operations.some((operation) => ["set_active_take", "set_take_playback"].includes(operation.kind)) ? ["items", "takes"] : ["items"];
 }
 
@@ -1181,7 +1297,7 @@ function pendingChange(operation) {
     operation_id: operation.operation_id,
     template_id: operation.template_id,
     target_ref: operation.item_ref.ref,
-    related_ref: operation.take_ref?.ref,
+    related_ref: operation.take_ref?.ref ?? operation.target_track_ref?.ref,
     field: operation.field,
     before_value: operation.before_value,
     requested_value: operation.requested_value,
@@ -1197,7 +1313,7 @@ function previewChange(operation) {
     operation_id: operation.operation_id,
     template_id: operation.template_id,
     target_ref: operation.item_ref.ref,
-    related_ref: operation.take_ref?.ref,
+    related_ref: operation.take_ref?.ref ?? operation.target_track_ref?.ref,
     field: operation.field,
     before_value: operation.before_value,
     requested_value: operation.requested_value,

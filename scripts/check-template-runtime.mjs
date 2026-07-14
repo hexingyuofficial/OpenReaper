@@ -57,6 +57,11 @@ execFileSync(process.execPath, ["--test", "tests/layer4dx/safe-write-a-handler-e
   stdio: "inherit",
 });
 
+execFileSync(process.execPath, ["--test", "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"], {
+  cwd: root,
+  stdio: "inherit",
+});
+
 execFileSync(process.execPath, ["scripts/smoke-template-runtime-live.mjs"], {
   cwd: root,
   stdio: "inherit",

@@ -11,6 +11,7 @@ import {
 import {
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
+  CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A1_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A2_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_FIRST_REAL_A3_LIVE_TEMPLATE_IDS,
@@ -264,6 +265,10 @@ export const registryRoutes = Object.freeze({
   "safe-write-a": Object.freeze({
     ids: CALL_TEMPLATE_RUNTIME_SAFE_WRITE_A_LIVE_TEMPLATE_IDS,
     tests: Object.freeze(["tests/layer4dx/safe-write-a-handler-expansion.test.mjs"]),
+  }),
+  "alpha3-3-lifecycle-atom-handlers": Object.freeze({
+    ids: CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
+    tests: Object.freeze(["tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"]),
   }),
 });
 

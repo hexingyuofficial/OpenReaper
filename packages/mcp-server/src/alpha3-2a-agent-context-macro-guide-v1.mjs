@@ -249,18 +249,18 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.project.delete_targets",
     title: "Delete scoped project targets",
-    summary: "Preview and delete only explicitly scoped project objects with undo evidence and absence readback.",
+    summary: "Preview and delete only explicitly scoped project objects or exact Track/Take FX instances with undo evidence and absence readback.",
     pack: "project",
     risk: "destructive",
     entity_kind: "macro.project.delete_targets",
-    task_intents: ["delete tracks", "delete items", "delete markers or regions", "scoped cleanup"],
-    rollout_slice: "3.2-E",
+    task_intents: ["delete tracks", "delete items", "delete markers or regions", "delete exact FX instances", "scoped cleanup"],
+    rollout_slice: "Alpha3.3 lifecycle",
     known_blocker: null,
     implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
-        "Delete an explicit bounded set of project-owned tracks, items, markers, or regions after preview and confirmation.",
+        "Delete an explicit bounded set of project-owned tracks, items, markers, regions, or exact Track/Take FX instances after preview and confirmation.",
         "Apply a query-derived selector only when the resulting exact target set is shown and confirmed.",
       ],
       when_not_to_use: [
@@ -273,7 +273,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "confirm_scope must exactly match the previewed target kinds/counts and undo/readback must be available.",
       ],
       input_shape: {
-        refs: "Explicit canonical project-object refs grouped by kind.",
+        refs: "Explicit canonical project-object refs grouped by tracks/items/markers/regions/fx. FX rows must be exact fx:track:guid or fx:take:guid slot refs.",
         selectors: "Optional bounded query-derived selectors; must resolve to exact refs before execution.",
         dry_run: "Boolean; true by default and required for first pass.",
         confirm_scope: "Explicit confirmation token or object containing target kinds and expected counts.",
@@ -283,17 +283,18 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Inspect the current project and resolve every supplied/query-derived target to a canonical current-generation ref.",
         "Reject duplicate, stale, cross-project, filesystem, hardware, unsupported take, and unsupported automation targets.",
-        "Return a dry-run preview with counts by kind, skipped refs, and exact confirmation scope.",
+        "Return a dry-run preview with effective counts, collapsed Track/Track-FX overlaps, skipped refs, and exact confirmation scope.",
       ],
       underlying_actions: [
         "template.tracks.delete_track or template.tracks.delete_tracks",
         "template.items.delete_item or template.items.delete_items",
         "template.project.delete_marker",
         "template.project.delete_region",
+        "template.fx.delete_fx",
         "matching accepted list/read templates for preflight and absence readback",
       ],
       readback_steps: [
-        "Re-read each affected scope and prove targeted refs are absent or report surviving refs.",
+        "Re-read each affected scope and prove targeted refs are absent; exact FX rows use native GUID absence readback from the complete owner chain.",
         "Return deleted/skipped/failed counts and bounded per-ref reasons.",
         "Retain request ids and undo evidence for successfully executed destructive calls.",
       ],
@@ -327,6 +328,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       },
       examples: [
         example("preview two items", { refs: { items: ["item:guid:{ITEM-A}", "item:guid:{ITEM-B}"] }, dry_run: true, delete_policy: "project_objects_only", compact_response: true }),
+        example("preview exact FX cleanup", { refs: { fx: ["fx:track:guid:{TRACK}:3", "fx:track:guid:{TRACK}:1"] }, dry_run: true, delete_policy: "project_objects_only" }),
         example("confirmed marker cleanup", { refs: { markers: ["marker:project:12"] }, dry_run: false, confirm_scope: { target_kinds: ["marker"], expected_counts: { marker: 1 } }, delete_policy: "project_objects_only" }),
       ],
     }),
@@ -419,18 +421,18 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.routing.apply",
     title: "Apply internal project routing",
-    summary: "Preview and apply declared internal sends, master-parent posture, channels, and bounded send controls.",
+    summary: "Preview and apply declared internal sends, exact send removals, master-parent posture, channels, and bounded send controls.",
     pack: "routing",
     risk: "write",
     entity_kind: "macro.routing.apply",
-    task_intents: ["create sends", "update routing", "route tracks", "inspect routing graph"],
-    rollout_slice: "3.2-E",
+    task_intents: ["create sends", "update routing", "remove exact internal sends", "route tracks", "inspect routing graph"],
+    rollout_slice: "Alpha3.3 lifecycle",
     known_blocker: null,
     implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
-        "Create or update explicit internal track-to-track routes and related bounded send settings.",
+        "Create, update, or remove explicit internal track-to-track routes and related bounded send settings.",
         "Apply a declared routing patch after inspecting the current routing graph.",
       ],
       when_not_to_use: [
@@ -443,7 +445,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "dry_run/confirm_scope and readback_policy must cover every proposed create/update/delete route action.",
       ],
       input_shape: {
-        routes: "Ordered routing patch rows with source/target refs or bounded selectors and optional volume, pan, mute, mode, audio/MIDI channels.",
+        routes: "Ordered rows. create uses exact source/destination Track refs; update uses exact send_ref plus controls; delete uses only id/action/exact send_ref.",
         master_parent: "Optional declared per-track master-parent posture.",
         track_channel_counts: "Optional bounded per-track channel counts.",
         dry_run: "Boolean; previews graph delta.",
@@ -468,6 +470,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "template.routing.set_send_midi_channels",
         "template.routing.set_master_parent_send",
         "template.routing.set_track_channel_count",
+        "template.routing.remove_send",
       ],
       readback_steps: [
         "Re-read the affected routing graph after each bounded patch batch.",
@@ -483,13 +486,12 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         blocker("ROUTING_APPLY_PREVIEW_REQUIRED", "Run a dry-run routing preview and planned readback before applying routing changes."),
         blocker("HARDWARE_IO_FORBIDDEN", "A route targets hardware/device I/O."),
         blocker("ROUTE_AMBIGUOUS_OR_FEEDBACK", "Source/target resolution or feedback posture is unsafe."),
-        blocker("ROUTE_DELETE_NOT_AUDITED", "A requested route deletion lacks an accepted audited template."),
         blocker("READBACK_MISMATCH", "Actual routing differs from the confirmed patch."),
       ],
       recovery_steps: [
         "For preview blockers, rerun dry-run, then call the same registered internal-routing Macro and require graph readback.",
         "Remove hardware/external endpoints and replace ambiguous selectors with canonical refs.",
-        "Omit unaudited delete rows; report them as blocked rather than emulating deletion through another surface.",
+        "For removal, use one exact category-0 send ref; never redirect the request to hardware outputs or infer a different send after indices shift.",
         "On partial success, reread the graph and retry only mismatched accepted rows with a new confirmation scope.",
       ],
       dry_run_shape: {
@@ -500,10 +502,11 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       resume_or_retry_policy: {
         resume_from: "latest verified affected routing graph",
         retry: "Retry only accepted mismatched route rows after re-resolution.",
-        hard_stop: "Stop on hardware I/O, unsafe feedback, unaudited deletion, or repeated graph mismatch.",
+        hard_stop: "Stop on hardware I/O, unsafe feedback, stale exact send identity, or repeated graph mismatch.",
       },
       examples: [
         example("create reverb send", { routes: [{ source_ref: "track:guid:{VOCAL}", target_ref: "track:guid:{VERB}", volume: 0.5, pan: 0, mute: false }], dry_run: true, readback_policy: "changed_routes_only" }),
+        example("remove exact send", { routes: [{ id: "old_verb", action: "delete", send_ref: "send:track:guid:{VOCAL}:2" }], dry_run: true }),
         example("disable master parent", { routes: [], master_parent: [{ track_ref: "track:guid:{BUS}", enabled: false }], track_channel_counts: [{ track_ref: "track:guid:{BUS}", channels: 4 }], dry_run: false, confirm_scope: { route_rows: 0, track_rows: 1 } }),
       ],
     }),
@@ -1209,9 +1212,9 @@ function compactPrimaryUnderlyingActions(id) {
   return ({
     "macro.project.inspect": ["template.project.read_summary", "template.project.create_observation_bundle", "template.project.read_dirty_state", "template.render.read_settings"],
     "macro.project.query": ["template.project.read_summary", "template.project.create_observation_bundle", "entity-specific accepted read templates", "SQLite query runtime"],
-    "macro.project.delete_targets": ["template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region"],
+    "macro.project.delete_targets": ["template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region", "template.fx.delete_fx"],
     "macro.project.apply_layout": ["template.tracks.list_tracks", "template.tracks.create_folder_track", "template.tracks.create_track", "template.tracks.read_folder_structure"],
-    "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.read_track_routing"],
+    "macro.routing.apply": ["template.routing.read_project_routing_graph", "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.remove_send", "template.routing.read_track_routing"],
     "macro.media.place_assets": ["template.media.probe_file", "template.tracks.resolve_track_ref", "template.media.import_file_to_track", "template.items.read_item_summary"],
     "macro.render.targets": ["template.project.read_dirty_state", "template.render.render_targets"],
   })[id] ?? null;

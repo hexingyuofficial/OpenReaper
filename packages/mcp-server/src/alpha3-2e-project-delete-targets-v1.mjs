@@ -13,7 +13,7 @@ const MAX_REFS_PER_KIND = 100;
 const MAX_TOTAL_REFS = 250;
 const MAX_SELECTOR_COUNT = 12;
 const UNKNOWN_FIELD_DETAIL_LIMIT = 8;
-const SUPPORTED_REF_KINDS = Object.freeze(["tracks", "items", "markers", "regions"]);
+const SUPPORTED_REF_KINDS = Object.freeze(["tracks", "items", "markers", "regions", "fx"]);
 const UNSUPPORTED_REF_KINDS = Object.freeze(["takes", "automation", "media_files", "files", "source_media", "hardware", "devices"]);
 
 const DELETE_TEMPLATE_BY_KIND = Object.freeze({
@@ -21,6 +21,7 @@ const DELETE_TEMPLATE_BY_KIND = Object.freeze({
   items: "template.items.delete_items",
   markers: "template.project.delete_marker",
   regions: "template.project.delete_region",
+  fx: "template.fx.delete_fx",
 });
 
 const READBACK_ENTITY_BY_KIND = Object.freeze({
@@ -28,6 +29,7 @@ const READBACK_ENTITY_BY_KIND = Object.freeze({
   items: "items",
   markers: "markers_regions",
   regions: "markers_regions",
+  fx: null,
 });
 
 const REF_PREFIX_BY_KIND = Object.freeze({
@@ -35,6 +37,7 @@ const REF_PREFIX_BY_KIND = Object.freeze({
   items: "item:",
   markers: "marker:",
   regions: "region:",
+  fx: "fx:",
 });
 
 export function isAlpha3_2EProjectDeleteTargetsMacroId(id) {
@@ -50,7 +53,8 @@ export function planAlpha3_2EProjectDeleteTargetsMacro(input = {}, requestPostur
   const targetSet = normalizeTargetSet(normalized.refs);
   blockers.push(...targetSet.blockers);
   const dryRun = normalized.dry_run !== false;
-  const preview = buildPreview(targetSet.targets);
+  const collapsed = collapseOverlappingTargets(targetSet.targets);
+  const preview = buildPreview(collapsed.targets, targetSet.targets, collapsed.rows);
   const confirmation = confirmationFor(preview);
 
   if (blockers.length > 0) return blockedPlan(blockers, preview, confirmation);
@@ -62,8 +66,8 @@ export function planAlpha3_2EProjectDeleteTargetsMacro(input = {}, requestPostur
   const confirmBlockers = validateConfirmation(normalized.confirm_scope, confirmation, preview);
   if (confirmBlockers.length > 0) return blockedPlan(confirmBlockers, preview, confirmation);
 
-  const mutationRequests = buildMutationRequests(targetSet.targets);
-  const readbackRequests = buildReadbackRequests(targetSet.targets);
+  const mutationRequests = buildMutationRequests(collapsed.targets);
+  const readbackRequests = buildReadbackRequests(collapsed.targets);
   const childRequests = [...mutationRequests, ...readbackRequests];
   return deepFreeze({
     contract: ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_CONTRACT,
@@ -140,7 +144,7 @@ export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(options =
   return [deepFreeze({
     id: ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID,
     title: "Delete scoped project targets",
-    summary: "Preview or execute confirmed project-object deletion through one registered Macro with live ref resolution and absence readback.",
+    summary: "Preview or execute confirmed project-object and exact FX-instance deletion through one registered Macro with live ref resolution and absence readback.",
     pack: "project",
     lifecycle: "experimental",
     risk: "destructive",
@@ -152,7 +156,7 @@ export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(options =
     menu_group: "primary",
     execution_shape: "registered_macro_program",
     user_label: "Delete scoped project targets",
-    task_intents: ["delete tracks", "delete items", "delete markers", "delete regions", "scoped cleanup"],
+    task_intents: ["delete tracks", "delete items", "delete markers", "delete regions", "delete exact track FX", "delete exact take FX", "scoped cleanup"],
     support_status: "executable_runtime_bound_confirmation_gated",
     implementation_status: "executable",
     support_state: "supported_with_confirmation",
@@ -184,12 +188,12 @@ export function createAlpha3_2EProjectDeleteTargetsMacroDiscoveryItems(options =
         result: { type: "object" },
       },
     },
-    refs: { input: ["track_ref", "item_ref", "marker_ref", "region_ref"], output: [] },
+    refs: { input: ["track_ref", "item_ref", "marker_ref", "region_ref", "fx_ref"], output: [] },
     expectedDelta: {
       kind: "destructive",
       action: "delete_project_objects",
-      entities: ["tracks", "items", "markers", "regions"],
-      summary: "When dry_run is false and confirm_scope matches exactly, executes only the confirmed project-object deletes and verifies the refs are absent.",
+      entities: ["tracks", "items", "markers", "regions", "fx"],
+      summary: "When dry_run is false and confirm_scope matches exactly, executes only the confirmed project-object/FX deletes and verifies every row through live absence readback.",
     },
     examples: [
       { input: { refs: { items: ["item:guid:{ITEM-A}"] }, dry_run: true, delete_policy: "project_objects_only" } },
@@ -275,7 +279,7 @@ function validateSelectors(value) {
 }
 
 function normalizeTargetSet(refs) {
-  const targets = { tracks: [], items: [], markers: [], regions: [] };
+  const targets = { tracks: [], items: [], markers: [], regions: [], fx: [] };
   const blockers = [];
   if (refs === undefined) return { targets, blockers };
   if (!isPlainObject(refs)) return { targets, blockers: [blocker("DELETE_TARGETS_REFS_INVALID", "refs must be an object grouped by target kind.")] };
@@ -295,7 +299,7 @@ function normalizeTargetSet(refs) {
     if (value.length > MAX_REFS_PER_KIND) blockers.push(blocker("DELETE_TARGET_REFS_TOO_LARGE", `refs.${kind} accepts at most ${MAX_REFS_PER_KIND} refs.`, { kind }));
     const seen = new Set();
     for (const ref of value) {
-      if (typeof ref !== "string" || ref.length === 0 || /[\u0000-\u001f\u007f]/u.test(ref) || !ref.startsWith(REF_PREFIX_BY_KIND[kind])) {
+      if (typeof ref !== "string" || ref.length === 0 || /[\u0000-\u001f\u007f]/u.test(ref) || !ref.startsWith(REF_PREFIX_BY_KIND[kind]) || (kind === "fx" && !parseExactFxRef(ref))) {
         blockers.push(blocker("DELETE_TARGET_REF_INVALID", `refs.${kind} contains a non-canonical or mismatched ref.`, { kind, ref: boundedString(ref) }));
         continue;
       }
@@ -312,17 +316,28 @@ function normalizeTargetSet(refs) {
   return { targets: deepFreeze(targets), blockers };
 }
 
-function buildPreview(targets) {
+function buildPreview(targets, requestedTargets = targets, collapsedTargets = []) {
   const refsByKind = normalizeRefsByKind(targets);
+  const requestedRefsByKind = normalizeRefsByKind(requestedTargets);
   const counts = Object.fromEntries(SUPPORTED_REF_KINDS.map((kind) => [kind, refsByKind[kind].length]));
+  const requestedCounts = Object.fromEntries(SUPPORTED_REF_KINDS.map((kind) => [kind, requestedRefsByKind[kind].length]));
   const orderedRefs = SUPPORTED_REF_KINDS.flatMap((kind) => refsByKind[kind].map((ref) => `${kind}:${ref}`));
   const targetHash = stableHash(orderedRefs.join("\n"));
   return deepFreeze({
     contract: "alpha3.2e.project_delete_targets.preview.v1",
     supported_kinds: SUPPORTED_REF_KINDS,
     refs_by_kind: refsByKind,
+    requested_refs_by_kind: requestedRefsByKind,
     target_counts_by_kind: counts,
+    requested_counts_by_kind: requestedCounts,
     total_count: orderedRefs.length,
+    requested_total_count: Object.values(requestedCounts).reduce((sum, count) => sum + count, 0),
+    collapsed_targets: collapsedTargets,
+    cascade_preview: {
+      parent_child_overlap_collapsed: collapsedTargets.length > 0,
+      collapsed_count: collapsedTargets.length,
+      note: "Exact Track-FX children are collapsed when their owning Track is already confirmed for deletion; other rows remain explicit.",
+    },
     target_hash: targetHash,
     confirmation_token: `delete:${orderedRefs.length}:${targetHash}`,
     filesystem_delete: false,
@@ -331,7 +346,7 @@ function buildPreview(targets) {
 }
 
 function emptyPreview() {
-  return buildPreview({ tracks: [], items: [], markers: [], regions: [] });
+  return buildPreview({ tracks: [], items: [], markers: [], regions: [], fx: [] });
 }
 
 function confirmationFor(preview) {
@@ -357,7 +372,11 @@ function validateConfirmation(confirmScope, expected, preview) {
 function buildMutationRequests(targets) {
   const requests = [];
   let sequence = 1;
+  for (const ref of sortFxRefsForDeletion(targets.fx ?? [])) {
+    requests.push(childRequest(sequence++, "mutation", DELETE_TEMPLATE_BY_KIND.fx, refsFor("fx", [ref]), {}, `Delete confirmed exact FX ref ${ref} in descending owner-slot order.`));
+  }
   for (const kind of SUPPORTED_REF_KINDS) {
+    if (kind === "fx") continue;
     const refs = targets[kind] ?? [];
     if (refs.length === 0) continue;
     if (kind === "markers" || kind === "regions") {
@@ -371,7 +390,7 @@ function buildMutationRequests(targets) {
 
 function buildReadbackRequests(targets) {
   const refsByKind = normalizeRefsByKind(targets);
-  const entities = [...new Set(SUPPORTED_REF_KINDS.filter((kind) => refsByKind[kind].length > 0).map((kind) => READBACK_ENTITY_BY_KIND[kind]))];
+  const entities = [...new Set(SUPPORTED_REF_KINDS.filter((kind) => refsByKind[kind].length > 0).map((kind) => READBACK_ENTITY_BY_KIND[kind]).filter(Boolean))];
   return deepFreeze(entities.map((entity, index) => childRequest(index + 1, "absence_readback", "macro.project.query", {}, { entity, refresh_policy: "required", hydrate_refs: false, limit: MAX_TOTAL_REFS }, `Re-read ${entity} after deletion and prove confirmed refs are absent or reported as survivors.`)));
 }
 
@@ -384,6 +403,7 @@ function refsFor(kind, refs) {
   if (kind === "items") return { item_ref: refs };
   if (kind === "markers") return { marker_ref: refs[0] };
   if (kind === "regions") return { region_ref: refs[0] };
+  if (kind === "fx") return { fx_ref: exactFxObjectRef(refs[0]) };
   return {};
 }
 
@@ -393,13 +413,14 @@ function successCriteriaFor(preview) {
     target_counts_by_kind: preview.target_counts_by_kind,
     deletion_boundary: "Only previewed and confirmed project objects may be deleted; filesystem/source-media/hardware/device targets are forbidden.",
     absence_readback: "Agent must execute absence_readback requests and report survivors or mismatches before claiming completion.",
+    fx_absence_readback: "Each exact FX row is applied only when template.fx.delete_fx proves the native FX GUID absent from the complete owner chain.",
     no_executor: "Server executor_call_count remains 0; the agent executes child requests explicitly.",
   });
 }
 
 function agentExecutionFlow(preview) {
   return deepFreeze({
-    instruction: "Execute mutation_requests in order, then absence readback requests. Stop and report typed blockers if any child request fails.",
+    instruction: "Execute exact FX deletes in descending owner-slot order, then remaining mutation_requests and absence readback requests. Stop and report typed blockers if any child request fails.",
     child_request_policy: "serial_agent_executed_call_template_only",
     confirmed_target_count: preview.total_count,
     stop_on_blocker: true,
@@ -435,6 +456,56 @@ function requestPosture(request = {}) {
 
 function summarizeRuntimeRequest(request) {
   return { id: request.id ?? ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID, input_keys: isPlainObject(request.input) ? Object.keys(request.input).sort() : [], idempotency_key_present: requestPosture(request).idempotency_key_present };
+}
+
+function collapseOverlappingTargets(targets) {
+  const normalized = Object.fromEntries(SUPPORTED_REF_KINDS.map((kind) => [kind, [...(targets?.[kind] ?? [])]]));
+  const tracks = new Set(normalized.tracks);
+  const rows = [];
+  normalized.fx = normalized.fx.filter((ref) => {
+    const parsed = parseExactFxRef(ref);
+    if (parsed?.owner_kind !== "track" || !tracks.has(parsed.owner_ref)) return true;
+    rows.push({ ref, parent_ref: parsed.owner_ref, reason: "owning_track_delete_cascades_fx" });
+    return false;
+  });
+  return { targets: deepFreeze(normalized), rows: deepFreeze(rows) };
+}
+
+function parseExactFxRef(ref) {
+  if (typeof ref !== "string") return null;
+  const match = /^fx:(track|take):guid:([^:]+):(\d+)$/u.exec(ref);
+  if (!match) return null;
+  const slotIndex = Number(match[3]);
+  if (!Number.isSafeInteger(slotIndex) || slotIndex < 0) return null;
+  return {
+    ref,
+    owner_kind: match[1],
+    owner_guid: match[2],
+    owner_ref: `${match[1]}:guid:${match[2]}`,
+    slot_index: slotIndex,
+  };
+}
+
+function sortFxRefsForDeletion(refs) {
+  return [...refs].sort((left, right) => {
+    const a = parseExactFxRef(left);
+    const b = parseExactFxRef(right);
+    const ownerOrder = a.owner_ref.localeCompare(b.owner_ref);
+    return ownerOrder !== 0 ? ownerOrder : b.slot_index - a.slot_index;
+  });
+}
+
+function exactFxObjectRef(ref) {
+  const parsed = parseExactFxRef(ref);
+  if (!parsed) return null;
+  return {
+    kind: "fx",
+    ref,
+    identity: {
+      scheme: `${parsed.owner_kind}_fx`,
+      value: `${parsed.owner_kind}:guid:${parsed.owner_guid}:${parsed.slot_index}`,
+    },
+  };
 }
 
 function normalizeRefsByKind(targets) {

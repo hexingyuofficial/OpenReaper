@@ -40,8 +40,8 @@ const INTENT_ROUTES = deepFreeze([
     term("查找", 6), term("搜索", 6), term("查询", 6), term("定位", 5),
   ]),
   intent("macro.project.delete_targets", [
-    term("delete target", 9), term("delete track", 9), term("delete item", 9), term("remove track", 8), term("remove item", 8), term("cleanup project", 6),
-    term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("移除轨道", 8), term("清理项目", 6),
+    term("delete target", 9), term("delete track", 9), term("delete item", 9), term("delete fx", 10), term("remove fx", 9), term("remove track", 8), term("remove item", 8), term("cleanup project", 6),
+    term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("删除fx", 10), term("移除效果器", 9), term("移除轨道", 8), term("清理项目", 6),
   ]),
   intent("macro.project.apply_layout", [
     term("create track", 9), term("create folder", 9), term("track layout", 8), term("organize tracks", 8),
@@ -51,8 +51,8 @@ const INTENT_ROUTES = deepFreeze([
     term("save as", 10), term("save project", 9), term("save", 6), term("另存为", 10), term("保存项目", 9), term("保存", 6),
   ], ["new project", "open project", "create project", "新建项目", "打开项目", "创建项目"]),
   intent("macro.routing.apply", [
-    term("routing", 8), term("route track", 8), term("create send", 9), term("send to", 7), term("sidechain", 8), term("bus", 5),
-    term("路由", 8), term("发送到", 7), term("创建send", 9), term("侧链", 8), term("总线", 5),
+    term("routing", 8), term("route track", 8), term("create send", 9), term("remove send", 10), term("delete send", 10), term("send to", 7), term("sidechain", 8), term("bus", 5),
+    term("路由", 8), term("发送到", 7), term("创建send", 9), term("删除send", 10), term("移除发送", 10), term("侧链", 8), term("总线", 5),
   ]),
   intent("macro.media.place_assets", [
     term("import audio", 10), term("import media", 10), term("import sample", 9), term("place assets", 9), term("place media", 9),

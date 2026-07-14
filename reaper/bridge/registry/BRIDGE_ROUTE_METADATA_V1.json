@@ -3,11 +3,11 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 224,
+    "entryCount": 227,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 224,
-    "handlerModuleCount": 84,
-    "routeCount": 33,
+    "extractedHandlerCount": 227,
+    "handlerModuleCount": 87,
+    "routeCount": 34,
     "operationCount": 102
   },
   "routes": [
@@ -929,6 +929,32 @@
         "template.midi.insert_notes_batch",
         "template.midi.insert_cc_batch",
         "template.midi.insert_text_sysex_events"
+      ]
+    },
+    {
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "template_count": 3,
+      "handler_module_count": 3,
+      "operation_count": 3,
+      "packs": [
+        "fx",
+        "items",
+        "routing"
+      ],
+      "risks": [
+        "destructive",
+        "write"
+      ],
+      "artifact_policies": [
+        "none"
+      ],
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ],
+      "template_ids": [
+        "template.fx.delete_fx",
+        "template.routing.remove_send",
+        "template.items.move_item_to_track"
       ]
     }
   ]

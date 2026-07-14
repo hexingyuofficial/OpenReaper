@@ -3716,6 +3716,57 @@
       "tests": [
         "tests/layer4dx/safe-write-a-handler-expansion.test.mjs"
       ]
+    },
+    {
+      "template_id": "template.fx.delete_fx",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "fx",
+      "risk": "destructive",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "fx/delete_fx.lua",
+      "handler_export": "alpha33_delete_fx",
+      "artifact_policy": "none",
+      "capability": "fx.delete_fx",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.routing.remove_send",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "routing",
+      "risk": "destructive",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "routing/remove_send.lua",
+      "handler_export": "alpha33_remove_send",
+      "artifact_policy": "none",
+      "capability": "routing.remove_send",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.items.move_item_to_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "write",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "items/move_item_to_track.lua",
+      "handler_export": "alpha33_move_item_to_track",
+      "artifact_policy": "none",
+      "capability": "items.move_item_to_track",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
     }
   ]
 }

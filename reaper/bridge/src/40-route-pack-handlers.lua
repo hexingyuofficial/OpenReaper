@@ -793,6 +793,9 @@ local SAFE_WRITE_A_HANDLERS = {
   ["midi.insert_notes_batch"] = safe_write_insert_notes_batch,
   ["midi.insert_cc_batch"] = safe_write_insert_cc_batch,
   ["midi.insert_text_sysex_events"] = safe_write_insert_text_sysex_events,
+  ["fx.delete_fx"] = alpha33_delete_fx,
+  ["routing.remove_send"] = alpha33_remove_send,
+  ["items.move_item_to_track"] = alpha33_move_item_to_track,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

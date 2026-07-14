@@ -23,6 +23,9 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["midi.insert_notes_batch"] = { pack = "midi", risk = "write" },
   ["midi.insert_cc_batch"] = { pack = "midi", risk = "write" },
   ["midi.insert_text_sysex_events"] = { pack = "midi", risk = "write" },
+  ["fx.delete_fx"] = { pack = "fx", risk = "destructive" },
+  ["routing.remove_send"] = { pack = "routing", risk = "destructive" },
+  ["items.move_item_to_track"] = { pack = "items", risk = "write" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {

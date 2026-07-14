@@ -22,6 +22,7 @@ const SET_SEND_PAN_ID = "template.routing.set_send_pan";
 const SET_SEND_MUTE_ID = "template.routing.set_send_mute";
 const SET_MASTER_PARENT_ID = "template.routing.set_master_parent_send";
 const SET_CHANNEL_COUNT_ID = "template.routing.set_track_channel_count";
+const REMOVE_SEND_ID = "template.routing.remove_send";
 const READ_TRACK_ROUTING_ID = "template.routing.read_track_routing";
 
 export function isAlpha3_2ERoutingApplyMacroId(id) {
@@ -114,7 +115,7 @@ export function createAlpha3_2ERoutingApplyMacroDiscoveryItems(options = {}) {
   return deepFreeze([{
     id: ALPHA3_2E_ROUTING_APPLY_MACRO_ID,
     title: "Apply internal routing",
-    summary: "Preview or execute bounded internal track-send, master-parent, and track-channel routing changes with live resolution and readback.",
+    summary: "Preview or execute bounded internal track-send creation, control, exact removal, master-parent, and track-channel changes with live resolution and readback.",
     pack: "routing",
     risk: "write",
     lifecycle: "accepted",
@@ -158,6 +159,9 @@ export function createAlpha3_2ERoutingApplyMacroDiscoveryItems(options = {}) {
         routes: [{ id: "vox_to_verb", action: "create", source_track_ref: "track:guid:{VOX}", destination_track_ref: "track:guid:{VERB}", volume: 0.5, pan: 0, muted: false }],
         dry_run: true,
       },
+    }, {
+      name: "remove_exact_internal_send",
+      input: { routes: [{ id: "remove_old_verb", action: "delete", send_ref: "send:track:guid:{SOURCE}:2" }], dry_run: true },
     }],
   }]);
 }
@@ -195,13 +199,16 @@ function normalizeRoutes(value) {
     else ids.add(id.value);
     const action = row.action ?? (row.send_ref ? "update" : "create");
     if (!["create", "update", "delete"].includes(action)) blockers.push(blocker("ROUTING_ROUTE_ACTION_INVALID", "Route action must be create, update, or delete.", { id: id.value, action }));
-    if (action === "delete") blockers.push(blocker("ROUTE_DELETE_NOT_AUDITED", "Ordinary send deletion is not audited for macro.routing.apply yet.", { id: id.value }));
     if (row.source_track_ref !== undefined && !isTrackRef(row.source_track_ref)) blockers.push(blocker("ROUTING_SOURCE_TRACK_REF_INVALID", "source_track_ref must be a canonical track ref.", { id: id.value }));
     if (row.destination_track_ref !== undefined && !isTrackRef(row.destination_track_ref)) blockers.push(blocker("ROUTING_DESTINATION_TRACK_REF_INVALID", "destination_track_ref must be a canonical internal track ref; hardware/device endpoints are blocked.", { id: id.value }));
     if (isDeviceEndpoint(row.destination_track_ref) || isDeviceEndpoint(row.source_track_ref)) blockers.push(blocker("ROUTING_DEVICE_ENDPOINT_FORBIDDEN", "Hardware/device routing endpoints are hard-stopped.", { id: id.value }));
     if (row.send_ref !== undefined && !isSendRef(row.send_ref)) blockers.push(blocker("ROUTING_SEND_REF_INVALID", "send_ref must be a canonical send ref when supplied.", { id: id.value }));
     if (action === "create" && (!isTrackRef(row.source_track_ref) || !isTrackRef(row.destination_track_ref))) blockers.push(blocker("ROUTING_CREATE_REFS_REQUIRED", "Create route rows require source_track_ref and destination_track_ref.", { id: id.value }));
     if (action === "update" && !isSendRef(row.send_ref)) blockers.push(blocker("ROUTING_UPDATE_SEND_REF_REQUIRED", "Update route rows require send_ref.", { id: id.value }));
+    if (action === "delete" && !parseExactSendRef(row.send_ref)) blockers.push(blocker("ROUTING_DELETE_SEND_REF_REQUIRED", "Delete route rows require one exact send:track:guid:<SOURCE_GUID>:<index> ref.", { id: id.value }));
+    if (action === "delete" && [row.source_track_ref, row.destination_track_ref, row.duplicate_policy, row.volume, row.pan, row.muted].some((entry) => entry !== undefined)) {
+      blockers.push(blocker("ROUTING_DELETE_FIELDS_UNSUPPORTED", "Delete route rows accept only id, action, and exact send_ref so removal cannot be retargeted implicitly.", { id: id.value }));
+    }
     if (row.duplicate_policy !== undefined && !["reject_existing", "allow_duplicate"].includes(row.duplicate_policy)) blockers.push(blocker("ROUTING_DUPLICATE_POLICY_INVALID", "duplicate_policy must be reject_existing or allow_duplicate.", { id: id.value }));
     if (row.volume !== undefined && !isNumberInRange(row.volume, 0, 4)) blockers.push(blocker("ROUTING_SEND_VOLUME_INVALID", "volume must be a finite scalar from 0 through 4.", { id: id.value }));
     if (row.pan !== undefined && !isNumberInRange(row.pan, -1, 1)) blockers.push(blocker("ROUTING_SEND_PAN_INVALID", "pan must be a finite value from -1 through 1.", { id: id.value }));
@@ -253,16 +260,18 @@ function normalizeChannelCounts(value) {
 
 function buildPreview(operations) {
   const routeCreates = operations.routes.filter((row) => row.action === "create");
+  const routeDeletes = operations.routes.filter((row) => row.action === "delete");
   const sendUpdates = operations.routes.filter((row) => row.volume !== undefined || row.pan !== undefined || row.muted !== undefined);
   return deepFreeze({
     contract: "alpha3.2e.routing_apply.preview.v1",
     target_counts: {
       routes: operations.routes.length,
       create_sends: routeCreates.length,
+      remove_sends: routeDeletes.length,
       send_updates: sendUpdates.length,
       master_parent: operations.master_parent.length,
       channel_counts: operations.channel_counts.length,
-      total_operations: routeCreates.length + sendUpdates.length + operations.master_parent.length + operations.channel_counts.length,
+      total_operations: routeCreates.length + routeDeletes.length + sendUpdates.length + operations.master_parent.length + operations.channel_counts.length,
     },
     routes: operations.routes.map((row) => ({ id: row.id, action: row.action, source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref, send_ref: plannedSendRef(row), volume: row.volume, pan: row.pan, muted: row.muted })),
     master_parent: operations.master_parent.map((row) => ({ id: row.id, track_ref: row.track_ref, enabled: row.enabled })),
@@ -277,7 +286,7 @@ function preflightRequests() {
 function buildMutationRequests(operations) {
   const requests = [];
   let sequence = 1;
-  for (const row of operations.routes) {
+  for (const row of operations.routes.filter((entry) => entry.action !== "delete")) {
     if (row.action === "create") requests.push(childRequest(sequence++, "mutation", CREATE_SEND_ID, { source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref }, { duplicate_policy: row.duplicate_policy }, `Create internal track send ${row.id}.`));
     const sendRef = plannedSendRef(row);
     if (row.volume !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_VOLUME_ID, { send_ref: sendRef }, { volume: row.volume }, `Set send volume for route ${row.id}.`));
@@ -286,6 +295,9 @@ function buildMutationRequests(operations) {
   }
   for (const row of operations.master_parent) requests.push(childRequest(sequence++, "mutation", SET_MASTER_PARENT_ID, { track_ref: row.track_ref }, { enabled: row.enabled }, `Set master-parent routing for ${row.id}.`));
   for (const row of operations.channel_counts) requests.push(childRequest(sequence++, "mutation", SET_CHANNEL_COUNT_ID, { track_ref: row.track_ref }, { channel_count: row.channel_count }, `Set track channel count for ${row.id}.`));
+  for (const row of sortDeleteRoutes(operations.routes.filter((entry) => entry.action === "delete"))) {
+    requests.push(childRequest(sequence++, "mutation", REMOVE_SEND_ID, { send_ref: exactSendObjectRef(row.send_ref) }, {}, `Remove exact internal send for route ${row.id} in descending source-slot order.`));
+  }
   return deepFreeze(requests);
 }
 
@@ -294,6 +306,8 @@ function readbackRequests(operations) {
   for (const row of operations.routes) {
     if (row.source_track_ref) tracks.add(row.source_track_ref);
     if (row.destination_track_ref) tracks.add(row.destination_track_ref);
+    const deleted = parseExactSendRef(row.send_ref);
+    if (row.action === "delete" && deleted) tracks.add(deleted.source_track_ref);
   }
   for (const row of operations.master_parent) tracks.add(row.track_ref);
   for (const row of operations.channel_counts) tracks.add(row.track_ref);
@@ -315,14 +329,14 @@ function successCriteriaFor(preview) {
   return deepFreeze([
     `Project routing preflight succeeds before ${preview.target_counts.total_operations} routing operation(s).`,
     "Every emitted internal routing child request returns accepted template evidence.",
-    "Affected-track routing readback must match the requested sends, master-parent state, and channel counts before success wording.",
+    "Affected-track routing readback must match the requested sends, removals, master-parent state, and channel counts before success wording.",
   ]);
 }
 
 function agentExecutionFlow(preview) {
   return deepFreeze([
     { step: "run_preflight", request_count: 1, stop_on_error: true },
-    { step: "run_mutations", request_count: preview.target_counts.create_sends + preview.target_counts.send_updates + preview.target_counts.master_parent + preview.target_counts.channel_counts, stop_on_error: true },
+    { step: "run_mutations", request_count: preview.target_counts.create_sends + preview.target_counts.remove_sends + preview.target_counts.send_updates + preview.target_counts.master_parent + preview.target_counts.channel_counts, stop_on_error: true },
     { step: "run_readback", request_count: "affected_tracks", stop_on_mismatch: true },
   ]);
 }
@@ -343,6 +357,27 @@ function normalizeId(value, index, prefix) { if (typeof value !== "string" || va
 function isPlainObject(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 function isTrackRef(value) { return typeof value === "string" && value.startsWith("track:") && !/[\u0000-\u001f\u007f]/u.test(value) && !isDeviceEndpoint(value); }
 function isSendRef(value) { return typeof value === "string" && value.startsWith("send:") && !/[\u0000-\u001f\u007f]/u.test(value); }
+function parseExactSendRef(value) {
+  if (typeof value !== "string") return null;
+  const match = /^send:track:guid:([^:]+):(\d+)$/u.exec(value);
+  if (!match) return null;
+  const sendIndex = Number(match[2]);
+  if (!Number.isSafeInteger(sendIndex) || sendIndex < 0) return null;
+  return { ref: value, source_guid: match[1], source_track_ref: `track:guid:${match[1]}`, send_index: sendIndex };
+}
+function sortDeleteRoutes(rows) {
+  return [...rows].sort((left, right) => {
+    const a = parseExactSendRef(left.send_ref);
+    const b = parseExactSendRef(right.send_ref);
+    const ownerOrder = a.source_track_ref.localeCompare(b.source_track_ref);
+    return ownerOrder !== 0 ? ownerOrder : b.send_index - a.send_index;
+  });
+}
+function exactSendObjectRef(value) {
+  const parsed = parseExactSendRef(value);
+  if (!parsed) return null;
+  return { kind: "send", ref: value, identity: { scheme: "track_send", value: `track:guid:${parsed.source_guid}:${parsed.send_index}` } };
+}
 function isDeviceEndpoint(value) { return typeof value === "string" && /^(hardware|device|audio_device|midi_device):/u.test(value); }
 function isNumberInRange(value, min, max) { return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max; }
 function deepFreeze(value) { if (value && typeof value === "object" && !Object.isFrozen(value)) { Object.freeze(value); for (const child of Object.values(value)) deepFreeze(child); } return value; }

@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (224 registered template handler row(s); 0 legacy_monolith row(s); 224 extracted handler row(s); 84 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (227 registered template handler row(s); 0 legacy_monolith row(s); 227 extracted handler row(s); 87 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1456,6 +1456,9 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["midi.insert_notes_batch"] = { pack = "midi", risk = "write" },
   ["midi.insert_cc_batch"] = { pack = "midi", risk = "write" },
   ["midi.insert_text_sysex_events"] = { pack = "midi", risk = "write" },
+  ["fx.delete_fx"] = { pack = "fx", risk = "destructive" },
+  ["routing.remove_send"] = { pack = "routing", risk = "destructive" },
+  ["items.move_item_to_track"] = { pack = "items", risk = "write" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {
@@ -2619,38 +2622,39 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 133,
+  template_count = 227,
   by_pack = {
     actions = 8,
     analysis = 7,
-    automation = 15,
+    automation = 21,
     core = 3,
-    fx = 15,
-    items = 11,
+    fx = 17,
+    items = 33,
     media = 7,
-    midi = 12,
-    project = 12,
-    render = 7,
-    routing = 15,
+    midi = 14,
+    project = 30,
+    render = 26,
+    routing = 21,
     system = 3,
-    tracks = 8,
-    transport = 10,
+    tracks = 21,
+    transport = 16,
   },
   by_risk = {
-    read = 68,
-    safe = 9,
-    write = 56,
+    destructive = 12,
+    read = 81,
+    safe = 12,
+    write = 122,
   },
   by_lifecycle = {
-    experimental = 133,
+    experimental = 227,
   },
   by_entity_kind = {
     action = 4,
     api_symbol = 1,
-    automation_item = 3,
+    automation_item = 4,
     automation_mode = 3,
-    automation_point = 4,
-    channel = 4,
+    automation_point = 7,
+    channel = 5,
     cleanup_report = 1,
     command_id = 1,
     core_state = 2,
@@ -2658,44 +2662,68 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     custom_action = 1,
     cycle_action = 1,
     delivery_report = 1,
-    envelope = 5,
-    fx = 5,
+    envelope = 7,
+    fx = 6,
     fx_chain = 3,
     fx_param = 3,
-    item = 8,
+    ["fx_param.envelope_mapping"] = 1,
+    grid = 2,
+    hardware_output = 4,
+    item = 19,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
     loop_click_risk = 1,
     loop_qa_report = 1,
     loop_state = 3,
-    marker = 2,
+    marker = 5,
     marker_action = 1,
     media_file = 5,
     media_source = 2,
     midi_cc = 3,
     midi_event = 4,
     midi_item = 2,
-    midi_note = 3,
-    output_file = 2,
+    midi_note = 5,
+    output_file = 3,
     peak = 1,
     pin_mapping = 1,
+    playback_rate = 1,
+    plugin = 1,
     preset = 2,
-    project = 7,
-    region = 1,
+    project = 8,
+    project_observation = 1,
+    project_snapshot = 1,
+    project_tab = 1,
+    record_mode = 1,
+    recording = 2,
+    ["recording.punch_range"] = 1,
+    ["recording.schedule"] = 1,
+    region = 4,
     render_job = 1,
+    ["render_job.format"] = 6,
+    ["render_job.item"] = 1,
+    ["render_job.item_selection"] = 1,
+    ["render_job.region_track_filter"] = 1,
+    ["render_job.targets"] = 1,
+    ["render_job.track_item"] = 1,
+    ["render_job.track_selection"] = 1,
     render_matrix = 1,
     render_region = 1,
-    render_setting = 1,
+    render_setting = 7,
     resource_path = 1,
     rms = 1,
-    send = 10,
+    send = 11,
     silence = 1,
+    subproject = 2,
+    subproject_item = 1,
     system_state = 1,
-    take = 2,
-    tempo_map = 1,
+    take = 13,
+    tempo_map = 4,
     time_selection = 2,
-    track = 7,
+    track = 13,
+    track_folder = 4,
+    track_mixer = 1,
+    track_order = 2,
     track_selection = 1,
     transient = 1,
     transport = 4,
@@ -2704,22 +2732,22 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 77,
+  template_count = 227,
   by_pack = {
-    actions = 6,
-    analysis = 3,
-    automation = 0,
+    actions = 8,
+    analysis = 7,
+    automation = 21,
     core = 3,
-    fx = 6,
-    items = 11,
+    fx = 17,
+    items = 33,
     media = 7,
-    midi = 10,
-    project = 12,
-    render = 2,
-    routing = 0,
+    midi = 14,
+    project = 30,
+    render = 26,
+    routing = 21,
     system = 3,
-    tracks = 7,
-    transport = 7,
+    tracks = 21,
+    transport = 16,
   },
 }
 
@@ -24765,6 +24793,836 @@ return {
 }
 end)
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/fx/delete_fx.lua
+__openreaper_register_handler_module("fx/delete_fx.lua", function()
+-- Alpha3.3 exact native FX deletion: template.fx.delete_fx.
+
+local function alpha33_delete_fx_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_delete_fx_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_delete_fx_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_delete_fx_find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and alpha33_delete_fx_track_guid(track) == guid then
+      found = track
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_delete_fx_find_take_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local found = nil
+  local matches = 0
+  for item_index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
+    if ok_item and item then
+      local ok_takes, take_count = call_reaper("CountTakes", item)
+      local total_takes = ok_takes and math.max(0, math.floor(first_number(take_count) or 0)) or 0
+      for take_index = 0, total_takes - 1 do
+        local ok_take, take = call_reaper("GetTake", item, take_index)
+        if ok_take and take and alpha33_delete_fx_take_guid(take) == guid then
+          found = take
+          matches = matches + 1
+        end
+      end
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_delete_fx_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, {
+      code = "REF_INVALID",
+      message = "delete_fx requires exactly one exact FX ref.",
+      details = { ref_count = is_json_array(request.refs) and #request.refs or 0 },
+    }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "fx" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, {
+      code = "REF_INVALID",
+      message = "delete_fx requires one canonical FX ref object.",
+      details = {},
+    }
+  end
+  local owner_kind, owner_guid, slot_text = ref.ref:match("^fx:(track):guid:([^:]+):(%d+)$")
+  if not owner_kind then
+    owner_kind, owner_guid, slot_text = ref.ref:match("^fx:(take):guid:([^:]+):(%d+)$")
+  end
+  if not owner_kind then
+    return nil, {
+      code = "REF_INVALID",
+      message = "delete_fx accepts only exact Track-FX or Take-FX refs whose owner uses a GUID identity.",
+      details = { fx_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  local slot_index = tonumber(slot_text)
+  local expected_scheme = owner_kind .. "_fx"
+  local expected_value = owner_kind .. ":guid:" .. owner_guid .. ":" .. slot_text
+  if ref.identity.scheme ~= expected_scheme or tostring(ref.identity.value) ~= expected_value then
+    return nil, {
+      code = "REF_INVALID",
+      message = "delete_fx FX ref identity does not match its owner and slot.",
+      details = { fx_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return {
+    object_ref = ref,
+    ref = ref.ref,
+    owner_kind = owner_kind,
+    owner_guid = owner_guid,
+    owner_ref = owner_kind .. ":guid:" .. owner_guid,
+    slot_index = math.floor(slot_index),
+  }, nil
+end
+
+local function alpha33_delete_fx_count(owner_kind, owner)
+  local ok, count
+  if owner_kind == "take" then
+    ok, count = call_reaper("TakeFX_GetCount", owner)
+  else
+    ok, count = call_reaper("TrackFX_GetCount", owner)
+  end
+  return ok and math.max(0, math.floor(first_number(count) or 0)) or nil
+end
+
+local function alpha33_delete_fx_guid(owner_kind, owner, slot_index)
+  local ok, guid
+  if owner_kind == "take" then
+    ok, guid = call_reaper("TakeFX_GetFXGUID", owner, slot_index)
+  else
+    ok, guid = call_reaper("TrackFX_GetFXGUID", owner, slot_index)
+  end
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_delete_fx_name(owner_kind, owner, slot_index)
+  local call_ok, api_ok, value
+  if owner_kind == "take" then
+    call_ok, api_ok, value = call_reaper("TakeFX_GetFXName", owner, slot_index, "")
+  else
+    call_ok, api_ok, value = call_reaper("TrackFX_GetFXName", owner, slot_index, "")
+  end
+  value = call_ok and api_ok ~= false and first_string(value) or nil
+  return value and bounded_string(value, 160) or nil
+end
+
+local function alpha33_delete_fx_ident(owner_kind, owner, slot_index)
+  local ok, value_a, value_b
+  if owner_kind == "take" then
+    ok, value_a, value_b = call_reaper("TakeFX_GetNamedConfigParm", owner, slot_index, "fx_ident")
+  else
+    ok, value_a, value_b = call_reaper("TrackFX_GetNamedConfigParm", owner, slot_index, "fx_ident")
+  end
+  return bounded_string(ok and first_string(value_a, value_b) or "", 160)
+end
+
+local function alpha33_delete_fx_guid_occurrences(owner_kind, owner, fx_guid, count)
+  local matches = 0
+  for slot_index = 0, count - 1 do
+    local current_guid = alpha33_delete_fx_guid(owner_kind, owner, slot_index)
+    if not current_guid then
+      return matches, false
+    end
+    if current_guid == fx_guid then
+      matches = matches + 1
+    end
+  end
+  return matches, true
+end
+
+local function alpha33_delete_fx(request)
+  local exact, ref_failure = alpha33_delete_fx_exact_ref(request)
+  if not exact then
+    return alpha33_delete_fx_error(ref_failure.code, ref_failure.message, ref_failure.details)
+  end
+
+  local owner, owner_matches
+  if exact.owner_kind == "take" then
+    owner, owner_matches = alpha33_delete_fx_find_take_by_guid(exact.owner_guid)
+  else
+    owner, owner_matches = alpha33_delete_fx_find_track_by_guid(exact.owner_guid)
+  end
+  if owner_matches == 0 or not owner then
+    return alpha33_delete_fx_error("FX_OWNER_NOT_FOUND", "delete_fx exact owner GUID did not resolve.", {
+      owner_kind = exact.owner_kind,
+      owner_ref = exact.owner_ref,
+    })
+  end
+  if owner_matches ~= 1 then
+    return alpha33_delete_fx_error("REF_INVALID", "delete_fx exact owner GUID resolved more than once.", {
+      owner_kind = exact.owner_kind,
+      owner_ref = exact.owner_ref,
+      duplicate_count = owner_matches,
+    }, false)
+  end
+
+  local count_before = alpha33_delete_fx_count(exact.owner_kind, owner)
+  if count_before == nil then
+    return alpha33_delete_fx_error("COMMAND_FAILED", "delete_fx could not read the complete owner FX chain before mutation.", {
+      owner_ref = exact.owner_ref,
+    }, false)
+  end
+  if exact.slot_index < 0 or exact.slot_index >= count_before then
+    return alpha33_delete_fx_error("FX_SLOT_NOT_FOUND", "delete_fx exact slot is outside the complete owner FX chain.", {
+      fx_ref = exact.ref,
+      fx_count = count_before,
+      slot_index = exact.slot_index,
+    })
+  end
+
+  local fx_guid = alpha33_delete_fx_guid(exact.owner_kind, owner, exact.slot_index)
+  if not fx_guid or fx_guid == "" then
+    return alpha33_delete_fx_error("FX_REF_NOT_FOUND", "delete_fx could not read a native FX GUID for the exact slot.", {
+      fx_ref = exact.ref,
+    }, false)
+  end
+  local guid_matches, chain_complete = alpha33_delete_fx_guid_occurrences(exact.owner_kind, owner, fx_guid, count_before)
+  if not chain_complete then
+    return alpha33_delete_fx_error("COMMAND_FAILED", "delete_fx could not read every native FX GUID in the complete owner chain before mutation.", {
+      fx_ref = exact.ref,
+      fx_guid = fx_guid,
+    }, false)
+  end
+  if guid_matches ~= 1 then
+    return alpha33_delete_fx_error("REF_INVALID", "delete_fx native FX GUID is missing or duplicated in the complete owner chain.", {
+      fx_ref = exact.ref,
+      fx_guid = fx_guid,
+      duplicate_count = guid_matches,
+    }, false)
+  end
+  local name = alpha33_delete_fx_name(exact.owner_kind, owner, exact.slot_index)
+  if not name then
+    return alpha33_delete_fx_error("COMMAND_FAILED", "delete_fx could not read the exact FX name before mutation.", {
+      fx_ref = exact.ref,
+      fx_guid = fx_guid,
+    }, false)
+  end
+  local ident = alpha33_delete_fx_ident(exact.owner_kind, owner, exact.slot_index)
+
+  local command_ok, deleted
+  if exact.owner_kind == "take" then
+    command_ok, deleted = call_reaper("TakeFX_Delete", owner, exact.slot_index)
+  else
+    command_ok, deleted = call_reaper("TrackFX_Delete", owner, exact.slot_index)
+  end
+  if not command_ok or deleted == false then
+    return alpha33_delete_fx_error("COMMAND_FAILED", "REAPER rejected exact FX deletion.", {
+      fx_ref = exact.ref,
+      name = name,
+    }, false)
+  end
+
+  local count_after = alpha33_delete_fx_count(exact.owner_kind, owner)
+  if count_after == nil or count_after ~= count_before - 1 then
+    return alpha33_delete_fx_error("VERIFY_FAILED", "FX chain count did not decrement by exactly one after deletion.", {
+      fx_ref = exact.ref,
+      fx_count_before = count_before,
+      fx_count_after = count_after,
+    }, false)
+  end
+  local remaining_matches, readback_complete = alpha33_delete_fx_guid_occurrences(exact.owner_kind, owner, fx_guid, count_after)
+  if not readback_complete then
+    return alpha33_delete_fx_error("VERIFY_FAILED", "delete_fx could not read every native FX GUID in the complete owner chain after mutation.", {
+      fx_ref = exact.ref,
+      fx_guid = fx_guid,
+    }, false)
+  end
+  if remaining_matches ~= 0 then
+    return alpha33_delete_fx_error("VERIFY_FAILED", "Deleted native FX GUID still exists in the complete owner chain.", {
+      fx_ref = exact.ref,
+      fx_guid = fx_guid,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  return {
+    kind = "fx_deleted",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    deleted_fx_ref = exact.ref,
+    owner_kind = exact.owner_kind,
+    owner_ref = exact.owner_ref,
+    slot_index = exact.slot_index,
+    name = name,
+    ident = ident,
+    fx_guid = fx_guid,
+    fx_count_before = count_before,
+    fx_count_after = count_after,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+end
+return {
+  exports = { alpha33_delete_fx = alpha33_delete_fx },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/routing/remove_send.lua
+__openreaper_register_handler_module("routing/remove_send.lua", function()
+-- Alpha3.3 exact native internal send deletion: template.routing.remove_send.
+
+local function alpha33_remove_send_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_remove_send_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_remove_send_track_ref(track)
+  local guid = alpha33_remove_send_track_guid(track)
+  return guid and ("track:guid:" .. guid) or nil
+end
+
+local function alpha33_remove_send_find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and alpha33_remove_send_track_guid(track) == guid then
+      found = track
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_remove_send_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, {
+      code = "REF_INVALID",
+      message = "remove_send requires exactly one exact internal send ref.",
+      details = { ref_count = is_json_array(request.refs) and #request.refs or 0 },
+    }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "send" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, {
+      code = "REF_INVALID",
+      message = "remove_send requires one canonical send ref object.",
+      details = {},
+    }
+  end
+  local source_guid, index_text = ref.ref:match("^send:track:guid:([^:]+):(%d+)$")
+  if not source_guid then
+    return nil, {
+      code = "REF_INVALID",
+      message = "remove_send accepts only exact category-0 send refs whose source Track uses a GUID identity.",
+      details = { send_ref = bounded_string(ref.ref, 160), category_allowed = 0 },
+    }
+  end
+  local expected_value = "track:guid:" .. source_guid .. ":" .. index_text
+  if ref.identity.scheme ~= "track_send" or tostring(ref.identity.value) ~= expected_value then
+    return nil, {
+      code = "REF_INVALID",
+      message = "remove_send ref identity does not match its source Track and send index.",
+      details = { send_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return {
+    object_ref = ref,
+    ref = ref.ref,
+    source_guid = source_guid,
+    source_ref = "track:guid:" .. source_guid,
+    send_index = math.floor(tonumber(index_text)),
+  }, nil
+end
+
+local function alpha33_remove_send_count(track)
+  local ok, count = call_reaper("GetTrackNumSends", track, 0)
+  return ok and math.max(0, math.floor(first_number(count) or 0)) or nil
+end
+
+local function alpha33_remove_send_value(track, index, key)
+  local ok, value = call_reaper("GetTrackSendInfo_Value", track, 0, index, key)
+  return ok and first_number(value) or nil
+end
+
+local function alpha33_remove_send_snapshot(source_track, send_index)
+  local ok_destination, destination_track = call_reaper("GetTrackSendInfo_Value", source_track, 0, send_index, "P_DESTTRACK")
+  local destination_ref = ok_destination and destination_track and alpha33_remove_send_track_ref(destination_track) or nil
+  if not destination_ref then
+    return nil
+  end
+  local keys = {
+    "D_VOL",
+    "D_PAN",
+    "D_PANLAW",
+    "B_MUTE",
+    "B_PHASE",
+    "B_MONO",
+    "I_SENDMODE",
+    "I_AUTOMODE",
+    "I_SRCCHAN",
+    "I_DSTCHAN",
+    "I_MIDIFLAGS",
+  }
+  local parts = { destination_ref }
+  for index = 1, #keys do
+    local value = alpha33_remove_send_value(source_track, send_index, keys[index])
+    if value == nil then
+      return nil
+    end
+    parts[#parts + 1] = string.format("%.17g", value)
+  end
+  return {
+    destination_track = destination_track,
+    destination_ref = destination_ref,
+    fingerprint = table.concat(parts, "|"),
+  }
+end
+
+local function alpha33_remove_send_fingerprint_occurrences(source_track, fingerprint, count)
+  local matches = 0
+  for send_index = 0, count - 1 do
+    local snapshot = alpha33_remove_send_snapshot(source_track, send_index)
+    if snapshot and snapshot.fingerprint == fingerprint then
+      matches = matches + 1
+    end
+  end
+  return matches
+end
+
+local function alpha33_remove_send(request)
+  local exact, ref_failure = alpha33_remove_send_exact_ref(request)
+  if not exact then
+    return alpha33_remove_send_error(ref_failure.code, ref_failure.message, ref_failure.details)
+  end
+  local source_track, source_matches = alpha33_remove_send_find_track_by_guid(exact.source_guid)
+  if source_matches == 0 or not source_track then
+    return alpha33_remove_send_error("TRACK_NOT_FOUND", "remove_send exact source Track GUID did not resolve.", {
+      source_track_ref = exact.source_ref,
+    })
+  end
+  if source_matches ~= 1 then
+    return alpha33_remove_send_error("REF_INVALID", "remove_send exact source Track GUID resolved more than once.", {
+      source_track_ref = exact.source_ref,
+      duplicate_count = source_matches,
+    }, false)
+  end
+  local count_before = alpha33_remove_send_count(source_track)
+  if count_before == nil then
+    return alpha33_remove_send_error("COMMAND_FAILED", "remove_send could not read the complete category-0 send list.", {
+      source_track_ref = exact.source_ref,
+    }, false)
+  end
+  if exact.send_index < 0 or exact.send_index >= count_before then
+    return alpha33_remove_send_error("SEND_NOT_FOUND", "remove_send exact index is outside the complete category-0 send list.", {
+      send_ref = exact.ref,
+      send_count = count_before,
+    })
+  end
+  local before = alpha33_remove_send_snapshot(source_track, exact.send_index)
+  if not before then
+    return alpha33_remove_send_error("SEND_NOT_FOUND", "remove_send could not prove the destination identity for the exact send.", {
+      send_ref = exact.ref,
+    })
+  end
+  local destination_track, destination_matches = alpha33_remove_send_find_track_by_guid(
+    before.destination_ref:match("^track:guid:(.+)$")
+  )
+  if destination_matches ~= 1 or destination_track ~= before.destination_track then
+    return alpha33_remove_send_error("REF_INVALID", "remove_send destination Track GUID was missing or duplicated during preflight.", {
+      send_ref = exact.ref,
+      destination_track_ref = before.destination_ref,
+      duplicate_count = destination_matches,
+    }, false)
+  end
+  local fingerprint_matches = alpha33_remove_send_fingerprint_occurrences(source_track, before.fingerprint, count_before)
+  if fingerprint_matches ~= 1 then
+    return alpha33_remove_send_error("REF_INVALID", "remove_send exact routing fingerprint is duplicated and cannot be proved absent after deletion.", {
+      send_ref = exact.ref,
+      destination_track_ref = before.destination_ref,
+      duplicate_count = fingerprint_matches,
+    }, false)
+  end
+
+  local command_ok, removed = call_reaper("RemoveTrackSend", source_track, 0, exact.send_index)
+  if not command_ok or removed == false then
+    return alpha33_remove_send_error("COMMAND_FAILED", "REAPER rejected exact category-0 send deletion.", {
+      send_ref = exact.ref,
+      category = 0,
+    }, false)
+  end
+  local count_after = alpha33_remove_send_count(source_track)
+  if count_after == nil or count_after ~= count_before - 1 then
+    return alpha33_remove_send_error("VERIFY_FAILED", "Category-0 send count did not decrement by exactly one.", {
+      send_ref = exact.ref,
+      send_count_before = count_before,
+      send_count_after = count_after,
+    }, false)
+  end
+  if alpha33_remove_send_fingerprint_occurrences(source_track, before.fingerprint, count_after) ~= 0 then
+    return alpha33_remove_send_error("VERIFY_FAILED", "Deleted routing fingerprint still exists in the complete source routing list.", {
+      send_ref = exact.ref,
+      destination_track_ref = before.destination_ref,
+    }, false)
+  end
+  call_reaper("TrackList_AdjustWindows", false)
+  call_reaper("UpdateArrange")
+
+  return {
+    kind = "send_deleted",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    deleted_send_ref = exact.ref,
+    source_track_ref = exact.source_ref,
+    destination_track_ref = before.destination_ref,
+    send_index = exact.send_index,
+    category = 0,
+    fingerprint = before.fingerprint,
+    send_count_before = count_before,
+    send_count_after = count_after,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+end
+return {
+  exports = { alpha33_remove_send = alpha33_remove_send },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/move_item_to_track.lua
+__openreaper_register_handler_module("items/move_item_to_track.lua", function()
+-- Alpha3.3 exact native Item owner move: template.items.move_item_to_track.
+
+local function alpha33_move_item_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_move_item_item_guid(item)
+  local ok, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_move_item_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_move_item_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  return ok and first_string(guid) or nil
+end
+
+local function alpha33_move_item_find_item_by_guid(guid)
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item and alpha33_move_item_item_guid(item) == guid then
+      found = item
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_move_item_find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and alpha33_move_item_track_guid(track) == guid then
+      found = track
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_move_item_exact_guid_ref(ref, kind)
+  if not is_object(ref) or ref.kind ~= kind or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil
+  end
+  local value = ref.ref:match("^" .. kind .. ":guid:([^:]+)$")
+  if not value or ref.identity.scheme ~= "guid" or tostring(ref.identity.value) ~= value then
+    return nil
+  end
+  return { value = value, ref = ref.ref, object_ref = ref }
+end
+
+local function alpha33_move_item_request_refs(request)
+  if not is_json_array(request.refs) or #request.refs ~= 2 then
+    return nil, nil, {
+      code = "REF_INVALID",
+      message = "move_item_to_track requires exactly one exact Item GUID ref and one exact target Track GUID ref.",
+      details = { ref_count = is_json_array(request.refs) and #request.refs or 0 },
+    }
+  end
+  local item_ref = nil
+  local track_ref = nil
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "item" and not item_ref then
+      item_ref = alpha33_move_item_exact_guid_ref(ref, "item")
+    elseif is_object(ref) and ref.kind == "track" and not track_ref then
+      track_ref = alpha33_move_item_exact_guid_ref(ref, "track")
+    else
+      return nil, nil, {
+        code = "REF_INVALID",
+        message = "move_item_to_track accepts one Item ref and one target Track ref only.",
+        details = { ref_index = index - 1 },
+      }
+    end
+  end
+  if not item_ref or not track_ref then
+    return nil, nil, {
+      code = "REF_INVALID",
+      message = "move_item_to_track rejects selected and index aliases; both refs must use exact GUID identities.",
+      details = {},
+    }
+  end
+  return item_ref, track_ref, nil
+end
+
+local function alpha33_move_item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or nil
+end
+
+local function alpha33_move_item_owner(item)
+  local ok, track = call_reaper("GetMediaItemTrack", item)
+  if ok and track then
+    return track
+  end
+  ok, track = call_reaper("GetMediaItem_Track", item)
+  return ok and track or nil
+end
+
+local function alpha33_move_item_take_snapshot(item)
+  local ok_count, count = call_reaper("CountTakes", item)
+  if not ok_count then
+    return nil
+  end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  local take_guids = {}
+  local take_refs = json_array({})
+  for index = 0, total - 1 do
+    local ok_take, take = call_reaper("GetTake", item, index)
+    local guid = ok_take and take and alpha33_move_item_take_guid(take) or nil
+    if not guid or guid == "" then
+      return nil
+    end
+    take_guids[#take_guids + 1] = guid
+    take_refs[#take_refs + 1] = "take:guid:" .. guid
+  end
+  local ok_active, active_take = call_reaper("GetActiveTake", item)
+  if not ok_active then
+    return nil
+  end
+  local active_guid = active_take and alpha33_move_item_take_guid(active_take) or ""
+  if active_take and (not active_guid or active_guid == "") then
+    return nil
+  end
+  return {
+    count = total,
+    guids = take_guids,
+    refs = take_refs,
+    active_guid = active_guid or "",
+    active_ref = active_guid and active_guid ~= "" and ("take:guid:" .. active_guid) or "",
+  }
+end
+
+local function alpha33_move_item_same_takes(before, after)
+  if not before or not after or before.count ~= after.count or before.active_guid ~= after.active_guid then
+    return false
+  end
+  for index = 1, before.count do
+    if before.guids[index] ~= after.guids[index] then
+      return false
+    end
+  end
+  return true
+end
+
+local function alpha33_move_item_track_ref_object(ref, guid)
+  return {
+    kind = "track",
+    ref = ref,
+    identity = { scheme = "guid", value = guid },
+  }
+end
+
+local function alpha33_move_item_to_track(request)
+  local item_ref, target_ref, ref_failure = alpha33_move_item_request_refs(request)
+  if ref_failure then
+    return alpha33_move_item_error(ref_failure.code, ref_failure.message, ref_failure.details)
+  end
+  local item, item_matches = alpha33_move_item_find_item_by_guid(item_ref.value)
+  if item_matches == 0 or not item then
+    return alpha33_move_item_error("ITEM_NOT_FOUND", "move_item_to_track exact Item GUID did not resolve.", {
+      item_ref = item_ref.ref,
+    })
+  end
+  if item_matches ~= 1 then
+    return alpha33_move_item_error("REF_INVALID", "move_item_to_track exact Item GUID resolved more than once.", {
+      item_ref = item_ref.ref,
+      duplicate_count = item_matches,
+    }, false)
+  end
+  local target_track, target_matches = alpha33_move_item_find_track_by_guid(target_ref.value)
+  if target_matches == 0 or not target_track then
+    return alpha33_move_item_error("TRACK_NOT_FOUND", "move_item_to_track exact existing target Track GUID did not resolve.", {
+      target_track_ref = target_ref.ref,
+    })
+  end
+  if target_matches ~= 1 then
+    return alpha33_move_item_error("REF_INVALID", "move_item_to_track exact target Track GUID resolved more than once.", {
+      target_track_ref = target_ref.ref,
+      duplicate_count = target_matches,
+    }, false)
+  end
+
+  local source_track = alpha33_move_item_owner(item)
+  local source_guid = source_track and alpha33_move_item_track_guid(source_track) or nil
+  local position_before = alpha33_move_item_number(item, "D_POSITION")
+  local length_before = alpha33_move_item_number(item, "D_LENGTH")
+  local takes_before = alpha33_move_item_take_snapshot(item)
+  local ok_tracks, track_count_before_value = call_reaper("CountTracks", 0)
+  local track_count_before = ok_tracks and math.max(0, math.floor(first_number(track_count_before_value) or 0)) or nil
+  if not source_guid or position_before == nil or length_before == nil or not takes_before or track_count_before == nil then
+    return alpha33_move_item_error("COMMAND_FAILED", "move_item_to_track could not capture complete preflight identity and content readback.", {
+      item_ref = item_ref.ref,
+      target_track_ref = target_ref.ref,
+    }, false)
+  end
+  local max_items = is_object(request.budget) and math.floor(tonumber(request.budget.max_items) or 50) or 50
+  if takes_before.count > math.max(1, max_items) then
+    return alpha33_move_item_error("RESPONSE_TOO_LARGE", "move_item_to_track cannot return complete ordered Take identity readback within the request item budget.", {
+      item_ref = item_ref.ref,
+      take_count = takes_before.count,
+      max_items = math.max(1, max_items),
+    })
+  end
+
+  local command_ok, moved = call_reaper("MoveMediaItemToTrack", item, target_track)
+  if not command_ok or moved == false then
+    return alpha33_move_item_error("COMMAND_FAILED", "REAPER rejected exact Item move to the existing target Track.", {
+      item_ref = item_ref.ref,
+      target_track_ref = target_ref.ref,
+    }, false)
+  end
+  local readback_item, readback_matches = alpha33_move_item_find_item_by_guid(item_ref.value)
+  local readback_track = readback_item and alpha33_move_item_owner(readback_item) or nil
+  local readback_track_guid = readback_track and alpha33_move_item_track_guid(readback_track) or nil
+  local position_after = readback_item and alpha33_move_item_number(readback_item, "D_POSITION") or nil
+  local length_after = readback_item and alpha33_move_item_number(readback_item, "D_LENGTH") or nil
+  local takes_after = readback_item and alpha33_move_item_take_snapshot(readback_item) or nil
+  local ok_tracks_after, track_count_after_value = call_reaper("CountTracks", 0)
+  local track_count_after = ok_tracks_after and math.max(0, math.floor(first_number(track_count_after_value) or 0)) or nil
+  if readback_matches ~= 1 or readback_track_guid ~= target_ref.value then
+    return alpha33_move_item_error("VERIFY_FAILED", "Moved Item owner readback did not exactly match the target Track GUID.", {
+      item_ref = item_ref.ref,
+      expected_target_track_ref = target_ref.ref,
+      actual_target_track_guid = readback_track_guid,
+    }, false)
+  end
+  if position_after == nil or length_after == nil or math.abs(position_after - position_before) > 0.000000001 or math.abs(length_after - length_before) > 0.000000001 then
+    return alpha33_move_item_error("VERIFY_FAILED", "Moved Item position or length changed unexpectedly.", {
+      item_ref = item_ref.ref,
+      position_before = position_before,
+      position_after = position_after,
+      length_before = length_before,
+      length_after = length_after,
+    }, false)
+  end
+  if not alpha33_move_item_same_takes(takes_before, takes_after) then
+    return alpha33_move_item_error("VERIFY_FAILED", "Moved Item take identities, order, or active take changed unexpectedly.", {
+      item_ref = item_ref.ref,
+      take_count_before = takes_before.count,
+      take_count_after = takes_after and takes_after.count or nil,
+    }, false)
+  end
+  if track_count_after ~= track_count_before then
+    return alpha33_move_item_error("VERIFY_FAILED", "move_item_to_track changed the project Track count.", {
+      track_count_before = track_count_before,
+      track_count_after = track_count_after,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local source_ref = "track:guid:" .. source_guid
+  return {
+    kind = "item_moved_to_track",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    item_ref = item_ref.ref,
+    source_track_ref = source_ref,
+    target_track_ref = target_ref.ref,
+    position_seconds = position_after,
+    length_seconds = length_after,
+    take_count = takes_after.count,
+    take_refs = takes_after.refs,
+    active_take_ref = takes_after.active_ref,
+    track_count_unchanged = true,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({
+    item_ref.object_ref,
+    alpha33_move_item_track_ref_object(target_ref.ref, target_ref.value),
+  })
+end
+return {
+  exports = { alpha33_move_item_to_track = alpha33_move_item_to_track },
+  shared = {  },
+}
+end)
+
 local function current_project()
   local ok, project, project_path = call_reaper("EnumProjects", -1, "")
   if ok then
@@ -25560,6 +26418,9 @@ local SAFE_WRITE_A_HANDLERS = {
   ["midi.insert_notes_batch"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_notes_batch,
   ["midi.insert_cc_batch"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_cc_batch,
   ["midi.insert_text_sysex_events"] = OPENREAPER_HANDLER_EXPORTS.safe_write_insert_text_sysex_events,
+  ["fx.delete_fx"] = OPENREAPER_HANDLER_EXPORTS.alpha33_delete_fx,
+  ["routing.remove_send"] = OPENREAPER_HANDLER_EXPORTS.alpha33_remove_send,
+  ["items.move_item_to_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_move_item_to_track,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

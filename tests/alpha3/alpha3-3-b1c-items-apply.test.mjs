@@ -47,6 +47,7 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.deepEqual(entry.dependencies.template_ids, ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS);
     assert.equal(entry.dependencies.template_ids.includes("template.items.set_item_pan"), false);
     assert.equal(entry.dependencies.template_ids.includes("template.items.set_active_take"), true);
+    assert.equal(entry.dependencies.template_ids.includes("template.items.move_item_to_track"), true);
     assert.equal(JSON.stringify(entry.input_schema).includes("steps"), false);
     assert.equal(entry.input_schema.properties.active_take_assignments.maxItems, 8);
 
@@ -59,6 +60,8 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.equal(discovery.held_property_fields.includes("pan"), true);
     assert.equal(discovery.supported_modes.includes("set_active_take"), true);
     assert.equal(discovery.held_modes.includes("set_active_take"), false);
+    assert.equal(discovery.supported_modes.includes("stack_on_existing_tracks"), true);
+    assert.equal(discovery.held_modes.includes("stack_on_existing_tracks"), false);
     const manual = createAlpha3_3B1cItemsApplyExactManual().action_manual;
     assert.match(manual.when_to_use.join(" "), /explicit item_ref\/take_ref assignment rows/u);
     assert.match(manual.when_not_to_use.join(" "), /no REAPER Item-level pan control is proven/u);
@@ -66,6 +69,7 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.match(manual.recovery_steps.join(" "), /multi-Take Item/u);
     assert.match(manual.readback_steps.join(" "), /row by row/u);
     assert.match(manual.readback_steps.join(" "), /native GetActiveTake readback/u);
+    assert.match(manual.readback_steps.join(" "), /exact Item and target Track/u);
   });
 
   it("executes through the public createCallTemplateRuntime facade and verifies the final live Item position", async () => {
@@ -287,6 +291,39 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
       index_maintenance: { status: "completed", scopes: ["items", "takes"] },
     });
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("moves exact Items onto exact existing Tracks with row-specific native readback", async () => {
+    const bridge = new FakeFoundationBridge([item(ITEM_A, 3, 2)]);
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "stack_on_existing_tracks",
+        track_assignments: [{ item_ref: ITEM_A.ref, target_track_ref: "track:guid:{TRACK-B}" }],
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.tracks.resolve_track_ref",
+      "template.items.read_item_summary",
+      "template.items.move_item_to_track",
+    ]);
+    assert.equal(bridge.items.get(ITEM_A.ref).track_ref, "track:guid:{TRACK-B}");
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(result.result.changes[0].before_value, "track:guid:{TRACK-A}");
+    assert.equal(result.result.changes[0].related_ref, "track:guid:{TRACK-B}");
+    assert.deepEqual(result.result.changes[0].live_readback, {
+      status: "passed",
+      source: "exact_item_track_readback",
+      observed_value: "track:guid:{TRACK-B}",
+    });
+    assert.deepEqual(invalidations, [["items", "tracks", "takes"]]);
   });
 
   it("applies fades, exact trim, Take playback, and snap offset through fixed accepted atoms", async () => {
@@ -727,6 +764,10 @@ class FakeFoundationBridge {
       if (!entry) return failure(id, "ITEM_NOT_FOUND", "Fake Item was not found.");
       return execution(id, summary(entry), [entry.item_ref]);
     }
+    if (id === "template.tracks.resolve_track_ref") {
+      const resolved = trackRef(input.track_ref.slice("track:guid:".length));
+      return execution(id, { track_ref: resolved.ref }, [resolved]);
+    }
     const itemReference = refs.item_ref;
     const refString = typeof itemReference === "string" ? itemReference : itemReference?.ref;
     const entry = this.items.get(refString);
@@ -741,6 +782,20 @@ class FakeFoundationBridge {
     if (id === "template.items.move_item") {
       entry.position_seconds = input.position_seconds;
       return execution(id, { ...summary(entry), readback_status: "passed" }, [entry.item_ref]);
+    }
+    if (id === "template.items.move_item_to_track") {
+      const target = refs.target_track_ref;
+      const targetRef = typeof target === "string" ? target : target?.ref;
+      const sourceTrackRef = entry.track_ref;
+      entry.track_ref = targetRef;
+      return execution(id, {
+        ...summary(entry),
+        source_track_ref: sourceTrackRef,
+        target_track_ref: targetRef,
+        take_refs: [...entry.take_refs],
+        track_count_unchanged: true,
+        readback_status: "passed",
+      }, [entry.item_ref, target]);
     }
     if (id === "template.items.set_active_take") {
       const takeReference = refs.take_ref;
@@ -813,6 +868,10 @@ function itemRef(value) {
 
 function takeRef(value) {
   return { kind: "take", ref: `take:guid:${value}`, identity: { scheme: "guid", value } };
+}
+
+function trackRef(value) {
+  return { kind: "track", ref: `track:guid:${value}`, identity: { scheme: "guid", value } };
 }
 
 function item(itemReference, positionSeconds, lengthSeconds, extra = {}) {

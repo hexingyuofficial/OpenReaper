@@ -63,6 +63,32 @@ describe("Alpha3.2-E routing apply planner", () => {
     assert.equal(plan.child_requests.length, plan.preflight_requests.length + plan.mutation_requests.length + plan.readback_requests.length);
   });
 
+  it("emits exact internal send removals in descending source-slot order", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [
+        { id: "low", action: "delete", send_ref: "send:track:guid:{SRC}:1" },
+        { id: "high", action: "delete", send_ref: "send:track:guid:{SRC}:4" },
+        { id: "other", action: "delete", send_ref: "send:track:guid:{OTHER}:2" },
+      ],
+      dry_run: false,
+    });
+    assert.equal(plan.ok, true);
+    assert.equal(plan.preview.target_counts.remove_sends, 3);
+    assert.deepEqual(plan.mutation_requests.map((request) => request.refs.send_ref.ref), [
+      "send:track:guid:{OTHER}:2",
+      "send:track:guid:{SRC}:4",
+      "send:track:guid:{SRC}:1",
+    ]);
+    assert.deepEqual(plan.mutation_requests[1].refs.send_ref.identity, {
+      scheme: "track_send",
+      value: "track:guid:{SRC}:4",
+    });
+    assert.deepEqual(plan.readback_requests.map((request) => request.refs.track_ref), [
+      "track:guid:{SRC}",
+      "track:guid:{OTHER}",
+    ]);
+  });
+
   it("fails closed for delete, hardware/device endpoints, bad refs, bad values, duplicates, and unsupported idempotency", () => {
     const plan = planAlpha3_2ERoutingApplyMacro({
       routes: [
@@ -75,7 +101,7 @@ describe("Alpha3.2-E routing apply planner", () => {
     }, { idempotency_key_present: true });
     const codes = plan.blockers.map((entry) => entry.code);
     assert.equal(plan.ok, false);
-    assert.equal(codes.includes("ROUTE_DELETE_NOT_AUDITED"), true);
+    assert.equal(codes.includes("ROUTING_DELETE_SEND_REF_REQUIRED"), true);
     assert.equal(codes.includes("ROUTING_DEVICE_ENDPOINT_FORBIDDEN"), true);
     assert.equal(codes.includes("ROUTING_DESTINATION_TRACK_REF_INVALID"), true);
     assert.equal(codes.includes("ROUTING_ROUTE_ID_DUPLICATE"), true);

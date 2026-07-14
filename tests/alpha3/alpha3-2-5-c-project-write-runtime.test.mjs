@@ -343,7 +343,84 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.some((call) => call.id === "template.items.delete_items"), true);
     assert.equal(completed.recovery, null);
   });
+
+  it("keeps exact FX deletion applied when live absence readback passes and invalidates only legal index scopes", async () => {
+    const fxRef = "fx:track:guid:{TRACK}:1";
+    const preview = planAlpha3_2EProjectDeleteTargetsMacro({ refs: { fx: [fxRef] }, dry_run: true });
+    const invalidations = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.delete_targets",
+        input: { refs: preview.preview.refs_by_kind, dry_run: false, confirm_scope: preview.required_confirm_scope },
+      },
+      executeAtomic: async ({ id, input = {}, refs = {} }) => {
+        if (id === "template.fx.delete_fx") {
+          return successfulExecution(id, {
+            deleted_fx_ref: fxRef,
+            owner_ref: "track:guid:{TRACK}",
+            readback_status: "passed",
+          }, [refs.fx_ref]);
+        }
+        if (id === "template.fx.resolve_fx_ref") {
+          return successfulExecution(id, { fx_ref: fxRef }, [{
+            kind: "fx",
+            ref: fxRef,
+            identity: { scheme: "track_fx", value: "track:guid:{TRACK}:1" },
+          }]);
+        }
+        throw new Error(`Unexpected atomic call ${id}:${JSON.stringify(input)}`);
+      },
+      projectIndexRuntime: {
+        status: () => ({ snapshot_id: "snapshot:fx-delete", revision: 3 }),
+        invalidateScopes: ({ scopes }) => {
+          invalidations.push(scopes);
+          return { ok: true, status: "scopes_invalidated", scopes };
+        },
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(result.result.changes[0].live_readback.source, "accepted_template_live_absence_readback");
+    assert.deepEqual(invalidations, [["fx", "tracks", "takes", "automation"]]);
+  });
+
+  it("does not project FX identities or routing fingerprints as canonical refs", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: {
+          routes: [{ id: "send", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+          dry_run: false,
+        },
+      },
+      executeAtomic: async (request) => {
+        const response = await fakeAtomic(calls)(request);
+        if (request.id === "template.routing.create_track_send") {
+          response.result.summary.fingerprint = "track:guid:{DST}|1|0|-1|0";
+          response.result.summary.internal_identity = "track:guid:{SRC}:0";
+        }
+        return response;
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.canonical_refs.includes("track:guid:{DST}|1|0|-1|0"), false);
+    assert.equal(result.result.canonical_refs.includes("track:guid:{SRC}:0"), false);
+  });
 });
+
+function successfulExecution(id, summary, refs = []) {
+  return {
+    ok: true,
+    request: { id: `evidence:${id}` },
+    verification: { status: "passed" },
+    result: { summary, readback: summary, refs },
+  };
+}
 
 function fakeAtomic(calls, options = {}) {
   return async ({ id, input = {}, refs = {}, budget }) => {

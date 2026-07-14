@@ -31,6 +31,7 @@ const ITEM_ID_RESOLVER_ID = "template.items.resolve_item_ref";
 const ITEM_RESOLVER_ID = ITEM_ID_RESOLVER_ID;
 const MARKER_REGION_RESOLVER_ID = "template.project.list_markers_regions";
 const SEND_RESOLVER_ID = "template.routing.resolve_send_ref";
+const FX_RESOLVER_ID = "template.fx.resolve_fx_ref";
 const MAX_MUTATIONS = 256;
 const LAYOUT_EVIDENCE_REF_MAX_COUNT = 16;
 const LAYOUT_EVIDENCE_REF_MAX_BYTES = 128;
@@ -64,8 +65,8 @@ const PROGRAMS = Object.freeze({
     undoPolicy: "per_stage_undo",
     planner: planAlpha3_2EProjectDeleteTargetsMacro,
     templateIds: [
-      "template.tracks.list_tracks", TRACK_RESOLVER_ID, ITEM_RESOLVER_ID, ITEM_ID_RESOLVER_ID, MARKER_REGION_RESOLVER_ID,
-      "template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region",
+      "template.tracks.list_tracks", TRACK_RESOLVER_ID, ITEM_RESOLVER_ID, ITEM_ID_RESOLVER_ID, MARKER_REGION_RESOLVER_ID, FX_RESOLVER_ID,
+      "template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region", "template.fx.delete_fx",
     ],
     dryReads: [read("template.tracks.list_tracks", { limit: 100 }), read(MARKER_REGION_RESOLVER_ID, { limit: 250 })],
     confirmRequired: true,
@@ -93,7 +94,7 @@ const PROGRAMS = Object.freeze({
       "template.routing.read_project_routing_graph", TRACK_RESOLVER_ID, SEND_RESOLVER_ID,
       "template.routing.create_track_send", "template.routing.set_send_volume", "template.routing.set_send_pan",
       "template.routing.set_send_mute", "template.routing.set_master_parent_send", "template.routing.set_track_channel_count",
-      "template.routing.read_track_routing",
+      "template.routing.remove_send", "template.routing.read_track_routing",
     ],
     dryReads: [read("template.routing.read_project_routing_graph", { include_master_parent: true, max_tracks: 128, max_edges: 256 })],
     internalRoutingOnly: true,
@@ -168,7 +169,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     initializeLayoutOperationOutcomes(state, plan);
   }
   try {
-    const selectionReads = dryRun ? program.dryReads : plan.preflight_requests ?? [];
+    const selectionReads = dryRun ? dryReadsForPlan(program, plan) : plan.preflight_requests ?? [];
     for (const child of selectionReads) {
       const readRequest = child.id === "template.media.probe_file" && child.input === null
         ? null
@@ -368,6 +369,18 @@ function resolverFor(key, ref) {
   return null;
 }
 
+function parseExactFxOwner(ref) {
+  const match = typeof ref === "string" ? /^fx:(track|take):guid:([^:]+):(\d+)$/u.exec(ref) : null;
+  if (!match) return null;
+  const slotIndex = Number(match[3]);
+  if (!Number.isSafeInteger(slotIndex) || slotIndex < 0) return null;
+  return { owner_kind: match[1], owner_ref: `${match[1]}:guid:${match[2]}`, slot_index: slotIndex };
+}
+
+function exactGuidObjectRef(kind, ref) {
+  return { kind, ref, identity: { scheme: "guid", value: ref.slice(`${kind}:guid:`.length) } };
+}
+
 async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, mutation = null, plan = null, now }) {
   const execution = await executeAtomic({ id, input, refs: materializeRefs(refs, state), context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
   const evidence = boundedProgramEvidenceRefs(program, evidenceRefs(execution));
@@ -392,6 +405,24 @@ function verificationReads(program, plan, state) {
   const reads = (plan.readback_requests ?? []).filter((entry) => !entry.id.startsWith("macro."));
   if (reads.length > 0) return reads;
   return program.dryReads;
+}
+
+function dryReadsForPlan(program, plan) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) return program.dryReads;
+  const reads = [...program.dryReads];
+  for (const itemRef of plan.preview?.refs_by_kind?.items ?? []) {
+    reads.push(read(ITEM_ID_RESOLVER_ID, { ref: itemRef }));
+  }
+  for (const fxRef of plan.preview?.refs_by_kind?.fx ?? []) {
+    const parsed = parseExactFxOwner(fxRef);
+    if (!parsed) continue;
+    reads.push({
+      id: FX_RESOLVER_ID,
+      input: { owner_kind: parsed.owner_kind, slot_index: parsed.slot_index },
+      refs: { [`${parsed.owner_kind}_ref`]: exactGuidObjectRef(parsed.owner_kind, parsed.owner_ref) },
+    });
+  }
+  return reads;
 }
 
 async function verifyDeletedTargets({ program, plan, request, executeAtomic, stages, state, now }) {
@@ -447,6 +478,12 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
   }
   for (const change of state.changes) {
     if (change.mutation?.status !== "completed") continue;
+    if (change.template_id === "template.fx.delete_fx") {
+      if (change.live_readback?.status !== "passed") {
+        throw coded("DELETE_FX_READBACK_MISSING", "An exact FX deletion completed without row-specific native absence readback.");
+      }
+      continue;
+    }
     change.status = "applied";
     change.live_readback = {
       status: "passed",
@@ -460,23 +497,20 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
     stageIdFor(program, "verify"),
     "verify",
     "completed",
-    "Confirmed deleted track/item/marker/region refs are absent through accepted live reads.",
+    "Confirmed deleted track/item/marker/region refs and exact FX rows are absent through accepted live reads.",
     evidence,
   );
 }
 
 function deleteTargetsFromPlan(plan) {
-  const result = { tracks: [], items: [], markers: [], regions: [] };
+  const result = { tracks: [], items: [], markers: [], regions: [], fx: [] };
   for (const mutation of plan.mutation_requests ?? []) {
-    for (const [key, raw] of Object.entries(mutation.refs ?? {})) {
-      const refs = Array.isArray(raw) ? raw : [raw];
-      for (const ref of refs) {
-        if (typeof ref !== "string") continue;
-        if (key === "track_ref" || ref.startsWith("track:")) result.tracks.push(ref);
-        else if (key === "item_ref" || ref.startsWith("item:")) result.items.push(ref);
-        else if (key === "marker_ref" || ref.startsWith("marker:")) result.markers.push(ref);
-        else if (key === "region_ref" || ref.startsWith("region:")) result.regions.push(ref);
-      }
+    for (const ref of refsInValue(mutation.refs)) {
+      if (ref.startsWith("track:")) result.tracks.push(ref);
+      else if (ref.startsWith("item:")) result.items.push(ref);
+      else if (ref.startsWith("marker:")) result.markers.push(ref);
+      else if (ref.startsWith("region:")) result.regions.push(ref);
+      else if (ref.startsWith("fx:")) result.fx.push(ref);
     }
   }
   return Object.fromEntries(Object.entries(result).map(([key, refs]) => [key, [...new Set(refs)]]));
@@ -501,8 +535,8 @@ function rememberRefs(state, execution) {
   }
   const summary = execution?.result?.summary ?? execution?.result?.readback ?? {};
   for (const [key, value] of Object.entries(summary)) {
-    if (typeof value === "string" && /^(track|item|send|file):/u.test(value)) state.localRefs.set(value, value);
-    if (Array.isArray(value)) for (const ref of value) if (typeof ref === "string" && /^(track|item|send|file):/u.test(ref)) state.canonicalRefs.push(ref);
+    if (isCanonicalProjectRef(value)) state.localRefs.set(value, value);
+    if (Array.isArray(value)) for (const ref of value) if (isCanonicalProjectRef(ref)) state.canonicalRefs.push(ref);
   }
 }
 
@@ -585,13 +619,14 @@ function valueContainsExactString(value, expected) {
 
 function recordCompletedMutation(program, plan, state, mutation, resolvedRefs, execution) {
   if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
+    const deletionReadback = acceptedDeletionReadback(mutation, execution);
     state.changes.push({
       template_id: mutation.id,
       purpose: mutation.purpose ?? null,
       target_refs: unique([...refsInValue(resolvedRefs), ...collectedRefs(execution)]),
-      status: "mutation_completed",
+      status: deletionReadback ? "applied" : "mutation_completed",
       mutation: { status: "completed", verification_status: "passed" },
-      live_readback: { status: "pending" },
+      live_readback: deletionReadback ?? { status: "pending" },
       index_maintenance: { status: "pending" },
     });
     return;
@@ -605,6 +640,20 @@ function recordCompletedMutation(program, plan, state, mutation, resolvedRefs, e
     change.mutation.status = completed ? "completed" : "in_progress";
     change.status = completed ? "mutation_completed" : "mutation_in_progress";
   }
+}
+
+function acceptedDeletionReadback(mutation, execution) {
+  const summary = execution?.result?.summary ?? execution?.result?.readback ?? {};
+  const expectedRefs = new Set(refsInValue(mutation.refs));
+  if (mutation.id === "template.fx.delete_fx") {
+    if (summary.readback_status !== "passed" || !expectedRefs.has(summary.deleted_fx_ref)) return null;
+    return { status: "passed", source: "accepted_template_live_absence_readback", observed_ref: summary.deleted_fx_ref, evidence_refs: evidenceRefs(execution) };
+  }
+  if (mutation.id === "template.routing.remove_send") {
+    if (summary.readback_status !== "passed" || !expectedRefs.has(summary.deleted_send_ref)) return null;
+    return { status: "passed", source: "accepted_template_live_absence_readback", observed_ref: summary.deleted_send_ref, evidence_refs: evidenceRefs(execution) };
+  }
+  return null;
 }
 
 function recordUnverifiedMutation(program, plan, state, mutation, id, refs, execution) {
@@ -704,7 +753,7 @@ function materializeRefs(refs, state) {
 function collectedRefs(execution) {
   const output = [];
   const visit = (value) => {
-    if (typeof value === "string" && /^(track|item|send|file|marker|region):/u.test(value)) output.push(value);
+    if (isCanonicalProjectRef(value)) output.push(value);
     else if (Array.isArray(value)) value.forEach(visit);
     else if (value && typeof value === "object") Object.values(value).forEach(visit);
   };
@@ -732,7 +781,7 @@ function requiresExactLiveIdentity(ref) {
 function refsInValue(value) {
   const refs = [];
   const visit = (entry) => {
-    if (typeof entry === "string" && /^(track|item|send|file|marker|region):/u.test(entry)) refs.push(entry);
+    if (isCanonicalProjectRef(entry)) refs.push(entry);
     else if (Array.isArray(entry)) entry.forEach(visit);
     else if (object(entry)) {
       if (typeof entry.ref === "string") visit(entry.ref);
@@ -752,6 +801,7 @@ function applyProjectWriteReadbackToChanges(state) {
   const missing = [];
   for (const change of state.changes) {
     if (change.mutation?.status !== "completed") continue;
+    if (change.live_readback?.status === "passed") continue;
     const targetRefs = typeof change.target_ref === "string" ? [change.target_ref] : change.target_refs ?? [];
     const matchedRefs = targetRefs.filter((ref) => state.readbackRefs.has(ref));
     if (matchedRefs.length === 0) {
@@ -986,6 +1036,7 @@ function scopesFor(macroId, plan) {
   if (targets.tracks.length > 0) scopes.push("tracks");
   if (targets.items.length > 0) scopes.push("items", "takes");
   if (targets.markers.length > 0 || targets.regions.length > 0) scopes.push("markers");
+  if (targets.fx.length > 0) scopes.push("fx", "tracks", "takes", "automation");
   return [...new Set(scopes)];
 }
 function invalidateProjectIndex(runtime, scopes, now) {
@@ -1015,6 +1066,11 @@ function compactIndexUpdate(value) {
 }
 function unique(values) { return [...new Set((values ?? []).filter((value) => typeof value === "string"))].slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count); }
 function uniqueUnbounded(values) { return [...new Set((values ?? []).filter((value) => typeof value === "string"))]; }
+function isCanonicalProjectRef(value) {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f|]/u.test(value)) return false;
+  if (/^track:guid:\{[^{}:]+\}:\d+$/u.test(value)) return false;
+  return /^(?:track|item|take|fx|send|file|marker|region):[^\s]+$/u.test(value);
+}
 function safeNowIso(now) { try { const value = now(); const date = value instanceof Date ? value : new Date(value); if (!Number.isNaN(date.getTime())) return date.toISOString(); } catch {} return new Date(0).toISOString(); }
 function coded(code, message, blockers) { const error = new Error(message); error.code = code; error.blockers = blockers; return error; }
 function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
