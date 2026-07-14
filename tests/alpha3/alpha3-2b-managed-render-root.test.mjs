@@ -29,6 +29,7 @@ const ACTIVE_FIXTURE_CLEANUPS = new Set();
 const RENDER_ENV = "OPENREAPER_LIVE_SMOKE_RENDER_ROOT";
 const RECORD_NAME = "managed-render-root.path";
 const RECORD_MAX = 4096;
+const PROVENANCE_NAME = "provenance.json";
 
 async function freshTmp(prefix) {
   const root = await mkdtemp(path.join("/tmp", prefix));
@@ -76,6 +77,25 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(outputPath, "utf8"), "existing-output\n");
     assert.match(report.recovery.previous_install_backup, /\.openreaper-install-backup-[^/]+\/previous-install$/);
     assert.equal(await pathExists(path.dirname(report.recovery.previous_install_backup)), false);
+  });
+
+  it("hardens package provenance after fresh install and rename-first upgrade", async () => {
+    const fixture = await makeInstallerFixture();
+    const packagedProvenance = path.join(fixture.packageRoot, PROVENANCE_NAME);
+    const installedProvenance = path.join(fixture.installRoot, PROVENANCE_NAME);
+    await chmod(packagedProvenance, 0o666);
+
+    const fresh = await runInstaller(fixture);
+    assert.equal(fresh.code, 0, fresh.stderr || fresh.stdout);
+    assert.equal((await lstat(installedProvenance)).mode & 0o777, 0o444);
+    assert.match(parseInstallerReport(fresh.stdout).changed.join("\n"), /secured read-only package provenance/);
+
+    await chmod(installedProvenance, 0o666);
+    await chmod(packagedProvenance, 0o666);
+    const upgrade = await runInstaller(fixture);
+    assert.equal(upgrade.code, 0, upgrade.stderr || upgrade.stdout);
+    assert.equal((await lstat(installedProvenance)).mode & 0o777, 0o444);
+    assert.match(parseInstallerReport(upgrade.stdout).recovery.previous_install_backup, /\.openreaper-install-backup-/);
   });
 
   it("reuses a prior custom selection with spaces and quotes and never deletes it", async () => {
@@ -1188,6 +1208,7 @@ async function makeInstallerFixture({ installerSource = null, uninstallerSource 
   }
   await writeFile(path.join(packageRoot, "install.command"), "#!/bin/zsh\n", "utf8");
   await writeFile(path.join(packageRoot, "uninstall.command"), "#!/bin/zsh\n", "utf8");
+  await writeFile(path.join(packageRoot, PROVENANCE_NAME), '{"contract":"openreaper.package.provenance.v1"}\n', "utf8");
   await writeFile(path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua"), "-- fixture only\n", "utf8");
   return { root, packageRoot, installerPath, uninstallerPath, home, installRoot };
 }

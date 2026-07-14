@@ -38,7 +38,7 @@ const vitalAgentRoot = path.resolve(options.vital_agent_root ?? path.join(repoRo
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
-const OPENREAPER_PRODUCT_VERSION = "3.3-alpha.0";
+const OPENREAPER_PRODUCT_VERSION = "3.3.0-alpha.0";
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   accepted_macro_count: 15,
@@ -3156,6 +3156,9 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     }
     await writeFile(path.join(fixturePackage, "install.command"), "#!/bin/zsh\n", "utf8");
     await writeFile(path.join(fixturePackage, "uninstall.command"), "#!/bin/zsh\n", "utf8");
+    const fixtureProvenance = path.join(fixturePackage, "provenance.json");
+    await writeFile(fixtureProvenance, '{"contract":"openreaper.package.provenance.v1"}\n', "utf8");
+    await chmod(fixtureProvenance, 0o666);
     await writeFile(
       path.join(fixturePackage, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua"),
       "-- fixture only\n",
@@ -3177,7 +3180,11 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     if (fresh.code !== 0) throw new Error(`packaged installer fresh fixture failed: ${fresh.stderr || fresh.stdout}`);
     const freshReport = parseInstallerJsonReport(fresh.stdout);
     const defaultRoot = path.join(installRoot, "session", "renders");
+    const installedProvenance = path.join(installRoot, "provenance.json");
     assertEqualText(await readFile(path.join(installRoot, "session", "managed-render-root.path"), "utf8"), defaultRoot, "installer persisted render root");
+    if (((await stat(installedProvenance)).mode & 0o777) !== 0o444) {
+      throw new Error("packaged installer fresh fixture left provenance writable.");
+    }
     if (!freshReport.render_root?.created || freshReport.render_root?.writable !== true || freshReport.render_root?.source !== "default") {
       throw new Error(`packaged installer fresh managed render report mismatch: ${JSON.stringify(freshReport.render_root)}`);
     }
@@ -3191,6 +3198,9 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     if (upgrade.code !== 0) throw new Error(`packaged installer upgrade fixture failed: ${upgrade.stderr || upgrade.stdout}`);
     const upgradeReport = parseInstallerJsonReport(upgrade.stdout);
     assertEqualText(await readFile(outputPath, "utf8"), "preserve-me", "installer default render output preservation");
+    if (((await stat(installedProvenance)).mode & 0o777) !== 0o444) {
+      throw new Error("packaged installer upgrade fixture left provenance writable.");
+    }
     if (upgradeReport.render_root?.source !== "persisted" || upgradeReport.render_root?.writable !== true) {
       throw new Error(`packaged installer upgrade render report mismatch: ${JSON.stringify(upgradeReport.render_root)}`);
     }
@@ -3216,6 +3226,7 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       persisted_record: path.join(installRoot, "session", "managed-render-root.path"),
       existing_output_preserved: true,
       installer_mcp_smoke_env: true,
+      installed_provenance_read_only: true,
       invalid_record_rejected_before_replacement: true,
       atomic_backup_container: /\.openreaper-install-backup-/.test(upgradeReport.recovery?.previous_install_backup ?? ""),
       safety_flags: ["--skip-client-config", "--skip-startup-hook"],

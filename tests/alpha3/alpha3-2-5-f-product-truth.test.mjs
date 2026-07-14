@@ -303,7 +303,9 @@ sleep 0.1
     assert.equal(source.match(/openreaper_git_commit:/gu)?.length, 2);
     assert.match(source, /accepted_template_count/);
     assert.match(source, /bridge_handler_count/);
-    assert.match(source, /OPENREAPER_PRODUCT_VERSION = "3\.3-alpha\.0"/);
+    const productVersion = source.match(/OPENREAPER_PRODUCT_VERSION = "([^"]+)"/u)?.[1];
+    assert.equal(productVersion, "3.3.0-alpha.0");
+    assert.match(productVersion, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u);
     assert.match(source, /ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS/);
     assert.match(source, /ALPHA3_3_B1_DEPRECATED_ALIASES/);
     assert.match(source, /createOpenReaperAlphaPackageCatalogFacts/);

@@ -16,6 +16,10 @@ const COPY_PROJECT = path.join(ROOT, "fixture", `Alpha33-${FIXTURE_LABEL}-${TRAC
 const BACKUP_PROJECT = path.join(ROOT, "recovery", "Untitled-before.RPP");
 const REPORT_PATH = path.join(ROOT, "reports", options.report_name ?? "alpha3-3-a1-project-index-live.json");
 const STDIO = path.join(REPO, "packages/mcp-server/src/openreaper-mcp-stdio.mjs");
+const MCP_COMMAND = options.mcp_command ?? process.execPath;
+const MCP_ARGS = options.mcp_command ? [] : [STDIO];
+const MCP_CWD = options.mcp_command ? path.dirname(options.mcp_command) : REPO;
+const ARTIFACT_ROOT = options.artifact_root ?? path.join(ROOT, "artifacts");
 const PUBLIC_BUDGET = {
   max_response_bytes: 65_536,
   max_items: 50,
@@ -27,7 +31,7 @@ const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templat
 
 await mkdir(path.dirname(COPY_PROJECT), { recursive: true });
 await mkdir(path.dirname(BACKUP_PROJECT), { recursive: true });
-await mkdir(path.join(ROOT, "artifacts"), { recursive: true });
+await mkdir(ARTIFACT_ROOT, { recursive: true });
 await mkdir(path.join(ROOT, "reports"), { recursive: true });
 await mkdir(path.join(ROOT, "project-index-bootstrap"), { recursive: true });
 await mkdir(path.join(ROOT, "project-index-state"), { recursive: true });
@@ -201,6 +205,13 @@ const report = {
   evidence_root: ROOT,
   source_project: SOURCE_PROJECT,
   active_test_project: COPY_PROJECT,
+  runtime: {
+    source: options.mcp_command ? "installed_wrapper" : "source_stdio",
+    command: MCP_COMMAND,
+    args: MCP_ARGS,
+    cwd: MCP_CWD,
+    artifact_root: ARTIFACT_ROOT,
+  },
   public_budget: PUBLIC_BUDGET,
   layout_batch_size: LAYOUT_BATCH_SIZE,
   expected_track_count: TRACK_COUNT,
@@ -258,13 +269,13 @@ if (error) process.exit(1);
 async function connect(name, overrides) {
   const client = new Client({ name, version: "0.0.0" });
   await client.connect(new StdioClientTransport({
-    command: process.execPath,
-    args: [STDIO],
-    cwd: REPO,
+    command: MCP_COMMAND,
+    args: MCP_ARGS,
+    cwd: MCP_CWD,
     env: {
       ...process.env,
-      OPENREAPER_ARTIFACT_ROOT: path.join(ROOT, "artifacts"),
-      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: path.join(ROOT, "artifacts"),
+      OPENREAPER_ARTIFACT_ROOT: ARTIFACT_ROOT,
+      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: ARTIFACT_ROOT,
       ...overrides,
     },
   }));
@@ -343,6 +354,8 @@ function parseArgs(argv) {
     if (!value || value.startsWith("--")) throw new Error(`Missing value for ${key}`);
     if (key === "--evidence-root") result.evidence_root = path.resolve(value);
     else if (key === "--source-project") result.source_project = path.resolve(value);
+    else if (key === "--mcp-command") result.mcp_command = path.resolve(value);
+    else if (key === "--artifact-root") result.artifact_root = path.resolve(value);
     else if (key === "--track-count") {
       if (!/^[1-9][0-9]{0,3}$/u.test(value)) throw new Error("--track-count must be an integer from 1 to 9999");
       result.track_count = Number(value);
@@ -364,7 +377,7 @@ function parseArgs(argv) {
     else throw new Error(`Unknown option ${key}`);
     index += 1;
   }
-  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP> [--track-count N] [--layout-batch-size N]");
+  if (!result.evidence_root || !result.source_project) throw new Error("Usage: smoke-alpha3-3-a1-project-index.mjs --evidence-root <fresh-root> --source-project <project.RPP> [--mcp-command /absolute/openreaper-mcp] [--artifact-root /absolute/artifacts] [--track-count N] [--layout-batch-size N]");
   return result;
 }
 

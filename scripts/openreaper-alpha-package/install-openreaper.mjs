@@ -33,6 +33,7 @@ const MANAGED_RENDER_ROOT_RECORD = "managed-render-root.path";
 const WRITE_PROBE_ATTEMPTS = 4;
 const MANAGED_RENDER_ROOT_RECORD_MAX_BYTES = 4096;
 const MANAGED_RENDER_ROOT_PATH_MAX_BYTES = 3072;
+const PACKAGE_PROVENANCE_MANIFEST = "provenance.json";
 const SWS_MISC_SECTION = "[Misc]";
 const SWS_GLOBAL_STARTUP_KEY = "GlobalStartupAction";
 const REAPER_RESOURCE_ROOT = path.join(os.homedir(), "Library", "Application Support", "REAPER");
@@ -159,6 +160,9 @@ async function runInstall() {
           filter: (src) => !src.includes(`${path.sep}.DS_Store`),
         });
         report.changed.push(`installed package at ${installRoot}`);
+        const installedProvenanceManifest = path.join(installRoot, PACKAGE_PROVENANCE_MANIFEST);
+        await chmod(installedProvenanceManifest, 0o444);
+        report.changed.push(`secured read-only package provenance at ${installedProvenanceManifest}`);
         await chmod(path.join(installRoot, "install.command"), 0o755).catch(() => {});
         await chmod(path.join(installRoot, "uninstall.command"), 0o755).catch(() => {});
         await chmod(mcpCommand, 0o755);
