@@ -815,8 +815,26 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(doctorSource, /projectAlpha3_2_5BProjectQueryDoctorTask/);
     assert.match(doctorSource, /projectIndexReadiness: report\.project_index_readiness/);
     assert.match(doctorSource, /OPENREAPER_LIVE_SMOKE_RENDER_ROOT: effectiveRenderRoot/);
-    assert.match(packageCommandSmoke, /command: mcpCommand,[\s\S]*env: mcpEnv,[\s\S]*assertExactArray\(toolNames, exactTools/);
+    assert.match(doctorSource, /report\.project_index = report\.smoke\?\.openreaper\?\.project_index\s+\?\? null/);
+    assert.match(packageCommandSmoke, /createPackageCommandValidationRuntime\(\)/);
+    assert.match(packageCommandSmoke, /try \{[\s\S]*command: mcpCommand,[\s\S]*env: validationRuntime\.env,[\s\S]*assertExactArray\(toolNames, exactTools/);
     assert.doesNotMatch(packageCommandSmoke, /path\.join\(installRoot, "session", "renders"\)/);
+    assert.match(packageCommandSmoke, /validation_scope: "isolated_package_runtime"/);
+    assert.match(packageCommandSmoke, /await lifecycle\?\.close\("normal_finish"\);\s+\} finally \{\s+await validationRuntime\.cleanup\(\)/);
+    assert.match(packageCommandSmoke, /mkdtemp\(path\.join\(os\.tmpdir\(\), "openreaper-doctor-package-"\)\)/);
+    for (const variable of [
+      "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
+      "OPENREAPER_ARTIFACT_ROOT",
+      "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT",
+      "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+      "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
+      "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
+    ]) {
+      assert.match(packageCommandSmoke, new RegExp(`${variable}:`), `${variable} is not isolated`);
+    }
+    assert.match(packageCommandSmoke, /delete env\.OPENREAPER_CURRENT_PROJECT_PATH/);
+    assert.match(packageCommandSmoke, /chmod\(root, 0o700\)/);
+    assert.match(packageCommandSmoke, /rm\(root, \{ recursive: true, force: true \}\)/);
     assert.match(doctorSource, /error_message: boundedErrorMessage\(error\)/);
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
   });

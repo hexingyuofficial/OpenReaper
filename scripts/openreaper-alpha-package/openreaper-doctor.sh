@@ -16,7 +16,7 @@ exec node --input-type=module - "$@" <<'NODE'
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { createRequire } from "node:module";
-import { access, lstat, open, readFile } from "node:fs/promises";
+import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -205,8 +205,7 @@ await scanClientConfigs();
 report.smoke = await smokeMcp();
 report.runtime_readiness = report.smoke?.openreaper?.runtime_readiness ?? null;
 report.request_response = report.smoke?.openreaper?.request_response ?? report.request_response;
-report.project_index = report.smoke?.package_mcp_command?.project_index
-  ?? report.smoke?.openreaper?.project_index
+report.project_index = report.smoke?.openreaper?.project_index
   ?? null;
 report.project_index_readiness = projectIndexReadiness(report.project_index);
 if (report.wait_bridge) {
@@ -512,17 +511,18 @@ async function smokeOpenReaperMcpCommandInner() {
   const packagePaths = [installRoot, path.join(installRoot, "node_modules")];
   const { Client, OwnedStdioClientTransport } = await loadOwnedMcpClientBindings(packagePaths);
   const client = new Client({ name: "openreaper-alpha-doctor-package-command", version: "0.0.0" });
-  const transport = new OwnedStdioClientTransport({
-    command: mcpCommand,
-    args: [],
-    // The wrapper must validate the same resolved session/render selection as
-    // the direct smoke; falling back here would make Doctor report a false MCP
-    // failure whenever the installed default directory does not exist.
-    env: mcpEnv,
-    stderr: "pipe",
-  });
-  const lifecycle = createMcpLifecycle(client, transport, "packaged MCP command");
+  const validationRuntime = await createPackageCommandValidationRuntime();
+  let lifecycle = null;
   try {
+    const transport = new OwnedStdioClientTransport({
+      command: mcpCommand,
+      args: [],
+      // Package reachability is intentionally independent of the selected live
+      // session. Direct MCP above remains the only diagnosis of user roots.
+      env: validationRuntime.env,
+      stderr: "pipe",
+    });
+    lifecycle = createMcpLifecycle(client, transport, "packaged MCP command");
     await client.connect(transport);
     const toolNames = (await client.listTools()).tools.map((tool) => tool.name).sort();
     assertExactArray(toolNames, exactTools, "packaged MCP command tool surface");
@@ -534,8 +534,8 @@ async function smokeOpenReaperMcpCommandInner() {
       ok: true,
       kernel: ping.kernel,
       tool_surface: toolNames,
+      validation_scope: "isolated_package_runtime",
       render_root_status: ping.runtime_readiness?.render_root?.status ?? "not_observed",
-      project_index: ping.project_index ?? null,
     };
   } catch (error) {
     return {
@@ -544,7 +544,43 @@ async function smokeOpenReaperMcpCommandInner() {
       error_code: boundedErrorCode(error),
     };
   } finally {
-    await lifecycle.close("normal_finish");
+    try {
+      await lifecycle?.close("normal_finish");
+    } finally {
+      await validationRuntime.cleanup();
+    }
+  }
+}
+
+async function createPackageCommandValidationRuntime() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-doctor-package-"));
+  try {
+    await chmod(root, 0o700);
+    const renderRoot = path.join(root, "renders");
+    const transportRoot = path.join(root, "transport");
+    const artifactRoot = path.join(root, "artifacts");
+    const projectIndexRoot = path.join(root, "project-index");
+    const directories = [renderRoot, transportRoot, artifactRoot, projectIndexRoot];
+    await Promise.all(directories.map((directory) => mkdir(directory, { mode: 0o700 })));
+    await Promise.all(directories.map((directory) => chmod(directory, 0o700)));
+    const env = {
+      ...mcpEnv,
+      OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportRoot,
+      OPENREAPER_ARTIFACT_ROOT: artifactRoot,
+      OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
+      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: renderRoot,
+      OPENREAPER_PROJECT_INDEX_STATE_ROOT: projectIndexRoot,
+      OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: `doctor-package:${path.basename(root)}`,
+      OPENREAPER_CURRENT_PROJECT_REF: "project:doctor-package-validation",
+    };
+    delete env.OPENREAPER_CURRENT_PROJECT_PATH;
+    return {
+      env,
+      cleanup: () => rm(root, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true }).catch(() => {});
+    throw error;
   }
 }
 
