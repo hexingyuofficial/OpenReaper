@@ -1,6 +1,31 @@
 #!/bin/zsh
 set -euo pipefail
 
+# Some MCP hosts export optional environment keys with empty values. Treat
+# those placeholders as absent while preserving every non-empty override.
+for optional_openreaper_env in \
+  OPENREAPER_SESSION_ROOT \
+  OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR \
+  OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH \
+  OPENREAPER_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT \
+  OPENREAPER_LIVE_SMOKE_RENDER_ROOT \
+  OPENREAPER_LIVE_BRIDGE_OWNER \
+  OPENREAPER_LIVE_BRIDGE_GENERATION \
+  OPENREAPER_LIVE_BRIDGE_SESSION_ID \
+  OPENREAPER_PROJECT_INDEX_STATE_ROOT \
+  OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY \
+  OPENREAPER_CURRENT_PROJECT_PATH \
+  OPENREAPER_CURRENT_PROJECT_REF \
+  OPENREAPER_MCP_PACKAGE_ROOT \
+  OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS \
+  OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS; do
+  if (( ${+parameters[${optional_openreaper_env}]} )) && [[ -z "${(P)optional_openreaper_env}" ]]; then
+    unset "${optional_openreaper_env}"
+  fi
+done
+unset optional_openreaper_env
+
 SCRIPT_DIR="${0:A:h}"
 INSTALL_ROOT="${SCRIPT_DIR:h}"
 SESSION_ROOT="${OPENREAPER_SESSION_ROOT:-${INSTALL_ROOT}/session}"

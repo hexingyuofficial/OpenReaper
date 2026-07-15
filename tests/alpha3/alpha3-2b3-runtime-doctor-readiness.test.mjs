@@ -839,6 +839,97 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(doctorSource, /function boundedErrorMessage\(error\)/);
   });
 
+  it("treats host-exported empty optional OpenReaper values as absent without discarding non-empty overrides", { timeout: 30_000 }, async () => {
+    const fixtureRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-doctor-empty-env-"));
+    const installRoot = path.join(fixtureRoot, "installed");
+    const binRoot = path.join(installRoot, "bin");
+    const fakeBin = path.join(fixtureRoot, "fake-bin");
+    const doctorPath = path.join(binRoot, "openreaper-doctor");
+    const fakeNode = path.join(fakeBin, "node");
+    await Promise.all([mkdir(binRoot, { recursive: true }), mkdir(fakeBin, { recursive: true })]);
+    await copyFile(
+      path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-doctor.sh"),
+      doctorPath,
+    );
+    await chmod(doctorPath, 0o755);
+    const canonicalInstallRoot = await realpath(installRoot);
+    await writeFile(fakeNode, `#!/bin/zsh
+for key in OPENREAPER_SESSION_ROOT OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR OPENREAPER_ARTIFACT_ROOT OPENREAPER_LIVE_SMOKE_RENDER_ROOT OPENREAPER_LIVE_BRIDGE_OWNER OPENREAPER_LIVE_BRIDGE_GENERATION OPENREAPER_CURRENT_PROJECT_PATH OPENREAPER_CURRENT_PROJECT_REF OPENREAPER_PROJECT_INDEX_STATE_ROOT OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY OPENREAPER_DOCTOR_INSTALL_ROOT OPENREAPER_DOCTOR_SESSION_ROOT OPENREAPER_DOCTOR_TRANSPORT_DIR OPENREAPER_DOCTOR_ARTIFACT_ROOT; do
+  if (( \${+parameters[\${key}]} )); then
+    print -r -- "\${key}=\${(P)key}"
+  else
+    print -r -- "\${key}=<unset>"
+  fi
+done
+`, "utf8");
+    await chmod(fakeNode, 0o755);
+
+    try {
+      const emptyPollution = Object.fromEntries([
+        "OPENREAPER_SESSION_ROOT",
+        "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR",
+        "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
+        "OPENREAPER_ARTIFACT_ROOT",
+        "OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT",
+        "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+        "OPENREAPER_LIVE_BRIDGE_OWNER",
+        "OPENREAPER_LIVE_BRIDGE_GENERATION",
+        "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+        "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
+        "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
+        "OPENREAPER_CURRENT_PROJECT_PATH",
+        "OPENREAPER_CURRENT_PROJECT_REF",
+        "OPENREAPER_MCP_PACKAGE_ROOT",
+        "OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS",
+        "OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS",
+      ].map((key) => [key, ""]));
+      const emptyRun = await runCopyPasteFix(doctorPath, {
+        env: {
+          ...process.env,
+          ...emptyPollution,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+        },
+      });
+      assert.equal(emptyRun.code, 0, emptyRun.stderr);
+      const emptyCaptured = Object.fromEntries(emptyRun.stdout.trim().split("\n").map((line) => line.split(/=(.*)/su).slice(0, 2)));
+      assert.equal(emptyCaptured.OPENREAPER_SESSION_ROOT, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_LIVE_BRIDGE_OWNER, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_LIVE_BRIDGE_GENERATION, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_CURRENT_PROJECT_PATH, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_CURRENT_PROJECT_REF, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_PROJECT_INDEX_STATE_ROOT, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY, "<unset>");
+      assert.equal(emptyCaptured.OPENREAPER_DOCTOR_INSTALL_ROOT, canonicalInstallRoot);
+      assert.equal(emptyCaptured.OPENREAPER_DOCTOR_SESSION_ROOT, path.join(canonicalInstallRoot, "session"));
+      assert.equal(emptyCaptured.OPENREAPER_DOCTOR_TRANSPORT_DIR, path.join(canonicalInstallRoot, "session", "transport"));
+      assert.equal(emptyCaptured.OPENREAPER_DOCTOR_ARTIFACT_ROOT, path.join(canonicalInstallRoot, "session", "artifacts"));
+
+      const explicitSession = path.join(fixtureRoot, "explicit-session");
+      const explicitRender = path.join(fixtureRoot, "explicit-renders");
+      const explicitRun = await runCopyPasteFix(doctorPath, {
+        env: {
+          ...process.env,
+          ...emptyPollution,
+          PATH: `${fakeBin}:/usr/bin:/bin`,
+          OPENREAPER_SESSION_ROOT: explicitSession,
+          OPENREAPER_LIVE_SMOKE_RENDER_ROOT: explicitRender,
+          OPENREAPER_LIVE_BRIDGE_OWNER: "explicit-owner",
+          OPENREAPER_LIVE_BRIDGE_GENERATION: "invalid-nonempty",
+        },
+      });
+      assert.equal(explicitRun.code, 0, explicitRun.stderr);
+      const explicitCaptured = Object.fromEntries(explicitRun.stdout.trim().split("\n").map((line) => line.split(/=(.*)/su).slice(0, 2)));
+      assert.equal(explicitCaptured.OPENREAPER_SESSION_ROOT, explicitSession);
+      assert.equal(explicitCaptured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, explicitRender);
+      assert.equal(explicitCaptured.OPENREAPER_LIVE_BRIDGE_OWNER, "explicit-owner");
+      assert.equal(explicitCaptured.OPENREAPER_LIVE_BRIDGE_GENERATION, "invalid-nonempty");
+      assert.equal(explicitCaptured.OPENREAPER_DOCTOR_SESSION_ROOT, explicitSession);
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
   it("publishes bounded readiness through actual stdio ping without dispatch or a sixth tool", { timeout: 30_000 }, async () => {
     const fixture = await makeTransportFixture();
     const renderRoot = await mkdtemp(path.join(os.tmpdir(), "openreaper-b3-stdio-render-"));
