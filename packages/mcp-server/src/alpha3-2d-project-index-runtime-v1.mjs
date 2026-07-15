@@ -1342,6 +1342,11 @@ function applyScopedProjection({ adapter, templateId, projection, readback, exec
     const result = adapter.upsertItemsAndTakes({ ...common, items: projection.scopes.items ?? [], takes: projection.scopes.takes ?? [], coverage_status: projection.coverage.items ?? "partial", freshness_status: "fresh" });
     return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["items", "takes"] };
   }
+  if (templateId === "template.media.read_take_source") {
+    const rows = mergeTakeRowSets(adapter.snapshot().rows?.takes, projection.scopes.takes ?? []);
+    const result = adapter.replaceTakes({ ...common, rows, coverage_status: projection.coverage.takes ?? "partial", freshness_status: "fresh" });
+    return { ok: result?.ok !== false, blockers: result?.blockers ?? [], applied: ["takes"] };
+  }
   return null;
 }
 
@@ -1404,6 +1409,16 @@ function mergeTrackRowSets(existingRows, incomingRows) {
 }
 
 function mergeEnvelopeRowSets(existingRows, incomingRows) {
+  const incomingByRef = new Map(arrayOf(incomingRows).map((row) => [row.ref, row]));
+  const merged = arrayOf(existingRows).map((row) => incomingByRef.get(row.ref) ?? row);
+  const existingRefs = new Set(arrayOf(existingRows).map((row) => row.ref));
+  for (const row of arrayOf(incomingRows)) {
+    if (!existingRefs.has(row.ref)) merged.push(row);
+  }
+  return merged;
+}
+
+function mergeTakeRowSets(existingRows, incomingRows) {
   const incomingByRef = new Map(arrayOf(incomingRows).map((row) => [row.ref, row]));
   const merged = arrayOf(existingRows).map((row) => incomingByRef.get(row.ref) ?? row);
   const existingRefs = new Set(arrayOf(existingRows).map((row) => row.ref));

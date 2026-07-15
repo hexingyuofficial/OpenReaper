@@ -751,6 +751,192 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("re-reads every existing exact Item ref after revision invalidation and fails closed on stale live-read errors", async () => {
+    const fixture = await makeFixture();
+    const itemRefs = Array.from({ length: 8 }, (_, index) => `item:guid:{STALE-ITEM-${index + 1}}`);
+    const liveItems = new Map(itemRefs.map((itemRef, index) => [itemRef, {
+      item_ref: itemRef,
+      track_ref: "track:guid:{OLD-TRACK}",
+      position_seconds: index,
+      length_seconds: 1,
+      take_count: 0,
+    }]));
+    const state = {
+      revision: 1,
+      trackName: "Media",
+      calls: [],
+      liveItems,
+      itemReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const input = {
+        entity: "items",
+        fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+        selectors: { refs: itemRefs },
+        refresh_policy: "if_stale",
+        limit: 8,
+      };
+
+      const seeded = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(1, "client-a"),
+      });
+      assert.equal(seeded.ok, true, JSON.stringify(seeded));
+      assert.equal(state.itemReadRefs.length, 8);
+
+      for (const [index, itemRef] of itemRefs.entries()) {
+        state.liveItems.set(itemRef, {
+          item_ref: itemRef,
+          track_ref: "track:guid:{NEW-TRACK}",
+          position_seconds: 100 + index,
+          length_seconds: 2,
+          take_count: 0,
+        });
+      }
+      const writeInvalidation = indexRuntime.invalidateScopes({ scopes: ["items"], observed_at: NOW });
+      assert.equal(writeInvalidation.ok, true, JSON.stringify(writeInvalidation));
+      const refreshed = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(1, "client-b"),
+      });
+      assert.equal(refreshed.ok, true, JSON.stringify(refreshed));
+      assert.equal(refreshed.result.data.refresh.call_count, 8);
+      assert.equal(state.itemReadRefs.length, 16);
+      assert.deepEqual(
+        new Set(state.itemReadRefs.slice(8).map((ref) => ref.ref)),
+        new Set(itemRefs),
+      );
+      assert.equal(refreshed.result.data.rows.length, 8);
+      assert.equal(refreshed.result.data.rows.every((row, index) => (
+        row.track_ref === "track:guid:{NEW-TRACK}" && row.start_seconds === 100 + index
+      )), true, JSON.stringify(refreshed.result.data.rows));
+
+      const warmReadCount = state.itemReadRefs.length;
+      const warm = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(2, "client-b"),
+      });
+      assert.equal(warm.ok, true, JSON.stringify(warm));
+      assert.equal(warm.result.data.refresh.call_count, 0);
+      assert.equal(state.itemReadRefs.length, warmReadCount);
+
+      for (const [index, itemRef] of itemRefs.entries()) {
+        state.liveItems.set(itemRef, {
+          item_ref: itemRef,
+          track_ref: "track:guid:{REVISION-TRACK}",
+          position_seconds: 200 + index,
+          length_seconds: 3,
+          take_count: 0,
+        });
+      }
+      state.revision = 2;
+      const revisionRefreshed = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(3, "client-b"),
+      });
+      assert.equal(revisionRefreshed.ok, true, JSON.stringify(revisionRefreshed));
+      assert.equal(revisionRefreshed.result.data.refresh.call_count, 8);
+      assert.equal(state.itemReadRefs.length, warmReadCount + 8);
+      assert.equal(revisionRefreshed.result.data.rows.every((row, index) => (
+        row.track_ref === "track:guid:{REVISION-TRACK}" && row.start_seconds === 200 + index
+      )), true, JSON.stringify(revisionRefreshed.result.data.rows));
+
+      const forced = await runtime.call_template({
+        id: "macro.project.query",
+        input: { ...input, refresh_policy: "force_read_only_refresh" },
+        context: callContext(4, "client-b"),
+      });
+      assert.equal(forced.ok, true, JSON.stringify(forced));
+      assert.equal(forced.result.data.refresh.call_count, 8);
+      assert.equal(state.itemReadRefs.length, warmReadCount + 16);
+
+      state.revision = 3;
+      state.itemReadFailureRefs = new Set([itemRefs[0]]);
+      const failed = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(1, "client-c"),
+      });
+      assert.equal(failed.ok, false, JSON.stringify(failed));
+      assert.equal(failed.error.code, "ITEM_NOT_FOUND");
+      assert.equal(failed.result?.data?.rows, undefined);
+      assert.equal(state.itemReadRefs.length, warmReadCount + 17);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("re-reads every existing exact Take ref after revision invalidation", async () => {
+    const fixture = await makeFixture();
+    const takeRefs = ["take:guid:{STALE-TAKE-1}", "take:guid:{STALE-TAKE-2}"];
+    const liveTakes = new Map(takeRefs.map((takeRef, index) => [takeRef, {
+      take_ref: takeRef,
+      item_ref: `item:guid:{TAKE-OWNER-${index + 1}}`,
+      track_ref: "track:guid:{OLD-TRACK}",
+      source_kind: "audio",
+      length_seconds: 1,
+    }]));
+    const state = {
+      revision: 1,
+      trackName: "Media",
+      calls: [],
+      atomicRequests: [],
+      liveTakes,
+      takeReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const input = {
+        entity: "takes",
+        fields: ["ref", "item_ref", "track_ref", "source_kind"],
+        selectors: { refs: takeRefs },
+        refresh_policy: "if_stale",
+        limit: 2,
+      };
+      const seeded = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(1, "take-client-a"),
+      });
+      assert.equal(seeded.ok, true, JSON.stringify({ seeded, takeReadRefs: state.takeReadRefs, atomicRequests: state.atomicRequests }));
+      assert.equal(state.takeReadRefs.length, 2);
+
+      for (const [index, takeRef] of takeRefs.entries()) {
+        state.liveTakes.set(takeRef, {
+          take_ref: takeRef,
+          item_ref: `item:guid:{TAKE-OWNER-${index + 1}}`,
+          track_ref: "track:guid:{NEW-TRACK}",
+          source_kind: "audio",
+          length_seconds: 10 + index,
+        });
+      }
+      state.revision = 2;
+      const refreshed = await runtime.call_template({
+        id: "macro.project.query",
+        input,
+        context: callContext(1, "take-client-b"),
+      });
+      assert.equal(refreshed.ok, true, JSON.stringify(refreshed));
+      assert.equal(refreshed.result.data.refresh.call_count, 2);
+      assert.equal(state.takeReadRefs.length, 4);
+      assert.deepEqual(new Set(state.takeReadRefs.slice(2).map((ref) => ref.ref)), new Set(takeRefs));
+      assert.equal(refreshed.result.data.rows.every((row) => row.track_ref === "track:guid:{NEW-TRACK}"), true, JSON.stringify(refreshed.result.data.rows));
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("materializes live track object refs across staged FX hydration", async () => {
     const fixture = await makeFixture();
     const state = { revision: 1, trackName: "Source", calls: [], fxOwnerRefs: [] };
@@ -1005,6 +1191,15 @@ function createRuntime({ fixture, indexRuntime, state }) {
           state.itemReadRefs?.push(structuredClone(request.refs[0]));
           response.result.summary = structuredClone(item);
           response.result.readback = structuredClone(item);
+          response.result.refs = [structuredClone(request.refs[0])];
+        }
+      } else if (request.operation.name === "media.take_source.read") {
+        const takeRef = request.refs[0]?.ref;
+        const take = state.liveTakes?.get(takeRef);
+        if (take) {
+          state.takeReadRefs?.push(structuredClone(request.refs[0]));
+          response.result.summary = structuredClone(take);
+          response.result.readback = structuredClone(take);
           response.result.refs = [structuredClone(request.refs[0])];
         }
       } else if (request.operation.name === "project.read_dirty_state") {

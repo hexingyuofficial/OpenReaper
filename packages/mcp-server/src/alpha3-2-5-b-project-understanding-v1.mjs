@@ -887,7 +887,13 @@ async function hydrateForQuery({
 }
 
 function exactSelectorRefreshRequests(request, projectIndexRuntime) {
-  return exactSelectorMissingRefs(request, projectIndexRuntime).map((ref) => {
+  const entity = request.input?.entity;
+  const requested = exactSelectorRequestedRefs(request);
+  const scopeStatus = projectIndexRuntime?.adapter?.snapshot?.().freshness_scopes?.[entity]?.status;
+  const refs = scopeStatus === "fresh" || scopeStatus === "fresh_enough"
+    ? exactSelectorMissingRefs(request, projectIndexRuntime)
+    : requested;
+  return refs.map((ref) => {
     if (request.input.entity === "items") {
       return {
         id: "template.items.read_item_summary",
@@ -907,17 +913,21 @@ function exactSelectorRefreshRequests(request, projectIndexRuntime) {
 
 function exactSelectorMissingRefs(request, projectIndexRuntime) {
   const entity = request.input?.entity;
-  if (entity !== "items" && entity !== "takes") return [];
-  const prefix = entity === "items" ? "item:guid:" : "take:guid:";
-  const requested = unique(Array.isArray(request.input?.selectors?.refs)
-    ? request.input.selectors.refs.filter((ref) => typeof ref === "string" && ref.startsWith(prefix))
-    : []).slice(0, MAX_EXACT_SELECTOR_REFS);
+  const requested = exactSelectorRequestedRefs(request);
   if (requested.length === 0) return [];
-  const rowKey = entity;
-  const indexed = new Set((projectIndexRuntime?.adapter?.snapshot?.().rows?.[rowKey] ?? [])
+  const indexed = new Set((projectIndexRuntime?.adapter?.snapshot?.().rows?.[entity] ?? [])
     .map((row) => row?.ref)
     .filter((ref) => typeof ref === "string"));
   return requested.filter((ref) => !indexed.has(ref));
+}
+
+function exactSelectorRequestedRefs(request) {
+  const entity = request.input?.entity;
+  if (entity !== "items" && entity !== "takes") return [];
+  const prefix = entity === "items" ? "item:guid:" : "take:guid:";
+  return unique(Array.isArray(request.input?.selectors?.refs)
+    ? request.input.selectors.refs.filter((ref) => typeof ref === "string" && ref.startsWith(prefix))
+    : []).slice(0, MAX_EXACT_SELECTOR_REFS);
 }
 
 function mergeHydrationResults(primary, supplemental) {
