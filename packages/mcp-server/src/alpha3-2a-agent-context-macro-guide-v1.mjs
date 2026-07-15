@@ -109,14 +109,15 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       input_shape: {
         include: "Optional ordered subset of project_identity, project_path, dirty_state, selected_context, tracks, items, markers_regions, render, and index_status.",
-        fields: "Optional compact field selection applied to returned rows.",
+        fields: "Optional compact field selection for exactly one requested indexed row scope; mixed row scopes must use fields_by_scope.",
+        fields_by_scope: "Optional per-scope compact fields for selected_context, tracks, items, and markers_regions; each key must also be present in include.",
         limit: "Positive bounded row limit per requested entity family.",
         compact_response: "Boolean; defaults true and never enables full descriptor or project dumps.",
         ref_policy: "canonical_only | include_missing_reasons; never fabricate refs.",
       },
       preflight_steps: [
         "Read server/bridge readiness without starting REAPER or using direct bridge files.",
-        "Validate include, fields, limit, compact_response, and ref_policy.",
+        "Validate include, fields or fields_by_scope, limit, compact_response, and ref_policy before any live revision probe.",
         "Probe the live REAPER change-count, hydrate or reuse the matching SQLite index, then run only requested bounded direct reads.",
       ],
       underlying_actions: [
@@ -158,8 +159,8 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         hard_stop: "Stop after the same typed blocker repeats twice.",
       },
       examples: [
-        example("compact readiness", { include: ["project_identity", "selected_context", "render", "index_status", "project_path", "dirty_state"], fields: ["name", "ref", "status"], limit: 25, compact_response: true, ref_policy: "canonical_only" }),
-        example("tracks and items", { include: ["tracks", "items"], fields: ["name", "ref", "track_ref"], limit: 100, compact_response: true }),
+        example("compact readiness", { include: ["project_identity", "selected_context", "render", "index_status", "project_path", "dirty_state"], fields_by_scope: { selected_context: ["ref", "scope_kind", "owner_ref"] }, limit: 25, compact_response: true, ref_policy: "canonical_only" }),
+        example("tracks and items", { include: ["tracks", "items"], fields_by_scope: { tracks: ["ref", "name", "index"], items: ["ref", "track_ref", "start_seconds"] }, limit: 100, compact_response: true }),
       ],
     }),
   }),

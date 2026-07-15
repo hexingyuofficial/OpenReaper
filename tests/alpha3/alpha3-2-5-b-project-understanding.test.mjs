@@ -139,6 +139,48 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("projects mixed inspect scopes with isolated fields and rejects a single-scope typo before live reads", async () => {
+    const fixture = await makeFixture();
+    const state = { revision: 3, trackName: "Kick", calls: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const mixed = await runtime.call_template({
+        id: "macro.project.inspect",
+        input: {
+          include: ["tracks", "items", "markers_regions"],
+          fields_by_scope: {
+            tracks: ["ref", "name", "index"],
+            items: ["ref", "track_ref", "start_seconds"],
+            markers_regions: ["ref", "name", "position_seconds"],
+          },
+          limit: 25,
+        },
+        context: callContext(1),
+      });
+
+      assert.equal(mixed.ok, true, JSON.stringify(mixed));
+      assert.deepEqual(Object.keys(mixed.result.data.scopes.tracks.rows[0]), ["ref", "name", "index"]);
+      assert.deepEqual(Object.keys(mixed.result.data.scopes.items.rows[0]), ["ref", "track_ref", "start_seconds"]);
+      assert.deepEqual(Object.keys(mixed.result.data.scopes.markers_regions.rows[0]), ["ref", "name", "position_seconds"]);
+
+      state.calls.length = 0;
+      const typo = await runtime.call_template({
+        id: "macro.project.inspect",
+        input: { include: ["tracks"], fields: ["naem"] },
+        context: callContext(2),
+      });
+      assert.equal(typo.ok, false, JSON.stringify(typo));
+      assert.equal(typo.error.code, "QUERY_FIELD_NOT_SUPPORTED");
+      assert.equal(typo.blockers.some((entry) => entry.code === "QUERY_FIELD_NOT_SUPPORTED"), true);
+      assert.deepEqual(state.calls, []);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("keeps a fourteen-track Project Index complete behind the default 2 KiB public budget and public pagination", async () => {
     const fixture = await makeFixture();
     const trackNames = Array.from({ length: 14 }, (_, index) => `Highway ${String(index + 1).padStart(2, "0")}`);

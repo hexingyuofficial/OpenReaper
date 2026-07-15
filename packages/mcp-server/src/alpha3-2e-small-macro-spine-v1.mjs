@@ -15,7 +15,8 @@ const DEFAULT_INCLUDE = deepFreeze([
 ]);
 
 const ALLOWED_INCLUDE = new Set(DEFAULT_INCLUDE);
-const ALLOWED_INPUT_FIELDS = new Set(["include", "fields", "limit", "compact_response", "ref_policy", "refresh_policy"]);
+const ALLOWED_INPUT_FIELDS = new Set(["include", "fields", "fields_by_scope", "limit", "compact_response", "ref_policy", "refresh_policy"]);
+const FIELD_PROJECTABLE_SCOPES = new Set(["selected_context", "tracks", "items", "markers_regions"]);
 const ALLOWED_REFRESH_POLICIES = new Set(["never", "if_stale", "required", "force_read_only_refresh"]);
 const ALLOWED_REF_POLICIES = new Set(["canonical_only", "include_missing_reasons"]);
 const MAX_INCLUDE = 12;
@@ -49,7 +50,8 @@ export function planAlpha3_2EProjectInspectMacro(input = {}, requestPosture = {}
   const refreshPolicy = normalizeRefreshPolicy(normalized.refresh_policy);
   const refPolicy = normalizeRefPolicy(normalized.ref_policy);
   const fields = normalizeFields(normalized.fields);
-  const childRequests = buildChildRequests({ include, limit, refreshPolicy, refPolicy, fields });
+  const fieldsByScope = normalizeFieldsByScope(normalized.fields_by_scope);
+  const childRequests = buildChildRequests({ include, limit, refreshPolicy, refPolicy, fields, fieldsByScope });
   const readbackRequests = buildReadbackRequests(include);
   const successCriteria = successCriteriaFor(include);
 
@@ -64,6 +66,7 @@ export function planAlpha3_2EProjectInspectMacro(input = {}, requestPosture = {}
     refresh_policy: refreshPolicy,
     ref_policy: refPolicy,
     fields,
+    fields_by_scope: fieldsByScope,
     preflight_requests: childRequests,
     child_requests: childRequests,
     readback_requests: readbackRequests,
@@ -156,6 +159,15 @@ export function createAlpha3_2EProjectInspectMacroDiscoveryItems(options = {}) {
       properties: {
         include: { type: "array", items: { enum: [...ALLOWED_INCLUDE] } },
         fields: { type: "array", items: { type: "string" } },
+        fields_by_scope: {
+          type: "object",
+          additionalProperties: false,
+          properties: Object.fromEntries([...FIELD_PROJECTABLE_SCOPES].map((scope) => [scope, {
+            type: "array",
+            maxItems: MAX_FIELDS,
+            items: { type: "string", maxLength: MAX_FIELD_BYTES },
+          }])),
+        },
         limit: { type: "integer", minimum: 1, maximum: MAX_LIMIT },
         compact_response: { type: "boolean" },
         ref_policy: { enum: [...ALLOWED_REF_POLICIES] },
@@ -183,12 +195,12 @@ export function createAlpha3_2EProjectInspectMacroDiscoveryItems(options = {}) {
     },
     examples: [
       { input: { include: ["project_path", "dirty_state", "selected_context"], refresh_policy: "if_stale", limit: 25 } },
-      { input: { include: ["tracks", "items", "markers_regions"], fields: ["ref", "name"], ref_policy: "canonical_only" } },
+      { input: { include: ["tracks", "items", "markers_regions"], fields_by_scope: { tracks: ["ref", "name", "index"], items: ["ref", "track_ref", "start_seconds"], markers_regions: ["ref", "name", "position_seconds"] }, ref_policy: "canonical_only" } },
     ],
   })];
 }
 
-function buildChildRequests({ include, limit, refreshPolicy, refPolicy, fields }) {
+function buildChildRequests({ include, limit, refreshPolicy, refPolicy, fields, fieldsByScope }) {
   const requests = [];
   let sequence = 1;
   const add = (phase, id, input = {}, purpose, refs = {}) => {
@@ -210,11 +222,11 @@ function buildChildRequests({ include, limit, refreshPolicy, refPolicy, fields }
   }
   if (include.includes("project_path")) add("preflight", READ_PATH_ID, {}, "Read exact current project path.");
   if (include.includes("dirty_state")) add("preflight", READ_DIRTY_ID, {}, "Read exact dirty-state before later agent-executed operations.");
-  if (include.includes("index_status")) addQuery(sequence, requests, "status", { limit, refreshPolicy, refPolicy, fields }, "Read Project Index readiness/status through macro.project.query.");
-  if (include.includes("selected_context")) addQuery(sequence, requests, "selected_context", { limit, refreshPolicy, refPolicy, fields }, "Read selected context through macro.project.query.");
-  if (include.includes("tracks")) addQuery(sequence, requests, "tracks", { limit, refreshPolicy, refPolicy, fields }, "Read compact track rows through macro.project.query.");
-  if (include.includes("items")) addQuery(sequence, requests, "items", { limit, refreshPolicy, refPolicy, fields }, "Read compact item rows through macro.project.query.");
-  if (include.includes("markers_regions")) addQuery(sequence, requests, "markers_regions", { limit, refreshPolicy, refPolicy, fields }, "Read compact marker/region rows through macro.project.query.");
+  if (include.includes("index_status")) addQuery(sequence, requests, "status", { limit, refreshPolicy, refPolicy, fields: [] }, "Read Project Index readiness/status through macro.project.query.");
+  if (include.includes("selected_context")) addQuery(sequence, requests, "selected_context", { limit, refreshPolicy, refPolicy, fields: fieldsForScope("selected_context", fields, fieldsByScope) }, "Read selected context through macro.project.query.");
+  if (include.includes("tracks")) addQuery(sequence, requests, "tracks", { limit, refreshPolicy, refPolicy, fields: fieldsForScope("tracks", fields, fieldsByScope) }, "Read compact track rows through macro.project.query.");
+  if (include.includes("items")) addQuery(sequence, requests, "items", { limit, refreshPolicy, refPolicy, fields: fieldsForScope("items", fields, fieldsByScope) }, "Read compact item rows through macro.project.query.");
+  if (include.includes("markers_regions")) addQuery(sequence, requests, "markers_regions", { limit, refreshPolicy, refPolicy, fields: fieldsForScope("markers_regions", fields, fieldsByScope) }, "Read compact marker/region rows through macro.project.query.");
   sequence = requests.length + 1;
   if (include.includes("render")) add("preflight", READ_RENDER_SETTINGS_ID, {}, "Read current render settings without rendering.");
   return deepFreeze(requests.map((request, index) => ({ ...request, sequence: index + 1 })));
@@ -286,6 +298,15 @@ function validateInput(original, normalized) {
   }
   if (normalized.include !== undefined) blockers.push(...validateInclude(normalized.include));
   if (normalized.fields !== undefined) blockers.push(...validateFields(normalized.fields));
+  if (normalized.fields_by_scope !== undefined) blockers.push(...validateFieldsByScope(normalized.fields_by_scope, normalized.include));
+  if (normalized.fields !== undefined && normalized.fields_by_scope !== undefined) {
+    blockers.push(blocker("PROJECT_INSPECT_FIELDS_MODE_CONFLICT", "Use either fields for one indexed row scope or fields_by_scope for per-scope projection, not both."));
+  }
+  if (Array.isArray(normalized.fields) && normalized.fields.length > 0 && inspectFieldScopes(normalized.include).length > 1) {
+    blockers.push(blocker("PROJECT_INSPECT_MIXED_SCOPE_FIELDS_AMBIGUOUS", "Top-level fields cannot be shared across multiple indexed row scopes; use fields_by_scope so every field is applied only to its matching scope.", {
+      scopes: inspectFieldScopes(normalized.include),
+    }));
+  }
   if (normalized.limit !== undefined && normalizeLimit(normalized.limit) === null) blockers.push(blocker("PROJECT_INSPECT_LIMIT_INVALID", `limit must be an integer from 1 to ${MAX_LIMIT}.`));
   if (normalized.compact_response !== undefined && typeof normalized.compact_response !== "boolean") blockers.push(blocker("PROJECT_INSPECT_COMPACT_RESPONSE_INVALID", "compact_response must be boolean when supplied."));
   if (normalized.ref_policy !== undefined && !ALLOWED_REF_POLICIES.has(normalized.ref_policy)) blockers.push(blocker("PROJECT_INSPECT_REF_POLICY_INVALID", "ref_policy must be canonical_only or include_missing_reasons."));
@@ -307,6 +328,28 @@ function validateFields(value) {
   return invalid.length > 0 ? [blocker("PROJECT_INSPECT_FIELD_INVALID", "fields entries must be non-empty bounded strings without control characters.", { invalid_count: invalid.length })] : [];
 }
 
+function validateFieldsByScope(value, includeValue) {
+  if (!isPlainObject(value)) return [blocker("PROJECT_INSPECT_FIELDS_BY_SCOPE_INVALID", "fields_by_scope must be an object when supplied.")];
+  const blockers = [];
+  const keys = Object.keys(value);
+  const unknown = keys.filter((scope) => !FIELD_PROJECTABLE_SCOPES.has(scope));
+  if (unknown.length > 0) {
+    blockers.push(blocker("PROJECT_INSPECT_FIELDS_BY_SCOPE_UNSUPPORTED", "fields_by_scope contains unsupported project inspect scopes.", { scopes: unknown }));
+  }
+  const included = new Set(Array.isArray(includeValue) ? includeValue : DEFAULT_INCLUDE);
+  const unused = keys.filter((scope) => FIELD_PROJECTABLE_SCOPES.has(scope) && !included.has(scope));
+  if (unused.length > 0) {
+    blockers.push(blocker("PROJECT_INSPECT_FIELDS_SCOPE_NOT_INCLUDED", "Every fields_by_scope key must also be present in include.", { scopes: unused }));
+  }
+  for (const scope of keys.filter((entry) => FIELD_PROJECTABLE_SCOPES.has(entry))) {
+    blockers.push(...validateFields(value[scope]).map((entry) => ({
+      ...entry,
+      details: { ...(entry.details ?? {}), scope },
+    })));
+  }
+  return blockers;
+}
+
 function normalizeInclude(value) {
   if (value === undefined) return DEFAULT_INCLUDE;
   return deepFreeze([...new Set(value)]);
@@ -315,6 +358,20 @@ function normalizeInclude(value) {
 function normalizeFields(value) {
   if (value === undefined) return deepFreeze([]);
   return deepFreeze([...new Set(value)]);
+}
+
+function normalizeFieldsByScope(value) {
+  if (value === undefined) return deepFreeze({});
+  return deepFreeze(Object.fromEntries(Object.entries(value).map(([scope, fields]) => [scope, [...new Set(fields)]])));
+}
+
+function inspectFieldScopes(includeValue) {
+  const include = Array.isArray(includeValue) ? [...new Set(includeValue)] : DEFAULT_INCLUDE;
+  return include.filter((scope) => FIELD_PROJECTABLE_SCOPES.has(scope));
+}
+
+function fieldsForScope(scope, fields, fieldsByScope) {
+  return fieldsByScope[scope] ?? fields;
 }
 
 function normalizeLimit(value) {
@@ -338,6 +395,8 @@ function blockedPlan(blockers) {
     ok: false,
     mode: "blocked",
     include: [],
+    fields: [],
+    fields_by_scope: {},
     preflight_requests: [],
     child_requests: [],
     readback_requests: [],

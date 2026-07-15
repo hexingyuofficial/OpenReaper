@@ -302,6 +302,12 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     const projectFileManual = requested.find((item) => item.id === "macro.project.file").action_manual;
 
     assert.deepEqual(ALPHA3_2A_PROJECT_FILE_TEMPLATE_POSTURE.ids.map((row) => row.id), EXPECTED_PROJECT_FILE_TEMPLATE_IDS);
+    assert.match(inspectManual.input_shape.fields, /exactly one requested indexed row scope/);
+    assert.match(inspectManual.input_shape.fields_by_scope, /selected_context, tracks, items, and markers_regions/);
+    assert.deepEqual(inspectManual.examples.find((row) => row.name === "tracks and items").input.fields_by_scope, {
+      tracks: ["ref", "name", "index"],
+      items: ["ref", "track_ref", "start_seconds"],
+    });
     assert.match(inspectManual.readback_steps.join(" "), /project identity\/path/);
     for (const id of EXPECTED_PROJECT_FILE_TEMPLATE_IDS) {
       assert.equal(projectFileManual.underlying_actions.some((row) => row.includes(id)), true, id);

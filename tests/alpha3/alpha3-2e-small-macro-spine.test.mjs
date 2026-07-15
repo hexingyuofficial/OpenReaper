@@ -50,7 +50,10 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
   it("plans a bounded read-only inspect flow over accepted reads and macro.project.query", () => {
     const plan = planAlpha3_2EProjectInspectMacro({
       include: ["project_path", "dirty_state", "selected_context", "tracks", "render"],
-      fields: ["ref", "name"],
+      fields_by_scope: {
+        selected_context: ["ref", "scope_kind"],
+        tracks: ["ref", "name"],
+      },
       limit: 25,
       refresh_policy: "if_stale",
       ref_policy: "canonical_only",
@@ -76,6 +79,46 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(queryInputs.every((input) => input.refresh_policy === "if_stale"), true);
     assert.equal(queryInputs.every((input) => input.limit === 25), true);
     assert.equal(queryInputs.every((input) => input.hydrate_refs === true), true);
+    assert.deepEqual(queryInputs[0].fields, ["ref", "scope_kind"]);
+    assert.deepEqual(queryInputs[1].fields, ["ref", "name"]);
+  });
+
+  it("requires explicit per-scope fields for mixed row scopes and validates every mapping", () => {
+    const discovery = createAlpha3_2EProjectInspectMacroDiscoveryItems()[0];
+    assert.equal(discovery.inputSchema.properties.fields_by_scope.type, "object");
+    assert.deepEqual(Object.keys(discovery.inputSchema.properties.fields_by_scope.properties), [
+      "selected_context",
+      "tracks",
+      "items",
+      "markers_regions",
+    ]);
+    assert.equal(discovery.examples[1].input.fields, undefined);
+    assert.deepEqual(discovery.examples[1].input.fields_by_scope.items, ["ref", "track_ref", "start_seconds"]);
+
+    const ambiguous = planAlpha3_2EProjectInspectMacro({
+      include: ["tracks", "items"],
+      fields: ["ref", "name"],
+    });
+    assert.equal(ambiguous.ok, false);
+    assert.equal(ambiguous.blockers.some((entry) => entry.code === "PROJECT_INSPECT_MIXED_SCOPE_FIELDS_AMBIGUOUS"), true);
+    assert.deepEqual(ambiguous.child_requests, []);
+
+    const invalidMapping = planAlpha3_2EProjectInspectMacro({
+      include: ["tracks"],
+      fields_by_scope: {
+        items: ["ref"],
+        unknown: ["ref"],
+        tracks: ["ok", "bad\nfield"],
+      },
+    });
+    assert.equal(invalidMapping.ok, false);
+    assert.equal(invalidMapping.blockers.some((entry) => entry.code === "PROJECT_INSPECT_FIELDS_SCOPE_NOT_INCLUDED"), true);
+    assert.equal(invalidMapping.blockers.some((entry) => entry.code === "PROJECT_INSPECT_FIELDS_BY_SCOPE_UNSUPPORTED"), true);
+    assert.equal(invalidMapping.blockers.some((entry) => entry.code === "PROJECT_INSPECT_FIELD_INVALID"), true);
+
+    const invalidShape = planAlpha3_2EProjectInspectMacro({ include: ["tracks"], fields_by_scope: [] });
+    assert.equal(invalidShape.ok, false);
+    assert.equal(invalidShape.blockers.some((entry) => entry.code === "PROJECT_INSPECT_FIELDS_BY_SCOPE_INVALID"), true);
   });
 
   it("fails closed for unsafe input, refs, and idempotency without emitting child requests", () => {

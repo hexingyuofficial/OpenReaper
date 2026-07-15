@@ -420,6 +420,29 @@ async function executeProjectInspect({
       blockers: validationPlan.blockers,
     });
   }
+  const requestedEntities = inspectEntities(validationPlan.include);
+  const queryValidationBlockers = requestedEntities.flatMap((entity) => {
+    const plan = planAlpha3_2DGenericProjectQuery({
+      entity,
+      refresh_policy: "if_stale",
+      limit: Math.min(validationPlan.limit, 100),
+      ...inspectFieldsInput(validationPlan, entity),
+    }, { projectIndex: projectIndexRuntime?.adapter, catalog });
+    return nonRefreshBlockers(plan);
+  });
+  if (queryValidationBlockers.length > 0) {
+    return blockedEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      stages,
+      status: initialStatus,
+      code: firstBlockerCode({ blockers: queryValidationBlockers }, "PROJECT_INSPECT_INVALID"),
+      message: "macro.project.inspect fields are invalid for one or more requested scopes.",
+      blockers: queryValidationBlockers,
+    });
+  }
   if (typeof executeAtomic !== "function") {
     return blockedEnvelope({
       entry,
@@ -463,7 +486,6 @@ async function executeProjectInspect({
     });
   }
 
-  const requestedEntities = inspectEntities(validationPlan.include);
   const needsHydration = initialCold || requestedEntities.some((entity) => {
     const planned = planAlpha3_2DGenericProjectQuery({
       entity,
@@ -569,7 +591,7 @@ async function executeProjectInspect({
       entity,
       refresh_policy: "never",
       limit: Math.min(validationPlan.limit, 100),
-      ...(validationPlan.fields.length > 0 ? { fields: validationPlan.fields } : {}),
+      ...inspectFieldsInput(validationPlan, entity),
     }, { projectIndex: projectIndexRuntime?.adapter, catalog });
     if (plan.ok) {
       queryResults[entity] = queryData(plan);
@@ -1809,15 +1831,25 @@ function inspectEntities(include) {
   return result;
 }
 
+function inspectFieldsInput(validationPlan, entity) {
+  if (entity === "status") return {};
+  const fields = validationPlan.fields_by_scope?.[entity] ?? validationPlan.fields;
+  return Array.isArray(fields) && fields.length > 0 ? { fields } : {};
+}
+
 function hasNonRefreshBlockers(plan) {
-  if (plan?.ok === true) return false;
+  return nonRefreshBlockers(plan).length > 0;
+}
+
+function nonRefreshBlockers(plan) {
+  if (plan?.ok === true) return [];
   const refreshCodes = new Set([
     "INDEX_NOT_READY",
     "INDEX_REFRESH_REQUIRED",
     "INDEX_COVERAGE_INCOMPLETE",
     "GENERIC_QUERY_REFRESH_REQUIRED",
   ]);
-  return (plan?.blockers ?? []).some((entry) => !refreshCodes.has(entry?.code));
+  return (plan?.blockers ?? []).filter((entry) => !refreshCodes.has(entry?.code));
 }
 
 function runtimeStatus(runtime) {
