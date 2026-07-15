@@ -212,6 +212,22 @@ describe("Layer 7 R1 cleanup recipe transcript driver", () => {
     );
   });
 
+  it("treats blank inherited bridge identity variables as unconfigured", async () => {
+    const result = await runLayer7R1RecipeTranscript({
+      env: {
+        OPENREAPER_LIVE_BRIDGE_SESSION_ID: "",
+        OPENREAPER_LIVE_BRIDGE_OWNER: "   ",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "",
+      },
+      runId: "r1-fake-blank-bridge-env",
+      transcriptPath: tempPath("blank-bridge-env.jsonl"),
+      now: fixedNow,
+    });
+
+    assert.equal(result.status, "succeeded");
+    assert.equal(result.reason, "layer7_r1_recipe_transcript_succeeded");
+  });
+
   it("blocks live mode without required non-spawning env/config", async () => {
     const result = await runLayer7R1RecipeTranscript({
       live: true,

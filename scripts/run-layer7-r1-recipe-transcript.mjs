@@ -1048,8 +1048,8 @@ function summarizeGetStateResponse(response) {
 function runtimeContext({ runId, requestSequence, env, mode, createdAt }) {
   return {
     client_id: "openreaper-layer7-r1-transcript-driver",
-    session_id: env[SESSION_ENV] ?? runId,
-    expected_owner: env[OWNER_ENV] ?? (mode === "live" ? "openreaper-layer7-r1-cleanup" : "owner-test"),
+    session_id: nonBlankString(env[SESSION_ENV], runId),
+    expected_owner: nonBlankString(env[OWNER_ENV], mode === "live" ? "openreaper-layer7-r1-cleanup" : "owner-test"),
     expected_generation: positiveInteger(env[GENERATION_ENV], 1),
     created_at: createdAt,
     request_sequence: requestSequence,
@@ -1130,6 +1130,10 @@ function compactError(error) {
 function positiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonBlankString(value, fallback) {
+  return typeof value === "string" && value.trim() !== "" ? value : fallback;
 }
 
 function safeNowIso(now) {
