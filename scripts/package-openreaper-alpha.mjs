@@ -75,8 +75,18 @@ const REQUIRED_INSTALLED_PROJECT_START_COMMAND =
 const REQUIRED_PROJECT_INDEX_USER_FLOW_CONTRACT = "alpha3.1.l3.project_index_user_flow.v1";
 const REQUIRED_MACRO_EXECUTION_CONVENIENCE_CONTRACT = "alpha3.1.l4.macro_execution_convenience.v1";
 const VITAL_AGENT_REQUIRED_TOOLS = Object.freeze([
+  "assess_openreaper_capabilities",
   "create_openreaper_handoff_plan",
   "run_doctor",
+]);
+const VITAL_AGENT_OPENREAPER_WRITE_TEMPLATE_IDS = Object.freeze([
+  "template.project.create_project_map_snapshot",
+  "template.tracks.read_mixer_controls",
+  "template.fx.list_track_fx_chain",
+  "template.fx.read_fx_summary",
+  "template.fx.list_fx_parameters",
+  "template.fx.read_fx_parameter",
+  "template.fx.set_fx_parameter_normalized",
 ]);
 const ACTIVE_PACKAGE_FIXTURE_PROCESSES = new Map();
 
@@ -3448,11 +3458,22 @@ async function smokePackagedVitalAgentMcp() {
     if (doctor.ok !== true) {
       throw new Error("Packaged vital-agent-mcp doctor did not report ok=true");
     }
+    const capabilityReport = parseJsonToolResult(await client.callTool({
+      name: "assess_openreaper_capabilities",
+      arguments: {
+        mode: "write",
+        evidence: minimalVitalAgentOpenReaperCapabilityEvidence(),
+      },
+    }));
+    if (capabilityReport.ok !== true || capabilityReport.mode !== "write") {
+      throw new Error("Packaged vital-agent-mcp capability smoke did not report write readiness");
+    }
     const handoff = parseJsonToolResult(await client.callTool({
       name: "create_openreaper_handoff_plan",
       arguments: {
         bundle: minimalResolvedVitalBundle(),
-        fx_ref: "track:1/fx:Vital",
+        fx_ref: "fx:track:guid:{PACKAGE-SMOKE}:0",
+        capability_report: capabilityReport,
         identity: {
           session_id: "openreaper-alpha-package-smoke",
           project_ref: "project:current",
@@ -3469,6 +3490,7 @@ async function smokePackagedVitalAgentMcp() {
       ok: true,
       required_tools: [...VITAL_AGENT_REQUIRED_TOOLS],
       doctor_schema: doctor.schema,
+      capability_schema: capabilityReport.schema,
       handoff_schema: handoff.schema,
       handoff_required_templates: handoff.target?.required_template_ids ?? [],
     };
@@ -3537,6 +3559,39 @@ function minimalResolvedVitalBundle() {
   };
 }
 
+function minimalVitalAgentOpenReaperCapabilityEvidence() {
+  const owner = "openreaper-alpha-package-smoke";
+  const generation = 1;
+  return {
+    schema: "opensynth.openreaper_capability_evidence.v1",
+    installed: true,
+    ping: {
+      ok: true,
+      version: OPENREAPER_PRODUCT_VERSION,
+      tools: [...EXACT_MCP_TOOLS],
+      live_bridge: {
+        configured: true,
+        ready: true,
+        status: "bridge_ready",
+        expected: { owner, generation },
+        observed: { owner, generation },
+      },
+      project_index: { session_id: owner },
+    },
+    list_templates: {
+      items: VITAL_AGENT_OPENREAPER_WRITE_TEMPLATE_IDS.map((id) => ({
+        id,
+        risk: id === "template.fx.set_fx_parameter_normalized" ? "write" : "read",
+        capability_truth: {
+          exists_in_catalog: true,
+          live_runnable_now: true,
+          known_blocker: null,
+        },
+      })),
+    },
+  };
+}
+
 async function importPackageModule(specifier, paths) {
   const resolved = require.resolve(specifier, { paths });
   return import(pathToFileURL(resolved));
@@ -3544,10 +3599,17 @@ async function importPackageModule(specifier, paths) {
 
 function parseJsonToolResult(response) {
   const text = response?.content?.find((item) => item.type === "text")?.text;
+  if (response?.isError === true) {
+    throw new Error(`MCP tool returned an error: ${text ?? "missing error detail"}`);
+  }
   if (!text) {
     throw new Error("MCP tool response did not include text content");
   }
-  return JSON.parse(text);
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`MCP tool response was not valid JSON: ${text.slice(0, 320)}`, { cause: error });
+  }
 }
 
 function assertExactArray(actual, expected, label) {

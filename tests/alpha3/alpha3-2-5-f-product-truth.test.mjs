@@ -323,6 +323,10 @@ sleep 0.1
     assert.match(source, /live_write_refs_reresolved/);
     assert.match(source, /candidateProjectUnderstanding/);
     assert.match(source, /projectAlpha3_2_5BProjectQueryDoctorTask/);
+    assert.match(source, /"assess_openreaper_capabilities"/);
+    assert.match(source, /capability_report: capabilityReport/);
+    assert.match(source, /host_parameter_freshness_status: "fresh"/);
+    assert.match(source, /MCP tool returned an error/);
     assert.match(source, /bridge_owner: "openreaper-alpha-package-smoke"/);
     assert.match(source, /bridge_generation: 1/);
     assert.match(source, /stale_identity_scrubbed_for_child/);
