@@ -2090,7 +2090,7 @@ function compactRuntimeErrorEnvelope({ id, code, message, recoverable, budget, n
       message: boundedString(message, 160),
       recoverable: Boolean(recoverable),
       failure_layer: diagnostics.failure_layer ?? null,
-      recommended_next_action: compactRecommendedNextAction(code, diagnostics.failure_layer),
+      recommended_next_action: compactRecommendedNextAction(code, diagnostics.failure_layer, details),
       copy_paste_safe_guidance: compactCopyPasteSafeGuidance(diagnostics.failure_layer),
     },
     budget: {
@@ -2102,9 +2102,13 @@ function compactRuntimeErrorEnvelope({ id, code, message, recoverable, budget, n
   return withRuntimeResponseBudget(minimal, budget, code === "RESPONSE_TOO_LARGE");
 }
 
-function compactRecommendedNextAction(code, failureLayer) {
+function compactRecommendedNextAction(code, failureLayer, details) {
   if (failureLayer === "response_budget" || code === "RESPONSE_TOO_LARGE") {
-    return "Call call_template again with budget.max_items=10 and budget.max_inline_value_bytes=512.";
+    const inlineRecovery = inlineBudgetRecovery(details);
+    if (inlineRecovery) {
+      return `Retry call_template with budget.max_inline_value_bytes=${inlineRecovery.recommended_bytes}; keep max_items and max_response_bytes unchanged.`;
+    }
+    return "Retry a supported bounded page, narrower fields, or artifact view; do not lower max_inline_value_bytes blindly.";
   }
   if (failureLayer === "transport_write") {
     return "Call ping, then retry call_template after the managed bridge is ready.";
@@ -2128,7 +2132,7 @@ function runtimeFailureDiagnostics(error = {}) {
   const details = isPlainObject(error.details) ? error.details : {};
   const blocker = details.blocker;
   const failureLayer = runtimeFailureLayer({ source, code, blocker });
-  const action = runtimeRecommendedNextAction({ failureLayer, code, blocker });
+  const action = runtimeRecommendedNextAction({ failureLayer, code, blocker, details });
   return {
     failure_layer: failureLayer,
     recommended_next_action: action,
@@ -2160,7 +2164,7 @@ function runtimeFailureLayer({ source, code, blocker }) {
   return null;
 }
 
-function runtimeRecommendedNextAction({ failureLayer, code, blocker }) {
+function runtimeRecommendedNextAction({ failureLayer, code, blocker, details }) {
   if (failureLayer === "server_validation") {
     return {
       code: "fix_request_and_retry",
@@ -2193,11 +2197,19 @@ function runtimeRecommendedNextAction({ failureLayer, code, blocker }) {
     };
   }
   if (failureLayer === "response_budget") {
+    const inlineRecovery = inlineBudgetRecovery(details);
+    if (inlineRecovery) {
+      return {
+        code: "retry_with_larger_inline_budget",
+        tool: "call_template",
+        request_patch: { budget: { max_inline_value_bytes: inlineRecovery.recommended_bytes } },
+        instruction: `Retry with max_inline_value_bytes=${inlineRecovery.recommended_bytes}; keep max_items and max_response_bytes unchanged. The failed complete value requires at least ${inlineRecovery.required_bytes} bytes.`,
+      };
+    }
     return {
-      code: "retry_compact_response",
+      code: "retry_bounded_page_or_artifact",
       tool: "call_template",
-      request_patch: { budget: { max_items: 10, max_inline_value_bytes: 512 } },
-      instruction: "Retry call_template with bounded fields, paging, or artifact refs instead of requesting a large inline payload.",
+      instruction: "Retry with this Template's supported cursor/limit/fields or artifact view. Keep max_inline_value_bytes unchanged; lower max_items only for a list-shaped result and continue all reported pages.",
     };
   }
   return {
@@ -2205,6 +2217,25 @@ function runtimeRecommendedNextAction({ failureLayer, code, blocker }) {
     tool: "ping",
     input: {},
     then: "Use only the existing OpenReaper MCP tools and retry after the reported blocker is resolved.",
+  };
+}
+
+function inlineBudgetRecovery(details) {
+  if (!isPlainObject(details) || typeof details.path !== "string") return null;
+  const requiredBytes = details.bytes;
+  const currentBytes = details.max_inline_value_bytes;
+  if (!Number.isInteger(requiredBytes) || !Number.isInteger(currentBytes) || requiredBytes <= currentBytes) {
+    return null;
+  }
+
+  let recommendedBytes = 1;
+  while (recommendedBytes < requiredBytes && recommendedBytes < FOUNDATION_BRIDGE_DEFAULT_BUDGET.max_response_bytes) {
+    recommendedBytes *= 2;
+  }
+  if (recommendedBytes < requiredBytes) return null;
+  return {
+    required_bytes: requiredBytes,
+    recommended_bytes: recommendedBytes,
   };
 }
 

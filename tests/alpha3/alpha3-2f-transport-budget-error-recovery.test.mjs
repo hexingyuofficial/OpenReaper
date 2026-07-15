@@ -131,10 +131,64 @@ describe("Alpha3.2-F transport, budget, and error recovery", () => {
     assert.equal(result.error.code, "RESPONSE_TOO_LARGE");
     assert.equal(result.error.failure_layer, "response_budget");
     assert.equal(result.error.recoverable, true);
-    assert.equal(result.error.recommended_next_action, "Call call_template again with budget.max_items=10 and budget.max_inline_value_bytes=512.");
+    assert.equal(result.error.recommended_next_action, "Retry a supported bounded page, narrower fields, or artifact view; do not lower max_inline_value_bytes blindly.");
     assert.equal(result.budget.truncated, true);
     assert.equal(result.budget.response_bytes <= result.budget.max_response_bytes, true);
     assert.equal(JSON.stringify(result).includes("x".repeat(100)), false);
+  });
+
+  it("gives an executable larger-inline retry without shrinking collection knowledge", async () => {
+    const bridge = new FakeFoundationBridge();
+    const tracks = Array.from({ length: 90 }, (_, index) => ({
+      track_ref: `track:guid:{TRACK-${String(index + 1).padStart(3, "0")}}`,
+      name: `Large Project Folder Track ${String(index + 1).padStart(3, "0")} ${"nested ".repeat(10)}`,
+      depth: index % 9 === 0 ? 1 : index % 9 === 8 ? -1 : 0,
+    }));
+    const runtime = createCallTemplateRuntime({
+      executor: (request) => bridge.okEnvelope(
+        request,
+        "2026-07-11T00:00:00.000Z",
+        { summary: { tracks } },
+      ),
+    });
+    const budget = {
+      max_response_bytes: 65_536,
+      max_items: 128,
+      max_inline_value_bytes: 8_192,
+    };
+
+    const first = await runtime.call_template({
+      id: "template.tracks.read_folder_structure",
+      input: {},
+      context: context(),
+      budget,
+    });
+
+    assert.equal(first.ok, false);
+    assert.equal(first.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(first.error.details.path, "result.summary");
+    assert.equal(first.error.details.bytes > budget.max_inline_value_bytes, true);
+    assert.equal(first.error.recommended_next_action.code, "retry_with_larger_inline_budget");
+    assert.deepEqual(Object.keys(first.error.recommended_next_action.request_patch.budget), ["max_inline_value_bytes"]);
+    assert.equal(
+      first.error.recommended_next_action.request_patch.budget.max_inline_value_bytes >= first.error.details.bytes,
+      true,
+    );
+    assert.match(first.error.recommended_next_action.instruction, /keep max_items and max_response_bytes unchanged/i);
+
+    const retry = await runtime.call_template({
+      id: "template.tracks.read_folder_structure",
+      input: {},
+      context: { ...context(), request_sequence: 2 },
+      budget: {
+        ...budget,
+        ...first.error.recommended_next_action.request_patch.budget,
+      },
+    });
+
+    assert.equal(retry.ok, true);
+    assert.equal(retry.result.summary.tracks.length, 90);
+    assert.equal(retry.budget.response_bytes <= retry.budget.max_response_bytes, true);
   });
 
   it("keeps the failure-layer vocabulary bounded and the public tool count unchanged", () => {
