@@ -115,6 +115,43 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
     assert.equal(oldFx.error.details.replacement, "macro.fx.apply_chain");
   });
 
+  it("keeps 32-note verification complete under a 2048-byte public Macro budget", async () => {
+    const notes = generatedNotes(32);
+    const bridge = new DRuntimeBridge({ notes });
+    const runtime = createRuntime({ bridge });
+    const midi = await runtime.call_template({
+      id: "macro.midi.apply",
+      input: { mode: "create_clips", start_seconds: 0, end_seconds: 4, notes, dry_run: false },
+      refs: { track_ref: TRACK_REF },
+      context: context(1),
+      budget: { max_response_bytes: 2_048, max_items: 1, max_inline_value_bytes: 64 },
+    });
+
+    assert.equal(midi.ok, true, JSON.stringify(midi));
+    assert.equal(midi.budget.max_bytes, 2_048);
+    assert.equal(midi.budget.actual_bytes <= 2_048, true, JSON.stringify(midi.budget));
+    assert.equal("notes" in midi.result.data, false);
+    assert.equal(midi.result.data.verification.note_count, notes.length);
+    assert.equal(midi.result.data.outcome.live_readback.status, "passed");
+    assert.equal(midi.result.data.outcome.index_maintenance.status, "completed");
+    assert.equal(midi.result.changes.length, 2);
+    assert.equal(midi.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(midi.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(midi.result.changes.every((change) => change.index_maintenance.status === "completed"), true);
+    const verificationRequests = bridge.seen.filter((request) => [
+      "midi.read_take_event_counts",
+      "midi.list_take_notes",
+    ].includes(request.pack.capability));
+    assert.equal(verificationRequests.length, 2);
+    assert.equal(verificationRequests.every((request) => request.budget.max_response_bytes === 65_536), true);
+    assert.equal(verificationRequests.every((request) => request.budget.max_items === 64), true);
+    assert.equal(verificationRequests.every((request) => request.budget.max_inline_value_bytes === 24_576), true);
+    assert.equal(verificationRequests[1].params.cursor, "0");
+    assert.equal(bridge.seen.every((request) => request.budget.max_response_bytes === 65_536), true);
+    assert.equal(bridge.seen.every((request) => request.budget.max_items === 64), true);
+    assert.equal(bridge.seen.every((request) => request.budget.max_inline_value_bytes === 24_576), true);
+  });
+
   it("executes the canonical installed-inventory FX chain mode through call_template", async () => {
     const bridge = new DRuntimeBridge();
     const invalidations = [];
@@ -183,28 +220,41 @@ function createRuntime({ bridge = new DRuntimeBridge(), invalidations = [] } = {
 }
 
 class DRuntimeBridge extends FakeFoundationBridge {
-  constructor() {
+  constructor({ notes = NOTES } = {}) {
     super();
     this.parameterValues = new Map();
     this.fxChain = [];
+    this.notes = structuredClone(notes);
   }
 
   dispatch(input) {
     const request = structuredClone(input);
     const capability = request.pack?.capability;
     request.params = { ...(request.params ?? {}) };
-    request.params.emits = emitted(capability, request, this.parameterValues, this.fxChain);
+    request.params.emits = emitted(capability, request, this.parameterValues, this.fxChain, this.notes);
     return super.dispatch(request);
   }
 }
 
-function emitted(capability, request, parameterValues, fxChain) {
+function emitted(capability, request, parameterValues, fxChain, notes) {
   if (capability === "track.resolve_ref") return output([TRACK_OBJECT], { track_ref: TRACK_REF, name: "D Runtime Track" });
   if (capability === "midi.create_midi_item") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF });
-  if (capability === "midi.insert_notes_batch") return output([TAKE_OBJECT], { take_ref: TAKE_REF, inserted_count: NOTES.length, note_count: NOTES.length, take_hash: "hash:d-runtime" });
-  if (capability === "midi.resolve_midi_take_ref") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF, event_count: NOTES.length, ppq_start: 0, ppq_end: 960 });
-  if (capability === "midi.read_take_event_counts") return output([TAKE_OBJECT], { take_ref: TAKE_REF, note_count: NOTES.length, cc_count: 0, text_sysex_count: 0 });
-  if (capability === "midi.list_take_notes") return output([TAKE_OBJECT], { take_ref: TAKE_REF, notes: NOTES, returned_count: NOTES.length, truncated: false });
+  if (capability === "midi.insert_notes_batch") return output([TAKE_OBJECT], { take_ref: TAKE_REF, inserted_count: notes.length, note_count: notes.length, take_hash: "hash:d-runtime" });
+  if (capability === "midi.resolve_midi_take_ref") return output([ITEM_OBJECT, TAKE_OBJECT], { item_ref: ITEM_REF, take_ref: TAKE_REF, event_count: notes.length, ppq_start: 0, ppq_end: notes.at(-1)?.end_ppq ?? 0 });
+  if (capability === "midi.read_take_event_counts") return output([TAKE_OBJECT], { take_ref: TAKE_REF, note_count: notes.length, cc_count: 0, text_sysex_count: 0 });
+  if (capability === "midi.list_take_notes") {
+    const cursor = Number(request.params.cursor ?? 0);
+    const limit = Number(request.params.limit ?? notes.length);
+    const page = notes.slice(cursor, cursor + limit);
+    const next = cursor + page.length;
+    return output([TAKE_OBJECT], {
+      take_ref: TAKE_REF,
+      notes: page,
+      returned_count: page.length,
+      truncated: next < notes.length,
+      ...(next < notes.length ? { next_cursor: String(next) } : {}),
+    });
+  }
   if (capability === "fx.installed.search") {
     const installed = ["VST: ReaEQ (Cockos)", "VST: ReaComp (Cockos)"];
     const query = String(request.params.query ?? "").toLocaleLowerCase();
@@ -285,4 +335,14 @@ function context(requestSequence) {
     created_at: "2026-07-12T10:00:00.000Z",
     request_sequence: requestSequence,
   };
+}
+
+function generatedNotes(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    start_ppq: index * 120,
+    end_ppq: index * 120 + 120,
+    pitch: 48 + (index % 24),
+    velocity: 80 + (index % 32),
+    channel: index % 4,
+  }));
 }

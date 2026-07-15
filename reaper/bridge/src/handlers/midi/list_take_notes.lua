@@ -1,5 +1,19 @@
 -- Extracted read-only handler: template.midi.list_take_notes.
 
+local function read_b_midi_notes_cursor(value)
+  if value == nil or value == JSON_NULL or value == "" then
+    return 0
+  end
+  if not is_string(value) or not value:match("^%d+$") then
+    return nil
+  end
+  local cursor = tonumber(value)
+  if cursor == nil or cursor < 0 or cursor ~= math.floor(cursor) then
+    return nil
+  end
+  return cursor
+end
+
 local function list_take_notes(request)
   local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
   if not take then
@@ -7,9 +21,16 @@ local function list_take_notes(request)
   end
   local ok_count, count_retval, note_count = call_reaper("MIDI_CountEvts", take)
   local total = (ok_count and count_retval ~= false) and first_number(note_count) or 0
+  local cursor = read_b_midi_notes_cursor(request.params.cursor)
+  if cursor == nil then
+    return READ_B_MIDI.handler_error("PARAMS_INVALID", "MIDI note cursor must be a non-negative decimal string.", {
+      reason_code = "CURSOR_INVALID",
+      cursor = bounded_string(request.params.cursor, 80),
+    })
+  end
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local notes = json_array({})
-  for index = 0, math.max(total - 1, -1) do
+  for index = cursor, math.max(total - 1, cursor - 1) do
     if #notes >= limit then
       break
     end
@@ -38,7 +59,7 @@ local function list_take_notes(request)
     take_ref = READ_B_MIDI.take_ref_string(take),
     notes = notes,
     returned_count = #notes,
-    next_cursor = total > #notes and tostring(#notes) or nil,
-    truncated = total > #notes,
+    next_cursor = total > cursor + #notes and tostring(cursor + #notes) or nil,
+    truncated = total > cursor + #notes,
   }
 end

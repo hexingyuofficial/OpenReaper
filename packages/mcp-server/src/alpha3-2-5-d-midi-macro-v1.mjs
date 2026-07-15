@@ -31,8 +31,15 @@ const PROJECT_QUERY_ID = "macro.project.query";
 const PROJECT_INDEX_RUNTIME_CAPABILITY = "project_index.runtime.v1";
 const PROJECT_UNDERSTANDING_RUNTIME_CAPABILITY = "project_understanding.runtime.v1";
 const INPUT_FIELDS = new Set(["start_seconds", "end_seconds", "notes", "selector", "dry_run"]);
+const MIN_RESPONSE_BUDGET = 2_048;
 const MAX_NOTES = 128;
-const MAX_NOTE_PAGE = 128;
+const MAX_NOTE_PAGE = 64;
+const MAX_NOTE_VERIFICATION_PAGES = Math.ceil(MAX_NOTES / MAX_NOTE_PAGE);
+const INTERNAL_ATOMIC_BUDGET = Object.freeze({
+  max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
+  max_items: MAX_NOTE_PAGE,
+  max_inline_value_bytes: MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
+});
 const TRACK_SCOPES = Object.freeze(["items", "takes", "selection"]);
 
 const REGISTRY_ENTRIES = Object.freeze([{
@@ -178,6 +185,15 @@ export async function executeAlpha3_2_5DMidiMacro({
   const stages = [];
   const state = createState(projectIndexRuntime);
   const input = isObject(request.input) ? request.input : {};
+  const requestedResponseBudget = request?.budget?.max_response_bytes;
+  if (Number.isInteger(requestedResponseBudget) && requestedResponseBudget > 0 && requestedResponseBudget < MIN_RESPONSE_BUDGET) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      code: "MIDI_RESPONSE_BUDGET_TOO_SMALL",
+      message: `macro.midi.create_clip requires at least ${MIN_RESPONSE_BUDGET} response bytes.`,
+      data: { requested_bytes: requestedResponseBudget, minimum_bytes: MIN_RESPONSE_BUDGET },
+    });
+  }
   const requestValidation = validateMacroProgramRequest({
     macro_id: request.id,
     input,
@@ -349,6 +365,7 @@ export async function executeAlpha3_2_5DMidiMacro({
       stages,
       stageId: "midi-create-clip-verify-count",
       kind: "verify",
+      budget: INTERNAL_ATOMIC_BUDGET,
       now,
     });
     const countReadback = readback(counted);
@@ -357,21 +374,16 @@ export async function executeAlpha3_2_5DMidiMacro({
       throw coded("MIDI_NOTE_COUNT_READBACK_MISMATCH", `MIDI note count readback was ${String(noteCount)}; expected ${plan.notes.length}.`);
     }
 
-    const listed = await runAtomic({
+    const listed = await listAllNotes({
       request,
       executeAtomic,
       state,
-      id: LIST_NOTES_ID,
-      input: { limit: MAX_NOTE_PAGE, include_project_time: false },
-      refs: { take_ref: resolvedTakeRef },
+      takeRef: resolvedTakeRef,
       stages,
-      stageId: "midi-create-clip-verify-list",
-      kind: "verify",
       now,
     });
-    const listReadback = readback(listed);
-    const actualNotes = Array.isArray(listReadback.notes) ? listReadback.notes : [];
-    if (listReadback.truncated === true || actualNotes.length !== plan.notes.length || !notesMatch(plan.notes, actualNotes)) {
+    const actualNotes = listed.notes;
+    if (actualNotes.length !== noteCount || actualNotes.length !== plan.notes.length || !notesMatch(plan.notes, actualNotes)) {
       throw coded("MIDI_NOTE_LIST_READBACK_MISMATCH", "MIDI note list readback did not exactly match the bounded PPQ notes.");
     }
     state.changes[0].status = "applied";
@@ -388,6 +400,7 @@ export async function executeAlpha3_2_5DMidiMacro({
       source: "live_note_count_and_list_readback",
       take_ref: resolvedTakeRef,
       note_count: noteCount,
+      page_count: listed.pageCount,
       list_truncated: false,
     };
 
@@ -415,14 +428,18 @@ export async function executeAlpha3_2_5DMidiMacro({
         item_ref: itemRef,
         take_ref: takeRef,
         note_count: noteCount,
-        notes: actualNotes,
         inserted_count: insertedCount ?? plan.notes.length,
+        verification: {
+          note_count: actualNotes.length,
+          page_count: listed.pageCount,
+          cursor_complete: true,
+        },
         index_update: compact(invalidation),
         outcome: midiOutcome(state),
       },
     });
   } catch (error) {
-    const partial = state.writeExecuted === true || state.changes.length > 0;
+    const partial = state.mutationAttempted === true || state.writeExecuted === true || state.changes.length > 0 || state.created !== null;
     if (partial) {
       const invalidation = invalidateProjectIndex(projectIndexRuntime, now);
       if (invalidation?.ok === true) {
@@ -474,7 +491,7 @@ async function selectTrack({ request, input, projectIndexRuntime, catalog, execu
       },
       refs: [],
       context: request.context,
-      budget: request.budget,
+      budget: INTERNAL_ATOMIC_BUDGET,
     },
     projectIndexRuntime,
     catalog,
@@ -494,24 +511,27 @@ async function selectTrack({ request, input, projectIndexRuntime, catalog, execu
   return { ok: true, trackRef, sqliteUsed: true };
 }
 
-async function runAtomic({ request, executeAtomic, state, id, input, refs, stages, stageId, kind, requiresPassedVerification = false, now }) {
+async function runAtomic({ request, executeAtomic, state, id, input, refs, stages, stageId, kind, requiresPassedVerification = false, budget, now }) {
+  const materializedRefs = materializeRefs(refs, state);
+  if (kind === "template_execute") state.mutationAttempted = true;
   const execution = await executeAtomic({
     id,
     input,
-    refs: materializeRefs(refs, state),
+    refs: materializedRefs,
     context: request.context,
-    budget: request.budget,
+    budget: budget ?? INTERNAL_ATOMIC_BUDGET,
     observeProjectIndex: false,
   });
   const evidence = executionEvidenceRefs(execution);
   state.evidenceRefs.push(...evidence);
+  collectObjectRefs(state, execution);
+  state.canonicalRefs.push(...canonicalRefs(execution));
+  if (id === CREATE_ITEM_ID) rememberCreatedRefs(state, execution);
   if (execution?.ok !== true) {
     const error = execution?.error ?? {};
     pushStage(stages, stageId, kind, "failed", `${id} failed.`, evidence);
     throw coded(error.code ?? "MIDI_MACRO_ATOMIC_STAGE_FAILED", error.message ?? `${id} failed through the managed atomic route.`, error.details?.blockers);
   }
-  collectObjectRefs(state, execution);
-  state.canonicalRefs.push(...canonicalRefs(execution));
   if (kind === "template_execute") state.writeExecuted = true;
   const verification = execution?.verification ?? execution?.result?.verification;
   if (requiresPassedVerification && verification?.status !== "passed") {
@@ -520,6 +540,80 @@ async function runAtomic({ request, executeAtomic, state, id, input, refs, stage
   }
   pushStage(stages, stageId, kind, "completed", `${id} completed.`, evidence);
   return execution;
+}
+
+async function listAllNotes({ request, executeAtomic, state, takeRef, stages, now }) {
+  const notes = [];
+  const pageFingerprints = new Set();
+  let cursor = "0";
+  let pageCount = 0;
+
+  while (pageCount < MAX_NOTE_VERIFICATION_PAGES) {
+    const listed = await runAtomic({
+      request,
+      executeAtomic,
+      state,
+      id: LIST_NOTES_ID,
+      input: { cursor, limit: MAX_NOTE_PAGE, include_project_time: false },
+      refs: { take_ref: takeRef },
+      stages,
+      stageId: "midi-create-clip-verify-list",
+      kind: "verify",
+      budget: INTERNAL_ATOMIC_BUDGET,
+      now,
+    });
+    const page = readback(listed);
+    const pageNotes = page.notes;
+    if (!Array.isArray(pageNotes)
+      || !Number.isInteger(page.returned_count)
+      || page.returned_count !== pageNotes.length
+      || typeof page.truncated !== "boolean"
+      || pageNotes.length > MAX_NOTE_PAGE
+      || (page.take_ref !== undefined && page.take_ref !== takeRef)) {
+      throw coded("MIDI_NOTE_LIST_PAGE_INVALID", "MIDI note verification returned an invalid pagination shape.");
+    }
+    if (notes.length + pageNotes.length > MAX_NOTES) {
+      throw coded("MIDI_NOTE_LIST_LIMIT_EXCEEDED", `MIDI note verification exceeded the ${MAX_NOTES}-note bound.`);
+    }
+    const fingerprint = JSON.stringify(pageNotes);
+    if (pageFingerprints.has(fingerprint)) {
+      throw coded("MIDI_NOTE_LIST_PAGE_REPEATED", "MIDI note verification repeated a previously returned page.");
+    }
+    pageFingerprints.add(fingerprint);
+    notes.push(...pageNotes);
+    pageCount += 1;
+
+    if (page.truncated !== true) {
+      if (page.next_cursor !== undefined && page.next_cursor !== null && page.next_cursor !== "") {
+        throw coded("MIDI_NOTE_LIST_CURSOR_INVALID", "Complete MIDI note verification returned an unexpected next_cursor.");
+      }
+      return { notes, pageCount };
+    }
+
+    if (typeof page.next_cursor !== "string" || !/^\d+$/u.test(page.next_cursor)) {
+      throw coded("MIDI_NOTE_LIST_CURSOR_INVALID", "Truncated MIDI note verification did not return a decimal next_cursor.");
+    }
+    const currentOffset = Number(cursor);
+    const nextOffset = Number(page.next_cursor);
+    if (!Number.isSafeInteger(nextOffset) || nextOffset <= currentOffset) {
+      throw coded("MIDI_NOTE_LIST_CURSOR_NOT_ADVANCING", "MIDI note verification returned a non-progressing next_cursor.");
+    }
+    if (nextOffset !== currentOffset + pageNotes.length) {
+      throw coded("MIDI_NOTE_LIST_CURSOR_INVALID", "MIDI note verification next_cursor did not match the returned page length.");
+    }
+    cursor = page.next_cursor;
+  }
+
+  throw coded("MIDI_NOTE_LIST_PAGINATION_INCOMPLETE", "MIDI note verification did not complete within the bounded page count.");
+}
+
+function rememberCreatedRefs(state, execution) {
+  const createdReadback = readback(execution);
+  const rawItemRef = createdReadback.item_ref ?? firstCanonicalRef(execution, "item:");
+  const rawTakeRef = createdReadback.take_ref ?? firstCanonicalRef(execution, "take:");
+  const itemRef = typeof rawItemRef === "string" && rawItemRef.startsWith("item:") ? rawItemRef : null;
+  const takeRef = typeof rawTakeRef === "string" && rawTakeRef.startsWith("take:") ? rawTakeRef : null;
+  if (itemRef !== null || takeRef !== null) state.created = { itemRef, takeRef };
 }
 
 function validateInput(input, request) {
@@ -589,7 +683,7 @@ function midiOutcome(state) {
   const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
   const indexStatuses = [...new Set(changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
   return {
-    mutation: { status: state.writeExecuted === true ? "completed" : "not_run", completed_count: changes.length },
+    mutation: { status: state.writeExecuted === true ? "completed" : state.mutationAttempted === true ? "attempted_unknown" : "not_run", completed_count: changes.length },
     live_readback: {
       status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
       passed_count: readbackPassed,
@@ -611,6 +705,7 @@ function createState(runtime) {
     canonicalRefs: [],
     evidenceRefs: [],
     objectRefs: new Map(),
+    mutationAttempted: false,
     writeExecuted: false,
     sqlite: sqliteEvidence(runtime),
     indexUpdate: null,
@@ -634,7 +729,7 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, status
       data: compactData(data),
     },
     blockers: [], error: null, recovery: null,
-    budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+    budget: { max_bytes: macroResponseBudget(request, entry), actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
 }
 
@@ -658,19 +753,117 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, status
     },
     blockers: bounded,
     error: { code: code ?? bounded[0]?.code ?? "MIDI_MACRO_EXECUTION_FAILED", message, recoverable: bounded.every((item) => item.recoverable !== false) },
-    recovery: { partial_changes_possible: status === "partial_failure", undo_policy: entry.undo_policy, sqlite_rows_authorize_writes: false, action: "Resolve the typed blocker, refresh stale Project Index scopes, then retry the same registered Macro." },
-    budget: { max_bytes: entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+    recovery: failureRecovery({ status, code, state, entry }),
+    budget: { max_bytes: macroResponseBudget(request, entry), actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
 }
 
 function finalizeEnvelope(envelope) {
   const result = structuredClone(envelope);
+  compactEnvelopeToBudget(result);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
   }
   const validation = validateMacroExecutionEnvelope(result);
   if (!validation.valid) throw new TypeError(`Invalid Alpha3.2.5-D MIDI Macro envelope: ${validation.errors.join("; ")}`);
   return deepFreeze(result);
+}
+
+function compactEnvelopeToBudget(envelope) {
+  envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  if (envelope.budget.actual_bytes <= envelope.budget.max_bytes) return;
+
+  envelope.execution.stages = [];
+  envelope.execution.stage_count = 0;
+  envelope.result.verification.evidence_refs = [];
+  envelope.result.canonical_refs = [];
+  envelope.sqlite.snapshot_ref = null;
+  envelope.sqlite.revision = null;
+  envelope.result.data = compactBudgetData(envelope.result.data, envelope.result.changes.length);
+  envelope.result.changes = envelope.result.changes.map(compactBudgetChange);
+  envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  if (envelope.budget.actual_bytes > envelope.budget.max_bytes) {
+    envelope.result.data = compactCriticalBudgetData(envelope.result.data);
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+}
+
+function compactBudgetData(data, changeCount) {
+  const value = isObject(data) ? data : {};
+  return compactData({
+    compacted: true,
+    change_count: changeCount,
+    track_ref: value.track_ref ?? null,
+    item_ref: value.item_ref ?? value.created?.itemRef ?? null,
+    take_ref: value.take_ref ?? value.created?.takeRef ?? null,
+    note_count: value.note_count ?? value.verification?.note_count ?? null,
+    inserted_count: value.inserted_count ?? null,
+    verification: value.verification,
+    outcome: value.outcome,
+  });
+}
+
+function compactBudgetChange(change) {
+  return {
+    template_id: change?.template_id ?? null,
+    status: change?.status ?? "unknown",
+    mutation: { status: change?.mutation?.status ?? "unknown" },
+    live_readback: { status: change?.live_readback?.status ?? "unknown" },
+    index_maintenance: { status: change?.index_maintenance?.status ?? "unknown" },
+  };
+}
+
+function compactCriticalBudgetData(data) {
+  const value = isObject(data) ? data : {};
+  return compactData({
+    compacted: true,
+    change_count: value.change_count,
+    verification: value.verification,
+    outcome: value.outcome,
+  });
+}
+
+function macroResponseBudget(request, entry) {
+  const requested = request?.budget?.max_response_bytes;
+  return Number.isInteger(requested) && requested > 0
+    ? Math.max(MIN_RESPONSE_BUDGET, Math.min(requested, entry.result_budget.max_bytes))
+    : entry.result_budget.max_bytes;
+}
+
+function failureRecovery({ status, code, state, entry }) {
+  if (status === "partial_failure") {
+    const itemRef = state.created?.itemRef ?? null;
+    const takeRef = state.created?.takeRef ?? null;
+    return {
+      partial_changes_possible: true,
+      undo_policy: entry.undo_policy,
+      sqlite_rows_authorize_writes: false,
+      replay_policy: "do_not_replay",
+      item_ref: itemRef,
+      take_ref: takeRef,
+      action: takeRef !== null
+        ? "Do not replay this non-idempotent Macro. Read and resolve the existing take_ref, inspect its current MIDI notes, and decide the next bounded mutation from that live state."
+        : itemRef !== null
+          ? "Do not replay this non-idempotent Macro. Resolve the retained item_ref, locate its active MIDI take, inspect the live notes, and decide the next bounded mutation from that state."
+          : "Do not replay this non-idempotent Macro. Inspect the live project for the attempted MIDI item and decide the next bounded mutation from the current state.",
+    };
+  }
+  if (code === "RESPONSE_TOO_LARGE") {
+    return {
+      partial_changes_possible: false,
+      undo_policy: entry.undo_policy,
+      sqlite_rows_authorize_writes: false,
+      replay_policy: "retry_after_blocker",
+      action: "Keep the requested response budget unchanged and restore a complete bounded atomic response before retrying the registered Macro.",
+    };
+  }
+  return {
+    partial_changes_possible: false,
+    undo_policy: entry.undo_policy,
+    sqlite_rows_authorize_writes: false,
+    replay_policy: "retry_after_blocker",
+    action: "Resolve the typed blocker, refresh stale Project Index scopes, then retry the same registered Macro.",
+  };
 }
 
 function pushStage(stages, id, kind, status, summary, evidenceRefs = []) {
