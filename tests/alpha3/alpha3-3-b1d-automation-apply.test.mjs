@@ -40,7 +40,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     const discovery = createAlpha3_3B1dAutomationApplyDiscoveryItems({ liveRunnableNow: true })[0];
     assert.deepEqual(discovery.supported_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_MODES);
     assert.deepEqual(discovery.held_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES);
-    assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, fx_targets: 8, total_inserted_points: 32 });
+    assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, fx_targets: 8, total_inserted_points: 64 });
     const manual = createAlpha3_3B1dAutomationApplyExactManual().action_manual;
     assert.match(manual.when_to_use.join(" "), /Automation Item deletion/u);
     assert.match(manual.when_to_use.join(" "), /Take-FX/u);
@@ -104,10 +104,70 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     ]);
     assert.equal(result.result.changes[0].status, "applied");
     assert.deepEqual(result.result.changes[0].mutation, { status: "completed", template_id: "template.automation.insert_envelope_points_batch" });
-    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", inserted_count: 2, total_count: 3 });
+    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", requested: 2, replaced: 0, net_new: 2, before: 1, after: 3 });
     assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
     assert.equal(result.result.verification.status, "passed");
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("treats identical and colliding point tuples as bounded overlays", async () => {
+    for (const scenario of [
+      {
+        before: [point(1, 0.5)],
+        requested: [point(1, 0.5)],
+        facts: { requested: 1, replaced: 1, net_new: 0, before: 1, after: 1 },
+      },
+      {
+        before: [point(1, 0.25), point(3, 0.4)],
+        requested: [point(1, 0.75), point(2, 0.6)],
+        facts: { requested: 2, replaced: 1, net_new: 1, before: 2, after: 3 },
+      },
+    ]) {
+      const bridge = new FakeAutomationBridge({ initialPoints: scenario.before });
+      const result = await executeAlpha3_3B1dAutomationApplyMacro({
+        request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: scenario.requested, dry_run: false }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", ...scenario.facts });
+    }
+  });
+
+  it("rejects duplicate requested Envelope times before mutation", async () => {
+    const bridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.25)] });
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: [point(1, 0.5), point(1, 0.75)], dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "AUTOMATION_DUPLICATE_POINT_TIME");
+    assert.equal(bridge.calls.some((call) => call.id === "template.automation.insert_envelope_points_batch"), false);
+    assert.deepEqual(bridge.envelopes.get(ENV_A).points, [point(0, 0.25)]);
+  });
+
+  it("allows a full 64-for-64 replacement and rejects a 65-point final overlay", async () => {
+    const existing = Array.from({ length: 64 }, (_, index) => point(index, 0.1));
+    const replacements = Array.from({ length: 64 }, (_, index) => point(index, 0.9));
+    const acceptedBridge = new FakeAutomationBridge({ initialPoints: existing });
+    const accepted = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: replacements, dry_run: false }),
+      executeAtomic: acceptedBridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(accepted.ok, true, JSON.stringify(accepted));
+    assert.deepEqual(accepted.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", requested: 64, replaced: 64, net_new: 0, before: 64, after: 64 });
+
+    const rejectedBridge = new FakeAutomationBridge({ initialPoints: [point(0, 0.1), point(100, 0.2)] });
+    const rejected = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: replacements, dry_run: false }),
+      executeAtomic: rejectedBridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.error.code, "AUTOMATION_COMPLETE_READBACK_REQUIRED");
+    assert.equal(rejectedBridge.calls.some((call) => call.id === "template.automation.insert_envelope_points_batch"), false);
   });
 
   it("sets an exact Track to safe read mode and verifies through the native read Template", async () => {
@@ -244,9 +304,9 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
   });
 
   it("creates a missing Take-FX parameter Envelope natively, then writes and independently proves its GUID points", async () => {
-    const bridge = new FakeAutomationBridge({ missingTakeFxEnvelope: true });
+    const bridge = new FakeAutomationBridge({ missingTakeFxEnvelope: true, newFxEnvelopePoints: [point(0, 0.5)] });
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
-      request: request({ mode: "insert_take_fx_parameter_points", fx_refs: [FX_TAKE], fx_parameter: { param_index: 0, param_ident: "take_gain" }, points: [point(4, 0.6)], dry_run: false }),
+      request: request({ mode: "insert_take_fx_parameter_points", fx_refs: [FX_TAKE], fx_parameter: { param_index: 0, param_ident: "take_gain" }, points: [point(0, 0.6)], dry_run: false }),
       executeAtomic: bridge.executeAtomic,
       now: () => new Date(NOW),
     });
@@ -254,6 +314,8 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(result.result.changes[0].live_readback.owner_kind, "take");
     assert.equal(result.result.changes[0].live_readback.created_envelope, true);
     assert.equal(result.result.changes[0].live_readback.envelope_ref, ENV_FX_TAKE);
+    assert.equal(result.result.changes[0].live_readback.replaced, 1);
+    assert.equal(result.result.changes[0].live_readback.net_new, 0);
     assert.equal(bridge.envelopes.get(ENV_FX_TAKE).points[0].value, 0.6);
   });
 
@@ -398,6 +460,24 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.deepEqual(invalidations, [["automation"]]);
   });
 
+  it("rejects overlays whose after-readback loses an old tuple or gains an extra tuple", async () => {
+    for (const options of [
+      { removeOldPointAfterMutation: 3 },
+      { addExtraPointAfterMutation: point(9, 0.9) },
+    ]) {
+      const bridge = new FakeAutomationBridge({ initialPoints: [point(1, 0.25), point(3, 0.5)], ...options });
+      const result = await executeAlpha3_3B1dAutomationApplyMacro({
+        request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: [point(1, 0.75)], dry_run: false }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, "AUTOMATION_READBACK_MISMATCH");
+      assert.equal(result.result.changes[0].status, "readback_failed");
+      assert.equal(result.result.changes[0].live_readback.status, "failed");
+    }
+  });
+
   it("marks a failed write child unknown_or_partial, re-reads live, and still invalidates Automation", async () => {
     const bridge = new FakeAutomationBridge({ partialBatchFailure: true });
     const invalidations = [];
@@ -536,7 +616,7 @@ class FakeAutomationBridge {
       const created = fx.envelope_ref === null;
       if (created) {
         fx.envelope_ref = fx.owner_kind === "take" ? ENV_FX_TAKE : ENV_FX_TRACK;
-        this.envelopes.set(fx.envelope_ref, envelope(fx.envelope_ref, "fx_parameter", []));
+        this.envelopes.set(fx.envelope_ref, envelope(fx.envelope_ref, "fx_parameter", this.options.newFxEnvelopePoints ?? []));
       }
       return execution(id, { ...fx, envelope_exists: true, created }, [fxRef(fx.fx_ref), envelopeRef(fx.envelope_ref)]);
     }
@@ -549,13 +629,18 @@ class FakeAutomationBridge {
     if (id === "template.automation.insert_envelope_points_batch") {
       const inserted = this.options.dropLastInsertedPoint ? input.points.slice(0, -1) : input.points;
       if (this.options.partialBatchFailure) {
-        env.points.push(structuredClone(input.points[0]));
+        upsertPoint(env.points, input.points[0]);
         sortPoints(env.points);
         return failure(id, "COMMAND_FAILED", { mutation_applied: true, inserted_before_failure: 1 }, false);
       }
-      env.points.push(...inserted.map((row) => structuredClone(row)));
+      for (const row of inserted) upsertPoint(env.points, row);
+      if (this.options.removeOldPointAfterMutation) {
+        const removeIndex = env.points.findIndex((row) => row.time_seconds === this.options.removeOldPointAfterMutation);
+        if (removeIndex >= 0) env.points.splice(removeIndex, 1);
+      }
+      if (this.options.addExtraPointAfterMutation) env.points.push(structuredClone(this.options.addExtraPointAfterMutation));
       sortPoints(env.points);
-      return execution(id, { ...envelopeSummary(env), inserted_count: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds }, [envelopeRef(ref)]);
+      return execution(id, { ...envelopeSummary(env), requested: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds }, [envelopeRef(ref)]);
     }
     if (id === "template.automation.set_envelope_lane_state") {
       Object.assign(env, input);
@@ -632,6 +717,12 @@ function point(timeSeconds, value, extra = {}) {
 
 function sortPoints(points) {
   points.sort((a, b) => a.time_seconds - b.time_seconds || a.value - b.value);
+}
+
+function upsertPoint(points, pointRow) {
+  const index = points.findIndex((row) => Math.abs(row.time_seconds - pointRow.time_seconds) <= 0.000001);
+  if (index >= 0) points[index] = structuredClone(pointRow);
+  else points.push(structuredClone(pointRow));
 }
 
 function envelopeRef(ref) {

@@ -103,7 +103,7 @@ function install_fake(config)
   }
   points = {
     [track_env] = {
-      [-1] = {
+      [-1] = config.track_points or {
         { 0, 0.1, 0, 0, false },
         { 1, 0.2, 1, 0.1, false },
         { 2, 0.3, 0, 0, true },
@@ -285,7 +285,20 @@ function install_fake(config)
     calls.insert = calls.insert + 1
     if config.insert_fail_at == calls.insert then return false end
     local rows = lane(envelope, autoitem_index)
-    rows[#rows + 1] = { time, value, shape, tension, selected }
+    local replacement = nil
+    for index = 1, #rows do
+      if math.abs(rows[index][1] - time) <= 0.000000001 then replacement = index; break end
+    end
+    if replacement then rows[replacement] = { time, value, shape, tension, selected }
+    else rows[#rows + 1] = { time, value, shape, tension, selected } end
+    if config.remove_old_time_after_insert then
+      for index = #rows, 1, -1 do
+        if math.abs(rows[index][1] - config.remove_old_time_after_insert) <= 0.000000001 then table.remove(rows, index); break end
+      end
+    end
+    if config.extra_point_after_insert and calls.insert == 1 then
+      rows[#rows + 1] = config.extra_point_after_insert
+    end
     return true
   end
   reaper.SetEnvelopePointEx = function(envelope, autoitem_index, index, time, value, shape, tension, selected)
@@ -488,14 +501,23 @@ assert(read_failure.details.reason_code == "POINT_READ_FAILED")
 `);
   });
 
-  it("rejects silent batch truncation, reports partial native failure, and never inserts on set-point overflow", () => {
+  it("rejects silent batch truncation, duplicate native times, and reports partial native failure", () => {
     runLua(`
 install_fake()
 local oversized = {}
-for index = 1, 33 do oversized[index] = { time_seconds = index, value = 0.5, shape = 0, tension = 0 } end
+for index = 1, 65 do oversized[index] = { time_seconds = index, value = 0.5, shape = 0, tension = 0 } end
 local summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", { points = oversized }, "envelope:guid:{ENV-TRACK}"))
 assert(summary == nil and failure.code == "PARAMS_INVALID")
-assert(failure.details.reason_code == "POINT_BATCH_LIMIT_EXCEEDED" and calls.insert == 0)
+assert(failure.details.reason_code == "POINT_BATCH_LIMIT_EXCEEDED" and failure.details.max_points == 64 and calls.insert == 0)
+
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = {
+    { time_seconds = 4, value = 0.5, shape = 0, tension = 0 },
+    { time_seconds = 4, value = 0.6, shape = 0, tension = 0 },
+  },
+}, "envelope:guid:{ENV-TRACK}"))
+assert(summary == nil and failure.code == "PARAMS_INVALID")
+assert(failure.details.reason_code == "POINT_BATCH_DUPLICATE_NATIVE_TIME" and calls.insert == 0)
 
 install_fake({ insert_fail_at = 2 })
 summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
@@ -515,6 +537,61 @@ summary, failure = set_envelope_point(make_request("automation.set_envelope_poin
 assert(summary == nil and failure.code == "REF_INVALID")
 assert(failure.details.reason_code == "POINT_INDEX_OUT_OF_RANGE")
 assert(calls.set == 0 and calls.insert == 0 and #points[track_env][-1] == 4)
+`);
+  });
+
+  it("applies exact tuple overlays, preserves a 64-point lane, and rejects mismatched final truth", () => {
+    runLua(`
+install_fake()
+local ref = "envelope:guid:{ENV-TRACK}"
+local summary, failure = insert_envelope_point(make_request("automation.insert_envelope_point", {
+  time_seconds = 1, value = 0.2, shape = 1, tension = 0.1,
+}, ref))
+assert(failure == nil and summary.requested == 1 and summary.replaced == 1)
+assert(summary.net_new == 0 and summary.before == 4 and summary.after == 4 and calls.insert == 0)
+
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = {
+    { time_seconds = 1, value = 0.9, shape = 0, tension = 0 },
+    { time_seconds = 4, value = 0.8, shape = 0, tension = 0 },
+  },
+}, ref))
+assert(failure == nil and summary.requested == 2 and summary.replaced == 1)
+assert(summary.net_new == 1 and summary.before == 4 and summary.after == 5)
+assert(#points[track_env][-1] == 5)
+
+local sixty_four = {}
+local replacements = {}
+for index = 0, 63 do
+  sixty_four[#sixty_four + 1] = { index, 0.1, 0, 0, false }
+  replacements[#replacements + 1] = { time_seconds = index, value = 0.9, shape = 0, tension = 0 }
+end
+install_fake({ track_points = sixty_four })
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", { points = replacements }, ref))
+assert(failure == nil and summary.replaced == 64 and summary.net_new == 0 and summary.after == 64)
+assert(#points[track_env][-1] == 64)
+
+install_fake({ track_points = sixty_four })
+local sixty_five_final = {}
+for index = 0, 63 do sixty_five_final[#sixty_five_final + 1] = { time_seconds = index, value = 0.8, shape = 0, tension = 0 } end
+sixty_five_final[64].time_seconds = 64
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", { points = sixty_five_final }, ref))
+assert(summary == nil and failure.code == "PARAMS_INVALID")
+assert(failure.details.reason_code == "POINT_FINAL_LANE_LIMIT_EXCEEDED" and calls.insert == 0)
+
+install_fake({ remove_old_time_after_insert = 3 })
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = { { time_seconds = 1, value = 0.9, shape = 0, tension = 0 } },
+}, ref))
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.reason_code == "POINT_BATCH_OVERLAY_READBACK_MISMATCH")
+
+install_fake({ extra_point_after_insert = { 9, 0.9, 0, 0, false } })
+summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
+  points = { { time_seconds = 1, value = 0.9, shape = 0, tension = 0 } },
+}, ref))
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.reason_code == "POINT_BATCH_OVERLAY_READBACK_MISMATCH")
 `);
   });
 
@@ -551,9 +628,14 @@ assert(failure == nil and summary.time_basis == "project")
 close(summary.points[1].time_seconds, 11)
 
 summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", {
-  points = { { time_seconds = 12, value = 0.75, shape = 0, tension = 0 } },
+  points = {
+    { time_seconds = 11, value = 0.65, shape = 0, tension = 0 },
+    { time_seconds = 12, value = 0.75, shape = 0, tension = 0 },
+  },
 }, ref))
 assert(failure == nil and summary.time_basis == "project")
+assert(summary.replaced == 1 and summary.net_new == 1 and summary.before == 1 and summary.after == 2)
+close(points[take_env][-1][1][1], 2)
 close(points[take_env][-1][2][1], 4)
 
 request = make_request("automation.read_envelope_points", { limit = 8 }, ref)

@@ -62,7 +62,7 @@ const DELETE_AUTOMATION_ITEM_ID = "template.automation.delete_automation_item";
 const MAP_FX_PARAMETER_ENVELOPE_ID = "template.fx.parameter_to_envelope_mapping";
 const ENSURE_FX_PARAMETER_ENVELOPE_ID = "template.automation.ensure_fx_parameter_envelope";
 const MAX_TARGETS = 8;
-const MAX_NEW_POINTS = 32;
+const MAX_NEW_POINTS = 64;
 const MAX_COMPLETE_READ_POINTS = 64;
 const MAX_AUTOMATION_ITEMS = 64;
 const EPSILON = 0.000001;
@@ -227,7 +227,7 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
         envelope_refs: "Existing exact Envelope refs; canonical envelope:guid:{GUID} is preferred.",
         track_refs: "Exact track:guid refs for set_track_mode.",
         fx_refs: "Exact fx:track:guid:{TRACK}:slot or fx:take:guid:{TAKE}:slot refs for insert_fx_parameter_points.",
-        points: "For insert_points: 1-32 raw points; total points across all target Envelopes must be <=32.",
+        points: "For insert_points: 1-64 raw points; total points across all target Envelopes must be <=64.",
         lane_state: "For set_lane_state: one or more booleans from active, armed, visible, show_lane.",
         point_update: "For update_point: autoitem_index (default -1), exact point_index, and at least one updated point field.",
         point_delete: "For delete_point: autoitem_index (default -1) and exact point_index.",
@@ -422,8 +422,10 @@ async function prepareEnvelopeMode({ request, input, executeAtomic, state, envel
     if (!before.ok) return before;
     const valueDomain = validateEnvelopePointValues(input.points, before.summary);
     if (!valueDomain.ok) return valueDomain;
-    if (before.points.length + input.points.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `Envelope ${envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
-    return { ok: true, operation: { template_id: INSERT_POINTS_ID, input: { autoitem_index: -1, points: input.points }, requested: { autoitem_index: -1, point_count: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds, time_basis: "project", value_range: valueDomain.range }, autoitem_index: -1, before_points: before.points } };
+    const overlay = buildPointOverlay(before.points, input.points);
+    if (!overlay.ok) return overlay;
+    if (overlay.expected.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `Envelope ${envelopeRef.ref} overlay would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
+    return { ok: true, operation: { template_id: INSERT_POINTS_ID, input: { autoitem_index: -1, points: input.points }, requested: { autoitem_index: -1, point_count: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds, time_basis: "project", value_range: valueDomain.range }, autoitem_index: -1, before_points: before.points, expected_points: overlay.expected, overlay_facts: overlay.facts } };
   }
   if (["update_point", "delete_point", "delete_point_range"].includes(input.mode)) {
     const spec = input.mode === "update_point" ? input.point_update : input.mode === "delete_point" ? input.point_delete : input.point_range;
@@ -514,7 +516,9 @@ async function prepareFxOperations({ request, input, executeAtomic, state }) {
       envelopeRef = mapping.envelopeRef;
       const before = await readCompletePoints({ request, executeAtomic, state, envelopeRef, autoitemIndex: -1 });
       if (!before.ok) return before;
-      if (before.points.length + input.points.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
+      const overlay = buildPointOverlay(before.points, input.points);
+      if (!overlay.ok) return overlay;
+      if (overlay.expected.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${envelopeRef.ref} overlay would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
       beforePoints = before.points;
       state.canonicalRefs.push(envelopeRef.ref);
     } else if (input.fx_parameter.create_if_missing !== true) {
@@ -643,11 +647,20 @@ async function executeFxOperation({ operation, change, request, executeAtomic, s
     return { ...failed("AUTOMATION_PRECONDITION_STALE", `FX parameter Envelope ${mapping.envelopeRef.ref} changed after preflight; no points were inserted.`), phase: "readback" };
   }
   operation.before_points = baseline.points;
-  if (baseline.points.length + operation.points.length > MAX_COMPLETE_READ_POINTS) {
+  const overlay = buildPointOverlay(baseline.points, operation.points);
+  if (!overlay.ok) {
     change.mutation = { status: operation.mapping_before.exists ? "not_completed" : "completed", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
     change.status = "blocked";
     change.live_readback = { status: "failed", source: "live_envelope_points" };
-    return { ...failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${mapping.envelopeRef.ref} would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`), phase: "readback" };
+    return { ...overlay, phase: "readback" };
+  }
+  operation.expected_points = overlay.expected;
+  operation.overlay_facts = overlay.facts;
+  if (overlay.expected.length > MAX_COMPLETE_READ_POINTS) {
+    change.mutation = { status: operation.mapping_before.exists ? "not_completed" : "completed", template_id: ENSURE_FX_PARAMETER_ENVELOPE_ID, stage: "ensure_envelope" };
+    change.status = "blocked";
+    change.live_readback = { status: "failed", source: "live_envelope_points" };
+    return { ...failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${mapping.envelopeRef.ref} overlay would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`), phase: "readback" };
   }
 
   let inserted;
@@ -685,8 +698,8 @@ async function verifyOperation({ operation, request, executeAtomic, state }) {
   if (operation.mode === "insert_points") {
     const after = await readCompletePoints({ request, executeAtomic, state, envelopeRef: operation.refs.envelope_ref, autoitemIndex: operation.autoitem_index });
     if (!after.ok) return { ...after, source: "live_envelope_points" };
-    if (after.points.length !== operation.before_points.length + operation.input.points.length || !pointMultisetDeltaMatches(operation.before_points, after.points, operation.input.points)) return failed("AUTOMATION_READBACK_MISMATCH", `Exact point readback did not prove all inserted points on ${operation.target_ref}.`, [blocker("AUTOMATION_READBACK_MISMATCH", "Complete pre/post point multisets did not match the requested insertion.")]);
-    return { ok: true, source: "live_envelope_points", facts: { inserted_count: operation.input.points.length, total_count: after.points.length } };
+    if (!pointMultisetEquals(after.points.map(stripPointIndex), operation.expected_points)) return failed("AUTOMATION_READBACK_MISMATCH", `Exact point readback did not match the complete overlay on ${operation.target_ref}.`, [blocker("AUTOMATION_READBACK_MISMATCH", "Complete after-readback did not equal the expected point overlay.")]);
+    return { ok: true, source: "live_envelope_points", facts: { ...operation.overlay_facts, after: after.points.length } };
   }
   if (operation.mode === "update_point") {
     const after = await readCompletePoints({ request, executeAtomic, state, envelopeRef: operation.refs.envelope_ref, autoitemIndex: operation.autoitem_index });
@@ -758,8 +771,8 @@ async function verifyOperation({ operation, request, executeAtomic, state }) {
     if (!mapping.exists || !mapping.envelopeRef || operation.envelope_ref && mapping.envelopeRef.ref !== operation.envelope_ref.ref) return failed("AUTOMATION_READBACK_MISMATCH", `FX parameter Envelope identity did not independently round-trip ${operation.target_ref}.`);
     const after = await readCompletePoints({ request, executeAtomic, state, envelopeRef: mapping.envelopeRef, autoitemIndex: -1 });
     if (!after.ok) return { ...after, source: "live_envelope_points" };
-    if (after.points.length !== operation.before_points.length + operation.points.length || !pointMultisetDeltaMatches(operation.before_points, after.points, operation.points)) return failed("AUTOMATION_READBACK_MISMATCH", `Exact FX parameter point readback did not prove all inserted points on ${operation.target_ref}.`);
-    return { ok: true, source: "live_fx_parameter_mapping_and_points", facts: { fx_ref: operation.fx_ref.ref, envelope_ref: mapping.envelopeRef.ref, owner_kind: mapping.ownerKind, param_index: mapping.paramIndex, param_ident: mapping.paramIdent, inserted_count: operation.points.length, total_count: after.points.length, created_envelope: operation.mapping_before.exists === false } };
+    if (!operation.expected_points || !pointMultisetEquals(after.points.map(stripPointIndex), operation.expected_points)) return failed("AUTOMATION_READBACK_MISMATCH", `Exact FX parameter point readback did not match the complete overlay on ${operation.target_ref}.`);
+    return { ok: true, source: "live_fx_parameter_mapping_and_points", facts: { fx_ref: operation.fx_ref.ref, envelope_ref: mapping.envelopeRef.ref, owner_kind: mapping.ownerKind, param_index: mapping.paramIndex, param_ident: mapping.paramIdent, ...operation.overlay_facts, after: after.points.length, created_envelope: operation.mapping_before.exists === false } };
   }
   return failed("AUTOMATION_MODE_HELD", `${operation.mode} has no verifier.`);
 }
@@ -913,6 +926,10 @@ function normalizePoints(value) {
     const selected = point.selected ?? false;
     if (!Number.isFinite(time) || time < 0 || !Number.isFinite(rawValue) || !Number.isInteger(shape) || shape < 0 || shape > 5 || !Number.isFinite(tension) || tension < -1 || tension > 1 || typeof selected !== "boolean") return failed("AUTOMATION_POINTS_INVALID", `points[${index}] must use project time>=0, a finite raw value, shape 0..5, tension -1..1, and boolean selected.`);
     points.push({ time_seconds: time, value: rawValue, shape, tension, selected });
+  }
+  for (let index = 0; index < points.length; index += 1) {
+    const firstIndex = points.findIndex((point, prior) => prior < index && point.time_seconds === points[index].time_seconds);
+    if (firstIndex >= 0) return failed("AUTOMATION_DUPLICATE_POINT_TIME", `points[${index}] collides with points[${firstIndex}] at the same project time; no points were inserted.`);
   }
   return { ok: true, value: points };
 }
@@ -1109,12 +1126,27 @@ function previewChange(operation) {
   return { operation_id: operation.operation_id, template_id: operation.template_id, target_ref: operation.target_ref, mode: operation.mode, requested: clone(operation.requested), status: "planned", mutation: { status: "not_run" }, live_readback: { status: "not_run" }, index_maintenance: { status: "skipped", scopes: [] } };
 }
 
-function pointMultisetDeltaMatches(before, after, requested) {
-  const remaining = after.map((point) => ({ ...point }));
-  for (const point of before) if (!removeMatchingPoint(remaining, point)) return false;
-  if (remaining.length !== requested.length) return false;
-  for (const point of requested) if (!removeMatchingPoint(remaining, point)) return false;
-  return remaining.length === 0;
+function buildPointOverlay(before, requested) {
+  for (let index = 0; index < requested.length; index += 1) {
+    const firstIndex = requested.findIndex((point, prior) => prior < index && valuesMatch(point.time_seconds, requested[index].time_seconds));
+    if (firstIndex >= 0) return failed("AUTOMATION_DUPLICATE_POINT_TIME", `points[${index}] collides with points[${firstIndex}] at the same normalized Envelope time; no points were inserted.`);
+  }
+  const expected = before
+    .filter((point) => !requested.some((candidate) => valuesMatch(candidate.time_seconds, point.time_seconds)))
+    .map(stripPointIndex);
+  const replaced = before.length - expected.length;
+  expected.push(...requested.map((point) => ({ ...point })));
+  return {
+    ok: true,
+    expected,
+    facts: {
+      requested: requested.length,
+      replaced,
+      net_new: expected.length - before.length,
+      before: before.length,
+      after: expected.length,
+    },
+  };
 }
 
 function pointMultisetEquals(actual, expected) {

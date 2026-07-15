@@ -1950,6 +1950,102 @@ local function e5_automation_find_matching_point(envelope, autoitem_index, expec
   return nil, nil
 end
 
+local function e5_automation_read_native_lane(envelope, autoitem_index)
+  local count = e5_automation_point_count_ex(envelope, autoitem_index)
+  if count == nil then return nil end
+  local rows = {}
+  for index = 0, count - 1 do
+    local row = e5_automation_point_row_ex(envelope, autoitem_index, index)
+    if not row then return nil end
+    rows[#rows + 1] = {
+      time_seconds = row.time_seconds,
+      value = row.value,
+      shape = row.shape,
+      tension = row.tension,
+      selected = row.selected,
+    }
+  end
+  return rows
+end
+
+local function e5_automation_native_times_match(left, right)
+  return e5_automation_numbers_match(left, right)
+end
+
+local function e5_automation_overlay_plan(before, requested)
+  for index = 1, #requested do
+    for prior = 1, index - 1 do
+      if e5_automation_native_times_match(requested[index].time_seconds, requested[prior].time_seconds) then
+        return nil, {
+          duplicate_index = index - 1,
+          first_index = prior - 1,
+          native_time_seconds = requested[index].time_seconds,
+        }
+      end
+    end
+  end
+
+  local expected = {}
+  local replaced = 0
+  for index = 1, #before do
+    local collides = false
+    for requested_index = 1, #requested do
+      if e5_automation_native_times_match(before[index].time_seconds, requested[requested_index].time_seconds) then
+        collides = true
+        break
+      end
+    end
+    if collides then
+      replaced = replaced + 1
+    else
+      expected[#expected + 1] = before[index]
+    end
+  end
+  for index = 1, #requested do expected[#expected + 1] = requested[index] end
+
+  local writes = {}
+  for index = 1, #requested do
+    local collision_count = 0
+    local identical = false
+    for before_index = 1, #before do
+      if e5_automation_native_times_match(before[before_index].time_seconds, requested[index].time_seconds) then
+        collision_count = collision_count + 1
+        if e5_automation_points_match(before[before_index], requested[index]) then identical = true end
+      end
+    end
+    if collision_count ~= 1 or not identical then
+      writes[#writes + 1] = { requested_index = index, point = requested[index] }
+    end
+  end
+
+  return {
+    expected = expected,
+    writes = writes,
+    requested = #requested,
+    replaced = replaced,
+    net_new = #expected - #before,
+    before = #before,
+    after = #expected,
+  }, nil
+end
+
+local function e5_automation_point_multiset_equals(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  local used = {}
+  for expected_index = 1, #expected do
+    local found = false
+    for actual_index = 1, #actual do
+      if not used[actual_index] and e5_automation_points_match(actual[actual_index], expected[expected_index]) then
+        used[actual_index] = true
+        found = true
+        break
+      end
+    end
+    if not found then return false end
+  end
+  return true
+end
+
 local function read_envelope_points(request)
   local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
   if not envelope then
@@ -2140,45 +2236,76 @@ local function insert_envelope_point(request)
     return e5_routing_error(time_error.code, time_error.message, time_error.details)
   end
   local selected = request.params.selected == true
-  local before = e5_automation_point_count_ex(envelope, autoitem_index)
-  if before == nil then
-    return e5_routing_error("COMMAND_FAILED", "CountEnvelopePointsEx failed before point insertion.", {
-      reason_code = "POINT_COUNT_UNAVAILABLE",
+  local before_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not before_rows then
+    return e5_routing_error("COMMAND_FAILED", "Complete Envelope point readback failed before point insertion.", {
+      reason_code = "POINT_READBACK_UNAVAILABLE",
     })
   end
-  local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, selected, false)
-  local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
-  if not call_ok or inserted ~= true or not sort_ok then
-    return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx or lane sorting.", {
-      reason_code = "POINT_INSERT_FAILED",
-      envelope_ref = envelope_ref,
-      mutation_applied = call_ok and inserted == true,
-      index_maintenance_applied = sort_ok == true,
-    })
-  end
-  local after = e5_automation_point_count_ex(envelope, autoitem_index)
-  if after ~= before + 1 then
-    return e5_routing_error("VERIFY_FAILED", "Point count did not increase by exactly one after insertion.", {
-      reason_code = "POINT_COUNT_READBACK_MISMATCH",
-      before_count = before,
-      after_count = after,
-      mutation_applied = true,
-      index_maintenance_applied = true,
-    }, false)
-  end
-  local point_index, readback = e5_automation_find_matching_point(envelope, autoitem_index, {
+  local requested_row = {
     time_seconds = native_time,
     value = value,
     shape = shape,
     tension = tension,
     selected = selected,
-  })
+  }
+  local plan = e5_automation_overlay_plan(before_rows, { requested_row })
+  if plan.after > 64 then
+    return e5_routing_error("PARAMS_INVALID", "Point overlay would exceed the complete 64-point lane boundary.", {
+      reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = plan.after,
+      max_points = 64,
+    })
+  end
+  local mutation_applied = false
+  local index_maintenance_applied = false
+  if #plan.writes > 0 then
+    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, selected, true)
+    if not call_ok or inserted ~= true then
+      return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx.", {
+        reason_code = "POINT_INSERT_FAILED",
+        envelope_ref = envelope_ref,
+        mutation_applied = false,
+        index_maintenance_applied = false,
+      })
+    end
+    mutation_applied = true
+    local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
+    if not sort_ok then
+      return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point insertion.", {
+        reason_code = "POINT_SORT_FAILED",
+        envelope_ref = envelope_ref,
+        mutation_applied = true,
+        index_maintenance_applied = false,
+      }, false)
+    end
+    index_maintenance_applied = true
+  end
+  local after_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not e5_automation_point_multiset_equals(after_rows, plan.expected) then
+    return e5_routing_error("VERIFY_FAILED", "Point overlay did not exactly match the complete expected lane.", {
+      reason_code = "POINT_OVERLAY_READBACK_MISMATCH",
+      autoitem_index = autoitem_index,
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = after_rows and #after_rows or JSON_NULL,
+      mutation_applied = mutation_applied,
+      index_maintenance_applied = index_maintenance_applied,
+    }, false)
+  end
+  local point_index, readback = e5_automation_find_matching_point(envelope, autoitem_index, requested_row)
   if point_index == nil then
-    return e5_routing_error("VERIFY_FAILED", "Inserted point fields were not found in exact live readback.", {
+    return e5_routing_error("VERIFY_FAILED", "Point overlay tuple was not found after complete lane verification.", {
       reason_code = "POINT_READBACK_MISMATCH",
       autoitem_index = autoitem_index,
-      mutation_applied = true,
-      index_maintenance_applied = true,
+      mutation_applied = mutation_applied,
+      index_maintenance_applied = index_maintenance_applied,
     }, false)
   end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
@@ -2190,7 +2317,11 @@ local function insert_envelope_point(request)
     shape = readback.shape,
     tension = readback.tension,
     selected = readback.selected,
-    inserted_count = 1,
+    requested = plan.requested,
+    replaced = plan.replaced,
+    net_new = plan.net_new,
+    before = plan.before,
+    after = plan.after,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
@@ -2438,7 +2569,7 @@ local function insert_envelope_points_batch(request)
   if not envelope then
     return nil, err
   end
-  return e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, request.params.points, 32)
+  return e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, request.params.points, 64)
 end
 
 e5_automation_insert_points = function(request, envelope, envelope_ref, parent_kind, key, display_name, points, max_points)
@@ -2447,7 +2578,7 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
       reason_code = "POINT_BATCH_INVALID",
     })
   end
-  max_points = max_points or 128
+  max_points = max_points or 64
   if #points < 1 or #points > max_points then
     return e5_routing_error("PARAMS_INVALID", "Point batch size is outside the accepted bound and will not be silently truncated.", {
       reason_code = "POINT_BATCH_LIMIT_EXCEEDED",
@@ -2457,10 +2588,10 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
   end
   local autoitem_index, autoitem_error = e5_automation_autoitem_index(request, envelope)
   if autoitem_index == nil then return nil, autoitem_error end
-  local before = e5_automation_point_count_ex(envelope, autoitem_index)
-  if before == nil then
-    return e5_routing_error("COMMAND_FAILED", "CountEnvelopePointsEx failed before batch insertion.", {
-      reason_code = "POINT_COUNT_UNAVAILABLE",
+  local before_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not before_rows then
+    return e5_routing_error("COMMAND_FAILED", "Complete Envelope point readback failed before batch insertion.", {
+      reason_code = "POINT_READBACK_UNAVAILABLE",
       autoitem_index = autoitem_index,
     })
   end
@@ -2497,64 +2628,87 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
     normalized[#normalized + 1] = normalized_point
     first_project_time = first_project_time and math.min(first_project_time, time_seconds) or time_seconds
     last_project_time = last_project_time and math.max(last_project_time, time_seconds) or time_seconds
-    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, normalized_point.selected, true)
+    min_value = min_value and math.min(min_value, value) or value
+    max_value = max_value and math.max(max_value, value) or value
+  end
+
+  local plan, duplicate = e5_automation_overlay_plan(before_rows, normalized)
+  if not plan then
+    return e5_routing_error("PARAMS_INVALID", "Point batch contains duplicate native Envelope times and no points were inserted.", {
+      reason_code = "POINT_BATCH_DUPLICATE_NATIVE_TIME",
+      requested_count = #normalized,
+      duplicate_index = duplicate.duplicate_index,
+      first_index = duplicate.first_index,
+      native_time_seconds = duplicate.native_time_seconds,
+      mutation_applied = false,
+      inserted_before_failure = 0,
+    })
+  end
+  if max_points <= 64 and plan.after > 64 then
+    return e5_routing_error("PARAMS_INVALID", "Point overlay would exceed the complete 64-point lane boundary.", {
+      reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = plan.after,
+      max_points = 64,
+      mutation_applied = false,
+      inserted_before_failure = 0,
+    })
+  end
+
+  local writes_completed = 0
+  for index = 1, #plan.writes do
+    local write = plan.writes[index]
+    local point = write.point
+    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, point.time_seconds, point.value, point.shape, point.tension, point.selected, true)
     if not call_ok or inserted ~= true then
       return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx in point batch.", {
         reason_code = "POINT_BATCH_INSERT_FAILED",
         envelope_ref = envelope_ref,
-        point_index = index - 1,
-        inserted_before_failure = index - 1,
-        mutation_applied = index > 1,
+        point_index = write.requested_index - 1,
+        inserted_before_failure = writes_completed,
+        mutation_applied = writes_completed > 0,
         index_maintenance_applied = false,
       }, false)
     end
-    min_value = min_value and math.min(min_value, value) or value
-    max_value = max_value and math.max(max_value, value) or value
+    writes_completed = writes_completed + 1
   end
-  local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
-  if not sort_ok then
-    return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point batch insertion.", {
-      reason_code = "POINT_SORT_FAILED",
-      inserted_count = #normalized,
-      mutation_applied = true,
-      index_maintenance_applied = false,
-    }, false)
-  end
-  local after = e5_automation_point_count_ex(envelope, autoitem_index)
-  if after ~= before + #normalized then
-    return e5_routing_error("VERIFY_FAILED", "Batch insertion point count did not increase by the exact requested count.", {
-      reason_code = "POINT_COUNT_READBACK_MISMATCH",
-      before_count = before,
-      after_count = after,
-      requested_count = #normalized,
-      mutation_applied = true,
-      index_maintenance_applied = true,
-    }, false)
-  end
-  local used = {}
-  local readback = {}
-  for index = 1, #normalized do
-    local point_index, row = e5_automation_find_matching_point(envelope, autoitem_index, normalized[index], used)
-    if point_index == nil then
-      return e5_routing_error("VERIFY_FAILED", "Batch insertion could not find every requested point in exact live readback.", {
-        reason_code = "POINT_BATCH_READBACK_MISMATCH",
-        requested_index = index - 1,
+  local index_maintenance_applied = false
+  if writes_completed > 0 then
+    local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
+    if not sort_ok then
+      return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point batch insertion.", {
+        reason_code = "POINT_SORT_FAILED",
+        processed_count = writes_completed,
         mutation_applied = true,
-        index_maintenance_applied = true,
+        index_maintenance_applied = false,
       }, false)
     end
-    used[point_index] = true
-    readback[#readback + 1] = row
+    index_maintenance_applied = true
   end
-  table.sort(readback, function(a, b)
-    if a.time_seconds == b.time_seconds then return a.point_index < b.point_index end
-    return a.time_seconds < b.time_seconds
-  end)
+  local after_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not e5_automation_point_multiset_equals(after_rows, plan.expected) then
+    return e5_routing_error("VERIFY_FAILED", "Batch overlay did not exactly match the complete expected Envelope lane.", {
+      reason_code = "POINT_BATCH_OVERLAY_READBACK_MISMATCH",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = after_rows and #after_rows or JSON_NULL,
+      mutation_applied = writes_completed > 0,
+      index_maintenance_applied = index_maintenance_applied,
+    }, false)
+  end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     autoitem_index = autoitem_index,
-    requested_count = #points,
-    inserted_count = #normalized,
-    processed_count = #normalized,
+    requested = plan.requested,
+    replaced = plan.replaced,
+    net_new = plan.net_new,
+    before = plan.before,
+    after = plan.after,
+    processed_count = writes_completed,
     first_time_seconds = first_project_time,
     last_time_seconds = last_project_time,
     time_basis = "project",
