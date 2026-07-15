@@ -718,28 +718,51 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.changes[0].live_readback.status, "failed");
   });
 
-  it("blocks one-hundred-row compact results before the first mutation for short and long ids", async () => {
-    for (const longIds of [false, true]) {
-      const calls = [];
-      const layout = layoutRows(100, { longIds });
-      const result = await executeAlpha3_2_5CProjectWriteMacro({
-        request: {
-          id: "macro.project.apply_layout",
-          input: { layout, dry_run: false },
-          context: { session_id: "client:alpha33:budget-boundary", request_sequence: longIds ? 2 : 1 },
-        },
-        executeAtomic: fakeAtomic(calls, { multiTrackRefs: true, realLengthTrackRefs: true, realLengthRequestIds: true }),
-        now: () => new Date(NOW),
-      });
+  it("executes eighty-four-row layouts with compact per-row truth", async () => {
+    const calls = [];
+    const layout = Array.from({ length: 7 }, (_, folderIndex) => ({
+      id: `bus_${folderIndex + 1}`,
+      kind: "folder",
+      name: `Bus ${folderIndex + 1}`,
+      color: folderIndex % 2 ? "#4D83A8" : "#6B8E58",
+      children: Array.from({ length: 11 }, (_, childIndex) => ({
+        id: `track_${folderIndex + 1}_${childIndex + 1}`,
+        kind: "track",
+        name: `Track ${folderIndex + 1} ${childIndex + 1}`,
+      })),
+    }));
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { layout, dry_run: false },
+        context: { session_id: "client:alpha33:budget-boundary", request_sequence: 1 },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        realLengthTrackRefs: true,
+        realLengthRequestIds: true,
+        folderStructureReadback: true,
+      }),
+      now: () => new Date(NOW),
+    });
 
-      assert.equal(result.ok, false);
-      assert.equal(result.execution.status, "blocked");
-      assert.equal(result.error.code, "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED");
-      assert.equal(result.result.changes.length, 0);
-      assert.equal(calls.length, 0, "response-budget rejection must precede every child call");
-      assert.equal(result.budget.actual_bytes <= 65_536, true);
-      assert.equal(inlineDetailBytes(result) <= 24_576, true);
-    }
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "completed");
+    assert.equal(result.result.changes.length, 84);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.mutation.status === "completed"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);
+    assert.equal(result.result.changes.every((change) => !Object.hasOwn(change, "template_ids")), true);
+    const layoutMutationIds = new Set([
+      "template.tracks.create_track",
+      "template.tracks.create_folder_track",
+      "template.tracks.set_color",
+      "template.tracks.nest_tracks_in_folder",
+    ]);
+    assert.equal(calls.filter((call) => layoutMutationIds.has(call.id)).length, 98);
+    assert.equal(result.budget.actual_bytes <= 65_536, true);
+    assert.equal(inlineDetailBytes(result) <= 24_576, true);
   });
 
   it("honors the caller response budget before the first layout mutation", async () => {
@@ -748,7 +771,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
       request: {
         id: "macro.project.apply_layout",
         input: { layout: layoutRows(20), dry_run: false },
-        budget: { max_response_bytes: 12_000, max_items: 50, max_inline_value_bytes: 2_048 },
+        budget: { max_response_bytes: 6_000, max_items: 50, max_inline_value_bytes: 2_048 },
       },
       executeAtomic: fakeAtomic(calls, { multiTrackRefs: true, realLengthTrackRefs: true, realLengthRequestIds: true }),
       now: () => new Date(NOW),
@@ -757,7 +780,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.ok, false);
     assert.equal(result.execution.status, "blocked");
     assert.equal(result.error.code, "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED");
-    assert.match(result.error.message, /12000 envelope bytes available/u);
+    assert.match(result.error.message, /6000 envelope bytes available/u);
     assert.equal(result.result.changes.length, 0);
     assert.equal(calls.length, 0, "caller-budget rejection must precede every child call");
   });

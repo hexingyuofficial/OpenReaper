@@ -149,8 +149,8 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
   };
   rememberInputObjectRefs(state, request.refs);
   if (!dryRun && program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
-    const budgetBlocker = layoutResponseBudgetBlocker(program, request, plan);
-    if (budgetBlocker) {
+    const budgetPosture = layoutResponseBudgetPosture(program, request, plan);
+    if (budgetPosture.blocker) {
       return failure(
         program,
         request,
@@ -158,13 +158,14 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         now,
         stages,
         "blocked",
-        budgetBlocker.code,
-        budgetBlocker.message,
-        [budgetBlocker],
+        budgetPosture.blocker.code,
+        budgetPosture.blocker.message,
+        [budgetPosture.blocker],
         { preview: plan.preview ?? {}, source_media_deleted: false },
         state,
       );
     }
+    state.layoutCompactResponse = budgetPosture.compact;
     initializeLayoutOperationOutcomes(state, plan);
   }
   if (!dryRun && program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
@@ -1308,13 +1309,14 @@ function projectWriteOutcome(state) {
 }
 
 function success(program, request, startedAt, now, stages, state, status, summary, data) {
+  const publicStages = projectedStages(program, state, stages);
   return finalize({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: true,
     macro: identity(program), request: requestSummary(request),
-    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
+    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: publicStages.length, stages: publicStages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary, canonical_refs: projectedCanonicalRefs(program, state), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: "passed", evidence_refs: projectedEvidenceRefs(program, state.evidenceRefs) }, data: projectResultData(program, request, data) },
+    result: { summary, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: "passed", evidence_refs: projectedEvidenceRefs(program, state.evidenceRefs) }, data: projectResultData(program, request, data) },
     blockers: [], error: null, recovery: null,
     budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
@@ -1323,13 +1325,14 @@ function success(program, request, startedAt, now, stages, state, status, summar
 function failure(program, request, startedAt, now, stages, status, code, message, blockers = [], data = {}, state = { evidenceRefs: [], changes: [], canonicalRefs: [] }) {
   const verifiedByLiveReadback = state.changes.length > 0
     && state.changes.every((change) => change.live_readback?.status === "passed");
+  const publicStages = projectedStages(program, state, stages);
   return finalize({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
     macro: identity(program), request: requestSummary(request, { forceNonDry: true }),
-    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
+    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: publicStages.length, stages: publicStages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, data) },
+    result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, data) },
     blockers: boundedBlockers(blockers.length ? blockers : [{ code, message, recoverable: true }]),
     error: { code, message, recoverable: true },
     recovery: recoveryForFailure(program, status, code),
@@ -1379,16 +1382,32 @@ function macroRequest(request) { return { macro_id: request.id, input: object(re
 function evidenceRefs(execution) { return unique([execution?.request?.id, ...collectedRefs(execution).filter((ref) => ref.startsWith("artifact:"))].filter((ref) => typeof ref === "string")); }
 function firstCode(plan, fallback) { return plan?.blockers?.find((entry) => typeof entry?.code === "string")?.code ?? fallback; }
 function boundedBlockers(entries) { return entries.slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count).map((entry) => ({ code: entry?.code ?? "PROJECT_WRITE_BLOCKED", message: entry?.message ?? String(entry), recoverable: entry?.recoverable !== false })); }
-function layoutResponseBudgetBlocker(program, request, plan) {
+function layoutResponseBudgetPosture(program, request, plan) {
   const projection = buildLayoutOperationProjection(plan, { projectedApplied: true });
   const sampleEvidenceRefs = Array.from({ length: LAYOUT_EVIDENCE_REF_MAX_COUNT }, (_, index) => `request:${String(index).padStart(2, "0")}:${"x".repeat(LAYOUT_EVIDENCE_REF_MAX_BYTES - 11)}`);
   const stages = program.entry.stages.map((entry) => stage(entry.id, entry.kind, "completed", "Projected bounded layout stage.", sampleEvidenceRefs));
+  const full = projectedLayoutBudget({ program, request, plan, changes: projection.changes, sampleEvidenceRefs, stages });
+  if (full.fits) return { blocker: null, compact: false };
+  const compactChanges = projection.changes.map(compactLayoutChange);
+  const compact = projectedLayoutBudget({ program, request, plan, changes: compactChanges, sampleEvidenceRefs, stages: compactLayoutStages(stages) });
+  if (compact.fits) return { blocker: null, compact: true };
+  return {
+    compact: false,
+    blocker: {
+      code: "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED",
+      message: `The compact per-layout-row result would exceed the active response contract (${compact.inlineBytes} inline bytes projected; ${compact.envelopeBytes} envelope bytes projected; ${compact.maxEnvelopeBytes} envelope bytes available). Split the layout into smaller calls; every accepted batch still returns one live-readback outcome per row.`,
+      recoverable: true,
+    },
+  };
+}
+
+function projectedLayoutBudget({ program, request, plan, changes, sampleEvidenceRefs, stages }) {
   const data = projectResultData(program, request, {
     preview: plan.preview ?? {},
     undo_policy: program.entry.undo_policy,
     source_media_deleted: false,
     index_update: null,
-    outcome: projectedLayoutOutcome(projection.changes),
+    outcome: projectedLayoutOutcome(changes),
   });
   const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
@@ -1397,25 +1416,65 @@ function layoutResponseBudgetBlocker(program, request, plan) {
     request: requestSummary(request),
     execution: { status: "completed", started_at: new Date(0).toISOString(), completed_at: new Date(0).toISOString(), stage_count: stages.length, stages },
     sqlite: sqliteEvidence(),
-    result: { summary: "Registered project write completed and required readback passed.", canonical_refs: [], changes: projection.changes, verification: { status: "passed", evidence_refs: sampleEvidenceRefs }, data },
+    result: { summary: "Registered project write completed and required readback passed.", canonical_refs: [], changes, verification: { status: "passed", evidence_refs: sampleEvidenceRefs }, data },
     blockers: [],
     error: null,
     recovery: null,
     budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
   for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
-  const inline = JSON.stringify({ stages, changes: projection.changes, data, blockers: [], error: null, recovery: null });
+  const inline = JSON.stringify({ stages, changes, data, blockers: [], error: null, recovery: null });
   const inlineBytes = Buffer.byteLength(inline, "utf8") + LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES;
   const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8") + LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES;
   const requestedEnvelopeBytes = Number.isInteger(request.budget?.max_response_bytes) && request.budget.max_response_bytes > 0
     ? request.budget.max_response_bytes
     : program.entry.result_budget.max_bytes;
   const maxEnvelopeBytes = Math.min(MACRO_CONTRACT_CEILINGS.envelope_max_bytes, requestedEnvelopeBytes);
-  if (inlineBytes <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes && envelopeBytes <= maxEnvelopeBytes) return null;
   return {
-    code: "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED",
-    message: `The compact per-layout-row result would exceed the active response contract (${inlineBytes} inline bytes projected; ${envelopeBytes} envelope bytes projected; ${maxEnvelopeBytes} envelope bytes available). Split the layout into smaller calls or raise only the public response projection budget before mutation.`,
-    recoverable: true,
+    fits: inlineBytes <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes && envelopeBytes <= maxEnvelopeBytes,
+    inlineBytes,
+    envelopeBytes,
+    maxEnvelopeBytes,
+  };
+}
+
+function projectedChanges(program, state) {
+  const changes = state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count);
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || state.layoutCompactResponse !== true) return changes;
+  return changes.map(compactLayoutChange);
+}
+
+function projectedStages(program, state, stages) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || state.layoutCompactResponse !== true) return stages;
+  return compactLayoutStages(stages);
+}
+
+function compactLayoutStages(stages) {
+  const byKind = new Map();
+  for (const entry of stages) {
+    const existing = byKind.get(entry.kind);
+    if (!existing) {
+      byKind.set(entry.kind, { ...entry, summary: `Completed bounded ${entry.kind} stage(s).`, evidence_refs: [] });
+      continue;
+    }
+    if (entry.status === "failed") existing.status = "failed";
+  }
+  return [...byKind.values()];
+}
+
+function compactLayoutChange(change) {
+  return {
+    operation_id: change.operation_id,
+    status: change.status,
+    mutation: { status: change.mutation?.status ?? "pending" },
+    live_readback: {
+      status: change.live_readback?.status ?? "pending",
+      ...(Array.isArray(change.live_readback?.mismatched_fields) ? { mismatched_fields: change.live_readback.mismatched_fields } : {}),
+    },
+    index_maintenance: {
+      status: change.index_maintenance?.status ?? "pending",
+      ...(change.index_maintenance?.blocker_code ? { blocker_code: change.index_maintenance.blocker_code } : {}),
+    },
   };
 }
 function projectedLayoutOutcome(changes) {
