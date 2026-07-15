@@ -5608,24 +5608,39 @@ local function d10_overview_item_summary(item, track)
   }
 end
 
+local function d10_overview_native_count(api_name, ...)
+  local ok, value = call_reaper(api_name, ...)
+  if not ok or type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+    return nil
+  end
+  if value < 0 or value ~= math.floor(value) then
+    return nil
+  end
+  return value
+end
+
 local function d10_overview_track_summary(track, max_items_per_track)
-  local ok_track_items, track_item_count = call_reaper("CountTrackMediaItems", track)
-  local item_count = ok_track_items and math.max(0, math.floor(first_number(track_item_count) or 0)) or 0
+  local item_count = d10_overview_native_count("CountTrackMediaItems", track)
+  local fx_count = d10_overview_native_count("TrackFX_GetCount", track)
+  local send_count = d10_overview_native_count("GetTrackNumSends", track, 0)
   local items = json_array({})
-  for index = 0, math.min(item_count, max_items_per_track) - 1 do
+  for index = 0, math.min(item_count or 0, max_items_per_track) - 1 do
     local ok_item, item = call_reaper("GetTrackMediaItem", track, index)
     if ok_item and item then
       items[#items + 1] = d10_overview_item_summary(item, track)
     end
   end
-  return {
+  local summary = {
     track_ref = d10_overview_track_ref_string(track),
     index = d10_overview_track_index(track),
     name = d10_overview_track_name(track),
-    item_count = item_count,
     items = items,
-    items_truncated = item_count > #items,
+    items_truncated = item_count == nil or item_count > #items,
   }
+  summary.item_count = item_count
+  summary.fx_count = fx_count
+  summary.send_count = send_count
+  return summary
 end
 
 local function read_track_item_overview(request)
@@ -11728,6 +11743,15 @@ local function e5_routing_read_send_value(track, category, send_index, key, fall
   return fallback
 end
 
+local function e5_routing_read_send_number_exact(track, category, send_index, key)
+  local ok, value = call_reaper("GetTrackSendInfo_Value", track, category, send_index, key)
+  local number = ok and first_number(value) or nil
+  if type(number) ~= "number" or number ~= number or number == math.huge or number == -math.huge then
+    return nil
+  end
+  return number
+end
+
 local function e5_routing_send_mode_label(value)
   if value == 1 then
     return "pre_fx"
@@ -11742,6 +11766,15 @@ local function e5_routing_master_parent_enabled(track)
   return ok and first_number(value) ~= 0 or false
 end
 
+local function e5_routing_master_parent_exact(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "B_MAINSEND")
+  local number = ok and first_number(value) or nil
+  if type(number) ~= "number" or number ~= number or number == math.huge or number == -math.huge then
+    return nil
+  end
+  return number ~= 0
+end
+
 local function e5_routing_channel_count(track)
   local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_NCHAN")
   local channels = ok and first_number(value) or 2
@@ -11751,9 +11784,32 @@ local function e5_routing_channel_count(track)
   return math.floor(channels)
 end
 
+local function e5_routing_channel_count_exact(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_NCHAN")
+  local channels = ok and first_number(value) or nil
+  if type(channels) ~= "number"
+    or channels ~= channels
+    or channels == math.huge
+    or channels == -math.huge
+    or channels < 2
+    or channels > 128
+    or channels ~= math.floor(channels)
+    or channels % 2 ~= 0 then
+    return nil
+  end
+  return channels
+end
+
 local function e5_routing_send_summary(source_track, send_index, category)
   local ok_destination, destination_track = call_reaper("GetTrackSendInfo_Value", source_track, category, send_index, "P_DESTTRACK")
   if not ok_destination or not destination_track then
+    return nil
+  end
+  local volume = e5_routing_read_send_number_exact(source_track, category, send_index, "D_VOL")
+  local pan = e5_routing_read_send_number_exact(source_track, category, send_index, "D_PAN")
+  local muted = e5_routing_read_send_number_exact(source_track, category, send_index, "B_MUTE")
+  local mode = e5_routing_read_send_number_exact(source_track, category, send_index, "I_SENDMODE")
+  if volume == nil or pan == nil or muted == nil or mode == nil then
     return nil
   end
   return {
@@ -11762,10 +11818,10 @@ local function e5_routing_send_summary(source_track, send_index, category)
     source_track_ref = e5_routing_track_ref_string(source_track),
     destination_track_ref = e5_routing_track_ref_string(destination_track),
     index = send_index,
-    volume = e5_routing_read_send_value(source_track, category, send_index, "D_VOL", 1),
-    pan = e5_routing_read_send_value(source_track, category, send_index, "D_PAN", 0),
-    muted = e5_routing_read_send_value(source_track, category, send_index, "B_MUTE", 0) ~= 0,
-    mode = e5_routing_send_mode_label(e5_routing_read_send_value(source_track, category, send_index, "I_SENDMODE", 0)),
+    volume = volume,
+    pan = pan,
+    muted = muted ~= 0,
+    mode = e5_routing_send_mode_label(mode),
   }
 end
 
@@ -11946,7 +12002,15 @@ end
 local function e5_routing_read_sends(track, category, limit)
   local rows = json_array({})
   local refs = json_array({})
-  local count = e5_routing_send_count(track, category)
+  local incomplete_reasons = json_array({})
+  local ok_count, raw_count = call_reaper("GetTrackNumSends", track, category)
+  local count = ok_count and first_number(raw_count) or nil
+  local complete = true
+  if type(count) ~= "number" or count ~= count or count == math.huge or count == -math.huge or count < 0 or count ~= math.floor(count) then
+    count = 0
+    complete = false
+    incomplete_reasons[#incomplete_reasons + 1] = "SEND_COUNT_UNAVAILABLE"
+  end
   local truncated = false
   for index = 0, count - 1 do
     if #rows >= limit then
@@ -11957,9 +12021,12 @@ local function e5_routing_read_sends(track, category, limit)
     if summary then
       rows[#rows + 1] = summary
       refs[#refs + 1] = e5_routing_send_object_ref(track, index)
+    else
+      complete = false
+      incomplete_reasons[#incomplete_reasons + 1] = "SEND_SUMMARY_UNAVAILABLE"
     end
   end
-  return rows, refs, truncated
+  return rows, refs, truncated, complete, incomplete_reasons
 end
 
 local function read_track_routing(request)
@@ -11968,24 +12035,49 @@ local function read_track_routing(request)
     return e5_routing_error("TRACK_NOT_FOUND", "E5-R1 read_track_routing requires a resolvable track ref.", {})
   end
   local limit = READ_B_MEDIA.bounded_limit(request, request.params.max_routes, 32, 128)
-  local sends, send_refs, sends_truncated = e5_routing_read_sends(track, 0, limit)
+  local sends, send_refs, sends_truncated, sends_complete, send_incomplete_reasons = e5_routing_read_sends(track, 0, limit)
   local receives = json_array({})
   local receive_refs = json_array({})
   local receives_truncated = false
+  local receives_complete = true
+  local receive_incomplete_reasons = json_array({})
   if request.params.include_receives == true then
-    receives, receive_refs, receives_truncated = e5_routing_read_sends(track, -1, limit)
+    receives, receive_refs, receives_truncated, receives_complete, receive_incomplete_reasons = e5_routing_read_sends(track, -1, limit)
   end
   local track_ref = e5_routing_track_ref_string(track)
   local refs = e5_routing_refs(e5_routing_track_object_ref(track))
   e5_routing_append_refs(refs, send_refs)
   e5_routing_append_refs(refs, receive_refs)
+  local internally_complete = sends_complete and receives_complete
+  local incomplete_reasons = json_array({})
+  e5_routing_append_refs(incomplete_reasons, send_incomplete_reasons)
+  e5_routing_append_refs(incomplete_reasons, receive_incomplete_reasons)
+  local channel_count = e5_routing_channel_count_exact(track)
+  if channel_count == nil then
+    internally_complete = false
+    incomplete_reasons[#incomplete_reasons + 1] = "TRACK_CHANNEL_COUNT_UNAVAILABLE"
+  end
+  local master_parent_enabled = JSON_NULL
+  if request.params.include_master_parent ~= false then
+    master_parent_enabled = e5_routing_master_parent_exact(track)
+    if master_parent_enabled == nil then
+      internally_complete = false
+      master_parent_enabled = JSON_NULL
+      incomplete_reasons[#incomplete_reasons + 1] = "MASTER_PARENT_STATE_UNAVAILABLE"
+    end
+  end
   return e5_routing_summary(request, {
     track_ref = track_ref,
-    channel_count = e5_routing_channel_count(track),
-    master_parent_enabled = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
+    channel_count = channel_count == nil and JSON_NULL or channel_count,
+    master_parent_enabled = master_parent_enabled,
     sends = sends,
     receives = receives,
     truncated = sends_truncated or receives_truncated,
+    coverage_status = internally_complete and "complete" or "incomplete",
+    coverage = {
+      internally_complete = internally_complete,
+      incomplete_reasons = incomplete_reasons,
+    },
   }), nil, nil, nil, refs
 end
 
@@ -12021,8 +12113,8 @@ local function create_track_send(request)
       send_ref = e5_routing_send_ref(source_track, existing),
     })
   end
-  local send_index = existing
-  if send_index == nil then
+  local send_index = nil
+  if existing == nil or request.params.duplicate_policy == "allow_duplicate" then
     local ok, created_index = call_reaper("CreateTrackSend", source_track, destination_track)
     send_index = ok and first_number(created_index) or nil
   end
@@ -12036,7 +12128,7 @@ local function create_track_send(request)
       send_index = send_index,
     })
   end
-  summary.created = existing == nil
+  summary.created = true
   return e5_routing_write_summary(request, summary), nil, json_array({}), json_array({}), e5_routing_refs(
     e5_routing_send_object_ref(source_track, send_index),
     e5_routing_track_object_ref(source_track),
@@ -12138,26 +12230,45 @@ local function set_master_parent_send(request)
 end
 
 local function set_track_channel_count(request)
+  local channels = request.params.channel_count
+  local requested_detail = channels
+  if type(channels) == "number"
+    and (channels ~= channels or channels == math.huge or channels == -math.huge) then
+    requested_detail = JSON_NULL
+  end
+  if type(channels) ~= "number"
+    or channels ~= channels
+    or channels == math.huge
+    or channels == -math.huge
+    or channels < 2
+    or channels > 128
+    or channels ~= math.floor(channels)
+    or channels % 2 ~= 0 then
+    return e5_routing_error("PARAMS_INVALID", "Track channel_count must be an even integer from 2 through 128.", {
+      reason_code = "TRACK_CHANNEL_COUNT_INVALID",
+      requested_channel_count = requested_detail == nil and JSON_NULL or requested_detail,
+    })
+  end
   local track = e5_routing_track_from_request_refs(request)
   if not track then
     return e5_routing_error("TRACK_NOT_FOUND", "E5 routing set_track_channel_count requires a resolvable track ref.", {})
   end
-  local channels = math.floor(tonumber(request.params.channel_count) or 2)
-  if channels < 2 then
-    channels = 2
-  end
-  if channels % 2 == 1 then
-    channels = channels + 1
-  end
-  if channels > 64 then
-    channels = 64
-  end
-  if not e5_routing_set_media_track_value(track, "I_NCHAN", channels) then
+  local dispatch_ok, accepted = call_reaper("SetMediaTrackInfo_Value", track, "I_NCHAN", channels)
+  if not dispatch_ok or accepted ~= true then
     return e5_routing_error("COMMAND_FAILED", "REAPER rejected the track channel-count update.", {})
+  end
+  local readback_channels = e5_routing_channel_count_exact(track)
+  if readback_channels ~= channels then
+    return e5_routing_error("VERIFY_FAILED", "Track channel-count mutation did not read back the exact requested value.", {
+      reason_code = "TRACK_CHANNEL_COUNT_READBACK_MISMATCH",
+      requested_channel_count = channels,
+      actual_channel_count = readback_channels == nil and JSON_NULL or readback_channels,
+      mutation_applied = true,
+    }, false)
   end
   return e5_routing_write_summary(request, {
     track_ref = e5_routing_track_ref_string(track),
-    channel_count = e5_routing_channel_count(track),
+    channel_count = readback_channels,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
 end
 
@@ -12311,10 +12422,24 @@ local function list_available_audio_outputs(request)
 end
 
 local function read_project_routing_graph(request)
+  local internally_complete = true
+  local incomplete_reasons = json_array({})
+  local seen_incomplete_reasons = {}
+  local function mark_incomplete(reason)
+    internally_complete = false
+    if not seen_incomplete_reasons[reason] then
+      seen_incomplete_reasons[reason] = true
+      incomplete_reasons[#incomplete_reasons + 1] = reason
+    end
+  end
   local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
-  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 8)
-  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 24)
+  local total = ok_count and first_number(count) or nil
+  if type(total) ~= "number" or total ~= total or total == math.huge or total == -math.huge or total < 0 or total ~= math.floor(total) then
+    total = 0
+    mark_incomplete("TRACK_COUNT_UNAVAILABLE")
+  end
+  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 128)
+  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 256)
   local tracks = json_array({})
   local edges = json_array({})
   local refs = json_array({})
@@ -12323,16 +12448,29 @@ local function read_project_routing_graph(request)
     local ok_track, track = call_reaper("GetTrack", 0, index)
     if ok_track and track then
       local track_ref = e5_routing_track_ref_string(track)
+      local channel_count = e5_routing_channel_count_exact(track)
+      if channel_count == nil then
+        mark_incomplete("TRACK_CHANNEL_COUNT_UNAVAILABLE")
+      end
+      local master_parent_enabled = JSON_NULL
+      if request.params.include_master_parent ~= false then
+        master_parent_enabled = e5_routing_master_parent_exact(track)
+        if master_parent_enabled == nil then
+          master_parent_enabled = JSON_NULL
+          mark_incomplete("MASTER_PARENT_STATE_UNAVAILABLE")
+        end
+      end
       tracks[#tracks + 1] = {
         track_ref = track_ref,
         index = index,
-        channels = e5_routing_channel_count(track),
-        master = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
+        channel_count = channel_count == nil and JSON_NULL or channel_count,
+        master_parent_enabled = master_parent_enabled,
       }
       refs[#refs + 1] = e5_routing_track_object_ref(track)
       local ok_send_count, send_count = call_reaper("GetTrackNumSends", track, 0)
-      send_count = ok_send_count and math.max(0, math.floor(first_number(send_count) or 0)) or 0
-      if not ok_send_count then
+      send_count = ok_send_count and first_number(send_count) or nil
+      if type(send_count) ~= "number" or send_count ~= send_count or send_count == math.huge or send_count == -math.huge or send_count < 0 or send_count ~= math.floor(send_count) then
+        send_count = 0
         mark_incomplete("SEND_COUNT_UNAVAILABLE")
       end
       for send_index = 0, send_count - 1 do
@@ -12344,8 +12482,12 @@ local function read_project_routing_graph(request)
         if summary then
           edges[#edges + 1] = summary
           refs[#refs + 1] = e5_routing_send_object_ref(track, send_index)
+        else
+          mark_incomplete("SEND_SUMMARY_UNAVAILABLE")
         end
       end
+    else
+      mark_incomplete("TRACK_READ_FAILED")
     end
     if #edges >= max_edges then
       break
@@ -12358,6 +12500,11 @@ local function read_project_routing_graph(request)
     tracks = tracks,
     edges = edges,
     truncated = truncated,
+    coverage_status = internally_complete and "complete" or "incomplete",
+    coverage = {
+      internally_complete = internally_complete,
+      incomplete_reasons = incomplete_reasons,
+    },
   }), nil, nil, nil, refs
 end
 
@@ -13382,6 +13529,102 @@ local function e5_automation_find_matching_point(envelope, autoitem_index, expec
   return nil, nil
 end
 
+local function e5_automation_read_native_lane(envelope, autoitem_index)
+  local count = e5_automation_point_count_ex(envelope, autoitem_index)
+  if count == nil then return nil end
+  local rows = {}
+  for index = 0, count - 1 do
+    local row = e5_automation_point_row_ex(envelope, autoitem_index, index)
+    if not row then return nil end
+    rows[#rows + 1] = {
+      time_seconds = row.time_seconds,
+      value = row.value,
+      shape = row.shape,
+      tension = row.tension,
+      selected = row.selected,
+    }
+  end
+  return rows
+end
+
+local function e5_automation_native_times_match(left, right)
+  return e5_automation_numbers_match(left, right)
+end
+
+local function e5_automation_overlay_plan(before, requested)
+  for index = 1, #requested do
+    for prior = 1, index - 1 do
+      if e5_automation_native_times_match(requested[index].time_seconds, requested[prior].time_seconds) then
+        return nil, {
+          duplicate_index = index - 1,
+          first_index = prior - 1,
+          native_time_seconds = requested[index].time_seconds,
+        }
+      end
+    end
+  end
+
+  local expected = {}
+  local replaced = 0
+  for index = 1, #before do
+    local collides = false
+    for requested_index = 1, #requested do
+      if e5_automation_native_times_match(before[index].time_seconds, requested[requested_index].time_seconds) then
+        collides = true
+        break
+      end
+    end
+    if collides then
+      replaced = replaced + 1
+    else
+      expected[#expected + 1] = before[index]
+    end
+  end
+  for index = 1, #requested do expected[#expected + 1] = requested[index] end
+
+  local writes = {}
+  for index = 1, #requested do
+    local collision_count = 0
+    local identical = false
+    for before_index = 1, #before do
+      if e5_automation_native_times_match(before[before_index].time_seconds, requested[index].time_seconds) then
+        collision_count = collision_count + 1
+        if e5_automation_points_match(before[before_index], requested[index]) then identical = true end
+      end
+    end
+    if collision_count ~= 1 or not identical then
+      writes[#writes + 1] = { requested_index = index, point = requested[index] }
+    end
+  end
+
+  return {
+    expected = expected,
+    writes = writes,
+    requested = #requested,
+    replaced = replaced,
+    net_new = #expected - #before,
+    before = #before,
+    after = #expected,
+  }, nil
+end
+
+local function e5_automation_point_multiset_equals(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  local used = {}
+  for expected_index = 1, #expected do
+    local found = false
+    for actual_index = 1, #actual do
+      if not used[actual_index] and e5_automation_points_match(actual[actual_index], expected[expected_index]) then
+        used[actual_index] = true
+        found = true
+        break
+      end
+    end
+    if not found then return false end
+  end
+  return true
+end
+
 local function read_envelope_points(request)
   local envelope, envelope_ref, parent_kind, key, display_name, err = e5_automation_resolve_or_error(request)
   if not envelope then
@@ -13572,45 +13815,76 @@ local function insert_envelope_point(request)
     return e5_routing_error(time_error.code, time_error.message, time_error.details)
   end
   local selected = request.params.selected == true
-  local before = e5_automation_point_count_ex(envelope, autoitem_index)
-  if before == nil then
-    return e5_routing_error("COMMAND_FAILED", "CountEnvelopePointsEx failed before point insertion.", {
-      reason_code = "POINT_COUNT_UNAVAILABLE",
+  local before_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not before_rows then
+    return e5_routing_error("COMMAND_FAILED", "Complete Envelope point readback failed before point insertion.", {
+      reason_code = "POINT_READBACK_UNAVAILABLE",
     })
   end
-  local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, selected, false)
-  local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
-  if not call_ok or inserted ~= true or not sort_ok then
-    return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx or lane sorting.", {
-      reason_code = "POINT_INSERT_FAILED",
-      envelope_ref = envelope_ref,
-      mutation_applied = call_ok and inserted == true,
-      index_maintenance_applied = sort_ok == true,
-    })
-  end
-  local after = e5_automation_point_count_ex(envelope, autoitem_index)
-  if after ~= before + 1 then
-    return e5_routing_error("VERIFY_FAILED", "Point count did not increase by exactly one after insertion.", {
-      reason_code = "POINT_COUNT_READBACK_MISMATCH",
-      before_count = before,
-      after_count = after,
-      mutation_applied = true,
-      index_maintenance_applied = true,
-    }, false)
-  end
-  local point_index, readback = e5_automation_find_matching_point(envelope, autoitem_index, {
+  local requested_row = {
     time_seconds = native_time,
     value = value,
     shape = shape,
     tension = tension,
     selected = selected,
-  })
+  }
+  local plan = e5_automation_overlay_plan(before_rows, { requested_row })
+  if plan.after > 64 then
+    return e5_routing_error("PARAMS_INVALID", "Point overlay would exceed the complete 64-point lane boundary.", {
+      reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = plan.after,
+      max_points = 64,
+    })
+  end
+  local mutation_applied = false
+  local index_maintenance_applied = false
+  if #plan.writes > 0 then
+    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, selected, true)
+    if not call_ok or inserted ~= true then
+      return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx.", {
+        reason_code = "POINT_INSERT_FAILED",
+        envelope_ref = envelope_ref,
+        mutation_applied = false,
+        index_maintenance_applied = false,
+      })
+    end
+    mutation_applied = true
+    local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
+    if not sort_ok then
+      return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point insertion.", {
+        reason_code = "POINT_SORT_FAILED",
+        envelope_ref = envelope_ref,
+        mutation_applied = true,
+        index_maintenance_applied = false,
+      }, false)
+    end
+    index_maintenance_applied = true
+  end
+  local after_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not e5_automation_point_multiset_equals(after_rows, plan.expected) then
+    return e5_routing_error("VERIFY_FAILED", "Point overlay did not exactly match the complete expected lane.", {
+      reason_code = "POINT_OVERLAY_READBACK_MISMATCH",
+      autoitem_index = autoitem_index,
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = after_rows and #after_rows or JSON_NULL,
+      mutation_applied = mutation_applied,
+      index_maintenance_applied = index_maintenance_applied,
+    }, false)
+  end
+  local point_index, readback = e5_automation_find_matching_point(envelope, autoitem_index, requested_row)
   if point_index == nil then
-    return e5_routing_error("VERIFY_FAILED", "Inserted point fields were not found in exact live readback.", {
+    return e5_routing_error("VERIFY_FAILED", "Point overlay tuple was not found after complete lane verification.", {
       reason_code = "POINT_READBACK_MISMATCH",
       autoitem_index = autoitem_index,
-      mutation_applied = true,
-      index_maintenance_applied = true,
+      mutation_applied = mutation_applied,
+      index_maintenance_applied = index_maintenance_applied,
     }, false)
   end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
@@ -13622,7 +13896,11 @@ local function insert_envelope_point(request)
     shape = readback.shape,
     tension = readback.tension,
     selected = readback.selected,
-    inserted_count = 1,
+    requested = plan.requested,
+    replaced = plan.replaced,
+    net_new = plan.net_new,
+    before = plan.before,
+    after = plan.after,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_envelope_object_ref(envelope, envelope_ref))
 end
 
@@ -13870,7 +14148,7 @@ local function insert_envelope_points_batch(request)
   if not envelope then
     return nil, err
   end
-  return e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, request.params.points, 32)
+  return e5_automation_insert_points(request, envelope, envelope_ref, parent_kind, key, display_name, request.params.points, 64)
 end
 
 e5_automation_insert_points = function(request, envelope, envelope_ref, parent_kind, key, display_name, points, max_points)
@@ -13879,7 +14157,7 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
       reason_code = "POINT_BATCH_INVALID",
     })
   end
-  max_points = max_points or 128
+  max_points = max_points or 64
   if #points < 1 or #points > max_points then
     return e5_routing_error("PARAMS_INVALID", "Point batch size is outside the accepted bound and will not be silently truncated.", {
       reason_code = "POINT_BATCH_LIMIT_EXCEEDED",
@@ -13889,10 +14167,10 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
   end
   local autoitem_index, autoitem_error = e5_automation_autoitem_index(request, envelope)
   if autoitem_index == nil then return nil, autoitem_error end
-  local before = e5_automation_point_count_ex(envelope, autoitem_index)
-  if before == nil then
-    return e5_routing_error("COMMAND_FAILED", "CountEnvelopePointsEx failed before batch insertion.", {
-      reason_code = "POINT_COUNT_UNAVAILABLE",
+  local before_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not before_rows then
+    return e5_routing_error("COMMAND_FAILED", "Complete Envelope point readback failed before batch insertion.", {
+      reason_code = "POINT_READBACK_UNAVAILABLE",
       autoitem_index = autoitem_index,
     })
   end
@@ -13929,64 +14207,87 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
     normalized[#normalized + 1] = normalized_point
     first_project_time = first_project_time and math.min(first_project_time, time_seconds) or time_seconds
     last_project_time = last_project_time and math.max(last_project_time, time_seconds) or time_seconds
-    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, native_time, value, shape, tension, normalized_point.selected, true)
+    min_value = min_value and math.min(min_value, value) or value
+    max_value = max_value and math.max(max_value, value) or value
+  end
+
+  local plan, duplicate = e5_automation_overlay_plan(before_rows, normalized)
+  if not plan then
+    return e5_routing_error("PARAMS_INVALID", "Point batch contains duplicate native Envelope times and no points were inserted.", {
+      reason_code = "POINT_BATCH_DUPLICATE_NATIVE_TIME",
+      requested_count = #normalized,
+      duplicate_index = duplicate.duplicate_index,
+      first_index = duplicate.first_index,
+      native_time_seconds = duplicate.native_time_seconds,
+      mutation_applied = false,
+      inserted_before_failure = 0,
+    })
+  end
+  if max_points <= 64 and plan.after > 64 then
+    return e5_routing_error("PARAMS_INVALID", "Point overlay would exceed the complete 64-point lane boundary.", {
+      reason_code = "POINT_FINAL_LANE_LIMIT_EXCEEDED",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = plan.after,
+      max_points = 64,
+      mutation_applied = false,
+      inserted_before_failure = 0,
+    })
+  end
+
+  local writes_completed = 0
+  for index = 1, #plan.writes do
+    local write = plan.writes[index]
+    local point = write.point
+    local call_ok, inserted = call_reaper("InsertEnvelopePointEx", envelope, autoitem_index, point.time_seconds, point.value, point.shape, point.tension, point.selected, true)
     if not call_ok or inserted ~= true then
       return e5_routing_error("COMMAND_FAILED", "REAPER rejected InsertEnvelopePointEx in point batch.", {
         reason_code = "POINT_BATCH_INSERT_FAILED",
         envelope_ref = envelope_ref,
-        point_index = index - 1,
-        inserted_before_failure = index - 1,
-        mutation_applied = index > 1,
+        point_index = write.requested_index - 1,
+        inserted_before_failure = writes_completed,
+        mutation_applied = writes_completed > 0,
         index_maintenance_applied = false,
       }, false)
     end
-    min_value = min_value and math.min(min_value, value) or value
-    max_value = max_value and math.max(max_value, value) or value
+    writes_completed = writes_completed + 1
   end
-  local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
-  if not sort_ok then
-    return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point batch insertion.", {
-      reason_code = "POINT_SORT_FAILED",
-      inserted_count = #normalized,
-      mutation_applied = true,
-      index_maintenance_applied = false,
-    }, false)
-  end
-  local after = e5_automation_point_count_ex(envelope, autoitem_index)
-  if after ~= before + #normalized then
-    return e5_routing_error("VERIFY_FAILED", "Batch insertion point count did not increase by the exact requested count.", {
-      reason_code = "POINT_COUNT_READBACK_MISMATCH",
-      before_count = before,
-      after_count = after,
-      requested_count = #normalized,
-      mutation_applied = true,
-      index_maintenance_applied = true,
-    }, false)
-  end
-  local used = {}
-  local readback = {}
-  for index = 1, #normalized do
-    local point_index, row = e5_automation_find_matching_point(envelope, autoitem_index, normalized[index], used)
-    if point_index == nil then
-      return e5_routing_error("VERIFY_FAILED", "Batch insertion could not find every requested point in exact live readback.", {
-        reason_code = "POINT_BATCH_READBACK_MISMATCH",
-        requested_index = index - 1,
+  local index_maintenance_applied = false
+  if writes_completed > 0 then
+    local sort_ok = call_reaper("Envelope_SortPointsEx", envelope, autoitem_index)
+    if not sort_ok then
+      return e5_routing_error("COMMAND_FAILED", "Envelope_SortPointsEx failed after point batch insertion.", {
+        reason_code = "POINT_SORT_FAILED",
+        processed_count = writes_completed,
         mutation_applied = true,
-        index_maintenance_applied = true,
+        index_maintenance_applied = false,
       }, false)
     end
-    used[point_index] = true
-    readback[#readback + 1] = row
+    index_maintenance_applied = true
   end
-  table.sort(readback, function(a, b)
-    if a.time_seconds == b.time_seconds then return a.point_index < b.point_index end
-    return a.time_seconds < b.time_seconds
-  end)
+  local after_rows = e5_automation_read_native_lane(envelope, autoitem_index)
+  if not e5_automation_point_multiset_equals(after_rows, plan.expected) then
+    return e5_routing_error("VERIFY_FAILED", "Batch overlay did not exactly match the complete expected Envelope lane.", {
+      reason_code = "POINT_BATCH_OVERLAY_READBACK_MISMATCH",
+      requested = plan.requested,
+      replaced = plan.replaced,
+      net_new = plan.net_new,
+      before = plan.before,
+      after = after_rows and #after_rows or JSON_NULL,
+      mutation_applied = writes_completed > 0,
+      index_maintenance_applied = index_maintenance_applied,
+    }, false)
+  end
   return e5_automation_summary(request, envelope, envelope_ref, parent_kind, key, display_name, {
     autoitem_index = autoitem_index,
-    requested_count = #points,
-    inserted_count = #normalized,
-    processed_count = #normalized,
+    requested = plan.requested,
+    replaced = plan.replaced,
+    net_new = plan.net_new,
+    before = plan.before,
+    after = plan.after,
+    processed_count = writes_completed,
     first_time_seconds = first_project_time,
     last_time_seconds = last_project_time,
     time_basis = "project",
@@ -15704,6 +16005,7 @@ local D31_STRING_KEYS = { "RENDER_FILE", "RENDER_PATTERN", "RENDER_FORMAT", "REN
 --   ZXZhdxADAA== => 65 76 61 77 10 03 00 (evaw, 16-bit, LargeFiles=2, BWF=0, markers=0, tempo=false)
 --   ZXZhdxgDAA== => 65 76 61 77 18 03 00 (evaw, 24-bit, LargeFiles=2, BWF=0, markers=0, tempo=false)
 -- OGG encodes vggo + float32 LE quality + mode byte 0 + four zero LE ints + NUL.
+-- MP3 values were captured from REAPER 7.71's native LAME 3.100 CBR/q=0 settings.
 local D31_WAV_FORMATS = { [16] = "ZXZhdxADAA==", [24] = "ZXZhdxgDAA==" }
 local D31_OGG_FORMATS = {
   [0.3] = "dmdnb5qZmT4AAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -15711,6 +16013,12 @@ local D31_OGG_FORMATS = {
   [0.6] = "dmdnb5qZGT8AAAAAAAAAAAAAAAAAAAAAAAA=",
   [0.8] = "dmdnb83MTD8AAAAAAAAAAAAAAAAAAAAAAAA=",
   [1.0] = "dmdnbwAAgD8AAAAAAAAAAAAAAAAAAAAAAAA=",
+}
+local D31_MP3_FORMATS = {
+  [128] = "bDNwbYAAAAAAAAAAAAAAAP////8EAAAAgAAAAAAAAAA=",
+  [192] = "bDNwbcAAAAAAAAAAAAAAAP////8EAAAAwAAAAAAAAAA=",
+  [256] = "bDNwbQABAAAAAAAAAAAAAP////8EAAAAAAEAAAAAAAA=",
+  [320] = "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA=",
 }
 
 local D31_ERROR_CODE_MAP = {
@@ -15725,6 +16033,7 @@ local D31_ERROR_CODE_MAP = {
   REGION_REF_AMBIGUOUS = "REF_INVALID",
   WAV_BIT_DEPTH_REQUIRED = "PARAMS_INVALID",
   OGG_QUALITY_REQUIRED = "PARAMS_INVALID",
+  MP3_BITRATE_REQUIRED = "PARAMS_INVALID",
   FORMAT_INVALID = "PARAMS_INVALID",
   TIME_SELECTION_EMPTY = "PARAMS_INVALID",
   TARGET_REFS_DUPLICATE = "REF_INVALID",
@@ -15773,7 +16082,7 @@ local function d31_output_basename(value)
     return nil, "output_basename contains a path, wildcard, reserved, control, or unsafe trailing character."
   end
   local lower = value:lower()
-  if lower:match("%.wav$") or lower:match("%.ogg$") then
+  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") then
     return nil, "output_basename is a filename stem and must not include the output extension."
   end
   return value
@@ -15795,13 +16104,43 @@ local function d31_size(path_value)
   return size
 end
 
-local function d31_header_ok(path_value, extension)
+local function d31_mp3_probe(header)
+  local offset = 1
+  if header:sub(1, 3) == "ID3" then
+    if #header < 10 then return false end
+    local a, b, c, d = header:byte(7, 10)
+    if not a or a >= 128 or b >= 128 or c >= 128 or d >= 128 then return false end
+    offset = 11 + a * 2097152 + b * 16384 + c * 128 + d
+  end
+  for index = offset, math.max(offset, #header - 3) do
+    local first, second, third = header:byte(index, index + 2)
+    if first == 0xFF and second and second >= 0xE0 and third then
+      local version_bits = math.floor(second / 8) % 4
+      local layer_bits = math.floor(second / 2) % 4
+      local bitrate_index = math.floor(third / 16) % 16
+      local sample_rate_index = math.floor(third / 4) % 4
+      if version_bits ~= 1 and layer_bits == 1 and bitrate_index > 0 and bitrate_index < 15 and sample_rate_index < 3 then
+        local mpeg1 = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 }
+        local mpeg2 = { 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160 }
+        return true, version_bits == 3 and mpeg1[bitrate_index] or mpeg2[bitrate_index]
+      end
+    end
+  end
+  return false
+end
+
+local function d31_probe_output(path_value, extension)
   local handle = io.open(path_value, "rb")
   if not handle then return false end
-  local header = handle:read(12) or ""
+  local header = handle:read(1048576) or ""
   handle:close()
-  if extension == "wav" then return #header >= 12 and header:sub(1, 4) == "RIFF" and header:sub(9, 12) == "WAVE" end
-  return #header >= 4 and header:sub(1, 4) == "OggS"
+  if extension == "wav" then return #header >= 12 and header:sub(1, 4) == "RIFF" and header:sub(9, 12) == "WAVE", "wav" end
+  if extension == "ogg" then return #header >= 4 and header:sub(1, 4) == "OggS", "ogg" end
+  if extension == "mp3" then
+    local ok, bitrate = d31_mp3_probe(header)
+    return ok, ok and "mp3" or nil, bitrate
+  end
+  return false
 end
 
 local function d31_get_number(project, key)
@@ -16039,7 +16378,13 @@ local function d31_format(params)
     if not config then return d31_error("OGG_QUALITY_REQUIRED", "OGG renders require an allowed ogg_quality.", { ogg_quality = params.ogg_quality }, false) end
     return { extension = "ogg", config = config, ogg_quality = quality }
   end
-  return d31_error("FORMAT_INVALID", "D31 supports only wav and ogg.", { format = params.format }, false)
+  if params.format == "mp3" then
+    local bitrate = tonumber(params.mp3_bitrate_kbps)
+    local config = D31_MP3_FORMATS[bitrate]
+    if not config then return d31_error("MP3_BITRATE_REQUIRED", "MP3 renders require mp3_bitrate_kbps 128, 192, 256, or 320.", { mp3_bitrate_kbps = params.mp3_bitrate_kbps }, false) end
+    return { extension = "mp3", config = config, mp3_bitrate_kbps = bitrate }
+  end
+  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, and mp3.", { format = params.format }, false)
 end
 
 local function d31_resolve_targets(project, request, groups)
@@ -16161,6 +16506,8 @@ local function d31_apply_settings(project, target, output, params, format)
   if not d31_set_string(project, "RENDER_PATTERN", output.output_basename) then return false, "RENDER_PATTERN" end
   if not d31_set_string(project, "RENDER_FORMAT", format.config) then return false, "RENDER_FORMAT" end
   if not d31_set_string(project, "RENDER_FORMAT2", "") then return false, "RENDER_FORMAT2" end
+  if d31_get_string(project, "RENDER_FORMAT") ~= format.config then return false, "RENDER_FORMAT_READBACK" end
+  if d31_get_string(project, "RENDER_FORMAT2") ~= "" then return false, "RENDER_FORMAT2_READBACK" end
   return true
 end
 
@@ -16215,10 +16562,24 @@ local function d31_render_targets(request)
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
       local size = d31_size(output.absolute_path)
-      if size <= 0 or not d31_header_ok(output.absolute_path, output.extension) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container header.", details = { output_basename = output.output_basename, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
+      local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
+      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
-      result_outputs[#result_outputs + 1] = { source_name = output.source_name, output_basename = output.output_basename, absolute_path = output.absolute_path, size = size, extension = output.extension, generated_project_copy_retained = project_copy_retained, generated_project_copy_path = project_copy_retained and project_copy_path or nil }
+      result_outputs[#result_outputs + 1] = {
+        source_name = output.source_name,
+        output_basename = output.output_basename,
+        absolute_path = output.absolute_path,
+        size = size,
+        extension = output.extension,
+        requested_format = request.params.format,
+        actual_format = actual_format,
+        requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
+        actual_bitrate_kbps = actual_bitrate or JSON_NULL,
+        target_identity = target.ref or target.label,
+        generated_project_copy_retained = project_copy_retained,
+        generated_project_copy_path = project_copy_retained and project_copy_path or nil,
+      }
     end
     return { outputs = result_outputs }
   end
@@ -16232,11 +16593,11 @@ local function d31_render_targets(request)
   if outcome.failure then return d31_error(outcome.failure.code, outcome.failure.message, outcome.failure.details, outcome.failure.recoverable) end
 
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
   local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
   if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
   if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
   return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end
@@ -17112,6 +17473,20 @@ __openreaper_register_handler_module("midi/list_take_notes.lua", function()
 local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.list_take_notes.
 
+local function read_b_midi_notes_cursor(value)
+  if value == nil or value == JSON_NULL or value == "" then
+    return 0
+  end
+  if not is_string(value) or not value:match("^%d+$") then
+    return nil
+  end
+  local cursor = tonumber(value)
+  if cursor == nil or cursor < 0 or cursor ~= math.floor(cursor) then
+    return nil
+  end
+  return cursor
+end
+
 local function list_take_notes(request)
   local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
   if not take then
@@ -17119,9 +17494,16 @@ local function list_take_notes(request)
   end
   local ok_count, count_retval, note_count = call_reaper("MIDI_CountEvts", take)
   local total = (ok_count and count_retval ~= false) and first_number(note_count) or 0
+  local cursor = read_b_midi_notes_cursor(request.params.cursor)
+  if cursor == nil then
+    return READ_B_MIDI.handler_error("PARAMS_INVALID", "MIDI note cursor must be a non-negative decimal string.", {
+      reason_code = "CURSOR_INVALID",
+      cursor = bounded_string(request.params.cursor, 80),
+    })
+  end
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local notes = json_array({})
-  for index = 0, math.max(total - 1, -1) do
+  for index = cursor, math.max(total - 1, cursor - 1) do
     if #notes >= limit then
       break
     end
@@ -17150,8 +17532,8 @@ local function list_take_notes(request)
     take_ref = READ_B_MIDI.take_ref_string(take),
     notes = notes,
     returned_count = #notes,
-    next_cursor = total > #notes and tostring(#notes) or nil,
-    truncated = total > #notes,
+    next_cursor = total > cursor + #notes and tostring(cursor + #notes) or nil,
+    truncated = total > cursor + #notes,
   }
 end
 return {
@@ -17165,6 +17547,20 @@ __openreaper_register_handler_module("midi/list_take_cc_events.lua", function()
 local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
 -- Extracted read-only handler: template.midi.list_take_cc_events.
 
+local function read_b_midi_cc_cursor(value)
+  if value == nil or value == JSON_NULL or value == "" then
+    return 0
+  end
+  if not is_string(value) or not value:match("^%d+$") then
+    return nil
+  end
+  local cursor = tonumber(value)
+  if cursor == nil or cursor < 0 or cursor ~= math.floor(cursor) then
+    return nil
+  end
+  return cursor
+end
+
 local function list_take_cc_events(request)
   local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
   if not take then
@@ -17172,6 +17568,13 @@ local function list_take_cc_events(request)
   end
   local ok_count, count_retval, _, cc_count = call_reaper("MIDI_CountEvts", take)
   local total = (ok_count and count_retval ~= false) and first_number(cc_count) or 0
+  local cursor = read_b_midi_cc_cursor(request.params.cursor)
+  if cursor == nil then
+    return READ_B_MIDI.handler_error("PARAMS_INVALID", "MIDI CC cursor must be a non-negative decimal string.", {
+      reason_code = "CURSOR_INVALID",
+      cursor = bounded_string(request.params.cursor, 80),
+    })
+  end
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local controller = READ_B_MIDI.integer_value(request.params.controller)
   local events = json_array({})
@@ -17181,8 +17584,7 @@ local function list_take_cc_events(request)
     if ok_cc and cc_retval ~= false and selected ~= nil then
       local event_controller = first_number(msg2) or 0
       if controller == nil or controller == event_controller then
-        matched = matched + 1
-        if #events < limit then
+        if matched >= cursor and #events < limit then
           events[#events + 1] = {
             index = index,
             selected = selected == true,
@@ -17194,6 +17596,7 @@ local function list_take_cc_events(request)
             value = first_number(msg3) or 0,
           }
         end
+        matched = matched + 1
       end
     end
   end
@@ -17201,8 +17604,8 @@ local function list_take_cc_events(request)
     take_ref = READ_B_MIDI.take_ref_string(take),
     cc_events = events,
     returned_count = #events,
-    next_cursor = matched > #events and tostring(#events) or nil,
-    truncated = matched > #events,
+    next_cursor = matched > cursor + #events and tostring(cursor + #events) or nil,
+    truncated = matched > cursor + #events,
   }
 end
 return {
@@ -17229,6 +17632,20 @@ local function read_b_midi_text_sysex_kind(type_value)
   return "text"
 end
 
+local function read_b_midi_text_sysex_cursor(value)
+  if value == nil or value == JSON_NULL or value == "" then
+    return 0
+  end
+  if not is_string(value) or not value:match("^%d+$") then
+    return nil
+  end
+  local cursor = tonumber(value)
+  if cursor == nil or cursor < 0 or cursor ~= math.floor(cursor) then
+    return nil
+  end
+  return cursor
+end
+
 local function list_take_text_sysex_events(request)
   local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
   if not take then
@@ -17236,6 +17653,13 @@ local function list_take_text_sysex_events(request)
   end
   local ok_count, count_retval, _, _, text_sysex_count = call_reaper("MIDI_CountEvts", take)
   local total = (ok_count and count_retval ~= false) and first_number(text_sysex_count) or 0
+  local cursor = read_b_midi_text_sysex_cursor(request.params.cursor)
+  if cursor == nil then
+    return READ_B_MIDI.handler_error("PARAMS_INVALID", "MIDI text/sysex cursor must be a non-negative decimal string.", {
+      reason_code = "CURSOR_INVALID",
+      cursor = bounded_string(request.params.cursor, 80),
+    })
+  end
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local requested_kind = is_string(request.params.event_kind) and request.params.event_kind or "any"
   local events = json_array({})
@@ -17245,8 +17669,7 @@ local function list_take_text_sysex_events(request)
     if ok_event and event_retval ~= false and selected ~= nil then
       local kind = read_b_midi_text_sysex_kind(first_number(type_value) or 1)
       if requested_kind == "any" or requested_kind == kind then
-        matched = matched + 1
-        if #events < limit then
+        if matched >= cursor and #events < limit then
           events[#events + 1] = {
             index = index,
             selected = selected == true,
@@ -17256,6 +17679,7 @@ local function list_take_text_sysex_events(request)
             text = bounded_string(message, 160),
           }
         end
+        matched = matched + 1
       end
     end
   end
@@ -17263,8 +17687,8 @@ local function list_take_text_sysex_events(request)
     take_ref = READ_B_MIDI.take_ref_string(take),
     events = events,
     returned_count = #events,
-    next_cursor = matched > #events and tostring(#events) or nil,
-    truncated = matched > #events,
+    next_cursor = matched > cursor + #events and tostring(cursor + #events) or nil,
+    truncated = matched > cursor + #events,
   }
 end
 return {
