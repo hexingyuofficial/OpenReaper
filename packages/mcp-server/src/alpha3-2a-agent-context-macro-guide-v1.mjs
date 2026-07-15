@@ -608,23 +608,23 @@ const PRIMARY_DEFINITIONS = deepFreeze([
   primaryDefinition({
     id: "macro.render.targets",
     title: "Render declared targets",
-    summary: "Preview or execute bounded managed-root WAV/OGG exports with an optional user-owned basename through one audited D31 route.",
+    summary: "Preview or execute bounded managed-root WAV/OGG/MP3 exports with an optional user-owned basename through one audited D31 route.",
     pack: "render",
     risk: "write",
     entity_kind: "macro.render.targets",
-    task_intents: ["render wav", "render region ogg", "render selected items", "export project"],
+    task_intents: ["render wav", "render region ogg", "export mp3", "render selected items", "export project"],
     rollout_slice: "3.2-E",
     known_blocker: null,
     implementation_status: "executable",
     runnable: true,
     manual: actionManual({
       when_to_use: [
-        "Render a bounded whole project, time selection, explicit regions, selected/explicit items, or selected/explicit tracks to WAV or OGG.",
+        "Render a bounded whole project, time selection, explicit regions, selected/explicit items, or selected/explicit tracks to WAV, OGG, or native MP3.",
         "Require managed-root output, an optional safe visible basename, fail-if-exists collision policy, settings restoration, and verified output artifacts.",
       ],
       when_not_to_use: [
         "Do not provide an arbitrary output path, overwrite route, external encoder, shell/process, raw action/Lua, or hidden executor fallback.",
-        "Do not claim broader format/platform support than the accepted D31 WAV/OGG evidence.",
+        "Do not claim broader format/platform support than the accepted D31 WAV/OGG/native-MP3 evidence.",
       ],
       required_readiness: [
         "Managed render-root readiness and live bridge readiness must pass.",
@@ -633,12 +633,13 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       input_shape: {
         target_kind: "whole_project | time_selection | regions | selected_items | explicit_items | selected_tracks | explicit_tracks.",
-        format: "wav | ogg.",
+        format: "wav | ogg | mp3.",
         refs: "Canonical region/item/track refs only for the matching explicit target kind.",
         sample_rate_hz: "44100 | 48000; defaults to 48000.",
         channel_count: "1 | 2; defaults to 2.",
         wav_bit_depth: "16 | 24 for WAV only; defaults to 24.",
         ogg_quality: "0.3 | 0.5 | 0.6 | 0.8 | 1.0 for OGG only; defaults to 0.5.",
+        mp3_bitrate_kbps: "128 | 192 | 256 | 320 for native MP3 only; defaults to 320.",
         output_basename: "Optional safe 1-96 byte filename stem without an extension; multiple targets become stem_01, stem_02, and so on.",
         output_policy: "openreaper_managed_render_root only.",
         collision_policy: "fail_if_exists only; overwrite and suffix fallback are forbidden.",
@@ -647,13 +648,13 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       },
       preflight_steps: [
         "Normalize canonical refs and enforce exact target-kind/ref matching.",
-        "Validate managed-root-only output, fail_if_exists, max_targets, sample rate, channels, and format-specific WAV/OGG settings.",
+        "Validate managed-root-only output, fail_if_exists, max_targets, sample rate, channels, and format-specific WAV/OGG/MP3 settings.",
         "D31 resolves live targets, validates the requested filename stem, and checks every expected output/artifact collision before its first render action.",
       ],
       underlying_actions: [
         "template.project.read_dirty_state before and after the render mutation",
         "template.render.render_targets (the single audited D31 mutation executed internally)",
-        "D31 internally uses REAPER project render settings, restores render/selection state, verifies WAV/OGG headers, and emits manifest/evidence artifacts",
+        "D31 internally uses REAPER project render settings, reads the native encoder setting back exactly, restores render/selection state, verifies WAV/OGG/MPEG Layer III headers plus MP3 bitrate, and emits manifest/evidence artifacts",
       ],
       readback_steps: [
         "Return the exact effective managed root before execution, then label audio outputs separately from retained recovery project copies.",
@@ -663,20 +664,20 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       success_criteria: [
         "Dry-run returns the effective managed-root preview; non-dry-run executes one D31 mutation bracketed by exact dirty-state reads.",
-        "The registered render dependency verifies every non-empty managed WAV/OGG output and returns compact manifest/evidence refs.",
+        "The registered render dependency verifies every non-empty managed WAV/OGG/MP3 output and returns requested/actual format, bitrate, extension, absolute path, size, target identity, and compact manifest/evidence refs.",
         "No arbitrary path, overwrite, external encoder, hidden executor, public call_recipe, raw action/Lua, shell, or UI bypass is exposed.",
       ],
       common_blockers: [
         blocker("RENDER_ROOT_NOT_READY", "The managed render root is absent, unwritable, or outside policy."),
         blocker("RENDER_TARGET_KIND_OR_REFS_INVALID", "Target kind and canonical refs do not match the strict target contract."),
-        blocker("RENDER_FORMAT_SETTINGS_UNSUPPORTED", "Sample rate, channels, WAV bit depth, or OGG quality is outside the bounded enum."),
+        blocker("RENDER_FORMAT_SETTINGS_UNSUPPORTED", "Sample rate, channels, WAV bit depth, OGG quality, or MP3 bitrate is outside the bounded enum."),
         blocker("RENDER_OUTPUT_BASENAME_INVALID", "The requested filename stem is unsafe, includes an extension/path token, or exceeds the bounded length."),
         blocker("RENDER_OUTPUT_COLLISION", "A managed output or evidence artifact already exists and fail_if_exists rejected the whole batch before rendering."),
       ],
       recovery_steps: [
         "Repair bridge/render-root readiness through supported startup/doctor guidance, then retry the same registered Macro.",
         "Repair target_kind and refs; selected modes take no explicit refs and whole/time take no object refs.",
-        "Use only the bounded WAV/OGG settings and a fresh idempotency context; never bypass fail_if_exists.",
+        "Use only the bounded WAV/OGG/MP3 settings and a fresh request identity; never bypass fail_if_exists.",
         "After a failure, inspect the D31 restoration/error evidence before retrying.",
       ],
       dry_run_shape: {
@@ -692,6 +693,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       examples: [
         example("whole project WAV preview", { target_kind: "whole_project", format: "wav", output_basename: "Client Mix", sample_rate_hz: 48000, channel_count: 2, wav_bit_depth: 24, dry_run: true }),
         example("explicit region OGG plan", { target_kind: "regions", refs: ["region:index:3"], format: "ogg", ogg_quality: 0.6, collision_policy: "fail_if_exists", max_targets: 16, dry_run: false }),
+        example("whole project native MP3", { target_kind: "whole_project", format: "mp3", output_basename: "Client Preview", mp3_bitrate_kbps: 320, collision_policy: "fail_if_exists", dry_run: false }),
       ],
     }),
   })

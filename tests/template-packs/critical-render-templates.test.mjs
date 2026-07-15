@@ -165,13 +165,14 @@ describe("Critical render template descriptors", () => {
       "selected_tracks",
       "explicit_tracks",
     ]);
-    assert.deepEqual(descriptor.inputSchema.properties.format.enum, ["wav", "ogg"]);
+    assert.deepEqual(descriptor.inputSchema.properties.format.enum, ["wav", "ogg", "mp3"]);
     assert.deepEqual(descriptor.inputSchema.properties.output_policy, { const: "openreaper_managed_render_root" });
     assert.deepEqual(descriptor.inputSchema.properties.collision_policy, { const: "fail_if_exists" });
     assert.deepEqual(descriptor.inputSchema.properties.sample_rate_hz.enum, [44100, 48000]);
     assert.deepEqual(descriptor.inputSchema.properties.channel_count.enum, [1, 2]);
     assert.deepEqual(descriptor.inputSchema.properties.wav_bit_depth.enum, [16, 24]);
     assert.deepEqual(descriptor.inputSchema.properties.ogg_quality.enum, [0.3, 0.5, 0.6, 0.8, 1.0]);
+    assert.deepEqual(descriptor.inputSchema.properties.mp3_bitrate_kbps.enum, [128, 192, 256, 320]);
     assert.deepEqual(descriptor.refs.input.map((entry) => [entry.name, entry.kind, entry.required]), [
       ["region_refs", "region", false],
       ["item_refs", "item", false],

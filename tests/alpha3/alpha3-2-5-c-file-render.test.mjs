@@ -34,7 +34,7 @@ function verifiedRenderResult(overrides = {}) {
       output_artifact_ref: manifestRef,
       evidence_artifact_ref: evidenceRef,
       file_count: 1,
-      outputs: [{ absolute_path: "/managed/renders/trial.wav", size: 4096, extension: "wav" }],
+      outputs: [{ absolute_path: "/managed/renders/trial.wav", size: 4096, extension: "wav", requested_format: "wav", actual_format: "wav", target_identity: "whole_project" }],
       ...overrides.data,
     },
     refs: overrides.refs ?? [
@@ -287,7 +287,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
       executeAtomic: async ({ id, input }) => {
         calls.push({ id, input });
         if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
-        return atomicExecution(verifiedRenderResult({ data: { outputs: [{ absolute_path: `/managed/renders/${outputBasename}.wav`, output_basename: outputBasename, size: 4096, extension: "wav" }] } }));
+        return atomicExecution(verifiedRenderResult({ data: { outputs: [{ absolute_path: `/managed/renders/${outputBasename}.wav`, output_basename: outputBasename, size: 4096, extension: "wav", requested_format: "wav", actual_format: "wav", target_identity: "whole_project" }] } }));
       },
     });
 
@@ -300,6 +300,49 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     const failed = await run("internal_request_name");
     assert.equal(failed.ok, false);
     assert.equal(failed.error.code, "RENDER_OUTPUT_BASENAME_MISMATCH");
+  });
+
+  it("requires exact requested and actual native MP3 facts from D31", async () => {
+    const run = async (actualBitrate) => executeAlpha3_2_5CRenderTargetsMacro({
+      request: { request_id: `render-mp3-${actualBitrate}`, input: { target_kind: "whole_project", format: "mp3", mp3_bitrate_kbps: 320, dry_run: false } },
+      now,
+      managedRenderRoot,
+      executeAtomic: async ({ id, input }) => {
+        if (id === "template.project.read_dirty_state") return atomicExecution({ readback: { dirty: false } });
+        assert.equal(input.mp3_bitrate_kbps, 320);
+        return atomicExecution(verifiedRenderResult({
+          data: {
+            outputs: [{
+              absolute_path: "/managed/renders/trial.mp3",
+              size: 8192,
+              extension: "mp3",
+              requested_format: "mp3",
+              actual_format: "mp3",
+              requested_bitrate_kbps: 320,
+              actual_bitrate_kbps: actualBitrate,
+              target_identity: "whole_project",
+            }],
+          },
+        }));
+      },
+    });
+
+    const passed = await run(320);
+    assert.equal(passed.ok, true, JSON.stringify(passed));
+    assert.deepEqual(passed.result.data.audio_outputs[0], {
+      absolute_path: "/managed/renders/trial.mp3",
+      size: 8192,
+      extension: "mp3",
+      requested_format: "mp3",
+      actual_format: "mp3",
+      requested_bitrate_kbps: 320,
+      actual_bitrate_kbps: 320,
+      target_identity: "whole_project",
+    });
+
+    const failed = await run(256);
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "RENDER_OUTPUT_ROW_INVALID");
   });
 
   it("retains completed render evidence when post-render dirty readback fails", async () => {
@@ -321,6 +364,9 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
               absolute_path: "/managed/renders/retained.wav",
               size: 4096,
               extension: "wav",
+              requested_format: "wav",
+              actual_format: "wav",
+              target_identity: "whole_project",
               generated_project_copy_retained: true,
               generated_project_copy_path: "/managed/renders/retained.wav.RPP",
             }],
@@ -405,6 +451,9 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
               absolute_path: "/managed/renders/live.wav",
               size: 4096,
               extension: "wav",
+              requested_format: "wav",
+              actual_format: "wav",
+              target_identity: "whole_project",
               generated_project_copy_retained: true,
               generated_project_copy_path: "/managed/renders/live.wav.RPP",
             }],

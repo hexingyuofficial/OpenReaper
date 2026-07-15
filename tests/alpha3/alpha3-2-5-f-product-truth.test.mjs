@@ -266,7 +266,7 @@ sleep 0.1
               output_artifact_ref: "artifact:render:manifest",
               evidence_artifact_ref: "artifact:render:evidence",
               file_count: 1,
-              outputs: [{ absolute_path: "/managed/renders/final.wav", generated_project_copy_retained: true, generated_project_copy_path: "/managed/renders/final.wav.RPP" }],
+              outputs: [{ absolute_path: "/managed/renders/final.wav", size: 4096, extension: "wav", requested_format: "wav", actual_format: "wav", target_identity: "whole_project", generated_project_copy_retained: true, generated_project_copy_path: "/managed/renders/final.wav.RPP" }],
             },
             refs: [{ ref: "artifact:render:manifest" }, { ref: "artifact:render:evidence" }, { ref: "job:render:1" }],
             artifacts: [{ ref: "artifact:render:manifest" }, { ref: "artifact:render:evidence" }],

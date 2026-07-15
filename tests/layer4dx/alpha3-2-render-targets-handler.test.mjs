@@ -103,7 +103,7 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     assert.equal(status, lua.LUA_OK, message);
   });
 
-  it("uses audited codec blobs with the expected raw WAV and OGG layouts", () => {
+  it("uses audited codec blobs with the expected raw WAV, OGG, and native MP3 layouts", () => {
     const wav16 = Buffer.from("ZXZhdxADAA==", "base64");
     const wav24 = Buffer.from("ZXZhdxgDAA==", "base64");
     assert.equal(wav16.toString("hex"), "65766177100300");
@@ -130,6 +130,18 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
       assert.equal(raw.readInt32LE(17), 0, quality);
       assert.equal(raw.readInt32LE(21), 0, quality);
       assert.equal(raw[25], 0, quality);
+    }
+
+    for (const [bitrate, encoded] of Object.entries({
+      128: "bDNwbYAAAAAAAAAAAAAAAP////8EAAAAgAAAAAAAAAA=",
+      192: "bDNwbcAAAAAAAAAAAAAAAP////8EAAAAwAAAAAAAAAA=",
+      256: "bDNwbQABAAAAAAAAAAAAAP////8EAAAAAAEAAAAAAAA=",
+      320: "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA=",
+    })) {
+      const raw = Buffer.from(encoded, "base64");
+      assert.equal(raw.length, 32, bitrate);
+      assert.equal(raw.subarray(0, 4).toString("ascii"), "l3pm", bitrate);
+      assert.match(HANDLER, new RegExp(`\\[${bitrate}\\] = "${encoded}"`));
     }
   });
 
@@ -162,6 +174,11 @@ describe("Alpha3.2 D31 render-targets bridge route", () => {
     assert.match(HANDLER, /write_a2_artifact/);
     assert.match(HANDLER, /header:sub\(1, 4\) == "OggS"/);
     assert.match(HANDLER, /header:sub\(1, 4\) == "RIFF"/);
+    assert.match(HANDLER, /layer_bits == 1/);
+    assert.match(HANDLER, /actual_bitrate ~= format\.mp3_bitrate_kbps/);
+    assert.match(HANDLER, /d31_get_string\(project, "RENDER_FORMAT"\) ~= format\.config/);
+    assert.match(HANDLER, /requested_format = request\.params\.format/);
+    assert.match(HANDLER, /target_identity = target\.ref or target\.label/);
     assert.match(HANDLER, /generated_project_copy_retained/);
     assert.match(HANDLER, /output\.absolute_path \.\. "\.RPP"/);
     assert.doesNotMatch(HANDLER, /os\.remove\(project_copy_path\)/);

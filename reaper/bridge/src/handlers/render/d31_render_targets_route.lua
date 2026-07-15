@@ -34,6 +34,7 @@ local D31_STRING_KEYS = { "RENDER_FILE", "RENDER_PATTERN", "RENDER_FORMAT", "REN
 --   ZXZhdxADAA== => 65 76 61 77 10 03 00 (evaw, 16-bit, LargeFiles=2, BWF=0, markers=0, tempo=false)
 --   ZXZhdxgDAA== => 65 76 61 77 18 03 00 (evaw, 24-bit, LargeFiles=2, BWF=0, markers=0, tempo=false)
 -- OGG encodes vggo + float32 LE quality + mode byte 0 + four zero LE ints + NUL.
+-- MP3 values were captured from REAPER 7.71's native LAME 3.100 CBR/q=0 settings.
 local D31_WAV_FORMATS = { [16] = "ZXZhdxADAA==", [24] = "ZXZhdxgDAA==" }
 local D31_OGG_FORMATS = {
   [0.3] = "dmdnb5qZmT4AAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -41,6 +42,12 @@ local D31_OGG_FORMATS = {
   [0.6] = "dmdnb5qZGT8AAAAAAAAAAAAAAAAAAAAAAAA=",
   [0.8] = "dmdnb83MTD8AAAAAAAAAAAAAAAAAAAAAAAA=",
   [1.0] = "dmdnbwAAgD8AAAAAAAAAAAAAAAAAAAAAAAA=",
+}
+local D31_MP3_FORMATS = {
+  [128] = "bDNwbYAAAAAAAAAAAAAAAP////8EAAAAgAAAAAAAAAA=",
+  [192] = "bDNwbcAAAAAAAAAAAAAAAP////8EAAAAwAAAAAAAAAA=",
+  [256] = "bDNwbQABAAAAAAAAAAAAAP////8EAAAAAAEAAAAAAAA=",
+  [320] = "bDNwbUABAAAAAAAAAAAAAP////8EAAAAQAEAAAAAAAA=",
 }
 
 local D31_ERROR_CODE_MAP = {
@@ -55,6 +62,7 @@ local D31_ERROR_CODE_MAP = {
   REGION_REF_AMBIGUOUS = "REF_INVALID",
   WAV_BIT_DEPTH_REQUIRED = "PARAMS_INVALID",
   OGG_QUALITY_REQUIRED = "PARAMS_INVALID",
+  MP3_BITRATE_REQUIRED = "PARAMS_INVALID",
   FORMAT_INVALID = "PARAMS_INVALID",
   TIME_SELECTION_EMPTY = "PARAMS_INVALID",
   TARGET_REFS_DUPLICATE = "REF_INVALID",
@@ -103,7 +111,7 @@ local function d31_output_basename(value)
     return nil, "output_basename contains a path, wildcard, reserved, control, or unsafe trailing character."
   end
   local lower = value:lower()
-  if lower:match("%.wav$") or lower:match("%.ogg$") then
+  if lower:match("%.wav$") or lower:match("%.ogg$") or lower:match("%.mp3$") then
     return nil, "output_basename is a filename stem and must not include the output extension."
   end
   return value
@@ -125,13 +133,43 @@ local function d31_size(path_value)
   return size
 end
 
-local function d31_header_ok(path_value, extension)
+local function d31_mp3_probe(header)
+  local offset = 1
+  if header:sub(1, 3) == "ID3" then
+    if #header < 10 then return false end
+    local a, b, c, d = header:byte(7, 10)
+    if not a or a >= 128 or b >= 128 or c >= 128 or d >= 128 then return false end
+    offset = 11 + a * 2097152 + b * 16384 + c * 128 + d
+  end
+  for index = offset, math.max(offset, #header - 3) do
+    local first, second, third = header:byte(index, index + 2)
+    if first == 0xFF and second and second >= 0xE0 and third then
+      local version_bits = math.floor(second / 8) % 4
+      local layer_bits = math.floor(second / 2) % 4
+      local bitrate_index = math.floor(third / 16) % 16
+      local sample_rate_index = math.floor(third / 4) % 4
+      if version_bits ~= 1 and layer_bits == 1 and bitrate_index > 0 and bitrate_index < 15 and sample_rate_index < 3 then
+        local mpeg1 = { 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 }
+        local mpeg2 = { 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160 }
+        return true, version_bits == 3 and mpeg1[bitrate_index] or mpeg2[bitrate_index]
+      end
+    end
+  end
+  return false
+end
+
+local function d31_probe_output(path_value, extension)
   local handle = io.open(path_value, "rb")
   if not handle then return false end
-  local header = handle:read(12) or ""
+  local header = handle:read(1048576) or ""
   handle:close()
-  if extension == "wav" then return #header >= 12 and header:sub(1, 4) == "RIFF" and header:sub(9, 12) == "WAVE" end
-  return #header >= 4 and header:sub(1, 4) == "OggS"
+  if extension == "wav" then return #header >= 12 and header:sub(1, 4) == "RIFF" and header:sub(9, 12) == "WAVE", "wav" end
+  if extension == "ogg" then return #header >= 4 and header:sub(1, 4) == "OggS", "ogg" end
+  if extension == "mp3" then
+    local ok, bitrate = d31_mp3_probe(header)
+    return ok, ok and "mp3" or nil, bitrate
+  end
+  return false
 end
 
 local function d31_get_number(project, key)
@@ -369,7 +407,13 @@ local function d31_format(params)
     if not config then return d31_error("OGG_QUALITY_REQUIRED", "OGG renders require an allowed ogg_quality.", { ogg_quality = params.ogg_quality }, false) end
     return { extension = "ogg", config = config, ogg_quality = quality }
   end
-  return d31_error("FORMAT_INVALID", "D31 supports only wav and ogg.", { format = params.format }, false)
+  if params.format == "mp3" then
+    local bitrate = tonumber(params.mp3_bitrate_kbps)
+    local config = D31_MP3_FORMATS[bitrate]
+    if not config then return d31_error("MP3_BITRATE_REQUIRED", "MP3 renders require mp3_bitrate_kbps 128, 192, 256, or 320.", { mp3_bitrate_kbps = params.mp3_bitrate_kbps }, false) end
+    return { extension = "mp3", config = config, mp3_bitrate_kbps = bitrate }
+  end
+  return d31_error("FORMAT_INVALID", "D31 supports only wav, ogg, and mp3.", { format = params.format }, false)
 end
 
 local function d31_resolve_targets(project, request, groups)
@@ -491,6 +535,8 @@ local function d31_apply_settings(project, target, output, params, format)
   if not d31_set_string(project, "RENDER_PATTERN", output.output_basename) then return false, "RENDER_PATTERN" end
   if not d31_set_string(project, "RENDER_FORMAT", format.config) then return false, "RENDER_FORMAT" end
   if not d31_set_string(project, "RENDER_FORMAT2", "") then return false, "RENDER_FORMAT2" end
+  if d31_get_string(project, "RENDER_FORMAT") ~= format.config then return false, "RENDER_FORMAT_READBACK" end
+  if d31_get_string(project, "RENDER_FORMAT2") ~= "" then return false, "RENDER_FORMAT2_READBACK" end
   return true
 end
 
@@ -545,10 +591,24 @@ local function d31_render_targets(request)
       local action_ok = call_reaper("Main_OnCommandEx", D31_ACTION_ID, 0, project)
       if not action_ok then return { failure = { code = "COMMAND_FAILED", message = "The audited REAPER project-render action 41824 failed.", details = { action_id = D31_ACTION_ID, target_index = index - 1 }, recoverable = false } } end
       local size = d31_size(output.absolute_path)
-      if size <= 0 or not d31_header_ok(output.absolute_path, output.extension) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container header.", details = { output_basename = output.output_basename, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
+      local header_ok, actual_format, actual_bitrate = d31_probe_output(output.absolute_path, output.extension)
+      if size <= 0 or not header_ok or actual_format ~= request.params.format or (format.mp3_bitrate_kbps and actual_bitrate ~= format.mp3_bitrate_kbps) then return { failure = { code = "VERIFY_FAILED", message = "Rendered output is absent, empty, or has the wrong container, MPEG layer, or bitrate.", details = { output_basename = output.output_basename, requested_format = request.params.format, actual_format = actual_format, requested_bitrate_kbps = format.mp3_bitrate_kbps, actual_bitrate_kbps = actual_bitrate, extension = output.extension, file_size_bytes = size, target_index = index - 1 }, recoverable = false } } end
       local project_copy_path = output.absolute_path .. ".RPP"
       local project_copy_retained = file_exists(project_copy_path)
-      result_outputs[#result_outputs + 1] = { source_name = output.source_name, output_basename = output.output_basename, absolute_path = output.absolute_path, size = size, extension = output.extension, generated_project_copy_retained = project_copy_retained, generated_project_copy_path = project_copy_retained and project_copy_path or nil }
+      result_outputs[#result_outputs + 1] = {
+        source_name = output.source_name,
+        output_basename = output.output_basename,
+        absolute_path = output.absolute_path,
+        size = size,
+        extension = output.extension,
+        requested_format = request.params.format,
+        actual_format = actual_format,
+        requested_bitrate_kbps = format.mp3_bitrate_kbps or JSON_NULL,
+        actual_bitrate_kbps = actual_bitrate or JSON_NULL,
+        target_identity = target.ref or target.label,
+        generated_project_copy_retained = project_copy_retained,
+        generated_project_copy_path = project_copy_retained and project_copy_path or nil,
+      }
     end
     return { outputs = result_outputs }
   end
@@ -562,11 +622,11 @@ local function d31_render_targets(request)
   if outcome.failure then return d31_error(outcome.failure.code, outcome.failure.message, outcome.failure.details, outcome.failure.recoverable) end
 
   local job_ref = d31_job_ref(request)
-  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
+  local manifest_summary = { job_ref = job_ref.ref, format = request.params.format, mp3_bitrate_kbps = format.mp3_bitrate_kbps, requested_output_basename = requested_basename, file_count = #outcome.outputs, max_targets = max_targets, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, truncated = false }
   local manifest, manifest_error = write_a2_artifact(request, D31_MANIFEST_SPEC, manifest_summary, { target_kind = request.params.target_kind, outputs = outcome.outputs })
   if not manifest then return d31_error(manifest_error.code, manifest_error.message, manifest_error.details, manifest_error.recoverable) end
   local evidence_summary = { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, verification_status = "passed", render_settings_restored = true, selections_restored = true, truncated = false }
-  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
+  local evidence, evidence_error = write_a2_artifact(request, D31_EVIDENCE_SPEC, evidence_summary, { action_id = D31_ACTION_ID, target_kind = request.params.target_kind, render_request = { format = request.params.format, output_basename = requested_basename, sample_rate_hz = request.params.sample_rate_hz, channel_count = request.params.channel_count, wav_bit_depth = format.wav_bit_depth, ogg_quality = format.ogg_quality, mp3_bitrate_kbps = format.mp3_bitrate_kbps, max_targets = max_targets }, restoration = { render_settings = true, track_selection = true, item_selection = true }, outputs = outcome.outputs })
   if not evidence then return d31_error(evidence_error.code, evidence_error.message, evidence_error.details, evidence_error.recoverable) end
   return { job_ref = job_ref.ref, output_artifact_ref = manifest.ref, evidence_artifact_ref = evidence.ref, format = request.params.format, output_policy = request.params.output_policy, collision_policy = request.params.collision_policy, file_count = #outcome.outputs, outputs = outcome.outputs, restoration = { render_settings = true, track_selection = true, item_selection = true }, truncated = false }, nil, json_array({ manifest.object_ref, evidence.object_ref }), json_array({ job_ref })
 end

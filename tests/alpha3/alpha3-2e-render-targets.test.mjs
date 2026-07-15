@@ -104,6 +104,20 @@ describe("Alpha3.2-E render target planner", () => {
     ]);
   });
 
+  it("normalizes native MP3 delivery with an explicit or default audited bitrate", () => {
+    for (const [input, expectedBitrate] of [
+      [{ target_kind: "whole_project", format: "mp3", dry_run: false }, 320],
+      [{ target_kind: "whole_project", format: "mp3", mp3_bitrate_kbps: 192, output_basename: "Client Preview", dry_run: false }, 192],
+    ]) {
+      const plan = planAlpha3_2ERenderTargetsMacro(input);
+      assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+      assert.equal(plan.preview.render_settings.mp3_bitrate_kbps, expectedBitrate);
+      assert.equal(plan.mutation_requests[0].input.mp3_bitrate_kbps, expectedBitrate);
+      assert.equal("wav_bit_depth" in plan.mutation_requests[0].input, false);
+      assert.equal("ogg_quality" in plan.mutation_requests[0].input, false);
+    }
+  });
+
   it("fails closed for target/ref mismatches, unsafe output policy, and unsupported settings", () => {
     const cases = [
       [{ target_kind: "selected_items", refs: ["item:guid:{A}"], format: "wav" }, "RENDER_SELECTED_REFS_FORBIDDEN"],
@@ -120,8 +134,14 @@ describe("Alpha3.2-E render target planner", () => {
       [{ target_kind: "whole_project", format: "wav", wav_bit_depth: 32 }, "RENDER_WAV_BIT_DEPTH_UNSUPPORTED"],
       [{ target_kind: "whole_project", format: "ogg", ogg_quality: 0.7 }, "RENDER_OGG_QUALITY_UNSUPPORTED"],
       [{ target_kind: "whole_project", format: "ogg", wav_bit_depth: 16 }, "RENDER_OGG_BIT_DEPTH_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "mp3", mp3_bitrate_kbps: 160 }, "RENDER_MP3_BITRATE_UNSUPPORTED"],
+      [{ target_kind: "whole_project", format: "mp3", wav_bit_depth: 16 }, "RENDER_MP3_WAV_BIT_DEPTH_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "mp3", ogg_quality: 0.5 }, "RENDER_MP3_OGG_QUALITY_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "wav", mp3_bitrate_kbps: 320 }, "RENDER_WAV_MP3_BITRATE_FORBIDDEN"],
+      [{ target_kind: "whole_project", format: "ogg", mp3_bitrate_kbps: 320 }, "RENDER_OGG_MP3_BITRATE_FORBIDDEN"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "../mix" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "mix.wav" }, "RENDER_OUTPUT_BASENAME_INVALID"],
+      [{ target_kind: "whole_project", format: "mp3", output_basename: "mix.mp3" }, "RENDER_OUTPUT_BASENAME_INVALID"],
       [{ target_kind: "whole_project", format: "wav", output_basename: "$project" }, "RENDER_OUTPUT_BASENAME_INVALID"],
     ];
 
