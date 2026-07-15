@@ -8400,7 +8400,7 @@ local function d16_tracks_delete_tracks_impl(request, require_single)
   call_reaper("TrackList_AdjustWindows", false)
   local absent, still_present = d16_tracks_verify_absent(tokens)
   if not absent then
-    return d16_tracks_error("VERIFICATION_FAILED", "Deleted track still resolves after D16 delete.", {
+    return d16_tracks_error("VERIFY_FAILED", "Deleted track still resolves after D16 delete.", {
       track_ref = still_present,
     })
   end
@@ -8437,7 +8437,7 @@ local function d16_tracks_create_folder_track(request)
   summary.created = true
   summary.folder_track = true
   if summary.name ~= tostring(request.params.name) then
-    return d16_tracks_error("VERIFICATION_FAILED", "D16 created folder track name did not match readback.", {
+    return d16_tracks_error("VERIFY_FAILED", "D16 created folder track name did not match readback.", {
       expected = tostring(request.params.name),
       actual = summary.name,
     })
@@ -8464,7 +8464,7 @@ local function d16_tracks_set_folder_depth(request)
   call_reaper("TrackList_AdjustWindows", false)
   local readback = math.floor(d16_tracks_numeric(track, "I_FOLDERDEPTH", 0) or 0)
   if readback ~= depth then
-    return d16_tracks_error("VERIFICATION_FAILED", "D16 folder depth did not match readback.", {
+    return d16_tracks_error("VERIFY_FAILED", "D16 folder depth did not match readback.", {
       expected = depth,
       actual = readback,
     })
@@ -8509,7 +8509,7 @@ local function d16_tracks_move_tracks_impl(request, require_single)
   end
   local first_index = rows[1] and rows[1].index or -1
   if first_index ~= target_index then
-    return d16_tracks_error("VERIFICATION_FAILED", "D16 moved track block did not start at requested index.", {
+    return d16_tracks_error("VERIFY_FAILED", "D16 moved track block did not start at requested index.", {
       expected = target_index,
       actual = first_index,
     })
@@ -8560,18 +8560,18 @@ local function d16_tracks_nest_tracks_in_folder(request)
     refs_out[#refs_out + 1] = d16_tracks_object_ref(children[index])
     rows[#rows + 1] = d16_tracks_track_summary(children[index])
     if d16_tracks_index(children[index]) ~= expected_index + index - 1 then
-      return d16_tracks_error("VERIFICATION_FAILED", "D16 nested child track did not follow the folder.", {
+      return d16_tracks_error("VERIFY_FAILED", "D16 nested child track did not follow the folder.", {
         child_ref = d16_tracks_ref_string(children[index]),
       })
     end
   end
   if math.floor(d16_tracks_numeric(folder, "I_FOLDERDEPTH", 0) or 0) ~= 1 then
-    return d16_tracks_error("VERIFICATION_FAILED", "D16 folder parent did not open a folder span.", {
+    return d16_tracks_error("VERIFY_FAILED", "D16 folder parent did not open a folder span.", {
       folder_ref = d16_tracks_ref_string(folder),
     })
   end
   if math.floor(d16_tracks_numeric(children[#children], "I_FOLDERDEPTH", 0) or 0) ~= -1 then
-    return d16_tracks_error("VERIFICATION_FAILED", "D16 last child did not close the folder span.", {
+    return d16_tracks_error("VERIFY_FAILED", "D16 last child did not close the folder span.", {
       child_ref = d16_tracks_ref_string(children[#children]),
     })
   end

@@ -493,27 +493,28 @@ function buildMutationRequests(rows, annotations) {
     if (row.index !== null && row.index !== undefined) requests.push(childRequest(sequence++, "mutation", MOVE_TRACK_ID, { track_ref: trackRef }, { index: row.index }, `Move ${row.id} to declared index.`, dependencyFor(row)));
     if (row.folder_depth !== null) requests.push(childRequest(sequence++, "mutation", SET_FOLDER_DEPTH_ID, { track_ref: trackRef }, { folder_depth: row.folder_depth }, `Set folder depth for ${row.id}.`, dependencyFor(row)));
   }
-  const childrenByParent = new Map();
-  for (const row of rows.filter((candidate) => candidate.parent_id)) {
-    const siblings = childrenByParent.get(row.parent_id) ?? [];
-    siblings.push(row);
-    childrenByParent.set(row.parent_id, siblings);
-  }
-  for (const [parentId, children] of childrenByParent) {
-    const parent = rows.find((candidate) => candidate.id === parentId);
+  const rowsById = new Map(rows.map((row) => [row.id, row]));
+  const parentIds = [...new Set(rows.filter((row) => row.parent_id).map((row) => row.parent_id))]
+    .sort((left, right) => nestingDepth(rowsById.get(left), rowsById) - nestingDepth(rowsById.get(right), rowsById)
+      || rowsById.get(left).index - rowsById.get(right).index
+      || left.localeCompare(right));
+  for (const parentId of parentIds) {
+    const parent = rowsById.get(parentId);
     if (!parent) continue;
-    const orderedChildren = [...children].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+    const orderedDescendants = rows
+      .filter((row) => isDescendantOf(row, parentId, rowsById))
+      .sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
     requests.push(childRequest(
       sequence++,
       "mutation",
       NEST_TRACKS_ID,
       {
         folder_ref: parent.track_ref ?? `track:planned:${parent.id}`,
-        track_ref: orderedChildren.map((row) => row.track_ref ?? `track:planned:${row.id}`),
+        track_ref: orderedDescendants.map((row) => row.track_ref ?? `track:planned:${row.id}`),
       },
       {},
-      `Nest ${orderedChildren.map((row) => row.id).join(", ")} under ${parent.id}.`,
-      { depends_on_local_ids: [parent.id, ...orderedChildren.map((row) => row.id)] },
+      `Nest the complete descendant block ${orderedDescendants.map((row) => row.id).join(", ")} under ${parent.id}.`,
+      { depends_on_local_ids: [parent.id, ...orderedDescendants.map((row) => row.id)] },
     ));
   }
   for (const row of annotations) {
@@ -523,6 +524,25 @@ function buildMutationRequests(rows, annotations) {
     requests.push(childRequest(sequence++, "mutation", row.kind === "marker" ? CREATE_MARKER_ID : CREATE_REGION_ID, {}, input, `Create ${row.kind} annotation ${row.id}.`, { produces_local_id: row.id, produces_kind: row.kind }));
   }
   return deepFreeze(requests);
+}
+
+function nestingDepth(row, rowsById) {
+  let depth = 0;
+  let parentId = row?.parent_id ?? null;
+  while (parentId) {
+    depth += 1;
+    parentId = rowsById.get(parentId)?.parent_id ?? null;
+  }
+  return depth;
+}
+
+function isDescendantOf(row, parentId, rowsById) {
+  let currentParentId = row.parent_id;
+  while (currentParentId) {
+    if (currentParentId === parentId) return true;
+    currentParentId = rowsById.get(currentParentId)?.parent_id ?? null;
+  }
+  return false;
 }
 
 function dependencyFor(row) {

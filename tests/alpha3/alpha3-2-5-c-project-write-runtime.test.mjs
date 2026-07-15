@@ -425,6 +425,56 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.deepEqual(mismatched.result.changes[1].live_readback.mismatched_fields, ["parent_ref"]);
   });
 
+  it("nests complete descendant blocks ancestor-first and verifies each final direct parent", async () => {
+    const layout = [
+      { id: "outer", kind: "folder", name: "Outer", index: 0 },
+      { id: "inner", kind: "folder", name: "Inner", parent_id: "outer", index: 1 },
+      { id: "inner_a", kind: "track", name: "Inner A", parent_id: "inner", index: 2 },
+      { id: "inner_b", kind: "track", name: "Inner B", parent_id: "inner", index: 3 },
+      { id: "outer_tail_a", kind: "track", name: "Outer Tail A", parent_id: "outer", index: 4 },
+      { id: "outer_tail_b", kind: "track", name: "Outer Tail B", parent_id: "outer", index: 5 },
+    ];
+    const calls = [];
+    const folderParentReadbacks = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: { id: "macro.project.apply_layout", input: { layout, dry_run: false } },
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        folderStructureReadback: true,
+        folderParentReadbacks,
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const nesting = calls.filter((call) => call.id === "template.tracks.nest_tracks_in_folder");
+    assert.deepEqual(nesting.map((call) => ({ folder_ref: firstRef({ folder_ref: call.refs.folder_ref }), track_refs: call.refs.track_ref.map((entry) => firstRef({ track_ref: entry })) })), [
+      {
+        folder_ref: "track:guid:{CREATED-1}",
+        track_refs: [
+          "track:guid:{CREATED-2}",
+          "track:guid:{CREATED-3}",
+          "track:guid:{CREATED-4}",
+          "track:guid:{CREATED-5}",
+          "track:guid:{CREATED-6}",
+        ],
+      },
+      {
+        folder_ref: "track:guid:{CREATED-2}",
+        track_refs: ["track:guid:{CREATED-3}", "track:guid:{CREATED-4}"],
+      },
+    ]);
+    assert.deepEqual(folderParentReadbacks.at(-1), [
+      ["track:guid:{CREATED-2}", "track:guid:{CREATED-1}"],
+      ["track:guid:{CREATED-3}", "track:guid:{CREATED-2}"],
+      ["track:guid:{CREATED-4}", "track:guid:{CREATED-2}"],
+      ["track:guid:{CREATED-5}", "track:guid:{CREATED-1}"],
+      ["track:guid:{CREATED-6}", "track:guid:{CREATED-1}"],
+    ]);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+  });
+
   it("creates Marker and Region annotations and applies rows only after exact field readback", async () => {
     const calls = [];
     const invalidations = [];
@@ -951,9 +1001,12 @@ function fakeAtomic(calls, options = {}) {
         : "track:guid:{CREATED}";
     }
     else if (id === "template.tracks.list_tracks" || id === "template.tracks.read_folder_structure") {
-      const nesting = calls.find((call) => call.id === "template.tracks.nest_tracks_in_folder");
-      const folderRef = nesting ? firstRef({ folder_ref: nesting.refs.folder_ref }) : null;
-      const childRefs = new Set((nesting?.refs.track_ref ?? []).map((entry) => firstRef({ track_ref: entry })));
+      const nesting = calls.filter((call) => call.id === "template.tracks.nest_tracks_in_folder");
+      const parentRefByChild = new Map();
+      for (const call of nesting) {
+        const folderRef = firstRef({ folder_ref: call.refs.folder_ref });
+        for (const entry of call.refs.track_ref ?? []) parentRefByChild.set(firstRef({ track_ref: entry }), folderRef);
+      }
       summary.tracks = options.multiTrackRefs
         ? calls
             .filter((call) => call.id === "template.tracks.create_track" || call.id === "template.tracks.create_folder_track")
@@ -961,16 +1014,21 @@ function fakeAtomic(calls, options = {}) {
             .filter((call) => options.respectTrackListLimitByIndex !== true || Number(call.input.index) < input.limit)
             .map((call) => {
               const trackRef = createdTrackRef(Number(call.input.index), options);
-              const isChild = options.folderStructureReadback === true && childRefs.has(trackRef);
+              const parentRef = options.folderStructureReadback === true ? parentRefByChild.get(trackRef) : null;
               return {
                 track_ref: trackRef,
                 name: call.input.name,
-                ...(isChild ? {
-                  parent_ref: Number(call.input.index) === options.wrongFolderParentTrackIndex ? null : folderRef,
+                ...(parentRef ? {
+                  parent_ref: Number(call.input.index) === options.wrongFolderParentTrackIndex ? null : parentRef,
                 } : {}),
               };
             })
         : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
+      if (id === "template.tracks.read_folder_structure" && nesting.length > 0 && Array.isArray(options.folderParentReadbacks)) {
+        options.folderParentReadbacks.push(summary.tracks
+          .filter((row) => typeof row.parent_ref === "string")
+          .map((row) => [row.track_ref, row.parent_ref]));
+      }
     }
     else if (id === "template.project.create_marker") {
       summary.marker_ref = "marker:index:1";
