@@ -29,6 +29,7 @@ const READ_RENDER_SETTINGS_ID = "template.render.read_settings";
 const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
 const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
 const MAX_HYDRATION_CALLS = 16;
+const MAX_EXACT_SELECTOR_REFS = 100;
 const MAX_RESULT_DATA_BYTES = 18_000;
 const MINIMUM_PUBLIC_QUERY_BUDGET = 2_048;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
@@ -675,7 +676,10 @@ async function hydrateForQuery({
   const refreshPolicy = request.input?.refresh_policy ?? "if_stale";
   const forceRefresh = refreshPolicy === "required" || refreshPolicy === "force_read_only_refresh";
   if (refreshPolicy === "never") return emptyHydration("Refresh policy forbids live hydration.");
-  if (plan.ok && !forceColdBundle && !forceRefresh) return emptyHydration("Matching fresh SQLite rows were reused.");
+  const exactSelectorRefreshRequired = exactSelectorRefreshRequests(request, projectIndexRuntime).length > 0;
+  if (plan.ok && !forceColdBundle && !forceRefresh && !exactSelectorRefreshRequired) {
+    return emptyHydration("Matching fresh SQLite rows were reused.");
+  }
   if (typeof executeAtomic !== "function") {
     return hydrationFailure(
       "PROJECT_INDEX_REFRESH_UNAVAILABLE",
@@ -753,6 +757,46 @@ async function hydrateForQuery({
     evidenceRefs.push(...cold.evidenceRefs);
   }
 
+  const exactSelectorRequests = exactSelectorRefreshRequests(request, projectIndexRuntime);
+  if (exactSelectorRequests.length > 0) {
+    const exact = await runHydrationRequests({
+      requests: exactSelectorRequests,
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      seen,
+      objectRefs,
+    });
+    if (!exact.ok) return mergeHydrationResults({
+      ok: true,
+      executions,
+      artifactRefs,
+      evidenceRefs,
+      blockers: [],
+      error: null,
+      logicalRefresh,
+      revisionProbeCount,
+      summary: "Completed earlier Project Index hydration.",
+    }, exact);
+    executions.push(...exact.executions);
+    artifactRefs.push(...exact.artifactRefs);
+    evidenceRefs.push(...exact.evidenceRefs);
+  }
+  const missingExactRefs = exactSelectorMissingRefs(request, projectIndexRuntime);
+  if (missingExactRefs.length > 0) {
+    return hydrationFailure(
+      "PROJECT_INDEX_EXACT_SELECTOR_HYDRATION_INCOMPLETE",
+      "Exact selector hydration completed, but one or more requested refs were not accepted into the Project Index.",
+      [{
+        code: "PROJECT_INDEX_EXACT_SELECTOR_HYDRATION_INCOMPLETE",
+        message: "Do not treat missing exact selector rows as not found; retry after restoring live readback/index observation.",
+        recoverable: true,
+        details: { missing_refs: missingExactRefs.slice(0, MAX_EXACT_SELECTOR_REFS) },
+      }],
+      { executions, artifactRefs, evidenceRefs },
+    );
+  }
+
   for (let pass = 0; pass < 3 && executions.length < MAX_HYDRATION_CALLS; pass += 1) {
     const nextPlan = planAlpha3_2DGenericProjectQuery({
       ...request.input,
@@ -806,6 +850,40 @@ async function hydrateForQuery({
       ? `Executed ${executions.length} bounded read-only Project Index refresh call(s).`
       : "Matching fresh SQLite rows were reused.",
   };
+}
+
+function exactSelectorRefreshRequests(request, projectIndexRuntime) {
+  return exactSelectorMissingRefs(request, projectIndexRuntime).map((ref) => {
+    if (request.input.entity === "items") {
+      return {
+        id: "template.items.read_item_summary",
+        input: { include_take_summary: false },
+        refs: { item_ref: ref },
+        read_only: true,
+      };
+    }
+    return {
+      id: "template.media.read_take_source",
+      input: { include_metadata_keys: false, include_parent_source: false },
+      refs: { take_ref: ref },
+      read_only: true,
+    };
+  });
+}
+
+function exactSelectorMissingRefs(request, projectIndexRuntime) {
+  const entity = request.input?.entity;
+  if (entity !== "items" && entity !== "takes") return [];
+  const prefix = entity === "items" ? "item:guid:" : "take:guid:";
+  const requested = unique(Array.isArray(request.input?.selectors?.refs)
+    ? request.input.selectors.refs.filter((ref) => typeof ref === "string" && ref.startsWith(prefix))
+    : []).slice(0, MAX_EXACT_SELECTOR_REFS);
+  if (requested.length === 0) return [];
+  const rowKey = entity;
+  const indexed = new Set((projectIndexRuntime?.adapter?.snapshot?.().rows?.[rowKey] ?? [])
+    .map((row) => row?.ref)
+    .filter((ref) => typeof ref === "string"));
+  return requested.filter((ref) => !indexed.has(ref));
 }
 
 function mergeHydrationResults(primary, supplemental) {

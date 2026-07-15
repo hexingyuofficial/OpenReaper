@@ -325,6 +325,143 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("hydrates 100 exact Item selectors from live readback and walks every 2 KiB page without loss or duplicates", async () => {
+    const fixture = await makeFixture();
+    const itemRefs = Array.from({ length: 100 }, (_, index) => `item:guid:{BULK-ITEM-${String(index + 1).padStart(3, "0")}}`);
+    const liveItems = new Map(itemRefs.map((itemRef, index) => [itemRef, {
+      item_ref: itemRef,
+      track_ref: "track:guid:{TRACK-1}",
+      position_seconds: index * 2,
+      length_seconds: 1,
+      take_count: 0,
+    }]));
+    const state = {
+      revision: 100,
+      trackName: "Media",
+      calls: [],
+      atomicRequests: [],
+      liveItems,
+      itemReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const rows = [];
+      let cursor = null;
+      let pageCount = 0;
+      do {
+        const page = await runtime.call_template({
+          id: "macro.project.query",
+          input: {
+            entity: "items",
+            fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+            selectors: { refs: itemRefs },
+            refresh_policy: cursor === null ? "if_stale" : "never",
+            limit: 1,
+            ...(cursor === null ? {} : { cursor }),
+          },
+          budget: { max_response_bytes: 2_048, max_items: 50, max_inline_value_bytes: 2_048 },
+          context: callContext(rows.length + 1, "bulk-item-client"),
+        });
+        assert.equal(page.ok, true, JSON.stringify(page));
+        assert.equal(page.budget.actual_bytes <= 2_048, true);
+        assert.equal(page.result.data.rows.length, 1);
+        assert.equal(page.result.data.coverage.public_returned_row_count, 1);
+        assert.equal(page.result.data.coverage.complete, false);
+        pageCount += 1;
+        assert.equal(state.itemReadRefs.length, 100, `cursor page ${pageCount} repeated live Item hydration`);
+        rows.push(...page.result.data.rows);
+        cursor = page.result.data.page.has_more ? page.result.data.page.next_cursor : null;
+        assert.equal(page.result.data.page.has_more !== true || typeof cursor === "string", true);
+      } while (cursor !== null);
+
+      assert.equal(rows.length, 100);
+      assert.equal(pageCount, 100);
+      assert.deepEqual(new Set(rows.map((row) => row.ref)), new Set(itemRefs));
+      assert.equal(new Set(rows.map((row) => row.ref)).size, 100);
+      assert.equal(state.itemReadRefs.length, 100);
+      assert.equal(new Set(state.itemReadRefs.map((ref) => ref.ref)).size, 100);
+      const indexedRefs = new Set(indexRuntime.adapter.snapshot().rows.items.map((row) => row.ref));
+      assert.equal(itemRefs.every((ref) => indexedRefs.has(ref)), true);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails closed when an exact Item selector cannot be confirmed by live readback", async () => {
+    const fixture = await makeFixture();
+    const missingItemRef = "item:guid:{NOT-LIVE}";
+    const state = {
+      revision: 101,
+      trackName: "Media",
+      calls: [],
+      liveItems: new Map(),
+      itemReadFailureRefs: new Set([missingItemRef]),
+      itemReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "items",
+          selectors: { refs: [missingItemRef] },
+          refresh_policy: "if_stale",
+          limit: 1,
+        },
+        context: callContext(1, "missing-item-client"),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "ITEM_NOT_FOUND");
+      assert.equal(result.blockers[0].recoverable, true);
+      assert.equal(state.itemReadRefs.length, 1);
+      assert.equal(indexRuntime.adapter.snapshot().rows.items.some((row) => row.ref === missingItemRef), false);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("rejects more than 100 exact selectors before any live Item hydration instead of silently slicing", async () => {
+    const fixture = await makeFixture();
+    const itemRefs = Array.from({ length: 101 }, (_, index) => `item:guid:{OVER-LIMIT-${index + 1}}`);
+    const state = {
+      revision: 102,
+      trackName: "Media",
+      calls: [],
+      liveItems: new Map(),
+      itemReadRefs: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const result = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "items",
+          selectors: { refs: itemRefs },
+          refresh_policy: "if_stale",
+          limit: 1,
+        },
+        context: callContext(1, "over-limit-item-client"),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, "GENERIC_QUERY_ARRAY_TOO_LARGE");
+      assert.deepEqual(state.calls, []);
+      assert.deepEqual(state.itemReadRefs, []);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("hydrates fourteen Automation rows losslessly and keeps the final GUID reachable after public paging", async () => {
     const fixture = await makeFixture();
     const automationNames = Array.from({ length: 14 }, (_, index) => index === 13 ? "Automation Envelope 14 Exact" : `Automation Envelope ${index + 1}`);
@@ -821,6 +958,13 @@ function createRuntime({ fixture, indexRuntime, state }) {
         }];
       } else if (request.operation.name === "items.read_item_summary") {
         const itemRef = request.refs[0]?.ref;
+        if (state.itemReadFailureRefs?.has(itemRef)) {
+          state.itemReadRefs?.push(structuredClone(request.refs[0]));
+          return structuredClone(fake.dispatch({
+            ...request,
+            params: { ...request.params, force_error: "ITEM_NOT_FOUND" },
+          }));
+        }
         const item = state.liveItems?.get(itemRef);
         if (item) {
           state.itemReadRefs?.push(structuredClone(request.refs[0]));
