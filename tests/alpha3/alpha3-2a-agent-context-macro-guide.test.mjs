@@ -32,6 +32,10 @@ import {
   ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
 } from "../../packages/mcp-server/src/alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
+  executeAlpha3_2EProjectLayoutMacro,
+  planAlpha3_2EProjectLayoutMacro,
+} from "../../packages/mcp-server/src/alpha3-2e-project-layout-v1.mjs";
 import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
@@ -425,6 +429,46 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.equal(legacy.error.code, "CALL_TEMPLATE_ID_REPLACED");
     assert.equal(legacy.error.details.id, "macro.index_status");
     assert.equal(legacy.error.details.replacement, "macro.project.query");
+  });
+
+  it("keeps the exact apply_layout manual example executable through the registered runtime", async () => {
+    const expansion = createAlpha3_2AAgentContextMacroGuide({ requested_ids: ["macro.project.apply_layout"] })
+      .requested_expansions.items[0];
+    const example = expansion.action_manual.examples.find((entry) => entry.name === "create drum folder");
+    assert.ok(example);
+
+    const plan = planAlpha3_2EProjectLayoutMacro(example.input);
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.preview.rows.map(({ id, parent_id }) => ({ id, parent_id })), [
+      { id: "drums", parent_id: null },
+      { id: "kick", parent_id: "drums" },
+      { id: "snare", parent_id: "drums" },
+    ]);
+
+    const calls = [];
+    const result = await executeAlpha3_2EProjectLayoutMacro({
+      request: { id: "macro.project.apply_layout", input: example.input },
+      executeAtomic: async ({ id }) => {
+        calls.push(id);
+        return {
+          ok: true,
+          request: { id },
+          verification: { status: "passed" },
+          result: { summary: { tracks: [] }, readback: { tracks: [] }, refs: [] },
+        };
+      },
+      now: () => new Date("2026-07-15T00:00:00Z"),
+    });
+
+    assert.equal(result.contract, "macro.execution.v1");
+    assert.equal(result.ok, true);
+    assert.equal(result.execution.status, "dry_run_completed");
+    assert.deepEqual(calls, ["template.tracks.list_tracks", "template.tracks.read_folder_structure"]);
+    assert.deepEqual(result.result.data.preview.rows.map(({ id, parent_id }) => ({ id, parent_id })), [
+      { id: "drums", parent_id: null },
+      { id: "kick", parent_id: "drums" },
+      { id: "snare", parent_id: "drums" },
+    ]);
   });
 
   it("retains folded secondary discovery, empty/draft recipe guidance, five tools, and no bypass", () => {

@@ -8,13 +8,14 @@ export async function executeAlpha3_2EProjectLayoutMacro(options) {
 }
 
 const ALLOWED_INPUT_FIELDS = new Set(["layout", "annotations", "match_policy", "conflict_policy", "dry_run", "compact_response"]);
-const ALLOWED_ROW_FIELDS = new Set(["id", "kind", "name", "track_ref", "color", "parent_id", "index", "folder_depth"]);
+const ALLOWED_ROW_FIELDS = new Set(["id", "kind", "name", "track_ref", "color", "parent_id", "index", "folder_depth", "children"]);
 const ALLOWED_ANNOTATION_FIELDS = new Set(["id", "kind", "name", "position_seconds", "start_seconds", "end_seconds", "color", "marker_ref", "region_ref"]);
 const ALLOWED_KINDS = new Set(["track", "folder"]);
 const ALLOWED_ANNOTATION_KINDS = new Set(["marker", "region"]);
 const ALLOWED_MATCH_POLICIES = new Set(["by_ref", "exact_name", "create_only"]);
 const ALLOWED_CONFLICT_POLICIES = new Set(["skip", "update_declared_fields", "stop"]);
 const MAX_LAYOUT_ROWS = 100;
+const MAX_LAYOUT_NESTING_DEPTH = 8;
 const MAX_ANNOTATION_ROWS = 50;
 const MAX_OPERATION_ROWS = 100;
 const MAX_NAME_BYTES = 160;
@@ -48,6 +49,7 @@ export function planAlpha3_2EProjectLayoutMacro(input = {}, requestPosture = {})
   const annotations = normalizeAnnotations(normalized.annotations);
   blockers.push(...rows.blockers);
   blockers.push(...annotations.blockers);
+  if (rows.rows.length + annotations.rows.length > MAX_OPERATION_ROWS) blockers.push(blocker("LAYOUT_OPERATIONS_TOO_LARGE", `layout and annotations accept at most ${MAX_OPERATION_ROWS} total rows after recursive children are flattened.`));
   blockers.push(...validateOperationIds(rows.rows, annotations.rows));
   const matchPolicy = normalizeMatchPolicy(normalized.match_policy);
   const conflictPolicy = normalizeConflictPolicy(normalized.conflict_policy);
@@ -253,10 +255,8 @@ function validateInput(original, normalized) {
   const unknown = keys.filter((key) => !ALLOWED_INPUT_FIELDS.has(key));
   if (unknown.length > 0) blockers.push(blocker("LAYOUT_INPUT_FIELDS_UNSUPPORTED", "macro.project.apply_layout input contains unsupported fields.", { fields: unknown.slice(0, UNKNOWN_FIELD_DETAIL_LIMIT), omitted_count: Math.max(0, unknown.length - UNKNOWN_FIELD_DETAIL_LIMIT) }));
   if (normalized.layout !== undefined && !Array.isArray(normalized.layout)) blockers.push(blocker("LAYOUT_ROWS_INVALID", "layout must be an array."));
-  if (Array.isArray(normalized.layout) && normalized.layout.length > MAX_LAYOUT_ROWS) blockers.push(blocker("LAYOUT_TOO_LARGE", `layout accepts at most ${MAX_LAYOUT_ROWS} rows.`));
   if (normalized.annotations !== undefined && !Array.isArray(normalized.annotations)) blockers.push(blocker("LAYOUT_ANNOTATIONS_INVALID", "annotations must be an array."));
   if (Array.isArray(normalized.annotations) && normalized.annotations.length > MAX_ANNOTATION_ROWS) blockers.push(blocker("LAYOUT_ANNOTATIONS_TOO_LARGE", `annotations accepts at most ${MAX_ANNOTATION_ROWS} rows so one complete native read can verify every row.`));
-  if ((Array.isArray(normalized.layout) ? normalized.layout.length : 0) + (Array.isArray(normalized.annotations) ? normalized.annotations.length : 0) > MAX_OPERATION_ROWS) blockers.push(blocker("LAYOUT_OPERATIONS_TOO_LARGE", `layout and annotations accept at most ${MAX_OPERATION_ROWS} total rows.`));
   if (normalized.match_policy !== undefined && !ALLOWED_MATCH_POLICIES.has(normalized.match_policy)) blockers.push(blocker("LAYOUT_MATCH_POLICY_INVALID", "match_policy must be by_ref, exact_name, or create_only."));
   if (normalized.conflict_policy !== undefined && !ALLOWED_CONFLICT_POLICIES.has(normalized.conflict_policy)) blockers.push(blocker("LAYOUT_CONFLICT_POLICY_INVALID", "conflict_policy must be skip, update_declared_fields, or stop."));
   if (normalized.dry_run !== undefined && typeof normalized.dry_run !== "boolean") blockers.push(blocker("LAYOUT_DRY_RUN_INVALID", "dry_run must be boolean when supplied."));
@@ -268,10 +268,13 @@ function normalizeRows(layout) {
   const rows = [];
   const blockers = [];
   if (!Array.isArray(layout)) return { rows, blockers };
+  const flattened = flattenLayoutRows(layout);
+  blockers.push(...flattened.blockers);
   const ids = new Set();
-  for (const [index, row] of layout.entries()) {
+  for (const [index, entry] of flattened.entries.entries()) {
+    const { row } = entry;
     if (!isPlainObject(row)) {
-      blockers.push(blocker("LAYOUT_ROW_INVALID", "Each layout row must be an object.", { index }));
+      blockers.push(blocker("LAYOUT_ROW_INVALID", "Each layout row must be an object.", { index, path: entry.path }));
       continue;
     }
     const unknown = Object.keys(row).filter((key) => !ALLOWED_ROW_FIELDS.has(key));
@@ -288,15 +291,64 @@ function normalizeRows(layout) {
     if (typeof row.name !== "string" || row.name.length === 0 || Buffer.byteLength(row.name) > MAX_NAME_BYTES || /[\u0000-\u001f\u007f]/u.test(row.name)) blockers.push(blocker("LAYOUT_ROW_NAME_INVALID", "Layout row name must be a bounded non-empty string without control characters.", { id }));
     if (row.track_ref !== undefined && (typeof row.track_ref !== "string" || !row.track_ref.startsWith("track:"))) blockers.push(blocker("LAYOUT_TRACK_REF_INVALID", "track_ref must be a canonical track ref when supplied.", { id }));
     if (row.parent_id !== undefined && (typeof row.parent_id !== "string" || row.parent_id.length === 0)) blockers.push(blocker("LAYOUT_PARENT_ID_INVALID", "parent_id must reference another layout row id.", { id }));
+    if (entry.nested && row.parent_id !== undefined && row.parent_id !== entry.parentId) blockers.push(blocker("LAYOUT_PARENT_ID_CONFLICT", "A row nested under children cannot declare a different explicit parent_id.", { id, parent_id: row.parent_id, children_parent_id: entry.parentId }));
     if (row.index !== undefined && (!Number.isInteger(row.index) || row.index < 0)) blockers.push(blocker("LAYOUT_INDEX_INVALID", "index must be a non-negative integer when supplied.", { id }));
     if (row.folder_depth !== undefined && (!Number.isInteger(row.folder_depth) || row.folder_depth < -1 || row.folder_depth > 1)) blockers.push(blocker("LAYOUT_FOLDER_DEPTH_INVALID", "folder_depth must be -1, 0, or 1 when supplied.", { id }));
     if (row.color !== undefined && (typeof row.color !== "string" || !/^#[0-9A-Fa-f]{6}$/.test(row.color))) blockers.push(blocker("LAYOUT_COLOR_INVALID", "color must be a #RRGGBB string when supplied.", { id }));
-    rows.push({ id, kind, name: row.name, track_ref: row.track_ref ?? null, color: row.color ?? null, parent_id: row.parent_id ?? null, index: row.index ?? index, folder_depth: row.folder_depth ?? null });
+    rows.push({ id, kind, name: row.name, track_ref: row.track_ref ?? null, color: row.color ?? null, parent_id: entry.nested ? entry.parentId ?? null : row.parent_id ?? null, index: row.index ?? index, folder_depth: row.folder_depth ?? null });
   }
   const idSet = new Set(rows.map((row) => row.id));
   for (const row of rows) if (row.parent_id && !idSet.has(row.parent_id)) blockers.push(blocker("LAYOUT_PARENT_MISSING", "parent_id must reference an existing layout row.", { id: row.id, parent_id: row.parent_id }));
   blockers.push(...detectCycles(rows));
   return { rows: deepFreeze(rows), blockers };
+}
+
+function flattenLayoutRows(layout) {
+  const entries = [];
+  const blockers = [];
+  const ancestors = new WeakSet();
+  let rowLimitBlocked = false;
+  let depthBlocked = false;
+  let cycleBlocked = false;
+
+  function visit(row, { parentId = null, nested = false, depth = 0, path }) {
+    if (isPlainObject(row) && ancestors.has(row)) {
+      if (!cycleBlocked) blockers.push(blocker("LAYOUT_CHILDREN_CYCLE", "Layout children must not contain a recursive object cycle.", { path }));
+      cycleBlocked = true;
+      return;
+    }
+    if (depth > MAX_LAYOUT_NESTING_DEPTH) {
+      if (!depthBlocked) blockers.push(blocker("LAYOUT_CHILDREN_DEPTH_EXCEEDED", `Layout children nesting may not exceed ${MAX_LAYOUT_NESTING_DEPTH} levels.`, { path, max_depth: MAX_LAYOUT_NESTING_DEPTH }));
+      depthBlocked = true;
+      return;
+    }
+    if (entries.length >= MAX_LAYOUT_ROWS) {
+      if (!rowLimitBlocked) blockers.push(blocker("LAYOUT_TOO_LARGE", `layout accepts at most ${MAX_LAYOUT_ROWS} rows after recursive children are flattened.`));
+      rowLimitBlocked = true;
+      return;
+    }
+
+    entries.push({ row, parentId, nested, depth, path });
+    if (!isPlainObject(row) || row.children === undefined) return;
+    if (!Array.isArray(row.children)) {
+      blockers.push(blocker("LAYOUT_CHILDREN_INVALID", "children must be an array when supplied.", { id: row.id, path }));
+      return;
+    }
+
+    ancestors.add(row);
+    for (const [childIndex, child] of row.children.entries()) {
+      visit(child, {
+        parentId: row.id,
+        nested: true,
+        depth: depth + 1,
+        path: `${path}.children[${childIndex}]`,
+      });
+    }
+    ancestors.delete(row);
+  }
+
+  for (const [index, row] of layout.entries()) visit(row, { path: `layout[${index}]` });
+  return { entries, blockers };
 }
 
 function normalizeAnnotations(annotations) {

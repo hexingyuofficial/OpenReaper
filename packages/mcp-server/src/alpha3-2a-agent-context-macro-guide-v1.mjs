@@ -361,7 +361,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
         "Existing-track matching and conflict policy must be explicit before writes.",
       ],
       input_shape: {
-        layout: "Ordered folders/tracks with local ids, names, colors, children, and optional desired refs.",
+        layout: "Ordered folders/tracks with local ids, names, colors, optional recursive children arrays, and optional desired refs. Recursive children are flattened deterministically to the existing flat parent_id ABI; flat parent_id rows remain accepted.",
         annotations: "Optional create-only Marker/Region rows with stable ids, names, and exact position or start/end seconds.",
         match_policy: "by_ref | exact_name | create_only; ambiguous matches are blocked.",
         conflict_policy: "skip | update_declared_fields | stop; no implicit delete.",
@@ -371,7 +371,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       preflight_steps: [
         "Read existing tracks and folder structure.",
         "For annotations, require one complete non-truncated live Marker/Region inventory before any write.",
-        "Validate layout acyclicity, unique local ids, color/name bounds, and deterministic order.",
+        "Flatten recursive children in deterministic pre-order, then validate at most 100 total layout nodes, at most 8 nesting levels, acyclicity, unique local ids, parent_id agreement, color/name bounds, and deterministic order.",
         "Resolve exact matches and return a dry-run diff for creates, updates, moves, and nesting.",
       ],
       underlying_actions: [
@@ -398,7 +398,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       ],
       common_blockers: [
         blocker("LAYOUT_PREVIEW_REQUIRED", "Run the layout dry-run preview before applying the bounded registered layout program."),
-        blocker("LAYOUT_INVALID", "The layout contains duplicate ids, cycles, invalid nesting, or invalid fields."),
+        blocker("LAYOUT_INVALID", "The layout contains duplicate ids, recursive/object cycles, excessive nesting, conflicting parent declarations, or invalid fields."),
         blocker("MATCH_AMBIGUOUS", "More than one existing track matches a declared row."),
         blocker("READBACK_MISMATCH", "The resulting folder depth/order differs from the declared layout."),
         blocker("LAYOUT_ANNOTATION_UPDATE_UNSUPPORTED", "The accepted owner can create annotations but cannot yet move Markers or change Region bounds."),
