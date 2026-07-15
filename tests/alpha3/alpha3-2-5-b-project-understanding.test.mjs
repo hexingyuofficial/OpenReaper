@@ -198,11 +198,12 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       const firstPage = await runtime.call_template({
         id: "macro.project.query",
         input: { entity: "tracks", fields: ["name", "index"], refresh_policy: "if_stale", limit: 1 },
-        budget: publicBudget,
+        budget: { ...publicBudget, max_response_bytes: 2_048 },
         context: callContext(1),
       });
 
       assert.equal(firstPage.ok, true, JSON.stringify(firstPage));
+      assert.equal(firstPage.budget.actual_bytes <= 2_048, true);
       assert.equal(firstPage.result.data.rows.length, 1);
       assert.equal(firstPage.result.data.page.has_more, true);
       assert.equal(firstPage.result.data.coverage.known_total_row_count, 14);
@@ -225,11 +226,14 @@ describe("Alpha3.2.5-B executable project understanding", () => {
           refresh_policy: "never",
           limit: 1,
         },
-        budget: publicBudget,
+        budget: { ...publicBudget, max_response_bytes: 2_048 },
         context: callContext(2),
       });
 
       assert.equal(exactLast.ok, true, JSON.stringify(exactLast));
+      assert.equal(exactLast.budget.max_bytes, 2_048);
+      assert.equal(exactLast.budget.actual_bytes <= 2_048, true);
+      assert.equal(exactLast.result.data.projection, "minimum_query_truth");
       assert.equal(exactLast.result.data.rows[0].name, trackNames.at(-1));
       assert.equal(exactLast.result.data.rows[0].index, 13);
       assert.equal(exactLast.result.data.coverage.indexed_row_count, 14);
@@ -255,6 +259,66 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(reopenedExactLast.ok, true, JSON.stringify(reopenedExactLast));
       assert.equal(reopenedExactLast.result.data.rows[0].name, trackNames.at(-1));
       assert.equal(reopenedExactLast.result.data.coverage.indexed_row_count, 14);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps a 304-track index intact when a 2 KiB page is too large, then resolves the final exact name", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 304 }, (_, index) =>
+      index === 303 ? "PRODUCTION-DEEP-EXACT-304" : `Production Track ${String(index + 1).padStart(3, "0")}`);
+    const state = { revision: 304, trackName: trackNames[0], trackNames, calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const normalBudget = { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 };
+      const minimumBudget = { ...normalBudget, max_response_bytes: 2_048 };
+
+      const hydrated = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", fields: ["ref", "name", "index"], refresh_policy: "if_stale", limit: 1 },
+        budget: normalBudget,
+        context: callContext(1),
+      });
+      assert.equal(hydrated.ok, true, JSON.stringify(hydrated));
+      assert.equal(hydrated.result.data.coverage.indexed_row_count, 304);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 304);
+
+      const oversizedPage = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", fields: ["ref", "name", "index"], refresh_policy: "never", limit: 100 },
+        budget: minimumBudget,
+        context: callContext(2),
+      });
+      assert.equal(oversizedPage.ok, false, JSON.stringify(oversizedPage));
+      assert.equal(oversizedPage.error.code, "RESPONSE_TOO_LARGE");
+      assert.equal(oversizedPage.budget.truncated, false);
+      assert.equal(oversizedPage.result.data.required_bytes > 2_048, true);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 304);
+
+      const exactLast = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          fields: ["ref", "name", "index"],
+          filters: { name: trackNames.at(-1) },
+          refresh_policy: "never",
+          limit: 1,
+        },
+        budget: minimumBudget,
+        context: callContext(3),
+      });
+      assert.equal(exactLast.ok, true, JSON.stringify(exactLast));
+      assert.equal(exactLast.budget.actual_bytes <= 2_048, true);
+      assert.equal(exactLast.result.data.rows[0].name, trackNames.at(-1));
+      assert.equal(exactLast.result.data.rows[0].index, 303);
+      assert.equal(exactLast.result.data.coverage.known_total_row_count, 304);
+      assert.equal(exactLast.result.data.coverage.indexed_row_count, 304);
+      assert.equal(exactLast.result.data.coverage.public_returned_row_count, 1);
+      assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 304);
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();

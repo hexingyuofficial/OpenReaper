@@ -30,6 +30,7 @@ const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
 const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_RESULT_DATA_BYTES = 18_000;
+const MINIMUM_PUBLIC_QUERY_BUDGET = 2_048;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
 const PROJECT_INDEX_HYDRATION_AUTOMATION_LIMIT = 32;
 const PROJECT_INDEX_MAX_TRACK_CHUNKS = 128;
@@ -1201,7 +1202,7 @@ async function runRevisionProbe({ request, projectIndexRuntime, executeAtomic })
     input: { include_counts: true },
     refs: [],
     context: request.context,
-    budget: request.budget,
+    budget: internalReadBudget(request),
     observeProjectIndex: false,
   });
   if (execution?.ok !== true) return readFailure(READ_SUMMARY_ID, execution);
@@ -1411,7 +1412,7 @@ async function runDirectRead({ id, input, request, executeAtomic }) {
     input,
     refs: [],
     context: request.context,
-    budget: request.budget,
+    budget: internalReadBudget(request),
     observeProjectIndex: false,
   });
   if (execution?.ok !== true) return readFailure(id, execution);
@@ -1442,6 +1443,7 @@ function successEnvelope({
   data,
 }) {
   const status = runtimeStatus(projectIndexRuntime);
+  const activeBudget = responseBudget(request, entry);
   const source = refreshed
     ? initialCold ? "cold_hydration" : "refreshed_index"
     : "warm_index";
@@ -1478,7 +1480,7 @@ function successEnvelope({
     error: null,
     recovery: null,
     budget: {
-      max_bytes: entry.result_budget.max_bytes,
+      max_bytes: activeBudget,
       actual_bytes: 0,
       truncated: false,
       artifact_fallback: false,
@@ -1498,6 +1500,7 @@ function blockedEnvelope({
   blockers = [],
   data = {},
 }) {
+  const activeBudget = responseBudget(request, entry);
   return finalizeMacroEnvelope({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
@@ -1526,7 +1529,7 @@ function blockedEnvelope({
       sqlite_rows_authorize_writes: false,
     },
     budget: {
-      max_bytes: entry.result_budget.max_bytes,
+      max_bytes: activeBudget,
       actual_bytes: 0,
       truncated: false,
       artifact_fallback: false,
@@ -1545,6 +1548,7 @@ function executionFailure({
   blockers = [],
   data = {},
 }) {
+  const activeBudget = responseBudget(request, entry);
   return finalizeMacroEnvelope({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
@@ -1577,7 +1581,7 @@ function executionFailure({
       stale_sqlite_rows_used_for_write: false,
     },
     budget: {
-      max_bytes: entry.result_budget.max_bytes,
+      max_bytes: activeBudget,
       actual_bytes: 0,
       truncated: false,
       artifact_fallback: false,
@@ -1587,14 +1591,156 @@ function executionFailure({
 
 function finalizeMacroEnvelope(envelope) {
   const result = structuredClone(envelope);
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  updateActualBytes(result);
+  let validation = validateMacroExecutionEnvelope(result);
+  if (!validation.valid
+    && result.ok === true
+    && result.macro?.id === ALPHA3_2D_GENERIC_PROJECT_QUERY_ID
+    && result.budget.actual_bytes > result.budget.max_bytes) {
+    compactProjectQueryEnvelope(result);
+    updateActualBytes(result);
+    validation = validateMacroExecutionEnvelope(result);
   }
-  const validation = validateMacroExecutionEnvelope(result);
+  if (!validation.valid && result.budget.actual_bytes > result.budget.max_bytes) {
+    return finalizeResponseBudgetFailure(result);
+  }
   if (!validation.valid) {
     throw new TypeError(`Invalid Alpha3.2.5-B Macro envelope: ${validation.errors.join("; ")}`);
   }
   return deepFreeze(result);
+}
+
+function compactProjectQueryEnvelope(envelope) {
+  envelope.execution.stages = [];
+  envelope.execution.stage_count = 0;
+  envelope.result.canonical_refs = [];
+  envelope.result.artifact_refs = [];
+  envelope.result.data = compactQueryTruth(envelope.result.data);
+}
+
+function compactQueryTruth(data) {
+  const source = isObject(data) ? data : {};
+  const refresh = isObject(source.refresh) ? source.refresh : null;
+  return compactObject({
+    projection: "minimum_query_truth",
+    entity: source.entity,
+    rows: clone(source.rows ?? []),
+    rows_truncated_by_macro_budget: source.rows_truncated_by_macro_budget,
+    coverage: compactObject({
+      complete: source.coverage?.complete,
+      known_total_row_count: source.coverage?.known_total_row_count,
+      indexed_row_count: source.coverage?.indexed_row_count,
+      public_returned_row_count: source.coverage?.public_returned_row_count,
+      match_status: source.coverage?.match_status,
+    }),
+    page: compactObject({
+      next_cursor: source.page?.next_cursor,
+      has_more: source.page?.has_more,
+    }),
+    sqlite_authorizes_writes: source.refs_truth?.sqlite_authorizes_writes ?? false,
+    refresh: refresh?.attempted !== true ? undefined : compactObject({
+      attempted: refresh.attempted,
+      call_count: refresh.call_count,
+      revision_probe_count: refresh.revision_probe_count,
+      logical_refresh: compactLogicalRefresh(refresh.logical_refresh),
+    }),
+  });
+}
+
+function compactLogicalRefresh(value) {
+  if (!isObject(value)) return null;
+  return compactObject({
+    status: value.status,
+    attempt_count: value.attempt_count,
+    chunk_count: value.chunk_count,
+    page_count: value.page_count,
+    row_counts: clone(value.row_counts ?? {}),
+    coverage: clone(value.coverage ?? {}),
+  });
+}
+
+function finalizeResponseBudgetFailure(source) {
+  const originalBytes = source.budget.actual_bytes;
+  const result = {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: false,
+    macro: clone(source.macro),
+    request: clone(source.request),
+    execution: {
+      status: "failed",
+      started_at: source.execution.started_at,
+      completed_at: source.execution.completed_at,
+      stage_count: 0,
+      stages: [],
+    },
+    sqlite: {
+      used: source.sqlite.used,
+      source: source.sqlite.source,
+      freshness: source.sqlite.freshness,
+      snapshot_ref: source.sqlite.snapshot_ref,
+      revision: source.sqlite.revision,
+      refreshed: source.sqlite.refreshed,
+    },
+    result: {
+      summary: "The requested Project Index projection exceeds the response budget.",
+      canonical_refs: [],
+      changes: [],
+      verification: { status: "not_required", evidence_refs: [] },
+      artifact_refs: [],
+      data: { required_bytes: originalBytes, max_bytes: source.budget.max_bytes },
+    },
+    blockers: [{
+      code: "RESPONSE_TOO_LARGE",
+      message: "Use a smaller page or narrower fields; internal Project Index rows remain intact.",
+      recoverable: true,
+    }],
+    error: {
+      code: "RESPONSE_TOO_LARGE",
+      message: "Project Index query result exceeds max_response_bytes.",
+      recoverable: true,
+    },
+    recovery: {
+      action: "Retry with a smaller limit or narrower fields; do not treat omitted public rows as absent from the index.",
+      sqlite_rows_authorize_writes: false,
+    },
+    budget: {
+      max_bytes: source.budget.max_bytes,
+      actual_bytes: 0,
+      truncated: false,
+      artifact_fallback: false,
+    },
+  };
+  updateActualBytes(result);
+  const validation = validateMacroExecutionEnvelope(result);
+  if (!validation.valid) {
+    throw new TypeError(`Invalid Alpha3.2.5-B response-budget envelope: ${validation.errors.join("; ")}`);
+  }
+  return deepFreeze(result);
+}
+
+function updateActualBytes(value) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    value.budget.actual_bytes = Buffer.byteLength(JSON.stringify(value), "utf8");
+  }
+}
+
+function responseBudget(request, entry) {
+  const requested = request?.budget?.max_response_bytes;
+  return Number.isInteger(requested)
+    && requested >= MINIMUM_PUBLIC_QUERY_BUDGET
+    && requested <= entry.result_budget.max_bytes
+    ? requested
+    : entry.result_budget.max_bytes;
+}
+
+function internalReadBudget(request) {
+  return {
+    ...PROJECT_INDEX_HYDRATION_BUDGET,
+    max_items: Math.max(
+      PROJECT_INDEX_HYDRATION_BUDGET.max_items,
+      Number.isInteger(request?.budget?.max_items) ? request.budget.max_items : 0,
+    ),
+  };
 }
 
 function queryData(plan, hydration = null) {
@@ -2052,6 +2198,10 @@ function macroProgramRequest(request) {
     input: isObject(request.input) ? request.input : {},
     refs: request.refs ?? [],
     dry_run: false,
+    response_budget: responseBudget(
+      request,
+      ALPHA3_2_5_B_PROJECT_UNDERSTANDING_REGISTRY.get(request.id),
+    ),
     ...(request.idempotency_key !== undefined ? { idempotency_key: request.idempotency_key } : {}),
   };
 }
