@@ -239,10 +239,11 @@ test("uses an exact requested third-party identity and stops without substitutio
 
   try {
     const identity = "VST3: TrialVerb (Example)";
+    const ident = "/Library/Audio/Plug-Ins/VST3/TrialVerb.vst3";
     const foundHarness = createProductionMock({
       evidenceProject: paths.evidenceProject,
       managedRenderRoot: paths.managedRenderRoot,
-      installedFxRows: [{ name: identity, ident: identity }],
+      installedFxRows: [{ name: identity, ident }],
     });
     const found = await runInstalledTrial({
       scenarios: ["mixing-delivery"],
@@ -252,7 +253,11 @@ test("uses an exact requested third-party identity and stops without substitutio
     });
     assert.equal(found.ok, true, JSON.stringify(found.error));
     const chain = foundHarness.requests.find((call) => call.arguments.id === "macro.fx.apply_chain" && call.arguments.input.dry_run === false).arguments.input.chain;
-    assert.deepEqual(chain.map((row) => row.plugin_query), ["ReaEQ", identity]);
+    assert.deepEqual(chain, [
+      { plugin_query: "ReaEQ", duplicate_policy: "fail_if_present" },
+      { plugin_name: identity, duplicate_policy: "fail_if_present" },
+    ]);
+    assert.equal(JSON.stringify(chain).includes(ident), false);
 
     const missingHarness = createProductionMock({ evidenceProject: paths.evidenceProject, managedRenderRoot: paths.managedRenderRoot });
     const missing = await runInstalledTrial({
@@ -450,7 +455,7 @@ async function respond(request, { evidenceProject, managedRenderRoot, trackRows,
   }
   if (id === "macro.fx.apply_chain") {
     const ownerRef = refs.track_ref;
-    const fxRows = input.chain.map((candidate, index) => ({ name: candidate.plugin_query, fx_ref: `fx:${ownerRef}:${index}` }));
+    const fxRows = input.chain.map((candidate, index) => ({ name: candidate.plugin_name ?? candidate.plugin_query, fx_ref: `fx:${ownerRef}:${index}` }));
     return jsonResponse(macroResult({ data: { final_chain: { fx: fxRows } }, changes: fxRows.map((row) => verifiedChange({ target_ref: row.fx_ref })) }));
   }
   if (id === "template.fx.parameter_to_envelope_mapping") {

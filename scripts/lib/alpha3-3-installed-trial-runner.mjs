@@ -726,7 +726,7 @@ export async function runMixingDelivery(context) {
   const trackRefs = new Map(layoutValue.result.changes.map((row) => [row.operation_id, row.target_ref]));
   assertValue([...trackRefs.values()].every((ref) => typeof ref === "string" && ref.startsWith("track:")), "MIX_TRACK_REF_MISSING");
 
-  let thirdPartyIdentity = null;
+  let thirdPartyName = null;
   if (context.thirdPartyFxQuery) {
     const inventory = await callTemplate(context, "primary", "mix-third-party-inventory", {
       id: "template.fx.search_installed_fx",
@@ -739,12 +739,12 @@ export async function runMixingDelivery(context) {
       matched_count: inventory?.result?.summary?.matched_count ?? rows.length,
       rows,
     });
-    thirdPartyIdentity = rows[0].ident ?? rows[0].name;
-    assertValue(typeof thirdPartyIdentity === "string" && thirdPartyIdentity.length > 0, "THIRD_PARTY_FX_IDENTITY_MISSING", rows[0]);
+    thirdPartyName = rows[0].name;
+    assertValue(typeof thirdPartyName === "string" && thirdPartyName.length > 0, "THIRD_PARTY_FX_IDENTITY_MISSING", rows[0]);
   }
 
   const chain = [{ plugin_query: "ReaEQ", duplicate_policy: "fail_if_present" }];
-  if (thirdPartyIdentity) chain.push({ plugin_query: thirdPartyIdentity, duplicate_policy: "fail_if_present" });
+  if (thirdPartyName) chain.push({ plugin_name: thirdPartyName, duplicate_policy: "fail_if_present" });
   const fx = await previewThenExecute(context, "primary", "mix-apply-fx-chain", {
     id: "macro.fx.apply_chain",
     refs: { track_ref: trackRefs.get("mix_bus") },
