@@ -13,6 +13,7 @@ RENDER_ROOT_EXPLICIT=false
 MANAGED_RENDER_ROOT_RECORD="${INSTALL_ROOT}/session/managed-render-root.path"
 TRANSPORT_DIR=""
 ARTIFACT_ROOT=""
+PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-8}"
@@ -204,6 +205,8 @@ fi
 if [[ -z "${ARTIFACT_ROOT}" ]]; then
   ARTIFACT_ROOT="${SESSION_ROOT}/artifacts"
 fi
+
+PROJECT_INDEX_STATE_ROOT="${SESSION_ROOT}/project-index"
 
 select_and_prepare_render_root() {
   local selection_mode="installed"
@@ -415,6 +418,142 @@ NODE
 if ! RENDER_ROOT="$(select_and_prepare_render_root)"; then
   exit 2
 fi
+
+prepare_project_index_state_root() {
+  node --input-type=module - \
+    "${INSTALL_ROOT}" \
+    "${SESSION_ROOT}" \
+    "${TRANSPORT_DIR}" \
+    "${ARTIFACT_ROOT}" \
+    "${RENDER_ROOT}" \
+    "${PROJECT_INDEX_STATE_ROOT}" <<'NODE'
+import { randomBytes } from "node:crypto";
+import { lstat, mkdir, open, realpath, rmdir, unlink } from "node:fs/promises";
+import path from "node:path";
+
+const PATH_MAX = 3072;
+const PROBE_ATTEMPTS = 4;
+const [installRoot, sessionRoot, transportRoot, artifactRoot, renderRoot, requestedRoot] = process.argv.slice(2);
+const installedDefaultRoot = path.join(installRoot, "session", "project-index");
+let candidate = null;
+let createdFinalDirectory = false;
+
+try {
+  validatePathText(requestedRoot);
+  candidate = path.normalize(requestedRoot);
+  if (candidate !== path.normalize(path.join(sessionRoot, "project-index"))) {
+    throw new Error("path is not the session-derived project-index root");
+  }
+  const before = await safeLstat(candidate);
+  if (before?.isSymbolicLink()) throw new Error("final component is a symlink");
+  if (before && !before.isDirectory()) throw new Error("path is not a directory");
+  await assertNoReservedOverlap(candidate);
+  if (!before) {
+    await mkdir(candidate, { recursive: true, mode: 0o700 });
+    createdFinalDirectory = true;
+  }
+  const after = await safeLstat(candidate);
+  if (!after || after.isSymbolicLink() || !after.isDirectory()) {
+    throw new Error("prepared path is not a real directory");
+  }
+  const canonical = await realpath(candidate);
+  await assertNoReservedOverlap(canonical);
+  await writeProbe(canonical);
+  process.stdout.write(canonical);
+} catch (error) {
+  if (createdFinalDirectory && candidate) await rmdir(candidate).catch(() => {});
+  process.stderr.write(`[OpenReaper] project-index state-root validation failed: ${bounded(error?.message ?? "invalid path")}\n`);
+  process.exitCode = 2;
+}
+
+function validatePathText(value) {
+  if (typeof value !== "string" || value === "") throw new Error("path is empty");
+  if (Buffer.byteLength(value, "utf8") > PATH_MAX) throw new Error(`path exceeds ${PATH_MAX} UTF-8 bytes`);
+  if (/^file:/i.test(value)) throw new Error("file URI is not allowed");
+  if (/[\u0000-\u001f\u007f]/u.test(value)) throw new Error("C0/DEL control characters are not allowed");
+  if (!path.isAbsolute(value)) throw new Error("path must be absolute");
+  const normalized = path.normalize(value);
+  if (normalized === path.parse(normalized).root) throw new Error("filesystem root is not allowed");
+}
+
+async function assertNoReservedOverlap(value) {
+  const canonical = await canonicalPath(value);
+  for (const [label, reserved] of [
+    ["effective transport", transportRoot],
+    ["effective artifact", artifactRoot],
+    ["effective render", renderRoot],
+  ]) {
+    if (overlaps(canonical, await canonicalPath(reserved))) {
+      throw new Error(`path overlaps ${label} root`);
+    }
+  }
+
+  if (canonical === await canonicalPath(installedDefaultRoot)) return;
+  if (overlaps(canonical, await canonicalPath(installRoot))) {
+    throw new Error("path overlaps reserved install root");
+  }
+}
+
+async function writeProbe(directory) {
+  for (let attempt = 0; attempt < PROBE_ATTEMPTS; attempt += 1) {
+    const probe = path.join(directory, `.openreaper-project-index-write-probe-${process.pid}-${randomBytes(8).toString("hex")}`);
+    let handle = null;
+    try {
+      handle = await open(probe, "wx", 0o600);
+      await handle.writeFile("openreaper-project-index-state-root-probe\n", "utf8");
+      await handle.sync();
+      await handle.close();
+      handle = null;
+      await unlink(probe);
+      return;
+    } catch (error) {
+      if (handle) await handle.close().catch(() => {});
+      await unlink(probe).catch(() => {});
+      if (error?.code === "EEXIST") continue;
+      throw new Error(`write probe failed: ${error?.code ?? "ERROR"}`);
+    }
+  }
+  throw new Error("write probe exhausted exclusive attempts");
+}
+
+async function canonicalPath(value) {
+  let cursor = path.resolve(value);
+  const suffix = [];
+  while (true) {
+    try {
+      return path.join(await realpath(cursor), ...suffix.reverse());
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      const parent = path.dirname(cursor);
+      if (parent === cursor) return path.join(cursor, ...suffix.reverse());
+      suffix.push(path.basename(cursor));
+      cursor = parent;
+    }
+  }
+}
+
+function overlaps(left, right) {
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+async function safeLstat(value) {
+  try {
+    return await lstat(value);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function bounded(value) {
+  return String(value).replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320);
+}
+NODE
+}
+
+if ! PROJECT_INDEX_STATE_ROOT="$(prepare_project_index_state_root)"; then
+  exit 2
+fi
 if [[ -z "${BRIDGE_OWNER}" ]]; then
   BRIDGE_OWNER="openreaper-alpha"
 fi
@@ -478,11 +617,13 @@ export OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
 export OPENREAPER_LIVE_SMOKE_RENDER_ROOT="${RENDER_ROOT}"
 export OPENREAPER_LIVE_BRIDGE_OWNER="${BRIDGE_OWNER}"
 export OPENREAPER_LIVE_BRIDGE_GENERATION="${BRIDGE_GENERATION}"
+export OPENREAPER_PROJECT_INDEX_STATE_ROOT="${PROJECT_INDEX_STATE_ROOT}"
 
 echo "[OpenReaper] Starting REAPER through OpenReaper."
 echo "[OpenReaper] MCP can connect only to REAPER sessions started this way."
 echo "[OpenReaper] transport=${TRANSPORT_DIR}"
 echo "[OpenReaper] render-root=${RENDER_ROOT}"
+echo "[OpenReaper] project-index-state-root=${PROJECT_INDEX_STATE_ROOT}"
 echo "[OpenReaper] bridge=${BRIDGE_SCRIPT}"
 echo "[OpenReaper] reaper-log=${START_LOG}"
 if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
@@ -548,6 +689,7 @@ launchservices_env_value() {
     OPENREAPER_LIVE_SMOKE_RENDER_ROOT) print -rn -- "${RENDER_ROOT}" ;;
     OPENREAPER_LIVE_BRIDGE_OWNER) print -rn -- "${BRIDGE_OWNER}" ;;
     OPENREAPER_LIVE_BRIDGE_GENERATION) print -rn -- "${BRIDGE_GENERATION}" ;;
+    OPENREAPER_PROJECT_INDEX_STATE_ROOT) print -rn -- "${PROJECT_INDEX_STATE_ROOT}" ;;
     *) return 1 ;;
   esac
 }

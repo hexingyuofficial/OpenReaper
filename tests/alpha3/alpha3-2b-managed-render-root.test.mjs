@@ -235,6 +235,51 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(missing.capturePath, "utf8"), `${path.join(await realpath(fixture.installRoot), "session", "renders")}\n`);
   });
 
+  it("prepares a real session-derived Project Index root before launching REAPER and fails closed on invalid roots", async () => {
+    const fixture = await makeStartFixture("project-index-state-root");
+    const freshSession = path.join(fixture.root, "fresh-existing-session");
+    await mkdir(freshSession, { recursive: true });
+    const prepared = await runFakeStartResult({
+      fixture,
+      label: "fresh-session",
+      extraArgs: ["--session-root", freshSession],
+    });
+    assert.equal(prepared.result.code, 0, prepared.result.stderr || prepared.result.stdout);
+    const expectedStateRoot = path.join(freshSession, "project-index");
+    const preparedStat = await lstat(expectedStateRoot);
+    assert.equal(preparedStat.isDirectory(), true);
+    assert.equal(preparedStat.isSymbolicLink(), false);
+    assert.equal(await readFile(prepared.projectIndexCapturePath, "utf8"), `${await realpath(expectedStateRoot)}\n`);
+    assert.deepEqual((await readdir(expectedStateRoot)).filter((name) => name.includes("write-probe")), []);
+
+    for (const kind of ["symlink", "file", "transport-overlap"]) {
+      const invalidSession = path.join(fixture.root, `invalid-${kind}-session`);
+      const invalidStateRoot = path.join(invalidSession, "project-index");
+      await mkdir(invalidSession, { recursive: true });
+      const extraArgs = ["--session-root", invalidSession];
+      if (kind === "symlink") {
+        const target = path.join(fixture.root, "project-index-symlink-target");
+        await mkdir(target, { recursive: true });
+        await symlink(target, invalidStateRoot);
+      } else if (kind === "file") {
+        await writeFile(invalidStateRoot, "not a directory\n", "utf8");
+      } else {
+        extraArgs.push("--transport-dir", invalidStateRoot);
+      }
+
+      const rejected = await runFakeStartResult({ fixture, label: `invalid-${kind}`, extraArgs });
+      assert.equal(rejected.result.code, 2, `${kind} Project Index root unexpectedly passed`);
+      assert.match(rejected.result.stderr, /project-index state-root validation failed/);
+      assert.equal(await pathExists(rejected.capturePath), false);
+      assert.equal(await pathExists(rejected.projectIndexCapturePath), false);
+      assert.equal(rejected.fixturePid, null);
+      assert.equal(await pathExists(path.join(invalidSession, "logs")), false);
+      assert.equal(await pathExists(path.join(invalidSession, "transport", "requests")), false);
+      assert.equal(await pathExists(path.join(invalidSession, "transport", "results")), false);
+      assert.equal(await pathExists(path.join(invalidSession, "artifacts")), false);
+    }
+  });
+
   it("orders installed-default and external-session exceptions after effective and install overlap checks", async () => {
     const fixture = await makeStartFixture("session-special-case-order");
     const aliasInstallRoot = path.join(fixture.root, "canonical-install-alias");
@@ -1263,10 +1308,11 @@ function runUninstaller(fixture) {
 
 async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null }) {
   const capturePath = path.join(fixture.root, `${label}.capture`);
+  const projectIndexCapturePath = path.join(fixture.root, `${label}.project-index.capture`);
   const fakeBinary = path.join(fixture.root, `${label}-fake-reaper`);
   const fakePidPath = path.join(fixture.root, `${label}-fake-reaper.pid`);
   const fakeExitedPath = path.join(fixture.root, `${label}-fake-reaper.exited`);
-  await writeFile(fakeBinary, `#!/bin/zsh\nprint -rn -- "$$" > ${shellQuote(fakePidPath)}\nprint -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}\nprint -rn -- "exited" > ${shellQuote(fakeExitedPath)}\n`, "utf8");
+  await writeFile(fakeBinary, `#!/bin/zsh\nprint -rn -- "$$" > ${shellQuote(fakePidPath)}\nprint -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}\nprint -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}\nprint -rn -- "exited" > ${shellQuote(fakeExitedPath)}\n`, "utf8");
   await chmod(fakeBinary, 0o755);
   const env = { ...process.env, HOME: fixture.home, OPENREAPER_START_WAIT_SECONDS: "0" };
   if (staleRoot !== null) env[RENDER_ENV] = staleRoot;
@@ -1285,7 +1331,7 @@ async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null 
   }
   await rm(fakePidPath, { force: true });
   await rm(fakeExitedPath, { force: true });
-  return { result, capturePath, fixturePid };
+  return { result, capturePath, projectIndexCapturePath, fixturePid };
 }
 
 async function runMcpResult({
