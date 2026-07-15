@@ -2844,7 +2844,10 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
       return [line.slice(0, separator), line.slice(separator + 1)];
     }));
     for (const key of scrubKeys) {
-      assertEqualText(scrubbed[key], "<unset>", `LaunchServices stale identity scrub ${key}`);
+      const expectedChildValue = key === "OPENREAPER_PROJECT_INDEX_STATE_ROOT"
+        ? await realpath(path.join(installRoot, "session", "project-index"))
+        : "<unset>";
+      assertEqualText(scrubbed[key], expectedChildValue, `LaunchServices stale identity scrub ${key}`);
       assertEqualText(await readFile(path.join(stateRoot, `${key}.presence`), "utf8"), "set", `LaunchServices stale identity presence restoration ${key}`);
       assertEqualText(await readFile(path.join(stateRoot, `${key}.value`), "utf8"), `stale-${key}`, `LaunchServices stale identity value restoration ${key}`);
     }
@@ -2868,6 +2871,7 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
       global_lock_source_guard: true,
       getenv_setenv_restore_unset: true,
       stale_identity_scrubbed_for_child: true,
+      project_index_state_root_propagated: true,
     };
   } finally {
     reapedPid = await reapFixtureProcess({

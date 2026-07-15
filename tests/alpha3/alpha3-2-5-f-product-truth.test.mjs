@@ -116,6 +116,7 @@ describe("Alpha3.2.5-F product truth", () => {
       "OPENREAPER_LIVE_BRIDGE_OWNER",
       "OPENREAPER_LIVE_BRIDGE_GENERATION",
       "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+      "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
       "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
     ]) assert.match(source, new RegExp(`unset \\"?\\$\\{stale_openreaper_env\\}|${key}`));
     assert.equal(source.includes('REAPER_BIN="${REAPER_BINARY:-'), false);
@@ -141,7 +142,7 @@ describe("Alpha3.2.5-F product truth", () => {
       await chmod(startPath, 0o755);
       await writeFile(bridgePath, "-- fixture\n", "utf8");
       await writeFile(fakeReaper, `#!/bin/zsh
-for key in OPENREAPER_SESSION_ROOT OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH OPENREAPER_ARTIFACT_ROOT OPENREAPER_LIVE_SMOKE_RENDER_ROOT OPENREAPER_LIVE_BRIDGE_OWNER OPENREAPER_LIVE_BRIDGE_GENERATION OPENREAPER_LIVE_BRIDGE_SESSION_ID OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY OPENREAPER_CURRENT_PROJECT_PATH; do
+for key in OPENREAPER_SESSION_ROOT OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH OPENREAPER_ARTIFACT_ROOT OPENREAPER_LIVE_SMOKE_RENDER_ROOT OPENREAPER_LIVE_BRIDGE_OWNER OPENREAPER_LIVE_BRIDGE_GENERATION OPENREAPER_LIVE_BRIDGE_SESSION_ID OPENREAPER_PROJECT_INDEX_STATE_ROOT OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY OPENREAPER_CURRENT_PROJECT_PATH; do
   if (( \${+parameters[\$key]} )); then print -r -- "\$key=\${(P)key}"; else print -r -- "\$key=<unset>"; fi
 done > ${shellQuote(capturePath)}
 sleep 0.1
@@ -156,6 +157,7 @@ sleep 0.1
         "OPENREAPER_LIVE_BRIDGE_OWNER",
         "OPENREAPER_LIVE_BRIDGE_GENERATION",
         "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+        "OPENREAPER_PROJECT_INDEX_STATE_ROOT",
         "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
         "OPENREAPER_CURRENT_PROJECT_PATH",
       ];
@@ -185,6 +187,7 @@ sleep 0.1
       assert.equal(captured.OPENREAPER_LIVE_BRIDGE_OWNER, "fresh-owner");
       assert.equal(captured.OPENREAPER_LIVE_BRIDGE_GENERATION, "9");
       assert.equal(captured.OPENREAPER_LIVE_BRIDGE_SESSION_ID, "<unset>");
+      assert.equal(captured.OPENREAPER_PROJECT_INDEX_STATE_ROOT, await realpath(path.join(freshSession, "project-index")));
       assert.equal(captured.OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY, "<unset>");
       assert.equal(captured.OPENREAPER_CURRENT_PROJECT_PATH, "<unset>");
     } finally {
