@@ -166,6 +166,89 @@ describe("Alpha3.2-D generic macro.project.query", () => {
     assert.equal(changedQuery.blockers.some((entry) => entry.code === "GENERIC_QUERY_CURSOR_INVALID"), true);
   });
 
+  it("normalizes track name_contains, reaches the fourteenth track, and rejects unsupported filters", () => {
+    const index = freshIndex();
+    index.rows.tracks = Array.from({ length: 14 }, (_, offset) => ({
+      ref: `track:guid:{HIGHWAY-${offset + 1}}`,
+      name: `Highway ${String(offset + 1).padStart(2, "0")}`,
+      index: offset,
+      freshness_status: "fresh",
+      coverage_status: "complete",
+    }));
+
+    const first = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      fields: ["name", "index"],
+      filters: { name_contains: "Highway" },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(first.ok, true, JSON.stringify(first.blockers));
+    assert.equal(first.rows[0].name, "Highway 01");
+    assert.equal(typeof first.page.next_cursor, "string");
+
+    const equivalentNext = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      fields: ["name", "index"],
+      filters: { name: "Highway" },
+      refresh_policy: "never",
+      limit: 1,
+      cursor: first.page.next_cursor,
+    }, { projectIndex: index });
+    assert.equal(equivalentNext.ok, true, JSON.stringify(equivalentNext.blockers));
+    assert.equal(equivalentNext.rows[0].name, "Highway 02");
+
+    const matchingAliases = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      filters: { name: "Highway 14", name_contains: "Highway 14" },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(matchingAliases.ok, true, JSON.stringify(matchingAliases.blockers));
+    assert.equal(matchingAliases.rows[0].name, "Highway 14");
+
+    const conflictingAliases = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      filters: { name: "Highway 01", name_contains: "Highway 14" },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(conflictingAliases.ok, false);
+    assert.equal(conflictingAliases.blockers.some((entry) => entry.code === "GENERIC_QUERY_FILTER_CONFLICT"), true);
+
+    const changedFilter = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      fields: ["name", "index"],
+      filters: { name_contains: "Highway 14" },
+      refresh_policy: "never",
+      limit: 1,
+      cursor: first.page.next_cursor,
+    }, { projectIndex: index });
+    assert.equal(changedFilter.ok, false);
+    assert.equal(changedFilter.blockers.some((entry) => entry.code === "GENERIC_QUERY_CURSOR_INVALID"), true);
+
+    const finalTrack = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      fields: ["name", "index"],
+      filters: { name_contains: "Highway 14" },
+      refresh_policy: "never",
+      limit: 1,
+    }, { projectIndex: index });
+    assert.equal(finalTrack.ok, true, JSON.stringify(finalTrack.blockers));
+    assert.equal(finalTrack.rows[0].name, "Highway 14");
+    assert.equal(finalTrack.rows[0].index, 13);
+
+    const unsupported = planAlpha3_2DGenericProjectQuery({
+      entity: "tracks",
+      filters: { name_exact: "Highway 14" },
+      refresh_policy: "never",
+    }, { projectIndex: index });
+    assert.equal(unsupported.ok, false);
+    assert.deepEqual(unsupported.rows, []);
+    assert.equal(unsupported.blockers.some((entry) =>
+      entry.code === "GENERIC_QUERY_FILTER_UNSUPPORTED" && entry.field === "filters.name_exact"), true);
+  });
+
   it("propagates changed_since adapter blockers instead of claiming empty complete", () => {
     const snapshot = freshIndex();
     const adapter = {

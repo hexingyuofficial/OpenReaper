@@ -222,11 +222,11 @@ describe("Alpha3.2.5-B executable project understanding", () => {
         input: {
           entity: "tracks",
           fields: ["name", "index"],
-          filters: { name: trackNames.at(-1) },
+          filters: { name_contains: trackNames.at(-1) },
           refresh_policy: "never",
           limit: 1,
         },
-        budget: { ...publicBudget, max_response_bytes: 2_048 },
+        budget: { max_bytes: 2_048, max_items: 50, max_inline_value_bytes: 2_048 },
         context: callContext(2),
       });
 
@@ -238,6 +238,21 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       assert.equal(exactLast.result.data.rows[0].index, 13);
       assert.equal(exactLast.result.data.coverage.indexed_row_count, 14);
       assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 14);
+
+      const equalBudgetAliases = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          filters: { name_contains: trackNames.at(-1) },
+          refresh_policy: "never",
+          limit: 1,
+        },
+        budget: { max_response_bytes: 2_048, max_bytes: 2_048, max_items: 50 },
+        context: callContext(3),
+      });
+      assert.equal(equalBudgetAliases.ok, true, JSON.stringify(equalBudgetAliases));
+      assert.equal(equalBudgetAliases.budget.max_bytes, 2_048);
+      assert.equal(equalBudgetAliases.budget.actual_bytes <= 2_048, true);
 
       indexRuntime.close();
       indexRuntime = await openIndex(fixture);
@@ -254,11 +269,54 @@ describe("Alpha3.2.5-B executable project understanding", () => {
           limit: 1,
         },
         budget: publicBudget,
-        context: callContext(3),
+        context: callContext(4),
       });
       assert.equal(reopenedExactLast.ok, true, JSON.stringify(reopenedExactLast));
       assert.equal(reopenedExactLast.result.data.rows[0].name, trackNames.at(-1));
       assert.equal(reopenedExactLast.result.data.coverage.indexed_row_count, 14);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("blocks conflicting query budgets and unsupported filters before any live read", async () => {
+    const fixture = await makeFixture();
+    const state = { revision: 14, trackName: "Highway 01", calls: [], atomicRequests: [] };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const conflict = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", refresh_policy: "if_stale", limit: 1 },
+        budget: { max_response_bytes: 4_096, max_bytes: 2_048 },
+        context: callContext(1),
+      });
+      assert.equal(conflict.ok, false, JSON.stringify(conflict));
+      assert.equal(conflict.error.code, "PROJECT_QUERY_BUDGET_CONFLICT");
+      assert.equal(conflict.budget.max_bytes, 2_048);
+      assert.equal(conflict.budget.actual_bytes <= 2_048, true);
+      assert.deepEqual(conflict.blockers[0].details, {
+        max_response_bytes: 4_096,
+        max_bytes: 2_048,
+      });
+      assert.deepEqual(state.calls, []);
+
+      const unsupported = await runtime.call_template({
+        id: "macro.project.query",
+        input: {
+          entity: "tracks",
+          filters: { name_exact: "Highway 14" },
+          refresh_policy: "if_stale",
+          limit: 1,
+        },
+        context: callContext(2),
+      });
+      assert.equal(unsupported.ok, false, JSON.stringify(unsupported));
+      assert.equal(unsupported.error.code, "GENERIC_QUERY_FILTER_UNSUPPORTED");
+      assert.deepEqual(unsupported.result.data.rows, []);
+      assert.deepEqual(state.calls, []);
     } finally {
       indexRuntime?.close();
       await fixture.cleanup();

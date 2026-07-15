@@ -2492,6 +2492,10 @@ function automationRowMatches(row, query) {
   const targetRefs = normalizeFilterRefs(filters, "target_ref", "target_refs");
   if (targetRefs.length > 0 && !targetRefs.includes(row.target_ref)) return false;
   if (typeof filters.parent_kind === "string" && filters.parent_kind !== row.parent_kind) return false;
+  if (Array.isArray(filters.parent_kinds)) {
+    const parentKinds = filters.parent_kinds.filter((entry) => typeof entry === "string" && entry.trim());
+    if (parentKinds.length > 0 && !parentKinds.includes(row.parent_kind)) return false;
+  }
   if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
   if (typeof filters.lane_kind === "string" && String(row.lane_kind ?? "").toLocaleLowerCase() !== filters.lane_kind.toLocaleLowerCase()) return false;
   if (typeof filters.envelope_kind === "string" && String(row.lane_kind ?? "").toLocaleLowerCase() !== filters.envelope_kind.toLocaleLowerCase()) return false;
@@ -4230,6 +4234,43 @@ const GENERIC_QUERY_CURSOR_VERSION = 2;
 const GENERIC_QUERY_DUPLICATE_FIELDS = new Set([
   "duplicate_key", "count", "refs", "owner_refs", "source_path", "path_fingerprint", "freshness", "coverage",
 ]);
+const GENERIC_QUERY_FILTER_KEYS = deepFreeze({
+  status: new Set(),
+  selected_context: new Set(["scope_kind", "ref_kind", "owner_ref"]),
+  tracks: new Set(["name", "name_contains", "selected", "armed", "mute", "solo", "has_items", "has_fx", "has_sends"]),
+  items: new Set([
+    "track_ref", "track_refs", "selected", "muted", "min_length_seconds", "max_length_seconds",
+    "starts_after_seconds", "starts_before_seconds", "time_range",
+  ]),
+  takes: new Set([
+    "item_ref", "item_refs", "track_ref", "track_refs", "active", "selected", "reverse", "has_take_fx",
+    "source_kind", "source_ref", "min_pitch_semitones", "max_pitch_semitones", "min_playrate", "max_playrate",
+  ]),
+  fx: new Set([
+    "owner_ref", "owner_refs", "plugin_name", "plugin_id", "stock_plugin", "bypassed", "offline",
+    "parameter_summary_available", "slot_index", "slot_min", "slot_max",
+  ]),
+  routing: new Set([
+    "owner_ref", "owner_refs", "source_track_ref", "source_track_refs", "destination_track_ref", "destination_track_refs",
+    "muted", "send_mode", "mode", "send_kind", "phase_inverted", "mono", "send_index", "send_index_min",
+    "send_index_max", "min_volume_db", "max_volume_db", "min_pan", "max_pan", "audio_channels", "midi_channels",
+  ]),
+  automation: new Set([
+    "owner_ref", "owner_refs", "target_ref", "target_refs", "parent_kind", "parent_kinds", "name", "lane_kind",
+    "envelope_kind", "active", "armed", "visible", "show_lane", "has_points", "has_automation_items",
+    "min_point_count", "max_point_count",
+  ]),
+  markers_regions: new Set([
+    "owner_ref", "owner_refs", "marker_kind", "kind", "include_markers", "include_regions", "name", "index",
+    "number", "min_position_seconds", "max_position_seconds", "min_length_seconds", "max_length_seconds", "time_range",
+  ]),
+  media_sources: new Set([
+    "owner_ref", "owner_refs", "name", "source_kind", "source_type", "media_type", "extension", "extensions",
+    "offline", "min_length_seconds", "max_length_seconds", "min_channel_count", "max_channel_count", "metadata_available",
+  ]),
+  duplicates: new Set(["path_fingerprint", "source_path", "minimum_count"]),
+  changed_since: new Set(["since"]),
+});
 const GENERIC_QUERY_ENTITY_TO_LEGACY_ID = deepFreeze({
   status: "macro.index_status",
   selected_context: "macro.selected_context",
@@ -4485,7 +4526,7 @@ function normalizeGenericProjectQueryInput(request, indexState) {
   }
 
   const fields = normalizeGenericStringArray(source.fields, "fields", blockers, GENERIC_QUERY_MAX_OBJECT_KEYS);
-  const filters = normalizeGenericBoundedObject(source.filters, "filters", blockers, { allowUnknown: true });
+  const filters = normalizeGenericFilters(source.filters, entity, blockers);
   const selectors = normalizeGenericBoundedObject(source.selectors, "selectors", blockers, { allowUnknown: false });
   const limit = normalizeLimit(source.limit, blockers);
   if (entity === "duplicates") {
@@ -4516,6 +4557,40 @@ function normalizeGenericProjectQueryInput(request, indexState) {
       limit,
     },
   };
+}
+
+function normalizeGenericFilters(value, entity, blockers) {
+  const filters = normalizeGenericBoundedObject(value, "filters", blockers, { allowUnknown: true });
+  const allowedKeys = GENERIC_QUERY_FILTER_KEYS[entity] ?? new Set();
+  for (const key of Object.keys(filters)) {
+    if (allowedKeys.has(key)) continue;
+    blockers.push(blocker(
+      genericFieldLabel("filters", key),
+      "GENERIC_QUERY_FILTER_UNSUPPORTED",
+      `${entity || "unknown entity"} does not support filter ${key}.`,
+    ));
+    delete filters[key];
+  }
+
+  if (entity === "tracks" && Object.hasOwn(filters, "name_contains")) {
+    if (typeof filters.name_contains !== "string") {
+      blockers.push(blocker(
+        "filters.name_contains",
+        "GENERIC_QUERY_FILTER_INVALID",
+        "tracks filter name_contains must be a string.",
+      ));
+    } else if (Object.hasOwn(filters, "name") && filters.name !== filters.name_contains) {
+      blockers.push(blocker(
+        "filters.name_contains",
+        "GENERIC_QUERY_FILTER_CONFLICT",
+        "tracks filters name and name_contains must match when both are provided.",
+      ));
+    } else {
+      filters.name = filters.name_contains;
+    }
+    delete filters.name_contains;
+  }
+  return filters;
 }
 
 function normalizeGenericBoundedObject(value, field, blockers, { allowUnknown }) {

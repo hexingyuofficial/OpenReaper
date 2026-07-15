@@ -245,6 +245,22 @@ async function executeProjectQuery({
     });
   }
 
+  const budgetConflict = projectQueryBudgetConflict(request);
+  if (budgetConflict) {
+    return blockedEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      stages,
+      status: initialStatus,
+      code: budgetConflict.code,
+      message: budgetConflict.message,
+      blockers: [budgetConflict],
+      data: { budget_conflict: clone(budgetConflict.details) },
+    });
+  }
+
   const publicInput = publicQueryInput(request);
   let plan = planAlpha3_2DGenericProjectQuery(publicInput, {
     projectIndex: projectIndexRuntime?.adapter,
@@ -1847,12 +1863,36 @@ function updateActualBytes(value) {
 }
 
 function responseBudget(request, entry) {
-  const requested = request?.budget?.max_response_bytes;
+  const standard = request?.budget?.max_response_bytes;
+  const alias = request?.budget?.max_bytes;
+  const candidates = [standard, alias].filter((value) =>
+    Number.isInteger(value)
+      && value >= MINIMUM_PUBLIC_QUERY_BUDGET
+      && value <= entry.result_budget.max_bytes
+  );
+  const requested = candidates.length > 0 ? Math.min(...candidates) : undefined;
   return Number.isInteger(requested)
-    && requested >= MINIMUM_PUBLIC_QUERY_BUDGET
-    && requested <= entry.result_budget.max_bytes
     ? requested
     : entry.result_budget.max_bytes;
+}
+
+function projectQueryBudgetConflict(request) {
+  const budget = request?.budget;
+  if (!isObject(budget)
+    || !Object.hasOwn(budget, "max_response_bytes")
+    || !Object.hasOwn(budget, "max_bytes")
+    || budget.max_response_bytes === budget.max_bytes) {
+    return null;
+  }
+  return {
+    code: "PROJECT_QUERY_BUDGET_CONFLICT",
+    message: "budget.max_response_bytes and budget.max_bytes must match when both are provided.",
+    recoverable: true,
+    details: {
+      max_response_bytes: budget.max_response_bytes,
+      max_bytes: budget.max_bytes,
+    },
+  };
 }
 
 function publicQueryInput(request) {
