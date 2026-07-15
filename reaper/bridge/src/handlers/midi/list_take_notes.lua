@@ -55,11 +55,14 @@ local function list_take_notes(request)
       notes[#notes + 1] = note
     end
   end
-  return {
-    take_ref = READ_B_MIDI.take_ref_string(take),
-    notes = notes,
-    returned_count = #notes,
-    next_cursor = total > cursor + #notes and tostring(cursor + #notes) or nil,
-    truncated = total > cursor + #notes,
-  }
+  return READ_B_MIDI.fit_paginated_summary(request, notes, math.max(total - cursor, 0), function()
+    local has_more = total > cursor + #notes
+    return {
+      take_ref = READ_B_MIDI.take_ref_string(take),
+      notes = notes,
+      returned_count = #notes,
+      next_cursor = has_more and tostring(cursor + #notes) or nil,
+      truncated = has_more,
+    }
+  end, "note")
 end

@@ -45,6 +45,7 @@ JSON_NULL = {}
 function is_string(value) return type(value) == "string" end
 function is_object(value) return type(value) == "table" end
 function is_json_array(value) return type(value) == "table" end
+function is_non_negative_integer(value) return type(value) == "number" and value >= 0 and value == math.floor(value) end
 function json_array(value) return value or {} end
 function bounded_string(value, max_bytes)
   local text = type(value) == "string" and value or tostring(value or "")
@@ -245,14 +246,11 @@ assert(insert_args[9] == true)
   });
 
   it("maps REAPER note, CC, and text event return slots without shifting fields", () => {
-    runLua(`${LIST_NOTES_SOURCE}\n${LIST_CC_SOURCE}\n${LIST_TEXT_SOURCE}\n`, `
+    runLua(`${RESOLVE_SOURCE}\n${LIST_NOTES_SOURCE}\n${LIST_CC_SOURCE}\n${LIST_TEXT_SOURCE}\n`, `
 local take = {}
-READ_B_MIDI = {
-  resolve_midi_take_for_request = function() return take, nil end,
-  bounded_limit = function(_, value) return value or 16 end,
-  integer_value = function(value) return value end,
-  take_ref_string = function() return "take:guid:{TAKE}" end,
-}
+json = { encode = function() return "{}" end }
+READ_B_MIDI.resolve_midi_take_for_request = function() return take, nil end
+READ_B_MIDI.take_ref_string = function() return "take:guid:{TAKE}" end
 call_reaper = function(name, ...)
   if name == "MIDI_CountEvts" then return true, true, 1, 1, 1 end
   if name == "MIDI_GetNote" then return true, true, false, true, 120, 360, 2, 64, 91 end

@@ -17178,6 +17178,39 @@ function READ_B_MIDI.bounded_limit(request, requested, default_limit, hard_limit
   return limit
 end
 
+function READ_B_MIDI.fit_paginated_summary(request, rows, remaining_count, summary_factory, row_kind)
+  local summary = summary_factory()
+  local encoded = json.encode(summary)
+  local summary_budget = READ_B_MIDI.paginated_summary_byte_budget(request)
+  while #encoded > summary_budget and #rows > 0 do
+    table.remove(rows)
+    summary = summary_factory()
+    encoded = json.encode(summary)
+  end
+  if #encoded > summary_budget then
+    return READ_B_MIDI.handler_error("RESPONSE_TOO_LARGE", "MIDI read page cannot fit within the request response budget.", {
+      reason_code = remaining_count > 0 and "SINGLE_ROW_EXCEEDS_RESPONSE_BUDGET" or "EMPTY_PAGE_EXCEEDS_RESPONSE_BUDGET",
+      row_kind = row_kind,
+      max_response_bytes = safe_budget(request).max_response_bytes,
+    })
+  end
+  if remaining_count > 0 and #rows == 0 then
+    return READ_B_MIDI.handler_error("RESPONSE_TOO_LARGE", "One MIDI read row cannot fit within the request response budget.", {
+      reason_code = "SINGLE_ROW_EXCEEDS_RESPONSE_BUDGET",
+      row_kind = row_kind,
+      max_response_bytes = safe_budget(request).max_response_bytes,
+    })
+  end
+  return summary
+end
+
+function READ_B_MIDI.paginated_summary_byte_budget(request)
+  local response_budget = safe_budget(request).max_response_bytes
+  -- Reserve the public call_template envelope, not just the inner bridge envelope.
+  local fixed_envelope_reserve = 1580
+  return math.max(response_budget - fixed_envelope_reserve, 0)
+end
+
 function READ_B_MIDI.integer_value(value)
   if type(value) == "number" and value == math.floor(value) then
     return value
@@ -17528,13 +17561,16 @@ local function list_take_notes(request)
       notes[#notes + 1] = note
     end
   end
-  return {
-    take_ref = READ_B_MIDI.take_ref_string(take),
-    notes = notes,
-    returned_count = #notes,
-    next_cursor = total > cursor + #notes and tostring(cursor + #notes) or nil,
-    truncated = total > cursor + #notes,
-  }
+  return READ_B_MIDI.fit_paginated_summary(request, notes, math.max(total - cursor, 0), function()
+    local has_more = total > cursor + #notes
+    return {
+      take_ref = READ_B_MIDI.take_ref_string(take),
+      notes = notes,
+      returned_count = #notes,
+      next_cursor = has_more and tostring(cursor + #notes) or nil,
+      truncated = has_more,
+    }
+  end, "note")
 end
 return {
   exports = { list_take_notes = list_take_notes },
@@ -17600,13 +17636,16 @@ local function list_take_cc_events(request)
       end
     end
   end
-  return {
-    take_ref = READ_B_MIDI.take_ref_string(take),
-    cc_events = events,
-    returned_count = #events,
-    next_cursor = matched > cursor + #events and tostring(cursor + #events) or nil,
-    truncated = matched > cursor + #events,
-  }
+  return READ_B_MIDI.fit_paginated_summary(request, events, math.max(matched - cursor, 0), function()
+    local has_more = matched > cursor + #events
+    return {
+      take_ref = READ_B_MIDI.take_ref_string(take),
+      cc_events = events,
+      returned_count = #events,
+      next_cursor = has_more and tostring(cursor + #events) or nil,
+      truncated = has_more,
+    }
+  end, "cc_event")
 end
 return {
   exports = { list_take_cc_events = list_take_cc_events },
@@ -17683,13 +17722,16 @@ local function list_take_text_sysex_events(request)
       end
     end
   end
-  return {
-    take_ref = READ_B_MIDI.take_ref_string(take),
-    events = events,
-    returned_count = #events,
-    next_cursor = matched > cursor + #events and tostring(cursor + #events) or nil,
-    truncated = matched > cursor + #events,
-  }
+  return READ_B_MIDI.fit_paginated_summary(request, events, math.max(matched - cursor, 0), function()
+    local has_more = matched > cursor + #events
+    return {
+      take_ref = READ_B_MIDI.take_ref_string(take),
+      events = events,
+      returned_count = #events,
+      next_cursor = has_more and tostring(cursor + #events) or nil,
+      truncated = has_more,
+    }
+  end, "text_sysex_event")
 end
 return {
   exports = { list_take_text_sysex_events = list_take_text_sysex_events },

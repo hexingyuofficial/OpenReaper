@@ -7,6 +7,7 @@ import {
   createObjectRef,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
+  CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_D17_MIDI_EDIT_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
@@ -23,6 +24,10 @@ const HANDLER_SOURCE = readFileSync(
   new URL("../../reaper/bridge/src/handlers/midi/d17_midi_edit_route.lua", import.meta.url),
   "utf8",
 );
+const MIDI_RESOLVER_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/handlers/midi/resolve_midi_take_ref.lua", import.meta.url),
+  "utf8",
+);
 const LIST_NOTES_SOURCE = readFileSync(
   new URL("../../reaper/bridge/src/handlers/midi/list_take_notes.lua", import.meta.url),
   "utf8",
@@ -37,10 +42,49 @@ const LIST_TEXT_SOURCE = readFileSync(
 );
 
 const MIDI_READ_PRELUDE = String.raw`
+CONTRACT = "foundation.bridge.v1"
+ACTIVE_OWNER = "owner-test"
+ACTIVE_GENERATION = 1
 JSON_NULL = {}
 function is_string(value) return type(value) == "string" end
 function is_non_negative_integer(value) return type(value) == "number" and value >= 0 and value == math.floor(value) end
-function json_array(value) return value or {} end
+local JSON_ARRAY_MT = { __openreaper_json_array = true }
+function json_array(value) return setmetatable(value or {}, JSON_ARRAY_MT) end
+local function is_json_array(value) return type(value) == "table" and getmetatable(value) == JSON_ARRAY_MT end
+json = {}
+local function encode_string(value)
+  return '"' .. value:gsub('[%c\\"]', function(char)
+    local escapes = { ['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
+    return escapes[char] or string.format("\\u%04x", string.byte(char))
+  end) .. '"'
+end
+local encode_json
+local function encode_array(value)
+  local parts = {}
+  for index = 1, #value do parts[#parts + 1] = encode_json(value[index]) end
+  return "[" .. table.concat(parts, ",") .. "]"
+end
+local function encode_object(value)
+  local keys = {}
+  for key, nested in pairs(value) do
+    if type(key) == "string" and nested ~= nil then keys[#keys + 1] = key end
+  end
+  table.sort(keys)
+  local parts = {}
+  for _, key in ipairs(keys) do parts[#parts + 1] = encode_string(key) .. ":" .. encode_json(value[key]) end
+  return "{" .. table.concat(parts, ",") .. "}"
+end
+function encode_json(value)
+  local kind = type(value)
+  if value == JSON_NULL or kind == "nil" then return "null" end
+  if kind == "string" then return encode_string(value) end
+  if kind == "number" then return tostring(value) end
+  if kind == "boolean" then return value and "true" or "false" end
+  if kind == "table" then return is_json_array(value) and encode_array(value) or encode_object(value) end
+  return "null"
+end
+function json.encode(value) return encode_json(value) end
+function now_iso() return "2026-07-15T00:00:00Z" end
 function first_number(...)
   for index = 1, select("#", ...) do
     local value = select(index, ...)
@@ -62,25 +106,12 @@ function call_reaper(name, ...)
   return pcall(reaper[name], ...)
 end
 
-READ_B_MIDI = {}
-function READ_B_MIDI.handler_error(code, message, details, recoverable)
-  return nil, { code = code, message = message, details = details or {}, recoverable = recoverable ~= false }
-end
-function READ_B_MIDI.bounded_limit(request, requested, default_limit, hard_limit)
-  local budget = safe_budget(request)
-  local limit = default_limit or budget.max_items
-  if is_non_negative_integer(requested) and requested > 0 then limit = requested end
-  return math.max(1, math.min(limit, budget.max_items, hard_limit or budget.max_items))
-end
-function READ_B_MIDI.integer_value(value)
-  if type(value) == "number" and value == math.floor(value) then return value end
-  return nil
-end
-function READ_B_MIDI.resolve_midi_take_for_request() return take, nil end
-function READ_B_MIDI.take_ref_string() return "take:guid:{D17-READ}" end
-
 function make_request(params)
-  return { params = params or {}, budget = { max_items = 100, max_response_bytes = 65536, max_inline_value_bytes = 2048 } }
+  return {
+    id = "cmd_midi_read_test",
+    params = params or {},
+    budget = { max_items = 100, max_response_bytes = 65536, max_inline_value_bytes = 2048 },
+  }
 end
 
 take = { id = "take" }
@@ -127,6 +158,10 @@ reaper.MIDI_GetTextSysexEvt = function(candidate, index)
   local row = text_events[index + 1]
   if not row then return false end
   return true, row[1], row[2], row[3], row[4], row[5]
+end
+reaper.MIDI_GetProjTimeFromPPQPos = function(candidate, ppq)
+  assert(candidate == take)
+  return ppq / 960
 end
 `;
 
@@ -251,6 +286,151 @@ assert(second_text.returned_count == 1 and second_text.events[1].index == 4 and 
 `);
   });
 
+  it("auto-pages note, CC, and text reads inside a 2 KiB response envelope", () => {
+    runMidiReadLua(`
+local function low_budget_request(params, max_response_bytes)
+  local request = make_request(params)
+  request.budget.max_response_bytes = max_response_bytes or 2048
+  return request
+end
+
+local function assert_complete_pages(read_page, rows_key, expected_indices)
+  local cursor = "0"
+  local seen = {}
+  local page_count = 0
+  repeat
+    local page, failure = read_page(cursor)
+    assert(failure == nil)
+    assert(page.returned_count > 0)
+    assert(#json.encode(page) <= READ_B_MIDI.paginated_summary_byte_budget(low_budget_request({})))
+    for _, row in ipairs(page[rows_key]) do seen[#seen + 1] = row.index end
+    cursor = page.next_cursor
+    page_count = page_count + 1
+    assert(page_count < 400)
+  until cursor == nil
+  assert(#seen == #expected_indices)
+  for index, expected in ipairs(expected_indices) do
+    assert(seen[index] == expected)
+  end
+  assert(page_count > 1)
+end
+
+for index = #notes + 1, 128 do notes[index] = { false, false, index * 120, index * 120 + 90, 0, 60 + (index % 12), 90 } end
+for index = #cc_events + 1, 128 do cc_events[index] = { false, false, index * 120, 176, 0, 7, index % 128 } end
+for index = #text_events + 1, 128 do text_events[index] = { false, false, index * 120, 1, "text-event-" .. tostring(index) } end
+
+local note_indices, cc_indices, text_indices = {}, {}, {}
+for index = 0, 127 do
+  note_indices[#note_indices + 1] = index
+  if cc_events[index + 1][6] == 7 then cc_indices[#cc_indices + 1] = index end
+  if text_events[index + 1][4] == 1 then text_indices[#text_indices + 1] = index end
+end
+
+assert_complete_pages(function(cursor)
+  return list_take_notes(low_budget_request({ cursor = cursor, limit = 16, include_project_time = true }))
+end, "notes", note_indices)
+assert_complete_pages(function(cursor)
+  return list_take_cc_events(low_budget_request({ cursor = cursor, limit = 16, controller = 7 }))
+end, "cc_events", cc_indices)
+assert_complete_pages(function(cursor)
+  return list_take_text_sysex_events(low_budget_request({ cursor = cursor, limit = 16, event_kind = "text" }))
+end, "events", text_indices)
+
+local _, note_failure = list_take_notes(low_budget_request({ limit = 1 }, 256))
+assert(note_failure.code == "RESPONSE_TOO_LARGE" and note_failure.details.reason_code == "SINGLE_ROW_EXCEEDS_RESPONSE_BUDGET")
+local _, cc_failure = list_take_cc_events(low_budget_request({ limit = 1, controller = 7 }, 256))
+assert(cc_failure.code == "RESPONSE_TOO_LARGE" and cc_failure.details.reason_code == "SINGLE_ROW_EXCEEDS_RESPONSE_BUDGET")
+local _, text_failure = list_take_text_sysex_events(low_budget_request({ limit = 1, event_kind = "text" }, 256))
+assert(text_failure.code == "RESPONSE_TOO_LARGE" and text_failure.details.reason_code == "SINGLE_ROW_EXCEEDS_RESPONSE_BUDGET")
+`);
+  });
+
+  it("keeps budget-sized MIDI pages inside the public 2 KiB call_template envelope", async () => {
+    const pageByOperation = new Map([
+      ["midi.list_take_notes", {
+        take_ref: TAKE_REF.ref,
+        notes: [0, 1].map((index) => ({
+          index,
+          selected: false,
+          muted: false,
+          start_ppq: index * 120,
+          end_ppq: index * 120 + 90,
+          channel: 0,
+          pitch: 60 + index,
+          velocity: 90,
+          start_seconds: index * 0.125,
+          end_seconds: index * 0.125 + 0.09375,
+        })),
+        returned_count: 2,
+        next_cursor: "2",
+        truncated: true,
+      }],
+      ["midi.list_take_cc_events", {
+        take_ref: TAKE_REF.ref,
+        cc_events: [0, 1].map((index) => ({
+          index,
+          selected: false,
+          muted: false,
+          ppq: index * 120,
+          channel_message: 176,
+          channel: 0,
+          controller: 7,
+          value: 64 + index,
+        })),
+        returned_count: 2,
+        next_cursor: "2",
+        truncated: true,
+      }],
+      ["midi.list_take_text_sysex_events", {
+        take_ref: TAKE_REF.ref,
+        events: [{
+          index: 0,
+          selected: false,
+          muted: false,
+          ppq: 0,
+          event_kind: "text",
+          text: "x".repeat(160),
+        }],
+        returned_count: 1,
+        next_cursor: "1",
+        truncated: true,
+      }],
+    ]);
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: {
+          async dispatch(request) {
+            return bridgeSuccess(request, pageByOperation.get(request.operation.name));
+          },
+        },
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_READ_B_LIVE_TEMPLATE_IDS,
+      },
+    });
+
+    for (const [index, operationName] of [...pageByOperation.keys()].entries()) {
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(pageByOperation.get(operationName))) <= 468,
+        `${operationName} exceeds the bridge summary budget reserved for a 2 KiB public envelope`,
+      );
+      const templateId = `template.${operationName}`;
+      const input = operationName === "midi.list_take_notes"
+        ? { cursor: "0", limit: 16, include_project_time: true }
+        : operationName === "midi.list_take_cc_events"
+          ? { cursor: "0", limit: 16, controller: 7 }
+          : { cursor: "0", limit: 16, event_kind: "text" };
+      const response = await runtime.call_template({
+        id: templateId,
+        input,
+        refs: { take_ref: TAKE_REF },
+        context: context({ request_sequence: index + 1 }),
+        budget: { max_response_bytes: 2048, max_items: 50, max_inline_value_bytes: 2048 },
+      });
+      assert.equal(response.ok, true, `${templateId}: ${JSON.stringify(response.error)}`);
+      assert.ok(response.budget.response_bytes <= 2048, templateId);
+    }
+  });
+
   it("returns PARAMS_INVALID for non-decimal MIDI read cursors", () => {
     runMidiReadLua(`
 for _, cursor in ipairs({ "-1", "1.5", "abc", 1 }) do
@@ -270,6 +450,11 @@ function runMidiReadLua(body) {
   lualib.luaL_openlibs(state);
   const source = [
     MIDI_READ_PRELUDE,
+    MIDI_RESOLVER_SOURCE,
+    `
+function READ_B_MIDI.resolve_midi_take_for_request() return take, nil end
+function READ_B_MIDI.take_ref_string() return "take:guid:{D17-READ}" end
+`,
     LIST_NOTES_SOURCE,
     LIST_CC_SOURCE,
     LIST_TEXT_SOURCE,
@@ -286,6 +471,38 @@ function runMidiReadLua(body) {
   }
   assert.equal(lua.lua_toboolean(state, -1), true);
   lua.lua_close(state);
+}
+
+function bridgeSuccess(request, summary) {
+  const completedAt = "2026-07-15T00:00:00Z";
+  const response = {
+    contract: "foundation.bridge.v1",
+    id: request.id,
+    ok: true,
+    completed_at: completedAt,
+    bridge: {
+      owner: request.bridge.expected_owner,
+      generation: request.bridge.expected_generation,
+    },
+    queue: { state: "done", started_at: completedAt, completed_at: completedAt },
+    result: {
+      summary,
+      refs: [],
+      artifacts: [],
+      jobs: [],
+      last_result: { updated: false, refs: [], truncated: false },
+    },
+    undo: { mode: "none", opened: false, closed: false, label: null },
+    verification: { mode: "none", status: "passed", checks: [] },
+    budget: {
+      max_response_bytes: request.budget.max_response_bytes,
+      response_bytes: 0,
+      truncated: false,
+    },
+    idempotency: { key: null, replayed: false },
+  };
+  response.budget.response_bytes = Buffer.byteLength(JSON.stringify(response));
+  return response;
 }
 
 const TAKE_REF = createObjectRef("take", { scheme: "guid", value: "{D17-TAKE}" }, {

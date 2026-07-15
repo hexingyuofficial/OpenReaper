@@ -64,11 +64,14 @@ local function list_take_text_sysex_events(request)
       end
     end
   end
-  return {
-    take_ref = READ_B_MIDI.take_ref_string(take),
-    events = events,
-    returned_count = #events,
-    next_cursor = matched > cursor + #events and tostring(cursor + #events) or nil,
-    truncated = matched > cursor + #events,
-  }
+  return READ_B_MIDI.fit_paginated_summary(request, events, math.max(matched - cursor, 0), function()
+    local has_more = matched > cursor + #events
+    return {
+      take_ref = READ_B_MIDI.take_ref_string(take),
+      events = events,
+      returned_count = #events,
+      next_cursor = has_more and tostring(cursor + #events) or nil,
+      truncated = has_more,
+    }
+  end, "text_sysex_event")
 end
