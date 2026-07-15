@@ -340,7 +340,14 @@ end
 local function e5_routing_channel_count_exact(track)
   local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_NCHAN")
   local channels = ok and first_number(value) or nil
-  if type(channels) ~= "number" or channels ~= channels or channels == math.huge or channels == -math.huge or channels < 2 or channels ~= math.floor(channels) then
+  if type(channels) ~= "number"
+    or channels ~= channels
+    or channels == math.huge
+    or channels == -math.huge
+    or channels < 2
+    or channels > 128
+    or channels ~= math.floor(channels)
+    or channels % 2 ~= 0 then
     return nil
   end
   return channels
@@ -776,26 +783,45 @@ local function set_master_parent_send(request)
 end
 
 local function set_track_channel_count(request)
+  local channels = request.params.channel_count
+  local requested_detail = channels
+  if type(channels) == "number"
+    and (channels ~= channels or channels == math.huge or channels == -math.huge) then
+    requested_detail = JSON_NULL
+  end
+  if type(channels) ~= "number"
+    or channels ~= channels
+    or channels == math.huge
+    or channels == -math.huge
+    or channels < 2
+    or channels > 128
+    or channels ~= math.floor(channels)
+    or channels % 2 ~= 0 then
+    return e5_routing_error("PARAMS_INVALID", "Track channel_count must be an even integer from 2 through 128.", {
+      reason_code = "TRACK_CHANNEL_COUNT_INVALID",
+      requested_channel_count = requested_detail == nil and JSON_NULL or requested_detail,
+    })
+  end
   local track = e5_routing_track_from_request_refs(request)
   if not track then
     return e5_routing_error("TRACK_NOT_FOUND", "E5 routing set_track_channel_count requires a resolvable track ref.", {})
   end
-  local channels = math.floor(tonumber(request.params.channel_count) or 2)
-  if channels < 2 then
-    channels = 2
-  end
-  if channels % 2 == 1 then
-    channels = channels + 1
-  end
-  if channels > 64 then
-    channels = 64
-  end
-  if not e5_routing_set_media_track_value(track, "I_NCHAN", channels) then
+  local dispatch_ok, accepted = call_reaper("SetMediaTrackInfo_Value", track, "I_NCHAN", channels)
+  if not dispatch_ok or accepted ~= true then
     return e5_routing_error("COMMAND_FAILED", "REAPER rejected the track channel-count update.", {})
+  end
+  local readback_channels = e5_routing_channel_count_exact(track)
+  if readback_channels ~= channels then
+    return e5_routing_error("VERIFY_FAILED", "Track channel-count mutation did not read back the exact requested value.", {
+      reason_code = "TRACK_CHANNEL_COUNT_READBACK_MISMATCH",
+      requested_channel_count = channels,
+      actual_channel_count = readback_channels == nil and JSON_NULL or readback_channels,
+      mutation_applied = true,
+    }, false)
   end
   return e5_routing_write_summary(request, {
     track_ref = e5_routing_track_ref_string(track),
-    channel_count = e5_routing_channel_count(track),
+    channel_count = readback_channels,
   }), nil, json_array({}), json_array({}), e5_routing_refs(e5_routing_track_object_ref(track))
 end
 

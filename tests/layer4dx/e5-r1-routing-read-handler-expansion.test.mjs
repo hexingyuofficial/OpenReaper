@@ -5,6 +5,7 @@ import { mkdir, mkdtemp, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   FakeFoundationBridge,
   createObjectRef,
@@ -34,6 +35,91 @@ const E5_R1_OPERATION_KEYS = Object.freeze([
   "query_state:routing.project_graph.read",
   "query_state:routing.audio_outputs.list",
 ]);
+
+const CHANNEL_COUNT_PRELUDE = String.raw`
+JSON_NULL = {}
+function is_string(value) return type(value) == "string" end
+function is_object(value) return type(value) == "table" end
+function is_json_array(value) return type(value) == "table" end
+function json_array(value) return value or {} end
+function first_number(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "number" then return value end
+  end
+  return nil
+end
+function first_string(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "string" then return value end
+  end
+  return nil
+end
+function bounded_string(value) return tostring(value or "") end
+function safe_budget(request) return request.budget or {} end
+function call_reaper(name, ...)
+  if not reaper or type(reaper[name]) ~= "function" then return false end
+  return pcall(reaper[name], ...)
+end
+READ_B_MEDIA = {
+  resolve_take_token = function() return nil end,
+  bounded_limit = function(request, value, fallback, maximum)
+    return math.min(tonumber(value) or fallback, maximum)
+  end,
+}
+function install_channel_count_fake(config)
+  config = config or {}
+  track = { guid = "{CHANNEL-TRACK}" }
+  channel_count = config.initial_channel_count or 2
+  channel_count_writes = 0
+  reaper = {}
+  reaper.CountTracks = function(project) assert(project == 0); return 1 end
+  reaper.GetTrack = function(project, index) assert(project == 0); if index == 0 then return track end end
+  reaper.GetTrackGUID = function(actual) assert(actual == track); return track.guid end
+  reaper.GetMediaTrackInfo_Value = function(actual, key)
+    assert(actual == track)
+    if key == "IP_TRACKNUMBER" then return 1 end
+    assert(key == "I_NCHAN")
+    if config.unreadable_after_write and channel_count_writes > 0 then return nil end
+    return channel_count
+  end
+  reaper.SetMediaTrackInfo_Value = function(actual, key, value)
+    assert(actual == track and key == "I_NCHAN")
+    channel_count_writes = channel_count_writes + 1
+    if config.reject_write then return false end
+    if not config.readback_mismatch then channel_count = value end
+    return true
+  end
+end
+function channel_count_request(value)
+  return {
+    refs = {{
+      kind = "track",
+      ref = "track:guid:{CHANNEL-TRACK}",
+      identity = { scheme = "guid", value = "{CHANNEL-TRACK}" },
+    }},
+    params = { channel_count = value },
+    pack = { id = "routing", capability = "routing.track.channel_count.set", risk = "write" },
+  }
+end
+`;
+
+function runChannelCountLua(body) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const source = `${CHANNEL_COUNT_PRELUDE}\n${E5_R1_HANDLER_SOURCE}\n${body}\nreturn true`;
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(source));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+}
 
 describe("E5-R1 routing read live handler expansion", () => {
   it("adds a separate runtime allowlist for exactly the five E5-R1 routing read template ids", async () => {
@@ -241,6 +327,71 @@ describe("E5-R1 routing read live handler expansion", () => {
   it("creates a fresh Send when allow_duplicate is explicit", () => {
     assert.match(E5_R1_HANDLER_SOURCE, /existing == nil or request\.params\.duplicate_policy == "allow_duplicate"[\s\S]*?CreateTrackSend/);
     assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local send_index = existing/);
+  });
+
+  it("sets exact 64, 66, and 128 Track channel counts and proves live readback", () => {
+    runChannelCountLua(`
+for _, requested in ipairs({ 64, 66, 128 }) do
+  install_channel_count_fake()
+  local summary, failure = set_track_channel_count(channel_count_request(requested))
+  assert(failure == nil)
+  assert(summary.channel_count == requested)
+  assert(summary.readback_status == "passed")
+  assert(channel_count == requested)
+  assert(channel_count_writes == 1)
+end
+`);
+  });
+
+  it("implements the public 2..128 even-number contract without coercion or clamping", () => {
+    const handler = E5_R1_HANDLER_SOURCE.slice(
+      E5_R1_HANDLER_SOURCE.indexOf("local function set_track_channel_count"),
+      E5_R1_HANDLER_SOURCE.indexOf("\nlocal function track_mono_or_stereo_button"),
+    );
+    assert.match(handler, /type\(channels\) ~= "number"/);
+    assert.match(handler, /channels > 128/);
+    assert.match(handler, /channels % 2 ~= 0/);
+    assert.match(handler, /SetMediaTrackInfo_Value", track, "I_NCHAN", channels/);
+    assert.match(handler, /e5_routing_channel_count_exact\(track\)/);
+    assert.match(handler, /"VERIFY_FAILED"/);
+    assert.match(handler, /"TRACK_CHANNEL_COUNT_READBACK_MISMATCH"/);
+    assert.doesNotMatch(handler, /tonumber|channels = math\.floor|channels = 64|channels = channels \+ 1/);
+  });
+
+  it("rejects every non-exact Track channel count before any REAPER mutation", () => {
+    runChannelCountLua(`
+local invalid = { "66", 0/0, math.huge, -math.huge, 0, 1, 3, 65, 127, 129, 64.5 }
+for _, requested in ipairs(invalid) do
+  install_channel_count_fake()
+  local summary, failure = set_track_channel_count(channel_count_request(requested))
+  assert(summary == nil)
+  assert(failure.code == "PARAMS_INVALID")
+  assert(failure.details.reason_code == "TRACK_CHANNEL_COUNT_INVALID")
+  assert(channel_count_writes == 0)
+end
+install_channel_count_fake()
+local request = channel_count_request(64)
+request.params.channel_count = nil
+local summary, failure = set_track_channel_count(request)
+assert(summary == nil and failure.code == "PARAMS_INVALID")
+assert(channel_count_writes == 0)
+`);
+  });
+
+  it("fails closed when accepted channel-count dispatch cannot be read back exactly", () => {
+    runChannelCountLua(`
+for _, config in ipairs({ { readback_mismatch = true }, { unreadable_after_write = true } }) do
+  install_channel_count_fake(config)
+  local summary, failure = set_track_channel_count(channel_count_request(66))
+  assert(summary == nil)
+  assert(failure.code == "VERIFY_FAILED")
+  assert(failure.recoverable == false)
+  assert(failure.details.reason_code == "TRACK_CHANNEL_COUNT_READBACK_MISMATCH")
+  assert(failure.details.requested_channel_count == 66)
+  assert(failure.details.mutation_applied == true)
+  assert(channel_count_writes == 1)
+end
+`);
   });
 });
 
