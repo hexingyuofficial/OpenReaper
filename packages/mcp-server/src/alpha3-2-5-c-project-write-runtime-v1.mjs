@@ -122,7 +122,12 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
   if (typeof executeAtomic !== "function") return failure(program, request, startedAt, now, stages, "blocked", "PROJECT_WRITE_EXECUTOR_UNAVAILABLE", "The managed OpenReaper atomic executor is unavailable.");
 
   const plan = program.planner(request.input ?? {}, { idempotency_key_present: request.idempotency_key !== undefined });
-  if (plan.ok !== true) return failure(program, request, startedAt, now, stages, "blocked", firstCode(plan, "PROJECT_WRITE_INPUT_BLOCKED"), "The registered Macro input or required confirmation is blocked.", plan.blockers, { preview: plan.preview ?? {} });
+  if (plan.ok !== true) {
+    const message = program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID
+      ? "The registered Routing Macro input is blocked."
+      : "The registered Macro input or required confirmation is blocked.";
+    return failure(program, request, startedAt, now, stages, "blocked", firstCode(plan, "PROJECT_WRITE_INPUT_BLOCKED"), message, plan.blockers, { preview: plan.preview ?? {} });
+  }
 
   const dryRun = request.input?.dry_run !== false;
   const state = {
@@ -133,7 +138,10 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     canonicalRefs: [],
     readbackRefs: new Set(),
     markerRegionReadbackRows: new Map(),
+    routingReadbackRows: new Map(),
+    routingResolvedSends: new Map(),
     readbackEvidenceRefs: [],
+    writeAttempted: false,
     writeExecuted: false,
     sqlite: sqliteEvidence(),
     indexUpdate: null,
@@ -158,6 +166,9 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     }
     initializeLayoutOperationOutcomes(state, plan);
   }
+  if (!dryRun && program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
+    initializeRoutingOperationOutcomes(state, plan);
+  }
   try {
     const selectionReads = dryRun ? dryReadsForPlan(program, plan) : plan.preflight_requests ?? [];
     for (const child of selectionReads) {
@@ -168,6 +179,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs: child.refs ?? {}, stageId: `select-${stageToken(child.id)}`, kind: "selector_resolve", now });
       bindPreflightLocalRef(plan, child, execution, state);
       validateLayoutAnnotationPreflight(program, plan, child, execution);
+      validateRoutingPreflight(program, plan, child, execution, state);
     }
     if (dryRun && request.id === ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) {
       for (const asset of request.input?.assets ?? []) {
@@ -226,7 +238,11 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         recordProjectWriteReadback(state, execution);
       }
       try {
-        applyProjectWriteReadbackToChanges(state);
+        if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
+          applyRoutingReadbackToChanges(state, plan);
+        } else {
+          applyProjectWriteReadbackToChanges(state);
+        }
       } catch (error) {
         readbackFailure ??= error;
       }
@@ -258,7 +274,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     recordStage(stages, stageIdFor(program, "result_project"), "result_project", "completed", "Projected verified registered-write evidence.", state.evidenceRefs);
     return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation), outcome: projectWriteOutcome(state) });
   } catch (error) {
-    const partial = state.writeExecuted === true || state.changes.some((change) => change.mutation?.status === "completed");
+    const partial = state.writeAttempted === true || state.writeExecuted === true || state.changes.some((change) => change.mutation?.status === "completed");
     return failure(program, request, startedAt, now, stages, partial ? "partial_failure" : "failed", error.code ?? "PROJECT_WRITE_STAGE_FAILED", error.message ?? "A registered project-write stage failed.", error.blockers, {
       applied_change_count: state.changes.filter((change) => change.status === "applied").length,
       source_media_deleted: false,
@@ -379,7 +395,9 @@ function exactGuidObjectRef(kind, ref) {
 }
 
 async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, mutation = null, plan = null, now }) {
-  const execution = await executeAtomic({ id, input, refs: materializeRefs(refs, state), context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
+  const materializedRefs = materializeRefs(refs, state);
+  if (kind === "template_execute") state.writeAttempted = true;
+  const execution = await executeAtomic({ id, input, refs: materializedRefs, context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
   const evidence = boundedProgramEvidenceRefs(program, evidenceRefs(execution));
   state.evidenceRefs.push(...evidence);
   const childVerification = execution?.verification ?? execution?.result?.verification;
@@ -455,6 +473,72 @@ function validateLayoutAnnotationPreflight(program, plan, child, execution) {
       `${row.kind} annotation ${row.id} conflicts with an existing same-name row, and no accepted atom can move its position or change its bounds.`,
     );
   }
+}
+
+function validateRoutingPreflight(program, plan, child, execution, state) {
+  if (program.entry.macro_id !== ALPHA3_2E_ROUTING_APPLY_MACRO_ID || child.id !== "template.routing.read_project_routing_graph") return;
+  const graph = executionSummary(execution);
+  if (graph.truncated === true) {
+    throw coded("ROUTING_GRAPH_TRUNCATED", "Routing mutation requires the complete live graph; the preflight graph was truncated.");
+  }
+  if (graph.coverage_status !== "complete" || graph.coverage?.internally_complete !== true) {
+    throw coded("ROUTING_GRAPH_COVERAGE_INCOMPLETE", "Routing mutation requires a complete live graph; REAPER graph enumeration was incomplete.");
+  }
+  if (!Array.isArray(graph.tracks) || !Array.isArray(graph.edges)) {
+    throw coded("ROUTING_GRAPH_SHAPE_INVALID", "Routing mutation requires live tracks[] and edges[] arrays before the first write.");
+  }
+  if (!Number.isInteger(graph.returned_track_count) || graph.returned_track_count !== graph.tracks.length) {
+    throw coded("ROUTING_GRAPH_TRACK_COUNT_MISMATCH", "Routing graph returned_track_count did not match the live tracks[] rows.");
+  }
+  if (!Number.isInteger(graph.track_count) || graph.track_count !== graph.tracks.length) {
+    throw coded("ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE", "Routing graph did not contain every live Track row.");
+  }
+  if (!Number.isInteger(graph.edge_count) || graph.edge_count !== graph.edges.length) {
+    throw coded("ROUTING_GRAPH_EDGE_COUNT_MISMATCH", "Routing graph edge_count did not match the live edges[] rows.");
+  }
+  validateRoutingGraphTopology(plan, graph);
+  state.routingPreflight = structuredClone(graph);
+}
+
+function validateRoutingGraphTopology(plan, graph) {
+  const createRows = (plan.preview?.routes ?? []).filter((row) => row.action === "create");
+  const liveEdges = graph.edges.filter((edge) => typeof edge?.source_track_ref === "string" && typeof edge?.destination_track_ref === "string");
+  for (const row of createRows) {
+    const duplicateCount = liveEdges.filter((edge) => edge.source_track_ref === row.source_track_ref && edge.destination_track_ref === row.destination_track_ref).length;
+    if (duplicateCount > 0 && row.duplicate_policy !== "allow_duplicate") {
+      throw coded("ROUTING_LIVE_DUPLICATE_EDGE", `Live routing already contains ${row.source_track_ref} -> ${row.destination_track_ref}; no write was dispatched.`);
+    }
+  }
+  const combinedEdges = [
+    ...liveEdges.map((edge) => ({ source: edge.source_track_ref, destination: edge.destination_track_ref, id: edge.send_ref ?? "live" })),
+    ...createRows.map((row) => ({ source: row.source_track_ref, destination: row.destination_track_ref, id: row.id })),
+  ];
+  if (directedEdgesHaveCycle(combinedEdges)) {
+    throw coded("ROUTING_LIVE_CYCLE", "The complete live graph plus requested creates contains a directed routing cycle; no write was dispatched.");
+  }
+}
+
+function directedEdgesHaveCycle(edges) {
+  const outgoing = new Map();
+  for (const edge of edges) {
+    if (typeof edge.source !== "string" || typeof edge.destination !== "string") continue;
+    const destinations = outgoing.get(edge.source) ?? [];
+    destinations.push(edge.destination);
+    outgoing.set(edge.source, destinations);
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (node) => {
+    if (visiting.has(node)) return true;
+    if (visited.has(node)) return false;
+    visiting.add(node);
+    for (const destination of outgoing.get(node) ?? []) if (visit(destination)) return true;
+    visiting.delete(node);
+    visited.add(node);
+    return false;
+  };
+  for (const node of outgoing.keys()) if (visit(node)) return true;
+  return false;
 }
 
 function validateLayoutAnnotationVerification(program, plan, child, execution) {
@@ -621,6 +705,10 @@ function bindMutationLocalRef(plan, mutation, execution, state) {
   if (assetId && mutation.id.startsWith("template.media.import_file") && itemRef) state.localRefs.set(`item:planned:${assetId}`, itemRef);
   const routeId = /(?:route|send) ([^ .]+)\.?$/u.exec(mutation.purpose ?? "")?.[1] ?? null;
   if (routeId && mutation.id === "template.routing.create_track_send" && sendRef) state.localRefs.set(`send:planned:${routeId}`, sendRef);
+  if (mutation.operation_id && mutation.id === "template.routing.create_track_send" && sendRef) {
+    state.localRefs.set(`send:planned:${mutation.operation_id}`, sendRef);
+    state.routingResolvedSends.set(mutation.operation_id, sendRef);
+  }
 }
 
 function initializeLayoutOperationOutcomes(state, plan) {
@@ -631,6 +719,37 @@ function initializeLayoutOperationOutcomes(state, plan) {
     changesById: new Map(projection.changes.map((change) => [change.operation_id, change])),
   };
   state.changes = projection.changes;
+}
+
+function initializeRoutingOperationOutcomes(state, plan) {
+  const rows = routingOperationRows(plan);
+  state.routingOperations = {
+    rowsById: new Map(rows.map((row) => [row.id, row])),
+    changesById: new Map(),
+  };
+  state.changes = rows.map((row) => {
+    const totalCount = (plan.mutation_requests ?? []).filter((mutation) => mutation.operation_id === row.id).length;
+    const change = {
+      operation_id: row.id,
+      operation_kind: row.operation_kind,
+      target_ref: row.send_ref ?? row.track_ref ?? null,
+      status: "pending",
+      template_ids: uniqueUnbounded((plan.mutation_requests ?? []).filter((mutation) => mutation.operation_id === row.id).map((mutation) => mutation.id)),
+      mutation: { status: "pending", completed_count: 0, total_count: totalCount },
+      live_readback: { status: "pending" },
+      index_maintenance: { status: "pending" },
+    };
+    state.routingOperations.changesById.set(row.id, change);
+    return change;
+  });
+}
+
+function routingOperationRows(plan) {
+  return [
+    ...(plan.preview?.routes ?? []).map((row) => ({ ...row, operation_kind: "route" })),
+    ...(plan.preview?.master_parent ?? []).map((row) => ({ ...row, operation_kind: "master_parent" })),
+    ...(plan.preview?.channel_counts ?? []).map((row) => ({ ...row, operation_kind: "channel_count" })),
+  ];
 }
 
 function buildLayoutOperationProjection(plan, { projectedApplied = false } = {}) {
@@ -681,6 +800,20 @@ function valueContainsExactString(value, expected) {
 }
 
 function recordCompletedMutation(program, plan, state, mutation, resolvedRefs, execution) {
+  if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID && state.routingOperations) {
+    const change = state.routingOperations.changesById.get(mutation.operation_id);
+    if (!change) return;
+    const row = state.routingOperations.rowsById.get(mutation.operation_id);
+    const sendRef = row?.action === "create"
+      ? state.routingResolvedSends.get(row.id) ?? firstCanonicalWithPrefix(execution, "send:")
+      : row?.send_ref;
+    if (sendRef) change.target_ref = sendRef;
+    change.mutation.completed_count += 1;
+    const completed = change.mutation.completed_count === change.mutation.total_count;
+    change.mutation.status = completed ? "completed" : "in_progress";
+    change.status = completed ? "mutation_completed" : "mutation_in_progress";
+    return;
+  }
   if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
     const deletionReadback = acceptedDeletionReadback(mutation, execution);
     state.changes.push({
@@ -720,6 +853,15 @@ function acceptedDeletionReadback(mutation, execution) {
 }
 
 function recordUnverifiedMutation(program, plan, state, mutation, id, refs, execution) {
+  if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID && mutation?.operation_id && state.routingOperations) {
+    const change = state.routingOperations.changesById.get(mutation.operation_id);
+    if (!change) return;
+    change.status = "mutation_unverified";
+    change.mutation.status = "unverified";
+    change.mutation.verification_status = "failed";
+    change.live_readback = { status: "not_run" };
+    return;
+  }
   if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || !mutation || !state.layoutOperations) {
     state.changes.push({
       template_id: id,
@@ -868,6 +1010,9 @@ function recordProjectWriteReadback(state, execution) {
     const ref = row?.kind === "region" ? row.region_ref : row?.marker_ref;
     if (typeof ref === "string") state.markerRegionReadbackRows.set(ref, structuredClone(row));
   }
+  if (typeof summary.track_ref === "string" && Array.isArray(summary.sends)) {
+    state.routingReadbackRows.set(summary.track_ref, structuredClone(summary));
+  }
   state.readbackEvidenceRefs.push(...evidenceRefs(execution));
 }
 
@@ -983,6 +1128,93 @@ function applyProjectWriteReadbackToChanges(state) {
   }
 }
 
+function applyRoutingReadbackToChanges(state, plan) {
+  const failures = [];
+  for (const change of state.changes) {
+    if (change.mutation?.status !== "completed") continue;
+    const expected = state.routingOperations?.rowsById.get(change.operation_id);
+    const verification = verifyRoutingOperation(expected, state);
+    if (!verification.ok) {
+      change.status = verification.status;
+      change.live_readback = {
+        status: "failed",
+        source: "live_track_routing_readback",
+        mismatched_fields: verification.mismatchedFields,
+      };
+      failures.push({ code: verification.code, message: verification.message, recoverable: true });
+      continue;
+    }
+    change.status = "applied";
+    change.live_readback = {
+      status: "passed",
+      source: "live_track_routing_readback",
+      observed_ref: verification.observedRef,
+    };
+  }
+  if (failures.length > 0) {
+    throw coded(failures[0].code, failures[0].message, failures);
+  }
+}
+
+function verifyRoutingOperation(expected, state) {
+  if (!expected) return routingReadbackFailure("ROUTING_OPERATION_READBACK_MISSING", "readback_missing", "No routing operation definition was retained for live verification.", ["operation_id"]);
+  if (expected.operation_kind === "route") return verifyRoutingRoute(expected, state);
+  const track = state.routingReadbackRows.get(expected.track_ref);
+  if (!completeRoutingTrackReadback(track)) {
+    return routingReadbackFailure("ROUTING_TRACK_READBACK_INCOMPLETE", "readback_missing", `Complete routing readback was unavailable for ${expected.track_ref}.`, ["track_ref", "truncated", "coverage"]);
+  }
+  if (expected.operation_kind === "master_parent") {
+    if (track.master_parent_enabled !== expected.enabled) return routingReadbackFailure("ROUTING_MASTER_PARENT_READBACK_MISMATCH", "readback_mismatch", `Master-parent readback did not match ${expected.id}.`, ["master_parent_enabled"]);
+    return { ok: true, observedRef: expected.track_ref };
+  }
+  if (track.channel_count !== expected.channel_count) return routingReadbackFailure("ROUTING_CHANNEL_COUNT_READBACK_MISMATCH", "readback_mismatch", `Channel-count readback did not match ${expected.id}.`, ["channel_count"]);
+  return { ok: true, observedRef: expected.track_ref };
+}
+
+function verifyRoutingRoute(expected, state) {
+  const sourceTrackRef = expected.source_track_ref ?? parseSourceTrackRefFromSendRef(expected.send_ref);
+  const track = sourceTrackRef ? state.routingReadbackRows.get(sourceTrackRef) : null;
+  if (!completeRoutingTrackReadback(track) || !Array.isArray(track.sends)) {
+    return routingReadbackFailure("ROUTING_TRACK_READBACK_INCOMPLETE", "readback_missing", `Complete source routing readback was unavailable for ${expected.id}.`, ["source_track_ref", "truncated", "coverage"]);
+  }
+  if (expected.action === "delete") {
+    if (track.sends.some((send) => send?.send_ref === expected.send_ref)) return routingReadbackFailure("ROUTING_DELETE_READBACK_MISMATCH", "readback_mismatch", `Deleted send ${expected.send_ref} is still present.`, ["send_ref"]);
+    return { ok: true, observedRef: expected.send_ref };
+  }
+  const sendRef = expected.action === "create" ? state.routingResolvedSends.get(expected.id) : expected.send_ref;
+  if (typeof sendRef !== "string") return routingReadbackFailure("ROUTING_SEND_IDENTITY_MISSING", "readback_missing", `No exact send ref was bound to ${expected.id}.`, ["send_ref"]);
+  const matches = track.sends.filter((send) => send?.send_ref === sendRef);
+  if (matches.length === 0) return routingReadbackFailure("ROUTING_SEND_READBACK_MISSING", "readback_missing", `No exact live send matched ${expected.id} at ${sendRef}.`, ["send_ref"]);
+  if (matches.length > 1) return routingReadbackFailure("ROUTING_SEND_READBACK_MULTIPLE", "readback_mismatch", `More than one live row claimed exact send ${sendRef}.`, ["send_ref"]);
+  const send = matches[0];
+  const mismatchedFields = [];
+  if (expected.source_track_ref !== null && expected.source_track_ref !== undefined && send.source_track_ref !== expected.source_track_ref) mismatchedFields.push("source_track_ref");
+  if (expected.destination_track_ref !== null && expected.destination_track_ref !== undefined && send.destination_track_ref !== expected.destination_track_ref) mismatchedFields.push("destination_track_ref");
+  if (expected.volume !== undefined && !numbersMatch(send.volume, expected.volume)) mismatchedFields.push("volume");
+  if (expected.pan !== undefined && !numbersMatch(send.pan, expected.pan)) mismatchedFields.push("pan");
+  if (expected.muted !== undefined && send.muted !== expected.muted) mismatchedFields.push("muted");
+  if (mismatchedFields.length > 0) return routingReadbackFailure("ROUTING_SEND_READBACK_MISMATCH", "readback_mismatch", `Live send fields did not match ${expected.id}: ${mismatchedFields.join(", ")}.`, mismatchedFields);
+  return { ok: true, observedRef: sendRef };
+}
+
+function completeRoutingTrackReadback(track) {
+  return Boolean(
+    track
+    && track.truncated !== true
+    && track.coverage_status === "complete"
+    && track.coverage?.internally_complete === true,
+  );
+}
+
+function parseSourceTrackRefFromSendRef(sendRef) {
+  const match = typeof sendRef === "string" ? /^send:(track:guid:[^:]+):\d+$/u.exec(sendRef) : null;
+  return match?.[1] ?? null;
+}
+
+function routingReadbackFailure(code, status, message, mismatchedFields) {
+  return { ok: false, code, status, message, mismatchedFields };
+}
+
 function applyProjectWriteIndexMaintenance(changes, status, invalidation) {
   for (const change of changes) {
     if (change.mutation?.status !== "completed") continue;
@@ -1043,9 +1275,25 @@ function failure(program, request, startedAt, now, stages, status, code, message
     result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, data) },
     blockers: boundedBlockers(blockers.length ? blockers : [{ code, message, recoverable: true }]),
     error: { code, message, recoverable: true },
-    recovery: { undo_policy: program.entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: "Inspect reported stage evidence, use the project undo scope where available, then retry only after live refs are current." },
+    recovery: recoveryForFailure(program, status, code),
     budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
+}
+
+function recoveryForFailure(program, status, code) {
+  const partialChangesPossible = status === "partial_failure";
+  if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
+    return {
+      undo_policy: program.entry.undo_policy,
+      partial_changes_possible: partialChangesPossible,
+      source_media_deleted: false,
+      replay_policy: partialChangesPossible ? "do_not_replay" : "correct_and_retry",
+      action: partialChangesPossible
+        ? "Do not replay the routing request. Inspect the current complete live graph and reported changes, then use the single undo scope or issue a newly previewed correction."
+        : `No routing mutation was dispatched for ${code}; correct the blocker, rerun dry-run with the same operations, then execute that same input with only dry_run changed to false.`,
+    };
+  }
+  return { undo_policy: program.entry.undo_policy, partial_changes_possible: partialChangesPossible, source_media_deleted: false, action: "Inspect reported stage evidence, use the project undo scope where available, then retry only after live refs are current." };
 }
 
 function finalize(envelope) {

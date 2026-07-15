@@ -41,6 +41,8 @@ export function planAlpha3_2ERoutingApplyMacro(input = {}, requestPosture = {}) 
   blockers.push(...routes.blockers, ...masterParent.blockers, ...channelCounts.blockers);
   const dryRun = normalized.dry_run !== false;
   const operations = { routes: routes.rows, master_parent: masterParent.rows, channel_counts: channelCounts.rows };
+  blockers.push(...validateOperationIdsAcrossKinds(operations));
+  blockers.push(...validateStaticRoutingTopology(operations.routes));
   const preview = buildPreview(operations);
 
   if (blockers.length > 0) return blockedPlan(blockers, preview);
@@ -258,6 +260,81 @@ function normalizeChannelCounts(value) {
   return { rows: deepFreeze(rows), blockers };
 }
 
+function validateOperationIdsAcrossKinds(operations) {
+  const seen = new Map();
+  const blockers = [];
+  for (const [kind, rows] of Object.entries(operations)) {
+    for (const row of rows) {
+      const previousKind = seen.get(row.id);
+      if (previousKind && previousKind !== kind) {
+        blockers.push(blocker(
+          "ROUTING_OPERATION_ID_DUPLICATE",
+          "Routing operation ids must be unique across routes, master_parent, and channel_counts.",
+          { id: row.id, first_kind: previousKind, duplicate_kind: kind },
+        ));
+      } else if (!previousKind) {
+        seen.set(row.id, kind);
+      }
+    }
+  }
+  return blockers;
+}
+
+function validateStaticRoutingTopology(routes) {
+  const blockers = [];
+  const createRows = routes.filter((row) => row.action === "create");
+  const seenEdges = new Map();
+  for (const row of createRows) {
+    if (!isTrackRef(row.source_track_ref) || !isTrackRef(row.destination_track_ref)) continue;
+    if (row.source_track_ref === row.destination_track_ref) {
+      blockers.push(blocker("ROUTING_SELF_SEND_FORBIDDEN", "Internal routing cannot create a send from a track to itself.", { id: row.id, track_ref: row.source_track_ref }));
+      continue;
+    }
+    const edgeKey = `${row.source_track_ref}\n${row.destination_track_ref}`;
+    const previous = seenEdges.get(edgeKey);
+    if (previous && (previous.duplicate_policy !== "allow_duplicate" || row.duplicate_policy !== "allow_duplicate")) {
+      blockers.push(blocker("ROUTING_REQUEST_DUPLICATE_EDGE", "Repeated create rows for one internal edge require duplicate_policy=allow_duplicate on every repeated row.", { id: row.id, duplicate_of: previous.id }));
+    } else {
+      seenEdges.set(edgeKey, row);
+    }
+  }
+  const cycle = firstDirectedCycle(createRows);
+  if (cycle) blockers.push(blocker("ROUTING_REQUEST_CYCLE", "The requested internal sends form a directed routing cycle.", { route_ids: cycle }));
+  return blockers;
+}
+
+function firstDirectedCycle(rows) {
+  const edges = new Map();
+  for (const row of rows) {
+    if (!isTrackRef(row.source_track_ref) || !isTrackRef(row.destination_track_ref) || row.source_track_ref === row.destination_track_ref) continue;
+    const outgoing = edges.get(row.source_track_ref) ?? [];
+    outgoing.push({ destination: row.destination_track_ref, id: row.id });
+    edges.set(row.source_track_ref, outgoing);
+  }
+  const visiting = new Set();
+  const visited = new Set();
+  const routeStack = [];
+  const visit = (trackRef) => {
+    if (visiting.has(trackRef)) return [...routeStack];
+    if (visited.has(trackRef)) return null;
+    visiting.add(trackRef);
+    for (const edge of edges.get(trackRef) ?? []) {
+      routeStack.push(edge.id);
+      const cycle = visit(edge.destination);
+      if (cycle) return cycle;
+      routeStack.pop();
+    }
+    visiting.delete(trackRef);
+    visited.add(trackRef);
+    return null;
+  };
+  for (const trackRef of edges.keys()) {
+    const cycle = visit(trackRef);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
 function buildPreview(operations) {
   const routeCreates = operations.routes.filter((row) => row.action === "create");
   const routeDeletes = operations.routes.filter((row) => row.action === "delete");
@@ -273,7 +350,7 @@ function buildPreview(operations) {
       channel_counts: operations.channel_counts.length,
       total_operations: routeCreates.length + routeDeletes.length + sendUpdates.length + operations.master_parent.length + operations.channel_counts.length,
     },
-    routes: operations.routes.map((row) => ({ id: row.id, action: row.action, source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref, send_ref: plannedSendRef(row), volume: row.volume, pan: row.pan, muted: row.muted })),
+    routes: operations.routes.map((row) => ({ id: row.id, action: row.action, source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref, send_ref: plannedSendRef(row), duplicate_policy: row.duplicate_policy, volume: row.volume, pan: row.pan, muted: row.muted })),
     master_parent: operations.master_parent.map((row) => ({ id: row.id, track_ref: row.track_ref, enabled: row.enabled })),
     channel_counts: operations.channel_counts.map((row) => ({ id: row.id, track_ref: row.track_ref, channel_count: row.channel_count })),
   });
@@ -287,16 +364,16 @@ function buildMutationRequests(operations) {
   const requests = [];
   let sequence = 1;
   for (const row of operations.routes.filter((entry) => entry.action !== "delete")) {
-    if (row.action === "create") requests.push(childRequest(sequence++, "mutation", CREATE_SEND_ID, { source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref }, { duplicate_policy: row.duplicate_policy }, `Create internal track send ${row.id}.`));
+    if (row.action === "create") requests.push(childRequest(sequence++, "mutation", CREATE_SEND_ID, { source_track_ref: row.source_track_ref, destination_track_ref: row.destination_track_ref }, { duplicate_policy: row.duplicate_policy }, `Create internal track send ${row.id}.`, row.id, "route"));
     const sendRef = plannedSendRef(row);
-    if (row.volume !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_VOLUME_ID, { send_ref: sendRef }, { volume: row.volume }, `Set send volume for route ${row.id}.`));
-    if (row.pan !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_PAN_ID, { send_ref: sendRef }, { pan: row.pan }, `Set send pan for route ${row.id}.`));
-    if (row.muted !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_MUTE_ID, { send_ref: sendRef }, { muted: row.muted }, `Set send mute for route ${row.id}.`));
+    if (row.volume !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_VOLUME_ID, { send_ref: sendRef }, { volume: row.volume }, `Set send volume for route ${row.id}.`, row.id, "route"));
+    if (row.pan !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_PAN_ID, { send_ref: sendRef }, { pan: row.pan }, `Set send pan for route ${row.id}.`, row.id, "route"));
+    if (row.muted !== undefined) requests.push(childRequest(sequence++, "mutation", SET_SEND_MUTE_ID, { send_ref: sendRef }, { muted: row.muted }, `Set send mute for route ${row.id}.`, row.id, "route"));
   }
-  for (const row of operations.master_parent) requests.push(childRequest(sequence++, "mutation", SET_MASTER_PARENT_ID, { track_ref: row.track_ref }, { enabled: row.enabled }, `Set master-parent routing for ${row.id}.`));
-  for (const row of operations.channel_counts) requests.push(childRequest(sequence++, "mutation", SET_CHANNEL_COUNT_ID, { track_ref: row.track_ref }, { channel_count: row.channel_count }, `Set track channel count for ${row.id}.`));
+  for (const row of operations.master_parent) requests.push(childRequest(sequence++, "mutation", SET_MASTER_PARENT_ID, { track_ref: row.track_ref }, { enabled: row.enabled }, `Set master-parent routing for ${row.id}.`, row.id, "master_parent"));
+  for (const row of operations.channel_counts) requests.push(childRequest(sequence++, "mutation", SET_CHANNEL_COUNT_ID, { track_ref: row.track_ref }, { channel_count: row.channel_count }, `Set track channel count for ${row.id}.`, row.id, "channel_count"));
   for (const row of sortDeleteRoutes(operations.routes.filter((entry) => entry.action === "delete"))) {
-    requests.push(childRequest(sequence++, "mutation", REMOVE_SEND_ID, { send_ref: exactSendObjectRef(row.send_ref) }, {}, `Remove exact internal send for route ${row.id} in descending source-slot order.`));
+    requests.push(childRequest(sequence++, "mutation", REMOVE_SEND_ID, { send_ref: exactSendObjectRef(row.send_ref) }, {}, `Remove exact internal send for route ${row.id} in descending source-slot order.`, row.id, "route"));
   }
   return deepFreeze(requests);
 }
@@ -306,8 +383,8 @@ function readbackRequests(operations) {
   for (const row of operations.routes) {
     if (row.source_track_ref) tracks.add(row.source_track_ref);
     if (row.destination_track_ref) tracks.add(row.destination_track_ref);
-    const deleted = parseExactSendRef(row.send_ref);
-    if (row.action === "delete" && deleted) tracks.add(deleted.source_track_ref);
+    const exact = parseExactSendRef(row.send_ref);
+    if (exact) tracks.add(exact.source_track_ref);
   }
   for (const row of operations.master_parent) tracks.add(row.track_ref);
   for (const row of operations.channel_counts) tracks.add(row.track_ref);
@@ -346,7 +423,7 @@ function noExecutorSafetyPosture() {
 }
 
 function plannedSendRef(row) { return row.send_ref ?? `send:planned:${row.id}`; }
-function childRequest(sequence, stage, id, refs, input, purpose) { return deepFreeze({ sequence, stage, tool: "call_template", id, refs: deepFreeze(refs), input: deepFreeze(input), purpose }); }
+function childRequest(sequence, stage, id, refs, input, purpose, operationId = null, operationKind = null) { return deepFreeze({ sequence, stage, tool: "call_template", id, refs: deepFreeze(refs), input: deepFreeze(input), purpose, ...(operationId ? { operation_id: operationId, operation_kind: operationKind } : {}) }); }
 function blocker(code, message, details = {}) { return deepFreeze({ code, message, details: deepFreeze(details) }); }
 function unknownFieldBlockers(object, allowed, code, message, details = {}) { return Object.keys(object ?? {}).filter((field) => !allowed.has(field)).slice(0, UNKNOWN_FIELD_DETAIL_LIMIT).map((field) => blocker(code, message, { ...details, field })); }
 function requestPosture(request = {}) { return { idempotency_key_present: request.idempotency_key !== undefined }; }

@@ -294,6 +294,102 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     canonical.action_manual.recovery_steps = [...createClipRecovery, ...editing.recovery_steps];
     canonical.action_manual.dry_run_shape = editing.dry_run_shape;
   }
+  if (id === "macro.routing.apply") {
+    canonical.action_manual.when_to_use = [
+      "Create, update, or delete bounded internal Track sends, set exact send volume/pan/mute fields, or set Track master-parent and channel-count posture.",
+      "Use one registered Macro transaction when every target is already an exact canonical Track or Send ref.",
+    ];
+    canonical.action_manual.when_not_to_use = [
+      "Do not configure hardware/device I/O, infer ambiguous Track identities, create self-sends, or directed feedback cycles.",
+      "Do not use it for send mode, audio/MIDI channel maps, or any field outside the exact input shape below; use a typed direct-Template fallback when no Macro field covers the task.",
+    ];
+    canonical.action_manual.required_readiness = [
+      "Obtain exact source_track_ref and destination_track_ref values with macro.project.query before creating a route; updates and deletes require one exact send_ref.",
+      "Run the operation set with dry_run:true first, then send the same operation input with only dry_run changed to false.",
+      "Execution requires a complete, untruncated live graph preflight covering up to 128 Tracks and 256 internal sends before the first write.",
+    ];
+    canonical.action_manual.input_shape = {
+      routes: "0-64 rows of {id,action=create|update|delete}. create requires source_track_ref and destination_track_ref; update requires send_ref; delete accepts only id, action, and exact send_ref. create/update optionally accept volume 0..4, pan -1..1, and muted boolean. duplicate_policy=reject_existing blocks a live duplicate; allow_duplicate creates a new Send even when the same edge already exists.",
+      master_parent: "0-64 rows of {id,track_ref,enabled}; id may be omitted only when track_ref is a suitable bounded id source.",
+      channel_counts: "0-64 rows of {id,track_ref,channel_count}. Use even counts from 2 through 64 for currently verified live behavior; the Macro schema accepts through 128, but values above 64 require lower-layer truth alignment before success may be claimed.",
+      dry_run: "Defaults true. A preview emits no mutations; set only this field to false on the same operation input to execute.",
+      compact_response: "Optional boolean requesting the registered compact public result without weakening internal graph or readback truth.",
+    };
+    canonical.action_manual.preflight_steps = [
+      "Validate all rows, exact refs, unique operation ids, self-send/duplicate-edge posture, and request-local cycles before planning any write.",
+      "Read the complete live project routing graph; fail before the first write on truncation, incomplete enumeration, malformed counts, a reject_existing live duplicate edge, or a live-plus-request cycle.",
+    ];
+    canonical.action_manual.underlying_actions = [
+      "template.routing.read_project_routing_graph",
+      "template.routing.create_track_send",
+      "template.routing.set_send_volume",
+      "template.routing.set_send_pan",
+      "template.routing.set_send_mute",
+      "template.routing.set_master_parent_send",
+      "template.routing.set_track_channel_count",
+      "template.routing.remove_send",
+      "template.routing.read_track_routing",
+    ];
+    canonical.action_manual.readback_steps = [
+      "After all bounded mutations, read every affected source Track with template.routing.read_track_routing.",
+      "Verify every logical route by exact send_ref plus requested source_track_ref, destination_track_ref, volume, pan, and muted fields; verify deletion by exact absence.",
+      "Verify master_parent with master_parent_enabled and channel_counts with channel_count on the exact Track row.",
+      "Report mutation, per-operation live readback, and Project Index maintenance separately; dispatch success alone never marks a change applied.",
+    ];
+    canonical.action_manual.success_criteria = [
+      "Every logical operation has all of its atomic mutations completed and an exact, complete live readback match.",
+      "No routing change is marked applied from dispatch success, stale SQLite state, an incomplete Track read, or a different Send row.",
+    ];
+    canonical.action_manual.common_blockers = [
+      { code: "ROUTING_GRAPH_COVERAGE_INCOMPLETE", summary: "REAPER could not enumerate the complete live internal-routing graph, so no write started." },
+      { code: "ROUTING_GRAPH_TRUNCATED", summary: "The project exceeded the bounded complete-graph preflight; no write started." },
+      { code: "ROUTING_LIVE_DUPLICATE_EDGE", summary: "A reject_existing source-to-destination edge already exists live, so no write started; use allow_duplicate only when another Send is intentional." },
+      { code: "ROUTING_LIVE_CYCLE", summary: "The complete live graph plus requested creates forms a directed cycle; no write started." },
+      { code: "ROUTING_SEND_READBACK_MISMATCH", summary: "The exact live Send row did not match every requested field after mutation." },
+    ];
+    canonical.action_manual.recovery_steps = [
+      "For a preflight blocker, correct the exact operation set and run a fresh preview before execution.",
+      "If any write was attempted, do not blindly replay the request. Inspect per-operation mutation/live-readback truth, reread current routing, and retry only work still needed with a new preview.",
+    ];
+    canonical.action_manual.dry_run_shape = {
+      supported: true,
+      required_first: true,
+      output: ["preview", "zero_mutations"],
+    };
+    canonical.action_manual.resume_or_retry_policy = {
+      before_first_write: "correct_and_retry after a fresh dry-run preview",
+      after_write_attempt: "do_not_replay; inspect live routing and retry only remaining work",
+      hard_stop: "Stop on hardware/device I/O, incomplete graph truth, duplicate edges, cycles, stale Send identity, or repeated exact-readback mismatch.",
+    };
+    canonical.action_manual.examples = [
+      {
+        name: "preview one exact create",
+        input: {
+          routes: [{ id: "vox_to_verb", action: "create", source_track_ref: "track:guid:{VOCAL}", destination_track_ref: "track:guid:{VERB}", duplicate_policy: "reject_existing", volume: 0.5, pan: 0, muted: false }],
+          master_parent: [],
+          channel_counts: [],
+          dry_run: true,
+        },
+      },
+      {
+        name: "execute the unchanged create after preview",
+        input: {
+          routes: [{ id: "vox_to_verb", action: "create", source_track_ref: "track:guid:{VOCAL}", destination_track_ref: "track:guid:{VERB}", duplicate_policy: "reject_existing", volume: 0.5, pan: 0, muted: false }],
+          master_parent: [],
+          channel_counts: [],
+          dry_run: false,
+        },
+      },
+      {
+        name: "preview one exact update",
+        input: { routes: [{ id: "lower_verb", action: "update", send_ref: "send:track:guid:{VOCAL}:2", volume: 0.35, pan: -0.1, muted: false }], dry_run: true },
+      },
+      {
+        name: "preview one exact delete",
+        input: { routes: [{ id: "remove_old_verb", action: "delete", send_ref: "send:track:guid:{VOCAL}:2" }], dry_run: true },
+      },
+    ];
+  }
   if (id === "macro.fx.apply_chain") {
     canonical.action_manual.when_to_use = [
       "Use one fixed call to search REAPER's installed inventory and apply a bounded ordered Track or Take FX chain with final complete-chain readback.",

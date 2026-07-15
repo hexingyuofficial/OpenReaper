@@ -22,6 +22,7 @@ const ROOT = new URL("../..", import.meta.url);
 const SMOKE_SCRIPT = "scripts/smoke-template-runtime-live.mjs";
 const BRIDGE_SOURCE = readFileSync(new URL("../../reaper/bridge/openreaper-live-bridge.lua", import.meta.url), "utf8");
 const E5_R1_HANDLER_SOURCE = readFileSync(new URL("../../reaper/bridge/src/handlers/routing/e5_r1_routing_read_route.lua", import.meta.url), "utf8");
+const E5_R1_ROUTING_ONLY_SOURCE = E5_R1_HANDLER_SOURCE.slice(0, E5_R1_HANDLER_SOURCE.indexOf("\nlocal function e5_automation_envelope_key"));
 const E5_R1_FLAG = "--routing-read";
 const E5_R1_OPT_IN_ENV = "OPENREAPER_E5_R1_ROUTING_READ_LIVE_SMOKE";
 const E5_TRACK_REF_ENV = "OPENREAPER_E5_TRACK_REF";
@@ -187,8 +188,59 @@ describe("E5-R1 routing read live handler expansion", () => {
       ],
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
-    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
+    assert.doesNotMatch(E5_R1_ROUTING_ONLY_SOURCE, /set_loop_source|Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\(|REAPER\.app/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
+  });
+
+  it("keeps project graph reads bounded but permits large-project truth above the old 8/24 caps", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /bounded_limit\(request, request\.params\.max_tracks, 8, 128\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /bounded_limit\(request, request\.params\.max_edges, 24, 256\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /truncated = total > max_tracks/);
+    assert.match(E5_R1_HANDLER_SOURCE, /if #edges >= max_edges then[\s\S]*?truncated = true/);
+    assert.match(E5_R1_HANDLER_SOURCE, /GetTrackNumSends", track, 0/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /GetTrackNumSends", track, 1[\s\S]*?read_project_routing_graph/);
+  });
+
+  it("reports graph truncation separately from internal enumeration failure", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /local internally_complete = true/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local function mark_incomplete\(reason\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("TRACK_COUNT_UNAVAILABLE"\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("TRACK_READ_FAILED"\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("SEND_COUNT_UNAVAILABLE"\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("SEND_SUMMARY_UNAVAILABLE"\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /coverage_status = internally_complete and "complete" or "incomplete"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /coverage = \{[\s\S]*?internally_complete = internally_complete,[\s\S]*?incomplete_reasons = incomplete_reasons/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local function read_project_routing_graph[\s\S]*?GetTrackNumSends", track, 1/);
+  });
+
+  it("treats non-numeric route counts and unreadable send rows as incomplete truth", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /local function e5_routing_read_sends[\s\S]*?call_reaper\("GetTrackNumSends", track, category\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /type\(count\) ~= "number"[\s\S]*?count ~= count[\s\S]*?count < 0[\s\S]*?count ~= math\.floor\(count\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /complete = false[\s\S]*?"SEND_SUMMARY_UNAVAILABLE"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /coverage_status = internally_complete and "complete" or "incomplete"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local function read_project_routing_graph[\s\S]*?type\(total\) ~= "number"[\s\S]*?"TRACK_COUNT_UNAVAILABLE"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local function read_project_routing_graph[\s\S]*?type\(send_count\) ~= "number"[\s\S]*?"SEND_COUNT_UNAVAILABLE"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local function e5_routing_send_summary[\s\S]*?e5_routing_read_send_number_exact[\s\S]*?return nil/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local function e5_routing_send_summary[\s\S]*?e5_routing_read_send_value\(source_track/);
+  });
+
+  it("never substitutes default Track state for failed routing truth reads", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /local function e5_routing_master_parent_exact[\s\S]*?return nil/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local function e5_routing_channel_count_exact[\s\S]*?return nil/);
+    assert.match(E5_R1_HANDLER_SOURCE, /"TRACK_CHANNEL_COUNT_UNAVAILABLE"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /"MASTER_PARENT_STATE_UNAVAILABLE"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /channel_count = channel_count == nil and JSON_NULL or channel_count/);
+  });
+
+  it("keeps project graph Track state fields aligned with exact Track readback", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /channel_count = e5_routing_channel_count_exact\(track\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /master_parent_enabled = e5_routing_master_parent_exact\(track\)/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local function read_project_routing_graph[\s\S]*?channels = e5_routing_channel_count\(track\)/);
+  });
+
+  it("creates a fresh Send when allow_duplicate is explicit", () => {
+    assert.match(E5_R1_HANDLER_SOURCE, /existing == nil or request\.params\.duplicate_policy == "allow_duplicate"[\s\S]*?CreateTrackSend/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local send_index = existing/);
   });
 });
 

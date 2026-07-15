@@ -37,15 +37,15 @@ describe("Alpha3.2-E routing apply planner", () => {
   });
 
   it("emits internal send, send-control, master-parent, channel-count, and readback requests", () => {
-    const plan = planAlpha3_2ERoutingApplyMacro({
+    const input = {
       routes: [
         { id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5, pan: 0, muted: false },
         { id: "send_b", action: "update", send_ref: "send:track:0:1", volume: 0.75 },
       ],
       master_parent: [{ id: "src_master", track_ref: "track:guid:{SRC}", enabled: true }],
       channel_counts: [{ id: "src_channels", track_ref: "track:guid:{SRC}", channel_count: 6 }],
-      dry_run: false,
-    });
+    };
+    const plan = planAlpha3_2ERoutingApplyMacro({ ...input, dry_run: false });
     assert.equal(plan.ok, true);
     assert.deepEqual(plan.preflight_requests.map((request) => request.id), ["template.routing.read_project_routing_graph"]);
     assert.deepEqual(plan.mutation_requests.map((request) => request.id), [
@@ -64,14 +64,14 @@ describe("Alpha3.2-E routing apply planner", () => {
   });
 
   it("emits exact internal send removals in descending source-slot order", () => {
-    const plan = planAlpha3_2ERoutingApplyMacro({
+    const input = {
       routes: [
         { id: "low", action: "delete", send_ref: "send:track:guid:{SRC}:1" },
         { id: "high", action: "delete", send_ref: "send:track:guid:{SRC}:4" },
         { id: "other", action: "delete", send_ref: "send:track:guid:{OTHER}:2" },
       ],
-      dry_run: false,
-    });
+    };
+    const plan = planAlpha3_2ERoutingApplyMacro({ ...input, dry_run: false });
     assert.equal(plan.ok, true);
     assert.equal(plan.preview.target_counts.remove_sends, 3);
     assert.deepEqual(plan.mutation_requests.map((request) => request.refs.send_ref.ref), [
@@ -111,6 +111,58 @@ describe("Alpha3.2-E routing apply planner", () => {
     assert.equal(codes.includes("ROUTING_MASTER_PARENT_ENABLED_INVALID"), true);
     assert.equal(codes.includes("ROUTING_CHANNEL_COUNT_INVALID"), true);
     assert.equal(codes.includes("ROUTING_APPLY_IDEMPOTENCY_KEY_UNSUPPORTED"), true);
+    assert.deepEqual(plan.child_requests, []);
+  });
+
+  it("fails closed for self-sends, duplicate create edges, and request-local cycles", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [
+        { id: "self", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{A}" },
+        { id: "ab1", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}" },
+        { id: "ab2", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}" },
+        { id: "ba", action: "create", source_track_ref: "track:guid:{B}", destination_track_ref: "track:guid:{A}" },
+      ],
+    });
+    const codes = plan.blockers.map((entry) => entry.code);
+    assert.equal(codes.includes("ROUTING_SELF_SEND_FORBIDDEN"), true);
+    assert.equal(codes.includes("ROUTING_REQUEST_DUPLICATE_EDGE"), true);
+    assert.equal(codes.includes("ROUTING_REQUEST_CYCLE"), true);
+    assert.deepEqual(plan.child_requests, []);
+  });
+
+  it("executes the same operation input with only dry_run changed to false", () => {
+    const input = { routes: [{ id: "ab", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}" }] };
+    const preview = planAlpha3_2ERoutingApplyMacro(input);
+    const execution = planAlpha3_2ERoutingApplyMacro({ ...input, dry_run: false });
+    assert.equal(preview.ok, true);
+    assert.equal(preview.dry_run, true);
+    assert.equal(Object.hasOwn(preview, "required_confirm_scope"), false);
+    assert.equal(execution.ok, true);
+    assert.equal(execution.mutation_requests.length, 1);
+    assert.equal(execution.mutation_requests[0].operation_id, "ab");
+  });
+
+  it("allows repeated request-local edges only when every row explicitly allows duplicates", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [
+        { id: "ab1", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}", duplicate_policy: "allow_duplicate" },
+        { id: "ab2", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}", duplicate_policy: "allow_duplicate" },
+      ],
+      dry_run: false,
+    });
+    assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+    assert.equal(plan.mutation_requests.filter((request) => request.id === "template.routing.create_track_send").length, 2);
+  });
+
+  it("rejects operation ids reused across routing operation kinds", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [{ id: "shared", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}" }],
+      master_parent: [{ id: "shared", track_ref: "track:guid:{A}", enabled: false }],
+      channel_counts: [{ id: "shared", track_ref: "track:guid:{A}", channel_count: 4 }],
+    });
+
+    assert.equal(plan.ok, false);
+    assert.equal(plan.blockers.filter((entry) => entry.code === "ROUTING_OPERATION_ID_DUPLICATE").length, 2);
     assert.deepEqual(plan.child_requests, []);
   });
 

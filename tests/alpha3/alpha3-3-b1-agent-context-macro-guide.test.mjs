@@ -10,6 +10,9 @@ import {
 import {
   ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
 } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
+  planAlpha3_2ERoutingApplyMacro,
+} from "../../packages/mcp-server/src/alpha3-2e-routing-apply-v1.mjs";
 
 describe("Alpha3.3-B1 agent context Macro guide", () => {
   it("returns one flat compact fifteen-Macro menu without tier fields", () => {
@@ -116,6 +119,45 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     assert.match(media.action_manual.input_shape.track_policy, /one_new_track_per_asset/u);
     assert.match(media.action_manual.input_shape.mode, /relink_sources/u);
     assert.match(media.action_manual.readback_steps.join(" "), /dispatch success alone never marks applied/iu);
+  });
+
+  it("publishes the exact executable Routing ABI and a planner-valid preview-to-execute handoff", () => {
+    const guide = createAlpha3_3B1AgentContextMacroGuide({ requested_ids: ["macro.routing.apply"] });
+    const [routing] = guide.requested_expansions.items;
+    const manual = routing.action_manual;
+    const manualText = JSON.stringify(manual);
+
+    assert.deepEqual(Object.keys(manual.input_shape), [
+      "routes",
+      "master_parent",
+      "channel_counts",
+      "dry_run",
+      "compact_response",
+    ]);
+    for (const staleField of ["source_ref", "target_ref", "track_channel_counts", "readback_policy", "\"mute\""]) {
+      assert.equal(manualText.includes(staleField), false, staleField);
+    }
+    assert.match(manual.input_shape.routes, /source_track_ref/u);
+    assert.match(manual.input_shape.routes, /destination_track_ref/u);
+    assert.match(manual.input_shape.routes, /muted boolean/u);
+    assert.match(manual.readback_steps.join(" "), /dispatch success alone never marks a change applied/iu);
+    assert.match(manual.preflight_steps.join(" "), /complete live project routing graph/iu);
+    assert.match(manual.recovery_steps.join(" "), /do not blindly replay/iu);
+
+    const previewExample = manual.examples.find((entry) => entry.name === "preview one exact create");
+    const executeExample = manual.examples.find((entry) => entry.name.startsWith("execute the unchanged create"));
+    const preview = planAlpha3_2ERoutingApplyMacro(previewExample.input);
+    const execution = planAlpha3_2ERoutingApplyMacro(executeExample.input);
+    assert.equal(preview.ok, true);
+    assert.equal(preview.dry_run, true);
+    assert.equal(execution.ok, true, JSON.stringify(execution.blockers));
+    assert.equal(execution.dry_run, false);
+    assert.deepEqual(manual.examples.map((entry) => entry.name), [
+      "preview one exact create",
+      "execute the unchanged create after preview",
+      "preview one exact update",
+      "preview one exact delete",
+    ]);
   });
 
   it("ranks one to three canonical Macros from ordinary English and Chinese intent", () => {

@@ -296,6 +296,15 @@ local function e5_routing_read_send_value(track, category, send_index, key, fall
   return fallback
 end
 
+local function e5_routing_read_send_number_exact(track, category, send_index, key)
+  local ok, value = call_reaper("GetTrackSendInfo_Value", track, category, send_index, key)
+  local number = ok and first_number(value) or nil
+  if type(number) ~= "number" or number ~= number or number == math.huge or number == -math.huge then
+    return nil
+  end
+  return number
+end
+
 local function e5_routing_send_mode_label(value)
   if value == 1 then
     return "pre_fx"
@@ -310,6 +319,15 @@ local function e5_routing_master_parent_enabled(track)
   return ok and first_number(value) ~= 0 or false
 end
 
+local function e5_routing_master_parent_exact(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "B_MAINSEND")
+  local number = ok and first_number(value) or nil
+  if type(number) ~= "number" or number ~= number or number == math.huge or number == -math.huge then
+    return nil
+  end
+  return number ~= 0
+end
+
 local function e5_routing_channel_count(track)
   local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_NCHAN")
   local channels = ok and first_number(value) or 2
@@ -319,9 +337,25 @@ local function e5_routing_channel_count(track)
   return math.floor(channels)
 end
 
+local function e5_routing_channel_count_exact(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_NCHAN")
+  local channels = ok and first_number(value) or nil
+  if type(channels) ~= "number" or channels ~= channels or channels == math.huge or channels == -math.huge or channels < 2 or channels ~= math.floor(channels) then
+    return nil
+  end
+  return channels
+end
+
 local function e5_routing_send_summary(source_track, send_index, category)
   local ok_destination, destination_track = call_reaper("GetTrackSendInfo_Value", source_track, category, send_index, "P_DESTTRACK")
   if not ok_destination or not destination_track then
+    return nil
+  end
+  local volume = e5_routing_read_send_number_exact(source_track, category, send_index, "D_VOL")
+  local pan = e5_routing_read_send_number_exact(source_track, category, send_index, "D_PAN")
+  local muted = e5_routing_read_send_number_exact(source_track, category, send_index, "B_MUTE")
+  local mode = e5_routing_read_send_number_exact(source_track, category, send_index, "I_SENDMODE")
+  if volume == nil or pan == nil or muted == nil or mode == nil then
     return nil
   end
   return {
@@ -330,10 +364,10 @@ local function e5_routing_send_summary(source_track, send_index, category)
     source_track_ref = e5_routing_track_ref_string(source_track),
     destination_track_ref = e5_routing_track_ref_string(destination_track),
     index = send_index,
-    volume = e5_routing_read_send_value(source_track, category, send_index, "D_VOL", 1),
-    pan = e5_routing_read_send_value(source_track, category, send_index, "D_PAN", 0),
-    muted = e5_routing_read_send_value(source_track, category, send_index, "B_MUTE", 0) ~= 0,
-    mode = e5_routing_send_mode_label(e5_routing_read_send_value(source_track, category, send_index, "I_SENDMODE", 0)),
+    volume = volume,
+    pan = pan,
+    muted = muted ~= 0,
+    mode = e5_routing_send_mode_label(mode),
   }
 end
 
@@ -514,7 +548,15 @@ end
 local function e5_routing_read_sends(track, category, limit)
   local rows = json_array({})
   local refs = json_array({})
-  local count = e5_routing_send_count(track, category)
+  local incomplete_reasons = json_array({})
+  local ok_count, raw_count = call_reaper("GetTrackNumSends", track, category)
+  local count = ok_count and first_number(raw_count) or nil
+  local complete = true
+  if type(count) ~= "number" or count ~= count or count == math.huge or count == -math.huge or count < 0 or count ~= math.floor(count) then
+    count = 0
+    complete = false
+    incomplete_reasons[#incomplete_reasons + 1] = "SEND_COUNT_UNAVAILABLE"
+  end
   local truncated = false
   for index = 0, count - 1 do
     if #rows >= limit then
@@ -525,9 +567,12 @@ local function e5_routing_read_sends(track, category, limit)
     if summary then
       rows[#rows + 1] = summary
       refs[#refs + 1] = e5_routing_send_object_ref(track, index)
+    else
+      complete = false
+      incomplete_reasons[#incomplete_reasons + 1] = "SEND_SUMMARY_UNAVAILABLE"
     end
   end
-  return rows, refs, truncated
+  return rows, refs, truncated, complete, incomplete_reasons
 end
 
 local function read_track_routing(request)
@@ -536,24 +581,49 @@ local function read_track_routing(request)
     return e5_routing_error("TRACK_NOT_FOUND", "E5-R1 read_track_routing requires a resolvable track ref.", {})
   end
   local limit = READ_B_MEDIA.bounded_limit(request, request.params.max_routes, 32, 128)
-  local sends, send_refs, sends_truncated = e5_routing_read_sends(track, 0, limit)
+  local sends, send_refs, sends_truncated, sends_complete, send_incomplete_reasons = e5_routing_read_sends(track, 0, limit)
   local receives = json_array({})
   local receive_refs = json_array({})
   local receives_truncated = false
+  local receives_complete = true
+  local receive_incomplete_reasons = json_array({})
   if request.params.include_receives == true then
-    receives, receive_refs, receives_truncated = e5_routing_read_sends(track, -1, limit)
+    receives, receive_refs, receives_truncated, receives_complete, receive_incomplete_reasons = e5_routing_read_sends(track, -1, limit)
   end
   local track_ref = e5_routing_track_ref_string(track)
   local refs = e5_routing_refs(e5_routing_track_object_ref(track))
   e5_routing_append_refs(refs, send_refs)
   e5_routing_append_refs(refs, receive_refs)
+  local internally_complete = sends_complete and receives_complete
+  local incomplete_reasons = json_array({})
+  e5_routing_append_refs(incomplete_reasons, send_incomplete_reasons)
+  e5_routing_append_refs(incomplete_reasons, receive_incomplete_reasons)
+  local channel_count = e5_routing_channel_count_exact(track)
+  if channel_count == nil then
+    internally_complete = false
+    incomplete_reasons[#incomplete_reasons + 1] = "TRACK_CHANNEL_COUNT_UNAVAILABLE"
+  end
+  local master_parent_enabled = JSON_NULL
+  if request.params.include_master_parent ~= false then
+    master_parent_enabled = e5_routing_master_parent_exact(track)
+    if master_parent_enabled == nil then
+      internally_complete = false
+      master_parent_enabled = JSON_NULL
+      incomplete_reasons[#incomplete_reasons + 1] = "MASTER_PARENT_STATE_UNAVAILABLE"
+    end
+  end
   return e5_routing_summary(request, {
     track_ref = track_ref,
-    channel_count = e5_routing_channel_count(track),
-    master_parent_enabled = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
+    channel_count = channel_count == nil and JSON_NULL or channel_count,
+    master_parent_enabled = master_parent_enabled,
     sends = sends,
     receives = receives,
     truncated = sends_truncated or receives_truncated,
+    coverage_status = internally_complete and "complete" or "incomplete",
+    coverage = {
+      internally_complete = internally_complete,
+      incomplete_reasons = incomplete_reasons,
+    },
   }), nil, nil, nil, refs
 end
 
@@ -589,8 +659,8 @@ local function create_track_send(request)
       send_ref = e5_routing_send_ref(source_track, existing),
     })
   end
-  local send_index = existing
-  if send_index == nil then
+  local send_index = nil
+  if existing == nil or request.params.duplicate_policy == "allow_duplicate" then
     local ok, created_index = call_reaper("CreateTrackSend", source_track, destination_track)
     send_index = ok and first_number(created_index) or nil
   end
@@ -604,7 +674,7 @@ local function create_track_send(request)
       send_index = send_index,
     })
   end
-  summary.created = existing == nil
+  summary.created = true
   return e5_routing_write_summary(request, summary), nil, json_array({}), json_array({}), e5_routing_refs(
     e5_routing_send_object_ref(source_track, send_index),
     e5_routing_track_object_ref(source_track),
@@ -879,10 +949,24 @@ local function list_available_audio_outputs(request)
 end
 
 local function read_project_routing_graph(request)
+  local internally_complete = true
+  local incomplete_reasons = json_array({})
+  local seen_incomplete_reasons = {}
+  local function mark_incomplete(reason)
+    internally_complete = false
+    if not seen_incomplete_reasons[reason] then
+      seen_incomplete_reasons[reason] = true
+      incomplete_reasons[#incomplete_reasons + 1] = reason
+    end
+  end
   local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
-  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 8)
-  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 24)
+  local total = ok_count and first_number(count) or nil
+  if type(total) ~= "number" or total ~= total or total == math.huge or total == -math.huge or total < 0 or total ~= math.floor(total) then
+    total = 0
+    mark_incomplete("TRACK_COUNT_UNAVAILABLE")
+  end
+  local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 128)
+  local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 256)
   local tracks = json_array({})
   local edges = json_array({})
   local refs = json_array({})
@@ -891,16 +975,29 @@ local function read_project_routing_graph(request)
     local ok_track, track = call_reaper("GetTrack", 0, index)
     if ok_track and track then
       local track_ref = e5_routing_track_ref_string(track)
+      local channel_count = e5_routing_channel_count_exact(track)
+      if channel_count == nil then
+        mark_incomplete("TRACK_CHANNEL_COUNT_UNAVAILABLE")
+      end
+      local master_parent_enabled = JSON_NULL
+      if request.params.include_master_parent ~= false then
+        master_parent_enabled = e5_routing_master_parent_exact(track)
+        if master_parent_enabled == nil then
+          master_parent_enabled = JSON_NULL
+          mark_incomplete("MASTER_PARENT_STATE_UNAVAILABLE")
+        end
+      end
       tracks[#tracks + 1] = {
         track_ref = track_ref,
         index = index,
-        channels = e5_routing_channel_count(track),
-        master = request.params.include_master_parent == false and JSON_NULL or e5_routing_master_parent_enabled(track),
+        channel_count = channel_count == nil and JSON_NULL or channel_count,
+        master_parent_enabled = master_parent_enabled,
       }
       refs[#refs + 1] = e5_routing_track_object_ref(track)
       local ok_send_count, send_count = call_reaper("GetTrackNumSends", track, 0)
-      send_count = ok_send_count and math.max(0, math.floor(first_number(send_count) or 0)) or 0
-      if not ok_send_count then
+      send_count = ok_send_count and first_number(send_count) or nil
+      if type(send_count) ~= "number" or send_count ~= send_count or send_count == math.huge or send_count == -math.huge or send_count < 0 or send_count ~= math.floor(send_count) then
+        send_count = 0
         mark_incomplete("SEND_COUNT_UNAVAILABLE")
       end
       for send_index = 0, send_count - 1 do
@@ -912,8 +1009,12 @@ local function read_project_routing_graph(request)
         if summary then
           edges[#edges + 1] = summary
           refs[#refs + 1] = e5_routing_send_object_ref(track, send_index)
+        else
+          mark_incomplete("SEND_SUMMARY_UNAVAILABLE")
         end
       end
+    else
+      mark_incomplete("TRACK_READ_FAILED")
     end
     if #edges >= max_edges then
       break
@@ -926,6 +1027,11 @@ local function read_project_routing_graph(request)
     tracks = tracks,
     edges = edges,
     truncated = truncated,
+    coverage_status = internally_complete and "complete" or "incomplete",
+    coverage = {
+      internally_complete = internally_complete,
+      incomplete_reasons = incomplete_reasons,
+    },
   }), nil, nil, nil, refs
 end
 

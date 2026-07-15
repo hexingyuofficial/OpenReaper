@@ -4,6 +4,7 @@ import {
   ALPHA3_2_5_C_PROJECT_WRITE_REGISTRY,
   executeAlpha3_2_5CProjectWriteMacro,
 } from "../../packages/mcp-server/src/alpha3-2-5-c-project-write-runtime-v1.mjs";
+import { planAlpha3_2ERoutingApplyMacro } from "../../packages/mcp-server/src/alpha3-2e-routing-apply-v1.mjs";
 import { planAlpha3_2EProjectDeleteTargetsMacro } from "../../packages/mcp-server/src/alpha3-2e-project-delete-targets-v1.mjs";
 
 const NOW = "2026-07-12T00:00:00.000Z";
@@ -37,10 +38,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
-        input: {
+        input: confirmedRoutingInput({
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5 }],
-          dry_run: false,
-        },
+        }),
         context: { session_id: "c2", request_sequence: 1 },
       },
       executeAtomic: fakeAtomic(calls),
@@ -63,10 +63,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
-        input: {
+        input: confirmedRoutingInput({
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
-          dry_run: false,
-        },
+        }),
       },
       executeAtomic: fakeAtomic(calls, { wrongTrackRef: "track:guid:{WRONG}" }),
       now: () => new Date(NOW),
@@ -82,10 +81,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
-        input: {
+        input: confirmedRoutingInput({
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
-          dry_run: false,
-        },
+        }),
       },
       executeAtomic: fakeAtomic(calls, { omitWriteVerification: true }),
       now: () => new Date(NOW),
@@ -104,10 +102,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
-        input: {
+        input: confirmedRoutingInput({
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5 }],
-          dry_run: false,
-        },
+        }),
       },
       executeAtomic: fakeAtomic(calls),
       projectIndexRuntime: {
@@ -129,6 +126,225 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.verification.status, "passed");
     assert.equal(result.result.data.outcome.live_readback.status, "passed");
     assert.equal(result.result.data.outcome.index_maintenance.status, "failed");
+  });
+
+  it("fails closed before the first routing write when graph truth is incomplete or malformed", async () => {
+    const cases = [
+      [{ routingGraphTruncated: true }, "ROUTING_GRAPH_TRUNCATED"],
+      [{ routingGraphCoverageStatus: "incomplete" }, "ROUTING_GRAPH_COVERAGE_INCOMPLETE"],
+      [{ routingGraphMissingTracks: true }, "ROUTING_GRAPH_SHAPE_INVALID"],
+      [{ routingGraphMissingEdges: true }, "ROUTING_GRAPH_SHAPE_INVALID"],
+      [{ routingGraphTrackCount: 3 }, "ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE"],
+      [{ routingGraphReturnedTrackCount: 1 }, "ROUTING_GRAPH_TRACK_COUNT_MISMATCH"],
+      [{ routingGraphEdgeCount: 1 }, "ROUTING_GRAPH_EDGE_COUNT_MISMATCH"],
+    ];
+    for (const [options, expectedCode] of cases) {
+      const calls = [];
+      const result = await executeAlpha3_2_5CProjectWriteMacro({
+        request: {
+          id: "macro.routing.apply",
+          input: confirmedRoutingInput({
+            routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+          }),
+        },
+        executeAtomic: fakeAtomic(calls, options),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, expectedCode);
+      assert.equal(result.execution.status, "failed", expectedCode);
+      assert.equal(result.error.code, expectedCode);
+      assert.equal(calls.some((call) => isWrite(call.id)), false);
+      assert.equal(result.recovery.replay_policy, "correct_and_retry");
+      assert.match(result.recovery.action, /same operations/);
+      assert.match(result.recovery.action, /only dry_run changed to false/);
+      assert.doesNotMatch(result.recovery.action, /confirm/i);
+    }
+  });
+
+  it("does not report a write attempt when ref materialization fails before executor dispatch", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, { omitResolverObjectRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "failed");
+    assert.equal(result.error.code, "PROJECT_WRITE_OBJECT_REF_REQUIRED");
+    assert.equal(calls.some((call) => isWrite(call.id)), false);
+    assert.equal(result.recovery.replay_policy, "correct_and_retry");
+  });
+
+  it("treats an executor throw at the mutation boundary as dispatch-uncertain", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, { throwOnWrite: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(calls.some((call) => isWrite(call.id)), true);
+    assert.equal(result.recovery.replay_policy, "do_not_replay");
+  });
+
+  it("blocks live duplicate edges and live-plus-request cycles before the first write", async () => {
+    const cases = [
+      [
+        { duplicate_policy: "reject_existing" },
+        [{ send_ref: "send:track:guid:{SRC}:0", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+        "ROUTING_LIVE_DUPLICATE_EDGE",
+      ],
+      [
+        {},
+        [{ send_ref: "send:track:guid:{DST}:0", source_track_ref: "track:guid:{DST}", destination_track_ref: "track:guid:{SRC}" }],
+        "ROUTING_LIVE_CYCLE",
+      ],
+    ];
+    for (const [routeExtras, graphEdges, expectedCode] of cases) {
+      const calls = [];
+      const result = await executeAlpha3_2_5CProjectWriteMacro({
+        request: {
+          id: "macro.routing.apply",
+          input: confirmedRoutingInput({
+            routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", ...routeExtras }],
+          }),
+        },
+        executeAtomic: fakeAtomic(calls, { routingGraphEdges: graphEdges }),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.error.code, expectedCode);
+      assert.equal(calls.some((call) => isWrite(call.id)), false);
+      assert.equal(result.result.changes.every((change) => change.mutation.status === "pending"), true);
+    }
+  });
+
+  it("allows an intentional live duplicate and binds the newly created Send", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", duplicate_policy: "allow_duplicate" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, {
+        routingGraphEdges: [{ send_ref: "send:track:guid:{SRC}:0", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+      }),
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.find((call) => call.id === "template.routing.create_track_send").input.duplicate_policy, "allow_duplicate");
+    assert.equal(result.result.changes[0].target_ref, "send:guid:{CREATED}");
+  });
+
+  it("reports one logical routing change with separate mutation, live readback, and index truth", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5, pan: 0, muted: false }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 1);
+    assert.deepEqual(result.result.changes[0].template_ids, [
+      "template.routing.create_track_send",
+      "template.routing.set_send_volume",
+      "template.routing.set_send_pan",
+      "template.routing.set_send_mute",
+    ]);
+    assert.deepEqual(result.result.changes[0].mutation, { status: "completed", completed_count: 4, total_count: 4 });
+    assert.equal(result.result.changes[0].live_readback.status, "passed");
+    assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
+  });
+
+  it("never marks a routing row applied when exact live readback is missing, multiple, mismatched, or truncated", async () => {
+    const cases = [
+      [{ routingReadbackOmitSend: true }, "ROUTING_SEND_READBACK_MISSING"],
+      [{ routingReadbackDuplicateSend: true }, "ROUTING_SEND_READBACK_MULTIPLE"],
+      [{ routingReadbackVolume: 0.75 }, "ROUTING_SEND_READBACK_MISMATCH"],
+      [{ routingReadbackTruncated: true }, "ROUTING_TRACK_READBACK_INCOMPLETE"],
+      [{ routingReadbackCoverageStatus: "incomplete" }, "ROUTING_TRACK_READBACK_INCOMPLETE"],
+    ];
+    for (const [options, expectedCode] of cases) {
+      const calls = [];
+      const result = await executeAlpha3_2_5CProjectWriteMacro({
+        request: {
+          id: "macro.routing.apply",
+          input: confirmedRoutingInput({
+            routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5 }],
+          }),
+        },
+        executeAtomic: fakeAtomic(calls, options),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, expectedCode);
+      assert.equal(result.execution.status, "partial_failure");
+      assert.equal(result.error.code, expectedCode);
+      assert.notEqual(result.result.changes[0].status, "applied");
+      assert.equal(result.result.changes[0].live_readback.status, "failed");
+      assert.equal(result.recovery.replay_policy, "do_not_replay");
+    }
+  });
+
+  it("never verifies delete absence when send enumeration coverage is unknown", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "delete_a", action: "delete", send_ref: "send:track:guid:{SRC}:0" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, { routingReadbackCoverageStatus: "incomplete" }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "ROUTING_TRACK_READBACK_INCOMPLETE");
+    assert.notEqual(result.result.changes[0].status, "applied");
+    assert.equal(result.recovery.replay_policy, "do_not_replay");
+  });
+
+  it("verifies master-parent and channel-count operations from their exact live track rows", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          master_parent: [{ id: "master", track_ref: "track:guid:{SRC}", enabled: false }],
+          channel_counts: [{ id: "channels", track_ref: "track:guid:{DST}", channel_count: 4 }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(result.result.changes.map((change) => [change.operation_id, change.status]), [["master", "applied"], ["channels", "applied"]]);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
   });
 
   it("executes layout through create/live-resolve/readback stages", async () => {
@@ -484,10 +700,9 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
-        input: {
+        input: confirmedRoutingInput({
           routes: [{ id: "send", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
-          dry_run: false,
-        },
+        }),
       },
       executeAtomic: async (request) => {
         const response = await fakeAtomic(calls)(request);
@@ -515,22 +730,59 @@ function successfulExecution(id, summary, refs = []) {
   };
 }
 
+function confirmedRoutingInput(input) {
+  const preview = planAlpha3_2ERoutingApplyMacro({ ...input, dry_run: true });
+  assert.equal(preview.ok, true, JSON.stringify(preview.blockers));
+  return { ...input, dry_run: false };
+}
+
 function fakeAtomic(calls, options = {}) {
   return async ({ id, input = {}, refs = {}, budget }) => {
     calls.push({ id, input, refs, budget });
+    if (options.throwOnWrite && isWrite(id)) throw new Error("Executor transport outcome is unknown.");
     if (id === "template.items.resolve_item_ref" && calls.some((call) => call.id === "template.items.delete_items")) {
       return { ok: false, request: { id }, error: { code: "ITEM_NOT_FOUND", message: "Deleted item no longer resolves." }, result: {} };
     }
     const ref = firstRef(refs);
     const summary = {};
-    if (id === "template.tracks.resolve_track_ref") summary.track_ref = options.wrongTrackRef ?? input.track_ref;
+    if (id === "template.routing.read_project_routing_graph") {
+      summary.tracks = options.routingGraphTracks ?? [
+        { track_ref: "track:guid:{SRC}", master_parent_enabled: true, channel_count: 2 },
+        { track_ref: "track:guid:{DST}", master_parent_enabled: true, channel_count: 2 },
+      ];
+      summary.edges = options.routingGraphEdges ?? [];
+      summary.track_count = options.routingGraphTrackCount ?? summary.tracks.length;
+      summary.returned_track_count = options.routingGraphReturnedTrackCount ?? summary.tracks.length;
+      summary.edge_count = options.routingGraphEdgeCount ?? summary.edges.length;
+      summary.truncated = options.routingGraphTruncated === true;
+      summary.coverage_status = options.routingGraphCoverageStatus ?? "complete";
+      summary.coverage = { internally_complete: options.routingGraphInternallyComplete !== false };
+      if (options.routingGraphMissingTracks) delete summary.tracks;
+      if (options.routingGraphMissingEdges) delete summary.edges;
+    }
+    else if (id === "template.tracks.resolve_track_ref") summary.track_ref = options.wrongTrackRef ?? input.track_ref;
     else if (id === "template.items.resolve_item_ref") summary.item_ref = input.ref;
     else if (id === "template.items.read_item_summary") summary.item_ref = ref;
     else if (id === "template.routing.resolve_send_ref") summary.send_ref = input.send_ref;
     else if (id === "template.routing.create_track_send") summary.send_ref = "send:guid:{CREATED}";
     else if (id === "template.routing.read_track_routing") {
-      summary.tracks = [{ track_ref: "track:guid:{SRC}" }, { track_ref: "track:guid:{DST}" }];
-      summary.sends = [{ send_ref: "send:guid:{CREATED}", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }];
+      summary.track_ref = ref;
+      summary.master_parent_enabled = ref === "track:guid:{SRC}" && calls.some((call) => call.id === "template.routing.set_master_parent_send") ? false : true;
+      summary.channel_count = ref === "track:guid:{DST}" && calls.some((call) => call.id === "template.routing.set_track_channel_count") ? 4 : 2;
+      summary.truncated = options.routingReadbackTruncated === true;
+      summary.coverage_status = options.routingReadbackCoverageStatus ?? "complete";
+      summary.coverage = { internally_complete: options.routingReadbackCoverageStatus !== "incomplete" };
+      const expectedSend = {
+            send_ref: "send:guid:{CREATED}",
+            source_track_ref: "track:guid:{SRC}",
+            destination_track_ref: "track:guid:{DST}",
+            volume: options.routingReadbackVolume ?? (calls.some((call) => call.id === "template.routing.set_send_volume") ? 0.5 : 1),
+            pan: 0,
+            muted: false,
+          };
+      summary.sends = ref === "track:guid:{SRC}" && !options.routingReadbackOmitSend
+        ? options.routingReadbackDuplicateSend ? [expectedSend, { ...expectedSend }] : [expectedSend]
+        : [];
     }
     else if (id === "template.media.probe_file") summary.file_ref = "file:guid:{PROBED}";
     else if (id === "template.tracks.create_track" || id === "template.tracks.create_folder_track") {
@@ -573,11 +825,12 @@ function fakeAtomic(calls, options = {}) {
         || (options.markerRegionReadbackTruncatedAfterWrite === true && created.length > 0);
     }
     else if (id.startsWith("template.media.import_file")) summary.imported_item_refs = ["item:guid:{IMPORTED}"];
+    const resultRefs = Object.values(summary).flatMap((value) => Array.isArray(value) ? value.map(objectRef) : typeof value === "string" ? [objectRef(value)] : []);
     return {
       ok: true,
       request: { id: options.realLengthRequestIds ? realLengthRequestId(calls.length, id) : id },
       ...(!options.omitWriteVerification || !isWrite(id) ? { verification: { status: "passed" } } : {}),
-      result: { summary, readback: summary, refs: Object.values(summary).flatMap((value) => Array.isArray(value) ? value.map(objectRef) : typeof value === "string" ? [objectRef(value)] : []) },
+      result: { summary, readback: summary, refs: options.omitResolverObjectRefs && id === "template.tracks.resolve_track_ref" ? [] : resultRefs },
     };
   };
 }
