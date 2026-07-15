@@ -524,6 +524,83 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.filter((call) => isWrite(call.id)).length, 40);
   });
 
+  it("verifies a layout batch whose final rows are beyond track one hundred", async () => {
+    const calls = [];
+    const layout = layoutRows(13).map((row, offset) => ({
+      ...row,
+      index: 91 + offset,
+    }));
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { layout, match_policy: "create_only", dry_run: false },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        realLengthTrackRefs: true,
+        respectTrackListLimitByIndex: true,
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 13);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    const verificationReads = calls.filter((call) =>
+      call.id === "template.tracks.list_tracks" || call.id === "template.tracks.read_folder_structure"
+    );
+    assert.equal(verificationReads.length >= 2, true);
+    assert.equal(verificationReads.every((call) => call.input.limit === 256), true);
+  });
+
+  it("uses exact GUID readback for layout targets beyond the bounded bulk scan", async () => {
+    const calls = [];
+    const layout = layoutRows(13).map((row, offset) => ({
+      ...row,
+      index: 291 + offset,
+    }));
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { layout, match_policy: "create_only", dry_run: false },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        realLengthTrackRefs: true,
+        respectTrackListLimitByIndex: true,
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    const exactReadbacks = postMutationTrackResolverCalls(calls);
+    assert.deepEqual(exactReadbacks.map((call) => call.input.track_ref), result.result.changes.map((change) => change.target_ref));
+  });
+
+  it("does not apply a deep layout row when exact GUID readback returns another Track", async () => {
+    const calls = [];
+    const layout = [{ ...layoutRows(1)[0], index: 300 }];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: { layout, match_policy: "create_only", dry_run: false },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        realLengthTrackRefs: true,
+        respectTrackListLimitByIndex: true,
+        wrongPostReadbackResolverTrackIndex: 300,
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "PROJECT_WRITE_ROW_READBACK_MISSING");
+    assert.equal(result.result.changes[0].status, "readback_missing");
+    assert.equal(result.result.changes[0].live_readback.status, "failed");
+  });
+
   it("blocks one-hundred-row compact results before the first mutation for short and long ids", async () => {
     for (const longIds of [false, true]) {
       const calls = [];
@@ -573,7 +650,12 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     const invalidations = [];
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: { id: "macro.project.apply_layout", input: { layout: layoutRows(3), dry_run: false } },
-      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true, realLengthTrackRefs: true, omitReadbackTrackIndex: 1 }),
+      executeAtomic: fakeAtomic(calls, {
+        multiTrackRefs: true,
+        realLengthTrackRefs: true,
+        omitReadbackTrackIndex: 1,
+        failPostReadbackResolverTrackIndex: 1,
+      }),
       projectIndexRuntime: {
         status: () => ({ snapshot_id: "snapshot:readback-missing", revision: 8 }),
         invalidateScopes: ({ scopes }) => {
@@ -743,6 +825,12 @@ function fakeAtomic(calls, options = {}) {
     if (id === "template.items.resolve_item_ref" && calls.some((call) => call.id === "template.items.delete_items")) {
       return { ok: false, request: { id }, error: { code: "ITEM_NOT_FOUND", message: "Deleted item no longer resolves." }, result: {} };
     }
+    if (id === "template.tracks.resolve_track_ref"
+      && Number.isInteger(options.failPostReadbackResolverTrackIndex)
+      && input.track_ref === createdTrackRef(options.failPostReadbackResolverTrackIndex, options)
+      && postMutationTrackResolverCalls(calls).at(-1) === calls.at(-1)) {
+      return { ok: false, request: { id }, error: { code: "TRACK_NOT_FOUND", message: "Track no longer resolves." }, result: {} };
+    }
     const ref = firstRef(refs);
     const summary = {};
     if (id === "template.routing.read_project_routing_graph") {
@@ -760,7 +848,12 @@ function fakeAtomic(calls, options = {}) {
       if (options.routingGraphMissingTracks) delete summary.tracks;
       if (options.routingGraphMissingEdges) delete summary.edges;
     }
-    else if (id === "template.tracks.resolve_track_ref") summary.track_ref = options.wrongTrackRef ?? input.track_ref;
+    else if (id === "template.tracks.resolve_track_ref") {
+      const wrongPostReadback = Number.isInteger(options.wrongPostReadbackResolverTrackIndex)
+        && input.track_ref === createdTrackRef(options.wrongPostReadbackResolverTrackIndex, options)
+        && postMutationTrackResolverCalls(calls).at(-1) === calls.at(-1);
+      summary.track_ref = wrongPostReadback ? "track:guid:{FFFFFFFF-FFFF-4FFF-8FFF-FFFFFFFFFFFF}" : options.wrongTrackRef ?? input.track_ref;
+    }
     else if (id === "template.items.resolve_item_ref") summary.item_ref = input.ref;
     else if (id === "template.items.read_item_summary") summary.item_ref = ref;
     else if (id === "template.routing.resolve_send_ref") summary.send_ref = input.send_ref;
@@ -795,6 +888,7 @@ function fakeAtomic(calls, options = {}) {
         ? calls
             .filter((call) => call.id === "template.tracks.create_track" || call.id === "template.tracks.create_folder_track")
             .filter((call) => Number(call.input.index) !== options.omitReadbackTrackIndex)
+            .filter((call) => options.respectTrackListLimitByIndex !== true || Number(call.input.index) < input.limit)
             .map((call) => ({ track_ref: createdTrackRef(Number(call.input.index), options), name: call.input.name }))
         : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
     }
@@ -847,6 +941,14 @@ function layoutRows(count, { longIds = false } = {}) {
 function createdTrackRef(index, options) {
   if (!options.realLengthTrackRefs) return `track:guid:{CREATED-${index + 1}}`;
   return `track:guid:{00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`;
+}
+
+function postMutationTrackResolverCalls(calls) {
+  const finalWriteIndex = calls.findLastIndex((call) => isWrite(call.id));
+  const firstBulkReadbackIndex = calls.findIndex((call, index) => index > finalWriteIndex
+    && (call.id === "template.tracks.list_tracks" || call.id === "template.tracks.read_folder_structure"));
+  if (firstBulkReadbackIndex < 0) return [];
+  return calls.slice(firstBulkReadbackIndex + 1).filter((call) => call.id === "template.tracks.resolve_track_ref");
 }
 
 function realLengthRequestId(sequence, id) {

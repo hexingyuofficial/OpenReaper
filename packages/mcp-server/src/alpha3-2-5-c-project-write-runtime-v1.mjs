@@ -58,7 +58,7 @@ const PROGRAMS = Object.freeze({
       "template.tracks.nest_tracks_in_folder", MARKER_REGION_RESOLVER_ID,
       "template.project.create_marker", "template.project.create_region",
     ],
-    dryReads: [read("template.tracks.list_tracks", { limit: 100 }), read("template.tracks.read_folder_structure", {})],
+    dryReads: [read("template.tracks.list_tracks", { limit: 256 }), read("template.tracks.read_folder_structure", { limit: 256 })],
   }),
   [ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID]: program({
     macroId: ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID,
@@ -236,6 +236,9 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
           continue;
         }
         recordProjectWriteReadback(state, execution);
+      }
+      if (program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
+        await verifyUncoveredLayoutTrackRefs({ program, request, executeAtomic, stages, state, now });
       }
       try {
         if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
@@ -1014,6 +1017,34 @@ function recordProjectWriteReadback(state, execution) {
     state.routingReadbackRows.set(summary.track_ref, structuredClone(summary));
   }
   state.readbackEvidenceRefs.push(...evidenceRefs(execution));
+}
+
+async function verifyUncoveredLayoutTrackRefs({ program, request, executeAtomic, stages, state, now }) {
+  const targets = uniqueUnbounded(state.changes
+    .filter((change) => change.mutation?.status === "completed")
+    .filter((change) => state.layoutOperations?.rowsById.get(change.operation_id)?.annotation !== true)
+    .map((change) => change.target_ref)
+    .filter((ref) => typeof ref === "string" && ref.startsWith("track:guid:") && !state.readbackRefs.has(ref)));
+  for (const trackRef of targets) {
+    try {
+      const execution = await atomicStage({
+        program,
+        request,
+        executeAtomic,
+        stages,
+        state,
+        id: TRACK_RESOLVER_ID,
+        input: { track_ref: trackRef },
+        refs: {},
+        stageId: `verify-${stageToken(TRACK_RESOLVER_ID)}`,
+        kind: "verify",
+        now,
+      });
+      recordProjectWriteReadback(state, execution);
+    } catch {
+      // The per-row result remains unverified and is projected fail-closed below.
+    }
+  }
 }
 
 function executionSummary(execution) {

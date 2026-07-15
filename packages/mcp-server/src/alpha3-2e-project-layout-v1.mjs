@@ -15,6 +15,7 @@ const ALLOWED_ANNOTATION_KINDS = new Set(["marker", "region"]);
 const ALLOWED_MATCH_POLICIES = new Set(["by_ref", "exact_name", "create_only"]);
 const ALLOWED_CONFLICT_POLICIES = new Set(["skip", "update_declared_fields", "stop"]);
 const MAX_LAYOUT_ROWS = 100;
+const MAX_TRACK_SCAN_ROWS = 256;
 const MAX_LAYOUT_NESTING_DEPTH = 8;
 const MAX_ANNOTATION_ROWS = 50;
 const MAX_OPERATION_ROWS = 100;
@@ -461,8 +462,8 @@ function emptyPreview() {
 function preflightRequests(preview) {
   const requests = [];
   if (preview.target_counts.layout_rows > 0) {
-    requests.push(childRequest(requests.length + 1, "preflight", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read current tracks before planning layout changes."));
-    requests.push(childRequest(requests.length + 1, "preflight", READ_FOLDERS_ID, {}, {}, "Read current folder structure before planning nesting/order changes."));
+    requests.push(childRequest(requests.length + 1, "preflight", LIST_TRACKS_ID, {}, { limit: MAX_TRACK_SCAN_ROWS }, "Read current tracks before planning layout changes."));
+    requests.push(childRequest(requests.length + 1, "preflight", READ_FOLDERS_ID, {}, { limit: MAX_TRACK_SCAN_ROWS }, "Read current folder structure before planning nesting/order changes."));
   }
   if (preview.target_counts.annotations > 0) requests.push(childRequest(requests.length + 1, "preflight", LIST_MARKERS_REGIONS_ID, {}, { limit: MAX_ANNOTATION_ROWS }, "Read every current Marker/Region before creating timeline annotations."));
   return deepFreeze(requests);
@@ -471,8 +472,8 @@ function preflightRequests(preview) {
 function readbackRequests(preview) {
   const requests = [];
   if (preview.target_counts.layout_rows > 0) {
-    requests.push(childRequest(requests.length + 1, "readback", LIST_TRACKS_ID, {}, { limit: MAX_LAYOUT_ROWS }, "Read tracks after layout changes."));
-    requests.push(childRequest(requests.length + 1, "readback", READ_FOLDERS_ID, {}, {}, "Read folder structure after layout changes."));
+    requests.push(childRequest(requests.length + 1, "readback", LIST_TRACKS_ID, {}, { limit: MAX_TRACK_SCAN_ROWS }, "Read tracks after layout changes."));
+    requests.push(childRequest(requests.length + 1, "readback", READ_FOLDERS_ID, {}, { limit: MAX_TRACK_SCAN_ROWS }, "Read folder structure after layout changes."));
   }
   if (preview.target_counts.annotations > 0) requests.push(childRequest(requests.length + 1, "readback", LIST_MARKERS_REGIONS_ID, {}, { limit: MAX_ANNOTATION_ROWS }, "Read every Marker/Region and verify each created annotation by exact ref and fields."));
   return deepFreeze(requests);
