@@ -119,7 +119,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.2.0",
+  program_version: "1.2.1",
   implementation_status: "executable",
   risk: "write",
   input_schema: {
@@ -287,7 +287,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         mode: ALPHA3_3_B1C_ITEMS_APPLY_MODES.join(" | "),
         target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take.",
         target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take.",
-        limit: "1-8; defaults to 4. Selected writes fail closed instead of truncating an oversized selection. set_active_take is bounded by its assignment rows instead.",
+        limit: "1-8; defaults to the complete explicit exact-ref set (at most 8), or 4 for implicit selected targets. Selected writes fail closed instead of truncating an oversized selection. set_active_take is bounded by its assignment rows instead.",
         dry_run: "Defaults to true. false is required to mutate REAPER.",
         anchor_seconds: "Non-negative project time; required by move_to_anchor and optional for other arrangement modes.",
         gap_seconds: "Non-negative gap for sequence_with_gap; defaults to 0.",
@@ -509,22 +509,26 @@ async function resolveTargets({ request, input, executeAtomic, state }) {
   }
   const directRefs = collectItemObjectRefs(request.refs);
   const tokens = input.target_refs;
-  if (directRefs.length + tokens.length > input.limit || directRefs.length + tokens.length > MAX_TARGETS) {
-    return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Exact Item targets exceed the bounded write limit of ${input.limit}.`);
+  const exactTargetCount = directRefs.length + tokens.length;
+  const effectiveLimit = request.input?.limit === undefined && exactTargetCount > 0
+    ? Math.min(MAX_TARGETS, exactTargetCount)
+    : input.limit;
+  if (exactTargetCount > effectiveLimit || exactTargetCount > MAX_TARGETS) {
+    return failed("ITEM_APPLY_TARGET_LIMIT_EXCEEDED", `Exact Item targets exceed the bounded write limit of ${effectiveLimit}.`);
   }
 
   const candidates = directRefs.map((ref) => ({ ref, expected_ref: ref.ref }));
   for (const token of tokens) candidates.push({ token, expected_ref: canonicalTokenRef(token) });
   if (candidates.length === 0) {
-    const execution = await runAtomic(executeAtomic, request, { id: LIST_SELECTED_ID, input: { limit: input.limit, include_track_refs: true }, refs: [] });
+    const execution = await runAtomic(executeAtomic, request, { id: LIST_SELECTED_ID, input: { limit: effectiveLimit, include_track_refs: true }, refs: [] });
     collectExecutionEvidence(state, execution);
     if (execution?.ok !== true) return atomicFailure(execution, LIST_SELECTED_ID);
     const summary = executionSummary(execution);
     state.targetScope = "selected";
     state.totalTargetCount = integerOr(summary.selected_count, 0);
-    state.targetsTruncated = summary.truncated === true || state.totalTargetCount > input.limit;
+    state.targetsTruncated = summary.truncated === true || state.totalTargetCount > effectiveLimit;
     if (state.targetsTruncated) {
-      return failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", `Selected Item count ${state.totalTargetCount} exceeds the bounded write limit ${input.limit}; no partial selection was mutated.`);
+      return failed("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", `Selected Item count ${state.totalTargetCount} exceeds the bounded write limit ${effectiveLimit}; no partial selection was mutated.`);
     }
     for (const ref of executionObjectRefs(execution).filter((entry) => entry.kind === "item")) {
       candidates.push({ ref, expected_ref: ref.ref });

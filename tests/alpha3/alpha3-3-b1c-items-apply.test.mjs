@@ -208,6 +208,61 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
+  it("uses the complete explicit eight-Item set when limit is omitted but keeps an explicit smaller limit fail-closed", async () => {
+    const itemRefs = Array.from({ length: 8 }, (_, index) => itemRef(`{ITEM-EXACT-${index + 1}}`));
+    const bridge = new FakeFoundationBridge(itemRefs.map((ref, index) => item(ref, index * 2, 1)));
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "sequence_with_gap",
+        target_refs: itemRefs.map((ref) => ref.ref),
+        anchor_seconds: 10,
+        gap_seconds: 0.25,
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 8);
+    assert.equal(result.result.changes.every((change) => change.status === "applied" && change.live_readback.status === "passed"), true);
+    assert.deepEqual(itemRefs.map((ref) => bridge.items.get(ref.ref).position_seconds), [10, 11.25, 12.5, 13.75, 15, 16.25, 17.5, 18.75]);
+
+    const blockedBridge = new FakeFoundationBridge(itemRefs.map((ref, index) => item(ref, index * 2, 1)));
+    const blocked = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "sequence_with_gap",
+        target_refs: itemRefs.map((ref) => ref.ref),
+        limit: 4,
+        gap_seconds: 0,
+        dry_run: false,
+      }),
+      executeAtomic: blockedBridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "ITEM_APPLY_TARGET_LIMIT_EXCEEDED");
+    assert.equal(blockedBridge.calls.length, 0);
+  });
+
+  it("uses the complete explicit request-ref set when limit is omitted", async () => {
+    const itemRefs = Array.from({ length: 8 }, (_, index) => itemRef(`{ITEM-REQUEST-${index + 1}}`));
+    const bridge = new FakeFoundationBridge(itemRefs.map((ref, index) => item(ref, index, 1)));
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: {
+        ...request({ mode: "align_starts", dry_run: false }),
+        refs: { item_refs: itemRefs },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 8);
+    assert.equal(result.result.changes.every((change) => change.status === "applied" && change.live_readback.status === "passed"), true);
+    assert.deepEqual(itemRefs.map((ref) => bridge.items.get(ref.ref).position_seconds), Array(8).fill(0));
+  });
+
   it("sets the four proven Item properties in fixed order and trusts only accepted atomic live readback", async () => {
     const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 1)]);
     const result = await executeAlpha3_3B1cItemsApplyMacro({
