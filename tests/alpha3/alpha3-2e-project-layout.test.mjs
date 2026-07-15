@@ -75,6 +75,25 @@ describe("Alpha3.2-E project apply_layout planner", () => {
     ]);
   });
 
+  it("nests all siblings under one folder in a single accepted Template call", () => {
+    const plan = planAlpha3_2EProjectLayoutMacro({
+      layout: [
+        { id: "folder", kind: "folder", name: "Folder", index: 0 },
+        { id: "child_a", kind: "track", name: "Child A", parent_id: "folder", index: 1 },
+        { id: "child_b", kind: "track", name: "Child B", parent_id: "folder", index: 2 },
+      ],
+      dry_run: false,
+    });
+
+    const nesting = plan.mutation_requests.filter((request) => request.id === "template.tracks.nest_tracks_in_folder");
+    assert.equal(nesting.length, 1);
+    assert.deepEqual(nesting[0].refs, {
+      folder_ref: "track:planned:folder",
+      track_ref: ["track:planned:child_a", "track:planned:child_b"],
+    });
+    assert.deepEqual(nesting[0].depends_on_local_ids, ["folder", "child_a", "child_b"]);
+  });
+
   it("fails closed for duplicate nested ids, recursive object cycles, and conflicting parent declarations", () => {
     const duplicate = planAlpha3_2EProjectLayoutMacro({
       layout: [

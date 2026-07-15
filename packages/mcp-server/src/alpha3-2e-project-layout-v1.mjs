@@ -493,10 +493,28 @@ function buildMutationRequests(rows, annotations) {
     if (row.index !== null && row.index !== undefined) requests.push(childRequest(sequence++, "mutation", MOVE_TRACK_ID, { track_ref: trackRef }, { index: row.index }, `Move ${row.id} to declared index.`, dependencyFor(row)));
     if (row.folder_depth !== null) requests.push(childRequest(sequence++, "mutation", SET_FOLDER_DEPTH_ID, { track_ref: trackRef }, { folder_depth: row.folder_depth }, `Set folder depth for ${row.id}.`, dependencyFor(row)));
   }
+  const childrenByParent = new Map();
   for (const row of rows.filter((candidate) => candidate.parent_id)) {
-    const parent = rows.find((candidate) => candidate.id === row.parent_id);
+    const siblings = childrenByParent.get(row.parent_id) ?? [];
+    siblings.push(row);
+    childrenByParent.set(row.parent_id, siblings);
+  }
+  for (const [parentId, children] of childrenByParent) {
+    const parent = rows.find((candidate) => candidate.id === parentId);
     if (!parent) continue;
-    requests.push(childRequest(sequence++, "mutation", NEST_TRACKS_ID, { folder_ref: parent.track_ref ?? `track:planned:${parent.id}`, track_ref: [row.track_ref ?? `track:planned:${row.id}`] }, {}, `Nest ${row.id} under ${parent.id}.`, { depends_on_local_ids: [parent.id, row.id] }));
+    const orderedChildren = [...children].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+    requests.push(childRequest(
+      sequence++,
+      "mutation",
+      NEST_TRACKS_ID,
+      {
+        folder_ref: parent.track_ref ?? `track:planned:${parent.id}`,
+        track_ref: orderedChildren.map((row) => row.track_ref ?? `track:planned:${row.id}`),
+      },
+      {},
+      `Nest ${orderedChildren.map((row) => row.id).join(", ")} under ${parent.id}.`,
+      { depends_on_local_ids: [parent.id, ...orderedChildren.map((row) => row.id)] },
+    ));
   }
   for (const row of annotations) {
     const input = row.kind === "marker"

@@ -137,6 +137,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     changes: [],
     canonicalRefs: [],
     readbackRefs: new Set(),
+    layoutTrackReadbackRows: new Map(),
     markerRegionReadbackRows: new Map(),
     routingReadbackRows: new Map(),
     routingResolvedSends: new Map(),
@@ -1009,6 +1010,9 @@ function refsInValue(value) {
 function recordProjectWriteReadback(state, execution) {
   for (const ref of collectedRefs(execution)) state.readbackRefs.add(ref);
   const summary = executionSummary(execution);
+  for (const row of Array.isArray(summary.tracks) ? summary.tracks : []) {
+    if (typeof row?.track_ref === "string") state.layoutTrackReadbackRows.set(row.track_ref, structuredClone(row));
+  }
   for (const row of Array.isArray(summary.items) ? summary.items : []) {
     const ref = row?.kind === "region" ? row.region_ref : row?.marker_ref;
     if (typeof ref === "string") state.markerRegionReadbackRows.set(ref, structuredClone(row));
@@ -1125,6 +1129,28 @@ function applyProjectWriteReadbackToChanges(state) {
       change.status = "applied";
       change.live_readback = { status: "passed", source: "live_marker_region_readback", observed_ref: change.target_ref };
       continue;
+    }
+    if (layoutRow && layoutRow.parent_id) {
+      const expectedParentRef = state.layoutOperations?.changesById.get(layoutRow.parent_id)?.target_ref ?? null;
+      const observed = typeof change.target_ref === "string"
+        ? state.layoutTrackReadbackRows.get(change.target_ref)
+        : null;
+      if (typeof expectedParentRef !== "string" || !observed || observed.parent_ref !== expectedParentRef) {
+        change.status = observed ? "readback_mismatch" : "readback_missing";
+        change.live_readback = {
+          status: "failed",
+          source: "live_folder_structure_readback",
+          mismatched_fields: observed ? ["parent_ref"] : ["target_ref"],
+        };
+        missing.push({
+          ...change,
+          readbackCode: observed ? "PROJECT_WRITE_ROW_READBACK_MISMATCH" : "PROJECT_WRITE_ROW_READBACK_MISSING",
+          readbackMessage: observed
+            ? `Live folder parent did not match ${change.operation_id}.`
+            : `No exact live folder-structure row matched ${change.operation_id}.`,
+        });
+        continue;
+      }
     }
     const matchedRefs = targetRefs.filter((ref) => state.readbackRefs.has(ref));
     if (matchedRefs.length === 0) {

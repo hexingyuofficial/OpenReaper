@@ -371,7 +371,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
           dry_run: false,
         },
       },
-      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true }),
+      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true, folderStructureReadback: true }),
       now: () => new Date(NOW),
     });
 
@@ -382,6 +382,47 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
       track_ref: [{ kind: "track", ref: "track:guid:{CREATED-2}" }],
     });
     assert.equal(Object.hasOwn(nesting.refs, "folder_track_ref"), false);
+  });
+
+  it("nests sibling rows atomically and requires their final live parent refs", async () => {
+    const layout = [
+      { id: "folder", kind: "folder", name: "Folder", index: 0 },
+      { id: "child_a", kind: "track", name: "Child A", parent_id: "folder", index: 1 },
+      { id: "child_b", kind: "track", name: "Child B", parent_id: "folder", index: 2 },
+    ];
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: { id: "macro.project.apply_layout", input: { layout, dry_run: false } },
+      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true, folderStructureReadback: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const nesting = calls.filter((call) => call.id === "template.tracks.nest_tracks_in_folder");
+    assert.equal(nesting.length, 1);
+    assert.deepEqual(nesting[0].refs, {
+      folder_ref: { kind: "track", ref: "track:guid:{CREATED-1}" },
+      track_ref: [
+        { kind: "track", ref: "track:guid:{CREATED-2}" },
+        { kind: "track", ref: "track:guid:{CREATED-3}" },
+      ],
+    });
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+
+    const mismatched = await executeAlpha3_2_5CProjectWriteMacro({
+      request: { id: "macro.project.apply_layout", input: { layout, dry_run: false } },
+      executeAtomic: fakeAtomic([], {
+        multiTrackRefs: true,
+        folderStructureReadback: true,
+        wrongFolderParentTrackIndex: 1,
+      }),
+      now: () => new Date(NOW),
+    });
+    assert.equal(mismatched.ok, false);
+    assert.equal(mismatched.execution.status, "partial_failure");
+    assert.equal(mismatched.error.code, "PROJECT_WRITE_ROW_READBACK_MISMATCH");
+    assert.equal(mismatched.result.changes[1].status, "readback_mismatch");
+    assert.deepEqual(mismatched.result.changes[1].live_readback.mismatched_fields, ["parent_ref"]);
   });
 
   it("creates Marker and Region annotations and applies rows only after exact field readback", async () => {
@@ -910,12 +951,25 @@ function fakeAtomic(calls, options = {}) {
         : "track:guid:{CREATED}";
     }
     else if (id === "template.tracks.list_tracks" || id === "template.tracks.read_folder_structure") {
+      const nesting = calls.find((call) => call.id === "template.tracks.nest_tracks_in_folder");
+      const folderRef = nesting ? firstRef({ folder_ref: nesting.refs.folder_ref }) : null;
+      const childRefs = new Set((nesting?.refs.track_ref ?? []).map((entry) => firstRef({ track_ref: entry })));
       summary.tracks = options.multiTrackRefs
         ? calls
             .filter((call) => call.id === "template.tracks.create_track" || call.id === "template.tracks.create_folder_track")
             .filter((call) => Number(call.input.index) !== options.omitReadbackTrackIndex)
             .filter((call) => options.respectTrackListLimitByIndex !== true || Number(call.input.index) < input.limit)
-            .map((call) => ({ track_ref: createdTrackRef(Number(call.input.index), options), name: call.input.name }))
+            .map((call) => {
+              const trackRef = createdTrackRef(Number(call.input.index), options);
+              const isChild = options.folderStructureReadback === true && childRefs.has(trackRef);
+              return {
+                track_ref: trackRef,
+                name: call.input.name,
+                ...(isChild ? {
+                  parent_ref: Number(call.input.index) === options.wrongFolderParentTrackIndex ? null : folderRef,
+                } : {}),
+              };
+            })
         : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
     }
     else if (id === "template.project.create_marker") {
