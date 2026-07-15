@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   validateFoundationBridgeResult,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
@@ -93,11 +94,117 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
       /template_count = 227/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /local completed_request_files = \{\}/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /not completed_request_files\[filename\]/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /local startup_orphan_claims = \{\}/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /orphaned_request_after_bridge_restart/);
+    assert.match(sourceModules["90-file-transport-loop.lua"], /write_file_atomic\(claim_path, raw\)/);
+    assert.doesNotMatch(sourceModules["90-file-transport-loop.lua"], /os\.rename\(request_path, claim_path\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /current_time >= next_heartbeat_at/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /next_heartbeat_at = current_time \+ HEARTBEAT_INTERVAL_SECONDS/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /heartbeat refresh failed/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /startup heartbeat failed/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.defer\(bridge_loop\)/);
+  });
+
+  it("checks completed request results once per bridge session while still discovering new requests", () => {
+    runFileTransportLoopLua(String.raw`
+files = { "completed.json" }
+results["/results/completed.json"] = true
+run_poll(0.11)
+assert(file_exists_calls["/results/completed.json"] == 1, "completed first result check")
+assert(read_calls["/requests/completed.json"] == nil, "completed request should not be read")
+
+files[2] = "new.json"
+requests["/requests/new.json"] = { id = "new", params = {} }
+run_poll(0.22)
+assert(file_exists_calls["/results/completed.json"] == 1, "completed result should stay cached")
+assert(file_exists_calls["/results/new.json"] == 3, "new result checked before parsing, before claim, and before terminal write")
+assert(read_calls["/requests/new.json"] == 1, "new request read once")
+assert(dispatch_calls.new == 1, "new request dispatched once")
+assert(results["/results/new.json"] == true, "new result written")
+assert(requests["/requests/new.json"] ~= nil, "completed request remains as durable evidence")
+
+run_poll(0.33)
+assert(file_exists_calls["/results/completed.json"] == 1, "completed result cached after third poll")
+assert(file_exists_calls["/results/new.json"] == 3, "new result cached after terminal write")
+assert(read_calls["/requests/new.json"] == 1, "new request still read once")
+assert(dispatch_calls.new == 1, "new request still dispatched once")
+`);
+  });
+
+  it("does not reopen 1,143 historical results while polling the next large-project request", () => {
+    runFileTransportLoopLua(String.raw`
+for index = 1, 1143 do
+  local filename = string.format("history-%04d.json", index)
+  files[index] = filename
+  results["/results/" .. string.gsub(filename, "%.json$", ".json")] = true
+end
+run_poll(0.11)
+local historical_result_checks = 0
+for path, count in pairs(file_exists_calls) do
+  if string.find(path, "/results/history-", 1, true) == 1 then historical_result_checks = historical_result_checks + count end
+end
+assert(historical_result_checks == 1143)
+
+files[1144] = "next.json"
+requests["/requests/next.json"] = { id = "next", params = {} }
+run_poll(0.22)
+local checks_after_next = 0
+for path, count in pairs(file_exists_calls) do
+  if string.find(path, "/results/history-", 1, true) == 1 then checks_after_next = checks_after_next + count end
+end
+assert(checks_after_next == 1143, "historical result files must not be reopened")
+assert(dispatch_calls.next == 1)
+assert(results["/results/next.json"] == true)
+`);
+  });
+
+  it("does not mark a request complete until its result is written successfully", () => {
+    runFileTransportLoopLua(String.raw`
+files = { "retry.json" }
+requests["/requests/retry.json"] = { id = "retry", params = {} }
+write_failures["/results/retry.json"] = 1
+
+run_poll(0.11)
+assert(dispatch_calls.retry == 1)
+assert(results["/results/retry.json"] == nil)
+assert(requests["/claims/retry.json"] ~= nil)
+assert(requests["/requests/retry.json"] ~= nil)
+
+run_poll(0.22)
+assert(dispatch_calls.retry == 1)
+assert(results["/results/retry.json"] == true)
+assert(requests["/claims/retry.json"] == nil)
+
+run_poll(0.33)
+assert(dispatch_calls.retry == 1)
+assert(read_calls["/requests/retry.json"] == 1)
+`);
+  });
+
+  it("turns a durable claim from an earlier bridge loop into a non-recoverable unknown outcome", () => {
+    runFileTransportLoopLua(String.raw`
+assert(dispatch_count == 0)
+assert(results["/results/orphan.json"] == true)
+assert(requests["/claims/orphan.json"] == nil)
+assert(string.find(writes["/results/orphan.json"], "orphaned_request_after_bridge_restart", 1, true) ~= nil)
+assert(string.find(writes["/results/orphan.json"], '"recoverable":false', 1, true) ~= nil)
+`, String.raw`
+requests["/claims/orphan.json"] = { id = "orphan", params = {} }
+`);
+  });
+
+  it("rejects a request whose internal id differs from its transport filename", () => {
+    runFileTransportLoopLua(String.raw`
+files = { "filename-id.json" }
+requests["/requests/filename-id.json"] = { id = "different-id", params = {} }
+run_poll(0.11)
+assert(dispatch_count == 0)
+assert(results["/results/filename-id.json"] == true)
+assert(results["/results/different-id.json"] == nil)
+assert(requests["/claims/filename-id.json"] == nil)
+`);
   });
 
   it("adds a manual file-transport bridge loop without REAPER startup behavior", () => {
@@ -406,6 +513,121 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.equal(response.error.details.missing, "requests_dir");
   });
 });
+
+const FILE_TRANSPORT_LOOP_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/90-file-transport-loop.lua", import.meta.url),
+  "utf8",
+);
+
+const FILE_TRANSPORT_LOOP_PRELUDE = String.raw`
+TRANSPORT_DIR = "/transport"
+REQUESTS_DIR = "/requests"
+RESULTS_DIR = "/results"
+CLAIMS_DIR = "/claims"
+POLL_INTERVAL_SECONDS = 0.10
+HEARTBEAT_INTERVAL_SECONDS = 0.50
+ACTIVE_OWNER = "test-owner"
+ACTIVE_GENERATION = 1
+files = {}
+requests = {}
+results = {}
+writes = {}
+write_failures = {}
+file_exists_calls = {}
+read_calls = {}
+dispatch_calls = {}
+dispatch_count = 0
+logs = {}
+now = 0
+deferred_callback = nil
+
+function path_join(base, child) return base .. "/" .. child end
+function result_id_from_filename(filename) return string.gsub(filename, "%.json$", "") end
+function is_request_id(value) return type(value) == "string" and #value > 0 end
+function bounded_string(value) return tostring(value) end
+function is_object(value) return type(value) == "table" end
+function ensure_directory() return true end
+function write_bridge_heartbeat() return true end
+function log(message) logs[#logs + 1] = message end
+function file_exists(path)
+  file_exists_calls[path] = (file_exists_calls[path] or 0) + 1
+  return results[path] == true or requests[path] ~= nil
+end
+function read_file(path)
+  read_calls[path] = (read_calls[path] or 0) + 1
+  if requests[path] == nil then return nil, "open_failed" end
+  return requests[path]
+end
+function write_file_atomic(path, content)
+  if (write_failures[path] or 0) > 0 then
+    write_failures[path] = write_failures[path] - 1
+    return false, "fixture_write_failed"
+  end
+  writes[path] = content
+  if string.match(path, "^/claims/") then
+    requests[path] = content
+  else
+    results[path] = true
+  end
+  return true
+end
+function bridge_error_envelope(request, code, message, options)
+  local recoverable = not (options and options.recoverable == false)
+  local reason = options and options.details and options.details.reason or "fixture_error"
+  return '{"ok":false,"recoverable":' .. tostring(recoverable) .. ',"reason":"' .. reason .. '"}'
+end
+function dispatch_request(request)
+  dispatch_count = dispatch_count + 1
+  dispatch_calls[request.id] = (dispatch_calls[request.id] or 0) + 1
+  return '{"ok":true,"id":"' .. request.id .. '"}'
+end
+
+json = { decode = function(value) return value end }
+reaper = {
+  EnumerateFiles = function(directory, index)
+    if directory == REQUESTS_DIR then return files[index + 1] end
+    if directory == CLAIMS_DIR then
+      local names = {}
+      for path in pairs(requests) do
+        local name = string.match(path, "^/claims/(.+)$")
+        if name then names[#names + 1] = name end
+      end
+      table.sort(names)
+      return names[index + 1]
+    end
+    return nil
+  end,
+  time_precise = function() return now end,
+  defer = function(callback) deferred_callback = callback end,
+}
+os.remove = function(path)
+  requests[path] = nil
+  return true
+end
+function run_poll(at)
+  now = at
+  assert(type(deferred_callback) == "function")
+  local callback = deferred_callback
+  deferred_callback = nil
+  callback()
+end
+`;
+
+function runFileTransportLoopLua(body, setup = "") {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const source = `${FILE_TRANSPORT_LOOP_PRELUDE}\n${setup}\n${FILE_TRANSPORT_LOOP_SOURCE}\n${body}\nreturn true`;
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(source));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+}
 
 function context(overrides = {}) {
   return {

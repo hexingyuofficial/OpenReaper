@@ -13,6 +13,7 @@ end
 local TRANSPORT_DIR = non_empty(os.getenv(TRANSPORT_ENV))
 local REQUESTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "requests") or nil
 local RESULTS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "results") or nil
+local CLAIMS_DIR = TRANSPORT_DIR and path_join(TRANSPORT_DIR, "claims") or nil
 local HEARTBEAT_CONTRACT = "openreaper.bridge_liveness.v1"
 local HEARTBEAT_FILENAME = "openreaper-bridge-liveness-v1.json"
 local HEARTBEAT_PATH = TRANSPORT_DIR and path_join(TRANSPORT_DIR, HEARTBEAT_FILENAME) or nil
