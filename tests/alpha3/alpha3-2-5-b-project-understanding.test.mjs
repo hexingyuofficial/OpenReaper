@@ -265,7 +265,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
-  it("keeps a 304-track index intact when a 2 KiB page is too large, then resolves the final exact name", async () => {
+  it("shrinks an oversized 2 KiB page without losing rows or its stable cursor, then resolves the final exact name", async () => {
     const fixture = await makeFixture();
     const trackNames = Array.from({ length: 304 }, (_, index) =>
       index === 303 ? "PRODUCTION-DEEP-EXACT-304" : `Production Track ${String(index + 1).padStart(3, "0")}`);
@@ -293,10 +293,13 @@ describe("Alpha3.2.5-B executable project understanding", () => {
         budget: minimumBudget,
         context: callContext(2),
       });
-      assert.equal(oversizedPage.ok, false, JSON.stringify(oversizedPage));
-      assert.equal(oversizedPage.error.code, "RESPONSE_TOO_LARGE");
-      assert.equal(oversizedPage.budget.truncated, false);
-      assert.equal(oversizedPage.result.data.required_bytes > 2_048, true);
+      assert.equal(oversizedPage.ok, true, JSON.stringify(oversizedPage));
+      assert.equal(oversizedPage.budget.actual_bytes <= 2_048, true);
+      assert.equal(oversizedPage.result.data.rows.length > 0, true);
+      assert.equal(oversizedPage.result.data.rows.length <= 50, true);
+      assert.equal(oversizedPage.result.data.page.has_more, true);
+      assert.equal(typeof oversizedPage.result.data.page.next_cursor, "string");
+      assert.equal(oversizedPage.result.data.coverage.public_returned_row_count, oversizedPage.result.data.rows.length);
       assert.equal(indexRuntime.adapter.snapshot().rows.tracks.length, 304);
 
       const exactLast = await runtime.call_template({
@@ -325,7 +328,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
-  it("hydrates 100 exact Item selectors from live readback and walks every 2 KiB page without loss or duplicates", async () => {
+  it("hydrates 100 exact Item selectors once, pages them 50 at a time, and also walks every 2 KiB page without loss", async () => {
     const fixture = await makeFixture();
     const itemRefs = Array.from({ length: 100 }, (_, index) => `item:guid:{BULK-ITEM-${String(index + 1).padStart(3, "0")}}`);
     const liveItems = new Map(itemRefs.map((itemRef, index) => [itemRef, {
@@ -347,6 +350,37 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     try {
       indexRuntime = await openIndex(fixture);
       const runtime = createRuntime({ fixture, indexRuntime, state });
+      const fiftyRows = [];
+      let fiftyCursor = null;
+      let fiftyPageCount = 0;
+      do {
+        const page = await runtime.call_template({
+          id: "macro.project.query",
+          input: {
+            entity: "items",
+            fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+            selectors: { refs: itemRefs },
+            refresh_policy: fiftyCursor === null ? "if_stale" : "never",
+            limit: 100,
+            ...(fiftyCursor === null ? {} : { cursor: fiftyCursor }),
+          },
+          budget: { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 },
+          context: callContext(fiftyPageCount + 1, "bulk-item-client"),
+        });
+        assert.equal(page.ok, true, JSON.stringify(page));
+        assert.equal(page.result.data.rows.length, 50);
+        assert.equal(page.result.data.coverage.public_returned_row_count, 50);
+        fiftyPageCount += 1;
+        assert.equal(state.itemReadRefs.length, 100, `public page ${fiftyPageCount} repeated live Item hydration`);
+        fiftyRows.push(...page.result.data.rows);
+        fiftyCursor = page.result.data.page.has_more ? page.result.data.page.next_cursor : null;
+      } while (fiftyCursor !== null);
+
+      assert.equal(fiftyPageCount, 2);
+      assert.equal(fiftyRows.length, 100);
+      assert.equal(new Set(fiftyRows.map((row) => row.ref)).size, 100);
+      assert.deepEqual(new Set(fiftyRows.map((row) => row.ref)), new Set(itemRefs));
+
       const rows = [];
       let cursor = null;
       let pageCount = 0;
@@ -357,8 +391,8 @@ describe("Alpha3.2.5-B executable project understanding", () => {
             entity: "items",
             fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
             selectors: { refs: itemRefs },
-            refresh_policy: cursor === null ? "if_stale" : "never",
-            limit: 1,
+            refresh_policy: "never",
+            limit: 100,
             ...(cursor === null ? {} : { cursor }),
           },
           budget: { max_response_bytes: 2_048, max_items: 50, max_inline_value_bytes: 2_048 },
@@ -366,8 +400,9 @@ describe("Alpha3.2.5-B executable project understanding", () => {
         });
         assert.equal(page.ok, true, JSON.stringify(page));
         assert.equal(page.budget.actual_bytes <= 2_048, true);
-        assert.equal(page.result.data.rows.length, 1);
-        assert.equal(page.result.data.coverage.public_returned_row_count, 1);
+        assert.equal(page.result.data.rows.length > 0, true);
+        assert.equal(page.result.data.rows.length <= 50, true);
+        assert.equal(page.result.data.coverage.public_returned_row_count, page.result.data.rows.length);
         assert.equal(page.result.data.coverage.complete, false);
         pageCount += 1;
         assert.equal(state.itemReadRefs.length, 100, `cursor page ${pageCount} repeated live Item hydration`);
@@ -377,7 +412,7 @@ describe("Alpha3.2.5-B executable project understanding", () => {
       } while (cursor !== null);
 
       assert.equal(rows.length, 100);
-      assert.equal(pageCount, 100);
+      assert.equal(pageCount > 2, true);
       assert.deepEqual(new Set(rows.map((row) => row.ref)), new Set(itemRefs));
       assert.equal(new Set(rows.map((row) => row.ref)).size, 100);
       assert.equal(state.itemReadRefs.length, 100);

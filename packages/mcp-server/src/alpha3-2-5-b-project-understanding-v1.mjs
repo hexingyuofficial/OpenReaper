@@ -245,7 +245,8 @@ async function executeProjectQuery({
     });
   }
 
-  let plan = planAlpha3_2DGenericProjectQuery(request.input, {
+  const publicInput = publicQueryInput(request);
+  let plan = planAlpha3_2DGenericProjectQuery(publicInput, {
     projectIndex: projectIndexRuntime?.adapter,
     catalog,
   });
@@ -292,7 +293,7 @@ async function executeProjectQuery({
         blockers: revision.blockers,
       });
     }
-    plan = planAlpha3_2DGenericProjectQuery(request.input, {
+    plan = planAlpha3_2DGenericProjectQuery(publicInput, {
       projectIndex: projectIndexRuntime?.adapter,
       catalog,
     });
@@ -338,22 +339,20 @@ async function executeProjectQuery({
   }
 
   const finalInput = hydration.executions.length > 0
-    ? { ...request.input, refresh_policy: "never" }
-    : request.input;
+    ? { ...publicInput, refresh_policy: "never" }
+    : publicInput;
   plan = planAlpha3_2DGenericProjectQuery(finalInput, {
     projectIndex: projectIndexRuntime?.adapter,
     catalog,
   });
   const queryOk = plan.ok === true;
-  stages.push(stageResult(
-    "query-index-read",
-    "sqlite_query",
-    queryOk ? "completed" : "failed",
-    queryOk
-      ? `SQLite returned ${plan.rows.length} compact ${plan.entity} candidate row(s).`
-      : "SQLite query remained blocked after the bounded refresh attempt.",
-  ));
   if (!queryOk) {
+    stages.push(stageResult(
+      "query-index-read",
+      "sqlite_query",
+      "failed",
+      "SQLite query remained blocked after the bounded refresh attempt.",
+    ));
     return executionFailure({
       entry,
       request,
@@ -371,26 +370,61 @@ async function executeProjectQuery({
     });
   }
 
-  stages.push(stageResult(
-    "query-result-project",
-    "result_project",
-    "completed",
-    "Projected bounded rows, canonical refs, freshness, coverage, and page evidence.",
-  ));
-  return successEnvelope({
-    entry,
-    request,
-    startedAt,
-    now,
-    stages,
-    projectIndexRuntime,
-    initialCold,
-    refreshed: hydration.executions.length > 0,
-    summary: `Project Index query completed for ${plan.entity}.`,
-    canonicalRefs: plan.refs,
-    artifactRefs: hydration.artifactRefs,
-    data: queryData(plan, hydration),
-  });
+  let candidateLimit = finalInput.limit;
+  let minimumCandidateLimit = 1;
+  let maximumCandidateLimit = candidateLimit;
+  let bestEnvelope = null;
+  let budgetFailure = null;
+  while (candidateLimit >= 1) {
+    if (candidateLimit !== plan.page.limit) {
+      plan = planAlpha3_2DGenericProjectQuery({ ...finalInput, limit: candidateLimit }, {
+        projectIndex: projectIndexRuntime?.adapter,
+        catalog,
+      });
+    }
+    const resultStages = [
+      ...stages,
+      stageResult(
+        "query-index-read",
+        "sqlite_query",
+        "completed",
+        `SQLite returned ${plan.rows.length} compact ${plan.entity} candidate row(s).`,
+      ),
+      stageResult(
+        "query-result-project",
+        "result_project",
+        "completed",
+        "Projected bounded rows, canonical refs, freshness, coverage, and page evidence.",
+      ),
+    ];
+    const envelope = successEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      stages: resultStages,
+      projectIndexRuntime,
+      initialCold,
+      refreshed: hydration.executions.length > 0,
+      summary: `Project Index query completed for ${plan.entity}.`,
+      canonicalRefs: plan.refs,
+      artifactRefs: hydration.artifactRefs,
+      data: queryData(plan, hydration),
+    });
+    const preservesPageTruth = Array.isArray(envelope.result?.data?.rows)
+      && envelope.result.data.rows_truncated_by_macro_budget !== true
+      && envelope.result.data.rows.length === plan.rows.length;
+    if (envelope.error?.code !== "RESPONSE_TOO_LARGE" && preservesPageTruth) {
+      bestEnvelope = envelope;
+      minimumCandidateLimit = candidateLimit + 1;
+    } else {
+      budgetFailure = envelope;
+      maximumCandidateLimit = candidateLimit - 1;
+    }
+    if (minimumCandidateLimit > maximumCandidateLimit) break;
+    candidateLimit = Math.floor((minimumCandidateLimit + maximumCandidateLimit) / 2);
+  }
+  return bestEnvelope ?? budgetFailure;
 }
 
 async function executeProjectInspect({
@@ -1809,6 +1843,19 @@ function responseBudget(request, entry) {
     && requested <= entry.result_budget.max_bytes
     ? requested
     : entry.result_budget.max_bytes;
+}
+
+function publicQueryInput(request) {
+  const input = clone(request?.input ?? {});
+  const requestedLimit = input.limit === undefined ? 25 : input.limit;
+  if (!Number.isInteger(requestedLimit) || requestedLimit < 1) return input;
+  const publicMaxItems = Number.isInteger(request?.budget?.max_items) && request.budget.max_items > 0
+    ? request.budget.max_items
+    : requestedLimit;
+  return {
+    ...input,
+    limit: Math.min(requestedLimit, publicMaxItems, MAX_EXACT_SELECTOR_REFS),
+  };
 }
 
 function internalReadBudget(request) {
