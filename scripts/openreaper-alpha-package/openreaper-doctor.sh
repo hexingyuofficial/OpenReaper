@@ -515,13 +515,10 @@ async function smokeOpenReaperMcpCommandInner() {
   const transport = new OwnedStdioClientTransport({
     command: mcpCommand,
     args: [],
-    env: {
-      ...mcpEnv,
-      // Package-command reachability is independent of the selected task render
-      // root. The installed B2 default is the bounded wrapper-validation input;
-      // the direct MCP ping above retains the actual selected-root diagnosis.
-      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: path.join(installRoot, "session", "renders"),
-    },
+    // The wrapper must validate the same resolved session/render selection as
+    // the direct smoke; falling back here would make Doctor report a false MCP
+    // failure whenever the installed default directory does not exist.
+    env: mcpEnv,
     stderr: "pipe",
   });
   const lifecycle = createMcpLifecycle(client, transport, "packaged MCP command");
