@@ -750,6 +750,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.execution.status, "completed");
     assert.equal(result.result.changes.length, 84);
     assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => /^track:guid:\{[0-9a-f-]{36}\}$/u.test(change.target_ref)), true);
     assert.equal(result.result.changes.every((change) => change.mutation.status === "completed"), true);
     assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);

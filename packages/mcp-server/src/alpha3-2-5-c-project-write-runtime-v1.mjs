@@ -1465,6 +1465,7 @@ function compactLayoutStages(stages) {
 function compactLayoutChange(change) {
   return {
     operation_id: change.operation_id,
+    target_ref: change.target_ref,
     status: change.status,
     mutation: { status: change.mutation?.status ?? "pending" },
     live_readback: {
