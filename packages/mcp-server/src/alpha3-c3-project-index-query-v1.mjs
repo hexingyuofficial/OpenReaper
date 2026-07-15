@@ -737,7 +737,14 @@ function queryTracksPlan({ macro, normalized, indexState, blockers, catalog }) {
   ];
   const rows = allBlockers.length === 0
     ? queryTrackRows(indexState.rows.tracks, normalized.query)
-    : { rows: [], next_cursor: null, refs: [] };
+    : { rows: [], next_cursor: null, refs: [], filter_knowledge_incomplete: false };
+  const filterTruthBlockers = rows.filter_knowledge_incomplete && rows.rows.length === 0
+    ? [blocker(
+        "filters",
+        "INDEX_COVERAGE_INCOMPLETE",
+        "Track count evidence is incomplete, so this empty filtered result is not a definitive no-match; refresh track count truth and retry.",
+      )]
+    : [];
   const refreshPlan = allBlockers.some((entry) =>
     entry.code === "INDEX_REFRESH_REQUIRED" || entry.code === "INDEX_NOT_READY"
   )
@@ -745,6 +752,7 @@ function queryTracksPlan({ macro, normalized, indexState, blockers, catalog }) {
     : { requests: [], blockers: [] };
   const finalBlockers = [
     ...allBlockers,
+    ...filterTruthBlockers,
     ...refreshPlan.blockers,
   ];
 
@@ -765,10 +773,10 @@ function queryTracksPlan({ macro, normalized, indexState, blockers, catalog }) {
       refresh_policy: normalized.query.freshness.refresh,
     },
     coverage: {
-      status: trackScope.coverage_status,
+      status: rows.filter_knowledge_incomplete ? "unknown" : trackScope.coverage_status,
       source_scope: "tracks",
       row_count: rows.rows.length,
-      complete: trackScope.coverage_status === "complete",
+      complete: trackScope.coverage_status === "complete" && !rows.filter_knowledge_incomplete,
     },
     page: pageEnvelope(normalized.query.limit, normalized.query.cursor, rows.next_cursor),
     refresh_requests: refreshPlan.requests,
@@ -1684,7 +1692,7 @@ function normalizeFreshnessScopes(scopes) {
 
 function normalizeTrackRow(row) {
   const source = isPlainObject(row) ? row : {};
-  return {
+  const normalized = {
     ref: typeof source.ref === "string" ? source.ref : null,
     name: typeof source.name === "string" ? source.name : "",
     index: Number.isInteger(source.index) ? source.index : null,
@@ -1694,14 +1702,22 @@ function normalizeTrackRow(row) {
     solo: Boolean(source.solo),
     record_arm: Boolean(source.record_arm ?? source.armed),
     folder_depth: Number.isInteger(source.folder_depth) ? source.folder_depth : 0,
-    item_count: Number.isInteger(source.item_count) ? source.item_count : 0,
-    fx_count: Number.isInteger(source.fx_count) ? source.fx_count : 0,
-    send_count: Number.isInteger(source.send_count) ? source.send_count : 0,
     freshness_status: FRESHNESS_STATUSES.includes(source.freshness_status) ? source.freshness_status : "unknown",
     coverage_status: COVERAGE_STATUSES.includes(source.coverage_status) ? source.coverage_status : "unknown",
     observed_at: typeof source.observed_at === "string" ? source.observed_at : null,
     payload_ref: typeof source.payload_ref === "string" ? source.payload_ref : null,
   };
+  const summary = isPlainObject(source.summary) ? source.summary : null;
+  for (const field of ["item_count", "fx_count", "send_count"]) {
+    const topLevelValue = source[field];
+    const value = summary !== null && Object.hasOwn(summary, field)
+      ? summary[field]
+      : summary === null || (Number.isInteger(topLevelValue) && topLevelValue > 0)
+        ? topLevelValue
+        : null;
+    if (Number.isInteger(value) && value >= 0) normalized[field] = value;
+  }
+  return normalized;
 }
 
 function normalizeItemRow(row) {
@@ -2245,15 +2261,19 @@ function projectObjectChangeRow(row) {
 
 function queryTrackRows(trackRows, query) {
   const offset = query.cursor === null ? 0 : decodeCursor(query.cursor);
-  const filtered = trackRows
+  const classified = trackRows
     .filter((row) => row.ref)
-    .filter((row) => trackRowMatches(row, query.filters));
+    .map((row) => ({ row, match: trackRowMatchStatus(row, query.filters) }));
+  const filtered = classified
+    .filter((entry) => entry.match === "match")
+    .map((entry) => entry.row);
   const pageRows = filtered.slice(offset, offset + query.limit);
   const nextOffset = offset + pageRows.length < filtered.length ? offset + pageRows.length : null;
   return {
     rows: pageRows.map((row) => projectTrackRow(row, query.fields)),
     refs: pageRows.map((row) => row.ref),
     next_cursor: nextOffset === null ? null : encodeCursor(nextOffset),
+    filter_knowledge_incomplete: classified.some((entry) => entry.match === "unknown"),
   };
 }
 
@@ -2369,17 +2389,28 @@ function querySelectedContextRows(selectionRows, query) {
   };
 }
 
-function trackRowMatches(row, filters) {
-  if (!isPlainObject(filters)) return true;
-  if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return false;
-  if (filters.selected !== undefined && Boolean(filters.selected) !== row.selected) return false;
-  if (filters.armed !== undefined && Boolean(filters.armed) !== row.record_arm) return false;
-  if (filters.mute !== undefined && Boolean(filters.mute) !== row.muted) return false;
-  if (filters.solo !== undefined && Boolean(filters.solo) !== row.solo) return false;
-  if (filters.has_items !== undefined && Boolean(filters.has_items) !== (row.item_count > 0)) return false;
-  if (filters.has_fx !== undefined && Boolean(filters.has_fx) !== (row.fx_count > 0)) return false;
-  if (filters.has_sends !== undefined && Boolean(filters.has_sends) !== (row.send_count > 0)) return false;
-  return true;
+function trackRowMatchStatus(row, filters) {
+  if (!isPlainObject(filters)) return "match";
+  if (typeof filters.name === "string" && !row.name.toLocaleLowerCase().includes(filters.name.toLocaleLowerCase())) return "no_match";
+  if (filters.selected !== undefined && Boolean(filters.selected) !== row.selected) return "no_match";
+  if (filters.armed !== undefined && Boolean(filters.armed) !== row.record_arm) return "no_match";
+  if (filters.mute !== undefined && Boolean(filters.mute) !== row.muted) return "no_match";
+  if (filters.solo !== undefined && Boolean(filters.solo) !== row.solo) return "no_match";
+
+  let unknown = false;
+  for (const [filterField, countField] of [
+    ["has_items", "item_count"],
+    ["has_fx", "fx_count"],
+    ["has_sends", "send_count"],
+  ]) {
+    if (filters[filterField] === undefined) continue;
+    if (!Object.hasOwn(row, countField)) {
+      unknown = true;
+      continue;
+    }
+    if (Boolean(filters[filterField]) !== (row[countField] > 0)) return "no_match";
+  }
+  return unknown ? "unknown" : "match";
 }
 
 function itemRowMatches(row, query) {
@@ -2677,7 +2708,7 @@ function projectTrackRow(row, fields) {
   ];
   const projected = {};
   for (const field of selectedFields) {
-    if (TRACK_ROW_FIELDS.includes(field)) projected[field] = row[field];
+    if (TRACK_ROW_FIELDS.includes(field) && Object.hasOwn(row, field)) projected[field] = row[field];
   }
   return projected;
 }

@@ -710,6 +710,9 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     }
     const observedAt = safeIso(input.observed_at, now);
     const snapshotId = `snapshot:alpha3.3:logical:${createHash("sha256").update(`${refreshId}\0${refresh.scope}\0${finalRevision}\0${declaredCount}`).digest("hex").slice(0, 24)}`;
+    const committedRows = refresh.scope === "tracks"
+      ? mergeProjectedTrackRows(adapter.snapshot().rows?.tracks, canonicalRows)
+      : canonicalRows;
     let result;
     try {
       result = adapter[scopeConfig.store_method]({
@@ -720,7 +723,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
         bridgeOwner: identity.bridge_owner,
         bridgeGeneration: identity.bridge_generation,
         sessionId,
-        rows: canonicalRows,
+        rows: committedRows,
         coverage_status: "complete",
         freshness_status: "fresh",
       });
@@ -808,13 +811,14 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
           let projectedRows = method === "replaceSelection"
             ? mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, rows)
             : rows;
-          if (method === "replaceTracks" && coverage !== "complete") {
+          if (method === "replaceTracks") {
             const snapshot = adapter.snapshot();
+            projectedRows = mergeProjectedTrackRows(snapshot.rows?.tracks, projectedRows);
             const priorScope = snapshot.freshness_scopes?.tracks ?? {};
-            if (priorScope.status === "fresh" && priorScope.coverage_status === "complete") {
+            if (coverage !== "complete" && priorScope.status === "fresh" && priorScope.coverage_status === "complete") {
               projectedRows = mergeTrackRowSets(
                 snapshot.rows?.tracks,
-                mergeProjectedTrackRows(snapshot.rows?.tracks, rows),
+                projectedRows,
               );
               coverage = "complete";
             }
@@ -1347,13 +1351,14 @@ function mergeProjectedTrackRows(existingRows, incomingRows) {
     const previous = existingByRef.get(row.ref);
     if (!previous) return row;
     const summary = isObject(row.summary) ? row.summary : {};
-    return {
-      ...row,
-      folder_depth: Object.hasOwn(summary, "folder_depth") ? row.folder_depth : previous.folder_depth,
-      item_count: Object.hasOwn(summary, "item_count") ? row.item_count : previous.item_count,
-      fx_count: Object.hasOwn(summary, "fx_count") ? row.fx_count : previous.fx_count,
-      send_count: Object.hasOwn(summary, "send_count") ? row.send_count : previous.send_count,
-    };
+    const previousSummary = isObject(previous.summary) ? previous.summary : {};
+    const merged = { ...row, summary: { ...summary } };
+    for (const field of ["folder_depth", "item_count", "fx_count", "send_count"]) {
+      if (Object.hasOwn(summary, field)) continue;
+      merged[field] = previous[field];
+      if (Object.hasOwn(previousSummary, field)) merged.summary[field] = previousSummary[field];
+    }
+    return merged;
   });
 }
 
@@ -1564,6 +1569,13 @@ function mapTracks(rows, projectRef) {
   return arrayOf(rows).map((row) => {
     const ref = canonicalRefFrom(row, ["ref", "track_ref"], "track");
     if (!ref) return null;
+    const summary = compactObject(row);
+    const counts = {};
+    for (const field of ["item_count", "fx_count", "send_count"]) {
+      const value = nonNegativeIntegerOrNull(row[field]);
+      if (value === null) delete summary[field];
+      else counts[field] = value;
+    }
     return {
       ref, owner_ref: canonicalProjectRef(row.owner_ref) ?? projectRef,
       name: stringOr(row.name, ""), index: integerOrNull(row.index ?? row.track_index),
@@ -1571,8 +1583,7 @@ function mapTracks(rows, projectRef) {
       selected: row.selected === true, muted: row.muted === true,
       solo: row.solo === true || row.solo_mode === "solo" || row.solo_mode === "solo_in_place",
       record_arm: row.record_arm === true || row.record_armed === true,
-      folder_depth: integerOr(row.folder_depth, 0), item_count: integerOr(row.item_count, 0),
-      fx_count: integerOr(row.fx_count, 0), send_count: integerOr(row.send_count, 0), summary: compactObject(row),
+      folder_depth: integerOr(row.folder_depth, 0), ...counts, summary,
     };
   }).filter(Boolean);
 }

@@ -174,24 +174,39 @@ local function d10_overview_item_summary(item, track)
   }
 end
 
+local function d10_overview_native_count(api_name, ...)
+  local ok, value = call_reaper(api_name, ...)
+  if not ok or type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then
+    return nil
+  end
+  if value < 0 or value ~= math.floor(value) then
+    return nil
+  end
+  return value
+end
+
 local function d10_overview_track_summary(track, max_items_per_track)
-  local ok_track_items, track_item_count = call_reaper("CountTrackMediaItems", track)
-  local item_count = ok_track_items and math.max(0, math.floor(first_number(track_item_count) or 0)) or 0
+  local item_count = d10_overview_native_count("CountTrackMediaItems", track)
+  local fx_count = d10_overview_native_count("TrackFX_GetCount", track)
+  local send_count = d10_overview_native_count("GetTrackNumSends", track, 0)
   local items = json_array({})
-  for index = 0, math.min(item_count, max_items_per_track) - 1 do
+  for index = 0, math.min(item_count or 0, max_items_per_track) - 1 do
     local ok_item, item = call_reaper("GetTrackMediaItem", track, index)
     if ok_item and item then
       items[#items + 1] = d10_overview_item_summary(item, track)
     end
   end
-  return {
+  local summary = {
     track_ref = d10_overview_track_ref_string(track),
     index = d10_overview_track_index(track),
     name = d10_overview_track_name(track),
-    item_count = item_count,
     items = items,
-    items_truncated = item_count > #items,
+    items_truncated = item_count == nil or item_count > #items,
   }
+  summary.item_count = item_count
+  summary.fx_count = fx_count
+  summary.send_count = send_count
+  return summary
 end
 
 local function read_track_item_overview(request)

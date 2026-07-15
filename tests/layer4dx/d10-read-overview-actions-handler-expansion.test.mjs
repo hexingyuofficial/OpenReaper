@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   FakeFoundationBridge,
 } from "../../packages/core/src/foundation-bridge-v1.mjs";
@@ -33,6 +34,65 @@ const CAPABILITIES = Object.freeze([
   "actions.read_custom_action_metadata",
   "actions.read_cycle_action_metadata",
 ]);
+const LUA_COUNT_PRELUDE = String.raw`
+JSON_NULL = {}
+function is_non_negative_integer(value)
+  return type(value) == "number" and value >= 0 and value == math.floor(value)
+end
+function json_array(value) return value or {} end
+function first_number(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "number" then return value end
+  end
+  return nil
+end
+function first_string(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "string" then return value end
+  end
+  return nil
+end
+function bounded_string(value) return tostring(value or "") end
+function safe_budget(request)
+  return request.budget or { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 }
+end
+function call_reaper(name, ...)
+  if not reaper or type(reaper[name]) ~= "function" then return false end
+  return pcall(reaper[name], ...)
+end
+
+local tracks = {
+  { guid = "{COUNT-A}", index = 0, name = "Count A" },
+  { guid = "{COUNT-B}", index = 1, name = "Count B" },
+  { guid = "{COUNT-UNKNOWN}", index = 2, name = "Count Unknown" },
+}
+local send_categories = {}
+reaper = {}
+reaper.CountTracks = function(project) assert(project == 0); return #tracks end
+reaper.CountMediaItems = function(project) assert(project == 0); return 6 end
+reaper.GetTrack = function(project, index) assert(project == 0); return tracks[index + 1] end
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.GetMediaTrackInfo_Value = function(track, key) assert(key == "IP_TRACKNUMBER"); return track.index + 1 end
+reaper.GetTrackName = function(track) return true, track.name end
+reaper.CountTrackMediaItems = function(track)
+  if track.index == 0 then return 2 end
+  if track.index == 1 then return 4 end
+  error("item count unavailable")
+end
+reaper.TrackFX_GetCount = function(track)
+  if track.index == 0 then return 1 end
+  if track.index == 1 then return 3 end
+  return 1.5
+end
+reaper.GetTrackNumSends = function(track, category)
+  send_categories[#send_categories + 1] = category
+  if track.index == 0 then return 2 end
+  if track.index == 1 then return 0 end
+  return -1
+end
+`;
 
 describe("D10 read overview/actions live handler expansion", () => {
   it("registers exactly the bounded read overview/actions batch", () => {
@@ -123,6 +183,39 @@ describe("D10 read overview/actions live handler expansion", () => {
     );
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
+  });
+
+  it("reads per-track item, FX, and internal-send counts without converting unknown evidence to zero", () => {
+    const assertions = String.raw`
+local summary = select(1, read_track_item_overview({
+  params = { include_track_items = false, include_selected_items = false, max_tracks = 8 },
+  budget = { max_items = 64, max_response_bytes = 65536, max_inline_value_bytes = 4096 },
+}))
+assert(#summary.tracks == 3)
+assert(summary.tracks[1].item_count == 2)
+assert(summary.tracks[1].fx_count == 1)
+assert(summary.tracks[1].send_count == 2)
+assert(summary.tracks[2].item_count == 4)
+assert(summary.tracks[2].fx_count == 3)
+assert(summary.tracks[2].send_count == 0)
+assert(summary.tracks[3].item_count == nil)
+assert(summary.tracks[3].fx_count == nil)
+assert(summary.tracks[3].send_count == nil)
+assert(summary.tracks[3].items_truncated == true)
+assert(#send_categories == 3)
+for _, category in ipairs(send_categories) do assert(category == 0) end
+`;
+    const state = lauxlib.luaL_newstate();
+    lualib.luaL_openlibs(state);
+    const status = lauxlib.luaL_loadstring(
+      state,
+      to_luastring(`${LUA_COUNT_PRELUDE}\n${PROJECT_HANDLER_SOURCE}\n${assertions}`),
+    );
+    const loadMessage = status === lua.LUA_OK ? "D10 Lua loaded" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(status, lua.LUA_OK, loadMessage);
+    const callStatus = lua.lua_pcall(state, 0, 0, 0);
+    const callMessage = callStatus === lua.LUA_OK ? "D10 Lua executed" : to_jsstring(lua.lua_tostring(state, -1));
+    assert.equal(callStatus, lua.LUA_OK, callMessage);
   });
 });
 

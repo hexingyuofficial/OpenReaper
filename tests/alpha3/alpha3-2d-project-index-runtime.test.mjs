@@ -15,12 +15,17 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
+import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   ALPHA3_2D_PROJECT_INDEX_DB_BASENAME,
   ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
   openAlpha3_2DProjectIndexRuntime,
   validateManagedStateRoot,
 } from "../../packages/mcp-server/src/alpha3-2d-project-index-runtime-v1.mjs";
+import {
+  CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+  createCallTemplateRuntime,
+} from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
 const NOW = "2026-07-11T02:00:00.000Z";
 const now = () => new Date(NOW);
@@ -317,6 +322,262 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("preserves evidenced derived counts across complete project maps and accepts explicit zero", async () => {
+    const fixture = await makeFixture();
+    try {
+      const runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
+        tracks: [{
+          track_ref: "track:guid:{COUNT-KEEP}", index: 0, name: "Count Keep",
+          item_count: 4, fx_count: 0, send_count: 1,
+        }],
+        track_count: 1,
+        truncated: false,
+      }));
+      assertObserved(runtime, execution("template.fx.list_track_fx_chain", identity, {
+        owner_ref: "track:guid:{COUNT-KEEP}",
+        fx_count: 1,
+        fx: [{
+          fx_ref: "fx:track:guid:{COUNT-KEEP}:slot:0",
+          owner_ref: "track:guid:{COUNT-KEEP}",
+          slot_index: 0,
+          name: "ReaEQ",
+        }],
+      }));
+
+      const observeProjectMap = (tracks) => assertObserved(runtime, execution("template.project.create_observation_bundle", identity, {
+        payload: {
+          project_ref: identity.project_ref,
+          project_map: {
+            project_ref: identity.project_ref,
+            track_count: tracks.length,
+            item_count: 4,
+            truncated: false,
+            tracks,
+            selected_items: [],
+          },
+          coverage: { project_map: "complete_page" },
+        },
+      }));
+
+      observeProjectMap([
+        { track_ref: "track:guid:{COUNT-KEEP}", index: 0, name: "Count Keep", items: [] },
+        { track_ref: "track:guid:{COUNT-NEW}", index: 1, name: "Count New", items: [] },
+      ]);
+      let rows = runtime.adapter.snapshot().rows.tracks;
+      const kept = rows.find((row) => row.ref === "track:guid:{COUNT-KEEP}");
+      const unknown = rows.find((row) => row.ref === "track:guid:{COUNT-NEW}");
+      assert.deepEqual([kept.item_count, kept.fx_count, kept.send_count], [4, 1, 1]);
+      assert.deepEqual(
+        [kept.summary.item_count, kept.summary.fx_count, kept.summary.send_count],
+        [4, 1, 1],
+      );
+      assert.deepEqual([unknown.item_count, unknown.fx_count, unknown.send_count], [0, 0, 0]);
+      assert.equal(Object.hasOwn(unknown.summary, "item_count"), false);
+      assert.equal(Object.hasOwn(unknown.summary, "fx_count"), false);
+      assert.equal(Object.hasOwn(unknown.summary, "send_count"), false);
+
+      observeProjectMap([
+        {
+          track_ref: "track:guid:{COUNT-KEEP}", index: 0, name: "Count Keep",
+          item_count: 0, fx_count: 0, send_count: 0, items: [],
+        },
+        { track_ref: "track:guid:{COUNT-NEW}", index: 1, name: "Count New", items: [] },
+      ]);
+      rows = runtime.adapter.snapshot().rows.tracks;
+      const cleared = rows.find((row) => row.ref === "track:guid:{COUNT-KEEP}");
+      assert.deepEqual([cleared.item_count, cleared.fx_count, cleared.send_count], [0, 0, 0]);
+      assert.deepEqual(
+        [cleared.summary.item_count, cleared.summary.fx_count, cleared.summary.send_count],
+        [0, 0, 0],
+      );
+      runtime.close();
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps unknown derived counts distinct from known zero through public query and inspect dispatch", async () => {
+    const fixture = await makeFixture();
+    let indexRuntime;
+    try {
+      indexRuntime = await openRuntime(fixture);
+      const identity = runtimeIdentity(indexRuntime);
+      assertObserved(indexRuntime, execution("template.tracks.list_tracks", identity, {
+        tracks: [{
+          track_ref: "track:guid:{COUNT-RETAINED}", index: 0, name: "Retained Counts",
+          item_count: 4, fx_count: 1, send_count: 1,
+        }],
+        track_count: 1,
+        truncated: false,
+      }));
+      assertObserved(indexRuntime, execution("template.project.create_observation_bundle", identity, {
+        payload: {
+          project_ref: identity.project_ref,
+          project_map: {
+            project_ref: identity.project_ref,
+            track_count: 3,
+            item_count: 4,
+            truncated: false,
+            tracks: [
+              { track_ref: "track:guid:{COUNT-RETAINED}", index: 0, name: "Retained Counts" },
+              { track_ref: "track:guid:{COUNT-UNKNOWN}", index: 1, name: "Unknown Counts" },
+              {
+                track_ref: "track:guid:{COUNT-ZERO}", index: 2, name: "Known Zero Counts",
+                item_count: 0, fx_count: 0, send_count: 0,
+              },
+            ],
+            selected_items: [],
+          },
+          coverage: { project_map: "complete_page" },
+        },
+      }));
+
+      indexRuntime.close();
+      indexRuntime = await openRuntime(fixture);
+      const reopenedRows = indexRuntime.adapter.snapshot().rows.tracks;
+      const reopenedRetained = reopenedRows.find((row) => row.ref === "track:guid:{COUNT-RETAINED}");
+      const reopenedUnknown = reopenedRows.find((row) => row.ref === "track:guid:{COUNT-UNKNOWN}");
+      const reopenedZero = reopenedRows.find((row) => row.ref === "track:guid:{COUNT-ZERO}");
+      for (const field of ["item_count", "fx_count", "send_count"]) {
+        assert.equal(reopenedRetained.summary[field] > 0, true);
+        assert.equal(Object.hasOwn(reopenedUnknown.summary, field), false);
+        assert.equal(reopenedZero.summary[field], 0);
+      }
+
+      const fake = new FakeFoundationBridge({
+        owner: identity.bridge_owner,
+        generation: identity.bridge_generation,
+        now,
+      });
+      const executor = {
+        dispatch(request) {
+          const response = structuredClone(fake.dispatch(request));
+          if (request.operation.name === "project.read_summary") {
+            response.result.summary = {
+              project_ref: identity.project_ref,
+              path: fixture.projectPath,
+              change_count: 1,
+              track_count: 3,
+              item_count: 4,
+            };
+            response.result.readback = response.result.summary;
+          }
+          return response;
+        },
+      };
+      const publicRuntime = createCallTemplateRuntime({
+        projectIndexRuntime: indexRuntime,
+        live: {
+          opted_in: true,
+          executor,
+          allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+        },
+        now,
+      });
+      const fields = ["ref", "name", "item_count", "fx_count", "send_count"];
+      const query = await publicRuntime.call_template({
+        id: "macro.project.query",
+        input: { entity: "tracks", fields, refresh_policy: "never", limit: 25 },
+        context: callContext(identity, 1),
+      });
+      const inspect = await publicRuntime.call_template({
+        id: "macro.project.inspect",
+        input: {
+          include: ["tracks"],
+          fields_by_scope: { tracks: fields },
+          refresh_policy: "never",
+          limit: 25,
+        },
+        context: callContext(identity, 2),
+      });
+
+      assert.equal(query.ok, true, JSON.stringify(query));
+      assert.equal(inspect.ok, true, JSON.stringify(inspect));
+      const publicRows = [
+        ["query", query.result.data.rows],
+        ["inspect", inspect.result.data.scopes.tracks.rows],
+      ];
+      const countFields = ["item_count", "fx_count", "send_count"];
+      const countTruth = (row) => Object.fromEntries(countFields.map((field) => [
+        field,
+        { known: Object.hasOwn(row, field), value: Object.hasOwn(row, field) ? row[field] : null },
+      ]));
+      assert.deepEqual(publicRows.map(([surface, rows]) => ({
+        surface,
+        retained: countTruth(rows.find((row) => row.ref === "track:guid:{COUNT-RETAINED}")),
+        unknown: countTruth(rows.find((row) => row.ref === "track:guid:{COUNT-UNKNOWN}")),
+        known_zero: countTruth(rows.find((row) => row.ref === "track:guid:{COUNT-ZERO}")),
+      })), ["query", "inspect"].map((surface) => ({
+        surface,
+        retained: {
+          item_count: { known: true, value: 4 },
+          fx_count: { known: true, value: 1 },
+          send_count: { known: true, value: 1 },
+        },
+        unknown: Object.fromEntries(countFields.map((field) => [field, { known: false, value: null }])),
+        known_zero: Object.fromEntries(countFields.map((field) => [field, { known: true, value: 0 }])),
+      })));
+
+      let filterSequence = 3;
+      for (const filterField of ["has_items", "has_fx", "has_sends"]) {
+        const knownFalse = await publicRuntime.call_template({
+          id: "macro.project.query",
+          input: {
+            entity: "tracks",
+            fields,
+            filters: { [filterField]: false },
+            refresh_policy: "never",
+            limit: 25,
+          },
+          context: callContext(identity, filterSequence),
+        });
+        filterSequence += 1;
+        assert.equal(knownFalse.ok, true, JSON.stringify(knownFalse));
+        assert.deepEqual(knownFalse.result.data.rows.map((row) => row.ref), ["track:guid:{COUNT-ZERO}"]);
+        assert.equal(knownFalse.result.data.coverage.match_status, "candidate_matches_from_incomplete_coverage");
+
+        const unknownFalse = await publicRuntime.call_template({
+          id: "macro.project.query",
+          input: {
+            entity: "tracks",
+            fields,
+            filters: { name: "Unknown Counts", [filterField]: false },
+            refresh_policy: "never",
+            limit: 25,
+          },
+          context: callContext(identity, filterSequence),
+        });
+        filterSequence += 1;
+        assert.equal(unknownFalse.ok, false, JSON.stringify(unknownFalse));
+        assert.equal(unknownFalse.blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE"), true);
+        assert.deepEqual(unknownFalse.result.data.rows, []);
+        assert.equal(unknownFalse.result.data.coverage.match_status, "no_match_not_definitive");
+
+        const unknownTrue = await publicRuntime.call_template({
+          id: "macro.project.query",
+          input: {
+            entity: "tracks",
+            fields,
+            filters: { name: "Unknown Counts", [filterField]: true },
+            refresh_policy: "never",
+            limit: 25,
+          },
+          context: callContext(identity, filterSequence),
+        });
+        filterSequence += 1;
+        assert.equal(unknownTrue.ok, false, JSON.stringify(unknownTrue));
+        assert.equal(unknownTrue.blockers.some((entry) => entry.code === "INDEX_COVERAGE_INCOMPLETE"), true);
+        assert.deepEqual(unknownTrue.result.data.rows, []);
+        assert.equal(unknownTrue.result.data.coverage.match_status, "no_match_not_definitive");
+      }
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("keeps FX rows isolated by owner and clears only the owner with an empty chain", async () => {
     const fixture = await makeFixture();
     try {
@@ -606,8 +867,11 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       runtime = await openRuntime(fixture);
       const identity = runtimeIdentity(runtime);
       assertObserved(runtime, execution("template.tracks.list_tracks", identity, {
-        tracks: [{ track_ref: "track:guid:{PREVIOUS}", name: "Previous" }],
-        track_count: 1,
+        tracks: [
+          { track_ref: "track:guid:{LOGICAL-1}", name: "Logical 1", item_count: 2, fx_count: 1, send_count: 1 },
+          { track_ref: "track:guid:{PREVIOUS}", name: "Previous" },
+        ],
+        track_count: 2,
         truncated: false,
       }));
       assertObserved(runtime, execution("template.project.read_summary", identity, {
@@ -677,7 +941,10 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
         assert.equal(staged.ok, true, JSON.stringify(staged));
         assert.equal(staged.status, "logical_refresh_page_staged");
         assert.equal(staged.sqlite_updated, false);
-        assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PREVIOUS}"]);
+        assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), [
+          "track:guid:{LOGICAL-1}",
+          "track:guid:{PREVIOUS}",
+        ]);
       }
 
       assert.equal(runtime.status().logical_refreshes_staged, 1);
@@ -697,6 +964,13 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
       const snapshot = runtime.adapter.snapshot();
       assert.equal(snapshot.rows.tracks.length, 40);
       assert.equal(snapshot.rows.tracks.at(-1).ref, "track:guid:{LOGICAL-40}");
+      assert.equal(snapshot.rows.tracks.some((row) => row.ref === "track:guid:{PREVIOUS}"), false);
+      const logicalFirst = snapshot.rows.tracks.find((row) => row.ref === "track:guid:{LOGICAL-1}");
+      assert.deepEqual([logicalFirst.item_count, logicalFirst.fx_count, logicalFirst.send_count], [2, 1, 1]);
+      assert.deepEqual(
+        [logicalFirst.summary.item_count, logicalFirst.summary.fx_count, logicalFirst.summary.send_count],
+        [2, 1, 1],
+      );
       assert.equal(snapshot.freshness_scopes.tracks.coverage_status, "complete");
       assert.equal(runtime.status().revision, "reaper-change-count:41");
       assert.equal(runtime.status().logical_refreshes_staged, 0);
@@ -1221,6 +1495,17 @@ function runtimeIdentity(runtime) {
     bridge_owner: status.bridge_owner,
     bridge_generation: status.bridge_generation,
     session_id: status.session_id,
+  };
+}
+
+function callContext(identity, requestSequence) {
+  return {
+    client_id: "alpha3-2d-count-truth",
+    session_id: "alpha3-2d-count-truth-session",
+    expected_owner: identity.bridge_owner,
+    expected_generation: identity.bridge_generation,
+    created_at: NOW,
+    request_sequence: requestSequence,
   };
 }
 
