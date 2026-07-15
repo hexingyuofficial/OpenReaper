@@ -122,6 +122,7 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
 
   it("executes save_as serially and verifies exact path and clean dirty state", async () => {
     const calls = [];
+    const rebinds = [];
     const response = await executeAlpha3_2_5CProjectFileMacro({
       request: { request_id: "save-1", input: { operation: "save_as", target_path: "/tmp/trial.RPP", overwrite: true, dry_run: false } },
       now,
@@ -136,6 +137,29 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
           ? { raw_dirty_state: 1, dirty_state: "dirty", dirty: true }
           : { raw_dirty_state: 0, dirty_state: "clean", dirty: false } }, true, `child-${calls.length}`);
         return atomicExecution({ summary: { saved: true }, changes: [{ kind: "project_file", action: "save_as" }] }, true, `child-${calls.length}`);
+      },
+      projectIndexRuntime: {
+        status: () => ({
+          lifecycle: "ready",
+          project_ref: rebinds.length === 0 ? "project:path:/tmp/original.RPP" : "project:path:/tmp/trial.RPP",
+          project_path: rebinds.length === 0 ? "/tmp/original.RPP" : "/tmp/trial.RPP",
+          session_id: rebinds.length === 0 ? "session:old" : "session:new",
+        }),
+        async rebindProjectIdentity(input) {
+          rebinds.push(input);
+          return {
+            ok: true,
+            status: "identity_rebound",
+            project_ref: "project:path:/tmp/trial.RPP",
+            project_path: "/tmp/trial.RPP",
+            session_id: "session:new",
+            db_path: "/state/new.sqlite",
+            scopes: ["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"],
+            snapshot_id: null,
+            revision: null,
+            old_rows_migrated: false,
+          };
+        },
       },
     });
 
@@ -152,7 +176,15 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.equal(response.result.data.path_after, "/tmp/trial.RPP");
     assert.equal(response.result.changes[0].status, "applied");
     assert.equal(response.result.changes[0].live_readback.status, "passed");
-    assert.equal(response.result.changes[0].index_maintenance.status, "skipped");
+    assert.equal(response.result.changes[0].index_maintenance.status, "completed");
+    assert.deepEqual(rebinds, [{
+      project_path: "/tmp/trial.RPP",
+      expected_previous_project_ref: "project:path:/tmp/original.RPP",
+      observed_at: "2026-07-12T00:00:00.000Z",
+    }]);
+    assert.equal(response.result.data.index_update.project_ref, "project:path:/tmp/trial.RPP");
+    assert.equal(response.result.data.index_update.project_path, "/tmp/trial.RPP");
+    assert.equal(response.result.data.index_update.old_rows_migrated, false);
     assert.deepEqual(response.result.verification.evidence_refs, ["child-1", "child-2", "child-3", "child-4", "child-5"]);
     assert.deepEqual(response.execution.stages.at(-1).evidence_refs, response.result.verification.evidence_refs);
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
@@ -181,9 +213,10 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
       },
       projectIndexRuntime: {
         status: () => ({ lifecycle: "degraded" }),
-        invalidateScopes: ({ scopes }) => ({
+        rebindProjectIdentity: ({ project_path }) => ({
           ok: false,
-          scopes,
+          scopes: [],
+          project_path,
           blockers: [{ code: "RUNTIME_NOT_OPEN", message: "Project Index runtime did not open.", recoverable: true }],
         }),
       },
@@ -200,6 +233,75 @@ describe("Alpha3.2.5-C executable file/render Macros", () => {
     assert.equal(response.result.data.outcome.live_readback.status, "passed");
     assert.equal(response.result.data.outcome.index_maintenance.status, "failed");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("fails Save As truthfully after verified live readback when Project Index is not configured", async () => {
+    let pathReads = 0;
+    let dirtyReads = 0;
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-no-index", input: { operation: "save_as", target_path: "/tmp/trial-no-index.RPP", overwrite: true } },
+      now,
+      executeAtomic: async ({ id }) => {
+        if (id === "template.project.read_current_project_path") {
+          pathReads += 1;
+          return atomicExecution({ readback: pathReads === 1
+            ? { has_project_path: true, path_state: "saved_project", path: "/tmp/original.RPP" }
+            : { has_project_path: true, path_state: "saved_project", path: "/tmp/trial-no-index.RPP" } });
+        }
+        if (id === "template.project.read_dirty_state") {
+          dirtyReads += 1;
+          return atomicExecution({ readback: dirtyReads === 1
+            ? { raw_dirty_state: 1, dirty_state: "dirty", dirty: true }
+            : { raw_dirty_state: 0, dirty_state: "clean", dirty: false } });
+        }
+        return atomicExecution({ summary: { saved: true } });
+      },
+    });
+
+    assert.equal(response.ok, false);
+    assert.equal(response.execution.status, "partial_failure");
+    assert.equal(response.error.code, "PROJECT_INDEX_REBIND_UNAVAILABLE");
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "failed");
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("invalidates only project_head for save_current and never rebinds identity", async () => {
+    let saved = false;
+    const invalidations = [];
+    let rebindCalls = 0;
+    const response = await executeAlpha3_2_5CProjectFileMacro({
+      request: { request_id: "save-current-index", input: { operation: "save_current" } },
+      now,
+      executeAtomic: async ({ id }) => {
+        if (id === "template.project.read_current_project_path") {
+          return atomicExecution({ readback: { has_project_path: true, path_state: "saved_project", path: "/tmp/current.RPP" } });
+        }
+        if (id === "template.project.read_dirty_state") {
+          return atomicExecution({ readback: saved
+            ? { raw_dirty_state: 0, dirty_state: "clean", dirty: false }
+            : { raw_dirty_state: 1, dirty_state: "dirty", dirty: true } });
+        }
+        saved = true;
+        return atomicExecution({ summary: { saved: true } });
+      },
+      projectIndexRuntime: {
+        status: () => ({ lifecycle: "ready", project_ref: "project:path:/tmp/current.RPP" }),
+        rebindProjectIdentity: async () => { rebindCalls += 1; throw new Error("save_current must not rebind"); },
+        invalidateScopes(input) {
+          invalidations.push(input);
+          return { ok: true, status: "scopes_invalidated", scopes: input.scopes, snapshot_id: "snapshot:current", revision: "revision:current" };
+        },
+      },
+    });
+
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(rebindCalls, 0);
+    assert.deepEqual(invalidations, [{ scopes: ["project_head"], observed_at: "2026-07-12T00:00:00.000Z" }]);
+    assert.equal(response.result.changes[0].mutation.status, "completed");
+    assert.equal(response.result.changes[0].live_readback.status, "passed");
+    assert.equal(response.result.changes[0].index_maintenance.status, "completed");
   });
 
   it("dry-runs the same save program without executing mutation", async () => {

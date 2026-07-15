@@ -20,6 +20,10 @@ export const ALPHA3_2D_PROJECT_INDEX_DB_BASENAME = "openreaper-project-index.sql
 export const ALPHA3_2D_PROJECT_INDEX_MAX_ROWS = 4096;
 export const ALPHA3_2D_PROJECT_INDEX_MAX_BYTES = 1_048_576;
 
+const PROJECT_IDENTITY_REBIND_SCOPES = Object.freeze([
+  "project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media",
+]);
+
 export const ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.project.read_summary",
   "template.project.create_observation_bundle",
@@ -84,6 +88,13 @@ const LOGICAL_REFRESH_SCOPE_CONFIG = Object.freeze({
 });
 
 export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
+  const runtime = await openProjectIndexRuntimeCore(options);
+  return runtime?.ok === true
+    ? createRebindableProjectIndexRuntime(runtime, options)
+    : runtime;
+}
+
+async function openProjectIndexRuntimeCore(options = {}) {
   const now = typeof options.now === "function" ? options.now : () => new Date();
   const observedAt = safeIso(options.observed_at, now);
   const pathCheck = await validateManagedStateRoot(options.stateRoot, {
@@ -184,6 +195,204 @@ export async function openAlpha3_2DProjectIndexRuntime(options = {}) {
     sessionId,
     maxRows: positiveBound(options.maxRows, ALPHA3_2D_PROJECT_INDEX_MAX_ROWS),
     maxBytes: positiveBound(options.maxBytes, ALPHA3_2D_PROJECT_INDEX_MAX_BYTES),
+  });
+}
+
+function createRebindableProjectIndexRuntime(initialRuntime, openOptions) {
+  let activeRuntime = initialRuntime;
+  let closed = false;
+  let rebindInFlight = false;
+  const dynamicAdapter = createDynamicProjectIndexAdapter(() => activeRuntime?.adapter ?? null);
+  const delegate = (method, input) => activeRuntime[method](input);
+
+  const rebindProjectIdentity = async (input = {}) => {
+    if (closed || activeRuntime.status().lifecycle === "closed") {
+      return identityRebindFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime is closed; project identity cannot be rebound.");
+    }
+    if (rebindInFlight) {
+      return identityRebindFailure("rebind_in_progress", "PROJECT_IDENTITY_REBIND_IN_PROGRESS", "Another Project Index identity rebind is already in progress.");
+    }
+    if (!isObject(input)) {
+      return identityRebindFailure("invalid_request", "PROJECT_IDENTITY_REBIND_INPUT_REQUIRED", "Project identity rebind requires an input object.");
+    }
+
+    const before = activeRuntime.status();
+    const expectedPreviousRef = nonEmpty(input.expected_previous_project_ref ?? input.expectedPreviousProjectRef);
+    if (!expectedPreviousRef) {
+      return identityRebindFailure("previous_identity_required", "PROJECT_IDENTITY_REBIND_PREVIOUS_REF_REQUIRED", "Project identity rebind requires the exact previous project_ref.");
+    }
+    if (expectedPreviousRef !== before.project_ref) {
+      return identityRebindFailure(
+        "previous_identity_mismatch",
+        "PROJECT_IDENTITY_REBIND_PREVIOUS_REF_MISMATCH",
+        "Project identity changed before the rebind could start; the active index was preserved.",
+        { expected: expectedPreviousRef, actual: before.project_ref },
+      );
+    }
+
+    const projectPath = input.project_path ?? input.projectPath;
+    if (typeof projectPath !== "string" || path.extname(projectPath).toLowerCase() !== ".rpp") {
+      return identityRebindFailure("invalid_project_path", "PROJECT_IDENTITY_REBIND_RPP_REQUIRED", "Project identity rebind requires a canonical real .RPP project path.");
+    }
+    rebindInFlight = true;
+    const sourceRuntime = activeRuntime;
+    let candidate = null;
+    try {
+      const identityCheck = await validateRuntimeIdentity({
+        projectPath,
+        projectRef: undefined,
+        bridgeOwner: before.bridge_owner,
+        bridgeGeneration: before.bridge_generation,
+      });
+      if (!identityCheck.ok) {
+        return identityRebindFailure(
+          "invalid_project_path",
+          identityCheck.blockers[0]?.code ?? "PROJECT_IDENTITY_REBIND_PATH_INVALID",
+          identityCheck.blockers[0]?.message ?? "Project identity rebind path validation failed.",
+          identityCheck.blockers[0]?.details,
+        );
+      }
+      if (closed || activeRuntime !== sourceRuntime || sourceRuntime.status().lifecycle === "closed") {
+        return identityRebindFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime closed before the replacement identity could be activated.");
+      }
+
+      const observedAt = safeIso(input.observed_at, typeof openOptions.now === "function" ? openOptions.now : () => new Date());
+      if (identityCheck.identity.project_ref === before.project_ref && identityCheck.identity.project_path === before.project_path) {
+        const invalidated = activeRuntime.invalidateScopes({ scopes: PROJECT_IDENTITY_REBIND_SCOPES, observed_at: observedAt });
+        if (invalidated?.ok !== true) {
+          return identityRebindFailure(
+            "identity_unchanged_invalidation_failed",
+            invalidated?.blockers?.[0]?.code ?? "PROJECT_IDENTITY_REBIND_INVALIDATION_FAILED",
+            invalidated?.blockers?.[0]?.message ?? "Matching Project Index identity could not be invalidated after Save As.",
+          );
+        }
+        return identityRebindSuccess("identity_unchanged", before, activeRuntime.status(), invalidated);
+      }
+
+      candidate = await openProjectIndexRuntimeCore({
+        ...openOptions,
+        projectPath: identityCheck.identity.project_path,
+        projectRef: undefined,
+        bridgeOwner: before.bridge_owner,
+        bridgeGeneration: before.bridge_generation,
+        observed_at: observedAt,
+      });
+      const candidateStatus = candidate?.status?.() ?? null;
+      if (candidate?.ok !== true || candidateStatus?.ok !== true) {
+        try { candidate?.close?.({ observed_at: observedAt }); } catch {}
+        return identityRebindFailure(
+          "candidate_open_failed",
+          candidateStatus?.blockers?.[0]?.code ?? candidate?.blockers?.[0]?.code ?? "PROJECT_IDENTITY_REBIND_OPEN_FAILED",
+          candidateStatus?.blockers?.[0]?.message ?? candidate?.blockers?.[0]?.message ?? "The replacement Project Index runtime could not be opened; the prior identity was preserved.",
+        );
+      }
+      if (closed || activeRuntime !== sourceRuntime || sourceRuntime.status().lifecycle === "closed") {
+        candidate.close({ observed_at: observedAt });
+        candidate = null;
+        return identityRebindFailure("runtime_closed", "RUNTIME_CLOSED", "Project Index runtime closed before the replacement identity could be activated.");
+      }
+
+      const invalidated = candidate.invalidateScopes({ scopes: PROJECT_IDENTITY_REBIND_SCOPES, observed_at: observedAt });
+      if (invalidated?.ok !== true) {
+        candidate.close({ observed_at: observedAt });
+        return identityRebindFailure(
+          "candidate_invalidation_failed",
+          invalidated?.blockers?.[0]?.code ?? "PROJECT_IDENTITY_REBIND_INVALIDATION_FAILED",
+          invalidated?.blockers?.[0]?.message ?? "The replacement Project Index could not be made stale before activation; the prior identity was preserved.",
+        );
+      }
+
+      const previousRuntime = activeRuntime;
+      activeRuntime = candidate;
+      candidate = null;
+      try { previousRuntime.close({ observed_at: observedAt }); } catch {}
+      return identityRebindSuccess("identity_rebound", before, activeRuntime.status(), invalidated);
+    } catch (error) {
+      try { candidate?.close?.(); } catch {}
+      return identityRebindFailure(
+        "rebind_failed",
+        "PROJECT_IDENTITY_REBIND_FAILED",
+        "Project Index identity rebind failed before activation; the prior identity was preserved.",
+        error,
+      );
+    } finally {
+      rebindInFlight = false;
+    }
+  };
+
+  return Object.freeze({
+    contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+    get ok() { return activeRuntime?.ok === true && !closed; },
+    get backend() { return activeRuntime.backend; },
+    get db_path() { return activeRuntime.db_path; },
+    get session_id() { return activeRuntime.session_id; },
+    get ownership() { return activeRuntime.ownership; },
+    get identity() { return activeRuntime.identity; },
+    get lifecycle() { return closed ? "closed" : activeRuntime.lifecycle; },
+    get adapter_lifecycle() { return activeRuntime.adapter_lifecycle; },
+    get degraded_reason() { return activeRuntime.degraded_reason; },
+    adapter: dynamicAdapter,
+    status() { return activeRuntime.status(); },
+    statusSummary() { return activeRuntime.status(); },
+    status_summary() { return activeRuntime.status(); },
+    observeSuccessfulTemplateExecution(input) { return delegate("observeSuccessfulTemplateExecution", input); },
+    observeArtifactPayload(input) { return delegate("observeArtifactPayload", input); },
+    invalidateScopes(input) { return delegate("invalidateScopes", input); },
+    reconcileProjectRevision(input) { return delegate("reconcileProjectRevision", input); },
+    beginLogicalRefresh(input) { return delegate("beginLogicalRefresh", input); },
+    commitLogicalRefresh(input) { return delegate("commitLogicalRefresh", input); },
+    abortLogicalRefresh(input) { return delegate("abortLogicalRefresh", input); },
+    rebindProjectIdentity,
+    close(input = {}) {
+      if (closed) return activeRuntime.status();
+      closed = true;
+      return activeRuntime.close(input);
+    },
+  });
+}
+
+function createDynamicProjectIndexAdapter(getAdapter) {
+  const initial = getAdapter();
+  const proxy = {};
+  for (const key of Object.keys(initial ?? {})) {
+    if (typeof initial[key] === "function") {
+      proxy[key] = (...args) => getAdapter()[key](...args);
+    } else {
+      Object.defineProperty(proxy, key, { enumerable: true, get: () => getAdapter()[key] });
+    }
+  }
+  return Object.freeze(proxy);
+}
+
+function identityRebindSuccess(status, before, after, invalidation) {
+  return Object.freeze({
+    contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+    ok: true,
+    status,
+    previous_project_ref: before.project_ref,
+    previous_project_path: before.project_path,
+    previous_session_id: before.session_id,
+    previous_db_path: before.db_path,
+    project_ref: after.project_ref,
+    project_path: after.project_path,
+    session_id: after.session_id,
+    db_path: after.db_path,
+    scopes: invalidation.scopes,
+    snapshot_id: after.snapshot_id,
+    revision: after.revision,
+    old_rows_migrated: false,
+    sqlite_rows_are_candidates_only: true,
+  });
+}
+
+function identityRebindFailure(status, code, message, details = undefined) {
+  return Object.freeze({
+    contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
+    ok: false,
+    status,
+    blockers: [blocker(code, message, details)],
+    old_identity_preserved: true,
+    sqlite_rows_are_candidates_only: true,
   });
 }
 
@@ -1878,7 +2087,7 @@ async function loadSqliteBackend(loader) {
 function createFailedRuntimeOpen({ observedAt, blockers, dbPath, ownership = null }) {
   const status = () => Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, lifecycle: "degraded", adapter_lifecycle: "missing", degraded: true, degraded_reason: blockers[0]?.code ?? "RUNTIME_OPEN_FAILED", ownership, rows_available: false, row_counts: {}, blockers });
   const notOpen = () => invalidationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open.");
-  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: ownership?.session_id ?? null, ownership, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), invalidateScopes: notOpen, reconcileProjectRevision: notOpen, beginLogicalRefresh: notOpen, commitLogicalRefresh: notOpen, abortLogicalRefresh: notOpen, close: status });
+  return Object.freeze({ contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT, ok: false, backend: "none", db_path: dbPath ?? null, session_id: ownership?.session_id ?? null, ownership, adapter: null, observed_at: observedAt, blockers, get lifecycle() { return status().lifecycle; }, get adapter_lifecycle() { return status().adapter_lifecycle; }, get degraded_reason() { return status().degraded_reason; }, status, statusSummary: status, status_summary: status, observeSuccessfulTemplateExecution: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), observeArtifactPayload: () => observationFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), invalidateScopes: notOpen, reconcileProjectRevision: notOpen, beginLogicalRefresh: notOpen, commitLogicalRefresh: notOpen, abortLogicalRefresh: notOpen, rebindProjectIdentity: async () => identityRebindFailure("runtime_not_open", "RUNTIME_NOT_OPEN", "Project Index runtime did not open."), close: status });
 }
 
 function observationFailure(status, code, message, details = undefined) {

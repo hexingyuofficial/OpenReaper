@@ -1,6 +1,6 @@
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_CONTRACT = "alpha3.2c3d.project_file_macro.v1";
 export const ALPHA3_2C3D_PROJECT_FILE_MACRO_ID = "macro.project.file";
-export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.0.0";
+export const ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION = "1.1.0";
 
 import {
   MACRO_CONTRACT_CEILINGS,
@@ -24,7 +24,7 @@ const UNKNOWN_FIELD_DETAIL_LIMIT = 8;
 const UNKNOWN_FIELD_NAME_MAX_BYTES = 80;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 const FILE_TEMPLATE_IDS = Object.freeze([READ_PATH_ID, READ_DIRTY_ID, SAVE_CURRENT_ID, SAVE_AS_ID]);
-const FILE_STAGE_IDS = new Set(["file-read-before-path", "file-read-before-dirty", "file-live-save-current", "file-live-save-as", "file-read-after-path", "file-read-after-dirty", "file-result-project"]);
+const FILE_STAGE_IDS = new Set(["file-read-before-path", "file-read-before-dirty", "file-live-save-current", "file-live-save-as", "file-read-after-path", "file-read-after-dirty", "file-index-maintenance", "file-result-project"]);
 
 export const ALPHA3_2_5_C_FILE_MACRO_REGISTRY = createMacroProgramRegistry([{
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
@@ -35,8 +35,8 @@ export const ALPHA3_2_5_C_FILE_MACRO_REGISTRY = createMacroProgramRegistry([{
   risk: "write",
   input_schema: { type: "object", additionalProperties: false },
   selector_policy: { task_shaped: true, canonical_refs_optional_at_public_boundary: true, live_reresolve_before_write: true },
-  sqlite_policy: { mode: "not_used", write_authority: false, identity_fields: [] },
-  dependencies: { template_ids: FILE_TEMPLATE_IDS, runtime_capabilities: [] },
+  sqlite_policy: { mode: "invalidate_after_write", write_authority: false, identity_fields: ["project", "bridge_owner", "bridge_generation", "snapshot", "revision"] },
+  dependencies: { template_ids: FILE_TEMPLATE_IDS, runtime_capabilities: ["project_index.runtime.v1"] },
   stages: [
     { id: "file-read-before-path", kind: "template_execute", dependency_ref: READ_PATH_ID, risk: "read", stop_on_error: true },
     { id: "file-read-before-dirty", kind: "template_execute", dependency_ref: READ_DIRTY_ID, risk: "read", stop_on_error: true },
@@ -44,13 +44,14 @@ export const ALPHA3_2_5_C_FILE_MACRO_REGISTRY = createMacroProgramRegistry([{
     { id: "file-live-save-as", kind: "template_execute", dependency_ref: SAVE_AS_ID, risk: "write", stop_on_error: true },
     { id: "file-read-after-path", kind: "template_execute", dependency_ref: READ_PATH_ID, risk: "read", stop_on_error: true },
     { id: "file-read-after-dirty", kind: "template_execute", dependency_ref: READ_DIRTY_ID, risk: "read", stop_on_error: true },
+    { id: "file-index-maintenance", kind: "runtime_execute", dependency_ref: "project_index.runtime.v1", risk: "read", stop_on_error: true },
     { id: "file-result-project", kind: "result_project", risk: "read", stop_on_error: true },
   ],
   undo_policy: "not_required",
   verification_policy: "required",
   dry_run_supported: true,
   result_budget: { max_bytes: 65_536 },
-}], { acceptedTemplateIds: FILE_TEMPLATE_IDS, registeredStageIds: FILE_STAGE_IDS });
+}], { acceptedTemplateIds: FILE_TEMPLATE_IDS, acceptedRuntimeCapabilities: ["project_index.runtime.v1"], registeredStageIds: FILE_STAGE_IDS });
 
 export const ALPHA3_2_5_C_PROJECT_FILE_REGISTRY = ALPHA3_2_5_C_FILE_MACRO_REGISTRY;
 
@@ -247,15 +248,27 @@ export async function executeAlpha3_2_5CProjectFileMacro({
     if (exactPath(afterPath) !== expectedPath) throw macroError("PROJECT_FILE_PATH_READBACK_MISMATCH", "Project-file save completed but exact path readback did not match the required path.");
     if (!isCleanDirtyState(afterDirty)) throw macroError("PROJECT_FILE_DIRTY_READBACK_MISMATCH", "Project-file save completed but exact dirty-state readback was not clean.");
     verifiedChange = projectFileChange(input.operation, afterPath, afterDirty);
-    invalidation = invalidateProjectFileIndex(projectIndexRuntime, input.operation, now);
-    if (invalidation?.ok === false) {
+    stages.push({ id: "file-index-maintenance", kind: "runtime_execute", status: "running", evidence_refs: [] });
+    invalidation = await maintainProjectFileIndex(projectIndexRuntime, input.operation, beforePath, afterPath, now);
+    if (input.operation === "save_current" && invalidation === null) {
+      stages.at(-1).status = "skipped";
+      stages.at(-1).summary = "Project Index is not configured; save_current completed without changing any index identity.";
+      verifiedChange.index_maintenance = indexMaintenance("skipped", null);
+    } else if (invalidation?.ok !== true) {
+      stages.at(-1).status = "failed";
+      stages.at(-1).summary = invalidation?.blockers?.[0]?.message ?? "Project Index identity maintenance failed.";
       verifiedChange.index_maintenance = indexMaintenance("failed", invalidation);
       throw macroError(
-        invalidation.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_INVALIDATION_FAILED",
-        invalidation.blockers?.[0]?.message ?? "Project-file save completed but Project Index identity scopes could not be invalidated.",
+        invalidation?.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_MAINTENANCE_FAILED",
+        invalidation?.blockers?.[0]?.message ?? "Project-file save completed but Project Index identity maintenance failed.",
       );
+    } else {
+      stages.at(-1).status = "completed";
+      stages.at(-1).summary = input.operation === "save_as"
+        ? "Project Index identity rebound to the exact live Save As path."
+        : "Project Index project-head scope invalidated without changing identity.";
+      verifiedChange.index_maintenance = indexMaintenance("completed", invalidation);
     }
-    verifiedChange.index_maintenance = indexMaintenance(invalidation ? "completed" : "skipped", invalidation);
     stages.push({ id: "file-result-project", kind: "result_project", status: "completed", summary: "Project-file save verified by exact path and dirty-state readback.", evidence_refs: collectedEvidence() });
     return fileEnvelope({
       entry,
@@ -372,13 +385,28 @@ function projectFileOutcome(change, invalidation) {
 }
 function evidenceRefs(execution) { return uniqueEvidenceRefs([execution?.request?.id, ...(execution?.evidence_refs ?? []), ...(execution?.result?.evidence_refs ?? [])]); }
 function uniqueEvidenceRefs(values) { return [...new Set(values.filter((value) => typeof value === "string"))].slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count); }
-function invalidateProjectFileIndex(runtime, operation, now) {
-  if (typeof runtime?.invalidateScopes !== "function") return null;
-  const scopes = operation === "save_as"
-    ? ["project_head", "selection", "tracks", "items", "takes", "fx", "routing", "automation", "markers", "media"]
-    : ["project_head"];
-  return runtime.invalidateScopes({ scopes, observed_at: safeNowIso(now) });
+async function maintainProjectFileIndex(runtime, operation, beforePath, afterPath, now) {
+  if (operation === "save_as") {
+    if (typeof runtime?.rebindProjectIdentity !== "function") {
+      return indexMaintenanceFailure("PROJECT_INDEX_REBIND_UNAVAILABLE", "Project Index runtime does not expose atomic Save As identity rebind.");
+    }
+    const status = typeof runtime?.status === "function" ? runtime.status() : {};
+    const expectedPreviousRef = status.project_ref ?? canonicalProjectPathRef(exactPath(beforePath));
+    if (typeof expectedPreviousRef !== "string") {
+      return indexMaintenanceFailure("PROJECT_INDEX_PREVIOUS_IDENTITY_REQUIRED", "Project Index previous project_ref is required before Save As identity rebind.");
+    }
+    return runtime.rebindProjectIdentity({
+      project_path: exactPath(afterPath),
+      expected_previous_project_ref: expectedPreviousRef,
+      observed_at: safeNowIso(now),
+    });
+  }
+  if (runtime === null || runtime === undefined) return null;
+  if (typeof runtime.invalidateScopes !== "function") return indexMaintenanceFailure("PROJECT_INDEX_INVALIDATION_UNAVAILABLE", "Configured Project Index runtime does not expose save-current scope invalidation.");
+  return runtime.invalidateScopes({ scopes: ["project_head"], observed_at: safeNowIso(now) });
 }
+function canonicalProjectPathRef(value) { return typeof value === "string" && value ? `project:path:${value}` : null; }
+function indexMaintenanceFailure(code, message) { return { ok: false, blockers: [{ code, message, recoverable: true }], scopes: [] }; }
 function sqliteEvidence(runtime, invalidation) {
   if (!invalidation) return { used: false, source: "not_used", freshness: "not_applicable", snapshot_ref: null, revision: null, refreshed: false };
   const status = typeof runtime?.status === "function" ? runtime.status() : {};
@@ -397,6 +425,11 @@ function compactIndexUpdate(value) {
   return {
     status: value.status ?? null,
     scopes: Array.isArray(value.scopes) ? value.scopes.slice(0, 16) : [],
+    project_ref: value.project_ref ?? null,
+    project_path: value.project_path ?? null,
+    session_id: value.session_id ?? null,
+    db_path: value.db_path ?? null,
+    old_rows_migrated: value.old_rows_migrated ?? null,
     snapshot_id: value.snapshot_id ?? null,
     revision: value.revision ?? null,
   };

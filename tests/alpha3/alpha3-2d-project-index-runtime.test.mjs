@@ -1307,6 +1307,132 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("atomically rebinds Save As identity to a canonical real RPP without migrating old rows", async () => {
+    const fixture = await makeFixture();
+    const saveAsPath = path.join(fixture.root, "Saved-As.RPP");
+    await writeFile(saveAsPath, "<REAPER_PROJECT 0.1>\n");
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const priorIdentity = runtimeIdentity(runtime);
+      const priorAdapterView = runtime.adapter;
+      assertObserved(runtime, execution("template.tracks.list_tracks", priorIdentity, {
+        tracks: [{ track_ref: "track:guid:{OLD-PROJECT}", name: "Old project row" }],
+      }));
+      const previousDbPath = runtime.db_path;
+      const previousSessionId = runtime.session_id;
+
+      const rebound = await runtime.rebindProjectIdentity({
+        project_path: saveAsPath,
+        expected_previous_project_ref: priorIdentity.project_ref,
+        observed_at: NOW,
+      });
+
+      assert.equal(rebound.ok, true, JSON.stringify(rebound));
+      assert.equal(rebound.status, "identity_rebound");
+      assert.equal(rebound.project_path, saveAsPath);
+      assert.equal(rebound.project_ref, `project:path:${saveAsPath}`);
+      assert.equal(rebound.old_rows_migrated, false);
+      assert.notEqual(rebound.session_id, previousSessionId);
+      assert.notEqual(rebound.db_path, previousDbPath);
+      assert.equal(runtime.identity.project_path, saveAsPath);
+      assert.equal(runtime.identity.project_ref, `project:path:${saveAsPath}`);
+      assert.equal(runtime.session_id, rebound.session_id);
+      assert.equal(runtime.db_path, rebound.db_path);
+      assert.equal(runtime.status().project_path, saveAsPath);
+      assert.equal(runtime.status().project_ref, `project:path:${saveAsPath}`);
+      assert.equal(runtime.status().session_id, rebound.session_id);
+      assert.equal(runtime.status().ownership.db_path, rebound.db_path);
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks, []);
+      assert.deepEqual(priorAdapterView.snapshot().rows.tracks, []);
+      assert.equal(runtime.adapter.snapshot().freshness_scopes.tracks.status, "stale");
+
+      const reboundIdentity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", reboundIdentity, {
+        tracks: [{ track_ref: "track:guid:{NEW-PROJECT}", name: "New project row" }],
+      }));
+      assert.deepEqual(priorAdapterView.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{NEW-PROJECT}"]);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("keeps the old identity and rows when Save As rebind validation fails", async () => {
+    const fixture = await makeFixture();
+    const missingPath = path.join(fixture.root, "Missing.RPP");
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const priorIdentity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.tracks.list_tracks", priorIdentity, {
+        tracks: [{ track_ref: "track:guid:{PRESERVED}", name: "Preserved row" }],
+      }));
+      const previousStatus = runtime.status();
+
+      const failed = await runtime.rebindProjectIdentity({
+        project_path: missingPath,
+        expected_previous_project_ref: priorIdentity.project_ref,
+        observed_at: NOW,
+      });
+
+      assert.equal(failed.ok, false);
+      assert.equal(failed.old_identity_preserved, true);
+      assert.equal(failed.blockers[0].code, "PROJECT_PATH_NOT_REAL_FILE");
+      assert.equal(runtime.status().project_ref, previousStatus.project_ref);
+      assert.equal(runtime.status().project_path, previousStatus.project_path);
+      assert.equal(runtime.status().session_id, previousStatus.session_id);
+      assert.equal(runtime.status().db_path, previousStatus.db_path);
+      assert.deepEqual(runtime.adapter.snapshot().rows.tracks.map((row) => row.ref), ["track:guid:{PRESERVED}"]);
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("never activates a replacement identity after the runtime closes during Save As rebind", async () => {
+    if (!await hasSqlite()) return;
+    const fixture = await makeFixture();
+    const saveAsPath = path.join(fixture.root, "Closed-During-Rebind.RPP");
+    await writeFile(saveAsPath, "<REAPER_PROJECT 0.1>\n");
+    const sqliteModule = await import("node:sqlite");
+    let loaderCalls = 0;
+    let releaseCandidate;
+    const candidateGate = new Promise((resolve) => { releaseCandidate = resolve; });
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture, {
+        sqliteModuleLoader: async () => {
+          loaderCalls += 1;
+          if (loaderCalls === 2) await candidateGate;
+          return sqliteModule;
+        },
+      });
+      const priorIdentity = runtimeIdentity(runtime);
+      const rebind = runtime.rebindProjectIdentity({
+        project_path: saveAsPath,
+        expected_previous_project_ref: priorIdentity.project_ref,
+        observed_at: NOW,
+      });
+      while (loaderCalls < 2) await new Promise((resolve) => setImmediate(resolve));
+
+      runtime.close({ observed_at: NOW });
+      releaseCandidate();
+      const failed = await rebind;
+
+      assert.equal(failed.ok, false);
+      assert.equal(failed.old_identity_preserved, true);
+      assert.equal(failed.blockers[0].code, "RUNTIME_CLOSED");
+      assert.equal(runtime.lifecycle, "closed");
+      assert.equal(runtime.identity.project_ref, priorIdentity.project_ref);
+      assert.equal(runtime.status().project_ref, priorIdentity.project_ref);
+    } finally {
+      releaseCandidate?.();
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("persists across close/reopen for one process identity and isolates project, owner, and generation databases", async () => {
     if (!await hasSqlite()) return;
     const fixture = await makeFixture();
