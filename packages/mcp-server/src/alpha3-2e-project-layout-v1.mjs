@@ -496,7 +496,7 @@ function buildMutationRequests(rows, annotations) {
   for (const row of rows.filter((candidate) => candidate.parent_id)) {
     const parent = rows.find((candidate) => candidate.id === row.parent_id);
     if (!parent) continue;
-    requests.push(childRequest(sequence++, "mutation", NEST_TRACKS_ID, { folder_track_ref: parent.track_ref ?? `track:planned:${parent.id}`, track_ref: [row.track_ref ?? `track:planned:${row.id}`] }, {}, `Nest ${row.id} under ${parent.id}.`, { depends_on_local_ids: [parent.id, row.id] }));
+    requests.push(childRequest(sequence++, "mutation", NEST_TRACKS_ID, { folder_ref: parent.track_ref ?? `track:planned:${parent.id}`, track_ref: [row.track_ref ?? `track:planned:${row.id}`] }, {}, `Nest ${row.id} under ${parent.id}.`, { depends_on_local_ids: [parent.id, row.id] }));
   }
   for (const row of annotations) {
     const input = row.kind === "marker"

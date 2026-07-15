@@ -358,6 +358,32 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
   });
 
+  it("uses the accepted folder_ref ABI when executing nested layout rows", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: {
+          layout: [
+            { id: "folder", kind: "folder", name: "Folder", index: 0 },
+            { id: "child", kind: "track", name: "Child", parent_id: "folder", index: 1 },
+          ],
+          dry_run: false,
+        },
+      },
+      executeAtomic: fakeAtomic(calls, { multiTrackRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const nesting = calls.find((call) => call.id === "template.tracks.nest_tracks_in_folder");
+    assert.deepEqual(nesting.refs, {
+      folder_ref: { kind: "track", ref: "track:guid:{CREATED-1}" },
+      track_ref: [{ kind: "track", ref: "track:guid:{CREATED-2}" }],
+    });
+    assert.equal(Object.hasOwn(nesting.refs, "folder_track_ref"), false);
+  });
+
   it("creates Marker and Region annotations and applies rows only after exact field readback", async () => {
     const calls = [];
     const invalidations = [];
