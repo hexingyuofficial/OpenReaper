@@ -148,12 +148,18 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     capability: "fx.list_parameters",
     inputProperties: {
       limit: { type: "integer" },
+      offset: { type: "integer" },
     },
     requiredInput: [],
     outputProperties: {
       parameter_count: { type: "integer" },
       parameters: { type: "array" },
+      returned_count: { type: "integer" },
+      offset: { type: "integer" },
+      next_offset: { oneOf: [{ type: "integer" }, { type: "null" }] },
       truncated: { type: "boolean" },
+      inventory_complete: { type: "boolean" },
+      coverage_status: { enum: ["complete", "paged"] },
     },
     refs: refs({
       input: fxOwnerScopedInputRefs("FX ref whose parameter metadata is listed."),
@@ -164,19 +170,22 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       {
         name: "list_reaeq_parameters",
         summary: "List parameter metadata for one resolved FX.",
-        input: { limit: 32 },
+        input: { limit: 32, offset: 0 },
       },
     ],
   }),
   readDescriptor({
     id: "template.fx.read_fx_parameter",
     title: "Read FX parameter",
-    summary: "Read one FX parameter by index or approved ident and return normalized facts.",
+    summary: "Read one FX parameter by index or approved ident, or format one hypothetical normalized value without mutation.",
     entity_kind: "fx_param",
     tags: ["fx", "parameter", "read", "wave2a"],
     operation_name: "fx.read_parameter",
     capability: "fx.read_parameter",
-    inputProperties: parameterSelectorProperties(),
+    inputProperties: {
+      ...parameterSelectorProperties(),
+      probe_normalized_value: { type: "number", minimum: 0, maximum: 1 },
+    },
     requiredInput: ["param_index"],
     outputProperties: parameterValueOutput(),
     refs: refs({

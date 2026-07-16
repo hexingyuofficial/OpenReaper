@@ -10716,6 +10716,39 @@ local function e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_
   return ok and first_number(value) or JSON_NULL
 end
 
+local function e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+  local api = owner_kind == "take" and "TakeFX_GetParamIdent" or "TrackFX_GetParamIdent"
+  local ok, _, ident = call_reaper(api, owner, slot_index, param_index, "")
+  ident = ok and first_string(ident) or nil
+  if not ident or ident == "" then
+    return nil
+  end
+  return bounded_string(ident, 160)
+end
+
+local function e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
+  local api = owner_kind == "take" and "TakeFX_GetFormattedParamValue" or "TrackFX_GetFormattedParamValue"
+  local ok, _, formatted = call_reaper(api, owner, slot_index, param_index, "")
+  return bounded_string(ok and first_string(formatted) or "", 160)
+end
+
+local function e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value)
+  local api = owner_kind == "take" and "TakeFX_FormatParamValueNormalized" or "TrackFX_FormatParamValueNormalized"
+  local ok, formatted_ok, formatted = call_reaper(api, owner, slot_index, param_index, normalized_value, "")
+  if not ok or formatted_ok == false then
+    return nil
+  end
+  return bounded_string(first_string(formatted) or "", 160)
+end
+
+local function e2_fx_parameter_offset(value)
+  local number = tonumber(value)
+  if not number or number < 0 or number ~= math.floor(number) then
+    return 0
+  end
+  return number
+end
+
 local function e2_fx_read_owner_ref(owner_kind, owner)
   if owner_kind == "take" then
     return e2_fx_read_take_ref_string(owner)
@@ -10827,25 +10860,34 @@ local function list_fx_parameters(request)
   end
   local count = e2_fx_read_param_count(owner_kind, owner, slot_index)
   local limit = e2_fx_read_bounded_limit(request, request.params and request.params.limit, 32, 64)
+  local offset = math.min(e2_fx_parameter_offset(request.params and request.params.offset), count)
   local parameters = json_array({})
-  local max_index = math.min(count, limit)
-  for param_index = 0, max_index - 1 do
+  local max_index = math.min(count, offset + limit)
+  for param_index = offset, max_index - 1 do
     local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
     parameters[#parameters + 1] = {
       param_index = param_index,
+      param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index) or JSON_NULL,
       name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
       value = values.value,
       min_value = values.min_value,
       max_value = values.max_value,
       normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
+      formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
     }
   end
+  local next_offset = max_index < count and max_index or JSON_NULL
   return e2_fx_read_summary(request, {
     owner_kind = owner_kind,
     slot_index = slot_index,
     parameter_count = count,
     parameters = parameters,
-    truncated = count > limit,
+    returned_count = #parameters,
+    offset = offset,
+    next_offset = next_offset,
+    truncated = next_offset ~= JSON_NULL,
+    inventory_complete = next_offset == JSON_NULL,
+    coverage_status = next_offset == JSON_NULL and "complete" or "paged",
   }), nil, json_array({}), json_array({}), e2_fx_read_refs()
 end
 
@@ -10865,17 +10907,53 @@ local function read_fx_parameter(request)
       parameter_count = count,
     })
   end
+  local param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+  if not param_ident then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_UNAVAILABLE", "REAPER did not return a stable identity for the exact FX parameter.", {
+      param_index = param_index,
+    })
+  end
+  local requested_ident = request.params and request.params.param_ident
+  if is_string(requested_ident) and requested_ident ~= param_ident then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_MISMATCH", "Requested param_ident does not match the exact live FX parameter.", {
+      requested_param_ident = bounded_string(requested_ident, 160),
+      live_param_ident = param_ident,
+    })
+  end
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
+  local formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
+  if request.params and request.params.probe_normalized_value ~= nil then
+    local probe_normalized_value = tonumber(request.params.probe_normalized_value)
+    if not probe_normalized_value or probe_normalized_value < 0 or probe_normalized_value > 1 then
+      return e2_fx_read_error("PARAMS_INVALID", "E2 FX-L1 probe_normalized_value must be between 0 and 1.", {
+        probe_normalized_value = request.params.probe_normalized_value,
+      })
+    end
+    local probe_formatted = e2_fx_format_param_normalized(owner_kind, owner, slot_index, param_index, probe_normalized_value)
+    if probe_formatted == nil then
+      return e2_fx_read_error("API_UNAVAILABLE", "REAPER could not format the requested normalized FX parameter value.", {
+        param_index = param_index,
+        probe_normalized_value = probe_normalized_value,
+      })
+    end
+    normalized_value = probe_normalized_value
+    formatted_value = probe_formatted
+  end
+  local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
   return e2_fx_read_summary(request, {
+    fx_ref = ref.ref,
     owner_kind = owner_kind,
     slot_index = slot_index,
     param_index = param_index,
+    param_ident = param_ident,
     name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
     value = values.value,
     min_value = values.min_value,
     max_value = values.max_value,
-    normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
-  }), nil, json_array({}), json_array({}), e2_fx_read_refs()
+    normalized_value = normalized_value,
+    formatted_value = formatted_value,
+  }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
 local function e2_fx_search_query(request)
@@ -11322,6 +11400,19 @@ local function set_fx_parameter_normalized(request)
       parameter_count = count,
     })
   end
+  local param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index)
+  if not param_ident then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_UNAVAILABLE", "REAPER did not return a stable identity for the exact FX parameter.", {
+      param_index = param_index,
+    })
+  end
+  local requested_ident = request.params and request.params.param_ident
+  if is_string(requested_ident) and requested_ident ~= param_ident then
+    return e2_fx_read_error("FX_PARAMETER_IDENTITY_MISMATCH", "Requested param_ident does not match the exact live FX parameter.", {
+      requested_param_ident = bounded_string(requested_ident, 160),
+      live_param_ident = param_ident,
+    })
+  end
   if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value) then
     return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX parameter update.", {}, false)
   end
@@ -11341,14 +11432,17 @@ local function set_fx_parameter_normalized(request)
   end
   local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
   return e2_fx_write_summary(request, {
+    fx_ref = ref.ref,
     owner_kind = owner_kind,
     slot_index = slot_index,
     param_index = param_index,
+    param_ident = param_ident,
     name = e2_fx_read_param_name(owner_kind, owner, slot_index, param_index),
     value = values.value,
     min_value = values.min_value,
     max_value = values.max_value,
     normalized_value = readback_normalized,
+    formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
     requested_normalized_value = normalized_value,
     tolerance = tolerance,
     updated = updated,

@@ -125,6 +125,58 @@ describe("Wave 2A fx template descriptors", () => {
     assert.equal(JSON.stringify(templates).includes('"kind":"device"'), false);
   });
 
+  it("publishes pageable parameter reads with stable identity and native formatting", () => {
+    const byId = new Map(createWave2AFxTemplates().map((descriptor) => [descriptor.id, descriptor]));
+    const list = byId.get("template.fx.list_fx_parameters");
+    const read = byId.get("template.fx.read_fx_parameter");
+    const set = byId.get("template.fx.set_fx_parameter_normalized");
+
+    assert.deepEqual(list.inputSchema.properties.offset, { type: "integer" });
+    assert.deepEqual(list.outputSchema.properties.returned_count, { type: "integer" });
+    assert.deepEqual(list.outputSchema.properties.offset, { type: "integer" });
+    assert.deepEqual(list.outputSchema.properties.next_offset, {
+      oneOf: [{ type: "integer" }, { type: "null" }],
+    });
+    assert.deepEqual(list.outputSchema.properties.inventory_complete, { type: "boolean" });
+    assert.deepEqual(list.outputSchema.properties.coverage_status, { enum: ["complete", "paged"] });
+    assert.deepEqual(read.inputSchema.properties.probe_normalized_value, {
+      type: "number",
+      minimum: 0,
+      maximum: 1,
+    });
+
+    for (const descriptor of [read, set]) {
+      assert.deepEqual(descriptor.inputSchema.properties.param_ident, { type: "string" });
+      assert.deepEqual(descriptor.outputSchema.properties.param_ident, { type: "string" });
+      assert.deepEqual(descriptor.outputSchema.properties.formatted_value, { type: "string" });
+    }
+
+    const fx = fxRef("track", 0);
+    const listRequest = buildTemplateBridgeRequest({
+      descriptor: list,
+      input: { limit: 64, offset: 128 },
+      refs: { fx_ref: fx },
+      context: context({ request_sequence: 60 }),
+    });
+    const readRequest = buildTemplateBridgeRequest({
+      descriptor: read,
+      input: {
+        param_index: 8,
+        param_ident: "band1_shape",
+        probe_normalized_value: 0.125,
+      },
+      refs: { fx_ref: fx },
+      context: context({ request_sequence: 61 }),
+    });
+
+    assert.deepEqual(listRequest.params, { limit: 64, offset: 128 });
+    assert.deepEqual(readRequest.params, {
+      param_index: 8,
+      param_ident: "band1_shape",
+      probe_normalized_value: 0.125,
+    });
+  });
+
   it("loads in a pack-local catalog, rejects duplicates, and keeps discovery compact", () => {
     const templates = createWave2AFxTemplates();
     const catalog = createTemplateCatalog({ templates });
