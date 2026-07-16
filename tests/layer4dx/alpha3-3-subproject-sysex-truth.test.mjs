@@ -118,6 +118,26 @@ assert(failure.details.blocker == "subproject_save_failed" and current_project =
 `);
   });
 
+  it("selects the one newly created inactive tab and fails closed when the new identity is ambiguous", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({ inactive_new_tab = true })
+local request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+local summary, failure = create_subproject(request)
+assert(failure == nil and summary.created == true and summary.parent_restored == true)
+assert(current_project == parent_project and calls.select_project == 2)
+assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
+
+install_subproject_fake({ ambiguous_new_tabs = true })
+request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+summary, failure = create_subproject(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "new_project_tab_identity_ambiguous")
+assert(failure.details.added_project_count == 2 and current_project == parent_project)
+`);
+  });
+
   it("opens a closed child path for synchronous render and restores the parent on render failure", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
 install_subproject_fake({})
@@ -248,7 +268,10 @@ function install_subproject_fake(config)
       assert(flag == 0 and project == parent_project)
       child_project = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
       projects[#projects + 1] = child_project
-      current_project = child_project
+      if config.ambiguous_new_tabs then
+        projects[#projects + 1] = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
+      end
+      if not config.inactive_new_tab and not config.ambiguous_new_tabs then current_project = child_project end
       return nil
     end
     assert(action == 42332 and flag == 0 and project == current_project)

@@ -249,6 +249,48 @@ local function d30_project_find_open_by_path(path)
   end
 end
 
+local function d30_project_open_instances()
+  local instances = {}
+  local index = 0
+  while true do
+    local ok, project, project_path = call_reaper("EnumProjects", index, "")
+    if not ok then
+      return nil
+    end
+    if not project then
+      return instances
+    end
+    instances[#instances + 1] = {
+      project = project,
+      path = is_string(project_path) and project_path or "",
+    }
+    index = index + 1
+  end
+end
+
+local function d30_project_find_single_added_instance(before)
+  local after = d30_project_open_instances()
+  if not after then
+    return nil, "project_tab_enumeration_failed"
+  end
+  local known = {}
+  for index = 1, #before do
+    known[before[index].project] = true
+  end
+  local added = nil
+  local added_count = 0
+  for index = 1, #after do
+    if not known[after[index].project] then
+      added = after[index]
+      added_count = added_count + 1
+    end
+  end
+  if added_count ~= 1 then
+    return nil, "new_project_tab_identity_ambiguous", added_count
+  end
+  return added, nil, added_count
+end
+
 local function d30_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   return ok and first_string(guid) or nil
@@ -542,6 +584,12 @@ local function create_subproject(request)
     })
   end
 
+  local projects_before = d30_project_open_instances()
+  if not projects_before then
+    return d30_project_error("COMMAND_FAILED", "create_subproject could not enumerate open projects before creating the child tab.", {
+      blocker = "project_tab_preflight_enumeration_failed",
+    }, false)
+  end
   local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, parent.project)
   if not created_tab then
     return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab for the subproject.", {
@@ -551,9 +599,24 @@ local function create_subproject(request)
   end
   local child = d30_project_current_state()
   if not child or child.project == parent.project then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab did not become the active project.", {
-      blocker = "new_project_tab_readback_failed",
-    }, false)
+    local added, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
+    if not added then
+      return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab identity could not be verified exactly.", {
+        blocker = added_reason,
+        added_project_count = added_count,
+      }, false)
+    end
+    if not d30_project_call_void("SelectProjectInstance", added.project) then
+      return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER created a new project tab but rejected selecting its exact project instance.", {
+        blocker = "new_project_tab_selection_failed",
+      }, false)
+    end
+    child = d30_project_current_state()
+    if not child or child.project ~= added.project then
+      return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "The exact newly created project tab did not become active after native selection.", {
+        blocker = "new_project_tab_selection_readback_failed",
+      }, false)
+    end
   end
   if inherited_time_selection and not d30_project_set_time_selection(child.project, inherited_time_selection) then
     return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject did not inherit the parent time selection exactly.", {

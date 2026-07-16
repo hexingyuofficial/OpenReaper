@@ -1069,6 +1069,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     capability: "project.create_subproject",
     entityKind: "subproject",
     tag: "create",
+    timeoutMs: 300_000,
     properties: {
       name: { type: "string" },
       activate: { type: "boolean" },
@@ -1271,6 +1272,7 @@ function subprojectMutationDescriptor({
   outputs = {},
   action,
   operationFamily = "run_command",
+  timeoutMs = operationFamily === "run_job" ? 30_000 : 5_000,
   idempotent = false,
   verificationName,
   verificationSummary,
@@ -1291,7 +1293,7 @@ function subprojectMutationDescriptor({
       operation_name: "template.execute",
       capability,
       idempotency: "supported",
-      timeout_ms: operationFamily === "run_job" ? 30_000 : 5_000,
+      timeout_ms: timeoutMs,
     }),
     inputSchema: objectSchema(properties, required),
     outputSchema: objectSchema({

@@ -175,6 +175,7 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(Object.hasOwn(renderOrUpdateSubproject.outputSchema.properties, "job_ref"), true);
     assert.equal(renderOrUpdateSubproject.bridge.operation_family, "run_job");
     assert.equal(renderOrUpdateSubproject.bridge.capability, "project.render_or_update_subproject");
+    assert.equal(createSubproject.bridge.timeout_ms, 300_000);
     assert.equal(Object.hasOwn(createSubproject.inputSchema.properties, "raw_action"), false);
     assert.equal(Object.hasOwn(createProjectTab.inputSchema.properties, "project_file_path"), false);
   });
