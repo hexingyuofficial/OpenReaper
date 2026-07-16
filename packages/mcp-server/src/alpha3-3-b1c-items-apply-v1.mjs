@@ -22,9 +22,10 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "trim_exact",
   "set_take_playback",
   "set_snap_offset",
+  "remove_silence",
+  "align_onsets",
 ]);
 export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES = deepFreeze([
-  "align_onsets",
   "set_snap_offset_to_onset",
   "normalize_peak",
   "normalize_lufs",
@@ -68,6 +69,10 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.set_item_snap_offset",
   "template.tracks.resolve_track_ref",
   "template.items.move_item_to_track",
+  "template.analysis.detect_item_silence",
+  "template.analysis.detect_item_transients",
+  "template.items.split_item_by_silence",
+  "template.items.list_items_on_track",
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
@@ -81,6 +86,10 @@ const SET_TAKE_PLAYRATE_ID = "template.items.set_take_playrate";
 const SET_ITEM_SNAP_OFFSET_ID = "template.items.set_item_snap_offset";
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
 const MOVE_ITEM_TO_TRACK_ID = "template.items.move_item_to_track";
+const DETECT_SILENCE_ID = "template.analysis.detect_item_silence";
+const DETECT_TRANSIENTS_ID = "template.analysis.detect_item_transients";
+const SPLIT_BY_SILENCE_ID = "template.items.split_item_by_silence";
+const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
 const MAX_TARGETS = 8;
 const DEFAULT_TARGET_LIMIT = 4;
 const POSITION_TOLERANCE = 0.000001;
@@ -102,6 +111,10 @@ const INPUT_FIELDS = new Set([
   "playrate",
   "preserve_pitch",
   "snap_offset_seconds",
+  "silence_threshold_dbfs",
+  "min_silence_ms",
+  "transient_delta_linear",
+  "min_transient_gap_ms",
 ]);
 const PROPERTY_DEFINITIONS = deepFreeze({
   volume_db: { template_id: "template.items.set_item_volume", input_field: "volume_db", type: "number", min: -120, max: 24 },
@@ -119,9 +132,9 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.2.1",
+  program_version: "1.3.0",
   implementation_status: "executable",
-  risk: "write",
+  risk: "destructive",
   input_schema: {
     type: "object",
     additionalProperties: false,
@@ -178,6 +191,10 @@ const REGISTRY_ENTRY = deepFreeze({
       playrate: { type: "number", exclusiveMinimum: 0, maximum: 16 },
       preserve_pitch: { type: "boolean" },
       snap_offset_seconds: { type: "number", minimum: 0 },
+      silence_threshold_dbfs: { type: "number", minimum: -150, maximum: 0 },
+      min_silence_ms: { type: "number", minimum: 0, maximum: 60000 },
+      transient_delta_linear: { type: "number", exclusiveMinimum: 0, maximum: 1024 },
+      min_transient_gap_ms: { type: "number", minimum: 0, maximum: 60000 },
     },
     required: ["mode"],
   },
@@ -228,11 +245,11 @@ export function isAlpha3_3B1cItemsApplyMacroId(id) {
 export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = false } = {}) {
   return deepFreeze([{
     id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
-    title: "Arrange Items, set properties, choose Active Takes, fades, trims, and playback",
+    title: "Arrange Items, remove silence, align onsets, and apply exact Item changes",
     user_label: "Apply Item changes",
     pack: "core",
     lifecycle: "experimental",
-    risk: "write",
+    risk: "destructive",
     entity_kind: "macro.items.apply",
     action_kind: "macro",
     kind: "official_macro",
@@ -244,7 +261,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     support_state: "supported_with_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Arrange selected or exact Items, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, or apply bounded fades, exact trims, Take playback, and snap offsets.",
+    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, or apply bounded fades, exact trims, Take playback, and snap offsets.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1C_ITEMS_APPLY_MODES,
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
@@ -257,6 +274,8 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
       { name: "stack_on_existing_tracks", input: { mode: "stack_on_existing_tracks", track_assignments: [{ item_ref: "item:guid:{ITEM-GUID}", target_track_ref: "track:guid:{TRACK-GUID}" }], dry_run: false } },
       { name: "fade_exact_items", input: { mode: "apply_fades", target_refs: ["item:guid:{ITEM-GUID}"], fade_in_seconds: 0.02, fade_out_seconds: 0.08, dry_run: false } },
       { name: "set_take_playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{ITEM-GUID}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
+      { name: "remove_silence", input: { mode: "remove_silence", target_refs: ["item:guid:{ITEM-GUID}"], silence_threshold_dbfs: -60, min_silence_ms: 50, dry_run: false } },
+      { name: "align_audio_onsets", input: { mode: "align_onsets", target_refs: ["item:guid:{ITEM-A}", "item:guid:{ITEM-B}"], dry_run: false } },
     ],
   }]);
 }
@@ -271,10 +290,10 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use set_properties for Item-level volume_db, muted, locked, or loop_source only.",
         "Use set_active_take with one to eight explicit item_ref/take_ref assignment rows; each exact Take is applied only to its paired exact Item.",
         "Use stack_on_existing_tracks with one to eight explicit item_ref/target_track_ref rows; every destination must already exist.",
-        "Use apply_fades, trim_exact, set_take_playback, or set_snap_offset for bounded common edits backed by accepted native Item/Take atoms.",
+        "Use apply_fades, trim_exact, set_take_playback, set_snap_offset, remove_silence, or align_onsets for bounded common edits backed by accepted native Item/Take atoms.",
       ],
       when_not_to_use: [
-        "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, transient splitting, crossfades, and onset alignment remain held.",
+        "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, arbitrary transient splitting, and crossfades remain held.",
         "stack_on_existing_tracks never creates Tracks or folders; use macro.project.apply_layout first when the destination layout does not exist.",
         "Do not request Take fields through set_properties; use set_active_take or set_take_playback so each mode keeps a bounded schema and readback contract.",
         "Do not request pan as an Item-level field: no REAPER Item-level pan control is proven here, and macro.items.apply will not silently redirect it to the current Active Take.",
@@ -298,12 +317,15 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         trim: "trim_exact requires positive length_seconds and does not analyze silence or change source media on disk.",
         take_playback: "set_take_playback requires positive playrate (max 16) plus explicit preserve_pitch and an existing Active Take.",
         snap_offset: "set_snap_offset requires a non-negative item-local snap_offset_seconds no greater than the current Item length.",
+        remove_silence: "remove_silence accepts optional silence_threshold_dbfs (-150..0, default -60) and min_silence_ms (0..60000, default 50), scans the complete Item up to 600 seconds, then deletes only silent Item fragments.",
+        align_onsets: "align_onsets accepts optional anchor_seconds; otherwise the earliest detected project-time onset is the anchor. Optional transient_delta_linear and min_transient_gap_ms tune the native pre-FX detector.",
       },
       preflight_steps: [
         "Reject unknown fields, held modes, held property fields, ambiguous target coverage, and impossible response budgets before mutation.",
         "Resolve every target live, read exact Item position/length/Active Take facts, then calculate the full deterministic operation list.",
         "For set_active_take, preserve each explicit Item/Take pair. The atom validates live Take ownership before SetActiveTake; the Macro never infers a Take from selection.",
         "For stack_on_existing_tracks, resolve both sides live, preserve every explicit Item/Track pair, and refuse missing or duplicate destinations before any move.",
+        "For remove_silence and align_onsets, require complete native audio-analysis range/channel/row coverage and at least one non-silent or transient result before any mutation.",
       ],
       underlying_actions: ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS,
       readback_steps: [
@@ -311,6 +333,8 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Property/fade/trim/Take-playback/snap modes require the accepted atomic Template to return the exact Item ref and every live REAPER field value that it just read back.",
         "set_active_take marks a row applied only when the atom returns the paired exact item_ref, requested active_take_ref, and passed native GetActiveTake readback.",
         "stack_on_existing_tracks marks a row applied only when the atom returns the exact Item and target Track plus passed identity/take/Track-count readback.",
+        "remove_silence marks a row applied only after the destructive atom proves kept GUIDs present, deleted GUIDs absent, duration conservation, and Track Item count; the Macro then reads every kept Item and independently checks the live Track Item count.",
+        "align_onsets re-runs native transient detection after every move and marks a row applied only when position + first_transient_time matches the requested project-time anchor.",
         "Index invalidation is reported separately and never changes an already verified mutation into an unverified applied claim.",
       ],
       success_criteria: [
@@ -327,6 +351,9 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         blocker("ITEM_APPLY_SNAP_OFFSET_OUTSIDE_ITEM", "The requested item-local snap offset exceeds the live Item length."),
         blocker("ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE", "The selected target set exceeds the bounded write limit and was not partially mutated."),
         blocker("ITEM_APPLY_READBACK_MISMATCH", "A row-level live value did not match the requested value."),
+        blocker("ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE", "Silence/transient analysis did not cover the complete Item and all result rows before mutation."),
+        blocker("ITEM_APPLY_ALL_SILENT_BLOCKED", "remove_silence refuses to delete an Item whose complete analyzed duration is silent."),
+        blocker("ITEM_APPLY_TRANSIENT_REQUIRED", "align_onsets requires at least one transient on every target Item."),
         blocker("ITEM_APPLY_RESPONSE_BUDGET_EXCEEDED", "The compact per-change result cannot fit the active response budget before mutation."),
       ],
       recovery_steps: [
@@ -397,7 +424,7 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
   pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${targets.refs.length} exact live Item target(s).`, state.evidenceRefs);
 
-  const facts = await readTargetFacts({ targets: targets.refs, assignments: targets.assignments, request, executeAtomic, state });
+  const facts = await readTargetFacts({ targets: targets.refs, assignments: targets.assignments, input: normalized.input, request, executeAtomic, state });
   if (!facts.ok) {
     pushStage(stages, "items-apply-preflight", "template_execute", "failed", facts.message, state.evidenceRefs);
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: facts.code, message: facts.message, blockers: facts.blockers, data: targetData(state) });
@@ -424,7 +451,9 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   }
 
   let executionFailure = null;
-  if (["set_properties", "set_active_take", "stack_on_existing_tracks"].includes(normalized.input.mode)) {
+  if (normalized.input.mode === "remove_silence") {
+    executionFailure = await executeRemoveSilencePlan({ plan, request, executeAtomic, state });
+  } else if (["set_properties", "set_active_take", "stack_on_existing_tracks"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
   } else if (["apply_fades", "trim_exact", "set_take_playback", "set_snap_offset"].includes(normalized.input.mode)) {
     executionFailure = await executePropertyPlan({ plan, request, executeAtomic, state });
@@ -615,7 +644,7 @@ async function resolveTrackAssignments({ request, assignments, executeAtomic, st
   return { ok: true, refs: resolved.map((row) => row.item_ref), assignments: resolved };
 }
 
-async function readTargetFacts({ targets, assignments = [], request, executeAtomic, state }) {
+async function readTargetFacts({ targets, assignments = [], input, request, executeAtomic, state }) {
   const rows = [];
   for (const [index, itemRef] of targets.entries()) {
     const execution = await runAtomic(executeAtomic, request, {
@@ -630,7 +659,7 @@ async function readTargetFacts({ targets, assignments = [], request, executeAtom
     if (!Number.isFinite(summary.position_seconds) || summary.position_seconds < 0 || !Number.isFinite(summary.length_seconds) || summary.length_seconds < 0) {
       return failed("ITEM_APPLY_ITEM_FACTS_INVALID", `Item ${itemRef.ref} did not return finite non-negative position and length facts.`);
     }
-    rows.push({
+    const row = {
       item_ref: itemRef,
       source_track_ref: stringOrNull(summary.track_ref),
       position_seconds: summary.position_seconds,
@@ -643,12 +672,70 @@ async function readTargetFacts({ targets, assignments = [], request, executeAtom
       requested_take_ref: assignments[index]?.take_ref ?? null,
       requested_track_ref: assignments[index]?.target_track_ref ?? null,
       target_order: index,
-    });
+    };
+    if (["remove_silence", "align_onsets"].includes(input.mode)) {
+      if (row.length_seconds > 600) {
+        return failed("ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE", `${itemRef.ref} is longer than the 600-second complete-analysis ceiling; no mutation was run.`);
+      }
+      const analysisId = input.mode === "remove_silence" ? DETECT_SILENCE_ID : DETECT_TRANSIENTS_ID;
+      const analysisInput = input.mode === "remove_silence"
+        ? compactObject({ max_analysis_seconds: 600, max_segments: 128, silence_threshold_dbfs: input.silence_threshold_dbfs, min_silence_ms: input.min_silence_ms })
+        : compactObject({ max_analysis_seconds: 600, max_transients: 128, transient_delta_linear: input.transient_delta_linear, min_transient_gap_ms: input.min_transient_gap_ms });
+      const analysis = await runAtomic(executeAtomic, request, { id: analysisId, input: analysisInput, refs: { item_ref: itemRef } });
+      collectExecutionEvidence(state, analysis);
+      if (analysis?.ok !== true) return atomicFailure(analysis, analysisId);
+      const analysisSummary = executionSummary(analysis);
+      const coverage = plainObject(analysisSummary.coverage);
+      const rowCountComplete = input.mode === "remove_silence"
+        ? analysisSummary.total_detected === analysisSummary.returned_count
+        : analysisSummary.total_detected === analysisSummary.transient_count;
+      if (analysisSummary.item_ref !== itemRef.ref || analysisSummary.truncated === true || coverage.range_complete !== true
+        || coverage.channel_coverage_complete !== true || coverage.result_rows_complete !== true || !rowCountComplete) {
+        return failed("ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE", `${analysisId} did not return complete range, channel, and result-row coverage for ${itemRef.ref}; no mutation was run.`);
+      }
+      if (input.mode === "remove_silence") {
+        const silenceCount = integerOr(analysisSummary.segment_count, -1);
+        const silenceSeconds = finiteOrNull(analysisSummary.total_silence_seconds);
+        if (silenceCount < 0 || silenceSeconds === null || silenceSeconds < 0 || silenceSeconds > row.length_seconds + POSITION_TOLERANCE) {
+          return failed("ITEM_APPLY_ANALYSIS_RESULT_INVALID", `${analysisId} returned invalid silence totals for ${itemRef.ref}; no mutation was run.`);
+        }
+        if (silenceCount > 0 && silenceSeconds >= row.length_seconds - POSITION_TOLERANCE) {
+          return failed("ITEM_APPLY_ALL_SILENT_BLOCKED", `${itemRef.ref} is completely silent at the requested threshold; deleting the only source Item is refused.`);
+        }
+        row.analysis = { silence_segment_count: silenceCount, silence_seconds: silenceSeconds };
+      } else {
+        const transientCount = integerOr(analysisSummary.transient_count, -1);
+        const firstTransient = finiteOrNull(analysisSummary.first_transient_time);
+        if (transientCount < 1 || firstTransient === null || firstTransient < 0 || firstTransient > row.length_seconds + POSITION_TOLERANCE) {
+          return failed("ITEM_APPLY_TRANSIENT_REQUIRED", `${itemRef.ref} has no complete first-transient result; no onset alignment was run.`);
+        }
+        row.analysis = { transient_count: transientCount, first_transient_time: firstTransient };
+      }
+    }
+    rows.push(row);
   }
   return { ok: true, rows };
 }
 
 function buildOperationPlan(input, facts) {
+  if (input.mode === "remove_silence") {
+    return {
+      ok: true,
+      operations: facts.map((fact) => ({
+        operation_id: `item-${fact.target_order + 1}-remove-silence`,
+        kind: "remove_silence",
+        template_id: SPLIT_BY_SILENCE_ID,
+        item_ref: fact.item_ref,
+        field: "silence_segments",
+        before_value: fact.length_seconds,
+        requested_value: {
+          count: fact.analysis.silence_segment_count,
+          duration_seconds: fact.analysis.silence_seconds,
+        },
+        input: compactObject({ silence_threshold_dbfs: input.silence_threshold_dbfs, min_silence_ms: input.min_silence_ms }),
+      })),
+    };
+  }
   if (input.mode === "stack_on_existing_tracks") {
     const missingOwner = facts.find((fact) => typeof fact.source_track_ref !== "string" || !fact.source_track_ref.startsWith("track:") || !fact.requested_track_ref);
     if (missingOwner) return failed("ITEM_APPLY_ITEM_FACTS_INVALID", `${missingOwner.item_ref.ref} did not return an exact live source Track or destination assignment; no move was run.`);
@@ -774,7 +861,10 @@ function buildOperationPlan(input, facts) {
 
   const timeline = [...facts].sort((a, b) => a.position_seconds - b.position_seconds || a.target_order - b.target_order);
   const desired = new Map();
-  if (input.mode === "align_starts") {
+  if (input.mode === "align_onsets") {
+    const anchor = input.anchor_seconds ?? Math.min(...facts.map((fact) => fact.position_seconds + fact.analysis.first_transient_time));
+    for (const fact of facts) desired.set(fact.item_ref.ref, anchor - fact.analysis.first_transient_time);
+  } else if (input.mode === "align_starts") {
     const anchor = input.anchor_seconds ?? Math.min(...facts.map((fact) => fact.position_seconds));
     for (const fact of facts) desired.set(fact.item_ref.ref, anchor);
   } else if (input.mode === "align_ends") {
@@ -799,13 +889,17 @@ function buildOperationPlan(input, facts) {
 
   const operations = facts.map((fact) => ({
     operation_id: `item-${fact.target_order + 1}-position_seconds`,
-    kind: "move_item",
+    kind: input.mode === "align_onsets" ? "align_onset" : "move_item",
     template_id: MOVE_ITEM_ID,
     item_ref: fact.item_ref,
     field: "position_seconds",
     before_value: fact.position_seconds,
     requested_value: desired.get(fact.item_ref.ref),
     input: { position_seconds: desired.get(fact.item_ref.ref) },
+    ...(input.mode === "align_onsets" ? {
+      onset_anchor_seconds: input.anchor_seconds ?? Math.min(...facts.map((row) => row.position_seconds + row.analysis.first_transient_time)),
+      transient_input: compactObject({ max_analysis_seconds: 600, max_transients: 128, transient_delta_linear: input.transient_delta_linear, min_transient_gap_ms: input.min_transient_gap_ms }),
+    } : {}),
   }));
   const invalid = operations.find((operation) => !Number.isFinite(operation.requested_value) || operation.requested_value < 0);
   if (invalid) return failed("ITEM_APPLY_POSITION_INVALID", `${input.mode} would move ${invalid.item_ref.ref} before project time zero; no mutation was run.`);
@@ -864,6 +958,108 @@ async function executePropertyPlan({ plan, request, executeAtomic, state }) {
   return null;
 }
 
+async function executeRemoveSilencePlan({ plan, request, executeAtomic, state }) {
+  for (const operation of plan.operations) {
+    const change = pendingChange(operation);
+    state.changes.push(change);
+    let execution;
+    try {
+      execution = await runAtomic(executeAtomic, request, {
+        id: operation.template_id,
+        input: operation.input,
+        refs: { item_ref: operation.item_ref },
+      });
+    } catch (error) {
+      change.mutation = { status: "failed" };
+      change.live_readback = { status: "not_run" };
+      return executionError(error, operation.template_id, "mutation");
+    }
+    collectExecutionEvidence(state, execution);
+    if (execution?.ok !== true) {
+      change.mutation = { status: "failed" };
+      change.live_readback = { status: "not_run" };
+      return { ...atomicFailure(execution, operation.template_id), phase: "mutation" };
+    }
+    change.mutation = { status: "completed", template_id: operation.template_id };
+    const summary = executionSummary(execution);
+    const keptRefs = Array.isArray(summary.kept_item_refs) ? summary.kept_item_refs : [];
+    const deletedRefs = Array.isArray(summary.deleted_item_refs) ? summary.deleted_item_refs : [];
+    const expected = operation.requested_value;
+    const atomMatches = summary.readback_status === "passed"
+      && summary.source_item_ref === operation.item_ref.ref
+      && isExactGuidRef(summary.owner_track_ref, "track")
+      && summary.source_media_deleted === false
+      && Number.isInteger(summary.silence_segment_count)
+      && summary.silence_segment_count === expected.count
+      && valuesMatch(summary.removed_duration_seconds, expected.duration_seconds)
+      && Number.isInteger(summary.split_count)
+      && Number.isInteger(summary.delete_count)
+      && Number.isInteger(summary.item_count_after)
+      && summary.delete_count === deletedRefs.length
+      && keptRefs.length >= 1
+      && keptRefs.every((ref) => isExactGuidRef(ref, "item"))
+      && deletedRefs.every((ref) => isExactGuidRef(ref, "item"));
+    if (!atomMatches) {
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "split_by_silence_atom_readback" };
+      return { ...failed("ITEM_APPLY_READBACK_MISMATCH", `${operation.item_ref.ref} split-by-silence atom did not return complete exact live truth.`), phase: "readback" };
+    }
+
+    for (const keptRef of keptRefs) {
+      const read = await runAtomic(executeAtomic, request, {
+        id: READ_ITEM_ID,
+        input: { include_take_summary: true },
+        refs: { item_ref: exactGuidObjectRef("item", keptRef) },
+      });
+      collectExecutionEvidence(state, read);
+      if (read?.ok !== true) {
+        change.status = "readback_failed";
+        change.live_readback = { status: "failed", source: "kept_item_live_summary" };
+        return { ...atomicFailure(read, READ_ITEM_ID), phase: "readback" };
+      }
+      const keptSummary = executionSummary(read);
+      if (keptSummary.item_ref !== keptRef || keptSummary.track_ref !== summary.owner_track_ref
+        || !Number.isFinite(keptSummary.position_seconds) || !Number.isFinite(keptSummary.length_seconds) || keptSummary.length_seconds <= 0) {
+        change.status = "readback_failed";
+        change.live_readback = { status: "failed", source: "kept_item_live_summary" };
+        return { ...failed("ITEM_APPLY_READBACK_MISMATCH", `${keptRef} did not survive with exact Track/position/length readback.`), phase: "readback" };
+      }
+    }
+
+    const trackList = await runAtomic(executeAtomic, request, {
+      id: LIST_TRACK_ITEMS_ID,
+      input: { limit: 128, include_take_summary: false },
+      refs: { track_ref: exactGuidObjectRef("track", summary.owner_track_ref) },
+    });
+    collectExecutionEvidence(state, trackList);
+    if (trackList?.ok !== true) {
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "owner_track_item_count" };
+      return { ...atomicFailure(trackList, LIST_TRACK_ITEMS_ID), phase: "readback" };
+    }
+    const trackSummary = executionSummary(trackList);
+    if (trackSummary.track_ref !== summary.owner_track_ref || trackSummary.item_count !== summary.item_count_after) {
+      change.status = "readback_failed";
+      change.live_readback = { status: "failed", source: "owner_track_item_count" };
+      return { ...failed("ITEM_APPLY_READBACK_MISMATCH", `${summary.owner_track_ref} Item count did not independently match the split atom.`), phase: "readback" };
+    }
+
+    change.status = "applied";
+    change.live_readback = {
+      status: "passed",
+      source: "split_atom_plus_kept_items_plus_track_count",
+      observed_value: {
+        kept: keptRefs.length,
+        deleted: deletedRefs.length,
+        removed_seconds: finiteOrNull(summary.removed_duration_seconds),
+        remaining_seconds: finiteOrNull(summary.remaining_duration_seconds),
+        track_item_count: summary.item_count_after,
+      },
+    };
+  }
+  return null;
+}
+
 async function executeArrangementPlan({ plan, request, executeAtomic, state }) {
   for (const operation of plan.operations) {
     const change = pendingChange(operation);
@@ -916,8 +1112,44 @@ async function executeArrangementPlan({ plan, request, executeAtomic, state }) {
       firstFailure ??= failedReadback(operation, summary.position_seconds, summary.item_ref);
       continue;
     }
-    change.status = "applied";
-    change.live_readback = { status: "passed", source: "live_item_summary", observed_value: summary.position_seconds };
+    if (operation.kind === "align_onset") {
+      const transientRead = await runAtomic(executeAtomic, request, {
+        id: DETECT_TRANSIENTS_ID,
+        input: operation.transient_input,
+        refs: { item_ref: operation.item_ref },
+      });
+      collectExecutionEvidence(state, transientRead);
+      if (transientRead?.ok !== true) {
+        change.status = "readback_failed";
+        change.live_readback = { status: "failed", source: "post_move_transient_analysis" };
+        firstFailure ??= { ...atomicFailure(transientRead, DETECT_TRANSIENTS_ID), phase: "readback" };
+        continue;
+      }
+      const transientSummary = executionSummary(transientRead);
+      const coverage = plainObject(transientSummary.coverage);
+      const firstTransient = finiteOrNull(transientSummary.first_transient_time);
+      const onset = firstTransient === null ? null : summary.position_seconds + firstTransient;
+      const transientMatches = transientSummary.item_ref === operation.item_ref.ref
+        && transientSummary.truncated !== true
+        && transientSummary.total_detected === transientSummary.transient_count
+        && transientSummary.transient_count >= 1
+        && coverage.range_complete === true
+        && coverage.channel_coverage_complete === true
+        && coverage.result_rows_complete === true
+        && onset !== null
+        && valuesMatch(onset, operation.onset_anchor_seconds);
+      if (!transientMatches) {
+        change.status = "readback_failed";
+        change.live_readback = compactObject({ status: "failed", source: "post_move_transient_analysis", observed_value: onset });
+        firstFailure ??= { ...failed("ITEM_APPLY_READBACK_MISMATCH", `${operation.item_ref.ref} live onset did not match ${operation.onset_anchor_seconds} seconds after movement.`), phase: "readback" };
+        continue;
+      }
+      change.status = "applied";
+      change.live_readback = { status: "passed", source: "live_item_summary_plus_transient_reanalysis", observed_value: onset };
+    } else {
+      change.status = "applied";
+      change.live_readback = { status: "passed", source: "live_item_summary", observed_value: summary.position_seconds };
+    }
   }
   return firstFailure;
 }
@@ -956,6 +1188,10 @@ function normalizeInput(input) {
   let playrate = null;
   let preservePitch = null;
   let snapOffsetSeconds = null;
+  let silenceThresholdDbfs = null;
+  let minSilenceMs = null;
+  let transientDeltaLinear = null;
+  let minTransientGapMs = null;
   if (mode !== "stack_on_existing_tracks" && input.track_assignments !== undefined) {
     return failed("ITEM_APPLY_REQUEST_INVALID", "track_assignments is valid only for stack_on_existing_tracks.");
   }
@@ -1003,6 +1239,20 @@ function normalizeInput(input) {
     if (input.properties !== undefined || input.active_take_assignments !== undefined || anchor.value !== null || gap.value !== null) return failed("ITEM_APPLY_REQUEST_INVALID", "set_snap_offset accepts targets, snap_offset_seconds, limit, and dry_run only.");
     if (!Number.isFinite(input.snap_offset_seconds) || input.snap_offset_seconds < 0) return failed("ITEM_APPLY_SNAP_OFFSET_INVALID", "set_snap_offset snap_offset_seconds must be a non-negative finite number.");
     snapOffsetSeconds = input.snap_offset_seconds;
+  } else if (mode === "remove_silence") {
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "silence_threshold_dbfs", "min_silence_ms"].includes(field));
+    if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `remove_silence does not accept field(s): ${unsupported.join(", ")}.`);
+    silenceThresholdDbfs = input.silence_threshold_dbfs ?? -60;
+    minSilenceMs = input.min_silence_ms ?? 50;
+    if (!Number.isFinite(silenceThresholdDbfs) || silenceThresholdDbfs < -150 || silenceThresholdDbfs > 0) return failed("ITEM_APPLY_SILENCE_THRESHOLD_INVALID", "silence_threshold_dbfs must be a finite number from -150 to 0.");
+    if (!Number.isFinite(minSilenceMs) || minSilenceMs < 0 || minSilenceMs > 60000) return failed("ITEM_APPLY_MIN_SILENCE_INVALID", "min_silence_ms must be a finite number from 0 to 60000.");
+  } else if (mode === "align_onsets") {
+    const unsupported = Object.keys(input).filter((field) => !["mode", "target", "target_refs", "limit", "dry_run", "anchor_seconds", "transient_delta_linear", "min_transient_gap_ms"].includes(field));
+    if (unsupported.length > 0) return failed("ITEM_APPLY_REQUEST_INVALID", `align_onsets does not accept field(s): ${unsupported.join(", ")}.`);
+    transientDeltaLinear = input.transient_delta_linear ?? 0.25;
+    minTransientGapMs = input.min_transient_gap_ms ?? 30;
+    if (!Number.isFinite(transientDeltaLinear) || transientDeltaLinear <= 0 || transientDeltaLinear > 1024) return failed("ITEM_APPLY_TRANSIENT_THRESHOLD_INVALID", "transient_delta_linear must be a finite number greater than 0 and at most 1024.");
+    if (!Number.isFinite(minTransientGapMs) || minTransientGapMs < 0 || minTransientGapMs > 60000) return failed("ITEM_APPLY_TRANSIENT_GAP_INVALID", "min_transient_gap_ms must be a finite number from 0 to 60000.");
   } else {
     if (input.properties !== undefined) return failed("ITEM_APPLY_REQUEST_INVALID", `${mode} does not accept properties.`);
     if (input.active_take_assignments !== undefined) return failed("ITEM_APPLY_REQUEST_INVALID", `${mode} does not accept active_take_assignments.`);
@@ -1028,6 +1278,10 @@ function normalizeInput(input) {
       playrate,
       preserve_pitch: preservePitch,
       snap_offset_seconds: snapOffsetSeconds,
+      silence_threshold_dbfs: silenceThresholdDbfs,
+      min_silence_ms: minSilenceMs,
+      transient_delta_linear: transientDeltaLinear,
+      min_transient_gap_ms: minTransientGapMs,
     },
   };
 }
@@ -1159,7 +1413,7 @@ function maintainProjectIndex(runtime, state, now) {
 }
 
 function affectedScopes(state) {
-  if (state.operations.some((operation) => operation.kind === "move_item_to_track")) return ["items", "tracks", "takes"];
+  if (state.operations.some((operation) => ["move_item_to_track", "remove_silence"].includes(operation.kind))) return ["items", "tracks", "takes"];
   return state.operations.some((operation) => ["set_active_take", "set_take_playback"].includes(operation.kind)) ? ["items", "takes"] : ["items"];
 }
 

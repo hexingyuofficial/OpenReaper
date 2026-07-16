@@ -196,7 +196,7 @@ global alias execution 或所有插件都受支持。
 
 ## 当前证据边界
 
-当前 Alpha3.3 产品面包含 15 个可见可执行 Macro，以及 231 个带已注册 bridge
+当前 Alpha3.3 产品面包含 15 个可见可执行 Macro，以及 232 个带已注册 bridge
 handler 的 Template；这些 handler 分布在 91 个模块中。部分 Macro 家族的真实支持
 范围仍比名称窄：
 

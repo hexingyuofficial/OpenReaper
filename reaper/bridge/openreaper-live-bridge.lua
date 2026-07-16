@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (231 registered template handler row(s); 0 legacy_monolith row(s); 231 extracted handler row(s); 91 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (232 registered template handler row(s); 0 legacy_monolith row(s); 232 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1464,6 +1464,7 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["tracks.freeze_track"] = { pack = "tracks", risk = "write" },
   ["tracks.unfreeze_track"] = { pack = "tracks", risk = "destructive" },
   ["automation.ensure_take_pitch_envelope"] = { pack = "automation", risk = "write" },
+  ["items.split_item_by_silence"] = { pack = "items", risk = "destructive" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {
@@ -2627,14 +2628,14 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 231,
+  template_count = 232,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 22,
     core = 3,
     fx = 17,
-    items = 34,
+    items = 35,
     media = 7,
     midi = 14,
     project = 30,
@@ -2645,13 +2646,13 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     transport = 16,
   },
   by_risk = {
-    destructive = 14,
+    destructive = 15,
     read = 81,
     safe = 12,
     write = 124,
   },
   by_lifecycle = {
-    experimental = 231,
+    experimental = 232,
   },
   by_entity_kind = {
     action = 4,
@@ -2674,7 +2675,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     ["fx_param.envelope_mapping"] = 1,
     grid = 2,
     hardware_output = 4,
-    item = 20,
+    item = 21,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -2737,14 +2738,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 231,
+  template_count = 232,
   by_pack = {
     actions = 8,
     analysis = 7,
     automation = 22,
     core = 3,
     fx = 17,
-    items = 34,
+    items = 35,
     media = 7,
     midi = 14,
     project = 30,
@@ -9412,10 +9413,6 @@ local function d27_analysis_param_number(params, name, default_value, minimum, m
 end
 
 local function d27_analysis_item_guid(item)
-  local ok_sws, guid = call_reaper("BR_GetMediaItemGUID", item)
-  if ok_sws and type(guid) == "string" and guid ~= "" then
-    return guid
-  end
   local ok_native, _, native_guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
   if ok_native and type(native_guid) == "string" and native_guid ~= "" then
     return native_guid
@@ -10474,8 +10471,341 @@ local function detect_item_transients(request)
     heuristic = true,
   })
 end
+
+local function d27_split_exact_item_ref(request)
+  if not is_json_array(request.refs) then return nil end
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "item" and is_string(ref.ref) and is_object(ref.identity) then
+      local guid = ref.ref:match("^item:guid:(.+)$")
+      if guid and ref.identity.scheme == "guid" and tostring(ref.identity.value) == guid then
+        return ref.ref, guid
+      end
+    end
+  end
+  return nil
+end
+
+local function d27_split_track_ref(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  guid = ok and first_string(guid) or nil
+  if not guid or guid == "" then return nil end
+  return "track:guid:" .. guid
+end
+
+local function d27_split_item_ref(item)
+  local guid = d27_analysis_item_guid(item)
+  if not guid then return nil end
+  return "item:guid:" .. guid, guid
+end
+
+local function d27_split_object_ref(kind, ref)
+  local scheme, value = ref:match("^[^:]+:([^:]+):(.+)$")
+  return {
+    kind = kind,
+    ref = ref,
+    identity = { scheme = scheme or "guid", value = tostring(value or "") },
+  }
+end
+
+local function d27_split_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  value = ok and d27_analysis_number(first_number(value)) or nil
+  return value
+end
+
+local function d27_split_matches_silence(midpoint, segments, tolerance)
+  for index = 1, #segments do
+    local segment = segments[index]
+    if midpoint >= segment.start_seconds - tolerance and midpoint <= segment.end_seconds + tolerance then
+      return true
+    end
+  end
+  return false
+end
+
+local function alpha33_split_item_by_silence(request)
+  local source_item_ref, requested_guid = d27_split_exact_item_ref(request)
+  if not source_item_ref then
+    return nil, d27_analysis_error("REF_INVALID", "Split by silence requires one exact item:guid ref; selection and index aliases are rejected.", {})
+  end
+
+  request.params = is_object(request.params) and request.params or {}
+  request.params.max_analysis_seconds = D27_MAX_ANALYSIS_SECONDS
+  request.params.max_segments = 512
+  local context, context_failure = d27_analysis_context(request)
+  if not context then return nil, context_failure end
+  if context.item_ref ~= source_item_ref or d27_analysis_item_guid(context.item) ~= requested_guid then
+    return nil, d27_analysis_error("REF_INVALID", "Live Item identity changed before silence analysis.", {
+      requested_item_ref = source_item_ref,
+      observed_item_ref = context.item_ref or "",
+    }, false)
+  end
+  if context.item_length > D27_MAX_ANALYSIS_SECONDS then
+    return nil, d27_analysis_error("PARAMS_INVALID", "Split by silence requires complete analysis and refuses Items longer than 600 seconds.", {
+      reason_code = "ANALYSIS_COVERAGE_INCOMPLETE",
+      item_length_seconds = context.item_length,
+      maximum_seconds = D27_MAX_ANALYSIS_SECONDS,
+    })
+  end
+
+  local range, range_failure = d27_analysis_limited_range(context, D27_MAX_ANALYSIS_SECONDS)
+  if not range then return nil, range_failure end
+  local scan, scan_failure = d27_analysis_sample_scan(context, range, { detect_silence = true })
+  if not scan then return nil, scan_failure end
+  if scan.truncated or not scan.coverage or scan.coverage.range_complete ~= true
+    or scan.coverage.channel_coverage_complete ~= true or scan.coverage.result_rows_complete ~= true
+    or scan.total_silence_segments ~= #scan.silence_segments then
+    return nil, d27_analysis_error("PARAMS_INVALID", "Split by silence requires complete range, channel, and silence-row coverage before mutation.", {
+      reason_code = "ANALYSIS_COVERAGE_INCOMPLETE",
+      truncated = scan.truncated == true,
+      total_silence_segments = scan.total_silence_segments,
+      returned_silence_segments = #scan.silence_segments,
+      truncation_reason = scan.coverage and scan.coverage.truncation_reason or "unknown",
+    })
+  end
+
+  local owner_ok, owner_track = call_reaper("GetMediaItemTrack", context.item)
+  if not owner_ok or not owner_track then
+    owner_ok, owner_track = call_reaper("GetMediaItem_Track", context.item)
+  end
+  local owner_track_ref = owner_ok and owner_track and d27_split_track_ref(owner_track) or nil
+  if not owner_track_ref then
+    return nil, d27_analysis_error("TRACK_NOT_FOUND", "Split by silence could not prove the exact owner Track GUID.", {}, false)
+  end
+  local ok_count_before, raw_count_before = call_reaper("CountTrackMediaItems", owner_track)
+  local item_count_before = ok_count_before and math.max(0, math.floor(first_number(raw_count_before) or -1)) or -1
+  if item_count_before < 1 then
+    return nil, d27_analysis_error("VERIFY_FAILED", "Split by silence could not read the owner Track Item count before mutation.", {}, false)
+  end
+
+  local tolerance = math.max(0.000001, 1 / context.sample_rate)
+  local boundaries = {}
+  local seen_boundaries = {}
+  for index = 1, #scan.silence_segments do
+    local segment = scan.silence_segments[index]
+    for _, boundary in ipairs({ segment.start_seconds, segment.end_seconds }) do
+      if boundary > tolerance and boundary < context.item_length - tolerance then
+        local key = string.format("%.9f", boundary)
+        if not seen_boundaries[key] then
+          seen_boundaries[key] = true
+          boundaries[#boundaries + 1] = boundary
+        end
+      end
+    end
+  end
+  table.sort(boundaries)
+
+  local abstract_fragments = {{ start_seconds = 0, end_seconds = context.item_length }}
+  for _, boundary in ipairs(boundaries) do
+    for index = 1, #abstract_fragments do
+      local fragment = abstract_fragments[index]
+      if boundary > fragment.start_seconds + tolerance and boundary < fragment.end_seconds - tolerance then
+        local right = { start_seconds = boundary, end_seconds = fragment.end_seconds }
+        fragment.end_seconds = boundary
+        table.insert(abstract_fragments, index + 1, right)
+        break
+      end
+    end
+  end
+  local planned_kept = 0
+  for index = 1, #abstract_fragments do
+    local fragment = abstract_fragments[index]
+    local midpoint = (fragment.start_seconds + fragment.end_seconds) / 2
+    if not d27_split_matches_silence(midpoint, scan.silence_segments, tolerance) then planned_kept = planned_kept + 1 end
+  end
+  if planned_kept == 0 then
+    return nil, d27_analysis_error("PARAMS_INVALID", "The complete Item is silent at the requested threshold; deleting the only source Item is refused.", {
+      reason_code = "ALL_SILENT_ITEM_BLOCKED",
+      item_ref = source_item_ref,
+      item_length_seconds = context.item_length,
+    })
+  end
+
+  if #scan.silence_segments == 0 then
+    return {
+      capability = request.pack.capability,
+      pack = request.pack.id,
+      risk = request.pack.risk,
+      readback_status = "passed",
+      source_item_ref = source_item_ref,
+      owner_track_ref = owner_track_ref,
+      kept_item_refs = json_array({ source_item_ref }),
+      deleted_item_refs = json_array({}),
+      silence_segment_count = 0,
+      split_count = 0,
+      delete_count = 0,
+      item_count_before = item_count_before,
+      item_count_after = item_count_before,
+      original_duration_seconds = context.item_length,
+      removed_duration_seconds = 0,
+      remaining_duration_seconds = context.item_length,
+      changed = false,
+      source_media_deleted = false,
+      analysis_coverage = scan.coverage,
+    }, nil, json_array({}), json_array({}), json_array({
+      d27_split_object_ref("item", source_item_ref),
+      d27_split_object_ref("track", owner_track_ref),
+    })
+  end
+
+  local fragments = {{
+    item = context.item,
+    start_seconds = 0,
+    end_seconds = context.item_length,
+    item_ref = source_item_ref,
+    guid = requested_guid,
+  }}
+  local split_count = 0
+  for _, boundary in ipairs(boundaries) do
+    local split_index = nil
+    for index = 1, #fragments do
+      local fragment = fragments[index]
+      if boundary > fragment.start_seconds + tolerance and boundary < fragment.end_seconds - tolerance then
+        split_index = index
+        break
+      end
+    end
+    if not split_index then
+      return nil, d27_analysis_error("VERIFY_FAILED", "A proven silence boundary no longer mapped to the live Item fragment chain.", {
+        boundary_seconds = boundary,
+      }, false)
+    end
+    local left = fragments[split_index]
+    local ok_split, right_item = call_reaper("SplitMediaItem", left.item, context.item_position + boundary)
+    if not ok_split or not right_item then
+      return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected native SplitMediaItem at a proven silence boundary.", {
+        boundary_seconds = boundary,
+      }, false)
+    end
+    local right_ref, right_guid = d27_split_item_ref(right_item)
+    if not right_ref or right_guid == left.guid then
+      return nil, d27_analysis_error("VERIFY_FAILED", "SplitMediaItem did not return a unique native GUID for the new right fragment.", {
+        boundary_seconds = boundary,
+      }, false)
+    end
+    local right = {
+      item = right_item,
+      start_seconds = boundary,
+      end_seconds = left.end_seconds,
+      item_ref = right_ref,
+      guid = right_guid,
+    }
+    left.end_seconds = boundary
+    table.insert(fragments, split_index + 1, right)
+    split_count = split_count + 1
+  end
+
+  local kept = {}
+  local deleted = {}
+  for index = 1, #fragments do
+    local fragment = fragments[index]
+    local midpoint = (fragment.start_seconds + fragment.end_seconds) / 2
+    if d27_split_matches_silence(midpoint, scan.silence_segments, tolerance) then
+      deleted[#deleted + 1] = fragment
+    else
+      kept[#kept + 1] = fragment
+    end
+  end
+  for index = 1, #deleted do
+    local fragment = deleted[index]
+    local ok_delete, deleted_ok = call_reaper("DeleteTrackMediaItem", owner_track, fragment.item)
+    if not ok_delete or deleted_ok ~= true then
+      return nil, d27_analysis_error("COMMAND_FAILED", "REAPER rejected deletion of a silence-classified Item fragment.", {
+        item_ref = fragment.item_ref,
+      }, false)
+    end
+  end
+  call_reaper("UpdateArrange")
+
+  local ok_count_after, raw_count_after = call_reaper("CountTrackMediaItems", owner_track)
+  local item_count_after = ok_count_after and math.max(0, math.floor(first_number(raw_count_after) or -1)) or -1
+  local expected_count_after = item_count_before + split_count - #deleted
+  if item_count_after ~= expected_count_after then
+    return nil, d27_analysis_error("VERIFY_FAILED", "Owner Track Item count did not match native split/delete operations.", {
+      item_count_before = item_count_before,
+      split_count = split_count,
+      delete_count = #deleted,
+      expected_item_count_after = expected_count_after,
+      observed_item_count_after = item_count_after,
+    }, false)
+  end
+
+  local kept_refs = json_array({})
+  local deleted_refs = json_array({})
+  local output_refs = json_array({ d27_split_object_ref("track", owner_track_ref) })
+  local remaining_duration = 0
+  for index = 1, #kept do
+    local fragment = kept[index]
+    local live_item = d27_analysis_find_item_by_guid(fragment.guid)
+    local live_position = live_item and d27_split_number(live_item, "D_POSITION") or nil
+    local live_length = live_item and d27_split_number(live_item, "D_LENGTH") or nil
+    local live_track_ok, live_track = live_item and call_reaper("GetMediaItemTrack", live_item) or false, nil
+    if live_item then
+      live_track_ok, live_track = call_reaper("GetMediaItemTrack", live_item)
+      if not live_track_ok or not live_track then live_track_ok, live_track = call_reaper("GetMediaItem_Track", live_item) end
+    end
+    local expected_position = context.item_position + fragment.start_seconds
+    local expected_length = fragment.end_seconds - fragment.start_seconds
+    if not live_item or not live_track_ok or live_track ~= owner_track or live_position == nil or live_length == nil
+      or math.abs(live_position - expected_position) > tolerance or math.abs(live_length - expected_length) > tolerance then
+      return nil, d27_analysis_error("VERIFY_FAILED", "A kept Item fragment failed exact GUID, Track, position, or length readback.", {
+        item_ref = fragment.item_ref,
+        expected_position_seconds = expected_position,
+        observed_position_seconds = live_position or -1,
+        expected_length_seconds = expected_length,
+        observed_length_seconds = live_length or -1,
+      }, false)
+    end
+    remaining_duration = remaining_duration + live_length
+    kept_refs[#kept_refs + 1] = fragment.item_ref
+    output_refs[#output_refs + 1] = d27_split_object_ref("item", fragment.item_ref)
+  end
+  local removed_duration = 0
+  for index = 1, #deleted do
+    local fragment = deleted[index]
+    if d27_analysis_find_item_by_guid(fragment.guid) then
+      return nil, d27_analysis_error("VERIFY_FAILED", "A deleted silence fragment GUID is still present in the live project.", {
+        item_ref = fragment.item_ref,
+      }, false)
+    end
+    removed_duration = removed_duration + (fragment.end_seconds - fragment.start_seconds)
+    deleted_refs[#deleted_refs + 1] = fragment.item_ref
+    output_refs[#output_refs + 1] = d27_split_object_ref("item", fragment.item_ref)
+  end
+  if math.abs((remaining_duration + removed_duration) - context.item_length) > tolerance then
+    return nil, d27_analysis_error("VERIFY_FAILED", "Kept and removed Item fragment durations do not conserve the original Item duration.", {
+      original_duration_seconds = context.item_length,
+      remaining_duration_seconds = remaining_duration,
+      removed_duration_seconds = removed_duration,
+      tolerance_seconds = tolerance,
+    }, false)
+  end
+
+  return {
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    readback_status = "passed",
+    source_item_ref = source_item_ref,
+    owner_track_ref = owner_track_ref,
+    kept_item_refs = kept_refs,
+    deleted_item_refs = deleted_refs,
+    silence_segment_count = #scan.silence_segments,
+    split_count = split_count,
+    delete_count = #deleted,
+    item_count_before = item_count_before,
+    item_count_after = item_count_after,
+    original_duration_seconds = context.item_length,
+    removed_duration_seconds = removed_duration,
+    remaining_duration_seconds = remaining_duration,
+    changed = true,
+    source_media_deleted = false,
+    analysis_coverage = scan.coverage,
+  }, nil, json_array({}), json_array({}), output_refs
+end
 return {
-  exports = { measure_item_rms = measure_item_rms, measure_item_peaks = measure_item_peaks, detect_item_silence = detect_item_silence, detect_item_transients = detect_item_transients },
+  exports = { measure_item_rms = measure_item_rms, measure_item_peaks = measure_item_peaks, detect_item_silence = detect_item_silence, detect_item_transients = detect_item_transients, alpha33_split_item_by_silence = alpha33_split_item_by_silence },
   shared = {  },
 }
 end)
@@ -29920,6 +30250,7 @@ local SAFE_WRITE_A_HANDLERS = {
   ["tracks.freeze_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_freeze_track,
   ["tracks.unfreeze_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_unfreeze_track,
   ["automation.ensure_take_pitch_envelope"] = OPENREAPER_HANDLER_EXPORTS.alpha33_ensure_take_pitch_envelope,
+  ["items.split_item_by_silence"] = OPENREAPER_HANDLER_EXPORTS.alpha33_split_item_by_silence,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

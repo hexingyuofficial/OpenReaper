@@ -3835,6 +3835,23 @@
       "tests": [
         "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
       ]
+    },
+    {
+      "template_id": "template.items.split_item_by_silence",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "destructive",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "analysis/d27_item_audio_analysis.lua",
+      "handler_export": "alpha33_split_item_by_silence",
+      "artifact_policy": "none",
+      "capability": "items.split_item_by_silence",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
     }
   ]
 }

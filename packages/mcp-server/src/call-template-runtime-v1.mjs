@@ -167,6 +167,7 @@ import {
 import {
   ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
   ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY,
+  MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY,
   createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems,
   createAlpha3_2EMediaPlaceAssetsMacroRuntimeEnvelope,
   executeAlpha3_3MediaPlaceAssetsMacro,
@@ -971,6 +972,7 @@ const PUBLIC_MACRO_PROGRAM_REGISTRIES = Object.freeze([
 const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   ALPHA3_2_5_C_CONTROL_EXECUTOR_CAPABILITY,
   ALPHA3_2_5_C_STOCK_PLUGIN_EXECUTOR_CAPABILITY,
+  MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY,
 ]);
 
 export class CallTemplateRuntimeError extends Error {

@@ -6,13 +6,21 @@ import {
   validateMacroExecutionEnvelope,
   validateMacroProgramRequest,
 } from "./macro-runtime-contract-v1.mjs";
+import {
+  MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY,
+  projectMediaExplorerSearchPage,
+  searchMediaExplorerDatabases,
+} from "./media-explorer-database-search-v1.mjs";
+
+export { MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY };
 
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_CONTRACT = "alpha3.3.media_place_assets_macro.v1";
 export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID = "macro.media.place_assets";
-export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION = "2.0.0";
+export const ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION = "2.1.0";
 export const ALPHA3_3_MEDIA_PLACE_ASSETS_MODES = deepFreeze([
   "place_assets",
   "relink_sources",
+  "search_library",
 ]);
 export const ALPHA3_3_MEDIA_PLACEMENT_MODES = deepFreeze([
   "explicit",
@@ -39,6 +47,7 @@ export const ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS = deepFreeze([
   "template.items.read_item_summary",
   "template.project.list_markers_regions",
   "template.project.create_region",
+  "template.system.read_resource_paths",
 ]);
 
 const PROBE_FILE_ID = "template.media.probe_file";
@@ -52,6 +61,7 @@ const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
 const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_REGIONS_ID = "template.project.list_markers_regions";
 const CREATE_REGION_ID = "template.project.create_region";
+const READ_RESOURCE_PATHS_ID = "template.system.read_resource_paths";
 const MAX_ASSETS = 8;
 const MAX_TRACK_ITEMS = 128;
 const MAX_PATH_BYTES = 1_024;
@@ -88,8 +98,12 @@ const REGISTRY_ENTRY = deepFreeze({
       column_gap_seconds: { type: "number", minimum: 0 },
       dry_run: { type: "boolean", default: true },
       compact_response: { type: "boolean", default: true },
+      query: { type: "string", minLength: 1, maxLength: 160 },
+      database_ids: { type: "array", minItems: 1, maxItems: 8, items: { type: "string" } },
+      page_size: { type: "integer", minimum: 1, maximum: 25 },
+      cursor: { type: "string", maxLength: 2048 },
     },
-    required: ["assets"],
+    required: [],
   },
   selector_policy: {
     task_shaped: true,
@@ -101,8 +115,11 @@ const REGISTRY_ENTRY = deepFreeze({
     write_authority: false,
     identity_fields: ["track_ref", "take_ref", "item_ref", "source_file_ref"],
   },
-  dependencies: { template_ids: ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS, runtime_capabilities: [] },
+  dependencies: { template_ids: ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS, runtime_capabilities: [MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY] },
   stages: [
+    { id: "media-library-resource", kind: "template_execute", risk: "read", stop_on_error: true, dependency_ref: READ_RESOURCE_PATHS_ID },
+    { id: "media-library-search", kind: "runtime_execute", risk: "read", stop_on_error: true, dependency_ref: MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY },
+    { id: "media-library-result", kind: "result_project", risk: "read", stop_on_error: true },
     { id: "media-place-assets-probe", kind: "selector_resolve", risk: "read", stop_on_error: true },
     { id: "media-place-assets-preflight", kind: "live_ref_resolve", risk: "read", stop_on_error: true },
     { id: "media-place-assets-layout", kind: "selector_resolve", risk: "read", stop_on_error: true },
@@ -122,7 +139,7 @@ const REGISTERED_STAGE_IDS = new Set(REGISTRY_ENTRY.stages.map((stage) => stage.
 export function createAlpha3_3MediaPlaceAssetsRegistry(options = {}) {
   return createMacroProgramRegistry([REGISTRY_ENTRY], {
     acceptedTemplateIds: options.acceptedTemplateIds ?? ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS,
-    acceptedRuntimeCapabilities: options.acceptedRuntimeCapabilities ?? [],
+    acceptedRuntimeCapabilities: options.acceptedRuntimeCapabilities ?? [MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY],
     registeredStageIds: options.registeredStageIds ?? REGISTERED_STAGE_IDS,
   });
 }
@@ -142,13 +159,13 @@ export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems({ liveRunnabl
     id: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
     title: "Place or relink media assets",
     user_label: "Place media assets",
-    summary: "Probe all bounded sources, compute deterministic explicit/sequence/stack/columns/append placement, import or exact-relink, and prove every applied row through independent live readback.",
+    summary: "Search paged REAPER Media Explorer databases, or probe bounded sources, place/import or exact-relink them, and prove every applied row through independent live readback.",
     pack: "media",
     risk: "write",
     lifecycle: "experimental",
     entity_kind: "macro.media.place_assets",
-    tags: ["alpha3.3", "macro", "media", "import", "place", "sequence", "columns", "append", "relink"],
-    task_intents: ["import audio", "place assets", "sequence media", "stack media", "append media", "relink source"],
+    tags: ["alpha3.3", "macro", "media", "media explorer", "sound library", "search", "import", "place", "sequence", "columns", "append", "relink"],
+    task_intents: ["search sound library", "find a sample", "find a kick", "browse media explorer", "import audio", "place assets", "sequence media", "stack media", "append media", "relink source"],
     action_kind: "macro",
     execution_shape: "registered_macro_program",
     implementation_status: "executable",
@@ -167,8 +184,9 @@ export function createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems({ liveRunnabl
     supported_modes: ALPHA3_3_MEDIA_PLACE_ASSETS_MODES,
     supported_placement_modes: ALPHA3_3_MEDIA_PLACEMENT_MODES,
     supported_track_policies: ALPHA3_3_MEDIA_TRACK_POLICIES,
-    limits: { assets: MAX_ASSETS, append_track_items: MAX_TRACK_ITEMS },
+    limits: { assets: MAX_ASSETS, append_track_items: MAX_TRACK_ITEMS, library_page_size: 25 },
     examples: [
+      { name: "search_media_explorer", input: { mode: "search_library", query: "short kick", page_size: 10 } },
       { name: "sequence_on_one_track", input: { assets: [{ id: "kick", path: "/Users/Shared/OpenReaper/kick.wav" }, { id: "snare", path: "/Users/Shared/OpenReaper/snare.wav" }], placement: { mode: "sequence_on_one_track", start_seconds: 0, gap_seconds: 0.25 }, track_policy: "existing_track", track_ref: "track:guid:{DRUMS}", dry_run: true } },
       { name: "stack_new_tracks", input: { assets: [{ id: "a", path: "/Users/Shared/OpenReaper/a.wav" }, { id: "b", path: "/Users/Shared/OpenReaper/b.wav" }], placement: { mode: "stack_on_separate_tracks", start_seconds: 0 }, track_policy: "one_new_track_per_asset", new_track: { name_prefix: "Layer" }, dry_run: true } },
       { name: "relink_exact_take", input: { mode: "relink_sources", assets: [{ id: "replacement", path: "/Users/Shared/OpenReaper/replacement.wav", take_ref: "take:guid:{TAKE}" }], dry_run: true } },
@@ -182,21 +200,25 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
     rollout_slice: "Alpha3.3 media placement expansion",
     action_manual: {
       when_to_use: [
+        "Use search_library to query the active REAPER Media Explorer databases with stable bounded pagination before choosing explicit file paths.",
         "Use place_assets to import up to eight explicit files through explicit, sequence_on_one_track, stack_on_separate_tracks, columns, or append_after_existing placement.",
         "Use relink_sources to change the source of up to eight exact take:guid refs after probing each explicit replacement path.",
       ],
       when_not_to_use: [
-        "Do not scan arbitrary folders, delete/move/overwrite source files, silently substitute another asset, or address hardware/device media paths.",
+        "Do not scan arbitrary folders outside REAPER's own Media Explorer database registry, delete/move/overwrite source files, silently substitute another asset, or address hardware/device media paths.",
         "Do not use detected_onset alignment in this slice; placement aligns item starts only.",
       ],
       required_readiness: [
+        "search_library first reads the active REAPER resource path live, then scans only MediaDB/*.ReaperFileList in the MCP process; candidates whose source volumes are offline are returned with available=false and must not be imported.",
+        "Search cursors bind the normalized query, selected databases, and their size/mtime/content hashes; a changed database produces a typed stale-cursor blocker instead of a wrong page.",
         "All source paths are probed and all existing Track/Take/region/append facts are read before the first mutation.",
         "append_after_existing requires one complete non-truncated <=128-item live page for every target track.",
         "Region placement requires a non-truncated inventory whose declared region_count exactly matches the returned Region rows.",
         "folder_ref selection remains held because the current folder:path handler does not prove an approved-folder identity boundary.",
       ],
       input_shape: {
-        mode: "place_assets (default) | relink_sources",
+        mode: "place_assets (default) | relink_sources | search_library",
+        search_library: "{query, database_ids?, page_size?:1-25, cursor?}; returns compact candidates with path/file_ref, duration, format facts, availability, total, and next_cursor.",
         assets: "1-8 unique rows. Placement rows require id/path and policy-specific track fields; relink rows require id/path/exact take_ref.",
         placement: "{mode: explicit | sequence_on_one_track | stack_on_separate_tracks | columns | append_after_existing, start_seconds?, gap_seconds?, column_gap_seconds?, columns?, align_basis:'item_start'}; top-level gap/columns aliases remain accepted.",
         track_policy: "existing_track | one_shared_new_track | one_new_track_per_asset | explicit_per_asset",
@@ -205,12 +227,14 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
       },
       underlying_actions: ALPHA3_3_MEDIA_PLACE_ASSETS_TEMPLATE_IDS,
       readback_steps: [
+        "Library search proves the active REAPER resource path through the live Bridge; filesystem parsing is bounded to its registered Media Explorer databases and never mutates REAPER or source media.",
         "Every created Track and Region is independently resolved by its exact returned ref and must match its requested name and bounds before applied.",
         "Every imported Item is independently read and must match exact source, Track, position, and probed/section duration before that asset is applied.",
         "Every relinked exact Take is independently read and must report the exact probed replacement file_ref before applied.",
         "Per-asset mutation, live readback, and Project Index maintenance remain separate; dispatch success alone never marks applied.",
       ],
       success_criteria: [
+        "Every search page stays bound to one database snapshot, reports the full match total, and marks each returned path available or unavailable from current disk state.",
         "Every applied asset has a row-specific canonical Item/Take ref and exact native-backed live state.",
         "No mutation starts until every asset probe and every policy preflight succeeds.",
       ],
@@ -220,6 +244,8 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
         blocker("MEDIA_REGION_COVERAGE_INCOMPLETE", "Region placement requires a complete live Region inventory whose count matches its returned rows."),
         blocker("MEDIA_REGION_COLOR_READBACK_UNSUPPORTED", "Portable #RRGGBB Region color readback is unavailable, so colored Region requests fail before mutation."),
         blocker("MEDIA_RESPONSE_BUDGET_EXCEEDED", "The projected truthful result does not fit the caller's public response budget, so mutation does not start."),
+        blocker("MEDIA_LIBRARY_CURSOR_STALE", "The Media Explorer database changed after a cursor was issued; restart at page one."),
+        blocker("MEDIA_LIBRARY_SOURCE_UNAVAILABLE", "A selected search candidate is offline and must not be passed to placement until its source volume is available."),
         blocker("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove approved-folder identity, so folder_ref selection is held."),
         blocker("MEDIA_LIVE_READBACK_MISMATCH", "Independent Item/Take source readback does not match the planned asset."),
       ],
@@ -235,6 +261,25 @@ export function createAlpha3_3MediaPlaceAssetsExactManual() {
 export function planAlpha3_2EMediaPlaceAssetsMacro(input = {}, requestPosture = {}) {
   const normalized = normalizeInput(input, requestPosture);
   if (!normalized.ok) return legacyBlockedPlan(normalized.blockers);
+  if (normalized.input.mode === "search_library") {
+    return deepFreeze({
+      contract: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_CONTRACT,
+      version: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION,
+      id: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
+      ok: true,
+      mode: "registered_program_required",
+      dry_run: true,
+      preview: {
+        contract: "alpha3.3.media_place_assets.preview.v1",
+        search_query: normalized.input.query,
+        page_size: normalized.input.page_size,
+        database_ids: normalized.input.database_ids,
+        rows: [],
+      },
+      preflight_requests: [], mutation_requests: [], readback_requests: [], child_requests: [], blockers: [], typed_blockers: [],
+      safety: safetyPosture(), no_executor_safety_posture: safetyPosture(),
+    });
+  }
   const rows = normalized.input.assets.map((asset) => ({
     id: asset.id,
     path: asset.path,
@@ -284,6 +329,9 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
   if (typeof executeAtomic !== "function") return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "MEDIA_LIVE_EXECUTOR_REQUIRED", message: "macro.media.place_assets requires the managed OpenReaper live executor." });
 
   try {
+    if (input.mode === "search_library") {
+      return await executeLibrarySearch({ entry, request, input, executeAtomic, startedAt, now, stages, state, activeBudget });
+    }
     state.operations = await prepareOperations({ request, input, executeAtomic, state });
     pushStage(stages, "media-place-assets-probe", "selector_resolve", "completed", `Probed ${state.operations.length} exact source file(s).`, state.evidenceRefs);
     pushStage(stages, "media-place-assets-preflight", "live_ref_resolve", "completed", "Resolved all existing targets and captured complete append/region facts before mutation.", state.evidenceRefs);
@@ -364,8 +412,86 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
       applyIndex(state.changes, indexResult);
       if (!stages.some((stage) => stage.id === "media-place-assets-index")) pushStage(stages, "media-place-assets-index", "index_update", indexResult.status, indexResult.message);
     }
-    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: mutated ? "partial_failure" : "blocked", code: error.code ?? "MEDIA_EXECUTION_FAILED", message: error.message ?? "The registered media placement program failed.", blockers: error.blockers, data: resultData(input, state) });
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: mutated ? "partial_failure" : "blocked", code: error.code ?? "MEDIA_EXECUTION_FAILED", message: error.message ?? "The registered media placement program failed.", blockers: error.blockers, data: input.mode === "search_library" ? emptySearchData(input) : resultData(input, state) });
   }
+}
+
+async function executeLibrarySearch({ entry, request, input, executeAtomic, startedAt, now, stages, state, activeBudget }) {
+  const resourceRead = await child({
+    request,
+    executeAtomic,
+    state,
+    id: READ_RESOURCE_PATHS_ID,
+    input: { include_queue_paths: false, include_script_path: false },
+    refs: {},
+  });
+  if (!resourceRead.ok) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: resourceRead.code, message: resourceRead.message, blockers: resourceRead.blockers, data: emptySearchData(input) });
+  }
+  const resourcePath = readback(resourceRead.execution).resource_path;
+  if (!isSafeAbsoluteFilePath(resourcePath)) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "MEDIA_LIBRARY_RESOURCE_PATH_INVALID", message: "The live REAPER resource path was missing or unsafe.", data: emptySearchData(input) });
+  }
+  pushStage(stages, "media-library-resource", "template_execute", "completed", "Read the active REAPER resource path through live Bridge readback.", state.evidenceRefs);
+
+  const search = await searchMediaExplorerDatabases({
+    resourcePath,
+    query: input.query,
+    databaseIds: input.database_ids,
+    pageSize: input.page_size,
+    cursor: input.cursor,
+  });
+  if (!search.ok) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: search.code, message: search.message, blockers: search.blockers, data: emptySearchData(input) });
+  }
+  pushStage(stages, "media-library-search", "runtime_execute", "completed", `Searched ${search.databases.length} registered Media Explorer database(s) and counted ${search.total} exact match(es).`);
+  pushStage(stages, "media-library-result", "result_project", "completed", "Projected one stable, compact Media Explorer search page.");
+
+  for (let count = search.results.length; count >= 0; count -= 1) {
+    const page = projectMediaExplorerSearchPage(search, count);
+    const envelope = buildSearchSuccessEnvelope({ entry, request, startedAt, now, state, activeBudget, page });
+    if (Buffer.byteLength(JSON.stringify(envelope), "utf8") + 16 <= activeBudget) return finalizeEnvelope(envelope);
+  }
+
+  return failureEnvelope({
+    entry,
+    request,
+    startedAt,
+    now,
+    stages: [],
+    state: createState(),
+    activeBudget,
+    code: "MEDIA_LIBRARY_RESPONSE_BUDGET_EXCEEDED",
+    message: `Even an empty Media Explorer page does not fit the ${activeBudget}-byte public response budget; raise max_response_bytes and retry the same query.`,
+    data: emptySearchData(input),
+  });
+}
+
+function buildSearchSuccessEnvelope({ entry, request, startedAt, now, state, activeBudget, page }) {
+  return {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: true,
+    macro: macroIdentity(entry),
+    request: requestSummary(request),
+    execution: { status: "dry_run_completed", started_at: startedAt, completed_at: safeNowIso(now), stage_count: 0, stages: [] },
+    sqlite: state.sqlite,
+    result: {
+      summary: `Found ${page.page.total}; returned ${page.page.returned} Media Explorer candidate(s).`,
+      canonical_refs: [],
+      changes: [],
+      verification: { status: "passed", evidence_refs: [] },
+      data: {
+        mode: "search_library",
+        query: page.query,
+        results: page.results,
+        page: page.page,
+      },
+    },
+    blockers: [],
+    error: null,
+    recovery: null,
+    budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
 }
 
 async function prepareOperations({ request, input, executeAtomic, state }) {
@@ -576,12 +702,13 @@ function ensureChangeReadOk(result, id, change) {
 function normalizeInput(raw, posture = {}) {
   if (!isObject(raw)) return failed("MEDIA_INPUT_NOT_OBJECT", "macro.media.place_assets input must be an object.");
   if (posture.idempotency_key_present) return failed("MEDIA_IDEMPOTENCY_UNSUPPORTED", "Bounded import/relink batches have no accepted Macro replay ledger; omit idempotency_key.");
-  const allowed = ["mode", "assets", "placement", "placement_policy", "track_policy", "target_policy", "track_ref", "new_track", "columns", "gap_seconds", "column_gap_seconds", "dry_run", "compact_response", "folder_ref", "folder_selection"];
+  const allowed = ["mode", "assets", "placement", "placement_policy", "track_policy", "target_policy", "track_ref", "new_track", "columns", "gap_seconds", "column_gap_seconds", "dry_run", "compact_response", "folder_ref", "folder_selection", "query", "database_ids", "page_size", "cursor"];
   const unknown = Object.keys(raw).filter((field) => !allowed.includes(field));
   if (unknown.length) return failed("MEDIA_INPUT_UNKNOWN_FIELD", `Unsupported media input field(s): ${unknown.slice(0, 8).join(", ")}.`);
-  if (raw.folder_ref !== undefined || raw.folder_selection !== undefined) return failed("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove an approved-folder identity boundary; supply up to eight explicit asset paths.");
   const mode = raw.mode ?? "place_assets";
   if (!ALPHA3_3_MEDIA_PLACE_ASSETS_MODES.includes(mode)) return failed("MEDIA_MODE_UNSUPPORTED", `mode must be ${ALPHA3_3_MEDIA_PLACE_ASSETS_MODES.join(" or ")}.`);
+  if (mode === "search_library") return normalizeLibrarySearchInput(raw);
+  if (raw.folder_ref !== undefined || raw.folder_selection !== undefined) return failed("MEDIA_FOLDER_APPROVAL_UNPROVEN", "Current folder:path listing does not prove an approved-folder identity boundary; supply up to eight explicit asset paths.");
   if (!Array.isArray(raw.assets) || raw.assets.length < 1 || raw.assets.length > MAX_ASSETS) return failed("MEDIA_ASSETS_INVALID", `assets must contain 1-${MAX_ASSETS} rows.`);
   if (raw.dry_run !== undefined && typeof raw.dry_run !== "boolean") return failed("MEDIA_INPUT_INVALID", "dry_run must be boolean.");
   if (raw.compact_response !== undefined && typeof raw.compact_response !== "boolean") return failed("MEDIA_INPUT_INVALID", "compact_response must be boolean.");
@@ -605,6 +732,35 @@ function normalizeInput(raw, posture = {}) {
   if (placement.value.mode === "sequence_on_one_track" && new Set(["one_new_track_per_asset", "explicit_per_asset"]).has(trackPolicy.value)) return failed("MEDIA_SEQUENCE_SINGLE_TRACK_REQUIRED", "sequence_on_one_track requires existing_track or one_shared_new_track.");
   if (placement.value.mode === "stack_on_separate_tracks" && new Set(["existing_track", "one_shared_new_track"]).has(trackPolicy.value)) return failed("MEDIA_STACK_SEPARATE_TRACKS_REQUIRED", "stack_on_separate_tracks requires explicit_per_asset or one_new_track_per_asset.");
   return { ok: true, input: { mode, assets, placement: placement.value, track_policy: trackPolicy.value, track_ref: raw.track_ref ?? null, new_track: newTrack.value, dry_run: raw.dry_run !== false, compact_response: raw.compact_response !== false } };
+}
+
+function normalizeLibrarySearchInput(raw) {
+  const allowed = new Set(["mode", "query", "database_ids", "page_size", "cursor", "dry_run", "compact_response"]);
+  const incompatible = Object.keys(raw).filter((field) => !allowed.has(field));
+  if (incompatible.length > 0) return failed("MEDIA_LIBRARY_INPUT_INVALID", `search_library does not accept placement field(s): ${incompatible.slice(0, 8).join(", ")}.`);
+  if (typeof raw.query !== "string" || raw.query.trim().length < 1 || Buffer.byteLength(raw.query.trim(), "utf8") > 160 || hasControls(raw.query)) {
+    return failed("MEDIA_LIBRARY_QUERY_REQUIRED", "search_library query must be 1-160 bytes without control characters.");
+  }
+  if (raw.page_size !== undefined && !integerRange(raw.page_size, 1, 25)) return failed("MEDIA_LIBRARY_PAGE_SIZE_INVALID", "page_size must be an integer from 1 to 25.");
+  if (raw.cursor !== undefined && (typeof raw.cursor !== "string" || raw.cursor.length > 2_048 || hasControls(raw.cursor))) return failed("MEDIA_LIBRARY_CURSOR_INVALID", "cursor must be a bounded search cursor string.");
+  if (raw.database_ids !== undefined && (!Array.isArray(raw.database_ids) || raw.database_ids.length < 1 || raw.database_ids.length > 8)) return failed("MEDIA_LIBRARY_DATABASES_INVALID", "database_ids must contain 1-8 database ids or labels.");
+  const databaseIds = [];
+  for (const value of raw.database_ids ?? []) {
+    if (typeof value !== "string" || value.trim().length < 1 || Buffer.byteLength(value.trim(), "utf8") > 80 || hasControls(value)) return failed("MEDIA_LIBRARY_DATABASES_INVALID", "Every database id or label must be a bounded string.");
+    if (!databaseIds.includes(value.trim())) databaseIds.push(value.trim());
+  }
+  return {
+    ok: true,
+    input: {
+      mode: "search_library",
+      query: raw.query.trim(),
+      database_ids: databaseIds,
+      page_size: raw.page_size ?? 10,
+      cursor: raw.cursor ?? null,
+      dry_run: true,
+      compact_response: raw.compact_response !== false,
+    },
+  };
 }
 
 function normalizePlacement(raw) {
@@ -782,6 +938,39 @@ function resultData(input, state) {
   const applied = state.changes.filter((change) => change.status === "applied" && change.live_readback?.status === "passed");
   const indexStatuses = uniqueStrings(mutated.map((change) => change.index_maintenance?.status));
   return { mode: input.mode, placement_mode: input.placement.mode, track_policy: input.track_policy, asset_count: input.assets.length, setup_mutation_count: setupChanges(state).length, selected_sources: state.operations.map((operation) => ({ id: operation.id, source_file_ref: operation.file_ref, path: operation.path })), layout: state.operations.map((operation) => ({ id: operation.id, position_seconds: operation.position_seconds, target_ref: operation.take_ref ?? operation.target_track_ref ?? operation.target_track_key, duration_seconds: operation.import_length_seconds ?? null })), source_media_deleted: false, arbitrary_folder_scan: false, sqlite_write_authority: false, outcome: { mutation: { status: mutated.some((change) => change.mutation.status === "unknown_or_partial") ? "unknown_or_partial" : mutated.length ? "completed" : "not_run", completed_count: mutated.filter((change) => change.mutation.status === "completed").length, unknown_or_partial_count: mutated.filter((change) => change.mutation.status === "unknown_or_partial").length, total_count: state.changes.length }, live_readback: { status: applied.length === mutated.length && mutated.length ? "passed" : applied.length ? "partial" : "not_run", passed_count: applied.length, total_count: mutated.length }, index_maintenance: { status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run", scopes: uniqueStrings(mutated.flatMap((change) => change.index_maintenance?.scopes ?? [])) } } };
+}
+
+function searchResultData(page) {
+  return {
+    mode: "search_library",
+    source: "reaper_media_explorer_database",
+    query: page.query,
+    results: page.results,
+    page: page.page,
+    databases: page.databases,
+    source_media_deleted: false,
+    arbitrary_folder_scan: false,
+    sqlite_write_authority: false,
+    outcome: {
+      mutation: { status: "not_run", completed_count: 0, unknown_or_partial_count: 0, total_count: 0 },
+      live_readback: { status: "passed", passed_count: 1, total_count: 1 },
+      index_maintenance: { status: "not_run", scopes: [] },
+    },
+  };
+}
+
+function emptySearchData(input) {
+  return {
+    mode: "search_library",
+    source: "reaper_media_explorer_database",
+    query: input.query,
+    results: [],
+    page: { offset: 0, returned: 0, requested_page_size: input.page_size, total: null, has_more: false, next_cursor: null },
+    databases: [],
+    source_media_deleted: false,
+    arbitrary_folder_scan: false,
+    sqlite_write_authority: false,
+  };
 }
 
 function createState() { return { operations: [], changes: [], canonicalRefs: [], evidenceRefs: [], trackObjects: new Map(), createdTracks: new Map(), beforeRegions: [], sqlite: sqliteEvidence() }; }

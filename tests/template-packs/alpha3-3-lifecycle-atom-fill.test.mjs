@@ -40,6 +40,7 @@ const IDS = Object.freeze([
   "template.tracks.freeze_track",
   "template.tracks.unfreeze_track",
   "template.automation.ensure_take_pitch_envelope",
+  "template.items.split_item_by_silence",
 ]);
 
 const FX_REF = createObjectRef("fx", {
@@ -61,7 +62,7 @@ const TAKE_REF = createObjectRef("take", { scheme: "guid", value: "{TAKE}" }, {
 });
 
 describe("Alpha3.3 exact lifecycle atom descriptors", () => {
-  it("exports exactly the seven accepted lifecycle atom ids", () => {
+  it("exports exactly the eight accepted lifecycle atom ids", () => {
     assert.deepEqual(ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
     assert.deepEqual(TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
@@ -72,7 +73,7 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
   it("validates exact destructive/write metadata, refs, undo posture, and readback declarations", async () => {
     const templates = createAlpha3_3LifecycleAtomTemplates();
     const catalog = createTemplateCatalog({ templates });
-    const [deleteFx, removeSend, moveItem, glueItem, freezeTrack, unfreezeTrack, ensurePitch] = IDS.map((id) => catalog.require(id));
+    const [deleteFx, removeSend, moveItem, glueItem, freezeTrack, unfreezeTrack, ensurePitch, splitSilence] = IDS.map((id) => catalog.require(id));
 
     for (const descriptor of templates) {
       const validation = validateTemplateDescriptor(descriptor);
@@ -145,6 +146,22 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
     assert.deepEqual(ensurePitch.refs.input.map(({ name, kind }) => [name, kind]), [["take_ref", "take"]]);
     assert.deepEqual(ensurePitch.refs.output.map(({ name, kind }) => [name, kind]), [["envelope_ref", "envelope"]]);
 
+    assert.equal(splitSilence.risk, "destructive");
+    assert.equal(splitSilence.bridge.timeout_ms, 300_000);
+    assert.equal(splitSilence.bridge.idempotency, "none");
+    assert.deepEqual(splitSilence.refs.input.map(({ name, kind }) => [name, kind]), [["item_ref", "item"]]);
+    assert.deepEqual(splitSilence.refs.output.map(({ name, kind }) => [name, kind]), [
+      ["kept_item_refs", "item"],
+      ["deleted_item_refs", "item"],
+    ]);
+    assert.deepEqual(splitSilence.verification.checks.map(({ name }) => name), [
+      "analysis_coverage_complete",
+      "kept_guids_present",
+      "deleted_guids_absent",
+      "duration_conserved",
+      "track_item_count_matches",
+    ]);
+
     const bridge = new FakeFoundationBridge();
     for (const [index, id] of IDS.entries()) {
       const result = await executeTemplate({
@@ -164,6 +181,7 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
       ["tracks", "tracks.freeze_track", "write"],
       ["tracks", "tracks.unfreeze_track", "destructive"],
       ["automation", "automation.ensure_take_pitch_envelope", "write"],
+      ["items", "items.split_item_by_silence", "destructive"],
     ]);
     for (const request of bridge.seen) {
       assert.equal(request.undo.mode, "required");
@@ -173,7 +191,7 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
     }
   });
 
-  it("promotes all seven into accepted catalog, Recipe compatibility, and one bounded live allowlist", async () => {
+  it("promotes all eight into accepted catalog, Recipe compatibility, and one bounded live allowlist", async () => {
     const official = createAcceptedOfficialTemplateCatalog();
     for (const id of IDS) {
       assert.equal(official.get(id) !== null, true, id);
@@ -220,12 +238,15 @@ function refsFor(id) {
   if (id === "template.routing.remove_send") return { send_ref: SEND_REF };
   if (id === "template.items.move_item_to_track") return { item_ref: ITEM_REF, target_track_ref: TRACK_REF };
   if (id === "template.items.glue_item") return { item_ref: ITEM_REF };
+  if (id === "template.items.split_item_by_silence") return { item_ref: ITEM_REF };
   if (id === "template.automation.ensure_take_pitch_envelope") return { take_ref: TAKE_REF };
   return { track_ref: TRACK_REF };
 }
 
 function inputFor(id) {
-  return id === "template.tracks.freeze_track" ? { mode: "stereo" } : {};
+  if (id === "template.tracks.freeze_track") return { mode: "stereo" };
+  if (id === "template.items.split_item_by_silence") return { silence_threshold_dbfs: -60, min_silence_ms: 50 };
+  return {};
 }
 
 function context(overrides = {}) {

@@ -263,7 +263,7 @@ async function respondToRunnerBridgeRequests({ transportDir, bridge, unknownResi
 describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
   it("adds exactly two official read descriptors with exact discovery truth", () => {
     const catalog = createAcceptedOfficialTemplateCatalog();
-    assert.equal(catalog.size, 231);
+    assert.equal(catalog.size, 232);
     for (const id of IDS) {
       const descriptor = catalog.require(id);
       assert.equal(descriptor.pack, "project");
@@ -294,14 +294,14 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
     assert.equal(exact.items.every((item) => item.risk === undefined), true);
   });
 
-  it("keeps historical Alpha2 evidence at 213 while carrying the 231-id current product", () => {
+  it("keeps historical Alpha2 evidence at 213 while carrying the 232-id current product", () => {
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.length, 213);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_HISTORICAL_EVIDENCE_TEMPLATE_IDS.includes("template.items.set_item_pan"), true);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.length, 212);
     assert.equal(CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes("template.items.set_item_pan"), false);
     assert.equal(IDS.some((id) => CALL_TEMPLATE_RUNTIME_ALPHA2_LIVE_GRADUATED_TEMPLATE_IDS.includes(id)), false);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS, IDS);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 231);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 232);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS[212], "template.items.set_active_take");
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.slice(213, 215), IDS);
     const current = createCallTemplateRuntime({
@@ -311,7 +311,7 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
         allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
       },
     });
-    assert.equal(current.live_gate.allowed_template_ids.length, 231);
+    assert.equal(current.live_gate.allowed_template_ids.length, 232);
     const invalid = createCallTemplateRuntime({
       live: {
         opted_in: true,

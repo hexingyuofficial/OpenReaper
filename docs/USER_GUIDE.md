@@ -214,7 +214,7 @@ supported.
 
 ## Current Evidence Boundary
 
-The current Alpha3.3 surface contains 15 visible executable Macros and 231
+The current Alpha3.3 surface contains 15 visible executable Macros and 232
 accepted Templates with registered bridge handlers across 91 handler modules.
 Support remains narrower than the names of some Macro families:
 

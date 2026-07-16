@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -11,6 +14,7 @@ import {
   ALPHA3_3_MEDIA_PLACEMENT_MODES,
   ALPHA3_3_MEDIA_TRACK_POLICIES,
   ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY,
+  MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY,
   createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems,
   createAlpha3_3MediaPlaceAssetsExactManual,
   executeAlpha3_3MediaPlaceAssetsMacro,
@@ -29,13 +33,97 @@ const TAKE_A = "take:guid:{MEDIA-TAKE-A}";
 describe("Alpha3.3 media.place_assets registered Macro", () => {
   it("publishes one executable registry entry with exact modes, policies, schema, and manual", () => {
     assert.deepEqual(ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY.ids, [ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID]);
-    assert.deepEqual(ALPHA3_3_MEDIA_PLACE_ASSETS_MODES, ["place_assets", "relink_sources"]);
+    assert.deepEqual(ALPHA3_3_MEDIA_PLACE_ASSETS_MODES, ["place_assets", "relink_sources", "search_library"]);
     assert.deepEqual(ALPHA3_3_MEDIA_PLACEMENT_MODES, ["explicit", "sequence_on_one_track", "stack_on_separate_tracks", "columns", "append_after_existing"]);
     assert.deepEqual(ALPHA3_3_MEDIA_TRACK_POLICIES, ["existing_track", "one_shared_new_track", "one_new_track_per_asset", "explicit_per_asset"]);
     const [item] = createAlpha3_2EMediaPlaceAssetsMacroDiscoveryItems();
     assert.equal(item.input_schema.properties.assets.maxItems, 8);
+    assert.equal(item.input_schema.properties.page_size.maximum, 25);
     assert.equal(item.implementation_status, "executable");
+    assert.deepEqual(ALPHA3_3_MEDIA_PLACE_ASSETS_REGISTRY.get(ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID).dependencies.runtime_capabilities, [MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY]);
     assert.match(createAlpha3_3MediaPlaceAssetsExactManual().action_manual.readback_steps.join(" "), /Every imported Item/i);
+  });
+
+  it("searches only active REAPER Media Explorer databases with stable pagination and truthful availability", async () => {
+    const fixture = await mediaLibraryFixture();
+    try {
+      const first = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({ mode: "search_library", query: "kick", database_ids: ["音效库"], page_size: 2 }),
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(first.ok, true, JSON.stringify(first));
+      assert.deepEqual(validateMacroExecutionEnvelope(first), { valid: true, errors: [] });
+      assert.equal(first.result.data.mode, "search_library");
+      assert.equal(first.result.data.page.total, 3);
+      assert.equal(first.result.data.page.returned, 2);
+      assert.equal(first.result.data.page.has_more, true);
+      assert.equal(typeof first.result.data.page.next_cursor, "string");
+      assert.deepEqual(first.result.data.results.map((row) => row.filename), ["kick short.wav", "kick offline.wav"]);
+      assert.deepEqual(first.result.data.results.map((row) => row.available), [true, false]);
+      assert.equal(first.result.data.results[0].duration_seconds, 0.25);
+      assert.equal(first.result.data.results[0].sample_rate_hz, 48_000);
+      assert.equal(first.result.data.results[0].channels, 2);
+      assert.equal(first.result.data.results[0].bit_depth, 24);
+      assert.deepEqual(first.result.changes, []);
+      assert.equal(first.sqlite.used, false);
+
+      const second = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({ mode: "search_library", query: "kick", database_ids: ["00.ReaperFileList"], page_size: 2, cursor: first.result.data.page.next_cursor }),
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(second.ok, true, JSON.stringify(second));
+      assert.equal(second.result.data.page.offset, 2);
+      assert.equal(second.result.data.page.returned, 1);
+      assert.equal(second.result.data.page.has_more, false);
+      assert.equal(second.result.data.results[0].filename, "deep kick.wav");
+      assert.equal(fixture.calls.every((call) => call.id === "template.system.read_resource_paths"), true);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects query-mismatched and stale Media Explorer cursors instead of returning a wrong page", async () => {
+    const fixture = await mediaLibraryFixture();
+    try {
+      const first = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({ mode: "search_library", query: "kick", page_size: 1 }),
+        executeAtomic: fixture.execute,
+      });
+      const cursor = first.result.data.page.next_cursor;
+      const mismatched = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({ mode: "search_library", query: "snare", page_size: 1, cursor }),
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(mismatched.ok, false);
+      assert.equal(mismatched.error.code, "MEDIA_LIBRARY_CURSOR_QUERY_MISMATCH");
+
+      await writeFile(fixture.databasePath, `${fixture.databaseSource}FILE "${fixture.root}/new kick.wav" 100 0 0 0\nDATA s:44100 n:1 l:0:00.100 i:16\n`, "utf8");
+      const stale = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: request({ mode: "search_library", query: "kick", page_size: 1, cursor }),
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(stale.ok, false);
+      assert.equal(stale.error.code, "MEDIA_LIBRARY_CURSOR_STALE");
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("shrinks a Media Explorer page before exceeding a 2 KiB public response budget", async () => {
+    const fixture = await mediaLibraryFixture();
+    try {
+      const response = await executeAlpha3_3MediaPlaceAssetsMacro({
+        request: { ...request({ mode: "search_library", query: "kick", page_size: 10 }), budget: { max_response_bytes: 2_048, max_items: 25, max_inline_value_bytes: 2_048 } },
+        executeAtomic: fixture.execute,
+      });
+      assert.equal(response.ok, true, JSON.stringify(response));
+      assert.equal(response.result.data.page.total, 3);
+      assert.equal(response.result.data.page.returned < 3, true);
+      assert.equal(response.result.data.page.has_more, true);
+      assert.equal(response.budget.actual_bytes <= 2_048, true);
+    } finally {
+      await rm(fixture.root, { recursive: true, force: true });
+    }
   });
 
   it("probes every asset before dry-run layout and emits no mutation", async () => {
@@ -469,3 +557,40 @@ function fail(id, code) { return { ok: false, request: { id }, template: { id },
 function objectRef(kind, ref) { return { kind, ref, identity: { scheme: ref.split(":")[1], value: ref.split(":").slice(2).join(":") } }; }
 function fileRef(path) { return { kind: "file", ref: `file:path:${path}`, identity: { scheme: "path", value: path } }; }
 function fakeIndex() { return { scopes: null, status: () => ({ snapshot_id: "snapshot:media", revision: "revision:media" }), invalidateScopes({ scopes }) { this.scopes = scopes; return { ok: true, scopes }; } }; }
+
+async function mediaLibraryFixture() {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-media-library-"));
+  const mediaDb = path.join(root, "MediaDB");
+  await mkdir(mediaDb, { recursive: true });
+  const availablePath = path.join(root, "kick short.wav");
+  const offlinePath = path.join(root, "offline", "kick offline.wav");
+  const deepPath = path.join(root, "deep kick.wav");
+  await writeFile(availablePath, "fixture", "utf8");
+  await writeFile(path.join(root, "reaper.ini"), "Shortcut6=00.ReaperFileList\nShortcutT6=音效库\n", "utf8");
+  const databaseSource = [
+    `PATH "${root}"`,
+    `FILE "${availablePath}" 12000 0 0 0`,
+    "DATA s:48000 n:2 l:0:00.250 i:24 genre:drum",
+    `FILE "${offlinePath}" 9000 0 0 0`,
+    "DATA s:44100 n:1 l:0:00.500 i:16",
+    `FILE "${deepPath}" 18000 0 0 0`,
+    "DATA s:96000 n:2 l:0:01.125 i:32",
+    `FILE "${path.join(root, "snare.wav")}" 10000 0 0 0`,
+    "DATA s:44100 n:1 l:0:00.400 i:16",
+    "",
+  ].join("\n");
+  const databasePath = path.join(mediaDb, "00.ReaperFileList");
+  await writeFile(databasePath, databaseSource, "utf8");
+  const calls = [];
+  return {
+    root,
+    databasePath,
+    databaseSource,
+    calls,
+    execute: async (call) => {
+      calls.push(structuredClone(call));
+      if (call.id !== "template.system.read_resource_paths") throw new Error(`Unexpected ${call.id}`);
+      return ok(call.id, { resource_path: root });
+    },
+  };
+}

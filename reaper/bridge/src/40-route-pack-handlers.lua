@@ -800,6 +800,7 @@ local SAFE_WRITE_A_HANDLERS = {
   ["tracks.freeze_track"] = alpha33_freeze_track,
   ["tracks.unfreeze_track"] = alpha33_unfreeze_track,
   ["automation.ensure_take_pitch_envelope"] = alpha33_ensure_take_pitch_envelope,
+  ["items.split_item_by_silence"] = alpha33_split_item_by_silence,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

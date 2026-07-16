@@ -20,6 +20,7 @@ const GLUE_SOURCE = source("items/glue_item.lua");
 const FREEZE_SOURCE = source("tracks/freeze_track.lua");
 const UNFREEZE_SOURCE = source("tracks/unfreeze_track.lua");
 const PITCH_SOURCE = source("automation/ensure_take_pitch_envelope.lua");
+const SPLIT_SILENCE_SOURCE = source("analysis/d27_item_audio_analysis.lua");
 const CATALOG_SUMMARY_SOURCE = source("core/read_template_catalog_summary.lua");
 const ROUTE_SOURCE = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
 const POLICY_SOURCE = readFileSync(new URL("../../reaper/bridge/src/35-route-policy.lua", import.meta.url), "utf8");
@@ -55,7 +56,7 @@ end
 `;
 
 describe("Alpha3.3 exact lifecycle atom handler truth", () => {
-  it("registers exactly seven extracted native handlers and assembles their dispatch routes", () => {
+  it("registers exactly eight extracted native handlers and assembles their dispatch routes", () => {
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
     const rows = registry.entries.filter((entry) => entry.route === "alpha3-3-lifecycle-atom-handlers");
@@ -68,9 +69,10 @@ describe("Alpha3.3 exact lifecycle atom handler truth", () => {
       ["tracks/freeze_track.lua", "alpha33_freeze_track"],
       ["tracks/unfreeze_track.lua", "alpha33_unfreeze_track"],
       ["automation/ensure_take_pitch_envelope.lua", "alpha33_ensure_take_pitch_envelope"],
+      ["analysis/d27_item_audio_analysis.lua", "alpha33_split_item_by_silence"],
     ]);
-    assert.equal(summary.entryCount, 231);
-    assert.equal(summary.extractedHandlerCount, 231);
+    assert.equal(summary.entryCount, 232);
+    assert.equal(summary.extractedHandlerCount, 232);
     assert.equal(summary.handlerModuleCount, 91);
     assert.equal(summary.routeCount, 34);
 
@@ -83,9 +85,124 @@ describe("Alpha3.3 exact lifecycle atom handler truth", () => {
       ["tracks.freeze_track", "alpha33_freeze_track"],
       ["tracks.unfreeze_track", "alpha33_unfreeze_track"],
       ["automation.ensure_take_pitch_envelope", "alpha33_ensure_take_pitch_envelope"],
+      ["items.split_item_by_silence", "alpha33_split_item_by_silence"],
     ]) {
       assert.match(built, new RegExp(`\\["${escapeRegExp(capability)}"\\]\\s*=\\s*OPENREAPER_HANDLER_EXPORTS\\.${handler}\\b`));
     }
+  });
+
+  it("splits one exact Item on complete native silence analysis and proves kept/deleted GUID truth", () => {
+    runLua(SPLIT_SILENCE_SOURCE, String.raw`
+track = { guid = "{TRACK}" }
+take = {}
+source = {}
+accessor = {}
+items = {{ guid = "{ITEM}", position = 2, length = 1, track = track }}
+next_guid = 1
+
+local function item_index(actual)
+  for index = 1, #items do if items[index] == actual then return index end end
+  return nil
+end
+
+read_item_summary = function(request)
+  local actual = items[1]
+  return {
+    item_ref = "item:guid:" .. actual.guid,
+    track_ref = "track:guid:" .. track.guid,
+    position_seconds = actual.position,
+    length_seconds = actual.length,
+    active_take_ref = "take:guid:{TAKE}",
+  }
+end
+
+reaper = {}
+reaper.CountMediaItems = function(project) assert(project == 0); return #items end
+reaper.GetMediaItem = function(project, index) assert(project == 0); return items[index + 1] end
+reaper.GetSetMediaItemInfo_String = function(actual, key, value, set_new)
+  assert(key == "GUID" and value == "" and set_new == false)
+  return true, actual.guid
+end
+reaper.GetActiveTake = function(actual) assert(item_index(actual)); return take end
+reaper.GetMediaItemTake_Source = function(actual) assert(actual == take); return source end
+reaper.GetMediaItemInfo_Value = function(actual, key)
+  if key == "D_POSITION" then return actual.position end
+  if key == "D_LENGTH" then return actual.length end
+  if key == "B_LOOPSRC" then return 0 end
+end
+reaper.GetMediaItemTakeInfo_Value = function(actual, key)
+  assert(actual == take)
+  if key == "D_STARTOFFS" then return 0 end
+  if key == "D_PLAYRATE" then return 1 end
+  if key == "B_REVERSE" then return 0 end
+end
+reaper.GetTakeNumStretchMarkers = function(actual) assert(actual == take); return 0 end
+reaper.GetMediaSourceSampleRate = function(actual) assert(actual == source); return 1000 end
+reaper.GetMediaSourceNumChannels = function(actual) assert(actual == source); return 1 end
+reaper.GetMediaSourceType = function(actual) assert(actual == source); return "WAVE" end
+reaper.GetMediaSourceLength = function(actual) assert(actual == source); return 1, false end
+reaper.CreateTakeAudioAccessor = function(actual) assert(actual == take); return accessor end
+reaper.GetAudioAccessorStartTime = function(actual) assert(actual == accessor); return 0 end
+reaper.GetAudioAccessorEndTime = function(actual) assert(actual == accessor); return 1 end
+reaper.new_array = function(size)
+  local values = {}
+  return { values = values, table = function() return values end }
+end
+reaper.GetAudioAccessorSamples = function(actual, rate, channels, start_time, frames, buffer)
+  assert(actual == accessor and rate == 1000 and channels == 1)
+  for frame = 0, frames - 1 do
+    local time = start_time + (frame / rate)
+    local silent = (time >= 0.2 and time < 0.5) or (time >= 0.7 and time < 0.9)
+    buffer.values[frame + 1] = silent and 0 or 1
+  end
+  return 1
+end
+reaper.DestroyAudioAccessor = function(actual) assert(actual == accessor) end
+reaper.GetMediaItemTrack = function(actual) assert(item_index(actual)); return actual.track end
+reaper.GetMediaItem_Track = reaper.GetMediaItemTrack
+reaper.GetTrackGUID = function(actual) assert(actual == track); return actual.guid end
+reaper.CountTrackMediaItems = function(actual) assert(actual == track); return #items end
+reaper.SplitMediaItem = function(actual, project_position)
+  local index = item_index(actual)
+  assert(index)
+  local offset = project_position - actual.position
+  assert(offset > 0 and offset < actual.length)
+  next_guid = next_guid + 1
+  local right = { guid = "{SPLIT-" .. tostring(next_guid) .. "}", position = project_position, length = actual.length - offset, track = track }
+  actual.length = offset
+  table.insert(items, index + 1, right)
+  return right
+end
+reaper.DeleteTrackMediaItem = function(actual_track, actual_item)
+  assert(actual_track == track)
+  local index = item_index(actual_item)
+  assert(index)
+  table.remove(items, index)
+  return true
+end
+reaper.UpdateArrange = function() end
+
+local request = {
+  pack = { id = "items", capability = "items.split_item_by_silence", risk = "destructive" },
+  refs = {{ kind = "item", ref = "item:guid:{ITEM}", identity = { scheme = "guid", value = "{ITEM}" } }},
+  params = { silence_threshold_dbfs = -60, min_silence_ms = 100 },
+  budget = { max_items = 512 },
+}
+local summary, failure, artifacts, jobs, refs = alpha33_split_item_by_silence(request)
+assert(failure == nil and summary.readback_status == "passed")
+assert(summary.source_item_ref == "item:guid:{ITEM}" and summary.owner_track_ref == "track:guid:{TRACK}")
+assert(summary.silence_segment_count == 2 and summary.split_count == 4 and summary.delete_count == 2)
+assert(summary.item_count_before == 1 and summary.item_count_after == 3 and #items == 3)
+assert(#summary.kept_item_refs == 3 and #summary.deleted_item_refs == 2)
+assert(math.abs(summary.removed_duration_seconds - 0.5) < 0.002)
+assert(math.abs(summary.remaining_duration_seconds - 0.5) < 0.002)
+assert(summary.source_media_deleted == false and summary.changed == true)
+for index = 1, #summary.deleted_item_refs do
+  local guid = summary.deleted_item_refs[index]:match("^item:guid:(.+)$")
+  for item_index_value = 1, #items do assert(items[item_index_value].guid ~= guid) end
+end
+assert(#refs == 6)
+`);
   });
 
   it("deletes exact Track-FX and Take-FX by native GUID and fails closed on duplicate identity", () => {
@@ -678,7 +795,7 @@ assert(summary == nil and failure.code == "REF_INVALID" and calls.action == befo
     }
   });
 
-  it("keeps public catalog and live-handler counts equal to the actual 231-row catalog and registry", () => {
+  it("keeps public catalog and live-handler counts equal to the actual 232-row catalog and registry", () => {
     const templates = createAcceptedOfficialTemplateCatalogTemplates();
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     const byPack = countBy(templates, "pack");

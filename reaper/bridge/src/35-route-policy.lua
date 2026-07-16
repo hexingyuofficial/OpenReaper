@@ -30,6 +30,7 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["tracks.freeze_track"] = { pack = "tracks", risk = "write" },
   ["tracks.unfreeze_track"] = { pack = "tracks", risk = "destructive" },
   ["automation.ensure_take_pitch_envelope"] = { pack = "automation", risk = "write" },
+  ["items.split_item_by_silence"] = { pack = "items", risk = "destructive" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {

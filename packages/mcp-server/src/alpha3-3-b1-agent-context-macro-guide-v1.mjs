@@ -59,7 +59,9 @@ const INTENT_ROUTES = deepFreeze([
     term("路由", 8), term("发送到", 7), term("创建send", 9), term("删除send", 10), term("移除发送", 10), term("侧链", 8), term("总线", 5),
   ]),
   intent("macro.media.place_assets", [
+    term("search sound library", 10), term("find a sound", 9), term("find a sample", 10), term("media explorer", 10), term("sound library", 9), term("find a kick", 10),
     term("import audio", 10), term("import media", 10), term("import sample", 9), term("place assets", 9), term("place media", 9),
+    term("搜索音效库", 10), term("找音效", 9), term("找素材", 10), term("媒体浏览器", 10), term("找kick", 10),
     term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入采样", 9), term("放置素材", 9),
   ]),
   intent("macro.items.analyze", [
@@ -553,7 +555,7 @@ function normalizeIntentText(value) {
 
 function riskFor(id) {
   if (id === "macro.project.inspect" || id === "macro.project.query" || id === ALPHA3_3_B1B_ITEMS_ANALYZE_MACRO_ID) return "read";
-  if (id === "macro.project.delete_targets") return "destructive";
+  if (id === "macro.project.delete_targets" || id === "macro.items.apply") return "destructive";
   return "write";
 }
 

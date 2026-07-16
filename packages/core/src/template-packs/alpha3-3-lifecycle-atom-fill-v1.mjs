@@ -8,6 +8,7 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS = Object.freeze([
   "template.tracks.freeze_track",
   "template.tracks.unfreeze_track",
   "template.automation.ensure_take_pitch_envelope",
+  "template.items.split_item_by_silence",
 ]);
 
 export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
@@ -292,6 +293,63 @@ export const ALPHA3_3_LIFECYCLE_ATOM_TEMPLATES = deepFreeze([
       check("selection_and_active_take_restored", "state_delta", "Track/Item selection and all readable active Takes are restored."),
     ]),
     examples: [{ name: "ensure_pitch_envelope", summary: "Ensure Pitch exists on one exact Take.", input: {} }],
+  }),
+  destructiveDescriptor({
+    id: "template.items.split_item_by_silence",
+    title: "Split Item By Silence",
+    summary: "Analyze one exact audio Item completely, split it at native silence boundaries, delete only silent Item fragments, and prove every kept/deleted GUID against live REAPER state.",
+    pack: "items",
+    entity_kind: "item",
+    tags: ["alpha3_3", "items", "silence", "split", "delete", "destructive", "exact_ref", "native"],
+    capability: "items.split_item_by_silence",
+    timeout_ms: 300_000,
+    inputSchema: objectSchema({
+      silence_threshold_dbfs: { type: "number", minimum: -150, maximum: 0 },
+      min_silence_ms: { type: "number", minimum: 0, maximum: 60000 },
+    }, []),
+    outputSchema: objectSchema({
+      source_item_ref: { type: "string" },
+      owner_track_ref: { type: "string" },
+      kept_item_refs: { type: "array" },
+      deleted_item_refs: { type: "array" },
+      silence_segment_count: { type: "integer" },
+      split_count: { type: "integer" },
+      delete_count: { type: "integer" },
+      item_count_before: { type: "integer" },
+      item_count_after: { type: "integer" },
+      original_duration_seconds: { type: "number" },
+      removed_duration_seconds: { type: "number" },
+      remaining_duration_seconds: { type: "number" },
+      changed: { type: "boolean" },
+      source_media_deleted: { const: false },
+    }),
+    refs: refs({
+      input: [ref("item_ref", "item", true, "Exact Item GUID ref; selection and index aliases are rejected before analysis or mutation.")],
+      output: [
+        ref("kept_item_refs", "item", true, "Every surviving Item fragment GUID read back from live REAPER state."),
+        ref("deleted_item_refs", "item", false, "Every deleted silent Item fragment GUID proven absent from the complete project Item list."),
+      ],
+    }),
+    expectedDelta: mutationDelta({
+      summary: "Splits one exact audio Item and deletes only Item fragments proven silent by complete native pre-FX sample analysis.",
+      entities: [
+        { entity_kind: "item", action: "create", summary: "Native SplitMediaItem creates bounded non-silent/silent fragments at analyzed boundaries." },
+        { entity_kind: "item", action: "delete", summary: "DeleteTrackMediaItem removes only fragments classified inside complete silence segments." },
+      ],
+      idempotent: false,
+    }),
+    verification: requiredVerification([
+      check("analysis_coverage_complete", "state_delta", "The entire Item duration and every detected silence row are complete before mutation."),
+      check("kept_guids_present", "state_delta", "Every kept native Item GUID exists on the original Track at the exact expected position and length."),
+      check("deleted_guids_absent", "state_delta", "Every deleted native Item GUID is absent from the complete project Item list."),
+      check("duration_conserved", "state_delta", "Remaining plus removed Item duration equals the original Item duration within one source-sample tolerance."),
+      check("track_item_count_matches", "state_delta", "The live Track Item count equals before + splits - deletions."),
+    ]),
+    examples: [{
+      name: "remove_silence_from_exact_item",
+      summary: "Split one exact audio Item at -60 dBFS silence lasting at least 50 ms and delete silent fragments only.",
+      input: { silence_threshold_dbfs: -60, min_silence_ms: 50 },
+    }],
   }),
 ]);
 

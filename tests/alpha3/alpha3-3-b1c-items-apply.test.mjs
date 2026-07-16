@@ -34,11 +34,11 @@ const RUNTIME_TAKE_A0_OBJECT = createObjectRef("take", { scheme: "guid", value: 
 const RUNTIME_TAKE_A1_OBJECT = createObjectRef("take", { scheme: "guid", value: "{TAKE-A1}" }, { ref: TAKE_A1.ref });
 
 describe("Alpha3.3-B1c executable macro.items.apply", () => {
-  it("registers one fixed allowlisted write program and truthfully holds unfinished modes and Take fields", () => {
+  it("registers one fixed allowlisted destructive program and truthfully holds unfinished modes and Take fields", () => {
     assert.deepEqual(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids, ["macro.items.apply"]);
     const entry = ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.entries[0];
     assert.equal(entry.implementation_status, "executable");
-    assert.equal(entry.risk, "write");
+    assert.equal(entry.risk, "destructive");
     assert.equal(entry.selector_policy.live_reresolve_before_write, true);
     assert.equal(entry.sqlite_policy.write_authority, false);
     assert.equal(entry.undo_policy, "per_stage_undo");
@@ -434,6 +434,158 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
     }
   });
 
+  it("removes silence only after complete analysis and verifies every kept Item plus the owner Track count", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 2, 2, { silence_segment_count: 2, silence_seconds: 0.5 }),
+    ]);
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({
+        mode: "remove_silence",
+        target_refs: [ITEM_A.ref],
+        silence_threshold_dbfs: -55,
+        min_silence_ms: 75,
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.items.size, 3);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_silence",
+      "template.items.split_item_by_silence",
+      "template.items.read_item_summary",
+      "template.items.read_item_summary",
+      "template.items.read_item_summary",
+      "template.items.list_items_on_track",
+    ]);
+    assert.equal(result.result.changes.length, 1);
+    assert.equal(result.result.changes[0].status, "applied");
+    assert.deepEqual(result.result.changes[0].mutation, {
+      status: "completed",
+      template_id: "template.items.split_item_by_silence",
+    });
+    assert.deepEqual(result.result.changes[0].live_readback, {
+      status: "passed",
+      source: "split_atom_plus_kept_items_plus_track_count",
+      observed_value: {
+        kept: 3,
+        deleted: 2,
+        removed_seconds: 0.5,
+        remaining_seconds: 1.5,
+        track_item_count: 3,
+      },
+    });
+    assert.deepEqual(result.result.changes[0].index_maintenance, {
+      status: "completed",
+      scopes: ["items", "tracks", "takes"],
+    });
+    assert.deepEqual(invalidations, [["items", "tracks", "takes"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("blocks incomplete or all-silent analysis before split-by-silence mutation", async () => {
+    const cases = [
+      {
+        options: { analysisCoverageIncomplete: true },
+        extra: { silence_segment_count: 2, silence_seconds: 0.5 },
+        code: "ITEM_APPLY_ANALYSIS_COVERAGE_INCOMPLETE",
+      },
+      {
+        options: { allSilent: true },
+        extra: { silence_segment_count: 1, silence_seconds: 2 },
+        code: "ITEM_APPLY_ALL_SILENT_BLOCKED",
+      },
+    ];
+    for (const testCase of cases) {
+      const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 2, testCase.extra)], testCase.options);
+      const result = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode: "remove_silence", target_refs: [ITEM_A.ref], dry_run: false }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false);
+      assert.equal(result.execution.status, "blocked");
+      assert.equal(result.error.code, testCase.code);
+      assert.equal(result.result.changes.length, 0);
+      assert.equal(bridge.calls.some((call) => isWrite(call.id)), false);
+      assert.deepEqual(bridge.calls.map((call) => call.id), [
+        "template.items.resolve_item_ref",
+        "template.items.read_item_summary",
+        "template.analysis.detect_item_silence",
+      ]);
+    }
+  });
+
+  it("aligns two audio onsets and re-runs complete transient analysis after each move", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 1, 2, { first_transient_time: 0.2, transient_count: 2 }),
+      item(ITEM_B, 4, 2, { first_transient_time: 0.5, transient_count: 3 }),
+    ]);
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "align_onsets", target_refs: [ITEM_A.ref, ITEM_B.ref], anchor_seconds: 3, dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(bridge.items.get(ITEM_A.ref).position_seconds, 2.8);
+    assert.equal(bridge.items.get(ITEM_B.ref).position_seconds, 2.5);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.items.resolve_item_ref",
+      "template.items.resolve_item_ref",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+      "template.items.move_item",
+      "template.items.move_item",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+      "template.items.read_item_summary",
+      "template.analysis.detect_item_transients",
+    ]);
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["applied", "applied"]);
+    assert.deepEqual(result.result.changes.map((change) => change.live_readback), [
+      { status: "passed", source: "live_item_summary_plus_transient_reanalysis", observed_value: 3 },
+      { status: "passed", source: "live_item_summary_plus_transient_reanalysis", observed_value: 3 },
+    ]);
+    assert.deepEqual(invalidations, [["items"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("does not report an aligned onset as applied when post-move transient readback differs", async () => {
+    const bridge = new FakeFoundationBridge([
+      item(ITEM_A, 1, 2, { first_transient_time: 0.2, transient_count: 2 }),
+      item(ITEM_B, 4, 2, { first_transient_time: 0.5, transient_count: 3 }),
+    ], { transientReadbackMismatchFor: ITEM_B.ref });
+    const invalidations = [];
+    const result = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "align_onsets", target_refs: [ITEM_A.ref, ITEM_B.ref], anchor_seconds: 3, dry_run: false }),
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: projectIndex(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "partial_failure");
+    assert.equal(result.error.code, "ITEM_APPLY_READBACK_MISMATCH");
+    assert.deepEqual(result.result.changes.map((change) => change.status), ["applied", "readback_failed"]);
+    assert.equal(result.result.changes[1].mutation.status, "completed");
+    assert.equal(result.result.changes[1].live_readback.status, "failed");
+    assert.equal(result.result.changes[1].live_readback.source, "post_move_transient_analysis");
+    assert.deepEqual(invalidations, [["items"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
   it("defaults new Item application modes to dry-run and dispatches no write", async () => {
     const bridge = new FakeFoundationBridge([item(ITEM_A, 2, 2)]);
     const result = await executeAlpha3_3B1cItemsApplyMacro({
@@ -799,6 +951,8 @@ class FakeFoundationBridge {
     this.options = options;
     this.calls = [];
     this.readCounts = new Map();
+    this.analysisCounts = new Map();
+    this.splitSerial = 0;
     this.executeAtomic = this.executeAtomic.bind(this);
   }
 
@@ -823,6 +977,18 @@ class FakeFoundationBridge {
       const resolved = trackRef(input.track_ref.slice("track:guid:".length));
       return execution(id, { track_ref: resolved.ref }, [resolved]);
     }
+    if (id === "template.items.list_items_on_track") {
+      const trackReference = refs.track_ref;
+      const trackRefString = typeof trackReference === "string" ? trackReference : trackReference?.ref;
+      const rows = [...this.items.values()].filter((candidate) => candidate.track_ref === trackRefString);
+      return execution(id, {
+        track_ref: trackRefString,
+        item_count: rows.length,
+        returned_count: rows.length,
+        truncated: false,
+        items: rows.map(summary),
+      }, [trackReference, ...rows.map((candidate) => candidate.item_ref)]);
+    }
     const itemReference = refs.item_ref;
     const refString = typeof itemReference === "string" ? itemReference : itemReference?.ref;
     const entry = this.items.get(refString);
@@ -833,6 +999,80 @@ class FakeFoundationBridge {
       const row = summary(entry);
       if (this.options.arrangementReadbackMismatch && count > 1) row.position_seconds += 0.25;
       return execution(id, row, [entry.item_ref]);
+    }
+    if (id === "template.analysis.detect_item_silence") {
+      const silenceSeconds = this.options.allSilent ? entry.length_seconds : (entry.silence_seconds ?? 0);
+      const silenceCount = this.options.allSilent ? 1 : (entry.silence_segment_count ?? 0);
+      return execution(id, {
+        item_ref: entry.item_ref.ref,
+        segment_count: silenceCount,
+        total_silence_seconds: silenceSeconds,
+        total_detected: silenceCount,
+        returned_count: silenceCount,
+        truncated: false,
+        coverage: {
+          range_complete: this.options.analysisCoverageIncomplete !== true,
+          channel_coverage_complete: true,
+          result_rows_complete: true,
+        },
+      }, [entry.item_ref]);
+    }
+    if (id === "template.analysis.detect_item_transients") {
+      const count = (this.analysisCounts.get(refString) ?? 0) + 1;
+      this.analysisCounts.set(refString, count);
+      const mismatch = this.options.transientReadbackMismatchFor === refString && count > 1;
+      const transientCount = entry.transient_count ?? 1;
+      return execution(id, {
+        item_ref: entry.item_ref.ref,
+        transient_count: transientCount,
+        total_detected: transientCount,
+        first_transient_time: (entry.first_transient_time ?? 0.1) + (mismatch ? 0.25 : 0),
+        truncated: false,
+        coverage: {
+          range_complete: this.options.analysisCoverageIncomplete !== true,
+          channel_coverage_complete: true,
+          result_rows_complete: true,
+        },
+      }, [entry.item_ref]);
+    }
+    if (id === "template.items.split_item_by_silence") {
+      const silenceCount = entry.silence_segment_count ?? 0;
+      const removedSeconds = entry.silence_seconds ?? 0;
+      const remainingSeconds = entry.length_seconds - removedSeconds;
+      const keptCount = silenceCount + 1;
+      const keptLength = remainingSeconds / keptCount;
+      const itemCountBefore = [...this.items.values()].filter((candidate) => candidate.track_ref === entry.track_ref).length;
+      const keptRefs = [entry.item_ref.ref];
+      const deletedRefs = [];
+      this.splitSerial += 1;
+      entry.length_seconds = keptLength;
+      for (let index = 1; index < keptCount; index += 1) {
+        const keptRef = itemRef(`{SPLIT-${this.splitSerial}-KEPT-${index + 1}}`);
+        const kept = structuredClone(entry);
+        kept.item_ref = keptRef;
+        kept.position_seconds = entry.position_seconds + (keptLength * index);
+        this.items.set(keptRef.ref, kept);
+        keptRefs.push(keptRef.ref);
+      }
+      for (let index = 0; index < silenceCount; index += 1) {
+        deletedRefs.push(itemRef(`{SPLIT-${this.splitSerial}-DELETED-${index + 1}}`).ref);
+      }
+      return execution(id, {
+        source_item_ref: entry.item_ref.ref,
+        owner_track_ref: entry.track_ref,
+        silence_segment_count: silenceCount,
+        split_count: silenceCount * 2,
+        delete_count: silenceCount,
+        item_count_before: itemCountBefore,
+        item_count_after: itemCountBefore + keptCount - 1,
+        kept_item_refs: keptRefs,
+        deleted_item_refs: deletedRefs,
+        removed_duration_seconds: removedSeconds,
+        remaining_duration_seconds: remainingSeconds,
+        source_media_deleted: false,
+        changed: silenceCount > 0,
+        readback_status: "passed",
+      }, keptRefs.map((ref) => exactItemObject(ref)));
     }
     if (id === "template.items.move_item") {
       entry.position_seconds = input.position_seconds;
@@ -919,6 +1159,10 @@ function request(input) {
 
 function itemRef(value) {
   return { kind: "item", ref: `item:guid:${value}`, identity: { scheme: "guid", value } };
+}
+
+function exactItemObject(ref) {
+  return itemRef(ref.slice("item:guid:".length));
 }
 
 function takeRef(value) {
@@ -1014,6 +1258,7 @@ function isWrite(id) {
     "template.items.trim_item",
     "template.items.set_take_playrate",
     "template.items.set_item_snap_offset",
+    "template.items.split_item_by_silence",
   ].includes(id) || propertyField(id) !== null;
 }
 

@@ -237,7 +237,7 @@ Template dependencies are derived from `steps[*].call_template.id`.
 
 Layer 5's accepted template dependency set is the Layer 4D accepted official
 catalog, currently the Wave 1A, Wave 2A, Wave 3B, critical-fill, P1, and
-Alpha3 C3 ids plus the accepted Alpha3.2 D31 render-target route and the seven Alpha3.3 lifecycle atoms (`template.fx.delete_fx`, `template.routing.remove_send`, `template.items.move_item_to_track`, `template.items.glue_item`, `template.tracks.freeze_track`, `template.tracks.unfreeze_track`, and `template.automation.ensure_take_pitch_envelope`), 231 templates total.
+Alpha3 C3 ids plus the accepted Alpha3.2 D31 render-target route and the eight Alpha3.3 lifecycle atoms (`template.fx.delete_fx`, `template.routing.remove_send`, `template.items.move_item_to_track`, `template.items.glue_item`, `template.tracks.freeze_track`, `template.tracks.unfreeze_track`, `template.automation.ensure_take_pitch_envelope`, and `template.items.split_item_by_silence`), 232 templates total.
 Recipe validation rejects:
 
 ```text
