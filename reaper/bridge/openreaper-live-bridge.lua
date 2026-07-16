@@ -17681,10 +17681,39 @@ end
 
 local D30_MAX_SOURCE_CHAIN_DEPTH = 16
 
-local function d30_item_source_truth(item, expected_proxy_path)
+local function d30_source_path_truth(source_path, expected_proxy_path)
+  if not is_string(source_path) or source_path == "" then
+    return nil
+  end
+  if source_path == expected_proxy_path then
+    return {
+      source_path = source_path,
+      proxy_path = expected_proxy_path,
+      mode = "exact_requested_proxy",
+    }
+  end
+  if source_path:sub(-5):upper() == "-PROX" and file_exists(source_path) then
+    return {
+      source_path = source_path,
+      proxy_path = source_path,
+      mode = "reaper_managed_proxy_copy",
+    }
+  end
+  local managed_proxy_path = source_path .. "-PROX"
+  if source_path:sub(-4):upper() == ".RPP" and file_exists(managed_proxy_path) then
+    return {
+      source_path = source_path,
+      proxy_path = managed_proxy_path,
+      mode = "reaper_managed_proxy_copy",
+    }
+  end
+  return nil
+end
+
+local function d30_item_source_truth(item, expected_proxy_path, expected_child_path)
   local ok_track, track = call_reaper("GetMediaItem_Track", item)
   local ok_take, take = call_reaper("GetActiveTake", item)
-  if not ok_track or not track or not ok_take or not take then
+  if not ok_track or not track or not ok_take or not take or not is_string(expected_child_path) or expected_child_path == "" then
     return nil
   end
   local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
@@ -17695,6 +17724,7 @@ local function d30_item_source_truth(item, expected_proxy_path)
   local current_source = source
   local visited = {}
   local path_source = nil
+  local path_truth = nil
   local subproject_source = nil
   local subproject = nil
   local terminated = false
@@ -17709,15 +17739,18 @@ local function d30_item_source_truth(item, expected_proxy_path)
       return nil
     end
     local current_path = first_string(path_a, path_b)
-    if current_path == expected_proxy_path then
+    local current_path_truth = d30_source_path_truth(current_path, expected_proxy_path)
+    if current_path_truth then
       path_source = current_source
+      path_truth = current_path_truth
     end
 
     local ok_subproject, current_subproject = call_reaper("GetSubProjectFromSource", current_source)
     if not ok_subproject then
       return nil
     end
-    if current_subproject then
+    local current_subproject_state = current_subproject and d30_project_state_for_instance(current_subproject) or nil
+    if current_subproject_state and current_subproject_state.path == expected_child_path then
       subproject_source = current_source
       subproject = current_subproject
     end
@@ -17732,7 +17765,7 @@ local function d30_item_source_truth(item, expected_proxy_path)
     end
     current_source = parent_source
   end
-  if not terminated or not path_source or not subproject_source then
+  if not terminated or not path_source or not path_truth or not subproject_source then
     return nil
   end
   return {
@@ -17741,7 +17774,10 @@ local function d30_item_source_truth(item, expected_proxy_path)
     source = path_source,
     subproject_source = subproject_source,
     subproject = subproject,
-    source_path = expected_proxy_path,
+    source_path = path_truth.source_path,
+    source_proxy_path = path_truth.proxy_path,
+    requested_proxy_path = expected_proxy_path,
+    source_path_mode = path_truth.mode,
   }
 end
 
@@ -18013,7 +18049,7 @@ local function insert_subproject_item(request)
       new_item_count = new_item_count,
     }, false)
   end
-  local truth = d30_item_source_truth(item, proxy_path)
+  local truth = d30_item_source_truth(item, proxy_path, child_path)
   if not truth or truth.track ~= track then
     d30_restore_project_ui(parent.project, ui_snapshot)
     return d30_project_error("VERIFY_FAILED", "Inserted Item did not read back on the exact Track with a real subproject source.", {
@@ -18052,7 +18088,10 @@ local function insert_subproject_item(request)
   local item_object_ref = d30_item_ref_object(item, {
     kind = "subproject_item",
     position_seconds = position,
-    source_path = proxy_path,
+    source_path = truth.source_path,
+    source_proxy_path = truth.source_proxy_path,
+    requested_proxy_path = proxy_path,
+    source_path_mode = truth.source_path_mode,
     materialization = "native_subproject_source_verified",
   })
   local child_object_ref = d30_project_ref_object(child_ref, {
@@ -18067,6 +18106,9 @@ local function insert_subproject_item(request)
     position_seconds = position,
     proxy_path = proxy_path,
     source_path = truth.source_path,
+    source_proxy_path = truth.source_proxy_path,
+    requested_proxy_path = truth.requested_proxy_path,
+    source_path_mode = truth.source_path_mode,
     parent_ui_restored = true,
     subproject_item_status = "native_source_verified",
     live_materialization = "native_subproject_source_verified",
@@ -18148,7 +18190,7 @@ local function render_or_update_subproject(request)
       child_project_path = child_path,
     }, false)
   end
-  if linked_item and not d30_item_source_truth(linked_item, proxy_path) then
+  if linked_item and not d30_item_source_truth(linked_item, proxy_path, child_path) then
     return d30_project_error("VERIFY_FAILED", "Linked subproject Item did not retain exact source association after render.", {
       blocker = "linked_item_source_readback_failed",
       proxy_path = proxy_path,

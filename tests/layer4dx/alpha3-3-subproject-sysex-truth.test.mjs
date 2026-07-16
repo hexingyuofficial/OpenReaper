@@ -200,11 +200,15 @@ assert(other_track.selected == true and target_track.selected == false and curso
 
   it("verifies native subproject truth across bounded wrapper-source chains", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
-install_subproject_fake({})
+install_subproject_fake({ open_child_path = "/session/Child.RPP" })
 local expected = "/session/Child.RPP-PROX"
-local associated_project = { path = "/session/Child.RPP" }
+local associated_project = child_project
 local function truth_for(source)
-  return d30_item_source_truth({ track = target_track, take = { source = source } }, expected)
+  return d30_item_source_truth(
+    { track = target_track, take = { source = source } },
+    expected,
+    "/session/Child.RPP"
+  )
 end
 
 local direct = { path = expected, subproject = associated_project }
@@ -274,6 +278,61 @@ inserted_source.parent.subproject = nil
 updated, update_failure = render_or_update_subproject(update_request)
 assert(updated == nil and update_failure.code == "VERIFY_FAILED")
 assert(update_failure.details.blocker == "linked_item_source_readback_failed")
+`);
+  });
+
+  it("accepts a REAPER-managed copied proxy only with the exact child pointer and existing managed proxy file", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+local managed_source_path = "/session/Media/Child.RPP"
+install_subproject_fake({ open_child_path = "/session/Child.RPP", managed_copy_source_path = managed_source_path })
+files["/session/Child.RPP-PROX"] = true
+files[managed_source_path .. "-PROX"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
+local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+local summary, failure = insert_subproject_item(request)
+assert(failure == nil and summary.inserted == true, failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "insert missing")
+assert(parent_project.items[2].take.source.path == managed_source_path)
+assert(parent_project.items[2].take.source.subproject == child_project)
+`);
+  });
+
+  it("rejects a REAPER-managed copied proxy associated with the wrong child pointer", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+local managed_source_path = "/session/Media/Child.RPP"
+install_subproject_fake({
+  open_child_path = "/session/Child.RPP",
+  managed_copy_source_path = managed_source_path,
+  managed_copy_wrong_child = true,
+})
+files["/session/Child.RPP-PROX"] = true
+files[managed_source_path .. "-PROX"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
+local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+local summary, failure = insert_subproject_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_source_readback_failed")
+`);
+  });
+
+  it("rejects a REAPER-managed copied source when its actual proxy file is missing", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+local managed_source_path = "/session/Media/Child.RPP"
+install_subproject_fake({ open_child_path = "/session/Child.RPP", managed_copy_source_path = managed_source_path })
+files["/session/Child.RPP-PROX"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
+local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+local summary, failure = insert_subproject_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_source_readback_failed")
 `);
   });
 
@@ -431,8 +490,11 @@ function install_subproject_fake(config)
     if config.insert_without_item then return 1 end
     local selected_track = nil
     for _, track in ipairs(parent_project.tracks) do if track.selected then selected_track = track end end
-    local source_path = config.wrong_source and "/wrong/source.RPP-PROX" or path
-    local associated_project = child_project or { path = path:gsub("%-PROX$", "") }
+    local source_path = config.managed_copy_source_path or (config.wrong_source and "/wrong/source.RPP-PROX" or path)
+    local associated_project = config.managed_copy_wrong_child
+      and { path = "/session/OtherChild.RPP" }
+      or child_project
+      or { path = path:gsub("%-PROX$", "") }
     local source = { path = source_path, subproject = associated_project }
     if config.wrapper_source then
       source.subproject = nil
