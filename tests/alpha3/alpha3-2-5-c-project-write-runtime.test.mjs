@@ -358,6 +358,95 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
   });
 
+  it("uses complete live exact-name preflight for dry-run recovery and never recreates matched tracks", async () => {
+    const existingTracks = [{
+      track_ref: "track:guid:{EXISTING-HIGHWAY-001}",
+      name: "Highway 001",
+      index: 0,
+    }];
+    const input = {
+      layout: [
+        { id: "track_1", kind: "track", name: "Highway 001", index: 0 },
+        { id: "track_2", kind: "track", name: "Highway 002", index: 1 },
+      ],
+      match_policy: "exact_name",
+      conflict_policy: "update_declared_fields",
+    };
+
+    const previewCalls = [];
+    const preview = await executeAlpha3_2_5CProjectWriteMacro({
+      request: { id: "macro.project.apply_layout", input: { ...input, dry_run: true } },
+      executeAtomic: fakeAtomic(previewCalls, { existingTracks, multiTrackRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(preview.ok, true, JSON.stringify(preview));
+    assert.equal(previewCalls.some((call) => isWrite(call.id)), false);
+    assert.equal(preview.result.data.preview.target_counts.matched_existing, 1);
+    assert.equal(preview.result.data.preview.target_counts.create, 1);
+    assert.equal(preview.result.data.preview.target_counts.update, 1);
+    assert.equal(preview.result.data.preview.rows[0].track_ref, existingTracks[0].track_ref);
+
+    const executeCalls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: { id: "macro.project.apply_layout", input: { ...input, dry_run: false } },
+      executeAtomic: fakeAtomic(executeCalls, { existingTracks, multiTrackRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(executeCalls.filter((call) => isWrite(call.id)).map((call) => call.id), [
+      "template.tracks.create_track",
+    ]);
+    assert.equal(result.result.changes[0].target_ref, existingTracks[0].track_ref);
+    assert.equal(result.result.changes[0].status, "matched_existing");
+    assert.deepEqual(result.result.changes[0].mutation, { status: "completed", completed_count: 0, total_count: 0 });
+    assert.equal(result.result.changes[0].live_readback.status, "passed");
+    assert.equal(result.result.changes[1].status, "applied");
+  });
+
+  it("blocks ambiguous or incomplete exact-name recovery before any mutation", async () => {
+    const input = {
+      layout: [{ id: "target", kind: "track", name: "Duplicate", index: 0 }],
+      match_policy: "exact_name",
+      conflict_policy: "update_declared_fields",
+      dry_run: false,
+    };
+    const cases = [
+      {
+        options: {
+          existingTracks: [
+            { track_ref: "track:guid:{DUPLICATE-001}", name: "Duplicate", index: 0 },
+            { track_ref: "track:guid:{DUPLICATE-002}", name: "Duplicate", index: 1 },
+          ],
+          multiTrackRefs: true,
+        },
+        code: "LAYOUT_EXACT_NAME_AMBIGUOUS",
+      },
+      {
+        options: {
+          existingTracks: [{ track_ref: "track:guid:{VISIBLE-001}", name: "Other", index: 0 }],
+          liveTrackCount: 2,
+          multiTrackRefs: true,
+        },
+        code: "LAYOUT_EXACT_NAME_PREFLIGHT_INCOMPLETE",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const calls = [];
+      const result = await executeAlpha3_2_5CProjectWriteMacro({
+        request: { id: "macro.project.apply_layout", input },
+        executeAtomic: fakeAtomic(calls, testCase.options),
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, testCase.code);
+      assert.equal(calls.some((call) => isWrite(call.id)), false);
+    }
+  });
+
   it("uses the accepted folder_ref ABI when executing nested layout rows", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5CProjectWriteMacro({
@@ -597,8 +686,8 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.deepEqual(result.result.changes.map((change) => change.operation_id), layout.map((row) => row.id));
     assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
     assert.equal(result.result.changes.every((change) => change.mutation.status === "completed"), true);
-    assert.equal(result.result.changes.every((change) => change.mutation.completed_count === 2), true);
-    assert.equal(result.result.changes.every((change) => change.mutation.total_count === 2), true);
+    assert.equal(result.result.changes.every((change) => change.mutation.completed_count === 1), true);
+    assert.equal(result.result.changes.every((change) => change.mutation.total_count === 1), true);
     assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);
     assert.equal(result.result.changes.some((change) => JSON.stringify(change).includes("evidence_refs")), false);
@@ -629,7 +718,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     for (const change of result.result.changes) {
       assert.match(change.target_ref, /^track:guid:\{[0-9a-f-]{36}\}$/u);
       assert.equal(change.status, "applied");
-      assert.deepEqual(change.mutation, { status: "completed", completed_count: 2, total_count: 2 });
+      assert.deepEqual(change.mutation, { status: "completed", completed_count: 1, total_count: 1 });
       assert.deepEqual(change.live_readback, { status: "passed" });
       assert.deepEqual(change.index_maintenance, { status: "skipped" });
       assert.equal(Object.hasOwn(change, "evidence_refs"), false);
@@ -638,7 +727,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.verification.evidence_refs.length, 16);
     assert.equal(result.budget.actual_bytes <= 65_536, true);
     assert.equal(inlineDetailBytes(result) <= 24_576, true);
-    assert.equal(calls.filter((call) => isWrite(call.id)).length, 40);
+    assert.equal(calls.filter((call) => isWrite(call.id)).length, 20);
   });
 
   it("verifies a layout batch whose final rows are beyond track one hundred", async () => {
@@ -1026,13 +1115,16 @@ function fakeAtomic(calls, options = {}) {
     }
     else if (id === "template.tracks.list_tracks" || id === "template.tracks.read_folder_structure") {
       const nesting = calls.filter((call) => call.id === "template.tracks.nest_tracks_in_folder");
+      const existingTracks = Array.isArray(options.existingTracks)
+        ? options.existingTracks.map((row) => ({ ...row }))
+        : [];
       const parentRefByChild = new Map();
       for (const call of nesting) {
         const folderRef = firstRef({ folder_ref: call.refs.folder_ref });
         for (const entry of call.refs.track_ref ?? []) parentRefByChild.set(firstRef({ track_ref: entry }), folderRef);
       }
       summary.tracks = options.multiTrackRefs
-        ? calls
+        ? [...existingTracks, ...calls
             .filter((call) => call.id === "template.tracks.create_track" || call.id === "template.tracks.create_folder_track")
             .filter((call) => Number(call.input.index) !== options.omitReadbackTrackIndex)
             .filter((call) => options.respectTrackListLimitByIndex !== true || Number(call.input.index) < input.limit)
@@ -1046,8 +1138,10 @@ function fakeAtomic(calls, options = {}) {
                   parent_ref: Number(call.input.index) === options.wrongFolderParentTrackIndex ? null : parentRef,
                 } : {}),
               };
-            })
-        : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
+            })]
+        : existingTracks.length > 0 ? existingTracks : [{ track_ref: "track:guid:{CREATED}", name: "FX" }];
+      summary.track_count = options.liveTrackCount ?? summary.tracks.length;
+      summary.truncated = options.liveTrackTruncated === true;
       if (id === "template.tracks.read_folder_structure" && nesting.length > 0 && Array.isArray(options.folderParentReadbacks)) {
         options.folderParentReadbacks.push(summary.tracks
           .filter((row) => typeof row.parent_ref === "string")

@@ -1769,7 +1769,6 @@ function compactQueryTruth(data) {
       known_total_row_count: source.coverage?.known_total_row_count,
       indexed_row_count: source.coverage?.indexed_row_count,
       public_returned_row_count: source.coverage?.public_returned_row_count,
-      match_status: source.coverage?.match_status,
     }),
     page: compactObject({
       next_cursor: source.page?.next_cursor,
@@ -1789,10 +1788,6 @@ function compactLogicalRefresh(value) {
   if (!isObject(value)) return null;
   return compactObject({
     status: value.status,
-    attempt_count: value.attempt_count,
-    chunk_count: value.chunk_count,
-    page_count: value.page_count,
-    row_counts: clone(value.row_counts ?? {}),
     coverage: clone(value.coverage ?? {}),
   });
 }

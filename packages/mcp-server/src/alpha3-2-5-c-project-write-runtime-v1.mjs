@@ -142,6 +142,9 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     routingReadbackRows: new Map(),
     routingResolvedSends: new Map(),
     readbackEvidenceRefs: [],
+    layoutPreflightTracks: null,
+    layoutPreflightFolders: null,
+    layoutMatchedRows: new Map(),
     writeAttempted: false,
     writeExecuted: false,
     sqlite: sqliteEvidence(),
@@ -180,9 +183,11 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
       if (readRequest === null) continue;
       const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: child.id, input: child.input ?? {}, refs: child.refs ?? {}, stageId: `select-${stageToken(child.id)}`, kind: "selector_resolve", now });
       bindPreflightLocalRef(plan, child, execution, state);
+      captureLayoutPreflight(program, plan, child, execution, state);
       validateLayoutAnnotationPreflight(program, plan, child, execution);
       validateRoutingPreflight(program, plan, child, execution, state);
     }
+    reconcileLayoutExactNamePreflight(program, plan, state);
     if (dryRun && request.id === ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID) {
       for (const asset of request.input?.assets ?? []) {
         const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: "template.media.probe_file", input: { path: asset.path, include_metadata_keys: false }, refs: {}, stageId: "select-media-probe", kind: "selector_resolve", now });
@@ -197,7 +202,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         ...(plan.required_confirm_scope ? { confirm_scope: structuredClone(plan.required_confirm_scope) } : {}),
       };
       return success(program, request, startedAt, now, stages, state, "dry_run_completed", "Validated the registered Macro selection and risk without mutating the project.", {
-        preview: plan.preview ?? {},
+        preview: resolvedLayoutPreview(program, plan, state),
         mutation_skipped: true,
         required_confirm_scope: plan.required_confirm_scope ?? null,
         executable_retry: { id: request.id, input: executableInput },
@@ -207,13 +212,16 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     }
 
     if ((plan.mutation_requests ?? []).length > MAX_MUTATIONS) throw coded("PROJECT_WRITE_MUTATION_LIMIT", "The registered Macro exceeded its bounded mutation ceiling.");
+    prepareLayoutMutationExecution(program, plan, state);
     for (const mutation of plan.mutation_requests ?? []) {
-      if (!program.templateIds.includes(mutation.id) || mutation.id.startsWith("macro.")) throw coded("PROJECT_WRITE_DEPENDENCY_REJECTED", `Rejected non-atomic dependency ${String(mutation.id)}.`);
-      const resolvedRefs = await liveResolveRefs({ program, request, executeAtomic, stages, state, refs: mutation.refs ?? {}, now });
-      const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: mutation.id, input: mutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(mutation.id)}`, kind: "template_execute", mutation, plan, now });
+      const effectiveMutation = effectiveLayoutMutation(program, mutation, state);
+      if (!effectiveMutation) continue;
+      if (!program.templateIds.includes(effectiveMutation.id) || effectiveMutation.id.startsWith("macro.")) throw coded("PROJECT_WRITE_DEPENDENCY_REJECTED", `Rejected non-atomic dependency ${String(effectiveMutation.id)}.`);
+      const resolvedRefs = await liveResolveRefs({ program, request, executeAtomic, stages, state, refs: effectiveMutation.refs ?? {}, now });
+      const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: effectiveMutation.id, input: effectiveMutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(effectiveMutation.id)}`, kind: "template_execute", mutation: effectiveMutation, plan, now });
       rememberRefs(state, execution);
-      bindMutationLocalRef(plan, mutation, execution, state);
-      recordCompletedMutation(program, plan, state, mutation, resolvedRefs, execution);
+      bindMutationLocalRef(plan, effectiveMutation, execution, state);
+      recordCompletedMutation(program, plan, state, effectiveMutation, resolvedRefs, execution);
     }
     let readbackFailure = null;
     if (program.entry.macro_id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID) {
@@ -252,7 +260,9 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
         readbackFailure ??= error;
       }
     }
-    const invalidation = invalidateProjectIndex(projectIndexRuntime, scopesFor(program.entry.macro_id, plan), now);
+    const invalidation = state.writeExecuted
+      ? invalidateProjectIndex(projectIndexRuntime, scopesFor(program.entry.macro_id, plan), now)
+      : null;
     if (invalidation?.ok === false) {
       state.indexUpdate = invalidation;
       applyProjectWriteIndexMaintenance(state.changes, "failed", invalidation);
@@ -277,7 +287,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     );
     if (readbackFailure) throw readbackFailure;
     recordStage(stages, stageIdFor(program, "result_project"), "result_project", "completed", "Projected verified registered-write evidence.", state.evidenceRefs);
-    return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: plan.preview ?? {}, undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation), outcome: projectWriteOutcome(state) });
+    return success(program, request, startedAt, now, stages, state, "completed", "Registered project write completed and required readback passed.", { preview: resolvedLayoutPreview(program, plan, state), undo_policy: program.entry.undo_policy, source_media_deleted: false, index_update: compactIndexUpdate(invalidation), outcome: projectWriteOutcome(state) });
   } catch (error) {
     const partial = state.writeAttempted === true || state.writeExecuted === true || state.changes.some((change) => change.mutation?.status === "completed");
     return failure(program, request, startedAt, now, stages, partial ? "partial_failure" : "failed", error.code ?? "PROJECT_WRITE_STAGE_FAILED", error.message ?? "A registered project-write stage failed.", error.blockers, {
@@ -444,6 +454,143 @@ function dryReadsForPlan(program, plan) {
     });
   }
   return reads;
+}
+
+function captureLayoutPreflight(program, plan, child, execution, state) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) return;
+  const summary = executionSummary(execution);
+  if (child.id === "template.tracks.list_tracks") {
+    state.layoutPreflightTracks = plan.match_policy === "exact_name"
+      ? completeLayoutPreflightRows(summary, "track list")
+      : (Array.isArray(summary?.tracks) ? summary.tracks.map((row) => structuredClone(row)) : []);
+  } else if (child.id === "template.tracks.read_folder_structure") {
+    state.layoutPreflightFolders = plan.match_policy === "exact_name"
+      ? completeLayoutPreflightRows(summary, "folder structure")
+      : (Array.isArray(summary?.tracks) ? summary.tracks.map((row) => structuredClone(row)) : []);
+  }
+}
+
+function completeLayoutPreflightRows(summary, label) {
+  const rows = Array.isArray(summary?.tracks) ? summary.tracks : [];
+  const total = Number.isInteger(summary?.track_count) ? summary.track_count : rows.length;
+  if (summary?.truncated === true || total !== rows.length) {
+    throw coded(
+      "LAYOUT_EXACT_NAME_PREFLIGHT_INCOMPLETE",
+      `macro.project.apply_layout cannot use incomplete live ${label} coverage for exact-name recovery.`,
+      [{ code: "LAYOUT_EXACT_NAME_PREFLIGHT_INCOMPLETE", message: `Live ${label} returned ${rows.length} of ${total} tracks.`, recoverable: true }],
+    );
+  }
+  return rows.map((row) => structuredClone(row));
+}
+
+function reconcileLayoutExactNamePreflight(program, plan, state) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || plan.match_policy !== "exact_name") return;
+  const tracks = state.layoutPreflightTracks;
+  if (!Array.isArray(tracks)) {
+    throw coded("LAYOUT_EXACT_NAME_PREFLIGHT_MISSING", "macro.project.apply_layout exact_name requires a complete live track list before mutation.");
+  }
+  const byName = new Map();
+  for (const row of tracks) {
+    if (typeof row?.name !== "string" || typeof row?.track_ref !== "string") continue;
+    const matches = byName.get(row.name) ?? [];
+    matches.push(row);
+    byName.set(row.name, matches);
+  }
+  for (const row of plan.preview?.rows ?? []) {
+    if (row.annotation === true || row.track_ref) continue;
+    const matches = byName.get(row.name) ?? [];
+    if (matches.length > 1) {
+      throw coded(
+        "LAYOUT_EXACT_NAME_AMBIGUOUS",
+        `Exact track name ${row.name} matched ${matches.length} live tracks; no mutation was attempted.`,
+        [{ code: "LAYOUT_EXACT_NAME_AMBIGUOUS", message: `Pass one canonical track_ref for ${row.id} or make the live name unique.`, recoverable: true }],
+      );
+    }
+    if (matches.length === 0) continue;
+    if (plan.conflict_policy === "stop") {
+      throw coded(
+        "LAYOUT_EXACT_NAME_CONFLICT",
+        `Exact track name ${row.name} already exists and conflict_policy=stop.`,
+        [{ code: "LAYOUT_EXACT_NAME_CONFLICT", message: `Use conflict_policy=skip or update_declared_fields for ${row.id}.`, recoverable: true }],
+      );
+    }
+    const ref = matches[0].track_ref;
+    state.localRefs.set(`track:planned:${row.id}`, ref);
+    state.layoutMatchedRows.set(row.id, {
+      ref,
+      policy: plan.conflict_policy,
+      observed: structuredClone(matches[0]),
+    });
+    const change = state.layoutOperations?.changesById.get(row.id);
+    if (change) {
+      change.target_ref = ref;
+      change.match = { status: "matched_existing", policy: plan.conflict_policy };
+    }
+  }
+}
+
+function prepareLayoutMutationExecution(program, plan, state) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || !state.layoutOperations) return;
+  state.layoutOperations.activeRowIds = new Map();
+  for (const mutation of plan.mutation_requests ?? []) {
+    const originalRowIds = state.layoutOperations.mutationRowIds.get(mutation.sequence) ?? [];
+    const activeRowIds = originalRowIds.filter((rowId) => layoutMutationAppliesToRow(mutation, rowId, state));
+    state.layoutOperations.activeRowIds.set(mutation.sequence, activeRowIds);
+    const inactiveRowIds = originalRowIds.filter((rowId) => !activeRowIds.includes(rowId));
+    for (const rowId of inactiveRowIds) {
+      const change = state.layoutOperations.changesById.get(rowId);
+      if (!change || change.mutation.total_count <= 0) continue;
+      change.mutation.total_count -= 1;
+      if (change.mutation.completed_count === change.mutation.total_count) {
+        change.mutation.status = "completed";
+        change.status = "mutation_not_required";
+      }
+    }
+  }
+}
+
+function layoutMutationAppliesToRow(mutation, rowId, state) {
+  const match = state.layoutMatchedRows.get(rowId);
+  if (!match) return true;
+  if (mutation.produces_local_id === rowId) return false;
+  if (match.policy === "skip") return false;
+  return true;
+}
+
+function effectiveLayoutMutation(program, mutation, state) {
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || !state.layoutOperations?.activeRowIds) return mutation;
+  const activeRowIds = state.layoutOperations.activeRowIds.get(mutation.sequence) ?? [];
+  if (activeRowIds.length === 0) return null;
+  if (mutation.id !== "template.tracks.nest_tracks_in_folder") return { ...mutation, active_row_ids: activeRowIds };
+  const refs = structuredClone(mutation.refs ?? {});
+  refs.track_ref = (Array.isArray(refs.track_ref) ? refs.track_ref : [refs.track_ref])
+    .filter((ref) => {
+      const rowId = plannedTrackRowId(ref);
+      return rowId === null || state.layoutMatchedRows.get(rowId)?.policy !== "skip";
+    });
+  if (refs.track_ref.length === 0) return null;
+  return { ...mutation, refs, active_row_ids: activeRowIds };
+}
+
+function plannedTrackRowId(ref) {
+  return typeof ref === "string" && ref.startsWith("track:planned:")
+    ? ref.slice("track:planned:".length)
+    : null;
+}
+
+function resolvedLayoutPreview(program, plan, state) {
+  const preview = structuredClone(plan.preview ?? {});
+  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || state.layoutMatchedRows.size === 0) return preview;
+  preview.rows = (preview.rows ?? []).map((row) => {
+    const match = state.layoutMatchedRows.get(row.id);
+    return match ? { ...row, track_ref: match.ref, match_status: "matched_existing", conflict_policy: match.policy } : row;
+  });
+  if (preview.target_counts) {
+    preview.target_counts.matched_existing = state.layoutMatchedRows.size;
+    preview.target_counts.create = Math.max(0, preview.target_counts.create - state.layoutMatchedRows.size);
+    preview.target_counts.update += state.layoutMatchedRows.size;
+  }
+  return preview;
 }
 
 function validateLayoutAnnotationPreflight(program, plan, child, execution) {
@@ -890,7 +1037,10 @@ function recordUnverifiedMutation(program, plan, state, mutation, id, refs, exec
 }
 
 function layoutChangesForMutation(state, mutation) {
-  const rowIds = state.layoutOperations?.mutationRowIds.get(mutation.sequence) ?? [];
+  const rowIds = mutation.active_row_ids
+    ?? state.layoutOperations?.activeRowIds?.get(mutation.sequence)
+    ?? state.layoutOperations?.mutationRowIds.get(mutation.sequence)
+    ?? [];
   return rowIds.map((rowId) => state.layoutOperations.changesById.get(rowId)).filter(Boolean);
 }
 
@@ -1162,7 +1312,11 @@ function applyProjectWriteReadbackToChanges(state) {
       missing.push(change);
       continue;
     }
-    change.status = "applied";
+    change.status = change.match?.policy === "skip"
+      ? "skipped_existing"
+      : change.match?.status === "matched_existing" && change.mutation?.total_count === 0
+        ? "matched_existing"
+        : "applied";
     change.live_readback = change.operation_id
       ? { status: "passed" }
       : {

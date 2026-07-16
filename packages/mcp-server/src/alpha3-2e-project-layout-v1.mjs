@@ -481,6 +481,12 @@ function readbackRequests(preview) {
 
 function buildMutationRequests(rows, annotations) {
   const requests = [];
+  const newIndexCounts = new Map();
+  for (const row of rows) {
+    if (!row.track_ref && row.index !== null && row.index !== undefined) {
+      newIndexCounts.set(row.index, (newIndexCounts.get(row.index) ?? 0) + 1);
+    }
+  }
   let sequence = 1;
   for (const row of [...rows].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id))) {
     const trackRef = row.track_ref ?? `track:planned:${row.id}`;
@@ -490,7 +496,8 @@ function buildMutationRequests(rows, annotations) {
       requests.push(childRequest(sequence++, "mutation", RENAME_TRACK_ID, { track_ref: trackRef }, { name: row.name }, `Rename matched track ${row.id}.`));
     }
     if (row.color) requests.push(childRequest(sequence++, "mutation", SET_COLOR_ID, { track_ref: trackRef }, { color: row.color }, `Set color for ${row.id}.`, dependencyFor(row)));
-    if (row.index !== null && row.index !== undefined) requests.push(childRequest(sequence++, "mutation", MOVE_TRACK_ID, { track_ref: trackRef }, { index: row.index }, `Move ${row.id} to declared index.`, dependencyFor(row)));
+    const createAlreadyPlacesUniqueIndex = !row.track_ref && newIndexCounts.get(row.index) === 1;
+    if (row.index !== null && row.index !== undefined && !createAlreadyPlacesUniqueIndex) requests.push(childRequest(sequence++, "mutation", MOVE_TRACK_ID, { track_ref: trackRef }, { index: row.index }, `Move ${row.id} to declared index.`, dependencyFor(row)));
     if (row.folder_depth !== null) requests.push(childRequest(sequence++, "mutation", SET_FOLDER_DEPTH_ID, { track_ref: trackRef }, { folder_depth: row.folder_depth }, `Set folder depth for ${row.id}.`, dependencyFor(row)));
   }
   const rowsById = new Map(rows.map((row) => [row.id, row]));

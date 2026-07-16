@@ -160,17 +160,16 @@ describe("Alpha3.2-E project apply_layout planner", () => {
       "template.tracks.set_folder_depth",
       "template.tracks.create_track",
       "template.tracks.set_color",
-      "template.tracks.move_track",
       "template.tracks.nest_tracks_in_folder",
     ]);
     assert.deepEqual(plan.mutation_requests[0].refs, { track_ref: "track:guid:{BUS}" });
     assert.equal(plan.mutation_requests[4].input.name, "Lead");
-    assert.deepEqual(plan.mutation_requests[7].refs, {
+    assert.deepEqual(plan.mutation_requests[6].refs, {
       folder_ref: "track:guid:{BUS}",
       track_ref: ["track:planned:lead"],
     });
     assert.deepEqual(plan.readback_requests.map((request) => request.id), ["template.tracks.list_tracks", "template.tracks.read_folder_structure"]);
-    assert.equal(plan.child_requests.length, 12);
+    assert.equal(plan.child_requests.length, 11);
     assert.equal(plan.safety.server_executes_children, false);
     assert.equal(plan.safety.raw_action_lua_shell_ui, false);
   });
