@@ -140,6 +140,23 @@ describe("D16 tracks organization live handler expansion", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
+
+  it("keeps an existing child folder subtree atomic while nesting it under a new parent", () => {
+    for (const symbol of [
+      "d16_tracks_subtree_block",
+      "d16_tracks_child_subtree_blocks",
+      "normalized_last_depth",
+      "moved_track_count",
+      "FOLDER_CYCLE_REJECTED",
+    ]) {
+      assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
+    }
+    assert.match(HANDLER_SOURCE, /d16_tracks_move_selected_to_index\(request, moved_tracks, folder_index \+ 1\)/);
+    assert.match(HANDLER_SOURCE, /closing_depth = block\.normalized_last_depth - \(index == #blocks and 1 or 0\)/);
+    assert.match(HANDLER_SOURCE, /D16 nested child subtree was not kept contiguous after the folder/);
+    assert.match(HANDLER_SOURCE, /D16 nested child subtrees did not leave a balanced folder span/);
+    assert.doesNotMatch(HANDLER_SOURCE, /local depth = index == #children and -1 or 0/);
+  });
 });
 
 const FOLDER_REF = createObjectRef("track", { scheme: "guid", value: "{D16-FOLDER}" }, {
