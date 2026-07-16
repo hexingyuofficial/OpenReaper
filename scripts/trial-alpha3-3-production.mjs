@@ -2,7 +2,7 @@
 import path from "node:path";
 import { runInstalledTrial } from "./lib/alpha3-3-installed-trial-runner.mjs";
 
-const SCENARIOS = Object.freeze(["large-production", "mixing-delivery"]);
+const SCENARIOS = Object.freeze(["large-production", "editing-sfx", "mixing-delivery"]);
 class CliUsageError extends Error {}
 
 try {
@@ -121,7 +121,7 @@ function assertAbsolutePath(value, label) {
 
 function printHelp() {
   console.log(`Usage:
-  trial-alpha3-3-production.mjs --scenario large-production|mixing-delivery --describe
+  trial-alpha3-3-production.mjs --scenario large-production|editing-sfx|mixing-delivery --describe
   trial-alpha3-3-production.mjs --all --dry-run
   trial-alpha3-3-production.mjs --scenario <name> --installed-wrapper <absolute-path> \\
     --source-project <absolute-.RPP-path> --evidence-project <absolute-.RPP-path> \\

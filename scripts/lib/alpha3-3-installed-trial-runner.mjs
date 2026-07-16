@@ -43,8 +43,11 @@ const REPORT_ACCOUNTING_FIELDS = Object.freeze([
   "artifacts",
   "calls",
   "failed_calls",
+  "expected_failures",
   "retries",
   "ineffective_retries",
+  "performance_measurements",
+  "capability_results",
   "macro_first",
   "template_fallbacks",
   "project_changes",
@@ -93,6 +96,20 @@ export function layoutRows(count) {
     id: `production_track_${String(index + 1).padStart(3, "0")}`,
     kind: index % 16 === 0 ? "folder" : "track",
     name: index === count - 1 ? "PRODUCTION-DEEP-EXACT-104" : `Production ${String(index + 1).padStart(3, "0")}`,
+    index,
+    ...(index % 16 === 0
+      ? { folder_depth: 1 }
+      : index % 16 === 15 || index === count - 1
+        ? { folder_depth: -1 }
+        : {}),
+  }));
+}
+
+export function editingLayoutRows(count = 64) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `editing_track_${String(index + 1).padStart(3, "0")}`,
+    kind: index % 16 === 0 ? "folder" : "track",
+    name: index === count - 1 ? "EDITING-DEEP-EXACT-064" : `Editing ${String(index + 1).padStart(3, "0")}`,
     index,
     ...(index % 16 === 0
       ? { folder_depth: 1 }
@@ -330,6 +347,62 @@ const MIXING_DELIVERY_STEPS = [
   }),
 ];
 
+const EDITING_SFX_STEPS = [
+  step({
+    id: "editing-installed-product-handshake",
+    prompt: "Open my editing project and make sure the OpenReaper connection is actually usable.",
+    tool: "ping",
+    input: {},
+    verification: ["Both installed-wrapper clients answer.", "The visible product surface contains exactly fifteen Macros."],
+    coverage: ["installed-wrapper", "ordinary-vague-prompt", "two-clients"],
+  }),
+  step({
+    id: "editing-64-track-project",
+    prompt: "Make this a fairly big nested editing session with about sixty-four tracks.",
+    templateId: "macro.project.apply_layout",
+    input: { layout: editingLayoutRows(64), match_policy: "create_only", conflict_policy: "stop", dry_run: false },
+    limits: { batch_size: 16, expected_total_tracks_at_least: 64 },
+    verification: ["Every Track and Folder row has exact live readback.", "The last Track resolves from a compact exact-name query."],
+    coverage: ["60-plus-tracks", "nested-folders", "large-project-read-write"],
+  }),
+  step({
+    id: "editing-recursive-media-and-item-controls",
+    prompt: "Bring in that whole folder twice, then make the clips quieter and put the active takes a little right, pitched up, and reversed.",
+    templateId: "macro.media.place_assets",
+    input: { assets: "${recursive_media_batches}", placement: { mode: "sequence_on_one_track" }, track_policy: "existing_track", track_ref: "${editing_media_track_ref}", dry_run: false },
+    limits: { batch_size: MAX_MEDIA_ASSETS_PER_CALL, minimum_repetitions: 2 },
+    verification: ["Recursive discovery is bounded to audio files and source hashes remain unchanged.", "Item volume and Active Take pan, pitch, and reverse read back exactly."],
+    coverage: ["recursive-media", "repeated-import", "item-volume", "take-pan", "take-pitch", "reverse"],
+  }),
+  step({
+    id: "editing-item-pan-recovery",
+    prompt: "Pan this item right a bit.",
+    templateId: "macro.items.apply",
+    input: { mode: "set_properties", target_refs: ["${editing_item_ref}"], properties: { pan: 0.25 }, dry_run: false },
+    verification: ["The unsupported Item-level field returns ITEM_APPLY_ITEM_PAN_UNSUPPORTED before mutation.", "Recovery uses macro.controls.set target_kind=take and verifies the same Active Take."],
+    coverage: ["typed-blocker", "zero-mutation", "executable-recovery"],
+  }),
+  step({
+    id: "editing-glue-pitch-freeze-local-render",
+    prompt: "Glue that clip, draw some pitch movement, freeze and unfreeze its track, then render just that result.",
+    templateId: "template.items.glue_item",
+    input: {},
+    refs: { item_ref: "${editing_item_object_ref}" },
+    verification: ["Glue returns a replacement Item and Take with live identity truth.", "Take Pitch points, freeze/unfreeze counts, and explicit-Item WAV render all verify."],
+    coverage: ["glue", "take-pitch-automation", "freeze", "unfreeze", "partial-render"],
+    fallbackReason: "Glue, exact Take Pitch Envelope creation, and Track freeze are reviewed lifecycle atoms that currently have no equivalent public Macro highway.",
+  }),
+  step({
+    id: "editing-complete-routing-graph",
+    prompt: "Wire this big edit session into a useful internal chain and show me the whole routing graph.",
+    templateId: "macro.routing.apply",
+    input: { routes: "${editing_route_rows}", dry_run: false },
+    limits: { batch_size: 64, expected_edges_at_least: 60 },
+    verification: ["Every route row has live readback.", "macro.project.query returns the complete 60+ edge graph without a small-project cap."],
+    coverage: ["large-routing", "complete-graph", "public-pagination"],
+  }),
+];
+
 export const SCENARIO_MANIFESTS = deepFreeze({
   "large-production": {
     contract: "openreaper.alpha3.3.installed_trial_manifest.v1",
@@ -340,10 +413,19 @@ export const SCENARIO_MANIFESTS = deepFreeze({
     report_accounting_fields: REPORT_ACCOUNTING_FIELDS,
     steps: LARGE_PRODUCTION_STEPS,
   },
+  "editing-sfx": {
+    contract: "openreaper.alpha3.3.installed_trial_manifest.v1",
+    scenario: "editing-sfx",
+    purpose: "Large editing/SFX workflow with recursive import, Item/Take lifecycle, Automation, Routing, freeze, and local render.",
+    execution_policy: "strict_serial",
+    required_product: "absolute_installed_openreaper_mcp_wrapper",
+    report_accounting_fields: REPORT_ACCOUNTING_FIELDS,
+    steps: EDITING_SFX_STEPS,
+  },
   "mixing-delivery": {
     contract: "openreaper.alpha3.3.installed_trial_manifest.v1",
     scenario: "mixing-delivery",
-    purpose: "Small real mix, repeated stock-FX Automation, and whole-project WAV delivery trial.",
+    purpose: "Real source-to-bus mix with Marker/Region batches, stock and exact third-party FX, Automation, and WAV/OGG/MP3 delivery.",
     execution_policy: "strict_serial",
     required_product: "absolute_installed_openreaper_mcp_wrapper",
     report_accounting_fields: REPORT_ACCOUNTING_FIELDS,
@@ -443,6 +525,7 @@ export async function runInstalledTrial({
     for (const manifest of selected) {
       await connectScenarioClients(context, manifest.scenario);
       if (manifest.scenario === "large-production") await runLargeProduction(context);
+      else if (manifest.scenario === "editing-sfx") await runEditingSfx(context);
       else await runMixingDelivery(context);
       await closeScenarioClients(context);
     }
@@ -465,8 +548,11 @@ export async function runInstalledTrial({
   }
   report.calls = context.calls;
   report.failed_calls = context.failures;
+  report.expected_failures = context.expectedFailures;
   report.retries = context.recoveries;
   report.ineffective_retries = context.ineffective_retries;
+  report.performance_measurements = context.performanceMeasurements;
+  report.capability_results = context.capabilityResults;
   report.project_changes = context.calls.flatMap((call) => call.value?.result?.changes ?? []);
   for (const call of report.calls) updateReportAccounting(report, call);
   report.source_hashes = context.source_hashes;
@@ -494,8 +580,11 @@ export function createExecutionContext({ installedWrapper, sourceProject = null,
     refs: new Map(),
     calls: [],
     failures: [],
+    expectedFailures: [],
     recoveries: [],
     ineffective_retries: [],
+    performanceMeasurements: [],
+    capabilityResults: [],
     source_hashes: {},
     copy_hashes: {},
     media_hashes: {},
@@ -548,14 +637,32 @@ export async function runLargeProduction(context) {
   });
 
   const rows = layoutRows(104);
-  for (let offset = 0; offset < rows.length; offset += 13) {
-    const batch = rows.slice(offset, offset + 13);
-    const value = await previewThenExecute(context, "primary", `layout-${offset / 13 + 1}`, {
+  const minimumLayoutRows = rows.slice(0, 32);
+  const blockedLayout = await callExpectedFailure(context, "primary", "layout-minimum-budget-blocker", {
+    id: "macro.project.apply_layout",
+    input: { layout: minimumLayoutRows, match_policy: "create_only", conflict_policy: "stop", dry_run: false },
+    budget: MINIMUM_BUDGET,
+  }, ["PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED"]);
+  assertValue((blockedLayout?.result?.changes?.length ?? 0) === 0, "MINIMUM_BUDGET_LAYOUT_MUTATED", blockedLayout?.result);
+  const absentAfterBlock = await measure(context, "large.minimum_budget_zero_mutation_query", () => walkProjectQuery(context, "secondary", {
+    entity: "tracks",
+    fields: ["ref", "name", "index"],
+    limit: 100,
+    refresh_policy: "force_read_only_refresh",
+  }));
+  const blockedNames = new Set(minimumLayoutRows.map((row) => row.name));
+  assertValue(absentAfterBlock.every((row) => !blockedNames.has(row.name)), "MINIMUM_BUDGET_LAYOUT_LEFT_TRACKS", { rows: absentAfterBlock.filter((row) => blockedNames.has(row.name)) });
+  context.recoveries.push({ kind: "typed_budget_recovery", step_id: "layout-minimum-budget-blocker", blocker_code: "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED", replay_safe: true, zero_mutation_proven: true });
+
+  const layoutBatches = [minimumLayoutRows];
+  for (let offset = minimumLayoutRows.length; offset < rows.length; offset += 12) layoutBatches.push(rows.slice(offset, offset + 12));
+  for (const [batchIndex, batch] of layoutBatches.entries()) {
+    const value = await previewThenExecute(context, "primary", `layout-${batchIndex + 1}`, {
       id: "macro.project.apply_layout",
       input: { layout: batch, match_policy: "create_only", conflict_policy: "stop" },
     });
     const changes = value?.result?.changes ?? [];
-    assertValue(changes.length === 13, "LAYOUT_BATCH_ROW_COUNT_MISMATCH", { offset, observed: changes.length });
+    assertValue(changes.length === batch.length, "LAYOUT_BATCH_ROW_COUNT_MISMATCH", { batch_index: batchIndex, expected: batch.length, observed: changes.length });
     for (const change of changes) {
       assertVerifiedMutation(change, "LAYOUT_ROW_NOT_VERIFIED");
       assertExactRef(change?.target_ref, "track:", "LAYOUT_TRACK_REF_MISSING");
@@ -563,12 +670,12 @@ export async function runLargeProduction(context) {
     }
   }
 
-  const tracks = await walkProjectQuery(context, "secondary", {
+  const tracks = await measure(context, "large.cold_full_track_read", () => walkProjectQuery(context, "secondary", {
     entity: "tracks",
     fields: ["ref", "name", "index"],
     limit: 100,
-    refresh_policy: "if_stale",
-  });
+    refresh_policy: "force_read_only_refresh",
+  }));
   const createdRefs = new Set([...context.refs.values()]);
   assertValue(tracks.filter((row) => createdRefs.has(row.ref)).length === 104, "LAYOUT_TRACKS_MISSING_FROM_CURSOR_QUERY", {
     expected: 104,
@@ -576,7 +683,7 @@ export async function runLargeProduction(context) {
   });
   const last = tracks.filter((row) => row.name === "PRODUCTION-DEEP-EXACT-104");
   assertValue(last.length === 1 && last[0].index === 103, "DEEP_TRACK_QUERY_MISMATCH", { observed: last });
-  const exactLast = await callTemplate(context, "secondary", "query-last-track-exact-name", {
+  const exactLast = await measure(context, "large.warm_last_track_exact_lookup", () => callTemplate(context, "secondary", "query-last-track-exact-name", {
     id: "macro.project.query",
     input: {
       entity: "tracks",
@@ -586,7 +693,7 @@ export async function runLargeProduction(context) {
       refresh_policy: "never",
     },
     budget: MINIMUM_BUDGET,
-  });
+  }));
   assertValue(
     exactLast?.result?.data?.rows?.length === 1
       && exactLast.result.data.rows[0].ref === last[0].ref
@@ -595,6 +702,14 @@ export async function runLargeProduction(context) {
     exactLast?.result?.data,
   );
   context.refs.set("production_last_track", last[0].ref);
+  for (const [rung, budget] of PUBLIC_BUDGET_LADDER.map((entry) => [entry.rung, entry.budget])) {
+    const value = await measure(context, `large.budget_ladder.${rung}`, () => callTemplate(context, "secondary", `query-last-track-${rung}`, {
+      id: "macro.project.query",
+      input: { entity: "tracks", fields: ["ref", "name", "index"], filters: { name: "PRODUCTION-DEEP-EXACT-104" }, limit: 1, refresh_policy: rung === "large_projection" ? "force_read_only_refresh" : "never" },
+      budget,
+    }));
+    assertValue(value?.result?.data?.rows?.[0]?.ref === last[0].ref, "BUDGET_LADDER_EXACT_LOOKUP_MISMATCH", { rung, data: value?.result?.data });
+  }
 
   const mediaTrackRef = context.refs.get("production_track_002");
   const itemRefs = [];
@@ -679,12 +794,28 @@ export async function runLargeProduction(context) {
     assertValue(Number.isInteger(readback?.before_count) && readback?.after_count === readback.before_count + 32 && readback?.coverage_complete === true, "MIDI_CC_COUNT_MISMATCH", readback);
   }
 
+  for (let pass = 0; pass < 2; pass += 1) {
+    const textWrite = await callTemplate(context, "primary", `dense-text-sysex-pass-${pass + 1}`, {
+      id: "template.midi.insert_text_sysex_events",
+      input: {
+        position_unit: "ppq",
+        sort_events: true,
+        events: [
+          { ppq: pass * 960, event_kind: "lyric", text: pass === 0 ? "verse" : "chorus" },
+          { ppq: pass * 960 + 240, event_kind: "sysex", bytes: `OPENREAPER-SYSEX-0${pass + 1}` },
+        ],
+      },
+      refs: { take_ref: takeObjectRef(denseMidi.takeRef) },
+    });
+    assertValue(textWrite?.ok === true, "MIDI_TEXT_SYSEX_WRITE_FAILED", textWrite);
+  }
+
   const notes = await walkMidiEvents(context, "template.midi.list_take_notes", denseMidi.takeRef, "notes");
   const ccEvents = await walkMidiEvents(context, "template.midi.list_take_cc_events", denseMidi.takeRef, "cc_events");
   const textEvents = await walkMidiEvents(context, "template.midi.list_take_text_sysex_events", denseMidi.takeRef, "events");
   assertValue(notes.length === 128, "MIDI_NOTE_CURSOR_COUNT_MISMATCH", { observed: notes.length });
   assertValue(ccEvents.length === 64, "MIDI_CC_CURSOR_COUNT_MISMATCH", { observed: ccEvents.length });
-  assertValue(Array.isArray(textEvents), "MIDI_TEXT_CURSOR_INVALID");
+  assertValue(textEvents.length === 4, "MIDI_TEXT_CURSOR_COUNT_MISMATCH", { observed: textEvents.length });
 
   const automationTrackRef = context.refs.get("production_track_005");
   const fx = await previewThenExecute(context, "primary", "add-production-reaeq", {
@@ -696,9 +827,195 @@ export async function runLargeProduction(context) {
   const fxRef = requireFxRef(fx, "ReaEQ");
   const paramIdent = await readFxParameterIdent(context, fxRef, "production-reaeq-mapping");
   await writeFxAutomationPasses(context, fxRef, paramIdent, "production");
+  await writeTrackAutomationPasses(context, automationTrackRef, "production");
+
+  await measure(context, "large.post_write_last_track_lookup", () => callTemplate(context, "secondary", "query-last-track-post-write", {
+    id: "macro.project.query",
+    input: { entity: "tracks", fields: ["ref", "name", "index"], filters: { name: "PRODUCTION-DEEP-EXACT-104" }, limit: 1, refresh_policy: "if_stale" },
+    budget: MINIMUM_BUDGET,
+  }));
 
   await renderVerifiedWav(context, "large-production");
   await saveAndReconnect(context, "large-production");
+  await finalizeRecoveryPosture(context);
+  return context;
+}
+
+export async function runEditingSfx(context) {
+  await assertInstalledHandshake(context, "primary", "editing-installed-product-handshake");
+  await assertInstalledHandshake(context, "secondary", "editing-secondary-client-handshake");
+
+  const mediaFiles = await discoverMediaFiles(context.mediaRoots, context.mediaAssets);
+  assertValue(mediaFiles.length > 0, "EDITING_MEDIA_REQUIRED", { media_roots: context.mediaRoots, media_assets: context.mediaAssets });
+  for (const file of mediaFiles) context.media_hashes[file] = await sha256(file);
+
+  const save = await previewThenExecute(context, "primary", "editing-save-evidence-project", {
+    id: "macro.project.file",
+    input: { operation: "save_as", target_path: context.evidenceProject, overwrite: true },
+  });
+  assertValue(save?.result?.data?.path_after === context.evidenceProject, "EDITING_SAVE_AS_PATH_MISMATCH", save?.result?.data);
+
+  const rows = editingLayoutRows(64);
+  for (let offset = 0; offset < rows.length; offset += 16) {
+    const batch = rows.slice(offset, offset + 16);
+    const value = await previewThenExecute(context, "primary", `editing-layout-${offset / 16 + 1}`, {
+      id: "macro.project.apply_layout",
+      input: { layout: batch, match_policy: "create_only", conflict_policy: "stop" },
+    });
+    assertVerifiedChanges(value, batch.length, "EDITING_LAYOUT_NOT_VERIFIED");
+    for (const change of value.result.changes) context.refs.set(change.operation_id, change.target_ref);
+  }
+
+  const tracks = await measure(context, "editing.cold_full_track_read", () => walkProjectQuery(context, "secondary", {
+    entity: "tracks",
+    fields: ["ref", "name", "index"],
+    limit: 100,
+    refresh_policy: "force_read_only_refresh",
+  }));
+  assertValue(tracks.filter((row) => row.name?.startsWith("Editing ") || row.name === "EDITING-DEEP-EXACT-064").length === 64, "EDITING_TRACK_COVERAGE_INCOMPLETE", { count: tracks.length });
+  const lastTrack = tracks.find((row) => row.name === "EDITING-DEEP-EXACT-064");
+  assertExactRef(lastTrack?.ref, "track:", "EDITING_LAST_TRACK_MISSING");
+
+  const mediaTrackRef = context.refs.get("editing_track_002");
+  const itemRefs = [];
+  const takeRefs = [];
+  for (let pass = 0; pass < 2; pass += 1) {
+    for (let offset = 0; offset < 16; offset += MAX_MEDIA_ASSETS_PER_CALL) {
+      const assets = Array.from({ length: MAX_MEDIA_ASSETS_PER_CALL }, (_, index) => ({
+        id: `editing_media_${pass + 1}_${offset + index + 1}`,
+        path: mediaFiles[(offset + index) % mediaFiles.length],
+      }));
+      const value = await callTemplate(context, "primary", `editing-media-${pass + 1}-${offset / MAX_MEDIA_ASSETS_PER_CALL + 1}`, {
+        id: "macro.media.place_assets",
+        input: {
+          assets,
+          placement: { mode: "sequence_on_one_track", start_seconds: pass * 180 + offset * 2, gap_seconds: 0.1 },
+          track_policy: "existing_track",
+          track_ref: mediaTrackRef,
+          dry_run: false,
+        },
+      });
+      assertVerifiedChanges(value, assets.length, "EDITING_MEDIA_NOT_VERIFIED");
+      for (const change of value.result.changes) {
+        assertExactRef(change.live_readback?.item_ref, "item:", "EDITING_ITEM_REF_MISSING");
+        assertExactRef(change.live_readback?.take_ref, "take:", "EDITING_TAKE_REF_MISSING");
+        itemRefs.push(change.live_readback.item_ref);
+        takeRefs.push(change.live_readback.take_ref);
+      }
+    }
+  }
+
+  const controlledItems = itemRefs.slice(0, 8);
+  for (const [pass, volumeDb] of [-6, -3].entries()) {
+    const volume = await previewThenExecute(context, "primary", `editing-item-volume-${pass + 1}`, {
+      id: "macro.items.apply",
+      input: { mode: "set_properties", target_refs: controlledItems, properties: { volume_db: volumeDb } },
+    });
+    assertVerifiedChanges(volume, controlledItems.length, "EDITING_ITEM_VOLUME_NOT_VERIFIED");
+  }
+
+  const beforeBlockedPan = await queryExactItems(context, controlledItems.slice(0, 1), "editing-item-pan-before");
+  const blockedPan = await callExpectedFailure(context, "primary", "editing-item-pan-blocked", {
+    id: "macro.items.apply",
+    input: { mode: "set_properties", target_refs: controlledItems.slice(0, 1), properties: { pan: 0.25 }, dry_run: false },
+  }, ["ITEM_APPLY_ITEM_PAN_UNSUPPORTED"]);
+  assertValue((blockedPan?.result?.changes?.length ?? 0) === 0, "EDITING_ITEM_PAN_BLOCK_MUTATED", blockedPan?.result);
+  const afterBlockedPan = await queryExactItems(context, controlledItems.slice(0, 1), "editing-item-pan-after");
+  assertValue(JSON.stringify(beforeBlockedPan) === JSON.stringify(afterBlockedPan), "EDITING_ITEM_PAN_BLOCK_CHANGED_ITEM", { beforeBlockedPan, afterBlockedPan });
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    const takeControls = await previewThenExecute(context, "primary", `editing-take-controls-${pass + 1}`, {
+      id: "macro.controls.set",
+      refs: { item_ref: controlledItems[0] },
+      input: {
+        target_kind: "take",
+        fields: { pan: pass === 0 ? 0.25 : -0.15, pitch_semitones: pass === 0 ? 3 : -2, reverse: pass === 0 },
+      },
+    });
+    assertValue((takeControls?.result?.changes ?? []).length === 3, "EDITING_TAKE_CONTROL_ROW_COUNT_MISMATCH", takeControls?.result);
+    for (const change of takeControls.result.changes) assertVerifiedMutation(change, "EDITING_TAKE_CONTROL_NOT_VERIFIED");
+  }
+  context.recoveries.push({ kind: "typed_field_recovery", blocker_code: "ITEM_APPLY_ITEM_PAN_UNSUPPORTED", recovery_macro: "macro.controls.set", target_kind: "take", exact_item_ref: controlledItems[0] });
+
+  const glue = await callTemplate(context, "primary", "editing-glue-item", {
+    id: "template.items.glue_item",
+    input: {},
+    refs: { item_ref: objectRef("item", controlledItems[0]) },
+  });
+  const glueSummary = glue?.result?.summary ?? {};
+  assertValue(glueSummary.source_item_ref === controlledItems[0] && glueSummary.old_item_guid_absent === true && glueSummary.new_item_unique === true, "EDITING_GLUE_IDENTITY_MISMATCH", glueSummary);
+  assertExactRef(glueSummary.glued_item_ref, "item:", "EDITING_GLUED_ITEM_REF_MISSING");
+  assertExactRef(glueSummary.glued_take_ref, "take:", "EDITING_GLUED_TAKE_REF_MISSING");
+
+  const pitchEnsure = await callTemplate(context, "primary", "editing-pitch-envelope-ensure", {
+    id: "template.automation.ensure_take_pitch_envelope",
+    input: {},
+    refs: { take_ref: objectRef("take", glueSummary.glued_take_ref) },
+  });
+  const pitchEnvelopeRef = pitchEnsure?.result?.summary?.envelope_ref;
+  assertExactRef(pitchEnvelopeRef, "envelope:", "EDITING_PITCH_ENVELOPE_REF_MISSING");
+  const pitchPoints = [
+    { time_seconds: 0, value: 0, shape: 0, tension: 0, selected: false },
+    { time_seconds: 0.25, value: 3, shape: 0, tension: 0, selected: false },
+    { time_seconds: 0.5, value: -2, shape: 0, tension: 0, selected: false },
+  ];
+  const pitchWrite = await callTemplate(context, "primary", "editing-pitch-envelope-points", {
+    id: "template.automation.insert_envelope_points_batch",
+    input: { points: pitchPoints },
+    refs: { envelope_ref: objectRef("envelope", pitchEnvelopeRef) },
+  });
+  assertValue(pitchWrite?.result?.summary?.inserted_count === pitchPoints.length, "EDITING_PITCH_POINT_COUNT_MISMATCH", pitchWrite?.result?.summary);
+  const pitchRead = await callTemplate(context, "secondary", "editing-pitch-envelope-read", {
+    id: "template.automation.read_envelope_points",
+    input: { autoitem_index: -1, start_seconds: 0, end_seconds: 1, limit: 16 },
+    refs: { envelope_ref: objectRef("envelope", pitchEnvelopeRef) },
+  });
+  assertValue(pitchRead?.result?.summary?.truncated === false && (pitchRead?.result?.summary?.points?.length ?? 0) >= pitchPoints.length, "EDITING_PITCH_READBACK_INCOMPLETE", pitchRead?.result?.summary);
+
+  await writeTrackAutomationPasses(context, context.refs.get("editing_track_003"), "editing");
+  const freezeTrackRef = context.refs.get("editing_track_002");
+  const frozen = await callTemplate(context, "primary", "editing-freeze-track", {
+    id: "template.tracks.freeze_track",
+    input: { mode: "stereo" },
+    refs: { track_ref: objectRef("track", freezeTrackRef) },
+  });
+  assertValue(frozen?.result?.summary?.freeze_count_after > frozen?.result?.summary?.freeze_count_before, "EDITING_FREEZE_COUNT_NOT_INCREASED", frozen?.result?.summary);
+  const unfrozen = await callTemplate(context, "primary", "editing-unfreeze-track", {
+    id: "template.tracks.unfreeze_track",
+    input: {},
+    refs: { track_ref: objectRef("track", freezeTrackRef) },
+  });
+  assertValue(unfrozen?.result?.summary?.freeze_count_after < unfrozen?.result?.summary?.freeze_count_before, "EDITING_UNFREEZE_COUNT_NOT_DECREASED", unfrozen?.result?.summary);
+
+  const routeRows = rows.slice(0, 63).map((row, index) => ({
+    id: `editing_route_${index + 1}`,
+    action: "create",
+    source_track_ref: context.refs.get(row.id),
+    destination_track_ref: context.refs.get(rows[index + 1].id),
+    volume: 0.5,
+    pan: 0,
+    muted: false,
+  }));
+  const routing = await previewThenExecute(context, "primary", "editing-routing-graph", {
+    id: "macro.routing.apply",
+    input: { routes: routeRows },
+    budget: LARGE_PROJECTION_BUDGET,
+  });
+  assertVerifiedChanges(routing, routeRows.length, "EDITING_ROUTING_NOT_VERIFIED");
+  const routingRows = await measure(context, "editing.complete_routing_graph_read", () => walkProjectQuery(context, "secondary", {
+    entity: "routing",
+    fields: ["ref", "source_track_ref", "destination_track_ref", "send_index", "volume_db", "pan"],
+    limit: 100,
+    refresh_policy: "force_read_only_refresh",
+  }));
+  assertValue(routingRows.length >= routeRows.length, "EDITING_ROUTING_GRAPH_INCOMPLETE", { expected: routeRows.length, observed: routingRows.length });
+
+  await renderVerifiedTarget(context, "editing-explicit-item", {
+    targetKind: "explicit_items",
+    itemRefs: [glueSummary.glued_item_ref],
+    format: "wav",
+  });
+  await saveAndReconnect(context, "editing-sfx");
   await finalizeRecoveryPosture(context);
   return context;
 }
@@ -707,6 +1024,10 @@ export async function runMixingDelivery(context) {
   await assertInstalledHandshake(context, "primary", "mix-installed-product-handshake");
   await assertInstalledHandshake(context, "secondary", "mix-secondary-client-handshake");
 
+  const mediaFiles = await discoverMediaFiles(context.mediaRoots, context.mediaAssets);
+  assertValue(mediaFiles.length > 0, "MIX_MEDIA_REQUIRED", { media_roots: context.mediaRoots, media_assets: context.mediaAssets });
+  for (const file of mediaFiles) context.media_hashes[file] = await sha256(file);
+
   const save = await previewThenExecute(context, "primary", "mix-save-evidence-project", {
     id: "macro.project.file",
     input: { operation: "save_as", target_path: context.evidenceProject, overwrite: true },
@@ -714,17 +1035,72 @@ export async function runMixingDelivery(context) {
   assertValue(save?.result?.data?.path_after === context.evidenceProject, "MIX_SAVE_AS_PATH_MISMATCH", save?.result?.data);
 
   const layout = [
-    { id: "mix_source_a", kind: "track", name: "TRIAL SOURCE A", index: 0 },
-    { id: "mix_source_b", kind: "track", name: "TRIAL SOURCE B", index: 1 },
-    { id: "mix_bus", kind: "track", name: "TRIAL MIX BUS", index: 2 },
+    { id: "mix_sources", kind: "folder", name: "TRIAL SOURCES", index: 0, folder_depth: 1 },
+    ...Array.from({ length: 8 }, (_, index) => ({ id: `mix_source_${index + 1}`, kind: "track", name: `TRIAL SOURCE ${index + 1}`, index: index + 1, ...(index === 7 ? { folder_depth: -1 } : {}) })),
+    { id: "mix_buses", kind: "folder", name: "TRIAL BUSES", index: 9, folder_depth: 1 },
+    { id: "mix_music_bus", kind: "track", name: "TRIAL MUSIC BUS", index: 10 },
+    { id: "mix_fx_bus", kind: "track", name: "TRIAL FX BUS", index: 11 },
+    { id: "mix_master_bus", kind: "track", name: "TRIAL MIX BUS", index: 12, folder_depth: -1 },
+    { id: "mix_prints", kind: "folder", name: "TRIAL PRINTS", index: 13, folder_depth: 1 },
+    { id: "mix_print_a", kind: "track", name: "TRIAL PRINT A", index: 14 },
+    { id: "mix_print_b", kind: "track", name: "TRIAL PRINT B", index: 15, folder_depth: -1 },
   ];
-  const layoutValue = await previewThenExecute(context, "primary", "mix-small-layout", {
+  const layoutValue = await previewThenExecute(context, "primary", "mix-production-layout", {
     id: "macro.project.apply_layout",
     input: { layout, match_policy: "create_only", conflict_policy: "stop" },
   });
-  assertVerifiedChanges(layoutValue, 3, "MIX_LAYOUT_NOT_VERIFIED");
+  assertVerifiedChanges(layoutValue, layout.length, "MIX_LAYOUT_NOT_VERIFIED");
   const trackRefs = new Map(layoutValue.result.changes.map((row) => [row.operation_id, row.target_ref]));
   assertValue([...trackRefs.values()].every((ref) => typeof ref === "string" && ref.startsWith("track:")), "MIX_TRACK_REF_MISSING");
+
+  const annotations = [
+    { id: "mix_marker_intro", kind: "marker", name: "Intro", position_seconds: 0 },
+    { id: "mix_marker_drop", kind: "marker", name: "Drop", position_seconds: 16 },
+    { id: "mix_marker_outro", kind: "marker", name: "Outro", position_seconds: 32 },
+    { id: "mix_region_intro", kind: "region", name: "Intro Region", start_seconds: 0, end_seconds: 8 },
+    { id: "mix_region_body", kind: "region", name: "Body Region", start_seconds: 8, end_seconds: 32 },
+    { id: "mix_region_outro", kind: "region", name: "Outro Region", start_seconds: 32, end_seconds: 40 },
+  ];
+  const annotationValue = await previewThenExecute(context, "primary", "mix-marker-region-batch", {
+    id: "macro.project.apply_layout",
+    input: { annotations },
+  });
+  assertVerifiedChanges(annotationValue, annotations.length, "MIX_ANNOTATIONS_NOT_VERIFIED");
+
+  const mixAssets = Array.from({ length: 8 }, (_, index) => ({
+    id: `mix_asset_${index + 1}`,
+    path: mediaFiles[index % mediaFiles.length],
+    track_ref: trackRefs.get(`mix_source_${index + 1}`),
+  }));
+  const placed = await callTemplate(context, "primary", "mix-place-source-assets", {
+    id: "macro.media.place_assets",
+    input: {
+      assets: mixAssets,
+      placement: { mode: "stack_on_separate_tracks", start_seconds: 0, gap_seconds: 0 },
+      track_policy: "explicit_per_asset",
+      dry_run: false,
+    },
+  });
+  assertVerifiedChanges(placed, mixAssets.length, "MIX_MEDIA_NOT_VERIFIED");
+
+  const routeRows = Array.from({ length: 8 }, (_, index) => ({
+    id: `mix_source_route_${index + 1}`,
+    action: "create",
+    source_track_ref: trackRefs.get(`mix_source_${index + 1}`),
+    destination_track_ref: trackRefs.get(index < 6 ? "mix_music_bus" : "mix_fx_bus"),
+    volume: 0.75,
+    pan: (index - 3.5) / 7,
+    muted: false,
+  }));
+  routeRows.push(
+    { id: "mix_music_to_master", action: "create", source_track_ref: trackRefs.get("mix_music_bus"), destination_track_ref: trackRefs.get("mix_master_bus"), volume: 1, pan: 0, muted: false },
+    { id: "mix_fx_to_master", action: "create", source_track_ref: trackRefs.get("mix_fx_bus"), destination_track_ref: trackRefs.get("mix_master_bus"), volume: 0.5, pan: 0, muted: false },
+  );
+  const routes = await previewThenExecute(context, "primary", "mix-source-bus-routing", {
+    id: "macro.routing.apply",
+    input: { routes: routeRows },
+  });
+  assertVerifiedChanges(routes, routeRows.length, "MIX_ROUTING_NOT_VERIFIED");
 
   let thirdPartyName = null;
   if (context.thirdPartyFxQuery) {
@@ -743,19 +1119,37 @@ export async function runMixingDelivery(context) {
     assertValue(typeof thirdPartyName === "string" && thirdPartyName.length > 0, "THIRD_PARTY_FX_IDENTITY_MISSING", rows[0]);
   }
 
-  const chain = [{ plugin_query: "ReaEQ", duplicate_policy: "fail_if_present" }];
+  const chain = [
+    { plugin_query: "ReaEQ", duplicate_policy: "fail_if_present" },
+    { plugin_query: "ReaComp", duplicate_policy: "fail_if_present", controls: { threshold_db: -18, ratio: 3 } },
+  ];
   if (thirdPartyName) chain.push({ plugin_name: thirdPartyName, duplicate_policy: "fail_if_present" });
   const fx = await previewThenExecute(context, "primary", "mix-apply-fx-chain", {
     id: "macro.fx.apply_chain",
-    refs: { track_ref: trackRefs.get("mix_bus") },
+    refs: { track_ref: trackRefs.get("mix_master_bus") },
     input: { owner_kind: "track", chain },
   });
   assertVerifiedChanges(fx, chain.length, "MIX_FX_CHAIN_NOT_VERIFIED");
   const fxRef = requireFxRef(fx, "ReaEQ");
   const paramIdent = await readFxParameterIdent(context, fxRef, "mix-reaeq-mapping");
   await writeFxAutomationPasses(context, fxRef, paramIdent, "mix");
+  const compRef = requireFxRef(fx, "ReaComp");
+  const stockControls = await previewThenExecute(context, "primary", "mix-reacomp-controls", {
+    id: "macro.fx.set_controls",
+    refs: { fx_ref: compRef },
+    input: { plugin: "reacomp", controls: { threshold_db: -12, ratio: 4 } },
+  });
+  assertValue(stockControls?.result?.verification?.status === "passed", "MIX_STOCK_CONTROL_NOT_VERIFIED", stockControls?.result);
+  await writeTrackAutomationPasses(context, trackRefs.get("mix_music_bus"), "mix-track");
 
-  await renderVerifiedWav(context, "mixing-delivery");
+  if (thirdPartyName) {
+    const thirdPartyRef = requireFxRef(fx, thirdPartyName);
+    await exerciseGenericThirdPartyFx(context, thirdPartyRef, thirdPartyName);
+  }
+
+  await renderVerifiedTarget(context, "mixing-delivery-wav", { targetKind: "whole_project", format: "wav" });
+  await renderFormatCapability(context, "mixing-delivery-ogg", { targetKind: "whole_project", format: "ogg", oggQuality: 0.6 });
+  await renderFormatCapability(context, "mixing-delivery-mp3", { targetKind: "explicit_tracks", trackRefs: [trackRefs.get("mix_master_bus")], format: "mp3", mp3BitrateKbps: 320 });
   await saveAndReconnect(context, "mixing-delivery");
   await finalizeRecoveryPosture(context);
   return context;
@@ -790,6 +1184,18 @@ async function assertExactItemsVisible(context, itemRefs, trackRef, stepId) {
     refresh_policy: "if_stale",
   });
   assertValue(rows.length === itemRefs.length && rows.every((row) => itemRefs.includes(row.ref) && row.track_ref === trackRef), "ITEM_WRITE_EXACT_READBACK_MISMATCH", { step_id: stepId, expected_track_ref: trackRef, rows });
+}
+
+async function queryExactItems(context, itemRefs, stepId) {
+  const rows = await walkProjectQuery(context, "secondary", {
+    entity: "items",
+    fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+    selectors: { refs: itemRefs },
+    limit: 100,
+    refresh_policy: "force_read_only_refresh",
+  });
+  assertValue(rows.length === itemRefs.length, "EXACT_ITEM_QUERY_INCOMPLETE", { step_id: stepId, expected: itemRefs, rows });
+  return [...rows].sort((left, right) => left.ref.localeCompare(right.ref));
 }
 
 async function createMidiClip(context, stepId, trackRef, startSeconds, endSeconds, count, budget = NORMAL_BUDGET) {
@@ -866,25 +1272,167 @@ async function writeFxAutomationPasses(context, fxRef, paramIdent, prefix) {
   }
 }
 
+async function writeTrackAutomationPasses(context, trackRef, prefix) {
+  assertExactRef(trackRef, "track:", "TRACK_AUTOMATION_TRACK_REF_MISSING");
+  const resolved = await callTemplate(context, "secondary", `${prefix}-resolve-volume-envelope`, {
+    id: "template.automation.resolve_envelope_ref",
+    input: { parent_kind: "track", envelope_name: "Volume" },
+    refs: { track_ref: objectRef("track", trackRef) },
+  });
+  const envelopeRef = resolved?.result?.summary?.envelope_ref;
+  assertExactRef(envelopeRef, "envelope:", "TRACK_AUTOMATION_ENVELOPE_REF_MISSING");
+  for (let pass = 0; pass < 2; pass += 1) {
+    const value = await previewThenExecute(context, "primary", `${prefix}-track-automation-${pass + 1}`, {
+      id: "macro.automation.apply",
+      input: {
+        mode: "insert_points",
+        envelope_refs: [envelopeRef],
+        points: [{ time_seconds: pass * 2 + 0.5, value: pass === 0 ? 0.5 : 0.85, shape: 0, tension: 0, selected: false }],
+      },
+    });
+    assertVerifiedChanges(value, 1, "TRACK_AUTOMATION_NOT_VERIFIED");
+  }
+  context.capabilityResults.push({ capability: "track_volume_automation", status: "passed", track_ref: trackRef, envelope_ref: envelopeRef, pass_count: 2 });
+}
+
+async function exerciseGenericThirdPartyFx(context, fxRef, pluginName) {
+  const pages = [];
+  const parameters = [];
+  let offset = 0;
+  await measure(context, "mix.third_party_parameter_inventory", async () => {
+    while (true) {
+      const page = await callTemplate(context, "secondary", `mix-third-party-parameters-${offset}`, {
+        id: "template.fx.list_fx_parameters",
+        input: { limit: 64, offset },
+        refs: { fx_ref: fxObjectRef(fxRef) },
+        budget: LARGE_PROJECTION_BUDGET,
+      });
+      const summary = page?.result?.summary ?? {};
+      assertValue(summary.offset === offset && summary.returned_count === summary.parameters?.length, "THIRD_PARTY_PARAMETER_PAGE_INVALID", { plugin_name: pluginName, summary });
+      pages.push({ offset, returned_count: summary.returned_count, next_offset: summary.next_offset ?? null });
+      parameters.push(...summary.parameters);
+      if (summary.next_offset == null) {
+        assertValue(summary.truncated === false && summary.inventory_complete === true && summary.coverage_status === "complete", "THIRD_PARTY_PARAMETER_INVENTORY_INCOMPLETE", { plugin_name: pluginName, summary });
+        assertValue(summary.parameter_count === parameters.length, "THIRD_PARTY_PARAMETER_COUNT_MISMATCH", { plugin_name: pluginName, expected: summary.parameter_count, observed: parameters.length });
+        break;
+      }
+      assertValue(summary.truncated === true && summary.inventory_complete === false && summary.coverage_status === "paged" && Number.isInteger(summary.next_offset) && summary.next_offset > offset, "THIRD_PARTY_PARAMETER_CURSOR_INVALID", { plugin_name: pluginName, summary });
+      offset = summary.next_offset;
+    }
+  });
+  assertValue(new Set(parameters.map((row) => row.param_index)).size === parameters.length, "THIRD_PARTY_PARAMETER_DUPLICATES", { plugin_name: pluginName });
+
+  const candidates = parameters.filter((row) => (
+    typeof row.param_ident === "string"
+    && row.param_ident.length > 0
+    && typeof row.name === "string"
+    && !/^(?:bank|bypass|delta|midi cc|preset|program|wet)$/iu.test(row.name.trim())
+  ));
+  let selected = null;
+  for (const parameter of candidates.slice(0, 12)) {
+    const low = await readFxParameter(context, fxRef, parameter, 0.25, `mix-third-party-probe-low-${parameter.param_index}`);
+    const high = await readFxParameter(context, fxRef, parameter, 0.75, `mix-third-party-probe-high-${parameter.param_index}`);
+    if (low.formatted_value !== high.formatted_value) {
+      selected = parameter;
+      break;
+    }
+  }
+  assertValue(selected, "THIRD_PARTY_WRITABLE_PARAMETER_NOT_FOUND", { plugin_name: pluginName, candidate_count: candidates.length });
+  const target = await readFxParameter(context, fxRef, selected, 0.5, "mix-third-party-probe-target");
+  const write = await callTemplate(context, "primary", "mix-third-party-set-parameter", {
+    id: "template.fx.set_fx_parameter_normalized",
+    input: { param_index: selected.param_index, param_ident: selected.param_ident, normalized_value: 0.5, tolerance: 0.000001 },
+    refs: { fx_ref: fxObjectRef(fxRef) },
+  });
+  const written = write?.result?.summary ?? {};
+  assertValue(written.updated === true && written.param_ident === selected.param_ident && written.formatted_value === target.formatted_value, "THIRD_PARTY_PARAMETER_WRITE_NOT_VERIFIED", { plugin_name: pluginName, requested: target, observed: written });
+
+  for (const enabled of [false, true]) {
+    const bypass = await callTemplate(context, "primary", `mix-third-party-enabled-${enabled}`, {
+      id: "template.fx.set_fx_bypass",
+      input: { enabled },
+      refs: { fx_ref: fxObjectRef(fxRef) },
+    });
+    assertValue(bypass?.result?.summary?.updated === true && bypass?.result?.summary?.enabled === enabled, "THIRD_PARTY_BYPASS_NOT_VERIFIED", { plugin_name: pluginName, enabled, summary: bypass?.result?.summary });
+  }
+
+  const paramIdent = await readFxParameterIdent(context, fxRef, "mix-third-party-automation-mapping");
+  await writeFxAutomationPasses(context, fxRef, paramIdent, "mix-third-party");
+  context.capabilityResults.push({
+    capability: "generic_third_party_fx",
+    status: "passed",
+    plugin_name: pluginName,
+    fx_ref: fxRef,
+    parameter_count: parameters.length,
+    page_count: pages.length,
+    selected_parameter: { param_index: selected.param_index, param_ident: selected.param_ident, name: selected.name },
+    verification_mode: written.verification_mode ?? null,
+    is_discrete: written.is_discrete ?? null,
+    is_toggle: written.is_toggle ?? null,
+    automation_pass_count: 2,
+  });
+}
+
+async function readFxParameter(context, fxRef, parameter, probeNormalizedValue, stepId) {
+  const value = await callTemplate(context, "secondary", stepId, {
+    id: "template.fx.read_fx_parameter",
+    input: {
+      param_index: parameter.param_index,
+      param_ident: parameter.param_ident,
+      ...(probeNormalizedValue === undefined ? {} : { probe_normalized_value: probeNormalizedValue }),
+    },
+    refs: { fx_ref: fxObjectRef(fxRef) },
+  });
+  const summary = value?.result?.summary ?? {};
+  assertValue(summary.param_ident === parameter.param_ident && typeof summary.formatted_value === "string", "THIRD_PARTY_PARAMETER_READ_INVALID", { parameter, summary });
+  return summary;
+}
+
 async function renderVerifiedWav(context, prefix) {
+  return renderVerifiedTarget(context, `${prefix}-render-wav`, { targetKind: "whole_project", format: "wav" });
+}
+
+async function renderVerifiedTarget(context, prefix, { targetKind, itemRefs = [], trackRefs = [], format, oggQuality = null, mp3BitrateKbps = null }) {
   const basename = `${prefix}-${Date.now()}-${context.calls.length}`;
-  const value = await previewThenExecute(context, "primary", `${prefix}-render-wav`, {
+  const input = {
+    target_kind: targetKind,
+    format,
+    output_basename: basename,
+    ...(targetKind === "explicit_items" ? { item_refs: itemRefs } : {}),
+    ...(targetKind === "explicit_tracks" ? { track_refs: trackRefs } : {}),
+    ...(format === "ogg" ? { ogg_quality: oggQuality ?? 0.6 } : {}),
+    ...(format === "mp3" ? { mp3_bitrate_kbps: mp3BitrateKbps ?? 320 } : {}),
+  };
+  const value = await previewThenExecute(context, "primary", `${prefix}-render`, {
     id: "macro.render.targets",
-    input: { target_kind: "whole_project", format: "wav", output_basename: basename },
+    input,
   });
   assertValue(value?.execution?.status === "completed" && value?.result?.verification?.status === "passed", "RENDER_EXECUTION_NOT_VERIFIED", {
     execution: value?.execution,
     verification: value?.result?.verification,
   });
   const outputs = value?.result?.data?.outputs ?? [];
-  assertValue(outputs.length === 1, "RENDER_OUTPUT_COUNT_MISMATCH", { outputs });
-  const output = outputs[0];
-  assertValue(output.requested_format === "wav" && output.actual_format === "wav" && output.output_basename === basename, "RENDER_OUTPUT_IDENTITY_MISMATCH", output);
-  const evidence = await verifyRenderedOutput({ absolutePath: output.absolute_path, requestedFormat: "wav", managedRenderRoot: context.managedRenderRoot });
-  assertValue(evidence.ok, "RENDER_FILE_VERIFICATION_FAILED", evidence);
+  const expectedCount = targetKind === "explicit_items" ? itemRefs.length : targetKind === "explicit_tracks" ? trackRefs.length : 1;
+  assertValue(outputs.length === expectedCount, "RENDER_OUTPUT_COUNT_MISMATCH", { expected: expectedCount, outputs });
   const call = context.calls.at(-1);
   assertValue(call?.requested_id === "macro.render.targets", "RENDER_CALL_ACCOUNTING_MISSING");
-  call.rendered_outputs.push({ ...output, verification: evidence });
+  for (const output of outputs) {
+    assertValue(output.requested_format === format && output.actual_format === format && output.output_basename === basename, "RENDER_OUTPUT_IDENTITY_MISMATCH", output);
+    const evidence = await verifyRenderedOutput({
+      absolutePath: output.absolute_path,
+      requestedFormat: format,
+      requestedMp3BitrateKbps: format === "mp3" ? input.mp3_bitrate_kbps : null,
+      managedRenderRoot: context.managedRenderRoot,
+    });
+    assertValue(evidence.ok, "RENDER_FILE_VERIFICATION_FAILED", evidence);
+    call.rendered_outputs.push({ ...output, verification: evidence });
+  }
+  context.capabilityResults.push({ capability: `render_${format}`, status: "passed", target_kind: targetKind, output_count: outputs.length, output_basename: basename });
+  return value;
+}
+
+async function renderFormatCapability(context, prefix, options) {
+  return measure(context, `render.${options.format}.${options.targetKind}`, () => renderVerifiedTarget(context, prefix, options));
 }
 
 async function saveAndReconnect(context, prefix) {
@@ -953,6 +1501,14 @@ async function assertInstalledHandshake(context, clientName, stepId) {
 
 function assertExactRef(ref, prefix, code) {
   assertValue(typeof ref === "string" && ref.startsWith(prefix), code, { ref });
+}
+
+function objectRef(kind, ref) {
+  assertValue(typeof ref === "string" && ref.startsWith(`${kind}:`), "OBJECT_REF_INVALID", { kind, ref });
+  const remainder = ref.slice(kind.length + 1);
+  const separator = remainder.indexOf(":");
+  assertValue(separator > 0 && separator < remainder.length - 1, "OBJECT_REF_INVALID", { kind, ref });
+  return { kind, ref, identity: { scheme: remainder.slice(0, separator), value: remainder.slice(separator + 1) } };
 }
 
 function takeObjectRef(ref) {
@@ -1026,7 +1582,45 @@ async function callTemplate(context, clientName, stepId, request) {
   });
 }
 
-async function callJson(context, clientName, stepId, tool, args) {
+async function callExpectedFailure(context, clientName, stepId, request, expectedErrorCodes) {
+  assertValue(Array.isArray(expectedErrorCodes) && expectedErrorCodes.length > 0, "EXPECTED_FAILURE_CODES_REQUIRED");
+  return callJson(context, clientName, stepId, "call_template", {
+    id: request.id,
+    input: request.input,
+    ...(request.refs ? { refs: request.refs } : {}),
+    budget: request.budget ?? NORMAL_BUDGET,
+  }, { expectedErrorCodes });
+}
+
+async function measure(context, id, action) {
+  const started = performance.now();
+  const firstCallOrdinal = context.calls.length + 1;
+  try {
+    const value = await action();
+    context.performanceMeasurements.push({
+      id,
+      status: "passed",
+      duration_ms: Math.round(performance.now() - started),
+      first_call_ordinal: firstCallOrdinal,
+      last_call_ordinal: context.calls.length,
+      call_count: context.calls.length - firstCallOrdinal + 1,
+    });
+    return value;
+  } catch (error) {
+    context.performanceMeasurements.push({
+      id,
+      status: "failed",
+      duration_ms: Math.round(performance.now() - started),
+      first_call_ordinal: firstCallOrdinal,
+      last_call_ordinal: context.calls.length,
+      call_count: Math.max(0, context.calls.length - firstCallOrdinal + 1),
+      error_code: error?.code ?? error?.cause?.code ?? null,
+    });
+    throw error;
+  }
+}
+
+async function callJson(context, clientName, stepId, tool, args, { expectedErrorCodes = [] } = {}) {
   const started = performance.now();
   const call = {
     ordinal: context.calls.length + 1,
@@ -1051,6 +1645,7 @@ async function callJson(context, clientName, stepId, tool, args) {
     template_fallback: String(args.id ?? "").startsWith("template."),
     fallback_reason: String(args.id ?? "").startsWith("template.") ? "Bounded direct readback with no public Macro equivalent." : null,
     rendered_outputs: [],
+    expected_failure: false,
     ok: false,
     error: null,
     value: null,
@@ -1077,6 +1672,15 @@ async function callJson(context, clientName, stepId, tool, args) {
     call.pre_mutation_evidence_fit = findPreMutationFit(value);
     call.ok = value?.ok === true;
     if (!call.ok && !call.error) call.error = value?.error ?? { code: "TRIAL_STEP_FAILED", blockers: value?.blockers ?? [] };
+    if (!call.ok && expectedErrorCodes.some((code) => responseErrorCodes(value).includes(code))) {
+      call.expected_failure = true;
+      context.expectedFailures.push(call);
+      return value;
+    }
+    if (call.ok && expectedErrorCodes.length > 0) {
+      call.error = { code: "EXPECTED_FAILURE_NOT_OBSERVED", expected_error_codes: expectedErrorCodes };
+      throw Object.assign(new Error(`${stepId} unexpectedly succeeded`), { cause: call.error });
+    }
     if (!call.ok) throw Object.assign(new Error(`${stepId} failed`), { cause: call.error });
     return value;
   } catch (error) {
@@ -1087,6 +1691,14 @@ async function callJson(context, clientName, stepId, tool, args) {
     call.duration_ms = Math.round(performance.now() - started);
     context.calls.push(call);
   }
+}
+
+function responseErrorCodes(value) {
+  return [...new Set([
+    value?.error?.code,
+    ...(value?.blockers ?? []).map((entry) => entry?.code),
+    ...(value?.result?.blockers ?? []).map((entry) => entry?.code),
+  ].filter((entry) => typeof entry === "string"))];
 }
 
 function assertValue(condition, code, details = null) {
@@ -1195,8 +1807,11 @@ function createBaseReport({ scenarios, mode, installedWrapper, status, unimpleme
     artifacts: [],
     calls: [],
     failed_calls: [],
+    expected_failures: [],
     retries: [],
     ineffective_retries: [],
+    performance_measurements: [],
+    capability_results: [],
     macro_first: { count: 0, total_template_calls: 0, rate: 0 },
     template_fallbacks: [],
     project_changes: [],
