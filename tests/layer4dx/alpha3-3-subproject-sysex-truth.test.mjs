@@ -47,7 +47,7 @@ json = { encode = function() return "{}" end }
 describe("Alpha3.3 native Subproject and SysEx truth", () => {
   it("creates a real child RPP/proxy, inserts its exact source on the exact Track, and synchronously updates it", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
-install_subproject_fake({})
+install_subproject_fake({ copy_import_media = true })
 local create_request = project_request("project.create_subproject", { name = "Dialog Edit", activate = true, inherit_time_selection = true }, {})
 create_request.id = "req_create"
 local created, failure, output_refs, _, refs = create_subproject(create_request)
@@ -69,16 +69,20 @@ local insert_request = project_request("project.insert_subproject_item", { posit
 insert_request.id = "req_insert"
 local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
 assert(insert_failure == nil and inserted.inserted == true, insert_failure and (insert_failure.code .. ":" .. tostring(insert_failure.details.blocker)) or "insert missing")
-assert(inserted.position_seconds == 12.5 and inserted.source_path == created.proxy_path)
+assert(inserted.position_seconds == 12.5 and inserted.source_path == created.child_project_path)
+assert(inserted.source_proxy_path == created.proxy_path and inserted.requested_proxy_path == created.proxy_path)
+assert(inserted.source_path_mode == "exact_requested_child_project")
 assert(inserted.subproject_item_status == "native_source_verified")
 assert(#parent_project.items == 2 and parent_project.items[2].track == target_track)
-assert(parent_project.items[2].position == 12.5 and parent_project.items[2].take.name == "Dialog Subproject")
-assert(parent_project.items[2].take.source.path == created.proxy_path)
+assert(parent_project.items[2].position == 12.5 and parent_project.items[2].length == 6.25)
+assert(parent_project.items[2].take.name == "Dialog Subproject")
+assert(parent_project.items[2].take.source.path == created.child_project_path)
 assert(parent_project.items[2].take.source.subproject == child_project)
 assert(other_track.selected == true and target_track.selected == false)
 assert(parent_project.items[1].selected == true and parent_project.items[2].selected == false)
 assert(cursor == 9 and inserted_refs[1].ref == "item:guid:{ITEM-NEW}")
 assert(inserted_refs[1].identity.scheme == "guid" and inserted_refs[1].identity.value == "{ITEM-NEW}")
+assert(calls.insert_media == 0 and calls.create_source == 1 and calls.add_item == 1 and calls.add_take == 1)
 
 local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
   refs[1], inserted_refs[1],
@@ -169,9 +173,117 @@ assert(failure.details.blocker == "subproject_render_action_failed" and current_
 `);
   });
 
-  it("fails closed when InsertMedia dispatch does not produce one exact subproject Item", () => {
+  it("fails before mutation when the exact open child cannot produce a valid native project source", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
-install_subproject_fake({ insert_without_item = true })
+local child_path = "/session/Child.RPP"
+local child_ref = { kind = "project", ref = "project:path:" .. child_path, identity = { scheme = "path", value = child_path } }
+local function insert_with(config)
+  install_subproject_fake(config)
+  files[child_path] = true
+  files[child_path .. "-PROX"] = true
+  local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+    child_ref,
+    { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+  })
+  return insert_subproject_item(request)
+end
+
+local summary, failure = insert_with({})
+assert(summary == nil and failure.code == "COMMAND_FAILED")
+assert(failure.details.blocker == "subproject_must_be_open_for_native_source")
+assert(#parent_project.items == 1 and calls.create_source == 0 and calls.insert_media == 0)
+
+summary, failure = insert_with({ open_child_path = child_path, source_create_failure = true })
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_source_create_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0)
+
+summary, failure = insert_with({ open_child_path = child_path, source_type = "WAVE" })
+assert(summary == nil and failure.details.blocker == "subproject_source_type_mismatch")
+assert(#parent_project.items == 1 and calls.destroy_source == 1)
+
+summary, failure = insert_with({ open_child_path = child_path, source_path = "/session/Wrong.RPP" })
+assert(summary == nil and failure.details.blocker == "subproject_source_path_mismatch")
+assert(#parent_project.items == 1 and calls.destroy_source == 1)
+
+summary, failure = insert_with({ open_child_path = child_path, source_length = 0 })
+assert(summary == nil and failure.details.blocker == "subproject_source_length_invalid")
+assert(#parent_project.items == 1 and calls.destroy_source == 1)
+
+summary, failure = insert_with({ open_child_path = child_path, source_length_is_qn = true })
+assert(summary == nil and failure.details.blocker == "subproject_source_length_invalid")
+assert(#parent_project.items == 1 and calls.destroy_source == 1)
+
+`);
+  });
+
+  it("rolls back partial native Item creation on every post-mutation failure", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+local child_path = "/session/Child.RPP"
+local child_ref = { kind = "project", ref = "project:path:" .. child_path, identity = { scheme = "path", value = child_path } }
+local function insert_with(config)
+  config.open_child_path = child_path
+  install_subproject_fake(config)
+  files[child_path .. "-PROX"] = true
+  local request = project_request("project.insert_subproject_item", { position_seconds = 4, name = "Child" }, {
+    child_ref,
+    { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+  })
+  return insert_subproject_item(request)
+end
+
+local summary, failure = insert_with({ add_item_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_item_create_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 1 and calls.delete_item == 0)
+
+summary, failure = insert_with({ add_take_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_take_create_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 1 and calls.delete_item == 1)
+
+summary, failure = insert_with({ position_write_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_item_bounds_write_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 1 and calls.delete_item == 1)
+
+summary, failure = insert_with({ length_write_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_item_bounds_write_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 1 and calls.delete_item == 1)
+
+summary, failure = insert_with({ set_source_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_take_source_write_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 1 and calls.delete_item == 1)
+
+summary, failure = insert_with({ update_item_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_item_update_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
+
+summary, failure = insert_with({ wrong_source_readback = true })
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_source_readback_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
+
+summary, failure = insert_with({ missing_child_pointer = true })
+assert(summary == nil and failure.details.blocker == "subproject_source_readback_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
+
+summary, failure = insert_with({ wrong_child_pointer = true })
+assert(summary == nil and failure.details.blocker == "subproject_source_readback_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
+
+summary, failure = insert_with({ name_readback_failure = true })
+assert(summary == nil and failure.details.blocker == "subproject_item_name_readback_failed")
+assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
+assert(other_track.selected == true and target_track.selected == false and cursor == 9)
+assert(calls.insert_media == 0)
+`);
+  });
+
+  it("reports rollback failure instead of hiding a partially created Item", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({
+  open_child_path = "/session/Child.RPP",
+  update_item_failure = true,
+  delete_item_failure = true,
+})
 files["/session/Child.RPP"] = true
 files["/session/Child.RPP-PROX"] = true
 local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
@@ -180,21 +292,9 @@ local request = project_request("project.insert_subproject_item", { position_sec
   { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
 })
 local summary, failure = insert_subproject_item(request)
-assert(summary == nil and failure.code == "VERIFY_FAILED", failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "failure missing")
-assert(failure.details.blocker == "new_item_identity_ambiguous")
-assert(other_track.selected == true and target_track.selected == false and cursor == 9)
-
-install_subproject_fake({ wrong_source = true })
-files["/session/Child.RPP"] = true
-files["/session/Child.RPP-PROX"] = true
-request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
-  child_ref,
-  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
-})
-summary, failure = insert_subproject_item(request)
-assert(summary == nil and failure.code == "VERIFY_FAILED", failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "failure missing")
-assert(failure.details.blocker == "subproject_source_readback_failed")
-assert(other_track.selected == true and target_track.selected == false and cursor == 9)
+assert(summary == nil and failure.code == "RESTORE_FAILED")
+assert(failure.details.original_blocker == "subproject_item_update_failed")
+assert(failure.details.item_deleted == false and #parent_project.items == 2)
 `);
   });
 
@@ -265,8 +365,11 @@ local insert_request = project_request("project.insert_subproject_item", { posit
 local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
 assert(insert_failure == nil and inserted.inserted == true)
 local inserted_source = parent_project.items[2].take.source
-assert(inserted_source.path == "/session/Child.RPP-PROX")
+assert(inserted_source.path == "/session/Child.RPP")
 assert(inserted_source.subproject == nil and inserted_source.parent.subproject == child_project)
+assert(inserted.source_path == "/session/Child.RPP")
+assert(inserted.source_proxy_path == "/session/Child.RPP-PROX")
+assert(inserted.source_path_mode == "exact_requested_child_project")
 
 local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
   child_ref, inserted_refs[1],
@@ -281,58 +384,25 @@ assert(update_failure.details.blocker == "linked_item_source_readback_failed")
 `);
   });
 
-  it("accepts a REAPER-managed copied proxy only with the exact child pointer and existing managed proxy file", () => {
+  it("retains legacy managed-copy readback only with the exact child pointer and existing proxy file", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
 local managed_source_path = "/session/Media/Child.RPP"
-install_subproject_fake({ open_child_path = "/session/Child.RPP", managed_copy_source_path = managed_source_path })
+install_subproject_fake({ open_child_path = "/session/Child.RPP" })
 files["/session/Child.RPP-PROX"] = true
 files[managed_source_path .. "-PROX"] = true
-local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
-local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
-  child_ref,
-  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
-})
-local summary, failure = insert_subproject_item(request)
-assert(failure == nil and summary.inserted == true, failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "insert missing")
-assert(parent_project.items[2].take.source.path == managed_source_path)
-assert(parent_project.items[2].take.source.subproject == child_project)
-`);
-  });
+local source = { path = managed_source_path, source_type = "RPP_PROJECT", subproject = child_project }
+local item = { track = target_track, take = { source = source } }
+local truth = d30_item_source_truth(item, "/session/Child.RPP-PROX", "/session/Child.RPP")
+assert(truth ~= nil and truth.source_path == managed_source_path)
+assert(truth.source_proxy_path == managed_source_path .. "-PROX")
+assert(truth.source_path_mode == "reaper_managed_proxy_copy")
 
-  it("rejects a REAPER-managed copied proxy associated with the wrong child pointer", () => {
-    runLua(SUBPROJECT_SOURCE, String.raw`
-local managed_source_path = "/session/Media/Child.RPP"
-install_subproject_fake({
-  open_child_path = "/session/Child.RPP",
-  managed_copy_source_path = managed_source_path,
-  managed_copy_wrong_child = true,
-})
-files["/session/Child.RPP-PROX"] = true
-files[managed_source_path .. "-PROX"] = true
-local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
-local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
-  child_ref,
-  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
-})
-local summary, failure = insert_subproject_item(request)
-assert(summary == nil and failure.code == "VERIFY_FAILED")
-assert(failure.details.blocker == "subproject_source_readback_failed")
-`);
-  });
+source.subproject = { path = "/session/OtherChild.RPP" }
+assert(d30_item_source_truth(item, "/session/Child.RPP-PROX", "/session/Child.RPP") == nil)
 
-  it("rejects a REAPER-managed copied source when its actual proxy file is missing", () => {
-    runLua(SUBPROJECT_SOURCE, String.raw`
-local managed_source_path = "/session/Media/Child.RPP"
-install_subproject_fake({ open_child_path = "/session/Child.RPP", managed_copy_source_path = managed_source_path })
-files["/session/Child.RPP-PROX"] = true
-local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
-local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
-  child_ref,
-  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
-})
-local summary, failure = insert_subproject_item(request)
-assert(summary == nil and failure.code == "VERIFY_FAILED")
-assert(failure.details.blocker == "subproject_source_readback_failed")
+source.subproject = child_project
+files[managed_source_path .. "-PROX"] = nil
+assert(d30_item_source_truth(item, "/session/Child.RPP-PROX", "/session/Child.RPP") == nil)
 `);
   });
 
@@ -397,7 +467,18 @@ function install_subproject_fake(config)
   existing_item = { guid = "{ITEM-OLD}", track = other_track, position = 1, selected = true }
   parent_project.items[1] = existing_item
   cursor = 9
-  calls = { actions = {}, select_project = 0, insert_media = 0 }
+  calls = {
+    actions = {},
+    select_project = 0,
+    insert_media = 0,
+    create_source = 0,
+    destroy_source = 0,
+    add_item = 0,
+    add_take = 0,
+    set_take_source = 0,
+    delete_item = 0,
+    update_item = 0,
+  }
   local expected_child = "/session/Dialog_Edit__subproject_req_create.RPP"
   if config.existing_child then files[expected_child] = true end
   if config.open_child_path then
@@ -484,36 +565,107 @@ function install_subproject_fake(config)
   reaper.SetEditCurPos2 = function(project, value) assert(project == parent_project); cursor = value end
   reaper.UpdateArrange = function() end
   reaper.InsertMedia = function(path, mode)
-    assert(path:match("%-PROX$") and mode == 0)
     calls.insert_media = calls.insert_media + 1
-    if config.insert_failure then return false end
-    if config.insert_without_item then return 1 end
-    local selected_track = nil
-    for _, track in ipairs(parent_project.tracks) do if track.selected then selected_track = track end end
-    local source_path = config.managed_copy_source_path or (config.wrong_source and "/wrong/source.RPP-PROX" or path)
-    local associated_project = config.managed_copy_wrong_child
-      and { path = "/session/OtherChild.RPP" }
-      or child_project
-      or { path = path:gsub("%-PROX$", "") }
-    local source = { path = source_path, subproject = associated_project }
-    if config.wrapper_source then
-      source.subproject = nil
-      source.parent = { path = "", subproject = associated_project }
-    end
+    error("InsertMedia must not be used for native subproject insertion: " .. tostring(path) .. ":" .. tostring(mode))
+  end
+  reaper.PCM_Source_CreateFromFile = function(path)
+    calls.create_source = calls.create_source + 1
+    assert(path:match("%.RPP$") and not path:match("%-PROX$"))
+    if config.source_create_failure then return nil end
+    local associated_project = config.wrong_child_pointer and { path = "/session/OtherChild.RPP" } or child_project
+    if config.missing_child_pointer then associated_project = nil end
+    return {
+      path = config.source_path or path,
+      source_type = config.source_type or "RPP_PROJECT",
+      length = config.source_length == nil and 6.25 or config.source_length,
+      length_is_qn = config.source_length_is_qn == true,
+      subproject = associated_project,
+    }
+  end
+  reaper.PCM_Source_Destroy = function(source)
+    calls.destroy_source = calls.destroy_source + 1
+    source.destroyed = true
+  end
+  reaper.GetMediaSourceType = function(source)
+    if source.raise_type then error("source type read failed") end
+    if source.source_type then return source.source_type end
+    return source.path and source.path ~= "" and "RPP_PROJECT" or "SECTION"
+  end
+  reaper.GetMediaSourceLength = function(source)
+    return source.length, source.length_is_qn == true
+  end
+  reaper.AddMediaItemToTrack = function(track)
+    calls.add_item = calls.add_item + 1
+    if config.add_item_failure then return nil end
     local item = {
       guid = "{ITEM-NEW}",
-      track = selected_track,
-      position = cursor,
+      track = track,
+      position = 0,
+      length = 0,
       selected = true,
-      take = { source = source, name = "" },
+      take = nil,
     }
     parent_project.items[#parent_project.items + 1] = item
-    return 1
+    return item
+  end
+  reaper.AddTakeToMediaItem = function(item)
+    calls.add_take = calls.add_take + 1
+    if config.add_take_failure then return nil end
+    local take = { source = nil, name = "" }
+    item.take = take
+    return take
+  end
+  reaper.SetMediaItemInfo_Value = function(item, key, value)
+    if key == "D_POSITION" then
+      if config.position_write_failure then return false end
+      item.position = value
+      return true
+    end
+    assert(key == "D_LENGTH")
+    if config.length_write_failure then return false end
+    item.length = value
+    return true
+  end
+  reaper.SetMediaItemTake_Source = function(take, source)
+    calls.set_take_source = calls.set_take_source + 1
+    if config.set_source_failure then return false end
+    if config.wrapper_source then
+      take.source = {
+        path = source.path,
+        source_type = source.source_type,
+        length = source.length,
+        length_is_qn = source.length_is_qn,
+        parent = { path = "", source_type = "SECTION", subproject = source.subproject },
+      }
+    else
+      take.source = source
+    end
+  end
+  reaper.UpdateItemInProject = function(item)
+    calls.update_item = calls.update_item + 1
+    if config.update_item_failure then return false end
+  end
+  reaper.DeleteTrackMediaItem = function(track, item)
+    calls.delete_item = calls.delete_item + 1
+    assert(track == item.track)
+    if config.delete_item_failure then return false end
+    for index, candidate in ipairs(parent_project.items) do
+      if candidate == item then
+        table.remove(parent_project.items, index)
+        return true
+      end
+    end
+    return false
   end
   reaper.BR_GetMediaItemGUID = function(item) return item.guid end
   reaper.GetMediaItem_Track = function(item) return item.track end
   reaper.GetActiveTake = function(item) return item.take end
-  reaper.GetMediaItemTake_Source = function(take) return take.source end
+  reaper.GetMediaItemTake_Source = function(take)
+    if config.wrong_source_readback then
+      return { path = "/wrong/source.RPP", source_type = "RPP_PROJECT", subproject = child_project }
+    end
+    return take.source
+  end
   reaper.GetMediaSourceFileName = function(source)
     if source.raise_path then error("source path read failed") end
     return source.path
@@ -526,10 +678,15 @@ function install_subproject_fake(config)
     if source.raise_parent then error("parent source read failed") end
     return source.parent
   end
-  reaper.GetMediaItemInfo_Value = function(item, key) assert(key == "D_POSITION"); return item.position end
+  reaper.GetMediaItemInfo_Value = function(item, key)
+    if key == "D_POSITION" then return item.position end
+    assert(key == "D_LENGTH")
+    return item.length
+  end
   reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, set_new)
     assert(key == "P_NAME")
     if set_new then take.name = value end
+    if config.name_readback_failure and not set_new then return true, "wrong" end
     return true, take.name
   end
 end

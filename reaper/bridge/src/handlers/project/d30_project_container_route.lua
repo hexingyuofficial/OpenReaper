@@ -501,43 +501,18 @@ local function d30_restore_project_ui(project, snapshot)
   return ok_cursor == true
 end
 
-local function d30_item_set(project)
-  local ok_count, count = call_reaper("CountMediaItems", project)
-  if not ok_count then
-    return nil
-  end
-  local result = {}
-  for index = 0, (first_number(count) or 0) - 1 do
-    local ok_item, item = call_reaper("GetMediaItem", project, index)
-    if not ok_item or not item then
-      return nil
-    end
-    result[item] = true
-  end
-  return result
-end
-
-local function d30_unique_new_item(project, before)
-  local after = d30_item_set(project)
-  if not after then
-    return nil, 0
-  end
-  local found = nil
-  local count = 0
-  for item in pairs(after) do
-    if not before[item] then
-      found = item
-      count = count + 1
-    end
-  end
-  return count == 1 and found or nil, count
-end
-
 local D30_MAX_SOURCE_CHAIN_DEPTH = 16
 
-local function d30_source_path_truth(source_path, expected_proxy_path)
+local function d30_source_path_truth(source_path, expected_proxy_path, expected_child_path)
   if not is_string(source_path) or source_path == "" then
     return nil
+  end
+  if source_path == expected_child_path then
+    return {
+      source_path = source_path,
+      proxy_path = expected_proxy_path,
+      mode = "exact_requested_child_project",
+    }
   end
   if source_path == expected_proxy_path then
     return {
@@ -589,12 +564,16 @@ local function d30_item_source_truth(item, expected_proxy_path, expected_child_p
     visited[current_source] = true
 
     local ok_path, path_a, path_b = call_reaper("GetMediaSourceFileName", current_source, "")
-    if not ok_path then
+    local ok_type, source_type_value = call_reaper("GetMediaSourceType", current_source, "")
+    if not ok_path or not ok_type then
       return nil
     end
     local current_path = first_string(path_a, path_b)
-    local current_path_truth = d30_source_path_truth(current_path, expected_proxy_path)
+    local current_path_truth = d30_source_path_truth(current_path, expected_proxy_path, expected_child_path)
     if current_path_truth then
+      if first_string(source_type_value) ~= "RPP_PROJECT" then
+        return nil
+      end
       path_source = current_source
       path_truth = current_path_truth
     end
@@ -632,7 +611,52 @@ local function d30_item_source_truth(item, expected_proxy_path, expected_child_p
     source_proxy_path = path_truth.proxy_path,
     requested_proxy_path = expected_proxy_path,
     source_path_mode = path_truth.mode,
+    source_type = "RPP_PROJECT",
   }
+end
+
+local function d30_destroy_source(source)
+  if not source then
+    return true
+  end
+  local destroyed = d30_project_call_void("PCM_Source_Destroy", source)
+  return destroyed == true
+end
+
+local function d30_delete_created_item(track, item)
+  if not track or not item then
+    return true
+  end
+  local ok, removed = call_reaper("DeleteTrackMediaItem", track, item)
+  return ok and removed ~= false
+end
+
+local function d30_create_native_subproject_source(child_path)
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", child_path)
+  if not ok_source or not source then
+    return nil, nil, "subproject_source_create_failed"
+  end
+
+  local ok_type, source_type_value = call_reaper("GetMediaSourceType", source, "")
+  if not ok_type or first_string(source_type_value) ~= "RPP_PROJECT" then
+    return source, nil, "subproject_source_type_mismatch"
+  end
+  local ok_path, path_a, path_b = call_reaper("GetMediaSourceFileName", source, "")
+  if not ok_path or first_string(path_a, path_b) ~= child_path then
+    return source, nil, "subproject_source_path_mismatch"
+  end
+  local ok_length, source_length, length_is_quarter_notes = call_reaper("GetMediaSourceLength", source)
+  if not ok_length
+    or type(source_length) ~= "number"
+    or source_length ~= source_length
+    or source_length == math.huge
+    or source_length == -math.huge
+    or source_length <= 0
+    or length_is_quarter_notes ~= false
+  then
+    return source, nil, "subproject_source_length_invalid"
+  end
+  return source, source_length, nil
 end
 
 local function d30_item_from_request(project, request)
@@ -875,49 +899,121 @@ local function insert_subproject_item(request)
     })
   end
 
-  local ui_snapshot = d30_snapshot_project_ui(parent.project)
-  local items_before = d30_item_set(parent.project)
-  if not ui_snapshot or not items_before then
-    return d30_project_error("COMMAND_FAILED", "Could not snapshot parent selection and item identity before subproject insertion.", {
-      blocker = "parent_ui_snapshot_failed",
+  local child_project = d30_project_find_open_by_path(child_path)
+  if not child_project then
+    return d30_project_error("COMMAND_FAILED", "The requested subproject must be open before its native project source can be inserted.", {
+      blocker = "subproject_must_be_open_for_native_source",
+      child_project_path = child_path,
+    })
+  end
+  local child_state = d30_project_state_for_instance(child_project)
+  if not child_state or child_state.path ~= child_path then
+    return d30_project_error("VERIFY_FAILED", "Open subproject identity did not match the requested project ref.", {
+      blocker = "open_subproject_path_mismatch",
+      expected_path = child_path,
+      actual_path = child_state and child_state.path or "",
     }, false)
   end
-  for selected_track in pairs(ui_snapshot.tracks) do
-    call_reaper("SetTrackSelected", selected_track, selected_track == track)
-  end
-  call_reaper("SetEditCurPos2", parent.project, position, false, false)
 
-  local inserted, insert_reason = d30_project_call_command("InsertMedia", proxy_path, 0)
-  if not inserted then
-    d30_restore_project_ui(parent.project, ui_snapshot)
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected insertion of the subproject proxy.", {
-      blocker = "insert_media_failed",
-      reason = insert_reason,
+  local source, source_length, source_failure = d30_create_native_subproject_source(child_path)
+  if source_failure then
+    local source_destroyed = d30_destroy_source(source)
+    return d30_project_error("VERIFY_FAILED", "REAPER did not create an exact native subproject source from the requested child project.", {
+      blocker = source_failure,
+      child_project_path = child_path,
+      source_destroyed = source_destroyed,
     }, false)
   end
-  local item, new_item_count = d30_unique_new_item(parent.project, items_before)
+
+  local ui_snapshot = d30_snapshot_project_ui(parent.project)
+  if not ui_snapshot then
+    local source_destroyed = d30_destroy_source(source)
+    return d30_project_error("COMMAND_FAILED", "Could not snapshot parent selection and edit cursor before subproject insertion.", {
+      blocker = "parent_ui_snapshot_failed",
+      source_destroyed = source_destroyed,
+    }, false)
+  end
+
+  local item = nil
+  local source_owned_by_take = false
+  local function fail_after_mutation(code, message, details, recoverable)
+    local source_destroyed = true
+    if not source_owned_by_take then
+      source_destroyed = d30_destroy_source(source)
+    end
+    local item_deleted = d30_delete_created_item(track, item)
+    local parent_ui_restored = d30_restore_project_ui(parent.project, ui_snapshot)
+    if not source_destroyed or not item_deleted or not parent_ui_restored then
+      return d30_project_error("RESTORE_FAILED", "Subproject insertion failed and rollback did not complete.", {
+        original_code = code,
+        original_blocker = details and details.blocker or nil,
+        source_destroyed = source_owned_by_take and nil or source_destroyed,
+        item_deleted = item_deleted,
+        parent_ui_restored = parent_ui_restored,
+      }, false)
+    end
+    return d30_project_error(code, message, details, recoverable)
+  end
+
+  local ok_item, created_item = call_reaper("AddMediaItemToTrack", track)
+  item = ok_item and created_item or nil
   if not item then
-    d30_restore_project_ui(parent.project, ui_snapshot)
-    return d30_project_error("VERIFY_FAILED", "Subproject insertion did not create exactly one identifiable Item.", {
-      blocker = "new_item_identity_ambiguous",
-      new_item_count = new_item_count,
+    return fail_after_mutation("COMMAND_FAILED", "REAPER could not create an Item for the native subproject source.", {
+      blocker = "subproject_item_create_failed",
     }, false)
   end
+  local ok_take, take = call_reaper("AddTakeToMediaItem", item)
+  if not ok_take or not take then
+    return fail_after_mutation("COMMAND_FAILED", "REAPER could not create a Take for the native subproject source.", {
+      blocker = "subproject_take_create_failed",
+    }, false)
+  end
+  local position_set, position_reason = d30_project_call_command("SetMediaItemInfo_Value", item, "D_POSITION", position)
+  local length_set, length_reason = d30_project_call_command("SetMediaItemInfo_Value", item, "D_LENGTH", source_length)
+  if not position_set or not length_set then
+    return fail_after_mutation("COMMAND_FAILED", "REAPER rejected native subproject Item bounds.", {
+      blocker = "subproject_item_bounds_write_failed",
+      position_reason = position_reason,
+      length_reason = length_reason,
+    }, false)
+  end
+  local source_set, source_set_reason = d30_project_call_void("SetMediaItemTake_Source", take, source)
+  if not source_set then
+    return fail_after_mutation("COMMAND_FAILED", "REAPER rejected the native subproject Take source.", {
+      blocker = "subproject_take_source_write_failed",
+      reason = source_set_reason,
+    }, false)
+  end
+  source_owned_by_take = true
+  local item_updated, update_reason = d30_project_call_void("UpdateItemInProject", item)
+  if not item_updated then
+    return fail_after_mutation("COMMAND_FAILED", "REAPER rejected the native subproject Item update.", {
+      blocker = "subproject_item_update_failed",
+      reason = update_reason,
+    }, false)
+  end
+
   local truth = d30_item_source_truth(item, proxy_path, child_path)
   if not truth or truth.track ~= track then
-    d30_restore_project_ui(parent.project, ui_snapshot)
-    return d30_project_error("VERIFY_FAILED", "Inserted Item did not read back on the exact Track with a real subproject source.", {
+    return fail_after_mutation("VERIFY_FAILED", "Inserted Item did not read back on the exact Track with a real subproject source.", {
       blocker = truth and "target_track_mismatch" or "subproject_source_readback_failed",
       proxy_path = proxy_path,
     }, false)
   end
   local ok_position, actual_position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
   if not ok_position or type(actual_position) ~= "number" or math.abs(actual_position - position) > 0.000001 then
-    d30_restore_project_ui(parent.project, ui_snapshot)
-    return d30_project_error("VERIFY_FAILED", "Inserted subproject Item did not read back at the requested position.", {
+    return fail_after_mutation("VERIFY_FAILED", "Inserted subproject Item did not read back at the requested position.", {
       blocker = "subproject_item_position_readback_failed",
       expected_position_seconds = position,
       actual_position_seconds = actual_position,
+    }, false)
+  end
+  local ok_length, actual_length = call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH")
+  if not ok_length or type(actual_length) ~= "number" or math.abs(actual_length - source_length) > 0.000001 then
+    return fail_after_mutation("VERIFY_FAILED", "Inserted subproject Item did not read back at the native source length.", {
+      blocker = "subproject_item_length_readback_failed",
+      expected_length_seconds = source_length,
+      actual_length_seconds = actual_length,
     }, false)
   end
   local requested_name = bounded_string(request.params.name or "", 160)
@@ -925,15 +1021,17 @@ local function insert_subproject_item(request)
     local ok_name, name_retval = call_reaper("GetSetMediaItemTakeInfo_String", truth.take, "P_NAME", requested_name, true)
     local ok_read, _, actual_name = call_reaper("GetSetMediaItemTakeInfo_String", truth.take, "P_NAME", "", false)
     if not ok_name or name_retval == false or not ok_read or actual_name ~= requested_name then
-      d30_restore_project_ui(parent.project, ui_snapshot)
-      return d30_project_error("VERIFY_FAILED", "Inserted subproject Item name did not read back exactly.", {
+      return fail_after_mutation("VERIFY_FAILED", "Inserted subproject Item name did not read back exactly.", {
         blocker = "subproject_item_name_readback_failed",
       }, false)
     end
   end
   if not d30_restore_project_ui(parent.project, ui_snapshot) then
+    local failed_item_ref = d30_item_ref(item)
+    local item_deleted = d30_delete_created_item(track, item)
     return d30_project_error("RESTORE_FAILED", "Inserted subproject Item but could not restore selection and edit cursor.", {
-      item_ref = d30_item_ref(item),
+      item_ref = failed_item_ref,
+      item_deleted = item_deleted,
     }, false)
   end
 
