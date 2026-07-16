@@ -229,7 +229,11 @@ test("runs the complete editing-sfx trial with recursive media, typed recovery, 
     assert.equal(calls.filter((call) => call.arguments.id === "macro.automation.apply").length, 8);
     assert.equal(report.capability_results.some((row) => row.capability === "track_volume_automation" && row.pass_count === 2), true);
     assert.equal(report.capability_results.some((row) => row.capability === "take_fx_parameter_automation" && row.pass_count === 2), true);
-    assert.equal(report.capability_results.some((row) => row.capability === "subproject_lifecycle" && row.track_ref?.startsWith("track:")), true);
+    const subprojectCapability = report.capability_results.find((row) => row.capability === "subproject_lifecycle");
+    assert.equal(subprojectCapability?.track_ref?.startsWith("track:"), true);
+    assert.equal(subprojectCapability?.source_path_mode, "reaper_managed_proxy_copy");
+    assert.notEqual(subprojectCapability?.source_path, subprojectCapability?.requested_proxy_path);
+    assert.equal(subprojectCapability?.source_proxy_path, `${subprojectCapability?.source_path}-PROX`);
     assert.ok(report.performance_measurements.length >= 2);
 
     assert.equal(report.rendered_outputs.length, 1);
@@ -638,9 +642,14 @@ async function respond(request, { evidenceProject, managedRenderRoot, state, ins
     const subproject = state.subprojects.get(projectRef);
     const itemRef = `item:guid:{SUBPROJECT-${state.nextItem++}}`;
     const trackRef = refs.track_ref.ref;
+    const managedSourcePath = path.join(path.dirname(evidenceProject), "Media", path.basename(subproject.childProjectPath));
+    const managedProxyPath = `${managedSourcePath}-PROX`;
+    await mkdir(path.dirname(managedSourcePath), { recursive: true });
+    await writeFile(managedSourcePath, "<REAPER_PROJECT 0.1 managed-subproject-copy\n>", "utf8");
+    await writeFile(managedProxyPath, wavFixture());
     state.items.set(itemRef, { ref: itemRef, track_ref: trackRef, start_seconds: input.position_seconds, length_seconds: 1, active_take_ref: `take:guid:{SUBPROJECT-${state.nextItem}}` });
     subproject.itemRef = itemRef;
-    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { item_ref: itemRef, subproject_project_ref: projectRef, inserted: true, position_seconds: input.position_seconds, proxy_path: subproject.proxyPath, source_path: subproject.proxyPath, parent_ui_restored: true, subproject_item_status: "native_source_verified", live_materialization: "native_subproject_source_verified" } } });
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { item_ref: itemRef, subproject_project_ref: projectRef, inserted: true, position_seconds: input.position_seconds, proxy_path: subproject.proxyPath, source_path: managedSourcePath, source_proxy_path: managedProxyPath, requested_proxy_path: subproject.proxyPath, source_path_mode: "reaper_managed_proxy_copy", parent_ui_restored: true, subproject_item_status: "native_source_verified", live_materialization: "native_subproject_source_verified" } } });
   }
   if (id === "template.project.render_or_update_subproject") {
     const projectRef = refs.subproject_project_ref.ref;

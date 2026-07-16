@@ -1372,15 +1372,44 @@ async function runSubprojectLifecycle(context, trackRef, prefix) {
   });
   const insertSummary = inserted?.result?.summary ?? {};
   assertExactRef(insertSummary.item_ref, "item:", "SUBPROJECT_ITEM_REF_MISSING");
+  const acceptedSourcePathModes = new Set(["exact_requested_proxy", "reaper_managed_proxy_copy"]);
   assertValue(
     insertSummary.inserted === true
       && insertSummary.subproject_project_ref === createSummary.subproject_project_ref
-      && insertSummary.source_path === createSummary.proxy_path
+      && insertSummary.requested_proxy_path === createSummary.proxy_path
+      && acceptedSourcePathModes.has(insertSummary.source_path_mode)
+      && path.isAbsolute(insertSummary.source_path ?? "")
+      && path.isAbsolute(insertSummary.source_proxy_path ?? "")
       && insertSummary.subproject_item_status === "native_source_verified"
       && insertSummary.parent_ui_restored === true,
     "SUBPROJECT_INSERT_NOT_VERIFIED",
     insertSummary,
   );
+  const expectedSourceProxyPath = insertSummary.source_path.endsWith("-PROX")
+    ? insertSummary.source_path
+    : `${insertSummary.source_path}-PROX`;
+  assertValue(insertSummary.source_proxy_path === expectedSourceProxyPath, "SUBPROJECT_SOURCE_PROXY_PAIR_MISMATCH", insertSummary);
+  if (insertSummary.source_path_mode === "exact_requested_proxy") {
+    assertValue(
+      insertSummary.source_path === createSummary.proxy_path && insertSummary.source_proxy_path === createSummary.proxy_path,
+      "SUBPROJECT_EXACT_PROXY_IDENTITY_MISMATCH",
+      insertSummary,
+    );
+  } else {
+    assertValue(
+      insertSummary.source_path !== createSummary.proxy_path && insertSummary.source_proxy_path !== createSummary.proxy_path,
+      "SUBPROJECT_MANAGED_PROXY_COPY_NOT_DISTINCT",
+      insertSummary,
+    );
+  }
+  const sourceFile = await stat(insertSummary.source_path).catch(() => null);
+  const sourceProxyFile = await stat(insertSummary.source_proxy_path).catch(() => null);
+  assertValue(sourceFile?.isFile() === true && sourceFile.size > 0 && sourceProxyFile?.isFile() === true && sourceProxyFile.size > 0, "SUBPROJECT_SOURCE_FILES_MISSING", {
+    source_path: insertSummary.source_path,
+    source_size: sourceFile?.size ?? 0,
+    source_proxy_path: insertSummary.source_proxy_path,
+    source_proxy_size: sourceProxyFile?.size ?? 0,
+  });
   const itemRows = await walkProjectQuery(context, "secondary", {
     entity: "items",
     fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
@@ -1426,6 +1455,10 @@ async function runSubprojectLifecycle(context, trackRef, prefix) {
     job_ref: updateSummary.job_ref,
     child_project_path: createSummary.child_project_path,
     proxy_path: updateSummary.proxy_path,
+    source_path: insertSummary.source_path,
+    source_proxy_path: insertSummary.source_proxy_path,
+    requested_proxy_path: insertSummary.requested_proxy_path,
+    source_path_mode: insertSummary.source_path_mode,
   });
 }
 
