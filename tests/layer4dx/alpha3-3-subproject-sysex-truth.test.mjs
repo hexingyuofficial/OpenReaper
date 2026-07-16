@@ -128,6 +128,14 @@ assert(failure == nil and summary.created == true and summary.parent_restored ==
 assert(current_project == parent_project and calls.select_project == 2)
 assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
 
+install_subproject_fake({ inactive_new_tab = true, select_project_noop = true })
+request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+summary, failure = create_subproject(request)
+assert(failure == nil and summary.created == true and summary.parent_restored == true)
+assert(current_project == parent_project and calls.actions[40861] >= 2)
+assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
+
 install_subproject_fake({ ambiguous_new_tabs = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
@@ -274,6 +282,16 @@ function install_subproject_fake(config)
       if not config.inactive_new_tab and not config.ambiguous_new_tabs then current_project = child_project end
       return nil
     end
+    if action == 40861 then
+      assert(flag == 0 and project == current_project)
+      local current_index = nil
+      for index, candidate in ipairs(projects) do
+        if candidate == current_project then current_index = index break end
+      end
+      assert(current_index ~= nil)
+      current_project = projects[(current_index % #projects) + 1]
+      return nil
+    end
     assert(action == 42332 and flag == 0 and project == current_project)
     if config.render_failure then return false end
     if not config.no_proxy then files[current_project.path .. "-PROX"] = true end
@@ -293,7 +311,7 @@ function install_subproject_fake(config)
   end
   reaper.SelectProjectInstance = function(project)
     calls.select_project = calls.select_project + 1
-    current_project = project
+    if not config.select_project_noop then current_project = project end
   end
   reaper.SetProjExtState = function(project) assert(project == parent_project); return 1 end
   reaper.GetSet_LoopTimeRange2 = function(project, is_set, is_loop, start_time, end_time)

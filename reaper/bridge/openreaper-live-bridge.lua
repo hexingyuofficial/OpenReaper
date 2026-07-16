@@ -17147,8 +17147,11 @@ __openreaper_register_handler_module("project/d30_project_container_route.lua", 
 -- Extracted D30 handler: native project tab/subproject container lifecycle.
 
 local D30_NEW_PROJECT_TAB_ACTION = 40859
+local D30_NEXT_PROJECT_TAB_ACTION = 40861
 local D30_SAVE_RENDER_SUBPROJECT_ACTION = 42332
 local D30_SAVE_AS_OPTIONS = 8
+
+local d30_project_select_exact
 
 local function d30_project_error(code, message, details, recoverable)
   return nil, {
@@ -17251,12 +17254,7 @@ local function d30_project_summary(request, fields)
 end
 
 local function d30_project_restore(parent_project)
-  local ok = call_reaper("SelectProjectInstance", parent_project)
-  if not ok then
-    return false
-  end
-  local current = d30_project_current_state()
-  return current ~= nil and current.project == parent_project
+  return d30_project_select_exact(parent_project) == true
 end
 
 local function d30_project_failure_after_restore(parent_project, code, message, details, recoverable)
@@ -17412,6 +17410,40 @@ local function d30_project_open_instances()
     }
     index = index + 1
   end
+end
+
+d30_project_select_exact = function(target_project)
+  if not target_project then
+    return false, "target_project_missing"
+  end
+  local current = d30_project_current_state()
+  if current and current.project == target_project then
+    return true, "already_active"
+  end
+
+  d30_project_call_void("SelectProjectInstance", target_project)
+  current = d30_project_current_state()
+  if current and current.project == target_project then
+    return true, "select_project_instance"
+  end
+
+  local instances = d30_project_open_instances()
+  if not instances then
+    return false, "project_tab_enumeration_failed"
+  end
+  for _ = 1, #instances do
+    current = d30_project_current_state()
+    local command_project = current and current.project or target_project
+    local advanced = d30_project_call_void("Main_OnCommandEx", D30_NEXT_PROJECT_TAB_ACTION, 0, command_project)
+    if not advanced then
+      return false, "next_project_tab_action_failed"
+    end
+    current = d30_project_current_state()
+    if current and current.project == target_project then
+      return true, "next_project_tab_action"
+    end
+  end
+  return false, "project_tab_selection_readback_failed"
 end
 
 local function d30_project_find_single_added_instance(before)
@@ -17752,9 +17784,11 @@ local function create_subproject(request)
         added_project_count = added_count,
       }, false)
     end
-    if not d30_project_call_void("SelectProjectInstance", added.project) then
+    local selected, selection_reason = d30_project_select_exact(added.project)
+    if not selected then
       return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER created a new project tab but rejected selecting its exact project instance.", {
         blocker = "new_project_tab_selection_failed",
+        reason = selection_reason,
       }, false)
     end
     child = d30_project_current_state()
@@ -18036,9 +18070,11 @@ local function render_or_update_subproject(request)
 
   local child_project = d30_project_find_open_by_path(child_path)
   if child_project then
-    if not d30_project_call_void("SelectProjectInstance", child_project) then
+    local selected, selection_reason = d30_project_select_exact(child_project)
+    if not selected then
       return d30_project_error("COMMAND_FAILED", "REAPER could not activate the requested subproject tab.", {
         blocker = "subproject_tab_activation_failed",
+        reason = selection_reason,
       }, false)
     end
   else
