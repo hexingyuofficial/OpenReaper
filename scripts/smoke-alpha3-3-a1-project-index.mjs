@@ -81,9 +81,25 @@ try {
   clients.push(clientA);
   calls.client_a_ping = await callTool(clientA, "ping", {});
 
-  calls.initial_tracks = await queryTracks(clientA, { limit: 100, refresh_policy: "if_stale" });
-  assertMacroSuccess(calls.initial_tracks, "macro.project.query");
-  const initialRefs = calls.initial_tracks.result?.data?.rows?.map((row) => row.ref).filter(Boolean) ?? [];
+  calls.initial_track_pages = [];
+  let initialCursor;
+  do {
+    const page = await queryTracks(clientA, {
+      limit: 50,
+      refresh_policy: "if_stale",
+      cursor: initialCursor,
+    });
+    assertMacroSuccess(page, "macro.project.query");
+    calls.initial_track_pages.push(page);
+    initialCursor = page.result?.data?.page?.has_more === true
+      ? page.result?.data?.page?.next_cursor
+      : undefined;
+    if (calls.initial_track_pages.length > 100) throw new Error("Initial track pagination exceeded 100 pages");
+  } while (initialCursor);
+  calls.initial_tracks = calls.initial_track_pages[0];
+  const initialRefs = calls.initial_track_pages.flatMap((page) => page.result?.data?.rows?.map((row) => row.ref).filter(Boolean) ?? []);
+  const initialKnownTotal = calls.initial_tracks.result?.data?.coverage?.known_total_row_count ?? 0;
+  assert(initialRefs.length === initialKnownTotal, `Initial pagination returned ${initialRefs.length} of ${initialKnownTotal} tracks`);
   if (initialRefs.length > 0) {
     calls.delete_preview = await callTemplate(clientA, "macro.project.delete_targets", {
       refs: { tracks: initialRefs },
@@ -327,13 +343,14 @@ async function connect(name, overrides) {
   return client;
 }
 
-async function queryTracks(client, { limit, refresh_policy, filters = undefined, fields = ["ref", "name", "index"], budget = PUBLIC_BUDGET }) {
+async function queryTracks(client, { limit, refresh_policy, filters = undefined, fields = ["ref", "name", "index"], budget = PUBLIC_BUDGET, cursor = undefined }) {
   return callTemplate(client, "macro.project.query", {
     entity: "tracks",
     fields,
     limit,
     refresh_policy,
     ...(filters ? { filters } : {}),
+    ...(cursor ? { cursor } : {}),
   }, undefined, budget);
 }
 
