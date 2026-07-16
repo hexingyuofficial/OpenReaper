@@ -59,7 +59,7 @@ assert(created.subproject_project_ref == "project:path:" .. created.child_projec
 assert(created.inherited_time_selection == true and created.inherited_time_selection_start_seconds == 3 and created.inherited_time_selection_end_seconds == 7)
 assert(output_refs[1].identity.scheme == "path" and output_refs[1].identity.value == created.child_project_path)
 assert(output_refs[2].identity.scheme == "path" and output_refs[2].identity.value == "/session/Parent.RPP")
-assert(current_project == parent_project and calls.actions[40859] == 1 and calls.actions[42332] == 1)
+assert(current_project == parent_project and calls.actions[41929] == 1 and calls.actions[42332] == 1)
 assert(child_project.time_start == 3 and child_project.time_end == 7)
 
 local insert_request = project_request("project.insert_subproject_item", { position_seconds = 12.5, name = "Dialog Subproject" }, {
@@ -99,7 +99,7 @@ local request = project_request("project.create_subproject", { name = "Dialog Ed
 request.id = "req_create"
 local summary, failure = create_subproject(request)
 assert(summary == nil and failure.code == "FILE_EXISTS")
-assert(calls.actions[40859] == nil and current_project == parent_project)
+assert(calls.actions[41929] == nil and current_project == parent_project)
 
 install_subproject_fake({ no_proxy = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
@@ -156,7 +156,7 @@ request.id = "closed_child"
 local summary, failure = render_or_update_subproject(request)
 assert(failure == nil and summary.completed == true and summary.queued == false)
 assert(summary.proxy_path == "/session/ClosedChild.RPP-PROX" and files[summary.proxy_path] == true)
-assert(current_project == parent_project and calls.actions[40859] == 1 and calls.actions[42332] == 1)
+assert(current_project == parent_project and calls.actions[41929] == 1 and calls.actions[42332] == 1)
 
 install_subproject_fake({ render_failure = true })
 files["/session/ClosedChild.RPP"] = true
@@ -272,8 +272,8 @@ function install_subproject_fake(config)
   end
   reaper.Main_OnCommandEx = function(action, flag, project)
     calls.actions[action] = (calls.actions[action] or 0) + 1
-    if action == 40859 then
-      assert(flag == 0 and project == parent_project)
+    if action == 41929 then
+      assert(flag == 0 and project == 0)
       child_project = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
       projects[#projects + 1] = child_project
       if config.ambiguous_new_tabs then
@@ -283,7 +283,7 @@ function install_subproject_fake(config)
       return nil
     end
     if action == 40861 then
-      assert(flag == 0 and project == current_project)
+      assert(flag == 0 and project == 0)
       local current_index = nil
       for index, candidate in ipairs(projects) do
         if candidate == current_project then current_index = index break end

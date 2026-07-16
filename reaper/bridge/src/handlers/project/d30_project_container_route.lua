@@ -1,6 +1,6 @@
 -- Extracted D30 handler: native project tab/subproject container lifecycle.
 
-local D30_NEW_PROJECT_TAB_ACTION = 40859
+local D30_NEW_PROJECT_TAB_ACTION = 41929
 local D30_NEXT_PROJECT_TAB_ACTION = 40861
 local D30_SAVE_RENDER_SUBPROJECT_ACTION = 42332
 local D30_SAVE_AS_OPTIONS = 8
@@ -287,8 +287,7 @@ d30_project_select_exact = function(target_project)
   end
   for _ = 1, #instances do
     current = d30_project_current_state()
-    local command_project = current and current.project or target_project
-    local advanced = d30_project_call_void("Main_OnCommandEx", D30_NEXT_PROJECT_TAB_ACTION, 0, command_project)
+    local advanced = d30_project_call_void("Main_OnCommandEx", D30_NEXT_PROJECT_TAB_ACTION, 0, 0)
     if not advanced then
       return false, "next_project_tab_action_failed"
     end
@@ -622,7 +621,7 @@ local function create_subproject(request)
       blocker = "project_tab_preflight_enumeration_failed",
     }, false)
   end
-  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, parent.project)
+  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
   if not created_tab then
     return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab for the subproject.", {
       blocker = "new_project_tab_failed",
@@ -932,7 +931,7 @@ local function render_or_update_subproject(request)
       }, false)
     end
   else
-    local created = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, parent.project)
+    local created = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
     if not created then
       return d30_project_error("COMMAND_FAILED", "REAPER could not create a tab to open the requested subproject.", {
         blocker = "subproject_open_tab_failed",
