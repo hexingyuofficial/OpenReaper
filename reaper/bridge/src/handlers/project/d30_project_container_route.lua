@@ -247,6 +247,26 @@ local function d30_project_find_open_by_path(path)
   end
 end
 
+local function d30_project_state_for_instance(target_project)
+  if not target_project then
+    return nil
+  end
+  local index = 0
+  while true do
+    local ok, project, project_path = call_reaper("EnumProjects", index, "")
+    if not ok or not project then
+      return nil
+    end
+    if project == target_project then
+      return {
+        project = project,
+        path = is_string(project_path) and project_path or "",
+      }
+    end
+    index = index + 1
+  end
+end
+
 local function d30_project_open_instances()
   local instances = {}
   local index = 0
@@ -628,28 +648,12 @@ local function create_subproject(request)
       reason = create_reason,
     }, false)
   end
-  local child = d30_project_current_state()
-  if not child or child.project == parent.project then
-    local added, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
-    if not added then
-      return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab identity could not be verified exactly.", {
-        blocker = added_reason,
-        added_project_count = added_count,
-      }, false)
-    end
-    local selected, selection_reason = d30_project_select_exact(added.project)
-    if not selected then
-      return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER created a new project tab but rejected selecting its exact project instance.", {
-        blocker = "new_project_tab_selection_failed",
-        reason = selection_reason,
-      }, false)
-    end
-    child = d30_project_current_state()
-    if not child or child.project ~= added.project then
-      return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "The exact newly created project tab did not become active after native selection.", {
-        blocker = "new_project_tab_selection_readback_failed",
-      }, false)
-    end
+  local child, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
+  if not child then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab identity could not be verified exactly.", {
+      blocker = added_reason,
+      added_project_count = added_count,
+    }, false)
   end
   if inherited_time_selection and not d30_project_set_time_selection(child.project, inherited_time_selection) then
     return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject did not inherit the parent time selection exactly.", {
@@ -666,7 +670,7 @@ local function create_subproject(request)
       reason = save_reason,
     }, false)
   end
-  child = d30_project_current_state()
+  child = d30_project_state_for_instance(child.project)
   if not child or child.path ~= child_path or not file_exists(child_path) then
     return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject path did not read back exactly after save.", {
       blocker = "subproject_save_readback_failed",
@@ -922,36 +926,18 @@ local function render_or_update_subproject(request)
   end
 
   local child_project = d30_project_find_open_by_path(child_path)
-  if child_project then
-    local selected, selection_reason = d30_project_select_exact(child_project)
-    if not selected then
-      return d30_project_error("COMMAND_FAILED", "REAPER could not activate the requested subproject tab.", {
-        blocker = "subproject_tab_activation_failed",
-        reason = selection_reason,
-      }, false)
-    end
-  else
-    local created = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
-    if not created then
-      return d30_project_error("COMMAND_FAILED", "REAPER could not create a tab to open the requested subproject.", {
-        blocker = "subproject_open_tab_failed",
-      }, false)
-    end
-    local opened = d30_project_call_void("Main_openProject", child_path)
-    if not opened then
-      return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER could not open the requested subproject path.", {
-        blocker = "subproject_open_failed",
-      }, false)
-    end
-    local opened_state = d30_project_current_state()
-    child_project = opened_state and opened_state.project or nil
+  if not child_project then
+    return d30_project_error("COMMAND_FAILED", "The requested subproject is not open, so OpenReaper will not risk replacing the active parent project.", {
+      blocker = "subproject_must_be_open_for_native_update",
+      child_project_path = child_path,
+    })
   end
-  local active_child = d30_project_current_state()
-  if not child_project or not active_child or active_child.project ~= child_project or active_child.path ~= child_path then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Active subproject path did not match the requested project ref.", {
-      blocker = "active_subproject_path_mismatch",
+  local child_state = d30_project_state_for_instance(child_project)
+  if not child_state or child_state.path ~= child_path then
+    return d30_project_error("VERIFY_FAILED", "Open subproject identity did not match the requested project ref.", {
+      blocker = "open_subproject_path_mismatch",
       expected_path = child_path,
-      actual_path = active_child and active_child.path or "",
+      actual_path = child_state and child_state.path or "",
     }, false)
   end
 
@@ -963,8 +949,8 @@ local function render_or_update_subproject(request)
     }, false)
   end
   local proxy_path = child_path .. "-PROX"
-  active_child = d30_project_current_state()
-  if not active_child or active_child.path ~= child_path or not file_exists(proxy_path) then
+  child_state = d30_project_state_for_instance(child_project)
+  if not child_state or child_state.path ~= child_path or not file_exists(proxy_path) then
     return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Subproject proxy did not read back after native save/render.", {
       blocker = "subproject_render_readback_failed",
       proxy_path = proxy_path,

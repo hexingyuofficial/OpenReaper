@@ -326,7 +326,6 @@ describe("Layer 7 official draft recipe fake smoke", () => {
         "template.fx.add_track_fx",
         "template.fx.list_fx_parameters",
         "template.automation.resolve_send_envelope",
-        "template.automation.set_envelope_lane_state",
         "template.automation.insert_envelope_point",
       ],
     );

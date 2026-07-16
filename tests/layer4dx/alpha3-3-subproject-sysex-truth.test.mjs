@@ -118,23 +118,16 @@ assert(failure.details.blocker == "subproject_save_failed" and current_project =
 `);
   });
 
-  it("selects the one newly created inactive tab and fails closed when the new identity is ambiguous", () => {
+  it("saves and renders the one newly created inactive tab by native project pointer and fails closed when identity is ambiguous", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
 install_subproject_fake({ inactive_new_tab = true })
 local request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
 local summary, failure = create_subproject(request)
 assert(failure == nil and summary.created == true and summary.parent_restored == true)
-assert(current_project == parent_project and calls.select_project == 2)
+assert(current_project == parent_project and calls.select_project == 0)
 assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
-
-install_subproject_fake({ inactive_new_tab = true, select_project_noop = true })
-request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
-request.id = "req_create"
-summary, failure = create_subproject(request)
-assert(failure == nil and summary.created == true and summary.parent_restored == true)
-assert(current_project == parent_project and calls.actions[40861] >= 2)
-assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
+assert(calls.actions[40861] == nil)
 
 install_subproject_fake({ ambiguous_new_tabs = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
@@ -146,7 +139,7 @@ assert(failure.details.added_project_count == 2 and current_project == parent_pr
 `);
   });
 
-  it("opens a closed child path for synchronous render and restores the parent on render failure", () => {
+  it("renders an already-open child by pointer and refuses to replace the parent for a closed child", () => {
     runLua(SUBPROJECT_SOURCE, String.raw`
 install_subproject_fake({})
 files["/session/ClosedChild.RPP"] = true
@@ -154,11 +147,19 @@ local child_ref = { kind = "project", ref = "project:path:/session/ClosedChild.R
 local request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
 request.id = "closed_child"
 local summary, failure = render_or_update_subproject(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED")
+assert(failure.details.blocker == "subproject_must_be_open_for_native_update")
+assert(current_project == parent_project and calls.actions[41929] == nil and calls.actions[42332] == nil)
+
+install_subproject_fake({ open_child_path = "/session/ClosedChild.RPP" })
+request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
+request.id = "open_child"
+summary, failure = render_or_update_subproject(request)
 assert(failure == nil and summary.completed == true and summary.queued == false)
 assert(summary.proxy_path == "/session/ClosedChild.RPP-PROX" and files[summary.proxy_path] == true)
-assert(current_project == parent_project and calls.actions[41929] == 1 and calls.actions[42332] == 1)
+assert(current_project == parent_project and calls.actions[42332] == 1 and calls.select_project == 0)
 
-install_subproject_fake({ render_failure = true })
+install_subproject_fake({ open_child_path = "/session/ClosedChild.RPP", render_failure = true })
 files["/session/ClosedChild.RPP"] = true
 request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
 request.id = "closed_child_failure"
@@ -261,6 +262,11 @@ function install_subproject_fake(config)
   calls = { actions = {}, select_project = 0, insert_media = 0 }
   local expected_child = "/session/Dialog_Edit__subproject_req_create.RPP"
   if config.existing_child then files[expected_child] = true end
+  if config.open_child_path then
+    child_project = { path = config.open_child_path, tracks = {}, items = {}, time_start = 0, time_end = 0 }
+    projects[#projects + 1] = child_project
+    files[config.open_child_path] = true
+  end
   function file_exists(path) return files[path] == true end
 
   reaper = {}
@@ -292,9 +298,9 @@ function install_subproject_fake(config)
       current_project = projects[(current_index % #projects) + 1]
       return nil
     end
-    assert(action == 42332 and flag == 0 and project == current_project)
+    assert(action == 42332 and flag == 0 and project == child_project)
     if config.render_failure then return false end
-    if not config.no_proxy then files[current_project.path .. "-PROX"] = true end
+    if not config.no_proxy then files[project.path .. "-PROX"] = true end
     return nil
   end
   reaper.Main_SaveProjectEx = function(project, path, options)
@@ -303,11 +309,6 @@ function install_subproject_fake(config)
     project.path = path
     files[path] = true
     return nil
-  end
-  reaper.Main_openProject = function(path)
-    child_project = { path = path, tracks = {}, items = {}, time_start = 0, time_end = 0 }
-    projects[#projects + 1] = child_project
-    current_project = child_project
   end
   reaper.SelectProjectInstance = function(project)
     calls.select_project = calls.select_project + 1

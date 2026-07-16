@@ -156,14 +156,6 @@ try {
   });
   assertAutomationSuccess(calls.update_point, "update_point");
 
-  calls.lane_state = await callTemplate(clientA, "macro.automation.apply", {
-    mode: "set_lane_state",
-    envelope_refs: [target.envelope_ref],
-    lane_state: { active: true, visible: true, show_lane: true, armed: false },
-    dry_run: false,
-  });
-  assertAutomationSuccess(calls.lane_state, "set_lane_state");
-
   calls.track_mode = await callTemplate(clientA, "macro.automation.apply", {
     mode: "set_track_mode",
     track_refs: [target.owner_ref],
@@ -247,13 +239,6 @@ try {
   }
   if (!masterSentinel) {
     const masterEnvelope = masterRows.find((row) => row.envelope_type === "volume") ?? masterRows[0];
-    calls.master_lane_state = await callTemplate(clientA, "macro.automation.apply", {
-      mode: "set_lane_state",
-      envelope_refs: [masterEnvelope.envelope_ref],
-      lane_state: { active: true, visible: true, show_lane: true, armed: false },
-      dry_run: false,
-    });
-    assertAutomationSuccess(calls.master_lane_state, "activate Master sentinel Envelope");
     calls.create_master_sentinel = await callTemplate(clientA, "macro.automation.apply", {
       mode: "create_automation_item",
       envelope_refs: [masterEnvelope.envelope_ref],
@@ -401,10 +386,8 @@ const report = {
   project_changes: {
     point_insert_rows: appliedCount(calls.insert_points) + appliedCount(calls.insert_token_staler),
     point_update_rows: appliedCount(calls.update_point),
-    lane_state_rows: appliedCount(calls.lane_state),
     track_mode_rows: appliedCount(calls.track_mode),
     automation_item_create_rows: appliedCount(calls.create_automation_item),
-    master_lane_state_rows: appliedCount(calls.master_lane_state),
     master_sentinel_create_rows: appliedCount(calls.create_master_sentinel),
     automation_item_bounds_rows: appliedCount(calls.set_automation_item_bounds),
     automation_item_delete_rows: appliedCount(calls.delete_automation_item),

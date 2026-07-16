@@ -40,11 +40,14 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     const discovery = createAlpha3_3B1dAutomationApplyDiscoveryItems({ liveRunnableNow: true })[0];
     assert.deepEqual(discovery.supported_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_MODES);
     assert.deepEqual(discovery.held_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES);
+    assert.equal(discovery.supported_modes.includes("set_lane_state"), false);
+    assert.equal(ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS.includes("template.automation.set_envelope_lane_state"), false);
     assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, fx_targets: 8, total_inserted_points: 64 });
     const manual = createAlpha3_3B1dAutomationApplyExactManual().action_manual;
     assert.match(manual.when_to_use.join(" "), /Automation Item deletion/u);
     assert.match(manual.when_to_use.join(" "), /Take-FX/u);
     assert.match(manual.readback_steps.join(" "), /complete pre\/post point tuples/u);
+    assert.doesNotMatch(JSON.stringify(manual), /BR\/SWS|set_lane_state/u);
     assert.match(manual.common_blockers.map((row) => row.code).join(" "), /AUTOMATION_CONFIRMATION_TOKEN_REQUIRED/u);
     assert.match(manual.common_blockers.map((row) => row.code).join(" "), /AUTOMATION_COMPLETE_READBACK_REQUIRED/u);
   });
@@ -52,7 +55,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
   it("passes a GUID-first Envelope ref unchanged through the real Template ref validator", async () => {
     const bridge = new FakeAutomationBridge();
     const result = await executeAlpha3_3B1dAutomationApplyMacro({
-      request: request({ mode: "set_lane_state", envelope_refs: [ENV_A], lane_state: { visible: true } }),
+      request: request({ mode: "insert_points", envelope_refs: [ENV_A], points: [point(1, 0.5)] }),
       executeAtomic: bridge.executeAtomic,
       now: () => new Date(NOW),
     });
@@ -204,23 +207,6 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(result.error.code, "AUTOMATION_TARGET_IDENTITY_MISMATCH");
     assert.deepEqual(bridge.calls.map((call) => call.id), ["template.tracks.resolve_track_ref"]);
     assert.equal(bridge.calls.some((call) => call.id === "template.automation.set_track_automation_mode"), false);
-  });
-
-  it("writes BR-backed lane state and independently re-reads every requested field", async () => {
-    const bridge = new FakeAutomationBridge();
-    const result = await executeAlpha3_3B1dAutomationApplyMacro({
-      request: request({ mode: "set_lane_state", envelope_refs: [ENV_A], lane_state: { visible: true, show_lane: true, armed: true }, dry_run: false }),
-      executeAtomic: bridge.executeAtomic,
-      now: () => new Date(NOW),
-    });
-
-    assert.equal(result.ok, true, JSON.stringify(result));
-    assert.deepEqual(bridge.calls.map((call) => call.id), [
-      "template.automation.read_envelope_summary",
-      "template.automation.set_envelope_lane_state",
-      "template.automation.read_envelope_summary",
-    ]);
-    assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_summary", visible: true, show_lane: true, armed: true });
   });
 
   it("creates one empty Automation Item and proves the unique new live index and bounds", async () => {
@@ -647,10 +633,6 @@ class FakeAutomationBridge {
       sortPoints(env.points);
       return execution(id, { ...envelopeSummary(env), requested: input.points.length, first_time_seconds: input.points[0].time_seconds, last_time_seconds: input.points.at(-1).time_seconds }, [envelopeRef(ref)]);
     }
-    if (id === "template.automation.set_envelope_lane_state") {
-      Object.assign(env, input);
-      return execution(id, envelopeSummary(env), [envelopeRef(ref)]);
-    }
     if (id === "template.automation.set_envelope_point") {
       const current = env.points[input.point_index];
       if (!current) return failure(id, "REF_INVALID");
@@ -757,7 +739,6 @@ function isMutation(id) {
     "template.automation.insert_envelope_points_batch",
     "template.automation.set_envelope_point",
     "template.automation.delete_envelope_points",
-    "template.automation.set_envelope_lane_state",
     "template.automation.set_track_automation_mode",
     "template.automation.create_automation_item",
     "template.automation.set_automation_item_bounds",
