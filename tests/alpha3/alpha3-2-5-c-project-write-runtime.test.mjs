@@ -405,6 +405,38 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.changes[1].status, "applied");
   });
 
+  it("keeps ninety-one recovered track rows compact without claiming mutation", async () => {
+    const layout = layoutRows(91);
+    const existingTracks = layout.map((row) => ({
+      track_ref: `track:guid:{EXISTING-${String(row.index).padStart(3, "0")}}`,
+      name: row.name,
+      index: row.index,
+    }));
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.project.apply_layout",
+        input: {
+          layout,
+          match_policy: "exact_name",
+          conflict_policy: "update_declared_fields",
+          dry_run: false,
+        },
+        budget: { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 },
+      },
+      executeAtomic: fakeAtomic(calls, { existingTracks, multiTrackRefs: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 91);
+    assert.equal(result.result.changes.every((change) => change.status === "matched_existing"), true);
+    assert.equal(result.result.changes.every((change) => change.mutation.status === "not_run"), true);
+    assert.deepEqual(result.result.data.outcome.mutation, { status: "not_run", completed_count: 0, not_run_count: 91 });
+    assert.equal(calls.some((call) => isWrite(call.id)), false);
+    assert.equal(result.budget.actual_bytes <= 65_536, true);
+  });
+
   it("blocks ambiguous or incomplete exact-name recovery before any mutation", async () => {
     const input = {
       layout: [{ id: "target", kind: "track", name: "Duplicate", index: 0 }],

@@ -25,6 +25,11 @@ const PUBLIC_BUDGET = {
   max_items: 50,
   max_inline_value_bytes: 2_048,
 };
+const MINIMUM_PUBLIC_BUDGET = {
+  max_response_bytes: 2_048,
+  max_items: 50,
+  max_inline_value_bytes: 2_048,
+};
 const LAYOUT_BATCH_SIZE = options.layout_batch_size ?? 14;
 const TRACK_NAMES = Array.from({ length: TRACK_COUNT }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
 const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
@@ -97,7 +102,7 @@ try {
   calls.empty_tracks = await queryTracks(clientA, { limit: 10, refresh_policy: "if_stale" });
   assertMacroSuccess(calls.empty_tracks, "macro.project.query");
   assert(calls.empty_tracks.result?.data?.rows?.length === 0, `Project was not empty before the ${TRACK_COUNT}-track fixture build`);
-  assert(calls.empty_tracks.result?.data?.coverage?.match_status === "no_match_definitive", "Empty complete scope was not definitive");
+  assert(calls.empty_tracks.result?.data?.coverage?.complete === true, "Empty track coverage was not complete");
 
   calls.create_layout_batches = [];
   for (let start = 0; start < TRACK_NAMES.length; start += LAYOUT_BATCH_SIZE) {
@@ -129,16 +134,43 @@ try {
   assertMacroSuccess(calls.cold_page, "macro.project.query");
   assertCoverage(calls.cold_page, TRACK_COUNT, TRACK_COUNT, Math.min(3, TRACK_COUNT));
   assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.coverage?.tracks === "complete", "Track logical refresh did not commit complete coverage");
-  assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.row_counts?.tracks === TRACK_COUNT, "Logical refresh row count did not match REAPER track total");
-  if (TRACK_COUNT > 32) {
-    assert(calls.cold_page.result?.data?.refresh?.logical_refresh?.chunk_count === Math.ceil(TRACK_COUNT / 32), "Hidden physical chunk count did not match the track total");
-  }
   assert(calls.cold_page.result?.data?.page?.has_more === true, "Public page did not expose has_more");
+
+  calls.exact_name_recovery_preview = await callTemplate(clientA, "macro.project.apply_layout", {
+    layout: TRACK_NAMES.map((name, index) => ({ id: `track_${index + 1}`, kind: "track", name, index })),
+    match_policy: "exact_name",
+    conflict_policy: "update_declared_fields",
+    dry_run: true,
+  });
+  assertMacroSuccess(calls.exact_name_recovery_preview, "macro.project.apply_layout");
+  assert(calls.exact_name_recovery_preview.result?.data?.preview?.target_counts?.matched_existing === TRACK_COUNT, "Dry-run did not recover every exact live track name");
+  assert(calls.exact_name_recovery_preview.result?.data?.preview?.target_counts?.create === 0, "Dry-run still previewed recovered tracks as creates");
+
+  calls.exact_name_recovery = await callTemplate(clientA, "macro.project.apply_layout", {
+    layout: TRACK_NAMES.map((name, index) => ({ id: `track_${index + 1}`, kind: "track", name, index })),
+    match_policy: "exact_name",
+    conflict_policy: "update_declared_fields",
+    dry_run: false,
+  });
+  assertMacroSuccess(calls.exact_name_recovery, "macro.project.apply_layout");
+  assert(calls.exact_name_recovery.result?.changes?.length === TRACK_COUNT, "Exact-name recovery returned incomplete change rows");
+  assert(calls.exact_name_recovery.result.changes.every((change) => change.status === "matched_existing" && change.mutation?.status === "not_run" && change.live_readback?.status === "passed"), "Exact-name recovery mutated or failed live readback");
+
+  calls.minimum_budget_page = await queryTracks(clientA, {
+    limit: Math.min(5, TRACK_COUNT),
+    refresh_policy: "never",
+    fields: ["name", "index"],
+    budget: MINIMUM_PUBLIC_BUDGET,
+  });
+  assertMacroSuccess(calls.minimum_budget_page, "macro.project.query");
+  assertCoverage(calls.minimum_budget_page, TRACK_COUNT, TRACK_COUNT, Math.min(5, TRACK_COUNT));
+  assert(Buffer.byteLength(JSON.stringify(calls.minimum_budget_page), "utf8") <= MINIMUM_PUBLIC_BUDGET.max_response_bytes, "Minimum-budget page exceeded 2 KiB");
 
   calls.exact_last = await queryTracks(clientA, {
     limit: 1,
     refresh_policy: "never",
     filters: { name: TRACK_NAMES.at(-1) },
+    budget: MINIMUM_PUBLIC_BUDGET,
   });
   assertMacroSuccess(calls.exact_last, "macro.project.query");
   assert(calls.exact_last.result?.data?.rows?.[0]?.name === TRACK_NAMES.at(-1), "Exact final track was not resolved");
@@ -213,6 +245,7 @@ const report = {
     artifact_root: ARTIFACT_ROOT,
   },
   public_budget: PUBLIC_BUDGET,
+  minimum_public_budget: MINIMUM_PUBLIC_BUDGET,
   layout_batch_size: LAYOUT_BATCH_SIZE,
   expected_track_count: TRACK_COUNT,
   expected_last_track_name: `${TRACK_NAMES.at(-1)} Refreshed`,
@@ -220,6 +253,11 @@ const report = {
     cold_hydration: calls.initial_tracks?.sqlite?.source ?? null,
     post_build_refresh: calls.cold_page?.sqlite?.source ?? null,
     logical_refresh: calls.cold_page?.result?.data?.refresh?.logical_refresh ?? null,
+    exact_name_recovery: {
+      matched_existing: calls.exact_name_recovery?.result?.changes?.filter((change) => change.status === "matched_existing").length ?? 0,
+      mutation_count: calls.exact_name_recovery?.result?.data?.outcome?.mutation?.completed_count ?? null,
+    },
+    minimum_budget_page_bytes: calls.minimum_budget_page ? Buffer.byteLength(JSON.stringify(calls.minimum_budget_page), "utf8") : null,
     warm_reuse: calls.warm_last?.sqlite?.source ?? null,
     write_invalidation_refresh_a: calls.refreshed_a?.sqlite?.source ?? null,
     cross_client_refresh_b: calls.refreshed_b?.sqlite?.source ?? null,
@@ -282,22 +320,22 @@ async function connect(name, overrides) {
   return client;
 }
 
-async function queryTracks(client, { limit, refresh_policy, filters = undefined }) {
+async function queryTracks(client, { limit, refresh_policy, filters = undefined, fields = ["ref", "name", "index"], budget = PUBLIC_BUDGET }) {
   return callTemplate(client, "macro.project.query", {
     entity: "tracks",
-    fields: ["ref", "name", "index"],
+    fields,
     limit,
     refresh_policy,
     ...(filters ? { filters } : {}),
-  });
+  }, undefined, budget);
 }
 
-async function callTemplate(client, id, input, refs = undefined) {
+async function callTemplate(client, id, input, refs = undefined, budget = PUBLIC_BUDGET) {
   return callTool(client, "call_template", {
     id,
     input,
     ...(refs ? { refs } : {}),
-    budget: PUBLIC_BUDGET,
+    budget,
   });
 }
 

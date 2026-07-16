@@ -1444,15 +1444,20 @@ function applyProjectWriteIndexMaintenance(changes, status, invalidation) {
 }
 
 function projectWriteOutcome(state) {
-  const changes = state.changes.filter((change) => change.mutation?.status === "completed");
-  const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
-  const indexStatuses = [...new Set(changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
+  const completed = state.changes.filter((change) => change.mutation?.status === "completed" && (change.mutation?.total_count ?? 1) > 0);
+  const notRunCount = state.changes.filter((change) => change.mutation?.status === "completed" && change.mutation?.total_count === 0).length;
+  const readbackPassed = state.changes.filter((change) => change.live_readback?.status === "passed").length;
+  const indexStatuses = [...new Set(state.changes.map((change) => change.index_maintenance?.status).filter(Boolean))];
   return {
-    mutation: { status: changes.length > 0 ? "completed" : "not_run", completed_count: changes.length },
+    mutation: {
+      status: completed.length > 0 ? "completed" : "not_run",
+      completed_count: completed.length,
+      not_run_count: notRunCount,
+    },
     live_readback: {
-      status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
+      status: state.changes.length > 0 && readbackPassed === state.changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",
       passed_count: readbackPassed,
-      total_count: changes.length,
+      total_count: state.changes.length,
     },
     index_maintenance: {
       status: indexStatuses.length === 1 ? indexStatuses[0] : indexStatuses.length > 1 ? "mixed" : "not_run",
@@ -1617,11 +1622,14 @@ function compactLayoutStages(stages) {
 }
 
 function compactLayoutChange(change) {
+  const mutationStatus = change.mutation?.total_count === 0
+    ? "not_run"
+    : change.mutation?.status ?? "pending";
   return {
     operation_id: change.operation_id,
     target_ref: change.target_ref,
     status: change.status,
-    mutation: { status: change.mutation?.status ?? "pending" },
+    mutation: { status: mutationStatus },
     live_readback: {
       status: change.live_readback?.status ?? "pending",
       ...(Array.isArray(change.live_readback?.mismatched_fields) ? { mismatched_fields: change.live_readback.mismatched_fields } : {}),
@@ -1633,8 +1641,14 @@ function compactLayoutChange(change) {
   };
 }
 function projectedLayoutOutcome(changes) {
+  const completedCount = changes.filter((change) => change.mutation?.status === "completed").length;
+  const notRunCount = changes.filter((change) => change.mutation?.status === "not_run").length;
   return {
-    mutation: { status: "completed", completed_count: changes.length },
+    mutation: {
+      status: completedCount > 0 ? "completed" : "not_run",
+      completed_count: completedCount,
+      not_run_count: notRunCount,
+    },
     live_readback: { status: "passed", passed_count: changes.length, total_count: changes.length },
     index_maintenance: { status: "skipped", scopes: [], blocker_code: null },
   };
