@@ -133,6 +133,9 @@ test("runs the complete large-production trial with exact bounded writes and fil
     assert.deepEqual(midiCreates.filter((call) => call.arguments.input.dry_run === false).map((call) => call.arguments.input.notes.length), [32, 128]);
     assert.equal(calls.filter((call) => call.arguments.id === "macro.midi.apply" && call.arguments.input.mode === "write_cc").length, 2);
     assert.equal(calls.filter((call) => call.arguments.id === "template.midi.insert_text_sysex_events").length, 2);
+    const sysexWrites = calls.filter((call) => call.arguments.id === "template.midi.insert_text_sysex_events");
+    assert.equal(sysexWrites[0].arguments.input.events[1].bytes, "F0 7D 10 01 F7");
+    assert.deepEqual(sysexWrites[1].arguments.input.events[1].bytes, [0xf0, 0x7d, 0x10, 0x02, 0xf7]);
     for (const id of ["template.midi.list_take_notes", "template.midi.list_take_cc_events", "template.midi.list_take_text_sysex_events"]) {
       const pages = calls.filter((call) => call.arguments.id === id);
       assert.ok(pages.length > 0);
@@ -212,14 +215,21 @@ test("runs the complete editing-sfx trial with recursive media, typed recovery, 
     assert.equal(calls.filter((call) => call.arguments.id === "template.automation.ensure_take_pitch_envelope").length, 1);
     assert.equal(calls.filter((call) => call.arguments.id === "template.automation.insert_envelope_points_batch").length, 1);
     assert.equal(calls.filter((call) => call.arguments.id === "template.automation.read_envelope_points").length, 1);
+    assert.equal(calls.filter((call) => call.arguments.id === "template.fx.add_take_fx").length, 1);
+    assert.equal(calls.filter((call) => call.arguments.id === "template.fx.parameter_to_envelope_mapping").length, 1);
+    assert.equal(calls.filter((call) => call.arguments.id === "template.project.create_subproject").length, 1);
+    assert.equal(calls.filter((call) => call.arguments.id === "template.project.insert_subproject_item").length, 1);
+    assert.equal(calls.filter((call) => call.arguments.id === "template.project.render_or_update_subproject").length, 1);
     assert.equal(calls.filter((call) => call.arguments.id === "template.tracks.freeze_track").length, 1);
     assert.equal(calls.filter((call) => call.arguments.id === "template.tracks.unfreeze_track").length, 1);
 
     const routingExec = calls.find((call) => call.arguments.id === "macro.routing.apply" && call.arguments.input.dry_run === false);
     assert.equal(routingExec.arguments.input.routes.length, 63);
     assert.ok(calls.some((call) => call.arguments.id === "macro.project.query" && call.arguments.input.entity === "routing" && call.arguments.input.refresh_policy === "force_read_only_refresh"));
-    assert.equal(calls.filter((call) => call.arguments.id === "macro.automation.apply").length, 4);
+    assert.equal(calls.filter((call) => call.arguments.id === "macro.automation.apply").length, 8);
     assert.equal(report.capability_results.some((row) => row.capability === "track_volume_automation" && row.pass_count === 2), true);
+    assert.equal(report.capability_results.some((row) => row.capability === "take_fx_parameter_automation" && row.pass_count === 2), true);
+    assert.equal(report.capability_results.some((row) => row.capability === "subproject_lifecycle" && row.track_ref?.startsWith("track:")), true);
     assert.ok(report.performance_measurements.length >= 2);
 
     assert.equal(report.rendered_outputs.length, 1);
@@ -452,6 +462,7 @@ function createProductionMock({ evidenceProject, managedRenderRoot, installedFxR
     fxParameterValues: new Map(),
     automatedTargets: new Set(),
     freezeCounts: new Map(),
+    subprojects: new Map(),
   };
   const connectFactory = async ({ scenario, clientName }) => {
     const client = {
@@ -613,6 +624,29 @@ async function respond(request, { evidenceProject, managedRenderRoot, state, ins
     const points = state.envelopes.get(envelopeRef) ?? [];
     return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { envelope_ref: envelopeRef, points, returned_count: points.length, total_count: points.length, next_cursor: null, truncated: false } } });
   }
+  if (id === "template.project.create_subproject") {
+    const childProjectPath = path.join(path.dirname(evidenceProject), `${input.name.replace(/[^A-Za-z0-9]+/gu, "_")}__subproject_mock.RPP`);
+    const proxyPath = `${childProjectPath}-PROX`;
+    await writeFile(childProjectPath, "<REAPER_PROJECT 0.1 mock-subproject\n>", "utf8");
+    await writeFile(proxyPath, wavFixture());
+    const projectRef = `project:path:${childProjectPath}`;
+    state.subprojects.set(projectRef, { childProjectPath, proxyPath, itemRef: null });
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { subproject_project_ref: projectRef, parent_project_ref: `project:path:${evidenceProject}`, name: input.name, child_project_path: childProjectPath, proxy_path: proxyPath, created: true, parent_restored: true, requested_activate: input.activate === true, inherited_time_selection: input.inherit_time_selection === true, live_materialization: "native_rpp_proxy_verified" } } });
+  }
+  if (id === "template.project.insert_subproject_item") {
+    const projectRef = refs.subproject_project_ref.ref;
+    const subproject = state.subprojects.get(projectRef);
+    const itemRef = `item:guid:{SUBPROJECT-${state.nextItem++}}`;
+    const trackRef = refs.track_ref.ref;
+    state.items.set(itemRef, { ref: itemRef, track_ref: trackRef, start_seconds: input.position_seconds, length_seconds: 1, active_take_ref: `take:guid:{SUBPROJECT-${state.nextItem}}` });
+    subproject.itemRef = itemRef;
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { item_ref: itemRef, subproject_project_ref: projectRef, inserted: true, position_seconds: input.position_seconds, proxy_path: subproject.proxyPath, source_path: subproject.proxyPath, parent_ui_restored: true, subproject_item_status: "native_source_verified", live_materialization: "native_subproject_source_verified" } } });
+  }
+  if (id === "template.project.render_or_update_subproject") {
+    const projectRef = refs.subproject_project_ref.ref;
+    const subproject = state.subprojects.get(projectRef);
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { subproject_project_ref: projectRef, job_ref: "job:job_id:project.subproject.mock", queued: false, completed: true, synchronous: true, mode: input.mode, proxy_path: subproject.proxyPath, parent_restored: true, linked_item_verified: refs.item_ref.ref === subproject.itemRef, live_materialization: "native_rpp_proxy_verified" } } });
+  }
   if (id === "template.tracks.freeze_track" || id === "template.tracks.unfreeze_track") {
     const trackRef = refs.track_ref.ref;
     const before = state.freezeCounts.get(trackRef) ?? 0;
@@ -644,8 +678,10 @@ async function respond(request, { evidenceProject, managedRenderRoot, state, ins
   }
   if (id === "template.midi.insert_text_sysex_events") {
     const take = state.midi.get(refs.take_ref.ref);
-    take.events.push(...input.events);
-    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { take_ref: refs.take_ref.ref, inserted_count: input.events.length, text_sysex_count: take.events.length } } });
+    const events = input.events.map((event) => event.event_kind === "sysex" ? { ...event, text: sysexBody(event.bytes) } : event);
+    take.events.push(...events);
+    const verifiedByKind = events.reduce((counts, event) => ({ ...counts, [event.event_kind]: (counts[event.event_kind] ?? 0) + 1 }), {});
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { take_ref: refs.take_ref.ref, inserted_count: input.events.length, verified_text_sysex_count: input.events.length, verified_by_kind: verifiedByKind, verification_mode: "exact_row_multiset_delta", text_sysex_count: take.events.length } } });
   }
   if (["template.midi.list_take_notes", "template.midi.list_take_cc_events", "template.midi.list_take_text_sysex_events"].includes(id)) {
     const take = state.midi.get(refs.take_ref.ref);
@@ -663,6 +699,14 @@ async function respond(request, { evidenceProject, managedRenderRoot, state, ins
       return row;
     });
     return jsonResponse(macroResult({ data: { final_chain: { fx: fxRows } }, changes: fxRows.map((row) => verifiedChange({ target_ref: row.fx_ref })) }));
+  }
+  if (id === "template.fx.add_take_fx") {
+    const takeRef = refs.take_ref.ref;
+    const slotIndex = [...state.fxByRef.keys()].filter((ref) => ref.startsWith(`fx:${takeRef}:`)).length;
+    const fxRef = `fx:${takeRef}:${slotIndex}`;
+    const row = { name: input.plugin_name, fx_ref: fxRef, owner_kind: "take" };
+    state.fxByRef.set(fxRef, row);
+    return jsonResponse({ contract: "template.execution.v1", ok: true, result: { summary: { fx_ref: fxRef, owner_kind: "take", slot_index: slotIndex, name: input.plugin_name, plugin_name: input.plugin_name, fx_count_before: slotIndex, fx_count_after: slotIndex + 1, created: true } } });
   }
   if (id === "template.fx.parameter_to_envelope_mapping") {
     const fx = state.fxByRef.get(refs.fx_ref.ref);
@@ -702,7 +746,8 @@ async function respond(request, { evidenceProject, managedRenderRoot, state, ins
     const targetRef = input.fx_refs?.[0] ?? input.envelope_refs?.[0];
     const createdEnvelope = !state.automatedTargets.has(targetRef);
     state.automatedTargets.add(targetRef);
-    return jsonResponse(macroResult({ changes: [verifiedChange({ target_ref: targetRef, live_readback: { created_envelope: createdEnvelope } })] }));
+    const fxParameter = input.fx_parameter ?? {};
+    return jsonResponse(macroResult({ changes: [verifiedChange({ target_ref: targetRef, live_readback: { created_envelope: createdEnvelope, fx_ref: input.fx_refs?.[0] ?? null, owner_kind: input.fx_refs?.[0]?.startsWith("fx:take:") ? "take" : input.fx_refs?.[0] ? "track" : null, param_index: fxParameter.param_index ?? null, param_ident: fxParameter.param_ident ?? null } })] }));
   }
   if (id === "macro.render.targets") {
     await mkdir(managedRenderRoot, { recursive: true });
@@ -725,6 +770,13 @@ function verifiedChange({ live_readback = {}, ...rest } = {}) {
     live_readback: { status: "passed", ...live_readback },
     index_maintenance: { status: "completed" },
   };
+}
+
+function sysexBody(bytes) {
+  const values = Array.isArray(bytes)
+    ? bytes
+    : String(bytes).trim().split(/\s+/u).map((part) => Number.parseInt(part, 16));
+  return String.fromCodePoint(...values.slice(1, -1));
 }
 
 function requestsForState(state, key) {

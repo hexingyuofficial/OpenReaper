@@ -393,6 +393,25 @@ const EDITING_SFX_STEPS = [
     fallbackReason: "Glue, exact Take Pitch Envelope creation, and Track freeze are reviewed lifecycle atoms that currently have no equivalent public Macro highway.",
   }),
   step({
+    id: "editing-take-fx-automation",
+    prompt: "Put ReaEQ on the glued take and draw two parameter moves that really read back from that Take FX.",
+    templateId: "template.fx.add_take_fx",
+    refs: { take_ref: "${glued_take_ref}" },
+    input: { plugin_name: "ReaEQ (Cockos)" },
+    verification: ["The new FX ref is owned by the exact glued Take.", "Both Automation writes map the same native parameter and pass live readback."],
+    coverage: ["take-fx", "take-fx-automation", "repeated-automation-edit"],
+    fallbackReason: "Take-FX insertion is a reviewed lifecycle atom; the public Automation Macro owns the repeated parameter writes after exact FX resolution.",
+  }),
+  step({
+    id: "editing-subproject-lifecycle",
+    prompt: "Make a real child project for this edit, put it on the requested track, update it, and prove the parent project came back intact.",
+    templateId: "template.project.create_subproject",
+    input: { name: "${unique_subproject_name}", activate: true, inherit_time_selection: false },
+    verification: ["A real child RPP and RPP-PROX exist.", "The inserted Item resolves on the exact Track and points at that child.", "Synchronous update completes and restores the parent project."],
+    coverage: ["subproject-create", "subproject-insert", "subproject-update", "parent-restore", "file-evidence"],
+    fallbackReason: "Subproject creation, insertion, and synchronous update are reviewed native lifecycle atoms with no equivalent public Macro highway.",
+  }),
+  step({
     id: "editing-complete-routing-graph",
     prompt: "Wire this big edit session into a useful internal chain and show me the whole routing graph.",
     templateId: "macro.routing.apply",
@@ -794,6 +813,7 @@ export async function runLargeProduction(context) {
     assertValue(Number.isInteger(readback?.before_count) && readback?.after_count === readback.before_count + 32 && readback?.coverage_complete === true, "MIDI_CC_COUNT_MISMATCH", readback);
   }
 
+  const expectedSysexBodies = [[0x7d, 0x10, 0x01], [0x7d, 0x10, 0x02]];
   for (let pass = 0; pass < 2; pass += 1) {
     const textWrite = await callTemplate(context, "primary", `dense-text-sysex-pass-${pass + 1}`, {
       id: "template.midi.insert_text_sysex_events",
@@ -802,12 +822,26 @@ export async function runLargeProduction(context) {
         sort_events: true,
         events: [
           { ppq: pass * 960, event_kind: "lyric", text: pass === 0 ? "verse" : "chorus" },
-          { ppq: pass * 960 + 240, event_kind: "sysex", bytes: `OPENREAPER-SYSEX-0${pass + 1}` },
+          {
+            ppq: pass * 960 + 240,
+            event_kind: "sysex",
+            bytes: pass === 0 ? "F0 7D 10 01 F7" : [0xf0, 0x7d, 0x10, 0x02, 0xf7],
+          },
         ],
       },
       refs: { take_ref: takeObjectRef(denseMidi.takeRef) },
     });
-    assertValue(textWrite?.ok === true, "MIDI_TEXT_SYSEX_WRITE_FAILED", textWrite);
+    const summary = textWrite?.result?.summary ?? {};
+    assertValue(
+      textWrite?.ok === true
+        && summary.inserted_count === 2
+        && summary.verified_text_sysex_count === 2
+        && summary.verified_by_kind?.lyric === 1
+        && summary.verified_by_kind?.sysex === 1
+        && summary.verification_mode === "exact_row_multiset_delta",
+      "MIDI_TEXT_SYSEX_WRITE_FAILED",
+      summary,
+    );
   }
 
   const notes = await walkMidiEvents(context, "template.midi.list_take_notes", denseMidi.takeRef, "notes");
@@ -816,6 +850,8 @@ export async function runLargeProduction(context) {
   assertValue(notes.length === 128, "MIDI_NOTE_CURSOR_COUNT_MISMATCH", { observed: notes.length });
   assertValue(ccEvents.length === 64, "MIDI_CC_CURSOR_COUNT_MISMATCH", { observed: ccEvents.length });
   assertValue(textEvents.length === 4, "MIDI_TEXT_CURSOR_COUNT_MISMATCH", { observed: textEvents.length });
+  const sysexBodies = textEvents.filter((event) => event.event_kind === "sysex").map((event) => midiTextBytes(event.text));
+  assertValue(JSON.stringify(sysexBodies) === JSON.stringify(expectedSysexBodies), "MIDI_SYSEX_BINARY_READBACK_MISMATCH", { expected: expectedSysexBodies, observed: sysexBodies });
 
   const automationTrackRef = context.refs.get("production_track_005");
   const fx = await previewThenExecute(context, "primary", "add-production-reaeq", {
@@ -971,6 +1007,27 @@ export async function runEditingSfx(context) {
     refs: { envelope_ref: objectRef("envelope", pitchEnvelopeRef) },
   });
   assertValue(pitchRead?.result?.summary?.truncated === false && (pitchRead?.result?.summary?.points?.length ?? 0) >= pitchPoints.length, "EDITING_PITCH_READBACK_INCOMPLETE", pitchRead?.result?.summary);
+
+  const takeFx = await callTemplate(context, "primary", "editing-add-take-reaeq", {
+    id: "template.fx.add_take_fx",
+    input: { plugin_name: "ReaEQ (Cockos)" },
+    refs: { take_ref: takeObjectRef(glueSummary.glued_take_ref) },
+  });
+  const takeFxSummary = takeFx?.result?.summary ?? {};
+  assertValue(takeFxSummary.created === true && takeFxSummary.owner_kind === "take", "EDITING_TAKE_FX_CREATE_NOT_VERIFIED", takeFxSummary);
+  assertExactRef(takeFxSummary.fx_ref, `fx:${glueSummary.glued_take_ref}:`, "EDITING_TAKE_FX_REF_MISSING");
+  const takeFxParamIdent = await readFxParameterIdent(context, takeFxSummary.fx_ref, "editing-take-reaeq-mapping");
+  await writeFxAutomationPasses(context, takeFxSummary.fx_ref, takeFxParamIdent, "editing-take-fx", "take");
+  context.capabilityResults.push({
+    capability: "take_fx_parameter_automation",
+    status: "passed",
+    take_ref: glueSummary.glued_take_ref,
+    fx_ref: takeFxSummary.fx_ref,
+    param_ident: takeFxParamIdent,
+    pass_count: 2,
+  });
+
+  await runSubprojectLifecycle(context, context.refs.get("editing_track_004"), "editing");
 
   await writeTrackAutomationPasses(context, context.refs.get("editing_track_003"), "editing");
   const freezeTrackRef = context.refs.get("editing_track_002");
@@ -1255,7 +1312,7 @@ async function readFxParameterIdent(context, fxRef, stepId) {
   return paramIdent;
 }
 
-async function writeFxAutomationPasses(context, fxRef, paramIdent, prefix) {
+async function writeFxAutomationPasses(context, fxRef, paramIdent, prefix, expectedOwnerKind = "track") {
   for (let pass = 0; pass < 2; pass += 1) {
     const value = await previewThenExecute(context, "primary", `${prefix}-automation-${pass + 1}`, {
       id: "macro.automation.apply",
@@ -1267,9 +1324,114 @@ async function writeFxAutomationPasses(context, fxRef, paramIdent, prefix) {
       },
     });
     assertVerifiedChanges(value, 1, "FX_AUTOMATION_NOT_VERIFIED");
-    const createdEnvelope = value.result.changes[0].live_readback?.created_envelope;
+    const readback = value.result.changes[0].live_readback ?? {};
+    const createdEnvelope = readback.created_envelope;
     assertValue(createdEnvelope === (pass === 0), "FX_AUTOMATION_CREATE_PATH_MISMATCH", { pass, created_envelope: createdEnvelope });
+    assertValue(
+      readback.fx_ref === fxRef && readback.owner_kind === expectedOwnerKind && readback.param_ident === paramIdent,
+      "FX_AUTOMATION_OWNER_READBACK_MISMATCH",
+      { expected_fx_ref: fxRef, expected_owner_kind: expectedOwnerKind, expected_param_ident: paramIdent, readback },
+    );
   }
+}
+
+async function runSubprojectLifecycle(context, trackRef, prefix) {
+  assertExactRef(trackRef, "track:", "SUBPROJECT_TARGET_TRACK_REF_MISSING");
+  const name = `OpenReaper ${prefix} ${Date.now()} ${context.calls.length}`;
+  const created = await callTemplate(context, "primary", `${prefix}-subproject-create`, {
+    id: "template.project.create_subproject",
+    input: { name, activate: true, inherit_time_selection: false },
+  });
+  const createSummary = created?.result?.summary ?? {};
+  assertValue(createSummary.created === true && createSummary.parent_restored === true, "SUBPROJECT_CREATE_NOT_VERIFIED", createSummary);
+  assertExactRef(createSummary.subproject_project_ref, "project:path:", "SUBPROJECT_PROJECT_REF_MISSING");
+  assertValue(
+    path.isAbsolute(createSummary.child_project_path)
+      && createSummary.subproject_project_ref === `project:path:${createSummary.child_project_path}`
+      && createSummary.proxy_path === `${createSummary.child_project_path}-PROX`
+      && createSummary.live_materialization === "native_rpp_proxy_verified",
+    "SUBPROJECT_CREATE_IDENTITY_MISMATCH",
+    createSummary,
+  );
+  const childFile = await stat(createSummary.child_project_path).catch(() => null);
+  const proxyFile = await stat(createSummary.proxy_path).catch(() => null);
+  assertValue(childFile?.isFile() === true && childFile.size > 0 && proxyFile?.isFile() === true && proxyFile.size > 0, "SUBPROJECT_FILES_MISSING", {
+    child_project_path: createSummary.child_project_path,
+    child_size: childFile?.size ?? 0,
+    proxy_path: createSummary.proxy_path,
+    proxy_size: proxyFile?.size ?? 0,
+  });
+
+  const inserted = await callTemplate(context, "primary", `${prefix}-subproject-insert`, {
+    id: "template.project.insert_subproject_item",
+    input: { position_seconds: 720, name: "OPENREAPER TRIAL SUBPROJECT" },
+    refs: {
+      subproject_project_ref: objectRef("project", createSummary.subproject_project_ref),
+      track_ref: objectRef("track", trackRef),
+    },
+  });
+  const insertSummary = inserted?.result?.summary ?? {};
+  assertExactRef(insertSummary.item_ref, "item:", "SUBPROJECT_ITEM_REF_MISSING");
+  assertValue(
+    insertSummary.inserted === true
+      && insertSummary.subproject_project_ref === createSummary.subproject_project_ref
+      && insertSummary.source_path === createSummary.proxy_path
+      && insertSummary.subproject_item_status === "native_source_verified"
+      && insertSummary.parent_ui_restored === true,
+    "SUBPROJECT_INSERT_NOT_VERIFIED",
+    insertSummary,
+  );
+  const itemRows = await walkProjectQuery(context, "secondary", {
+    entity: "items",
+    fields: ["ref", "track_ref", "start_seconds", "length_seconds"],
+    selectors: { refs: [insertSummary.item_ref] },
+    limit: 1,
+    refresh_policy: "force_read_only_refresh",
+  });
+  assertValue(itemRows.length === 1 && itemRows[0].ref === insertSummary.item_ref && itemRows[0].track_ref === trackRef, "SUBPROJECT_ITEM_QUERY_MISMATCH", {
+    expected_item_ref: insertSummary.item_ref,
+    expected_track_ref: trackRef,
+    rows: itemRows,
+  });
+
+  const updated = await callTemplate(context, "primary", `${prefix}-subproject-update`, {
+    id: "template.project.render_or_update_subproject",
+    input: { mode: "render_or_update", wait_for_completion: true },
+    refs: {
+      subproject_project_ref: objectRef("project", createSummary.subproject_project_ref),
+      item_ref: objectRef("item", insertSummary.item_ref),
+    },
+  });
+  const updateSummary = updated?.result?.summary ?? {};
+  assertValue(
+    updateSummary.completed === true
+      && updateSummary.queued === false
+      && updateSummary.synchronous === true
+      && updateSummary.linked_item_verified === true
+      && updateSummary.parent_restored === true
+      && updateSummary.subproject_project_ref === createSummary.subproject_project_ref
+      && updateSummary.proxy_path === createSummary.proxy_path,
+    "SUBPROJECT_UPDATE_NOT_VERIFIED",
+    updateSummary,
+  );
+  assertExactRef(updateSummary.job_ref, "job:", "SUBPROJECT_JOB_REF_MISSING");
+  const updatedProxy = await stat(updateSummary.proxy_path).catch(() => null);
+  assertValue(updatedProxy?.isFile() === true && updatedProxy.size > 0, "SUBPROJECT_UPDATED_PROXY_MISSING", updateSummary);
+  context.capabilityResults.push({
+    capability: "subproject_lifecycle",
+    status: "passed",
+    subproject_project_ref: createSummary.subproject_project_ref,
+    item_ref: insertSummary.item_ref,
+    track_ref: trackRef,
+    job_ref: updateSummary.job_ref,
+    child_project_path: createSummary.child_project_path,
+    proxy_path: updateSummary.proxy_path,
+  });
+}
+
+function midiTextBytes(value) {
+  assertValue(typeof value === "string", "MIDI_SYSEX_TEXT_READBACK_INVALID", { value });
+  return Array.from(value, (character) => character.codePointAt(0));
 }
 
 async function writeTrackAutomationPasses(context, trackRef, prefix) {
