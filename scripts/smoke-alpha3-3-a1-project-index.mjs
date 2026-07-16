@@ -163,7 +163,14 @@ try {
     budget: MINIMUM_PUBLIC_BUDGET,
   });
   assertMacroSuccess(calls.minimum_budget_page, "macro.project.query");
-  assertCoverage(calls.minimum_budget_page, TRACK_COUNT, TRACK_COUNT, Math.min(5, TRACK_COUNT));
+  const minimumBudgetRows = calls.minimum_budget_page.result?.data?.rows?.length ?? 0;
+  const minimumBudgetCoverage = calls.minimum_budget_page.result?.data?.coverage ?? {};
+  assert(minimumBudgetCoverage.known_total_row_count === TRACK_COUNT, `Minimum-budget known total was ${minimumBudgetCoverage.known_total_row_count}`);
+  assert(minimumBudgetCoverage.indexed_row_count === TRACK_COUNT, `Minimum-budget indexed total was ${minimumBudgetCoverage.indexed_row_count}`);
+  assert(minimumBudgetCoverage.public_returned_row_count === minimumBudgetRows, "Minimum-budget public row count did not match returned rows");
+  assert(minimumBudgetRows > 0 && minimumBudgetRows <= Math.min(5, TRACK_COUNT), `Minimum-budget page returned ${minimumBudgetRows} rows`);
+  assert(calls.minimum_budget_page.result?.data?.page?.has_more === true, "Minimum-budget page did not preserve pagination");
+  assert(typeof calls.minimum_budget_page.result?.data?.page?.next_cursor === "string", "Minimum-budget page returned no continuation cursor");
   assert(Buffer.byteLength(JSON.stringify(calls.minimum_budget_page), "utf8") <= MINIMUM_PUBLIC_BUDGET.max_response_bytes, "Minimum-budget page exceeded 2 KiB");
 
   calls.exact_last = await queryTracks(clientA, {
