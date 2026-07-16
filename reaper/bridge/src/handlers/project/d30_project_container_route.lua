@@ -533,6 +533,8 @@ local function d30_unique_new_item(project, before)
   return count == 1 and found or nil, count
 end
 
+local D30_MAX_SOURCE_CHAIN_DEPTH = 16
+
 local function d30_item_source_truth(item, expected_proxy_path)
   local ok_track, track = call_reaper("GetMediaItem_Track", item)
   local ok_take, take = call_reaper("GetActiveTake", item)
@@ -543,18 +545,57 @@ local function d30_item_source_truth(item, expected_proxy_path)
   if not ok_source or not source then
     return nil
   end
-  local ok_path, path_a, path_b = call_reaper("GetMediaSourceFileName", source, "")
-  local source_path = ok_path and first_string(path_a, path_b) or nil
-  local ok_subproject, subproject = call_reaper("GetSubProjectFromSource", source)
-  if source_path ~= expected_proxy_path or not ok_subproject or not subproject then
+
+  local current_source = source
+  local visited = {}
+  local path_source = nil
+  local subproject_source = nil
+  local subproject = nil
+  local terminated = false
+  for _ = 1, D30_MAX_SOURCE_CHAIN_DEPTH do
+    if visited[current_source] then
+      return nil
+    end
+    visited[current_source] = true
+
+    local ok_path, path_a, path_b = call_reaper("GetMediaSourceFileName", current_source, "")
+    if not ok_path then
+      return nil
+    end
+    local current_path = first_string(path_a, path_b)
+    if current_path == expected_proxy_path then
+      path_source = current_source
+    end
+
+    local ok_subproject, current_subproject = call_reaper("GetSubProjectFromSource", current_source)
+    if not ok_subproject then
+      return nil
+    end
+    if current_subproject then
+      subproject_source = current_source
+      subproject = current_subproject
+    end
+
+    local ok_parent, parent_source = call_reaper("GetMediaSourceParent", current_source)
+    if not ok_parent then
+      return nil
+    end
+    if not parent_source then
+      terminated = true
+      break
+    end
+    current_source = parent_source
+  end
+  if not terminated or not path_source or not subproject_source then
     return nil
   end
   return {
     track = track,
     take = take,
-    source = source,
+    source = path_source,
+    subproject_source = subproject_source,
     subproject = subproject,
-    source_path = source_path,
+    source_path = expected_proxy_path,
   }
 end
 

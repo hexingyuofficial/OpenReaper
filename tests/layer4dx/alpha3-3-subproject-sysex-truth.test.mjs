@@ -198,6 +198,85 @@ assert(other_track.selected == true and target_track.selected == false and curso
 `);
   });
 
+  it("verifies native subproject truth across bounded wrapper-source chains", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({})
+local expected = "/session/Child.RPP-PROX"
+local associated_project = { path = "/session/Child.RPP" }
+local function truth_for(source)
+  return d30_item_source_truth({ track = target_track, take = { source = source } }, expected)
+end
+
+local direct = { path = expected, subproject = associated_project }
+local truth = truth_for(direct)
+assert(truth ~= nil and truth.source == direct and truth.subproject_source == direct)
+
+local associated_parent = { path = "", subproject = associated_project }
+local path_wrapper = { path = expected, parent = associated_parent }
+truth = truth_for(path_wrapper)
+assert(truth ~= nil and truth.source == path_wrapper and truth.subproject_source == associated_parent)
+
+local path_parent = { path = expected }
+local associated_wrapper = { path = "", subproject = associated_project, parent = path_parent }
+truth = truth_for(associated_wrapper)
+assert(truth ~= nil and truth.source == path_parent and truth.subproject_source == associated_wrapper)
+
+assert(truth_for({ path = expected, parent = { path = "" } }) == nil)
+assert(truth_for({ path = "/wrong/source.RPP-PROX", subproject = associated_project }) == nil)
+assert(truth_for({ raise_path = true, parent = { path = expected, subproject = associated_project } }) == nil)
+assert(truth_for({ raise_subproject = true, parent = { path = expected, subproject = associated_project } }) == nil)
+assert(truth_for({ path = expected, subproject = associated_project, raise_parent = true }) == nil)
+
+local cyclic = { path = expected, subproject = associated_project }
+cyclic.parent = cyclic
+assert(truth_for(cyclic) == nil)
+
+local max_depth = { path = expected, subproject = associated_project }
+local max_cursor = max_depth
+for _ = 1, 15 do
+  max_cursor.parent = { path = "" }
+  max_cursor = max_cursor.parent
+end
+assert(truth_for(max_depth) ~= nil)
+
+local over_deep = { path = expected, subproject = associated_project }
+local cursor_source = over_deep
+for _ = 1, 16 do
+  cursor_source.parent = { path = "" }
+  cursor_source = cursor_source.parent
+end
+assert(truth_for(over_deep) == nil)
+`);
+  });
+
+  it("uses wrapper-source truth for both insertion and later linked-item update", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({ open_child_path = "/session/Child.RPP", wrapper_source = true })
+files["/session/Child.RPP-PROX"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
+local insert_request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
+assert(insert_failure == nil and inserted.inserted == true)
+local inserted_source = parent_project.items[2].take.source
+assert(inserted_source.path == "/session/Child.RPP-PROX")
+assert(inserted_source.subproject == nil and inserted_source.parent.subproject == child_project)
+
+local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
+  child_ref, inserted_refs[1],
+})
+local updated, update_failure = render_or_update_subproject(update_request)
+assert(update_failure == nil and updated.completed == true and updated.linked_item_verified == true)
+
+inserted_source.parent.subproject = nil
+updated, update_failure = render_or_update_subproject(update_request)
+assert(updated == nil and update_failure.code == "VERIFY_FAILED")
+assert(update_failure.details.blocker == "linked_item_source_readback_failed")
+`);
+  });
+
   it("persists mixed text and duplicate SysEx from integer-array and hex inputs with exact row-delta readback", () => {
     runLua(SYSEX_SOURCE, String.raw`
 install_midi_fake({})
@@ -353,7 +432,12 @@ function install_subproject_fake(config)
     local selected_track = nil
     for _, track in ipairs(parent_project.tracks) do if track.selected then selected_track = track end end
     local source_path = config.wrong_source and "/wrong/source.RPP-PROX" or path
-    local source = { path = source_path, subproject = child_project or { path = path:gsub("%-PROX$", "") } }
+    local associated_project = child_project or { path = path:gsub("%-PROX$", "") }
+    local source = { path = source_path, subproject = associated_project }
+    if config.wrapper_source then
+      source.subproject = nil
+      source.parent = { path = "", subproject = associated_project }
+    end
     local item = {
       guid = "{ITEM-NEW}",
       track = selected_track,
@@ -368,8 +452,18 @@ function install_subproject_fake(config)
   reaper.GetMediaItem_Track = function(item) return item.track end
   reaper.GetActiveTake = function(item) return item.take end
   reaper.GetMediaItemTake_Source = function(take) return take.source end
-  reaper.GetMediaSourceFileName = function(source) return source.path end
-  reaper.GetSubProjectFromSource = function(source) return source.subproject end
+  reaper.GetMediaSourceFileName = function(source)
+    if source.raise_path then error("source path read failed") end
+    return source.path
+  end
+  reaper.GetSubProjectFromSource = function(source)
+    if source.raise_subproject then error("subproject read failed") end
+    return source.subproject
+  end
+  reaper.GetMediaSourceParent = function(source)
+    if source.raise_parent then error("parent source read failed") end
+    return source.parent
+  end
   reaper.GetMediaItemInfo_Value = function(item, key) assert(key == "D_POSITION"); return item.position end
   reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, set_new)
     assert(key == "P_NAME")
