@@ -225,13 +225,14 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /owner_kind == "take" and "TakeFX_GetParamIdent" or "TrackFX_GetParamIdent"/);
     assert.match(HANDLER_SOURCE, /owner_kind == "take" and "TakeFX_GetFormattedParamValue" or "TrackFX_GetFormattedParamValue"/);
     assert.match(HANDLER_SOURCE, /owner_kind == "take" and "TakeFX_FormatParamValueNormalized" or "TrackFX_FormatParamValueNormalized"/);
+    assert.match(HANDLER_SOURCE, /owner_kind == "take" and "TakeFX_GetParameterStepSizes" or "TrackFX_GetParameterStepSizes"/);
     assert.match(
       HANDLER_SOURCE,
       /local function list_fx_parameters\(request\)[\s\S]*?local offset = math\.min\(e2_fx_parameter_offset\(request\.params and request\.params\.offset\), count\)[\s\S]*?local max_index = math\.min\(count, offset \+ limit\)[\s\S]*?for param_index = offset, max_index - 1 do/,
     );
     assert.match(
       HANDLER_SOURCE,
-      /parameters\[#parameters \+ 1\] = \{[\s\S]*?param_ident = e2_fx_read_param_ident\([\s\S]*?formatted_value = e2_fx_read_param_formatted\(/,
+      /parameters\[#parameters \+ 1\] = \{[\s\S]*?param_ident = e2_fx_read_param_ident\([\s\S]*?formatted_value = e2_fx_read_param_formatted\([\s\S]*?step_sizes_available = step_sizes\.step_sizes_available[\s\S]*?is_discrete = step_sizes\.is_discrete/,
     );
     assert.match(
       HANDLER_SOURCE,
@@ -243,7 +244,7 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     );
     assert.match(
       HANDLER_SOURCE,
-      /local function set_fx_parameter_normalized\(request\)[\s\S]*?param_ident = param_ident,[\s\S]*?formatted_value = e2_fx_read_param_formatted\(owner_kind, owner, slot_index, param_index\)/,
+      /local function set_fx_parameter_normalized\(request\)[\s\S]*?requested_formatted_value = e2_fx_format_param_normalized\([\s\S]*?e2_fx_parameter_readback_matches\([\s\S]*?param_ident = param_ident,[\s\S]*?formatted_value = readback_formatted_value/,
     );
     assert.doesNotMatch(HANDLER_SOURCE, /max_scan\s*=\s*2048/);
     assert.doesNotMatch(HANDLER_SOURCE, /GetTrack", 0, 0/);

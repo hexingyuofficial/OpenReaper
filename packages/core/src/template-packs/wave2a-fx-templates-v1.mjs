@@ -306,7 +306,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
   writeDescriptor({
     id: "template.fx.set_fx_parameter_normalized",
     title: "Set FX parameter normalized",
-    summary: "Set one FX parameter with a normalized 0..1 value and bounded readback tolerance.",
+    summary: "Set one FX parameter with continuous tolerance or REAPER-native discrete quantization readback.",
     entity_kind: "fx_param",
     tags: ["fx", "parameter", "write", "wave2a"],
     capability: "fx.set_parameter_normalized",
@@ -316,7 +316,14 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
       tolerance: { type: "number" },
     },
     requiredInput: ["param_index", "normalized_value"],
-    outputProperties: parameterValueOutput(),
+    outputProperties: {
+      ...parameterValueOutput(),
+      requested_normalized_value: { type: "number" },
+      requested_formatted_value: { oneOf: [{ type: "string" }, { type: "null" }] },
+      tolerance: { type: "number" },
+      verification_mode: { enum: ["numeric_tolerance", "native_discrete_format"] },
+      updated: { type: "boolean" },
+    },
     refs: refs({
       input: fxOwnerScopedInputRefs("FX ref whose parameter is updated."),
       output: [ref("fx_ref", "fx", true, "Same FX ref after parameter update.")],
@@ -326,7 +333,7 @@ export const WAVE2A_FX_TEMPLATES = deepFreeze([
     expectedEntitySummary: "One FX parameter value is updated.",
     checks: [
       check("fx_ref_resolves", "state_delta", "The FX ref still resolves after the parameter update."),
-      check("parameter_value_matches", "state_delta", "The normalized readback matches within tolerance."),
+      check("parameter_value_matches", "state_delta", "The live readback matches continuous tolerance or the exact REAPER-native discrete formatted value."),
     ],
     examples: [
       {
@@ -647,6 +654,12 @@ function parameterValueOutput() {
     param_ident: { type: "string" },
     normalized_value: { type: "number" },
     formatted_value: { type: "string" },
+    step_sizes_available: { type: "boolean" },
+    step_size: { oneOf: [{ type: "number" }, { type: "null" }] },
+    small_step_size: { oneOf: [{ type: "number" }, { type: "null" }] },
+    large_step_size: { oneOf: [{ type: "number" }, { type: "null" }] },
+    is_toggle: { oneOf: [{ type: "boolean" }, { type: "null" }] },
+    is_discrete: { oneOf: [{ type: "boolean" }, { type: "null" }] },
   };
 }
 

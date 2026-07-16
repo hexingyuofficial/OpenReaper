@@ -10741,6 +10741,58 @@ local function e2_fx_format_param_normalized(owner_kind, owner, slot_index, para
   return bounded_string(first_string(formatted) or "", 160)
 end
 
+local function e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
+  local api = owner_kind == "take" and "TakeFX_GetParameterStepSizes" or "TrackFX_GetParameterStepSizes"
+  local ok, available, step_size, small_step_size, large_step_size, is_toggle = call_reaper(
+    api,
+    owner,
+    slot_index,
+    param_index
+  )
+  if not ok or available ~= true then
+    return {
+      step_sizes_available = false,
+      step_size = JSON_NULL,
+      small_step_size = JSON_NULL,
+      large_step_size = JSON_NULL,
+      is_toggle = JSON_NULL,
+      is_discrete = JSON_NULL,
+    }
+  end
+  step_size = first_number(step_size)
+  small_step_size = first_number(small_step_size)
+  large_step_size = first_number(large_step_size)
+  is_toggle = is_toggle == true
+  return {
+    step_sizes_available = true,
+    step_size = step_size or JSON_NULL,
+    small_step_size = small_step_size or JSON_NULL,
+    large_step_size = large_step_size or JSON_NULL,
+    is_toggle = is_toggle,
+    is_discrete = is_toggle or (type(step_size) == "number" and step_size > 0),
+  }
+end
+
+local function e2_fx_parameter_readback_matches(
+  requested_normalized_value,
+  requested_formatted_value,
+  readback_normalized_value,
+  readback_formatted_value,
+  tolerance,
+  step_sizes
+)
+  if type(readback_normalized_value) == "number"
+      and math.abs(readback_normalized_value - requested_normalized_value) <= tolerance then
+    return true, "numeric_tolerance"
+  end
+  if step_sizes.is_discrete == true
+      and type(requested_formatted_value) == "string"
+      and requested_formatted_value == readback_formatted_value then
+    return true, "native_discrete_format"
+  end
+  return false, "failed"
+end
+
 local function e2_fx_parameter_offset(value)
   local number = tonumber(value)
   if not number or number < 0 or number ~= math.floor(number) then
@@ -10865,6 +10917,7 @@ local function list_fx_parameters(request)
   local max_index = math.min(count, offset + limit)
   for param_index = offset, max_index - 1 do
     local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
     parameters[#parameters + 1] = {
       param_index = param_index,
       param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index) or JSON_NULL,
@@ -10874,6 +10927,12 @@ local function list_fx_parameters(request)
       max_value = values.max_value,
       normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
       formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
+      step_sizes_available = step_sizes.step_sizes_available,
+      step_size = step_sizes.step_size,
+      small_step_size = step_sizes.small_step_size,
+      large_step_size = step_sizes.large_step_size,
+      is_toggle = step_sizes.is_toggle,
+      is_discrete = step_sizes.is_discrete,
     }
   end
   local next_offset = max_index < count and max_index or JSON_NULL
@@ -10921,6 +10980,7 @@ local function read_fx_parameter(request)
     })
   end
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
+  local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
   local normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
   if request.params and request.params.probe_normalized_value ~= nil then
@@ -10953,6 +11013,12 @@ local function read_fx_parameter(request)
     max_value = values.max_value,
     normalized_value = normalized_value,
     formatted_value = formatted_value,
+    step_sizes_available = step_sizes.step_sizes_available,
+    step_size = step_sizes.step_size,
+    small_step_size = step_sizes.small_step_size,
+    large_step_size = step_sizes.large_step_size,
+    is_toggle = step_sizes.is_toggle,
+    is_discrete = step_sizes.is_discrete,
   }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end
 
@@ -11413,6 +11479,14 @@ local function set_fx_parameter_normalized(request)
       live_param_ident = param_ident,
     })
   end
+  local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
+  local requested_formatted_value = e2_fx_format_param_normalized(
+    owner_kind,
+    owner,
+    slot_index,
+    param_index,
+    normalized_value
+  )
   if not e2_fx_set_param_normalized(owner_kind, owner, slot_index, param_index, normalized_value) then
     return e2_fx_read_error("COMMAND_FAILED", "REAPER rejected the FX parameter update.", {}, false)
   end
@@ -11422,12 +11496,28 @@ local function set_fx_parameter_normalized(request)
   end
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
   local readback_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
-  local updated = type(readback_normalized) == "number" and math.abs(readback_normalized - normalized_value) <= tolerance
+  local readback_formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
+  local updated, verification_mode = e2_fx_parameter_readback_matches(
+    normalized_value,
+    requested_formatted_value,
+    readback_normalized,
+    readback_formatted_value,
+    tolerance,
+    step_sizes
+  )
   if not updated then
-    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back within tolerance.", {
+    return e2_fx_read_error("VERIFY_FAILED", "E2 FX-B1 set_fx_parameter_normalized did not read back the requested continuous value or native discrete value.", {
       requested_normalized_value = normalized_value,
+      requested_formatted_value = requested_formatted_value or JSON_NULL,
       readback_normalized_value = readback_normalized,
+      readback_formatted_value = readback_formatted_value,
       tolerance = tolerance,
+      step_sizes_available = step_sizes.step_sizes_available,
+      step_size = step_sizes.step_size,
+      small_step_size = step_sizes.small_step_size,
+      large_step_size = step_sizes.large_step_size,
+      is_toggle = step_sizes.is_toggle,
+      is_discrete = step_sizes.is_discrete,
     }, false)
   end
   local _, ref = e2_fx_read_fx_summary(owner_kind, owner, slot_index)
@@ -11442,9 +11532,17 @@ local function set_fx_parameter_normalized(request)
     min_value = values.min_value,
     max_value = values.max_value,
     normalized_value = readback_normalized,
-    formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
+    formatted_value = readback_formatted_value,
     requested_normalized_value = normalized_value,
+    requested_formatted_value = requested_formatted_value or JSON_NULL,
     tolerance = tolerance,
+    verification_mode = verification_mode,
+    step_sizes_available = step_sizes.step_sizes_available,
+    step_size = step_sizes.step_size,
+    small_step_size = step_sizes.small_step_size,
+    large_step_size = step_sizes.large_step_size,
+    is_toggle = step_sizes.is_toggle,
+    is_discrete = step_sizes.is_discrete,
     updated = updated,
   }), nil, json_array({}), json_array({}), e2_fx_read_refs(ref)
 end

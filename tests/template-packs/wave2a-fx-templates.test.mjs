@@ -149,7 +149,20 @@ describe("Wave 2A fx template descriptors", () => {
       assert.deepEqual(descriptor.inputSchema.properties.param_ident, { type: "string" });
       assert.deepEqual(descriptor.outputSchema.properties.param_ident, { type: "string" });
       assert.deepEqual(descriptor.outputSchema.properties.formatted_value, { type: "string" });
+      assert.deepEqual(descriptor.outputSchema.properties.step_sizes_available, { type: "boolean" });
+      assert.deepEqual(descriptor.outputSchema.properties.step_size, {
+        oneOf: [{ type: "number" }, { type: "null" }],
+      });
+      assert.deepEqual(descriptor.outputSchema.properties.is_toggle, {
+        oneOf: [{ type: "boolean" }, { type: "null" }],
+      });
+      assert.deepEqual(descriptor.outputSchema.properties.is_discrete, {
+        oneOf: [{ type: "boolean" }, { type: "null" }],
+      });
     }
+    assert.deepEqual(set.outputSchema.properties.verification_mode, {
+      enum: ["numeric_tolerance", "native_discrete_format"],
+    });
 
     const fx = fxRef("track", 0);
     const listRequest = buildTemplateBridgeRequest({
