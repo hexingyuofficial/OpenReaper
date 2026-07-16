@@ -2840,6 +2840,7 @@ e5_automation_insert_points = function(request, envelope, envelope_ref, parent_k
     net_new = plan.net_new,
     before = plan.before,
     after = plan.after,
+    inserted_count = plan.requested,
     processed_count = writes_completed,
     first_time_seconds = first_project_time,
     last_time_seconds = last_project_time,

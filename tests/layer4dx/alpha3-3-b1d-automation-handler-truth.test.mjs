@@ -557,6 +557,7 @@ summary, failure = insert_envelope_points_batch(make_request("automation.insert_
   },
 }, ref))
 assert(failure == nil and summary.requested == 2 and summary.replaced == 1)
+assert(summary.inserted_count == 2 and summary.processed_count == 2)
 assert(summary.net_new == 1 and summary.before == 4 and summary.after == 5)
 assert(#points[track_env][-1] == 5)
 
@@ -569,6 +570,7 @@ end
 install_fake({ track_points = sixty_four })
 summary, failure = insert_envelope_points_batch(make_request("automation.insert_envelope_points_batch", { points = replacements }, ref))
 assert(failure == nil and summary.replaced == 64 and summary.net_new == 0 and summary.after == 64)
+assert(summary.inserted_count == 64 and summary.processed_count == 64)
 assert(#points[track_env][-1] == 64)
 
 install_fake({ track_points = sixty_four })
