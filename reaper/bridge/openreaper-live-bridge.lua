@@ -1,5 +1,5 @@
 -- OpenReaper generated live bridge.
--- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (227 registered template handler row(s); 0 legacy_monolith row(s); 227 extracted handler row(s); 87 handler module file(s)).
+-- Handler registry: reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json (231 registered template handler row(s); 0 legacy_monolith row(s); 231 extracted handler row(s); 91 handler module file(s)).
 
 -- OpenReaper 4D.x minimal live bridge loop.
 -- Manual REAPER-side script: polls file transport requests and writes
@@ -1460,6 +1460,10 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["fx.delete_fx"] = { pack = "fx", risk = "destructive" },
   ["routing.remove_send"] = { pack = "routing", risk = "destructive" },
   ["items.move_item_to_track"] = { pack = "items", risk = "write" },
+  ["items.glue_item"] = { pack = "items", risk = "destructive" },
+  ["tracks.freeze_track"] = { pack = "tracks", risk = "write" },
+  ["tracks.unfreeze_track"] = { pack = "tracks", risk = "destructive" },
+  ["automation.ensure_take_pitch_envelope"] = { pack = "automation", risk = "write" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {
@@ -2623,31 +2627,31 @@ __openreaper_register_handler_module("core/read_template_catalog_summary.lua", f
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 227,
+  template_count = 231,
   by_pack = {
     actions = 8,
     analysis = 7,
-    automation = 21,
+    automation = 22,
     core = 3,
     fx = 17,
-    items = 33,
+    items = 34,
     media = 7,
     midi = 14,
     project = 30,
     render = 26,
     routing = 21,
     system = 3,
-    tracks = 21,
+    tracks = 23,
     transport = 16,
   },
   by_risk = {
-    destructive = 12,
+    destructive = 14,
     read = 81,
     safe = 12,
-    write = 122,
+    write = 124,
   },
   by_lifecycle = {
-    experimental = 227,
+    experimental = 231,
   },
   by_entity_kind = {
     action = 4,
@@ -2663,14 +2667,14 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     custom_action = 1,
     cycle_action = 1,
     delivery_report = 1,
-    envelope = 7,
+    envelope = 8,
     fx = 6,
     fx_chain = 3,
     fx_param = 3,
     ["fx_param.envelope_mapping"] = 1,
     grid = 2,
     hardware_output = 4,
-    item = 19,
+    item = 20,
     item_layer_report = 1,
     last_result = 1,
     loop_candidates = 1,
@@ -2721,7 +2725,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     take = 13,
     tempo_map = 4,
     time_selection = 2,
-    track = 13,
+    track = 15,
     track_folder = 4,
     track_mixer = 1,
     track_order = 2,
@@ -2733,21 +2737,21 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 227,
+  template_count = 231,
   by_pack = {
     actions = 8,
     analysis = 7,
-    automation = 21,
+    automation = 22,
     core = 3,
     fx = 17,
-    items = 33,
+    items = 34,
     media = 7,
     midi = 14,
     project = 30,
     render = 26,
     routing = 21,
     system = 3,
-    tracks = 21,
+    tracks = 23,
     transport = 16,
   },
 }
@@ -26110,6 +26114,1300 @@ return {
 }
 end)
 
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/items/glue_item.lua
+__openreaper_register_handler_module("items/glue_item.lua", function()
+-- Alpha3.3 exact native Item glue: template.items.glue_item.
+
+local ALPHA3_3_GLUE_ITEM_ACTION_ID = 40362
+
+local function alpha33_glue_item_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_glue_item_guid(item)
+  local ok, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_glue_item_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_glue_item_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_glue_item_owner_track(item)
+  local ok, track = call_reaper("GetMediaItemTrack", item)
+  if ok and track then return track end
+  ok, track = call_reaper("GetMediaItem_Track", item)
+  return ok and track or nil
+end
+
+local function alpha33_glue_item_number(item, key)
+  local ok, value = call_reaper("GetMediaItemInfo_Value", item, key)
+  return ok and first_number(value) or nil
+end
+
+local function alpha33_glue_item_numbers_match(actual, expected)
+  return actual ~= nil and expected ~= nil and math.abs(actual - expected) <= 0.000000001
+end
+
+local function alpha33_glue_item_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, { code = "REF_INVALID", message = "glue_item requires exactly one exact Item ref.", details = {} }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, { code = "REF_INVALID", message = "glue_item requires one canonical Item ref object.", details = {} }
+  end
+  local guid = ref.ref:match("^item:guid:([^:]+)$")
+  if not guid or ref.identity.scheme ~= "guid" or tostring(ref.identity.value) ~= guid then
+    return nil, {
+      code = "REF_INVALID",
+      message = "glue_item accepts only an exact Item GUID ref.",
+      details = { item_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return { object_ref = ref, ref = ref.ref, guid = guid }, nil
+end
+
+local function alpha33_glue_item_list_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local guid = alpha33_glue_item_guid(item)
+    if not guid then return nil end
+    items[#items + 1] = { item = item, guid = guid }
+  end
+  return items
+end
+
+local function alpha33_glue_item_find_guid(items, guid)
+  local found, matches = nil, 0
+  for index = 1, #items do
+    if items[index].guid == guid then
+      found = items[index].item
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_glue_item_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks", 0) end
+  if not ok_count then return nil end
+  local tracks = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack", 0, index) end
+    if not ok_track or not track then return nil end
+    tracks[#tracks + 1] = track
+  end
+  return tracks
+end
+
+local function alpha33_glue_item_selected_items()
+  local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    items[#items + 1] = item
+  end
+  return items
+end
+
+local function alpha33_glue_item_active_snapshot(items)
+  local snapshot = {}
+  for index = 1, #items do
+    local ok_take, take = call_reaper("GetActiveTake", items[index].item)
+    if not ok_take then return nil end
+    snapshot[#snapshot + 1] = { item = items[index].item, take = take }
+  end
+  return snapshot
+end
+
+local function alpha33_glue_item_item_exists(item, current_items)
+  for index = 1, #current_items do
+    if current_items[index].item == item then return true end
+  end
+  return false
+end
+
+local function alpha33_glue_item_clear_track_selection()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master and not call_reaper("SetTrackSelected", master, false) then return false end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track or not call_reaper("SetTrackSelected", track, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_glue_item_restore(snapshot, source_item, replacement_item)
+  local current_items = alpha33_glue_item_list_items()
+  if not current_items then return false, false end
+
+  local track_ok = alpha33_glue_item_clear_track_selection()
+  for index = 1, #snapshot.selected_tracks do
+    if not call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true) then track_ok = false end
+  end
+
+  local item_ok = true
+  for index = 1, #current_items do
+    if not call_reaper("SetMediaItemSelected", current_items[index].item, false) then item_ok = false end
+  end
+  for index = 1, #snapshot.selected_items do
+    local selected = snapshot.selected_items[index]
+    if selected == source_item then
+      local restored_item = replacement_item
+      if not restored_item and alpha33_glue_item_item_exists(source_item, current_items) then restored_item = source_item end
+      if not restored_item or not call_reaper("SetMediaItemSelected", restored_item, true) then item_ok = false end
+    elseif alpha33_glue_item_item_exists(selected, current_items) then
+      if not call_reaper("SetMediaItemSelected", selected, true) then item_ok = false end
+    else
+      item_ok = false
+    end
+  end
+
+  local active_ok = true
+  for index = 1, #snapshot.active_takes do
+    local saved = snapshot.active_takes[index]
+    if saved.item ~= source_item and alpha33_glue_item_item_exists(saved.item, current_items) and saved.take then
+      local ok_current, current_take = call_reaper("GetActiveTake", saved.item)
+      if not ok_current or current_take ~= saved.take then
+        if not call_reaper("SetActiveTake", saved.take) then active_ok = false end
+      end
+    end
+  end
+  return track_ok and item_ok, active_ok
+end
+
+local function alpha33_glue_item_select_only(item)
+  local items = alpha33_glue_item_list_items()
+  if not items then return false end
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index].item, items[index].item == item) then return false end
+  end
+  return true
+end
+
+local function alpha33_glue_item_source_readback(item)
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  if not ok_take or not take then return nil end
+  local take_guid = alpha33_glue_item_take_guid(take)
+  if not take_guid then return nil end
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if not ok_source or not source then return nil end
+  local ok_filename, filename = call_reaper("GetMediaSourceFileName", source, "")
+  local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
+  if not ok_filename then return nil end
+  filename = first_string(filename) or ""
+  source_type = ok_type and first_string(source_type) or nil
+  if not source_type or source_type == "" then return nil end
+  return {
+    take = take,
+    take_guid = take_guid,
+    filename = bounded_string(filename, 512),
+    source_type = bounded_string(source_type, 120),
+  }
+end
+
+local function alpha33_glue_item(request)
+  local exact, ref_failure = alpha33_glue_item_exact_ref(request)
+  if not exact then return alpha33_glue_item_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+
+  local before_items = alpha33_glue_item_list_items()
+  if not before_items then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item could not read every Item GUID before mutation.", {}, false)
+  end
+  local source_item, source_matches = alpha33_glue_item_find_guid(before_items, exact.guid)
+  if not source_item or source_matches ~= 1 then
+    return alpha33_glue_item_error("REF_INVALID", "glue_item exact Item GUID was missing or duplicated.", {
+      item_ref = exact.ref,
+      duplicate_count = source_matches,
+    }, false)
+  end
+  local ok_active, source_active_take = call_reaper("GetActiveTake", source_item)
+  if not ok_active or not source_active_take then
+    return alpha33_glue_item_error("TAKE_NOT_FOUND", "glue_item requires the exact Item to expose an active Take.", {
+      item_ref = exact.ref,
+    })
+  end
+  local source_track = alpha33_glue_item_owner_track(source_item)
+  local source_track_guid = source_track and alpha33_glue_item_track_guid(source_track) or nil
+  local source_position = alpha33_glue_item_number(source_item, "D_POSITION")
+  local source_length = alpha33_glue_item_number(source_item, "D_LENGTH")
+  if not source_track_guid or source_position == nil or source_length == nil then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item could not read source Track, position, and length before mutation.", {
+      item_ref = exact.ref,
+    }, false)
+  end
+  local selected_tracks = alpha33_glue_item_selected_tracks()
+  local selected_items = alpha33_glue_item_selected_items()
+  local active_takes = alpha33_glue_item_active_snapshot(before_items)
+  if not selected_tracks or not selected_items or not active_takes then
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item could not snapshot Track, Item, and active Take state.", {}, false)
+  end
+  local snapshot = {
+    selected_tracks = selected_tracks,
+    selected_items = selected_items,
+    active_takes = active_takes,
+  }
+  if not alpha33_glue_item_select_only(source_item) then
+    local restored_selection, restored_active = alpha33_glue_item_restore(snapshot, source_item, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item could not select only the exact Item.", {
+      selection_restored = restored_selection,
+      active_take_restored = restored_active,
+    }, false)
+  end
+  if not call_reaper("SetActiveTake", source_active_take) then
+    local restored_selection, restored_active = alpha33_glue_item_restore(snapshot, source_item, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "glue_item could not restore the exact Item active Take before action.", {
+      selection_restored = restored_selection,
+      active_take_restored = restored_active,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_GLUE_ITEM_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local restored_selection, restored_active = alpha33_glue_item_restore(snapshot, source_item, nil)
+    return alpha33_glue_item_error("COMMAND_FAILED", "REAPER rejected the fixed native glue action.", {
+      selection_restored = restored_selection,
+      active_take_restored = restored_active,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local after_items = alpha33_glue_item_list_items()
+  local old_item_guid_absent = after_items and alpha33_glue_item_find_guid(after_items, exact.guid) == nil
+  local new_candidates = {}
+  if after_items then
+    for index = 1, #after_items do
+      local previously_seen = false
+      for before_index = 1, #before_items do
+        if before_items[before_index].guid == after_items[index].guid then previously_seen = true break end
+      end
+      if not previously_seen then new_candidates[#new_candidates + 1] = after_items[index].item end
+    end
+  end
+  local replacement_item = #new_candidates == 1 and new_candidates[1] or nil
+  local replacement_track = replacement_item and alpha33_glue_item_owner_track(replacement_item) or nil
+  local replacement_track_guid = replacement_track and alpha33_glue_item_track_guid(replacement_track) or nil
+  local replacement_position = replacement_item and alpha33_glue_item_number(replacement_item, "D_POSITION") or nil
+  local replacement_length = replacement_item and alpha33_glue_item_number(replacement_item, "D_LENGTH") or nil
+  local replacement_identity_matches = replacement_item
+    and replacement_track_guid == source_track_guid
+    and alpha33_glue_item_numbers_match(replacement_position, source_position)
+    and alpha33_glue_item_numbers_match(replacement_length, source_length)
+  local item_count_unchanged = after_items and #after_items == #before_items or false
+  local source_readback = replacement_item and alpha33_glue_item_source_readback(replacement_item) or nil
+  local selection_restored, active_take_restored = alpha33_glue_item_restore(snapshot, source_item, replacement_item)
+  if not old_item_guid_absent then
+    return alpha33_glue_item_error("VERIFY_FAILED", "The source Item GUID still exists after glue.", {
+      source_item_ref = exact.ref,
+      old_item_guid_absent = false,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  if #new_candidates ~= 1 or not item_count_unchanged or not replacement_identity_matches or not source_readback then
+    return alpha33_glue_item_error("VERIFY_FAILED", "glue_item could not uniquely identify a new Item with readable Take source state.", {
+      source_item_ref = exact.ref,
+      new_item_candidate_count = #new_candidates,
+      item_count_before = #before_items,
+      item_count_after = after_items and #after_items or nil,
+      item_count_unchanged = item_count_unchanged,
+      owner_track_matches = replacement_track_guid == source_track_guid,
+      position_matches = alpha33_glue_item_numbers_match(replacement_position, source_position),
+      length_matches = alpha33_glue_item_numbers_match(replacement_length, source_length),
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  if not selection_restored or not active_take_restored then
+    return alpha33_glue_item_error("VERIFY_FAILED", "glue_item could not restore Track, Item, or active Take state.", {
+      source_item_ref = exact.ref,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local glued_guid = alpha33_glue_item_guid(replacement_item)
+  local glued_item_ref = glued_guid and ("item:guid:" .. glued_guid) or nil
+  local glued_take_ref = "take:guid:" .. source_readback.take_guid
+  return {
+    kind = "item_glued",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    source_item_ref = exact.ref,
+    glued_item_ref = glued_item_ref,
+    glued_take_ref = glued_take_ref,
+    owner_track_ref = "track:guid:" .. source_track_guid,
+    position_seconds = replacement_position,
+    length_seconds = replacement_length,
+    source_filename = source_readback.filename,
+    source_type = source_readback.source_type,
+    item_count_before = #before_items,
+    item_count_after = #after_items,
+    item_count_unchanged = true,
+    old_item_guid_absent = true,
+    new_item_unique = true,
+    selection_restored = true,
+    active_take_restored = true,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({
+    exact.object_ref,
+    { kind = "item", ref = glued_item_ref, identity = { scheme = "guid", value = glued_guid } },
+    { kind = "take", ref = glued_take_ref, identity = { scheme = "guid", value = source_readback.take_guid } },
+  })
+end
+return {
+  exports = { alpha33_glue_item = alpha33_glue_item },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/freeze_track.lua
+__openreaper_register_handler_module("tracks/freeze_track.lua", function()
+-- Alpha3.3 exact native Track freeze: template.tracks.freeze_track.
+
+local ALPHA3_3_FREEZE_TRACK_ACTION_IDS = {
+  mono = 40901,
+  stereo = 41223,
+  multichannel = 40877,
+}
+
+local function alpha33_freeze_track_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_freeze_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_freeze_track_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, { code = "REF_INVALID", message = "freeze_track requires exactly one exact Track ref.", details = {} }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, { code = "REF_INVALID", message = "freeze_track requires one canonical Track ref object.", details = {} }
+  end
+  local guid = ref.ref:match("^track:guid:([^:]+)$")
+  if not guid or ref.identity.scheme ~= "guid" or tostring(ref.identity.value) ~= guid then
+    return nil, {
+      code = "REF_INVALID",
+      message = "freeze_track accepts only an exact Track GUID ref.",
+      details = { track_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return { object_ref = ref, ref = ref.ref, guid = guid }, nil
+end
+
+local function alpha33_freeze_track_find(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return nil, nil end
+  local found, matches = nil, 0
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track then return nil, nil end
+    if alpha33_freeze_track_guid(track) == guid then
+      found = track
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_freeze_track_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks", 0) end
+  if not ok_count then return nil end
+  local tracks = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack", 0, index) end
+    if not ok_track or not track then return nil end
+    tracks[#tracks + 1] = track
+  end
+  return tracks
+end
+
+local function alpha33_freeze_track_selected_items()
+  local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_guid, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+    local ok_track, track = call_reaper("GetMediaItemTrack", item)
+    if not ok_track then ok_track, track = call_reaper("GetMediaItem_Track", item) end
+    local track_guid = ok_track and track and alpha33_freeze_track_guid(track) or nil
+    guid = ok_guid and first_string(guid) or nil
+    if not guid or guid == "" or not track_guid then return nil end
+    items[#items + 1] = { guid = guid, owner_track_guid = track_guid }
+  end
+  return items
+end
+
+local function alpha33_freeze_track_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_guid, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+    local ok_track, track = call_reaper("GetMediaItemTrack", item)
+    if not ok_track then ok_track, track = call_reaper("GetMediaItem_Track", item) end
+    local track_guid = ok_track and track and alpha33_freeze_track_guid(track) or nil
+    guid = ok_guid and first_string(guid) or nil
+    if not guid or guid == "" or not track_guid then return nil end
+    items[#items + 1] = { item = item, guid = guid, owner_track_guid = track_guid }
+  end
+  return items
+end
+
+local function alpha33_freeze_track_same_pointers(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  for index = 1, #expected do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function alpha33_freeze_track_clear_tracks()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master and not call_reaper("SetTrackSelected", master, false) then return false end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track or not call_reaper("SetTrackSelected", track, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_freeze_track_clear_items()
+  local items = alpha33_freeze_track_items()
+  if not items then return false end
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index].item, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, target_track_guid)
+  local current_items = alpha33_freeze_track_items()
+  if not current_items then return false end
+  local before_guids = {}
+  for index = 1, #before_items do before_guids[before_items[index].guid] = true end
+  local selected_guids = {}
+  local target_mapping_needed = false
+  for index = 1, #selected_items do
+    local selected = selected_items[index]
+    local found = false
+    for current_index = 1, #current_items do
+      if current_items[current_index].guid == selected.guid then
+        selected_guids[selected.guid] = true
+        found = true
+        break
+      end
+    end
+    if not found then
+      if selected.owner_track_guid ~= target_track_guid then return false end
+      target_mapping_needed = true
+    end
+  end
+  if target_mapping_needed then
+    local mapped = 0
+    for index = 1, #current_items do
+      local current = current_items[index]
+      if current.owner_track_guid == target_track_guid and not before_guids[current.guid] then
+        selected_guids[current.guid] = true
+        mapped = mapped + 1
+      end
+    end
+    if mapped == 0 then return false end
+  end
+
+  local ok = alpha33_freeze_track_clear_tracks() and alpha33_freeze_track_clear_items()
+  for index = 1, #selected_tracks do
+    if not call_reaper("SetTrackSelected", selected_tracks[index], true) then ok = false end
+  end
+  for index = 1, #current_items do
+    if selected_guids[current_items[index].guid] and not call_reaper("SetMediaItemSelected", current_items[index].item, true) then
+      ok = false
+    end
+  end
+  local current_tracks = alpha33_freeze_track_selected_tracks()
+  local current_selected = alpha33_freeze_track_selected_items()
+  local expected_count = 0
+  for _ in pairs(selected_guids) do expected_count = expected_count + 1 end
+  local selected_match = current_selected and #current_selected == expected_count
+  if selected_match then
+    for index = 1, #current_selected do
+      if not selected_guids[current_selected[index].guid] then selected_match = false break end
+    end
+  end
+  return ok
+    and alpha33_freeze_track_same_pointers(current_tracks, selected_tracks)
+    and selected_match
+end
+
+local function alpha33_freeze_track_select_only(track)
+  return alpha33_freeze_track_clear_tracks() and call_reaper("SetTrackSelected", track, true)
+end
+
+local function alpha33_freeze_track_count(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_FREEZECOUNT")
+  local count = ok and first_number(value) or nil
+  return count ~= nil and math.max(0, math.floor(count)) or nil
+end
+
+local function alpha33_freeze_track(request)
+  local exact, ref_failure = alpha33_freeze_track_exact_ref(request)
+  if not exact then return alpha33_freeze_track_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+  local mode = is_object(request.params) and request.params.mode or nil
+  local action_id = is_string(mode) and ALPHA3_3_FREEZE_TRACK_ACTION_IDS[mode] or nil
+  if not action_id then
+    return alpha33_freeze_track_error("PARAMS_INVALID", "freeze_track mode must be mono, stereo, or multichannel.", {
+      mode = bounded_string(mode, 40),
+    })
+  end
+
+  local track, matches = alpha33_freeze_track_find(exact.guid)
+  if matches == nil then
+    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not read the complete Track list.", {}, false)
+  end
+  if not track or matches ~= 1 then
+    return alpha33_freeze_track_error(matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID", "freeze_track exact Track GUID was missing or duplicated.", {
+      track_ref = exact.ref,
+      duplicate_count = matches,
+    }, matches == 0)
+  end
+  local count_before = alpha33_freeze_track_count(track)
+  if count_before == nil then
+    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not read I_FREEZECOUNT before mutation.", {
+      track_ref = exact.ref,
+    }, false)
+  end
+  local selected_tracks = alpha33_freeze_track_selected_tracks()
+  local selected_items = alpha33_freeze_track_selected_items()
+  local before_items = alpha33_freeze_track_items()
+  if not selected_tracks or not selected_items or not before_items then
+    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not snapshot Track and Item selection.", {}, false)
+  end
+  if not alpha33_freeze_track_select_only(track) then
+    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    return alpha33_freeze_track_error("COMMAND_FAILED", "freeze_track could not select only the exact Track.", {
+      selection_restored = restored,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", action_id, 0, 0)
+  if not command_ok or command_result == false then
+    local restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    return alpha33_freeze_track_error("COMMAND_FAILED", "REAPER rejected the fixed native Track freeze action.", {
+      mode = mode,
+      selection_restored = restored,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local readback_track, readback_matches = alpha33_freeze_track_find(exact.guid)
+  local count_after = readback_track and readback_matches == 1 and alpha33_freeze_track_count(readback_track) or nil
+  local selection_restored = alpha33_freeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+  if not readback_track or readback_matches ~= 1 or count_after == nil or count_after <= count_before then
+    return alpha33_freeze_track_error("VERIFY_FAILED", "freeze_track I_FREEZECOUNT did not increase after action.", {
+      track_ref = exact.ref,
+      mode = mode,
+      freeze_count_before = count_before,
+      freeze_count_after = count_after,
+      track_match_count = readback_matches,
+      selection_restored = selection_restored,
+    }, false)
+  end
+  if not selection_restored then
+    return alpha33_freeze_track_error("VERIFY_FAILED", "freeze_track could not restore Track and Item selection.", {
+      track_ref = exact.ref,
+      mode = mode,
+      freeze_count_before = count_before,
+      freeze_count_after = count_after,
+      selection_restored = false,
+    }, false)
+  end
+
+  return {
+    kind = "track_frozen",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    track_ref = exact.ref,
+    mode = mode,
+    freeze_count_before = count_before,
+    freeze_count_after = count_after,
+    selection_restored = true,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+end
+return {
+  exports = { alpha33_freeze_track = alpha33_freeze_track },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/tracks/unfreeze_track.lua
+__openreaper_register_handler_module("tracks/unfreeze_track.lua", function()
+-- Alpha3.3 exact native Track unfreeze: template.tracks.unfreeze_track.
+
+local ALPHA3_3_UNFREEZE_TRACK_ACTION_ID = 41644
+
+local function alpha33_unfreeze_track_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_unfreeze_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_unfreeze_track_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, { code = "REF_INVALID", message = "unfreeze_track requires exactly one exact Track ref.", details = {} }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, { code = "REF_INVALID", message = "unfreeze_track requires one canonical Track ref object.", details = {} }
+  end
+  local guid = ref.ref:match("^track:guid:([^:]+)$")
+  if not guid or ref.identity.scheme ~= "guid" or tostring(ref.identity.value) ~= guid then
+    return nil, {
+      code = "REF_INVALID",
+      message = "unfreeze_track accepts only an exact Track GUID ref.",
+      details = { track_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return { object_ref = ref, ref = ref.ref, guid = guid }, nil
+end
+
+local function alpha33_unfreeze_track_find(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return nil, nil end
+  local found, matches = nil, 0
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track then return nil, nil end
+    if alpha33_unfreeze_track_guid(track) == guid then
+      found = track
+      matches = matches + 1
+    end
+  end
+  return found, matches
+end
+
+local function alpha33_unfreeze_track_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks", 0) end
+  if not ok_count then return nil end
+  local tracks = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack", 0, index) end
+    if not ok_track or not track then return nil end
+    tracks[#tracks + 1] = track
+  end
+  return tracks
+end
+
+local function alpha33_unfreeze_track_selected_items()
+  local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_guid, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+    local ok_track, track = call_reaper("GetMediaItemTrack", item)
+    if not ok_track then ok_track, track = call_reaper("GetMediaItem_Track", item) end
+    local track_guid = ok_track and track and alpha33_unfreeze_track_guid(track) or nil
+    guid = ok_guid and first_string(guid) or nil
+    if not guid or guid == "" or not track_guid then return nil end
+    items[#items + 1] = { guid = guid, owner_track_guid = track_guid }
+  end
+  return items
+end
+
+local function alpha33_unfreeze_track_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_guid, _, guid = call_reaper("GetSetMediaItemInfo_String", item, "GUID", "", false)
+    local ok_track, track = call_reaper("GetMediaItemTrack", item)
+    if not ok_track then ok_track, track = call_reaper("GetMediaItem_Track", item) end
+    local track_guid = ok_track and track and alpha33_unfreeze_track_guid(track) or nil
+    guid = ok_guid and first_string(guid) or nil
+    if not guid or guid == "" or not track_guid then return nil end
+    items[#items + 1] = { item = item, guid = guid, owner_track_guid = track_guid }
+  end
+  return items
+end
+
+local function alpha33_unfreeze_track_same_pointers(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  for index = 1, #expected do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function alpha33_unfreeze_track_clear_tracks()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master and not call_reaper("SetTrackSelected", master, false) then return false end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track or not call_reaper("SetTrackSelected", track, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_unfreeze_track_clear_items()
+  local items = alpha33_unfreeze_track_items()
+  if not items then return false end
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index].item, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, target_track_guid)
+  local current_items = alpha33_unfreeze_track_items()
+  if not current_items then return false end
+  local before_guids = {}
+  for index = 1, #before_items do before_guids[before_items[index].guid] = true end
+  local selected_guids = {}
+  local target_mapping_needed = false
+  for index = 1, #selected_items do
+    local selected = selected_items[index]
+    local found = false
+    for current_index = 1, #current_items do
+      if current_items[current_index].guid == selected.guid then
+        selected_guids[selected.guid] = true
+        found = true
+        break
+      end
+    end
+    if not found then
+      if selected.owner_track_guid ~= target_track_guid then return false end
+      target_mapping_needed = true
+    end
+  end
+  if target_mapping_needed then
+    local mapped = 0
+    for index = 1, #current_items do
+      local current = current_items[index]
+      if current.owner_track_guid == target_track_guid and not before_guids[current.guid] then
+        selected_guids[current.guid] = true
+        mapped = mapped + 1
+      end
+    end
+    if mapped == 0 then return false end
+  end
+
+  local ok = alpha33_unfreeze_track_clear_tracks() and alpha33_unfreeze_track_clear_items()
+  for index = 1, #selected_tracks do
+    if not call_reaper("SetTrackSelected", selected_tracks[index], true) then ok = false end
+  end
+  for index = 1, #current_items do
+    if selected_guids[current_items[index].guid] and not call_reaper("SetMediaItemSelected", current_items[index].item, true) then
+      ok = false
+    end
+  end
+  local current_selected = alpha33_unfreeze_track_selected_items()
+  local expected_count = 0
+  for _ in pairs(selected_guids) do expected_count = expected_count + 1 end
+  local selected_match = current_selected and #current_selected == expected_count
+  if selected_match then
+    for index = 1, #current_selected do
+      if not selected_guids[current_selected[index].guid] then selected_match = false break end
+    end
+  end
+  return ok
+    and alpha33_unfreeze_track_same_pointers(alpha33_unfreeze_track_selected_tracks(), selected_tracks)
+    and selected_match
+end
+
+local function alpha33_unfreeze_track_select_only(track)
+  return alpha33_unfreeze_track_clear_tracks() and call_reaper("SetTrackSelected", track, true)
+end
+
+local function alpha33_unfreeze_track_count(track)
+  local ok, value = call_reaper("GetMediaTrackInfo_Value", track, "I_FREEZECOUNT")
+  local count = ok and first_number(value) or nil
+  return count ~= nil and math.max(0, math.floor(count)) or nil
+end
+
+local function alpha33_unfreeze_track(request)
+  local exact, ref_failure = alpha33_unfreeze_track_exact_ref(request)
+  if not exact then return alpha33_unfreeze_track_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+
+  local track, matches = alpha33_unfreeze_track_find(exact.guid)
+  if matches == nil then
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not read the complete Track list.", {}, false)
+  end
+  if not track or matches ~= 1 then
+    return alpha33_unfreeze_track_error(matches == 0 and "TRACK_NOT_FOUND" or "REF_INVALID", "unfreeze_track exact Track GUID was missing or duplicated.", {
+      track_ref = exact.ref,
+      duplicate_count = matches,
+    }, matches == 0)
+  end
+  local count_before = alpha33_unfreeze_track_count(track)
+  if count_before == nil then
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not read I_FREEZECOUNT before mutation.", {
+      track_ref = exact.ref,
+    }, false)
+  end
+  if count_before <= 0 then
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track requires a Track with I_FREEZECOUNT greater than zero.", {
+      track_ref = exact.ref,
+      freeze_count_before = count_before,
+      reason_code = "TRACK_NOT_FROZEN",
+    })
+  end
+  local selected_tracks = alpha33_unfreeze_track_selected_tracks()
+  local selected_items = alpha33_unfreeze_track_selected_items()
+  local before_items = alpha33_unfreeze_track_items()
+  if not selected_tracks or not selected_items or not before_items then
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not snapshot Track and Item selection.", {}, false)
+  end
+  if not alpha33_unfreeze_track_select_only(track) then
+    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "unfreeze_track could not select only the exact Track.", {
+      selection_restored = restored,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_UNFREEZE_TRACK_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+    return alpha33_unfreeze_track_error("COMMAND_FAILED", "REAPER rejected the fixed native Track unfreeze action.", {
+      selection_restored = restored,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local readback_track, readback_matches = alpha33_unfreeze_track_find(exact.guid)
+  local count_after = readback_track and readback_matches == 1 and alpha33_unfreeze_track_count(readback_track) or nil
+  local selection_restored = alpha33_unfreeze_track_restore(selected_tracks, selected_items, before_items, exact.guid)
+  if not readback_track or readback_matches ~= 1 or count_after == nil or count_after >= count_before then
+    return alpha33_unfreeze_track_error("VERIFY_FAILED", "unfreeze_track I_FREEZECOUNT did not decrease after action.", {
+      track_ref = exact.ref,
+      freeze_count_before = count_before,
+      freeze_count_after = count_after,
+      track_match_count = readback_matches,
+      selection_restored = selection_restored,
+    }, false)
+  end
+  if not selection_restored then
+    return alpha33_unfreeze_track_error("VERIFY_FAILED", "unfreeze_track could not restore Track and Item selection.", {
+      track_ref = exact.ref,
+      freeze_count_before = count_before,
+      freeze_count_after = count_after,
+      selection_restored = false,
+    }, false)
+  end
+
+  return {
+    kind = "track_unfrozen",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    track_ref = exact.ref,
+    freeze_count_before = count_before,
+    freeze_count_after = count_after,
+    selection_restored = true,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({ exact.object_ref })
+end
+return {
+  exports = { alpha33_unfreeze_track = alpha33_unfreeze_track },
+  shared = {  },
+}
+end)
+
+-- OpenReaper bridge handler module: reaper/bridge/src/handlers/automation/ensure_take_pitch_envelope.lua
+__openreaper_register_handler_module("automation/ensure_take_pitch_envelope.lua", function()
+-- Alpha3.3 exact native Take Pitch Envelope ensure: template.automation.ensure_take_pitch_envelope.
+
+local ALPHA3_3_ENSURE_TAKE_PITCH_ENVELOPE_ACTION_ID = 41612
+
+local function alpha33_take_pitch_envelope_error(code, message, details, recoverable)
+  return nil, {
+    code = code,
+    message = message,
+    recoverable = recoverable ~= false,
+    details = details or {},
+  }
+end
+
+local function alpha33_take_pitch_envelope_take_guid(take)
+  local ok, _, guid = call_reaper("GetSetMediaItemTakeInfo_String", take, "GUID", "", false)
+  guid = ok and first_string(guid) or nil
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_take_pitch_envelope_exact_ref(request)
+  if not is_json_array(request.refs) or #request.refs ~= 1 then
+    return nil, { code = "REF_INVALID", message = "ensure_take_pitch_envelope requires exactly one exact Take ref.", details = {} }
+  end
+  local ref = request.refs[1]
+  if not is_object(ref) or ref.kind ~= "take" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil, { code = "REF_INVALID", message = "ensure_take_pitch_envelope requires one canonical Take ref object.", details = {} }
+  end
+  local guid = ref.ref:match("^take:guid:([^:]+)$")
+  if not guid or ref.identity.scheme ~= "guid" or tostring(ref.identity.value) ~= guid then
+    return nil, {
+      code = "REF_INVALID",
+      message = "ensure_take_pitch_envelope accepts only an exact Take GUID ref.",
+      details = { take_ref = bounded_string(ref.ref, 160) },
+    }
+  end
+  return { object_ref = ref, ref = ref.ref, guid = guid }, nil
+end
+
+local function alpha33_take_pitch_envelope_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    items[#items + 1] = item
+  end
+  return items
+end
+
+local function alpha33_take_pitch_envelope_find(guid)
+  local items = alpha33_take_pitch_envelope_items()
+  if not items then return nil, nil, nil end
+  local found_take, found_item, matches = nil, nil, 0
+  for item_index = 1, #items do
+    local ok_count, count = call_reaper("CountTakes", items[item_index])
+    if not ok_count then return nil, nil, nil end
+    local total = math.max(0, math.floor(first_number(count) or 0))
+    for take_index = 0, total - 1 do
+      local ok_take, take = call_reaper("GetTake", items[item_index], take_index)
+      if not ok_take or not take then return nil, nil, nil end
+      if alpha33_take_pitch_envelope_take_guid(take) == guid then
+        found_take = take
+        found_item = items[item_index]
+        matches = matches + 1
+      end
+    end
+  end
+  return found_take, found_item, matches
+end
+
+local function alpha33_take_pitch_envelope_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then ok_count, count = call_reaper("CountSelectedTracks", 0) end
+  if not ok_count then return nil end
+  local tracks = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track then ok_track, track = call_reaper("GetSelectedTrack", 0, index) end
+    if not ok_track or not track then return nil end
+    tracks[#tracks + 1] = track
+  end
+  return tracks
+end
+
+local function alpha33_take_pitch_envelope_selected_items()
+  local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+  if not ok_count then return nil end
+  local items = {}
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    items[#items + 1] = item
+  end
+  return items
+end
+
+local function alpha33_take_pitch_envelope_active_takes(items)
+  local active = {}
+  for index = 1, #items do
+    local ok_take, take = call_reaper("GetActiveTake", items[index])
+    if not ok_take then return nil end
+    active[#active + 1] = { item = items[index], take = take }
+  end
+  return active
+end
+
+local function alpha33_take_pitch_envelope_same_pointers(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  for index = 1, #expected do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function alpha33_take_pitch_envelope_clear_tracks()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master and not call_reaper("SetTrackSelected", master, false) then return false end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  local total = math.max(0, math.floor(first_number(count) or 0))
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track or not call_reaper("SetTrackSelected", track, false) then return false end
+  end
+  return true
+end
+
+local function alpha33_take_pitch_envelope_clear_items(items)
+  for index = 1, #items do
+    if not call_reaper("SetMediaItemSelected", items[index], false) then return false end
+  end
+  return true
+end
+
+local function alpha33_take_pitch_envelope_select_only(item, items)
+  if not alpha33_take_pitch_envelope_clear_items(items) then return false end
+  return call_reaper("SetMediaItemSelected", item, true)
+end
+
+local function alpha33_take_pitch_envelope_restore(snapshot)
+  local ok = alpha33_take_pitch_envelope_clear_tracks() and alpha33_take_pitch_envelope_clear_items(snapshot.items)
+  for index = 1, #snapshot.selected_tracks do
+    if not call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true) then ok = false end
+  end
+  for index = 1, #snapshot.selected_items do
+    if not call_reaper("SetMediaItemSelected", snapshot.selected_items[index], true) then ok = false end
+  end
+  local active_ok = true
+  for index = 1, #snapshot.active_takes do
+    local saved = snapshot.active_takes[index]
+    local ok_current, current = call_reaper("GetActiveTake", saved.item)
+    if not ok_current then
+      active_ok = false
+    elseif current ~= saved.take then
+      if saved.take then
+        if not call_reaper("SetActiveTake", saved.take) then active_ok = false end
+      else
+        active_ok = false
+      end
+    end
+  end
+  local selection_ok = ok
+    and alpha33_take_pitch_envelope_same_pointers(alpha33_take_pitch_envelope_selected_tracks(), snapshot.selected_tracks)
+    and alpha33_take_pitch_envelope_same_pointers(alpha33_take_pitch_envelope_selected_items(), snapshot.selected_items)
+  return selection_ok, active_ok
+end
+
+local function alpha33_take_pitch_envelope_lookup(take)
+  local ok, envelope = call_reaper("GetTakeEnvelopeByName", take, "Pitch")
+  if not ok then return nil, false end
+  return envelope, true
+end
+
+local function alpha33_take_pitch_envelope_guid(envelope)
+  local ok, api_ok, guid = call_reaper("GetSetEnvelopeInfo_String", envelope, "GUID", "", false)
+  if not ok or api_ok == false then return nil end
+  guid = first_string(guid)
+  return guid and guid ~= "" and guid or nil
+end
+
+local function alpha33_take_pitch_envelope_result(request, exact, envelope_guid, existing_before, changed)
+  local envelope_ref = "envelope:guid:" .. envelope_guid
+  return {
+    kind = "take_pitch_envelope_ensure",
+    capability = request.pack.capability,
+    pack = request.pack.id,
+    risk = request.pack.risk,
+    take_ref = exact.ref,
+    envelope_ref = envelope_ref,
+    envelope_guid = envelope_guid,
+    existing_before = existing_before,
+    changed = changed,
+    selection_restored = true,
+    active_take_restored = true,
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }, nil, json_array({}), json_array({}), json_array({
+    exact.object_ref,
+    { kind = "envelope", ref = envelope_ref, identity = { scheme = "guid", value = envelope_guid } },
+  })
+end
+
+local function alpha33_ensure_take_pitch_envelope(request)
+  local exact, ref_failure = alpha33_take_pitch_envelope_exact_ref(request)
+  if not exact then return alpha33_take_pitch_envelope_error(ref_failure.code, ref_failure.message, ref_failure.details) end
+  local take, item, matches = alpha33_take_pitch_envelope_find(exact.guid)
+  if matches == nil then
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "ensure_take_pitch_envelope could not read every Take GUID.", {}, false)
+  end
+  if not take or not item or matches ~= 1 then
+    return alpha33_take_pitch_envelope_error(matches == 0 and "TAKE_NOT_FOUND" or "REF_INVALID", "ensure_take_pitch_envelope exact Take GUID was missing or duplicated.", {
+      take_ref = exact.ref,
+      duplicate_count = matches,
+    }, matches == 0)
+  end
+  local ok_owner, owner = call_reaper("GetMediaItemTake_Item", take)
+  if not ok_owner or owner ~= item then
+    return alpha33_take_pitch_envelope_error("REF_INVALID", "ensure_take_pitch_envelope Take owner readback did not match.", {
+      take_ref = exact.ref,
+    }, false)
+  end
+
+  local envelope, lookup_ok = alpha33_take_pitch_envelope_lookup(take)
+  if not lookup_ok then
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "ensure_take_pitch_envelope could not query the Pitch envelope.", {
+      take_ref = exact.ref,
+    }, false)
+  end
+  if envelope then
+    local envelope_guid = alpha33_take_pitch_envelope_guid(envelope)
+    if not envelope_guid then
+      return alpha33_take_pitch_envelope_error("VERIFY_FAILED", "Existing Pitch envelope did not expose a native GUID.", {
+        take_ref = exact.ref,
+      }, false)
+    end
+    return alpha33_take_pitch_envelope_result(request, exact, envelope_guid, true, false)
+  end
+
+  local items = alpha33_take_pitch_envelope_items()
+  local selected_tracks = alpha33_take_pitch_envelope_selected_tracks()
+  local selected_items = alpha33_take_pitch_envelope_selected_items()
+  local active_takes = items and alpha33_take_pitch_envelope_active_takes(items) or nil
+  if not items or not selected_tracks or not selected_items or not active_takes then
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "ensure_take_pitch_envelope could not snapshot selection and active Takes.", {}, false)
+  end
+  local snapshot = {
+    items = items,
+    selected_tracks = selected_tracks,
+    selected_items = selected_items,
+    active_takes = active_takes,
+  }
+  if not alpha33_take_pitch_envelope_select_only(item, items) or not call_reaper("SetActiveTake", take) then
+    local selection_restored, active_take_restored = alpha33_take_pitch_envelope_restore(snapshot)
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "ensure_take_pitch_envelope could not target the exact Take for the native action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  local ok_active, active_take = call_reaper("GetActiveTake", item)
+  if not ok_active or active_take ~= take then
+    local selection_restored, active_take_restored = alpha33_take_pitch_envelope_restore(snapshot)
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "ensure_take_pitch_envelope exact Take did not become active before action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", ALPHA3_3_ENSURE_TAKE_PITCH_ENVELOPE_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local selection_restored, active_take_restored = alpha33_take_pitch_envelope_restore(snapshot)
+    return alpha33_take_pitch_envelope_error("COMMAND_FAILED", "REAPER rejected the fixed native Take Pitch envelope action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  call_reaper("UpdateArrange")
+
+  local readback_envelope, readback_ok = alpha33_take_pitch_envelope_lookup(take)
+  local envelope_guid = readback_envelope and alpha33_take_pitch_envelope_guid(readback_envelope) or nil
+  local selection_restored, active_take_restored = alpha33_take_pitch_envelope_restore(snapshot)
+  if not readback_ok or not readback_envelope or not envelope_guid then
+    return alpha33_take_pitch_envelope_error("VERIFY_FAILED", "Pitch envelope or native Envelope GUID was absent after action.", {
+      take_ref = exact.ref,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  if not selection_restored or not active_take_restored then
+    return alpha33_take_pitch_envelope_error("VERIFY_FAILED", "ensure_take_pitch_envelope could not restore selection and active Takes.", {
+      take_ref = exact.ref,
+      envelope_guid = envelope_guid,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  return alpha33_take_pitch_envelope_result(request, exact, envelope_guid, false, true)
+end
+return {
+  exports = { alpha33_ensure_take_pitch_envelope = alpha33_ensure_take_pitch_envelope },
+  shared = {  },
+}
+end)
+
 local function current_project()
   local ok, project, project_path = call_reaper("EnumProjects", -1, "")
   if ok then
@@ -26908,6 +28206,10 @@ local SAFE_WRITE_A_HANDLERS = {
   ["fx.delete_fx"] = OPENREAPER_HANDLER_EXPORTS.alpha33_delete_fx,
   ["routing.remove_send"] = OPENREAPER_HANDLER_EXPORTS.alpha33_remove_send,
   ["items.move_item_to_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_move_item_to_track,
+  ["items.glue_item"] = OPENREAPER_HANDLER_EXPORTS.alpha33_glue_item,
+  ["tracks.freeze_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_freeze_track,
+  ["tracks.unfreeze_track"] = OPENREAPER_HANDLER_EXPORTS.alpha33_unfreeze_track,
+  ["automation.ensure_take_pitch_envelope"] = OPENREAPER_HANDLER_EXPORTS.alpha33_ensure_take_pitch_envelope,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

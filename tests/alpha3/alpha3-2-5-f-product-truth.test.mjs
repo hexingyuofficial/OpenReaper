@@ -99,11 +99,11 @@ describe("Alpha3.2.5-F product truth", () => {
     const facts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
     assert.deepEqual(facts, {
       accepted_macro_count: 15,
-      accepted_template_count: 227,
-      bridge_handler_count: 87,
+      accepted_template_count: 231,
+      bridge_handler_count: 91,
     });
-    assert.equal(handlerRegistry.entries.length, 227);
-    assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 87);
+    assert.equal(handlerRegistry.entries.length, 231);
+    assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 91);
   });
 
   it("scrubs inherited session identity and keeps only explicit start overrides", async () => {

@@ -796,6 +796,10 @@ local SAFE_WRITE_A_HANDLERS = {
   ["fx.delete_fx"] = alpha33_delete_fx,
   ["routing.remove_send"] = alpha33_remove_send,
   ["items.move_item_to_track"] = alpha33_move_item_to_track,
+  ["items.glue_item"] = alpha33_glue_item,
+  ["tracks.freeze_track"] = alpha33_freeze_track,
+  ["tracks.unfreeze_track"] = alpha33_unfreeze_track,
+  ["automation.ensure_take_pitch_envelope"] = alpha33_ensure_take_pitch_envelope,
 }
 
 local E3_MEDIA_ROUTE_HANDLERS = {

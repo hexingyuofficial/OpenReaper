@@ -36,6 +36,10 @@ const IDS = Object.freeze([
   "template.fx.delete_fx",
   "template.routing.remove_send",
   "template.items.move_item_to_track",
+  "template.items.glue_item",
+  "template.tracks.freeze_track",
+  "template.tracks.unfreeze_track",
+  "template.automation.ensure_take_pitch_envelope",
 ]);
 
 const FX_REF = createObjectRef("fx", {
@@ -52,9 +56,12 @@ const ITEM_REF = createObjectRef("item", { scheme: "guid", value: "{ITEM}" }, {
 const TRACK_REF = createObjectRef("track", { scheme: "guid", value: "{TARGET}" }, {
   ref: "track:guid:{TARGET}",
 });
+const TAKE_REF = createObjectRef("take", { scheme: "guid", value: "{TAKE}" }, {
+  ref: "take:guid:{TAKE}",
+});
 
 describe("Alpha3.3 exact lifecycle atom descriptors", () => {
-  it("exports exactly the three accepted lifecycle atom ids", () => {
+  it("exports exactly the seven accepted lifecycle atom ids", () => {
     assert.deepEqual(ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
     assert.deepEqual(TEMPLATE_CATALOG_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
     assert.deepEqual(CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS, IDS);
@@ -65,14 +72,14 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
   it("validates exact destructive/write metadata, refs, undo posture, and readback declarations", async () => {
     const templates = createAlpha3_3LifecycleAtomTemplates();
     const catalog = createTemplateCatalog({ templates });
-    const [deleteFx, removeSend, moveItem] = IDS.map((id) => catalog.require(id));
+    const [deleteFx, removeSend, moveItem, glueItem, freezeTrack, unfreezeTrack, ensurePitch] = IDS.map((id) => catalog.require(id));
 
     for (const descriptor of templates) {
       const validation = validateTemplateDescriptor(descriptor);
       assert.deepEqual(validation.errors, [], descriptor.id);
       assert.equal(validation.ok, true, descriptor.id);
       assert.equal(descriptor.inputSchema.additionalProperties, false, descriptor.id);
-      assert.deepEqual(descriptor.inputSchema.required, [], descriptor.id);
+      assert.deepEqual(descriptor.inputSchema.required, descriptor.id === "template.tracks.freeze_track" ? ["mode"] : [], descriptor.id);
       assert.equal(descriptor.bridge.operation_family, "run_command", descriptor.id);
       assert.equal(descriptor.bridge.operation_name, "template.execute", descriptor.id);
       assert.equal(descriptor.verification.mode, "required", descriptor.id);
@@ -108,11 +115,41 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
       "track_count_unchanged",
     ]);
 
+    assert.equal(glueItem.risk, "destructive");
+    assert.equal(glueItem.bridge.timeout_ms, 300_000);
+    assert.equal(glueItem.bridge.idempotency, "none");
+    assert.deepEqual(glueItem.refs.input.map(({ name, kind }) => [name, kind]), [["item_ref", "item"]]);
+    assert.deepEqual(glueItem.refs.output.map(({ name, kind }) => [name, kind]), [
+      ["glued_item_ref", "item"],
+      ["glued_take_ref", "take"],
+    ]);
+    assert.equal(Object.hasOwn(glueItem.outputSchema.properties, "owner_track_ref"), true);
+    assert.equal(Object.hasOwn(glueItem.outputSchema.properties, "item_count_unchanged"), true);
+
+    assert.equal(freezeTrack.risk, "write");
+    assert.equal(freezeTrack.bridge.timeout_ms, 300_000);
+    assert.deepEqual(freezeTrack.inputSchema.properties.mode.enum, ["mono", "stereo", "multichannel"]);
+    assert.deepEqual(freezeTrack.inputSchema.required, ["mode"]);
+    assert.equal(Object.hasOwn(freezeTrack.outputSchema.properties, "action_id"), false);
+    assert.deepEqual(freezeTrack.verification.checks.map(({ name }) => name), ["freeze_count_increased", "selection_restored"]);
+
+    assert.equal(unfreezeTrack.risk, "destructive");
+    assert.equal(unfreezeTrack.bridge.timeout_ms, 60_000);
+    assert.equal(Object.hasOwn(unfreezeTrack.outputSchema.properties, "action_id"), false);
+    assert.deepEqual(unfreezeTrack.verification.checks.map(({ name }) => name), ["freeze_count_decreased", "selection_restored"]);
+
+    assert.equal(ensurePitch.risk, "write");
+    assert.equal(ensurePitch.bridge.timeout_ms, 10_000);
+    assert.equal(ensurePitch.bridge.idempotency, "supported");
+    assert.equal(ensurePitch.expectedDelta.idempotent, true);
+    assert.deepEqual(ensurePitch.refs.input.map(({ name, kind }) => [name, kind]), [["take_ref", "take"]]);
+    assert.deepEqual(ensurePitch.refs.output.map(({ name, kind }) => [name, kind]), [["envelope_ref", "envelope"]]);
+
     const bridge = new FakeFoundationBridge();
     for (const [index, id] of IDS.entries()) {
       const result = await executeTemplate({
         descriptor: catalog.require(id),
-        input: {},
+        input: inputFor(id),
         refs: refsFor(id),
         context: context({ request_sequence: index + 1 }),
         executor: bridge,
@@ -123,6 +160,10 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
       ["fx", "fx.delete_fx", "destructive"],
       ["routing", "routing.remove_send", "destructive"],
       ["items", "items.move_item_to_track", "write"],
+      ["items", "items.glue_item", "destructive"],
+      ["tracks", "tracks.freeze_track", "write"],
+      ["tracks", "tracks.unfreeze_track", "destructive"],
+      ["automation", "automation.ensure_take_pitch_envelope", "write"],
     ]);
     for (const request of bridge.seen) {
       assert.equal(request.undo.mode, "required");
@@ -132,7 +173,7 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
     }
   });
 
-  it("promotes all three into accepted catalog, Recipe compatibility, and one bounded live allowlist", async () => {
+  it("promotes all seven into accepted catalog, Recipe compatibility, and one bounded live allowlist", async () => {
     const official = createAcceptedOfficialTemplateCatalog();
     for (const id of IDS) {
       assert.equal(official.get(id) !== null, true, id);
@@ -151,7 +192,7 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
     for (const [index, id] of IDS.entries()) {
       const response = await runtime.call_template({
         id,
-        input: {},
+        input: inputFor(id),
         refs: refsFor(id),
         context: context({ request_sequence: index + 1 }),
       });
@@ -177,7 +218,14 @@ describe("Alpha3.3 exact lifecycle atom descriptors", () => {
 function refsFor(id) {
   if (id === "template.fx.delete_fx") return { fx_ref: FX_REF };
   if (id === "template.routing.remove_send") return { send_ref: SEND_REF };
-  return { item_ref: ITEM_REF, target_track_ref: TRACK_REF };
+  if (id === "template.items.move_item_to_track") return { item_ref: ITEM_REF, target_track_ref: TRACK_REF };
+  if (id === "template.items.glue_item") return { item_ref: ITEM_REF };
+  if (id === "template.automation.ensure_take_pitch_envelope") return { take_ref: TAKE_REF };
+  return { track_ref: TRACK_REF };
+}
+
+function inputFor(id) {
+  return id === "template.tracks.freeze_track" ? { mode: "stereo" } : {};
 }
 
 function context(overrides = {}) {

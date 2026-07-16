@@ -3767,6 +3767,74 @@
       "tests": [
         "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
       ]
+    },
+    {
+      "template_id": "template.items.glue_item",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "items",
+      "risk": "destructive",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "items/glue_item.lua",
+      "handler_export": "alpha33_glue_item",
+      "artifact_policy": "none",
+      "capability": "items.glue_item",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.freeze_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "write",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "tracks/freeze_track.lua",
+      "handler_export": "alpha33_freeze_track",
+      "artifact_policy": "none",
+      "capability": "tracks.freeze_track",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.tracks.unfreeze_track",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "tracks",
+      "risk": "destructive",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "tracks/unfreeze_track.lua",
+      "handler_export": "alpha33_unfreeze_track",
+      "artifact_policy": "none",
+      "capability": "tracks.unfreeze_track",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.automation.ensure_take_pitch_envelope",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "automation",
+      "risk": "write",
+      "route": "alpha3-3-lifecycle-atom-handlers",
+      "handler_file": "automation/ensure_take_pitch_envelope.lua",
+      "handler_export": "alpha33_ensure_take_pitch_envelope",
+      "artifact_policy": "none",
+      "capability": "automation.ensure_take_pitch_envelope",
+      "tests": [
+        "tests/layer4dx/alpha3-3-lifecycle-atom-handler-truth.test.mjs"
+      ]
     }
   ]
 }

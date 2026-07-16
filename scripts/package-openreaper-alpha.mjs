@@ -42,8 +42,8 @@ const OPENREAPER_PRODUCT_VERSION = "3.3.0-alpha.0";
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
   accepted_macro_count: 15,
-  accepted_template_count: 227,
-  bridge_handler_count: 87,
+  accepted_template_count: 231,
+  bridge_handler_count: 91,
 });
 const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;

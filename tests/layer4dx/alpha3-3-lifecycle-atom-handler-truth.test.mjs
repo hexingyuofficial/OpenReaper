@@ -16,6 +16,10 @@ const ROOT = new URL("../..", import.meta.url);
 const FX_SOURCE = source("fx/delete_fx.lua");
 const SEND_SOURCE = source("routing/remove_send.lua");
 const ITEM_SOURCE = source("items/move_item_to_track.lua");
+const GLUE_SOURCE = source("items/glue_item.lua");
+const FREEZE_SOURCE = source("tracks/freeze_track.lua");
+const UNFREEZE_SOURCE = source("tracks/unfreeze_track.lua");
+const PITCH_SOURCE = source("automation/ensure_take_pitch_envelope.lua");
 const CATALOG_SUMMARY_SOURCE = source("core/read_template_catalog_summary.lua");
 const ROUTE_SOURCE = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
 const POLICY_SOURCE = readFileSync(new URL("../../reaper/bridge/src/35-route-policy.lua", import.meta.url), "utf8");
@@ -51,7 +55,7 @@ end
 `;
 
 describe("Alpha3.3 exact lifecycle atom handler truth", () => {
-  it("registers exactly three extracted native handlers and assembles their dispatch routes", () => {
+  it("registers exactly seven extracted native handlers and assembles their dispatch routes", () => {
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     const summary = validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
     const rows = registry.entries.filter((entry) => entry.route === "alpha3-3-lifecycle-atom-handlers");
@@ -60,10 +64,14 @@ describe("Alpha3.3 exact lifecycle atom handler truth", () => {
       ["fx/delete_fx.lua", "alpha33_delete_fx"],
       ["routing/remove_send.lua", "alpha33_remove_send"],
       ["items/move_item_to_track.lua", "alpha33_move_item_to_track"],
+      ["items/glue_item.lua", "alpha33_glue_item"],
+      ["tracks/freeze_track.lua", "alpha33_freeze_track"],
+      ["tracks/unfreeze_track.lua", "alpha33_unfreeze_track"],
+      ["automation/ensure_take_pitch_envelope.lua", "alpha33_ensure_take_pitch_envelope"],
     ]);
-    assert.equal(summary.entryCount, 227);
-    assert.equal(summary.extractedHandlerCount, 227);
-    assert.equal(summary.handlerModuleCount, 87);
+    assert.equal(summary.entryCount, 231);
+    assert.equal(summary.extractedHandlerCount, 231);
+    assert.equal(summary.handlerModuleCount, 91);
     assert.equal(summary.routeCount, 34);
 
     const built = buildLiveBridgeBundle({ cwd: ROOT.pathname });
@@ -71,6 +79,10 @@ describe("Alpha3.3 exact lifecycle atom handler truth", () => {
       ["fx.delete_fx", "alpha33_delete_fx"],
       ["routing.remove_send", "alpha33_remove_send"],
       ["items.move_item_to_track", "alpha33_move_item_to_track"],
+      ["items.glue_item", "alpha33_glue_item"],
+      ["tracks.freeze_track", "alpha33_freeze_track"],
+      ["tracks.unfreeze_track", "alpha33_unfreeze_track"],
+      ["automation.ensure_take_pitch_envelope", "alpha33_ensure_take_pitch_envelope"],
     ]) {
       assert.match(built, new RegExp(`\\["${escapeRegExp(capability)}"\\]\\s*=\\s*OPENREAPER_HANDLER_EXPORTS\\.${handler}\\b`));
     }
@@ -290,7 +302,344 @@ assert(summary == nil and failure.code == "RESPONSE_TOO_LARGE" and calls.move ==
 `);
   });
 
-  it("contains only reviewed native mutation APIs and no selection, action, Lua, shell, UI, or Track creation bypass", () => {
+  it("glues one exact Item, restores selection/active Takes, and fails closed without unique source-bound readback", () => {
+    runLua(GLUE_SOURCE, String.raw`
+target_track = { guid = "{TRACK-TARGET}" }
+other_track = { guid = "{TRACK-OTHER}" }
+tracks = { target_track, other_track }
+calls = { action = 0, ids = {} }
+action_mode = "success"
+
+function reset_glue()
+  target_track.selected = false
+  other_track.selected = true
+  target_take = { guid = "{TAKE-TARGET}", source = { filename = "", source_type = "MIDI" } }
+  survivor_take_a = { guid = "{TAKE-SURVIVOR-A}", source = { filename = "/tmp/a.wav", source_type = "WAVE" } }
+  survivor_take_b = { guid = "{TAKE-SURVIVOR-B}", source = { filename = "/tmp/b.wav", source_type = "WAVE" } }
+  target_item = { guid = "{ITEM-TARGET}", track = target_track, position = 3.5, length = 2.25, selected = true, active = target_take }
+  survivor_item = { guid = "{ITEM-SURVIVOR}", track = other_track, position = 9, length = 1, selected = true, active = survivor_take_a }
+  target_take.item = target_item
+  survivor_take_a.item = survivor_item
+  survivor_take_b.item = survivor_item
+  items = { target_item, survivor_item }
+end
+reset_glue()
+
+reaper = {}
+reaper.CountTracks = function() return #tracks end
+reaper.GetTrack = function(_, index) return tracks[index + 1] end
+reaper.GetMasterTrack = function() return nil end
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.CountSelectedTracks2 = function() local count = 0; for _, track in ipairs(tracks) do if track.selected then count = count + 1 end end; return count end
+reaper.GetSelectedTrack2 = function(_, selected_index) local count = 0; for _, track in ipairs(tracks) do if track.selected then if count == selected_index then return track end; count = count + 1 end end end
+reaper.SetTrackSelected = function(track, selected) track.selected = selected; return true end
+reaper.CountMediaItems = function() return #items end
+reaper.GetMediaItem = function(_, index) return items[index + 1] end
+reaper.GetSetMediaItemInfo_String = function(item, key) assert(key == "GUID"); return true, item.guid end
+reaper.GetMediaItemTrack = function(item) return item.track end
+reaper.GetMediaItemInfo_Value = function(item, key) return key == "D_POSITION" and item.position or item.length end
+reaper.CountSelectedMediaItems = function() local count = 0; for _, item in ipairs(items) do if item.selected then count = count + 1 end end; return count end
+reaper.GetSelectedMediaItem = function(_, selected_index) local count = 0; for _, item in ipairs(items) do if item.selected then if count == selected_index then return item end; count = count + 1 end end end
+reaper.SetMediaItemSelected = function(item, selected) item.selected = selected; return true end
+reaper.GetActiveTake = function(item) return item.active end
+reaper.SetActiveTake = function(take) take.item.active = take; return true end
+reaper.GetSetMediaItemTakeInfo_String = function(take, key) assert(key == "GUID"); return true, take.guid end
+reaper.GetMediaItemTake_Source = function(take) return take.source end
+reaper.GetMediaSourceFileName = function(source) return source.filename end
+reaper.GetMediaSourceType = function(source) return source.source_type end
+reaper.Main_OnCommandEx = function(action_id)
+  calls.action = calls.action + 1
+  calls.ids[#calls.ids + 1] = action_id
+  assert(action_id == 40362)
+  assert(target_item.selected == true and survivor_item.selected == false)
+  if action_mode == "dispatch_false" then return false end
+  if action_mode == "no_readback" then return true end
+  local glued_take = { guid = "{TAKE-GLUED}", source = { filename = "", source_type = "MIDI" } }
+  local glued_item = { guid = "{ITEM-GLUED}", track = target_track, position = 3.5, length = 2.25, selected = true, active = glued_take }
+  glued_take.item = glued_item
+  survivor_item.active = survivor_take_b
+  if action_mode == "ambiguous" then
+    local extra_take = { guid = "{TAKE-EXTRA}", source = { filename = "/tmp/extra.wav", source_type = "WAVE" } }
+    local extra_item = { guid = "{ITEM-EXTRA}", track = target_track, position = 3.5, length = 2.25, selected = false, active = extra_take }
+    extra_take.item = extra_item
+    items = { glued_item, extra_item, survivor_item }
+  else
+    items = { glued_item, survivor_item }
+  end
+  return true
+end
+reaper.UpdateArrange = function() end
+
+local request = {
+  pack = { id = "items", capability = "items.glue_item", risk = "destructive" },
+  refs = {{ kind = "item", ref = "item:guid:{ITEM-TARGET}", identity = { scheme = "guid", value = "{ITEM-TARGET}" } }},
+}
+local summary, failure, artifacts, jobs, refs = alpha33_glue_item(request)
+assert(failure == nil and summary.readback_status == "passed")
+assert(summary.glued_item_ref == "item:guid:{ITEM-GLUED}" and summary.glued_take_ref == "take:guid:{TAKE-GLUED}")
+assert(summary.owner_track_ref == "track:guid:{TRACK-TARGET}" and summary.position_seconds == 3.5 and summary.length_seconds == 2.25)
+assert(summary.source_filename == "" and summary.source_type == "MIDI")
+assert(summary.item_count_before == 2 and summary.item_count_after == 2 and summary.item_count_unchanged == true)
+assert(items[1].selected == true and survivor_item.selected == true and other_track.selected == true)
+assert(survivor_item.active == survivor_take_a and #refs == 3 and calls.ids[1] == 40362)
+
+reset_glue()
+action_mode = "dispatch_false"
+summary, failure = alpha33_glue_item(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED" and failure.details.selection_restored == true)
+assert(target_item.selected == true and survivor_item.selected == true and other_track.selected == true)
+
+reset_glue()
+action_mode = "no_readback"
+summary, failure = alpha33_glue_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+
+reset_glue()
+action_mode = "ambiguous"
+summary, failure = alpha33_glue_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED" and failure.details.new_item_candidate_count == 2)
+
+request.refs[1] = { kind = "item", ref = "item:selected:0", identity = { scheme = "selected", value = "0" } }
+local before_actions = calls.action
+summary, failure = alpha33_glue_item(request)
+assert(summary == nil and failure.code == "REF_INVALID" and calls.action == before_actions)
+`);
+  });
+
+  it("freezes all three fixed modes with GUID-safe selected-Item replacement mapping", () => {
+    runLua(FREEZE_SOURCE, String.raw`
+target_track = { guid = "{TRACK-TARGET}", freeze_count = 0 }
+other_track = { guid = "{TRACK-OTHER}", freeze_count = 0 }
+tracks = { target_track, other_track }
+calls = { action = 0 }
+action_mode = "success"
+expected_action = 0
+sequence = 0
+
+function reset_freeze()
+  sequence = sequence + 1
+  target_track.freeze_count = 0
+  target_track.selected = false
+  other_track.selected = true
+  target_item = { guid = "{ITEM-TARGET-" .. sequence .. "}", track = target_track, selected = true }
+  other_item = { guid = "{ITEM-OTHER}", track = other_track, selected = true }
+  items = { target_item, other_item }
+end
+reset_freeze()
+
+reaper = {}
+reaper.CountTracks = function() return #tracks end
+reaper.GetTrack = function(_, index) return tracks[index + 1] end
+reaper.GetMasterTrack = function() return nil end
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.GetMediaTrackInfo_Value = function(track, key) assert(key == "I_FREEZECOUNT"); return track.freeze_count end
+reaper.CountSelectedTracks2 = function() local count = 0; for _, track in ipairs(tracks) do if track.selected then count = count + 1 end end; return count end
+reaper.GetSelectedTrack2 = function(_, selected_index) local count = 0; for _, track in ipairs(tracks) do if track.selected then if count == selected_index then return track end; count = count + 1 end end end
+reaper.SetTrackSelected = function(track, selected) track.selected = selected; return true end
+reaper.CountMediaItems = function() return #items end
+reaper.GetMediaItem = function(_, index) return items[index + 1] end
+reaper.GetSetMediaItemInfo_String = function(item, key) assert(key == "GUID"); return true, item.guid end
+reaper.GetMediaItemTrack = function(item) return item.track end
+reaper.CountSelectedMediaItems = function() local count = 0; for _, item in ipairs(items) do if item.selected then count = count + 1 end end; return count end
+reaper.GetSelectedMediaItem = function(_, selected_index) local count = 0; for _, item in ipairs(items) do if item.selected then if count == selected_index then return item end; count = count + 1 end end end
+reaper.SetMediaItemSelected = function(item, selected) item.selected = selected; return true end
+reaper.Main_OnCommandEx = function(action_id)
+  calls.action = calls.action + 1
+  assert(action_id == expected_action)
+  assert(target_track.selected == true and other_track.selected == false)
+  if action_mode == "dispatch_false" then return false end
+  if action_mode == "no_readback" then return true end
+  target_track.freeze_count = target_track.freeze_count + 1
+  freeze_item = { guid = "{ITEM-FREEZE-" .. sequence .. "}", track = target_track, selected = true }
+  items = { freeze_item, other_item }
+  return true
+end
+reaper.UpdateArrange = function() end
+
+local action_ids = { mono = 40901, stereo = 41223, multichannel = 40877 }
+for _, mode in ipairs({ "mono", "stereo", "multichannel" }) do
+  reset_freeze()
+  expected_action = action_ids[mode]
+  action_mode = "success"
+  local request = {
+    params = { mode = mode },
+    pack = { id = "tracks", capability = "tracks.freeze_track", risk = "write" },
+    refs = {{ kind = "track", ref = "track:guid:{TRACK-TARGET}", identity = { scheme = "guid", value = "{TRACK-TARGET}" } }},
+  }
+  local summary, failure = alpha33_freeze_track(request)
+  assert(failure == nil and summary.mode == mode and summary.freeze_count_before == 0 and summary.freeze_count_after == 1)
+  assert(summary.action_id == nil and summary.selection_restored == true)
+  assert(freeze_item.selected == true and other_item.selected == true and other_track.selected == true)
+end
+
+reset_freeze()
+expected_action = 41223
+action_mode = "dispatch_false"
+local request = { params = { mode = "stereo" }, pack = { id = "tracks", capability = "tracks.freeze_track", risk = "write" }, refs = {{ kind = "track", ref = "track:guid:{TRACK-TARGET}", identity = { scheme = "guid", value = "{TRACK-TARGET}" } }} }
+local summary, failure = alpha33_freeze_track(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED" and failure.details.selection_restored == true)
+
+reset_freeze()
+action_mode = "no_readback"
+summary, failure = alpha33_freeze_track(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED" and failure.details.freeze_count_after == 0)
+
+request.refs[1] = { kind = "track", ref = "track:selected:0", identity = { scheme = "selected", value = "0" } }
+local before_actions = calls.action
+summary, failure = alpha33_freeze_track(request)
+assert(summary == nil and failure.code == "REF_INVALID" and calls.action == before_actions)
+`);
+  });
+
+  it("unfreezes only a frozen exact Track and maps selected freeze Items to restored Items", () => {
+    runLua(UNFREEZE_SOURCE, String.raw`
+target_track = { guid = "{TRACK-TARGET}", freeze_count = 2 }
+other_track = { guid = "{TRACK-OTHER}", freeze_count = 0 }
+tracks = { target_track, other_track }
+target_track.selected = false
+other_track.selected = true
+freeze_item = { guid = "{ITEM-FREEZE}", track = target_track, selected = true }
+other_item = { guid = "{ITEM-OTHER}", track = other_track, selected = true }
+items = { freeze_item, other_item }
+calls = { action = 0 }
+action_mode = "success"
+
+reaper = {}
+reaper.CountTracks = function() return #tracks end
+reaper.GetTrack = function(_, index) return tracks[index + 1] end
+reaper.GetMasterTrack = function() return nil end
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.GetMediaTrackInfo_Value = function(track, key) assert(key == "I_FREEZECOUNT"); return track.freeze_count end
+reaper.CountSelectedTracks2 = function() local count = 0; for _, track in ipairs(tracks) do if track.selected then count = count + 1 end end; return count end
+reaper.GetSelectedTrack2 = function(_, selected_index) local count = 0; for _, track in ipairs(tracks) do if track.selected then if count == selected_index then return track end; count = count + 1 end end end
+reaper.SetTrackSelected = function(track, selected) track.selected = selected; return true end
+reaper.CountMediaItems = function() return #items end
+reaper.GetMediaItem = function(_, index) return items[index + 1] end
+reaper.GetSetMediaItemInfo_String = function(item, key) assert(key == "GUID"); return true, item.guid end
+reaper.GetMediaItemTrack = function(item) return item.track end
+reaper.CountSelectedMediaItems = function() local count = 0; for _, item in ipairs(items) do if item.selected then count = count + 1 end end; return count end
+reaper.GetSelectedMediaItem = function(_, selected_index) local count = 0; for _, item in ipairs(items) do if item.selected then if count == selected_index then return item end; count = count + 1 end end end
+reaper.SetMediaItemSelected = function(item, selected) item.selected = selected; return true end
+reaper.Main_OnCommandEx = function(action_id)
+  calls.action = calls.action + 1
+  assert(action_id == 41644)
+  assert(target_track.selected == true and other_track.selected == false)
+  if action_mode == "dispatch_false" then return false end
+  if action_mode == "no_readback" then return true end
+  target_track.freeze_count = 0
+  restored_a = { guid = "{ITEM-RESTORED-A}", track = target_track, selected = true }
+  restored_b = { guid = "{ITEM-RESTORED-B}", track = target_track, selected = false }
+  items = { restored_a, restored_b, other_item }
+  return true
+end
+reaper.UpdateArrange = function() end
+
+local request = { pack = { id = "tracks", capability = "tracks.unfreeze_track", risk = "destructive" }, refs = {{ kind = "track", ref = "track:guid:{TRACK-TARGET}", identity = { scheme = "guid", value = "{TRACK-TARGET}" } }} }
+local summary, failure = alpha33_unfreeze_track(request)
+assert(failure == nil and summary.freeze_count_before == 2 and summary.freeze_count_after == 0)
+assert(summary.action_id == nil and summary.selection_restored == true)
+assert(restored_a.selected == true and restored_b.selected == true and other_item.selected == true and other_track.selected == true)
+
+target_track.freeze_count = 0
+local before_actions = calls.action
+summary, failure = alpha33_unfreeze_track(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED" and failure.details.reason_code == "TRACK_NOT_FROZEN")
+assert(calls.action == before_actions)
+
+target_track.freeze_count = 2
+freeze_item = { guid = "{ITEM-FREEZE-2}", track = target_track, selected = true }
+other_item.selected = true
+items = { freeze_item, other_item }
+action_mode = "no_readback"
+summary, failure = alpha33_unfreeze_track(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED" and failure.details.freeze_count_after == 2)
+`);
+  });
+
+  it("ensures one exact Take Pitch envelope with idempotent no-toggle and GUID readback", () => {
+    runLua(PITCH_SOURCE, String.raw`
+target_track = { guid = "{TRACK-TARGET}", selected = false }
+other_track = { guid = "{TRACK-OTHER}", selected = true }
+tracks = { target_track, other_track }
+target_take = { guid = "{TAKE-TARGET}" }
+target_other_take = { guid = "{TAKE-OTHER}" }
+survivor_take_a = { guid = "{TAKE-SURVIVOR-A}" }
+survivor_take_b = { guid = "{TAKE-SURVIVOR-B}" }
+target_item = { track = target_track, selected = false, takes = { target_take, target_other_take }, active = target_other_take }
+survivor_item = { track = other_track, selected = true, takes = { survivor_take_a, survivor_take_b }, active = survivor_take_a }
+target_take.item = target_item
+target_other_take.item = target_item
+survivor_take_a.item = survivor_item
+survivor_take_b.item = survivor_item
+items = { target_item, survivor_item }
+envelope = { guid = "{ENV-PITCH}" }
+pitch_exists = true
+action_mode = "success"
+calls = { action = 0, set_active = 0 }
+
+reaper = {}
+reaper.CountTracks = function() return #tracks end
+reaper.GetTrack = function(_, index) return tracks[index + 1] end
+reaper.GetMasterTrack = function() return nil end
+reaper.CountSelectedTracks2 = function() local count = 0; for _, track in ipairs(tracks) do if track.selected then count = count + 1 end end; return count end
+reaper.GetSelectedTrack2 = function(_, selected_index) local count = 0; for _, track in ipairs(tracks) do if track.selected then if count == selected_index then return track end; count = count + 1 end end end
+reaper.SetTrackSelected = function(track, selected) track.selected = selected; return true end
+reaper.CountMediaItems = function() return #items end
+reaper.GetMediaItem = function(_, index) return items[index + 1] end
+reaper.CountTakes = function(item) return #item.takes end
+reaper.GetTake = function(item, index) return item.takes[index + 1] end
+reaper.GetSetMediaItemTakeInfo_String = function(take, key) assert(key == "GUID"); return true, take.guid end
+reaper.GetMediaItemTake_Item = function(take) return take.item end
+reaper.GetActiveTake = function(item) return item.active end
+reaper.SetActiveTake = function(take) calls.set_active = calls.set_active + 1; take.item.active = take; return true end
+reaper.CountSelectedMediaItems = function() local count = 0; for _, item in ipairs(items) do if item.selected then count = count + 1 end end; return count end
+reaper.GetSelectedMediaItem = function(_, selected_index) local count = 0; for _, item in ipairs(items) do if item.selected then if count == selected_index then return item end; count = count + 1 end end end
+reaper.SetMediaItemSelected = function(item, selected) item.selected = selected; return true end
+reaper.GetTakeEnvelopeByName = function(take, name) assert(take == target_take and name == "Pitch"); if pitch_exists then return envelope end end
+reaper.GetSetEnvelopeInfo_String = function(actual, key) assert(actual == envelope and key == "GUID"); return true, actual.guid end
+reaper.Main_OnCommandEx = function(action_id)
+  calls.action = calls.action + 1
+  assert(action_id == 41612 and target_item.selected == true and target_item.active == target_take)
+  if action_mode == "dispatch_false" then return false end
+  survivor_item.active = survivor_take_b
+  target_track.selected = true
+  other_track.selected = false
+  if action_mode == "success" then pitch_exists = true end
+  return true
+end
+reaper.UpdateArrange = function() end
+
+local request = { pack = { id = "automation", capability = "automation.ensure_take_pitch_envelope", risk = "write" }, refs = {{ kind = "take", ref = "take:guid:{TAKE-TARGET}", identity = { scheme = "guid", value = "{TAKE-TARGET}" } }} }
+local summary, failure = alpha33_ensure_take_pitch_envelope(request)
+assert(failure == nil and summary.existing_before == true and summary.changed == false)
+assert(summary.envelope_ref == "envelope:guid:{ENV-PITCH}" and calls.action == 0 and calls.set_active == 0)
+
+pitch_exists = false
+action_mode = "success"
+summary, failure = alpha33_ensure_take_pitch_envelope(request)
+assert(failure == nil and summary.existing_before == false and summary.changed == true)
+assert(calls.action == 1 and target_item.active == target_other_take and survivor_item.active == survivor_take_a)
+assert(target_item.selected == false and survivor_item.selected == true and other_track.selected == true)
+
+pitch_exists = false
+action_mode = "dispatch_false"
+summary, failure = alpha33_ensure_take_pitch_envelope(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED")
+assert(failure.details.selection_restored == true and failure.details.active_take_restored == true)
+
+pitch_exists = false
+action_mode = "no_envelope"
+summary, failure = alpha33_ensure_take_pitch_envelope(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+
+request.refs[1] = { kind = "take", ref = "take:selected:0", identity = { scheme = "selected", value = "0" } }
+local before_actions = calls.action
+summary, failure = alpha33_ensure_take_pitch_envelope(request)
+assert(summary == nil and failure.code == "REF_INVALID" and calls.action == before_actions)
+`);
+  });
+
+  it("contains only reviewed native mutation APIs and fixed private action ids without generic execution bypass", () => {
     assert.match(FX_SOURCE, /TrackFX_Delete/);
     assert.match(FX_SOURCE, /TakeFX_Delete/);
     assert.match(FX_SOURCE, /TrackFX_GetFXGUID/);
@@ -299,24 +648,37 @@ assert(summary == nil and failure.code == "RESPONSE_TOO_LARGE" and calls.move ==
     assert.match(SEND_SOURCE, /GetTrackSendInfo_Value/);
     assert.match(ITEM_SOURCE, /MoveMediaItemToTrack/);
     assert.match(ITEM_SOURCE, /GetMediaItemTrack/);
+    assert.match(GLUE_SOURCE, /ALPHA3_3_GLUE_ITEM_ACTION_ID\s*=\s*40362/);
+    assert.match(FREEZE_SOURCE, /mono\s*=\s*40901/);
+    assert.match(FREEZE_SOURCE, /stereo\s*=\s*41223/);
+    assert.match(FREEZE_SOURCE, /multichannel\s*=\s*40877/);
+    assert.match(UNFREEZE_SOURCE, /ALPHA3_3_UNFREEZE_TRACK_ACTION_ID\s*=\s*41644/);
+    assert.match(PITCH_SOURCE, /ALPHA3_3_ENSURE_TAKE_PITCH_ENVELOPE_ACTION_ID\s*=\s*41612/);
 
-    const combined = [FX_SOURCE, SEND_SOURCE, ITEM_SOURCE].join("\n");
-    assert.doesNotMatch(combined, /\b(?:GetSelectedTrack|GetSelectedMediaItem|SetTrackSelected|SetMediaItemSelected)\b/);
-    assert.doesNotMatch(combined, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
+    const directNative = [FX_SOURCE, SEND_SOURCE, ITEM_SOURCE].join("\n");
+    assert.doesNotMatch(directNative, /\b(?:GetSelectedTrack|GetSelectedMediaItem|SetTrackSelected|SetMediaItemSelected)\b/);
+    assert.doesNotMatch(directNative, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
+    const combined = [directNative, GLUE_SOURCE, FREEZE_SOURCE, UNFREEZE_SOURCE, PITCH_SOURCE].join("\n");
+    assert.doesNotMatch(combined, /\b(?:Main_OnCommand(?!Ex)|MIDIEditor_OnCommand|NamedCommandLookup|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(combined, /\b(?:InsertTrackAtIndex|AddMediaItemToTrack|CreateNewMIDIItemInProj|SetItemStateChunk|GetItemStateChunk)\b/);
     assert.doesNotMatch(SEND_SOURCE, /RemoveTrackSend"\s*,\s*source_track\s*,\s*1\b/);
+    assert.doesNotMatch(JSON.stringify(createAcceptedOfficialTemplateCatalogTemplates().filter(({ id }) => id.includes("freeze_track"))), /action_id/);
 
     for (const [capability, pack, risk, handler] of [
       ["fx.delete_fx", "fx", "destructive", "alpha33_delete_fx"],
       ["routing.remove_send", "routing", "destructive", "alpha33_remove_send"],
       ["items.move_item_to_track", "items", "write", "alpha33_move_item_to_track"],
+      ["items.glue_item", "items", "destructive", "alpha33_glue_item"],
+      ["tracks.freeze_track", "tracks", "write", "alpha33_freeze_track"],
+      ["tracks.unfreeze_track", "tracks", "destructive", "alpha33_unfreeze_track"],
+      ["automation.ensure_take_pitch_envelope", "automation", "write", "alpha33_ensure_take_pitch_envelope"],
     ]) {
       assert.match(POLICY_SOURCE, new RegExp(`\\["${escapeRegExp(capability)}"\\]\\s*=\\s*\\{\\s*pack\\s*=\\s*"${pack}",\\s*risk\\s*=\\s*"${risk}"\\s*\\}`));
       assert.match(ROUTE_SOURCE, new RegExp(`\\["${escapeRegExp(capability)}"\\]\\s*=\\s*${handler}\\b`));
     }
   });
 
-  it("keeps public catalog and live-handler counts equal to the actual 227-row catalog and registry", () => {
+  it("keeps public catalog and live-handler counts equal to the actual 231-row catalog and registry", () => {
     const templates = createAcceptedOfficialTemplateCatalogTemplates();
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     const byPack = countBy(templates, "pack");

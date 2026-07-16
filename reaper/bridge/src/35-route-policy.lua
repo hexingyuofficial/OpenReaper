@@ -26,6 +26,10 @@ local SAFE_WRITE_A_CAPABILITIES = {
   ["fx.delete_fx"] = { pack = "fx", risk = "destructive" },
   ["routing.remove_send"] = { pack = "routing", risk = "destructive" },
   ["items.move_item_to_track"] = { pack = "items", risk = "write" },
+  ["items.glue_item"] = { pack = "items", risk = "destructive" },
+  ["tracks.freeze_track"] = { pack = "tracks", risk = "write" },
+  ["tracks.unfreeze_track"] = { pack = "tracks", risk = "destructive" },
+  ["automation.ensure_take_pitch_envelope"] = { pack = "automation", risk = "write" },
 }
 
 local E3_MEDIA_ROUTE_CAPABILITIES = {

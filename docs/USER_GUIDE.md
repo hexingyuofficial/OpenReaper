@@ -214,8 +214,8 @@ supported.
 
 ## Current Evidence Boundary
 
-The current Alpha3.3 surface contains 15 visible executable Macros and 227
-accepted Templates with registered bridge handlers across 87 handler modules.
+The current Alpha3.3 surface contains 15 visible executable Macros and 231
+accepted Templates with registered bridge handlers across 91 handler modules.
 Support remains narrower than the names of some Macro families:
 
 - MIDI supports bounded `create_clips`, indexed existing-note edits,
