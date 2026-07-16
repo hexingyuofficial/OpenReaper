@@ -328,6 +328,8 @@ sleep 0.1
     assert.match(source, /host_parameter_freshness_status: "fresh"/);
     assert.match(source, /MCP tool returned an error/);
     assert.match(source, /bridge_owner: "openreaper-alpha-package-smoke"/);
+    assert.match(source, /error\.cleanup = cleanupError\?\.cleanup \?\? null/);
+    assert.match(source, /waitForSignalTargetExit\(target, 5_000\)/);
     assert.match(source, /bridge_generation: 1/);
     assert.match(source, /stale_identity_scrubbed_for_child/);
     assert.match(source, /registered executable Macros and verified Templates/);

@@ -4226,6 +4226,7 @@ function runCaptured(command, args, {
         error.code = code;
         error.stdout = stdout;
         error.stderr = stderr;
+        error.cleanup = cleanupError?.cleanup ?? null;
         reject(error);
         return;
       }
@@ -4315,11 +4316,13 @@ async function cleanupCapturedChild(child, { ownsProcessGroup, label, reason }) 
     return evidence;
   }
   evidence.kill_sent = signalProcessTarget(target, "SIGKILL");
-  if (await waitForSignalTargetExit(target, 1_500)) {
+  if (await waitForSignalTargetExit(target, 5_000)) {
     evidence.process_group_exited = true;
     return evidence;
   }
-  throw new Error(`${label} ${pid} remained alive after bounded ${reason} TERM/KILL cleanup`);
+  const error = new Error(`${label} ${pid} remained alive after bounded ${reason} TERM/KILL cleanup`);
+  error.cleanup = evidence;
+  throw error;
 }
 
 function signalProcessTarget(target, signal) {
