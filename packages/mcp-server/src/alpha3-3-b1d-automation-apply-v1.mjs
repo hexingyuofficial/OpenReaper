@@ -1097,6 +1097,9 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
 
 function finalizeEnvelope(envelope) {
   const result = structuredClone(envelope);
+  for (const change of result.result?.changes ?? []) {
+    change.applied = change.status === "applied" && change.live_readback?.status === "passed";
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
   const validation = validateMacroExecutionEnvelope(result);
   if (!validation.valid) throw new TypeError(`Invalid Alpha3.3-B1d automation.apply envelope: ${validation.errors.join("; ")}`);

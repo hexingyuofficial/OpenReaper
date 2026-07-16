@@ -83,6 +83,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(result.result.data.exact_live_identity, true);
     assert.equal(result.result.data.sqlite_write_authority, false);
     assert.equal(result.result.changes[0].status, "planned");
+    assert.equal(result.result.changes[0].applied, false);
     assert.equal(bridge.calls.some((call) => isMutation(call.id)), false);
     assert.deepEqual(bridge.envelopes.get(ENV_A).points, []);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
@@ -103,6 +104,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
       "template.automation.read_envelope_points",
     ]);
     assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(result.result.changes[0].applied, true);
     assert.deepEqual(result.result.changes[0].mutation, { status: "completed", template_id: "template.automation.insert_envelope_points_batch" });
     assert.deepEqual(result.result.changes[0].live_readback, { status: "passed", source: "live_envelope_points", requested: 2, replaced: 0, net_new: 2, before: 1, after: 3 });
     assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
@@ -474,6 +476,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
       assert.equal(result.ok, false);
       assert.equal(result.error.code, "AUTOMATION_READBACK_MISMATCH");
       assert.equal(result.result.changes[0].status, "readback_failed");
+      assert.equal(result.result.changes[0].applied, false);
       assert.equal(result.result.changes[0].live_readback.status, "failed");
     }
   });
@@ -492,6 +495,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(result.error.code, "COMMAND_FAILED");
     assert.equal(result.result.changes[0].mutation.status, "unknown_or_partial");
     assert.equal(result.result.changes[0].mutation.details.mutation_applied, true);
+    assert.equal(result.result.changes[0].applied, false);
     assert.equal(result.result.changes[0].live_readback.status, "failed");
     assert.equal(result.result.changes[0].index_maintenance.status, "completed");
     assert.deepEqual(invalidations, [["automation"]]);
@@ -510,6 +514,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(result.execution.status, "partial_failure");
     assert.equal(result.error.code, "INDEX_WRITE_FAILED");
     assert.equal(result.result.changes[0].status, "applied");
+    assert.equal(result.result.changes[0].applied, true);
     assert.equal(result.result.changes[0].live_readback.status, "passed");
     assert.deepEqual(result.result.changes[0].index_maintenance, { status: "failed", scopes: ["tracks", "automation"], blocker_code: "INDEX_WRITE_FAILED" });
     assert.equal(result.result.verification.status, "passed");
