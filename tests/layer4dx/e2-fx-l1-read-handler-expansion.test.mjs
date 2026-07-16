@@ -232,15 +232,20 @@ describe("E2-FX-L1 FX read live handler expansion", () => {
     );
     assert.match(
       HANDLER_SOURCE,
-      /parameters\[#parameters \+ 1\] = \{[\s\S]*?param_ident = e2_fx_read_param_ident\([\s\S]*?formatted_value = e2_fx_read_param_formatted\([\s\S]*?step_sizes_available = step_sizes\.step_sizes_available[\s\S]*?is_discrete = step_sizes\.is_discrete/,
+      /parameters\[#parameters \+ 1\] = \{[\s\S]*?param_ident = e2_fx_read_param_ident\([\s\S]*?formatted_value = e2_fx_read_param_formatted\(/,
     );
+    const listParametersSource = HANDLER_SOURCE.match(
+      /local function list_fx_parameters\(request\)[\s\S]*?\nend\n\nlocal function read_fx_parameter/,
+    )?.[0];
+    assert.equal(typeof listParametersSource, "string");
+    assert.doesNotMatch(listParametersSource, /step_sizes_available|is_discrete|is_toggle/);
     assert.match(
       HANDLER_SOURCE,
       /local next_offset = max_index < count and max_index or JSON_NULL[\s\S]*?returned_count = #parameters,[\s\S]*?offset = offset,[\s\S]*?next_offset = next_offset,[\s\S]*?truncated = next_offset ~= JSON_NULL,[\s\S]*?inventory_complete = next_offset == JSON_NULL,[\s\S]*?coverage_status = next_offset == JSON_NULL and "complete" or "paged"/,
     );
     assert.match(
       HANDLER_SOURCE,
-      /local function read_fx_parameter\(request\)[\s\S]*?request\.params\.probe_normalized_value[\s\S]*?e2_fx_format_param_normalized\(owner_kind, owner, slot_index, param_index, probe_normalized_value\)[\s\S]*?param_ident = param_ident,[\s\S]*?formatted_value = formatted_value/,
+      /local function read_fx_parameter\(request\)[\s\S]*?request\.params\.probe_normalized_value[\s\S]*?e2_fx_format_param_normalized\(owner_kind, owner, slot_index, param_index, probe_normalized_value\)[\s\S]*?param_ident = param_ident,[\s\S]*?formatted_value = formatted_value,[\s\S]*?step_sizes_available = step_sizes\.step_sizes_available[\s\S]*?is_discrete = step_sizes\.is_discrete/,
     );
     assert.match(
       HANDLER_SOURCE,

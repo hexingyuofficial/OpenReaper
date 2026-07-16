@@ -10917,7 +10917,6 @@ local function list_fx_parameters(request)
   local max_index = math.min(count, offset + limit)
   for param_index = offset, max_index - 1 do
     local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
-    local step_sizes = e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_index)
     parameters[#parameters + 1] = {
       param_index = param_index,
       param_ident = e2_fx_read_param_ident(owner_kind, owner, slot_index, param_index) or JSON_NULL,
@@ -10927,12 +10926,6 @@ local function list_fx_parameters(request)
       max_value = values.max_value,
       normalized_value = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index),
       formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index),
-      step_sizes_available = step_sizes.step_sizes_available,
-      step_size = step_sizes.step_size,
-      small_step_size = step_sizes.small_step_size,
-      large_step_size = step_sizes.large_step_size,
-      is_toggle = step_sizes.is_toggle,
-      is_discrete = step_sizes.is_discrete,
     }
   end
   local next_offset = max_index < count and max_index or JSON_NULL
