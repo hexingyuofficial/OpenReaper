@@ -687,6 +687,19 @@ assert(summary.envelope_ref == "envelope:guid:{ENV-TAKE-FX}")
 install_fake({ take_fx = true, take_fx_missing = true })
 summary, failure = ensure_fx_parameter_envelope(fx_request("fx:take:guid:{TAKE}:0", "take_fx", "take_gain"))
 assert(failure == nil and summary.created == true and take_fx_exists == true)
+
+install_fake({ take_fx = true })
+local point_request = fx_request("fx:take:guid:{TAKE}:0", "take_fx", "take_gain")
+point_request.pack.capability = "automation.insert_fx_parameter_envelope_points"
+point_request.params.points = {
+  { time_seconds = 1, value = 0.25, shape = 0, tension = 0 },
+  { time_seconds = 2, value = 0.75, shape = 0, tension = 0 },
+}
+summary, failure, _, _, refs = insert_fx_parameter_envelope_points(point_request)
+assert(failure == nil and summary.owner_kind == "take")
+assert(summary.fx_ref == "fx:take:guid:{TAKE}:0" and summary.envelope_ref == "envelope:guid:{ENV-TAKE-FX}")
+assert(summary.processed_count == 2 and summary.after == 2 and #points[take_fx_env][-1] == 2)
+assert(refs[1].identity.scheme == "guid" and refs[1].ref == "envelope:guid:{ENV-TAKE-FX}")
 `);
   });
 

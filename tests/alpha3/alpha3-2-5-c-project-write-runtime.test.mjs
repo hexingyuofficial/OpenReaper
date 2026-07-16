@@ -259,6 +259,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
         id: "macro.routing.apply",
         input: confirmedRoutingInput({
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", volume: 0.5, pan: 0, muted: false }],
+          compact_response: false,
         }),
       },
       executeAtomic: fakeAtomic(calls),
@@ -276,6 +277,54 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.deepEqual(result.result.changes[0].mutation, { status: "completed", completed_count: 4, total_count: 4 });
     assert.equal(result.result.changes[0].live_readback.status, "passed");
     assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
+  });
+
+  it("keeps fifty routing rows inside the inline detail ceiling with per-row live truth", async () => {
+    const calls = [];
+    const routes = routingRows(50);
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({ routes }),
+        budget: { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        batchRouting: true,
+        routingGraphTracks: routingGraphTracks(routes),
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 50);
+    assert.deepEqual(result.result.changes.map((change) => change.operation_id), routes.map((row) => row.id));
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.mutation.status === "completed"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);
+    assert.equal(result.result.changes.every((change) => !Object.hasOwn(change, "template_ids")), true);
+    assert.equal(calls.filter((call) => call.id === "template.routing.create_track_send").length, 50);
+    assert.equal(inlineDetailBytes(result) <= 24_576, true);
+    assert.equal(result.budget.actual_bytes <= 65_536, true);
+  });
+
+  it("blocks an oversized explicit full routing response before the first mutation", async () => {
+    const calls = [];
+    const routes = routingRows(50, { longIds: true, controls: true });
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({ routes, compact_response: false }),
+      },
+      executeAtomic: fakeAtomic(calls),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED");
+    assert.match(result.error.message, /compact_response=true/u);
+    assert.equal(calls.length, 0);
   });
 
   it("never marks a routing row applied when exact live readback is missing, multiple, mismatched, or truncated", async () => {
@@ -1119,7 +1168,12 @@ function fakeAtomic(calls, options = {}) {
     else if (id === "template.items.resolve_item_ref") summary.item_ref = input.ref;
     else if (id === "template.items.read_item_summary") summary.item_ref = ref;
     else if (id === "template.routing.resolve_send_ref") summary.send_ref = input.send_ref;
-    else if (id === "template.routing.create_track_send") summary.send_ref = "send:guid:{CREATED}";
+    else if (id === "template.routing.create_track_send") {
+      const createIndex = calls.filter((call) => call.id === "template.routing.create_track_send").length;
+      summary.send_ref = options.batchRouting
+        ? `send:guid:{00000000-0000-4000-8000-${String(createIndex).padStart(12, "0")}}`
+        : "send:guid:{CREATED}";
+    }
     else if (id === "template.routing.read_track_routing") {
       summary.track_ref = ref;
       summary.master_parent_enabled = ref === "track:guid:{SRC}" && calls.some((call) => call.id === "template.routing.set_master_parent_send") ? false : true;
@@ -1135,9 +1189,24 @@ function fakeAtomic(calls, options = {}) {
             pan: 0,
             muted: false,
           };
-      summary.sends = ref === "track:guid:{SRC}" && !options.routingReadbackOmitSend
-        ? options.routingReadbackDuplicateSend ? [expectedSend, { ...expectedSend }] : [expectedSend]
-        : [];
+      if (options.batchRouting) {
+        summary.sends = calls
+          .filter((call) => call.id === "template.routing.create_track_send")
+          .map((call, index) => ({ call, index }))
+          .filter(({ call }) => firstRef({ source_track_ref: call.refs.source_track_ref }) === ref)
+          .map(({ call, index }) => ({
+            send_ref: `send:guid:{00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`,
+            source_track_ref: firstRef({ source_track_ref: call.refs.source_track_ref }),
+            destination_track_ref: firstRef({ destination_track_ref: call.refs.destination_track_ref }),
+            volume: 1,
+            pan: 0,
+            muted: false,
+          }));
+      } else {
+        summary.sends = ref === "track:guid:{SRC}" && !options.routingReadbackOmitSend
+          ? options.routingReadbackDuplicateSend ? [expectedSend, { ...expectedSend }] : [expectedSend]
+          : [];
+      }
     }
     else if (id === "template.media.probe_file") summary.file_ref = "file:guid:{PROBED}";
     else if (id === "template.tracks.create_track" || id === "template.tracks.create_folder_track") {
@@ -1224,6 +1293,21 @@ function layoutRows(count, { longIds = false } = {}) {
     name: `Highway ${String(index + 1).padStart(3, "0")}`,
     index,
   }));
+}
+
+function routingRows(count, { longIds = false, controls = false } = {}) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: longIds ? `send_${String(index + 1).padStart(3, "0")}_${"x".repeat(70)}` : `send_${index + 1}`,
+    action: "create",
+    source_track_ref: `track:guid:{10000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`,
+    destination_track_ref: `track:guid:{20000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`,
+    ...(controls ? { volume: 0.5, pan: 0, muted: false } : {}),
+  }));
+}
+
+function routingGraphTracks(routes) {
+  return routes.flatMap((row) => [row.source_track_ref, row.destination_track_ref])
+    .map((track_ref) => ({ track_ref, master_parent_enabled: true, channel_count: 2 }));
 }
 
 function createdTrackRef(index, options) {

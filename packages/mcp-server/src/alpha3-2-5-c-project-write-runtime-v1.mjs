@@ -38,6 +38,7 @@ const LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER = "track:guid:{00000000-0000-4000-800
 const MARKER_TARGET_REF_BUDGET_PLACEHOLDER = "marker:index:2147483647";
 const REGION_TARGET_REF_BUDGET_PLACEHOLDER = "region:index:2147483647";
 const LAYOUT_RESPONSE_BUDGET_RESERVE_BYTES = 1_024;
+const ROUTING_RESPONSE_BUDGET_RESERVE_BYTES = 1_024;
 const PROJECT_WRITE_INTERNAL_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
   max_items: MAX_MUTATIONS,
@@ -172,6 +173,23 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     initializeLayoutOperationOutcomes(state, plan);
   }
   if (!dryRun && program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID) {
+    const budgetPosture = routingResponseBudgetPosture(program, request, plan);
+    if (budgetPosture.blocker) {
+      return failure(
+        program,
+        request,
+        startedAt,
+        now,
+        stages,
+        "blocked",
+        budgetPosture.blocker.code,
+        budgetPosture.blocker.message,
+        [budgetPosture.blocker],
+        { preview: plan.preview ?? {}, source_media_deleted: false },
+        state,
+      );
+    }
+    state.routingCompactResponse = budgetPosture.compact;
     initializeRoutingOperationOutcomes(state, plan);
   }
   try {
@@ -1547,8 +1565,8 @@ function layoutResponseBudgetPosture(program, request, plan) {
   const stages = program.entry.stages.map((entry) => stage(entry.id, entry.kind, "completed", "Projected bounded layout stage.", sampleEvidenceRefs));
   const full = projectedLayoutBudget({ program, request, plan, changes: projection.changes, sampleEvidenceRefs, stages });
   if (full.fits) return { blocker: null, compact: false };
-  const compactChanges = projection.changes.map(compactLayoutChange);
-  const compact = projectedLayoutBudget({ program, request, plan, changes: compactChanges, sampleEvidenceRefs, stages: compactLayoutStages(stages) });
+  const compactChanges = projection.changes.map(compactProjectWriteChange);
+  const compact = projectedLayoutBudget({ program, request, plan, changes: compactChanges, sampleEvidenceRefs, stages: compactProjectWriteStages(stages) });
   if (compact.fits) return { blocker: null, compact: true };
   return {
     compact: false,
@@ -1557,6 +1575,92 @@ function layoutResponseBudgetPosture(program, request, plan) {
       message: `The compact per-layout-row result would exceed the active response contract (${compact.inlineBytes} inline bytes projected; ${compact.envelopeBytes} envelope bytes projected; ${compact.maxEnvelopeBytes} envelope bytes available). Split the layout into smaller calls; every accepted batch still returns one live-readback outcome per row.`,
       recoverable: true,
     },
+  };
+}
+
+function routingResponseBudgetPosture(program, request, plan) {
+  const changes = projectedRoutingChanges(plan);
+  const compactRequested = request.input?.compact_response !== false;
+  const projected = compactRequested ? changes.map(compactProjectWriteChange) : changes;
+  const stages = compactRequested
+    ? compactProjectWriteStages(projectedRoutingStages(program))
+    : projectedRoutingStages(program);
+  const budget = projectedProjectWriteBudget({
+    program,
+    request,
+    plan,
+    changes: projected,
+    stages,
+    reserveBytes: ROUTING_RESPONSE_BUDGET_RESERVE_BYTES,
+  });
+  if (budget.fits) return { blocker: null, compact: compactRequested };
+  return {
+    compact: false,
+    blocker: {
+      code: "PROJECT_WRITE_RESPONSE_BUDGET_EXCEEDED",
+      message: compactRequested
+        ? `The compact per-routing-row result would exceed the active response contract (${budget.inlineBytes} inline bytes projected; ${budget.envelopeBytes} envelope bytes projected; ${budget.maxEnvelopeBytes} envelope bytes available). Split the routing operations into smaller calls; every accepted batch still returns one live-readback outcome per row.`
+        : `The requested full routing result would exceed the active response contract (${budget.inlineBytes} inline bytes projected; ${budget.envelopeBytes} envelope bytes projected; ${budget.maxEnvelopeBytes} envelope bytes available). Retry with compact_response=true or split the routing operations before any mutation.`,
+      recoverable: true,
+    },
+  };
+}
+
+function projectedRoutingChanges(plan) {
+  const mutations = plan.mutation_requests ?? [];
+  return routingOperationRows(plan).map((row) => {
+    const rowMutations = mutations.filter((mutation) => mutation.operation_id === row.id);
+    return {
+      operation_id: row.id,
+      operation_kind: row.operation_kind,
+      target_ref: row.send_ref ?? row.track_ref ?? LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER,
+      status: "applied",
+      template_ids: uniqueUnbounded(rowMutations.map((mutation) => mutation.id)),
+      mutation: { status: "completed", completed_count: rowMutations.length, total_count: rowMutations.length },
+      live_readback: { status: "passed", source: "live_track_routing_readback", observed_ref: row.send_ref ?? row.track_ref ?? LAYOUT_TARGET_REF_BUDGET_PLACEHOLDER },
+      index_maintenance: { status: "skipped" },
+    };
+  });
+}
+
+function projectedRoutingStages(program) {
+  return program.entry.stages.map((entry) => stage(entry.id, entry.kind, "completed", "Projected bounded routing stage.", []));
+}
+
+function projectedProjectWriteBudget({ program, request, plan, changes, stages, reserveBytes }) {
+  const data = projectResultData(program, request, {
+    preview: plan.preview ?? {},
+    undo_policy: program.entry.undo_policy,
+    source_media_deleted: false,
+    index_update: null,
+    outcome: projectWriteOutcome({ changes }),
+  });
+  const envelope = {
+    contract: MACRO_EXECUTION_CONTRACT,
+    ok: true,
+    macro: identity(program),
+    request: requestSummary(request),
+    execution: { status: "completed", started_at: new Date(0).toISOString(), completed_at: new Date(0).toISOString(), stage_count: stages.length, stages },
+    sqlite: sqliteEvidence(),
+    result: { summary: "Registered project write completed and required readback passed.", canonical_refs: [], changes, verification: { status: "passed", evidence_refs: [] }, data },
+    blockers: [],
+    error: null,
+    recovery: null,
+    budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
+  };
+  for (let attempt = 0; attempt < 3; attempt += 1) envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  const inline = JSON.stringify({ stages, changes, data, blockers: [], error: null, recovery: null });
+  const inlineBytes = Buffer.byteLength(inline, "utf8") + reserveBytes;
+  const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8") + reserveBytes;
+  const requestedEnvelopeBytes = Number.isInteger(request.budget?.max_response_bytes) && request.budget.max_response_bytes > 0
+    ? request.budget.max_response_bytes
+    : program.entry.result_budget.max_bytes;
+  const maxEnvelopeBytes = Math.min(MACRO_CONTRACT_CEILINGS.envelope_max_bytes, requestedEnvelopeBytes);
+  return {
+    fits: inlineBytes <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes && envelopeBytes <= maxEnvelopeBytes,
+    inlineBytes,
+    envelopeBytes,
+    maxEnvelopeBytes,
   };
 }
 
@@ -1599,16 +1703,18 @@ function projectedLayoutBudget({ program, request, plan, changes, sampleEvidence
 
 function projectedChanges(program, state) {
   const changes = state.changes.slice(0, MACRO_CONTRACT_CEILINGS.change_max_count);
-  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || state.layoutCompactResponse !== true) return changes;
-  return changes.map(compactLayoutChange);
+  if (program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID && state.layoutCompactResponse === true) return changes.map(compactProjectWriteChange);
+  if (program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID && state.routingCompactResponse === true) return changes.map(compactProjectWriteChange);
+  return changes;
 }
 
 function projectedStages(program, state, stages) {
-  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || state.layoutCompactResponse !== true) return stages;
-  return compactLayoutStages(stages);
+  const compactLayout = program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID && state.layoutCompactResponse === true;
+  const compactRouting = program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID && state.routingCompactResponse === true;
+  return compactLayout || compactRouting ? compactProjectWriteStages(stages) : stages;
 }
 
-function compactLayoutStages(stages) {
+function compactProjectWriteStages(stages) {
   const byKind = new Map();
   for (const entry of stages) {
     const existing = byKind.get(entry.kind);
@@ -1621,7 +1727,7 @@ function compactLayoutStages(stages) {
   return [...byKind.values()];
 }
 
-function compactLayoutChange(change) {
+function compactProjectWriteChange(change) {
   const mutationStatus = change.mutation?.total_count === 0
     ? "not_run"
     : change.mutation?.status ?? "pending";
@@ -1669,13 +1775,16 @@ function projectedStageEvidenceRefs(id, refs) {
   return String(id).startsWith("project-apply_layout-") ? values.slice(0, LAYOUT_EVIDENCE_REF_MAX_COUNT) : values;
 }
 function projectResultData(program, request, data) {
-  if (program.entry.macro_id !== ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID || request.input?.dry_run !== false) return compactData(data);
+  const compactWriteResult = request.input?.dry_run === false
+    && (program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID
+      || program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID);
+  if (!compactWriteResult) return compactData(data);
   const cloned = structuredClone(object(data) ? data : {});
   const preview = object(cloned.preview) ? cloned.preview : {};
   return {
     preview: {
       target_counts: preview.target_counts ?? {},
-      total_count: preview.target_counts?.rows ?? null,
+      total_count: preview.target_counts?.rows ?? preview.target_counts?.total_operations ?? null,
     },
     ...(cloned.applied_change_count !== undefined ? { applied_change_count: cloned.applied_change_count } : {}),
     ...(cloned.undo_policy !== undefined ? { undo_policy: cloned.undo_policy } : {}),

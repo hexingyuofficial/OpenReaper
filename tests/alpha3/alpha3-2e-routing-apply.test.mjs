@@ -63,6 +63,21 @@ describe("Alpha3.2-E routing apply planner", () => {
     assert.equal(plan.child_requests.length, plan.preflight_requests.length + plan.mutation_requests.length + plan.readback_requests.length);
   });
 
+  it("keeps complete internal readback coverage when fifty sends affect one hundred tracks", () => {
+    const routes = Array.from({ length: 50 }, (_, index) => ({
+      id: `send_${index + 1}`,
+      action: "create",
+      source_track_ref: `track:guid:{SRC-${index + 1}}`,
+      destination_track_ref: `track:guid:{DST-${index + 1}}`,
+    }));
+    const plan = planAlpha3_2ERoutingApplyMacro({ routes, dry_run: false });
+
+    assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+    assert.equal(plan.readback_requests.length, 100);
+    assert.equal(plan.readback_requests[0].refs.track_ref, "track:guid:{SRC-1}");
+    assert.equal(plan.readback_requests.at(-1).refs.track_ref, "track:guid:{DST-50}");
+  });
+
   it("emits exact internal send removals in descending source-slot order", () => {
     const input = {
       routes: [

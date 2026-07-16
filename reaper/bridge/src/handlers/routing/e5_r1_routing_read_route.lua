@@ -3160,42 +3160,55 @@ local function ensure_fx_parameter_envelope(request)
 end
 
 local function e5_automation_fx_parameter_envelope_from_request(request)
-  local track, slot_index = e5_routing_fx_from_request_refs(request)
-  local param_index = math.floor(tonumber(request.params and request.params.param_index) or -1)
-  if not track or param_index < 0 then
+  local owner_kind, owner, slot_index, owner_ref, fx_ref = e5_routing_fx_owner_from_request_refs(request)
+  local param_index = tonumber(request.params and request.params.param_index)
+  if not owner or type(param_index) ~= "number" or param_index ~= math.floor(param_index) or param_index < 0 then
     return nil, nil, nil
   end
-  local ok_count, param_count = call_reaper("TrackFX_GetNumParams", track, slot_index)
-  param_count = ok_count and math.floor(first_number(param_count) or 0) or 0
-  if param_index >= param_count then
+  local param_count = e5_automation_fx_parameter_count(owner_kind, owner, slot_index)
+  if param_count == nil or param_index >= param_count then
     return nil, nil, {
       code = "FX_PARAMETER_NOT_FOUND",
       message = "FX parameter index is outside the FX parameter count.",
       details = {
+        fx_ref = fx_ref or JSON_NULL,
         slot_index = slot_index,
         param_index = param_index,
-        parameter_count = param_count,
+        parameter_count = param_count or JSON_NULL,
       },
     }
   end
-  local ok_env, envelope = call_reaper("GetFXEnvelope", track, slot_index, param_index, false)
+  local ok_env, envelope = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
   if not ok_env or not envelope then
     return nil, nil, {
       code = "ENVELOPE_NOT_FOUND",
       message = "FX parameter envelope is not available for point insertion.",
       details = {
-        fx_ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
+        fx_ref = fx_ref or JSON_NULL,
         param_index = param_index,
       },
     }
   end
-  local ok_name, _, name = call_reaper("TrackFX_GetParamName", track, slot_index, param_index, "")
-  local envelope_ref = "envelope:fx:track:" .. tostring(slot_index) .. ":param:" .. tostring(param_index)
+  local guid = e5_automation_envelope_guid(envelope)
+  if not guid then
+    return nil, nil, {
+      code = "VERIFY_FAILED",
+      message = "FX parameter envelope did not expose a canonical GUID for point insertion.",
+      details = {
+        fx_ref = fx_ref or JSON_NULL,
+        param_index = param_index,
+      },
+    }
+  end
+  local envelope_ref = "envelope:guid:" .. guid
   return envelope, envelope_ref, {
-    track = track,
+    owner_kind = owner_kind,
+    owner = owner,
+    owner_ref = owner_ref,
+    fx_ref = fx_ref,
     slot_index = slot_index,
     param_index = param_index,
-    param_name = bounded_string(ok_name and first_string(name) or "", 160),
+    param_name = e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index),
   }
 end
 
@@ -3208,7 +3221,9 @@ local function insert_fx_parameter_envelope_points(request)
   if err then
     return nil, err
   end
-  summary.fx_ref = "fx:" .. e5_routing_track_ref_string(info.track) .. ":" .. tostring(info.slot_index)
+  summary.fx_ref = info.fx_ref
+  summary.owner_kind = info.owner_kind
+  summary.owner_ref = info.owner_ref
   summary.param_index = info.param_index
   summary.param_ident = request.params.param_ident or JSON_NULL
   summary.param_name = info.param_name

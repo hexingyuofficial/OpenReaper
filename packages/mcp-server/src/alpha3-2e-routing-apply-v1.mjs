@@ -388,7 +388,7 @@ function readbackRequests(operations) {
   }
   for (const row of operations.master_parent) tracks.add(row.track_ref);
   for (const row of operations.channel_counts) tracks.add(row.track_ref);
-  return deepFreeze([...tracks].slice(0, MAX_ROUTE_ROWS).map((trackRef, index) => childRequest(index + 1, "readback", READ_TRACK_ROUTING_ID, { track_ref: trackRef }, { include_receives: true, include_master_parent: true, max_routes: 64 }, `Read routing for affected track ${trackRef}.`)));
+  return deepFreeze([...tracks].map((trackRef, index) => childRequest(index + 1, "readback", READ_TRACK_ROUTING_ID, { track_ref: trackRef }, { include_receives: true, include_master_parent: true, max_routes: 64 }, `Read routing for affected track ${trackRef}.`)));
 }
 
 function dryRunPlan(preview) {

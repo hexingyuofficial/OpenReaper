@@ -1,0 +1,402 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
+
+const SUBPROJECT_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/handlers/project/d30_project_container_route.lua", import.meta.url),
+  "utf8",
+);
+const SYSEX_SOURCE = readFileSync(
+  new URL("../../reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua", import.meta.url),
+  "utf8",
+);
+
+const PRELUDE = String.raw`
+function is_string(value) return type(value) == "string" end
+function is_object(value) return type(value) == "table" end
+function is_json_array(value) return type(value) == "table" end
+function json_array(value) return value or {} end
+function first_number(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "number" then return value end
+  end
+  return nil
+end
+function first_string(...)
+  for index = 1, select("#", ...) do
+    local value = select(index, ...)
+    if type(value) == "string" then return value end
+  end
+  return nil
+end
+function bounded_string(value, max_length)
+  local text = value == nil and "" or tostring(value)
+  if #text <= (max_length or 160) then return text end
+  return text:sub(1, max_length or 160)
+end
+function call_reaper(name, ...)
+  if not reaper or type(reaper[name]) ~= "function" then return false end
+  return pcall(reaper[name], ...)
+end
+function artifact_id_from_request(request) return request.id end
+json = { encode = function() return "{}" end }
+`;
+
+describe("Alpha3.3 native Subproject and SysEx truth", () => {
+  it("creates a real child RPP/proxy, inserts its exact source on the exact Track, and synchronously updates it", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({})
+local create_request = project_request("project.create_subproject", { name = "Dialog Edit", activate = true, inherit_time_selection = true }, {})
+create_request.id = "req_create"
+local created, failure, output_refs, _, refs = create_subproject(create_request)
+assert(failure == nil and created.created == true and created.parent_restored == true)
+assert(created.child_project_path == "/session/Dialog_Edit__subproject_req_create.RPP")
+assert(created.proxy_path == created.child_project_path .. "-PROX")
+assert(files[created.child_project_path] == true and files[created.proxy_path] == true)
+assert(created.subproject_project_ref == "project:path:" .. created.child_project_path)
+assert(created.inherited_time_selection == true and created.inherited_time_selection_start_seconds == 3 and created.inherited_time_selection_end_seconds == 7)
+assert(output_refs[1].identity.scheme == "path" and output_refs[1].identity.value == created.child_project_path)
+assert(output_refs[2].identity.scheme == "path" and output_refs[2].identity.value == "/session/Parent.RPP")
+assert(current_project == parent_project and calls.actions[40859] == 1 and calls.actions[42332] == 1)
+assert(child_project.time_start == 3 and child_project.time_end == 7)
+
+local insert_request = project_request("project.insert_subproject_item", { position_seconds = 12.5, name = "Dialog Subproject" }, {
+  refs[1],
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+insert_request.id = "req_insert"
+local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
+assert(insert_failure == nil and inserted.inserted == true, insert_failure and (insert_failure.code .. ":" .. tostring(insert_failure.details.blocker)) or "insert missing")
+assert(inserted.position_seconds == 12.5 and inserted.source_path == created.proxy_path)
+assert(inserted.subproject_item_status == "native_source_verified")
+assert(#parent_project.items == 2 and parent_project.items[2].track == target_track)
+assert(parent_project.items[2].position == 12.5 and parent_project.items[2].take.name == "Dialog Subproject")
+assert(parent_project.items[2].take.source.path == created.proxy_path)
+assert(parent_project.items[2].take.source.subproject == child_project)
+assert(other_track.selected == true and target_track.selected == false)
+assert(parent_project.items[1].selected == true and parent_project.items[2].selected == false)
+assert(cursor == 9 and inserted_refs[1].ref == "item:guid:{ITEM-NEW}")
+assert(inserted_refs[1].identity.scheme == "guid" and inserted_refs[1].identity.value == "{ITEM-NEW}")
+
+local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
+  refs[1], inserted_refs[1],
+})
+update_request.id = "req_update"
+local updated, update_failure, _, jobs = render_or_update_subproject(update_request)
+assert(update_failure == nil and updated.completed == true and updated.queued == false and updated.synchronous == true)
+assert(updated.linked_item_verified == true and updated.parent_restored == true)
+assert(jobs[1].summary.state == "completed" and current_project == parent_project)
+assert(calls.actions[42332] == 2)
+`);
+  });
+
+  it("fails before mutation on existing child targets and restores the parent after save/render readback failures", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({ existing_child = true })
+local request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+local summary, failure = create_subproject(request)
+assert(summary == nil and failure.code == "FILE_EXISTS")
+assert(calls.actions[40859] == nil and current_project == parent_project)
+
+install_subproject_fake({ no_proxy = true })
+request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+summary, failure = create_subproject(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_proxy_missing")
+assert(current_project == parent_project and calls.select_project >= 1)
+
+install_subproject_fake({ save_failure = true })
+request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
+request.id = "req_create"
+summary, failure = create_subproject(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED")
+assert(failure.details.blocker == "subproject_save_failed" and current_project == parent_project)
+`);
+  });
+
+  it("opens a closed child path for synchronous render and restores the parent on render failure", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({})
+files["/session/ClosedChild.RPP"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/ClosedChild.RPP", identity = { scheme = "path", value = "/session/ClosedChild.RPP" } }
+local request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
+request.id = "closed_child"
+local summary, failure = render_or_update_subproject(request)
+assert(failure == nil and summary.completed == true and summary.queued == false)
+assert(summary.proxy_path == "/session/ClosedChild.RPP-PROX" and files[summary.proxy_path] == true)
+assert(current_project == parent_project and calls.actions[40859] == 1 and calls.actions[42332] == 1)
+
+install_subproject_fake({ render_failure = true })
+files["/session/ClosedChild.RPP"] = true
+request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
+request.id = "closed_child_failure"
+summary, failure = render_or_update_subproject(request)
+assert(summary == nil and failure.code == "COMMAND_FAILED")
+assert(failure.details.blocker == "subproject_render_action_failed" and current_project == parent_project)
+`);
+  });
+
+  it("fails closed when InsertMedia dispatch does not produce one exact subproject Item", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({ insert_without_item = true })
+files["/session/Child.RPP"] = true
+files["/session/Child.RPP-PROX"] = true
+local child_ref = { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } }
+local request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+local summary, failure = insert_subproject_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED", failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "failure missing")
+assert(failure.details.blocker == "new_item_identity_ambiguous")
+assert(other_track.selected == true and target_track.selected == false and cursor == 9)
+
+install_subproject_fake({ wrong_source = true })
+files["/session/Child.RPP"] = true
+files["/session/Child.RPP-PROX"] = true
+request = project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+  child_ref,
+  { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
+})
+summary, failure = insert_subproject_item(request)
+assert(summary == nil and failure.code == "VERIFY_FAILED", failure and (failure.code .. ":" .. tostring(failure.details.blocker)) or "failure missing")
+assert(failure.details.blocker == "subproject_source_readback_failed")
+assert(other_track.selected == true and target_track.selected == false and cursor == 9)
+`);
+  });
+
+  it("persists mixed text and duplicate SysEx from integer-array and hex inputs with exact row-delta readback", () => {
+    runLua(SYSEX_SOURCE, String.raw`
+install_midi_fake({})
+local request = midi_request({
+  { ppq = 0, event_kind = "lyric", text = "hello" },
+  { ppq = 120, event_kind = "sysex", bytes = { 240, 125, 1, 2, 247 } },
+  { ppq = 120, event_kind = "sysex", bytes = "F0 7D 01 02 F7" },
+})
+local summary, failure = safe_write_insert_text_sysex_events(request)
+assert(failure == nil and summary.inserted_count == 3 and summary.verified_text_sysex_count == 3)
+assert(summary.verified_by_kind.lyric == 1 and summary.verified_by_kind.sysex == 2)
+assert(summary.verification_mode == "exact_row_multiset_delta")
+assert(#midi_rows == 4 and calls.insert == 3 and calls.sort == 1)
+local expected = string.char(125, 1, 2)
+assert(midi_rows[3].payload == expected and midi_rows[4].payload == expected)
+`);
+  });
+
+  it("rejects malformed SysEx before mutation and reports VERIFY_FAILED when dispatch success is not persisted", () => {
+    runLua(SYSEX_SOURCE, String.raw`
+install_midi_fake({})
+local summary, failure = safe_write_insert_text_sysex_events(midi_request({
+  { ppq = 0, event_kind = "sysex", bytes = "F0 80 F7" },
+}))
+assert(summary == nil and failure.code == "PARAMS_INVALID")
+assert(failure.details.blocker == "sysex_bytes_invalid" and calls.insert == 0)
+
+install_midi_fake({ drop_sysex = true })
+summary, failure = safe_write_insert_text_sysex_events(midi_request({
+  { ppq = 0, event_kind = "sysex", bytes = { 240, 125, 247 } },
+}))
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "aggregate_count_delta_mismatch")
+assert(calls.insert == 1)
+`);
+  });
+});
+
+const FIXTURES = String.raw`
+function project_request(capability, params, refs)
+  return {
+    id = "request",
+    params = params or {},
+    refs = refs or {},
+    pack = { id = "project", capability = capability, risk = "write" },
+  }
+end
+
+function install_subproject_fake(config)
+  config = config or {}
+  parent_project = { path = "/session/Parent.RPP", items = {}, time_start = 3, time_end = 7 }
+  child_project = nil
+  current_project = parent_project
+  projects = { parent_project }
+  files = { [parent_project.path] = true }
+  target_track = { guid = "{TARGET}", name = "Target", selected = false }
+  other_track = { guid = "{OTHER}", name = "Other", selected = true }
+  parent_project.tracks = { target_track, other_track }
+  existing_item = { guid = "{ITEM-OLD}", track = other_track, position = 1, selected = true }
+  parent_project.items[1] = existing_item
+  cursor = 9
+  calls = { actions = {}, select_project = 0, insert_media = 0 }
+  local expected_child = "/session/Dialog_Edit__subproject_req_create.RPP"
+  if config.existing_child then files[expected_child] = true end
+  function file_exists(path) return files[path] == true end
+
+  reaper = {}
+  reaper.EnumProjects = function(index)
+    if index == -1 then return current_project, current_project.path or "" end
+    local project = projects[index + 1]
+    if not project then return nil, "" end
+    return project, project.path or ""
+  end
+  reaper.Main_OnCommandEx = function(action, flag, project)
+    calls.actions[action] = (calls.actions[action] or 0) + 1
+    if action == 40859 then
+      assert(flag == 0 and project == parent_project)
+      child_project = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
+      projects[#projects + 1] = child_project
+      current_project = child_project
+      return nil
+    end
+    assert(action == 42332 and flag == 0 and project == current_project)
+    if config.render_failure then return false end
+    if not config.no_proxy then files[current_project.path .. "-PROX"] = true end
+    return nil
+  end
+  reaper.Main_SaveProjectEx = function(project, path, options)
+    assert(project == child_project and options == 8)
+    if config.save_failure then return false end
+    project.path = path
+    files[path] = true
+    return nil
+  end
+  reaper.Main_openProject = function(path)
+    child_project = { path = path, tracks = {}, items = {}, time_start = 0, time_end = 0 }
+    projects[#projects + 1] = child_project
+    current_project = child_project
+  end
+  reaper.SelectProjectInstance = function(project)
+    calls.select_project = calls.select_project + 1
+    current_project = project
+  end
+  reaper.SetProjExtState = function(project) assert(project == parent_project); return 1 end
+  reaper.GetSet_LoopTimeRange2 = function(project, is_set, is_loop, start_time, end_time)
+    assert(is_loop == false)
+    if is_set then
+      project.time_start = start_time
+      project.time_end = end_time
+    end
+    return project.time_start, project.time_end
+  end
+  reaper.CountTracks = function(project) return #(project.tracks or {}) end
+  reaper.GetTrack = function(project, index) return (project.tracks or {})[index + 1] end
+  reaper.GetTrackGUID = function(track) return track.guid end
+  reaper.GetTrackName = function(track) return true, track.name end
+  reaper.GetSelectedTrack = function(project, index)
+    local selected = {}
+    for _, track in ipairs(project.tracks or {}) do if track.selected then selected[#selected + 1] = track end end
+    return selected[index + 1]
+  end
+  reaper.InsertTrackAtIndex = function(index)
+    local track = { guid = "{CREATED}", name = "Created", selected = false }
+    table.insert(current_project.tracks, index + 1, track)
+  end
+  reaper.IsTrackSelected = function(track) return track.selected == true end
+  reaper.SetTrackSelected = function(track, selected) track.selected = selected == true end
+  reaper.CountMediaItems = function(project) return #(project.items or {}) end
+  reaper.GetMediaItem = function(project, index) return (project.items or {})[index + 1] end
+  reaper.IsMediaItemSelected = function(item) return item.selected == true end
+  reaper.SetMediaItemSelected = function(item, selected) item.selected = selected == true end
+  reaper.GetCursorPositionEx = function(project) assert(project == parent_project); return cursor end
+  reaper.SetEditCurPos2 = function(project, value) assert(project == parent_project); cursor = value end
+  reaper.UpdateArrange = function() end
+  reaper.InsertMedia = function(path, mode)
+    assert(path:match("%-PROX$") and mode == 0)
+    calls.insert_media = calls.insert_media + 1
+    if config.insert_failure then return false end
+    if config.insert_without_item then return 1 end
+    local selected_track = nil
+    for _, track in ipairs(parent_project.tracks) do if track.selected then selected_track = track end end
+    local source_path = config.wrong_source and "/wrong/source.RPP-PROX" or path
+    local source = { path = source_path, subproject = child_project or { path = path:gsub("%-PROX$", "") } }
+    local item = {
+      guid = "{ITEM-NEW}",
+      track = selected_track,
+      position = cursor,
+      selected = true,
+      take = { source = source, name = "" },
+    }
+    parent_project.items[#parent_project.items + 1] = item
+    return 1
+  end
+  reaper.BR_GetMediaItemGUID = function(item) return item.guid end
+  reaper.GetMediaItem_Track = function(item) return item.track end
+  reaper.GetActiveTake = function(item) return item.take end
+  reaper.GetMediaItemTake_Source = function(take) return take.source end
+  reaper.GetMediaSourceFileName = function(source) return source.path end
+  reaper.GetSubProjectFromSource = function(source) return source.subproject end
+  reaper.GetMediaItemInfo_Value = function(item, key) assert(key == "D_POSITION"); return item.position end
+  reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, set_new)
+    assert(key == "P_NAME")
+    if set_new then take.name = value end
+    return true, take.name
+  end
+end
+
+READ_B_MIDI = {}
+function READ_B_MIDI.resolve_midi_take_for_request() return midi_take end
+function READ_B_MIDI.take_ref_string() return "take:guid:{MIDI-TAKE}" end
+
+function midi_request(events)
+  return {
+    params = { events = events, position_unit = "ppq", sort_events = true },
+    refs = { { kind = "take", ref = "take:guid:{MIDI-TAKE}", identity = { scheme = "guid", value = "{MIDI-TAKE}" } } },
+    pack = { id = "midi", capability = "midi.insert_text_sysex_events", risk = "write" },
+  }
+end
+
+function install_midi_fake(config)
+  config = config or {}
+  midi_take = {}
+  midi_rows = {
+    { selected = false, muted = false, ppq = -120, type_value = 1, payload = "existing" },
+  }
+  calls = { insert = 0, sort = 0 }
+  reaper = {}
+  reaper.MIDI_CountEvts = function(take)
+    assert(take == midi_take)
+    return true, 0, 0, #midi_rows
+  end
+  reaper.MIDI_GetTextSysexEvt = function(take, index)
+    assert(take == midi_take)
+    local row = midi_rows[index + 1]
+    if not row then return false end
+    return true, row.selected, row.muted, row.ppq, row.type_value, row.payload
+  end
+  reaper.MIDI_InsertTextSysexEvt = function(take, selected, muted, ppq, type_value, payload, no_sort)
+    assert(take == midi_take and no_sort == true)
+    calls.insert = calls.insert + 1
+    if config.dispatch_failure then return false end
+    if not (config.drop_sysex and type_value == -1) then
+      midi_rows[#midi_rows + 1] = {
+        selected = selected,
+        muted = muted,
+        ppq = ppq,
+        type_value = type_value,
+        payload = payload,
+      }
+    end
+    return true
+  end
+  reaper.MIDI_Sort = function(take) assert(take == midi_take); calls.sort = calls.sort + 1 end
+  reaper.MIDI_GetPPQPosFromProjTime = function(take, seconds) assert(take == midi_take); return seconds * 960 end
+end
+`;
+
+function runLua(handlerSource, body) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const script = `${PRELUDE}\n${FIXTURES}\n${handlerSource}\n${body}`;
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(script));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 0, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  lua.lua_close(state);
+}

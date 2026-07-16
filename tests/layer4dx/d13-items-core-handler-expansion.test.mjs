@@ -167,13 +167,21 @@ describe("D13 items core live handler expansion", () => {
       "I_CHANMODE",
       "I_PITCHMODE",
       "F_STRETCHFADESIZE",
+      "GetMediaItemTake_Source",
+      "PCM_Source_GetSectionInfo",
+      "D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID",
       "d13_items_values_match",
       "VERIFY_FAILED",
     ]) {
       assert.match(HANDLER_SOURCE, new RegExp(escapeRegExp(symbol)), symbol);
     }
     assert.doesNotMatch(HANDLER_SOURCE, /VERIFICATION_FAILED/);
-    assert.doesNotMatch(HANDLER_SOURCE, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
+    assert.match(HANDLER_SOURCE, /call_reaper\("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0\)/);
+    const withoutReviewedReverseAction = HANDLER_SOURCE.replace(
+      /call_reaper\("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0\)/g,
+      "",
+    );
+    assert.doesNotMatch(withoutReviewedReverseAction, /\b(?:Main_OnCommand|Main_OnCommandEx|MIDIEditor_OnCommand|ExecProcess|CF_ShellExecute|os\.execute|io\.popen|loadstring|dofile|require\s*\()\b/);
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });

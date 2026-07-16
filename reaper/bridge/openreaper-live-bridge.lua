@@ -6426,6 +6426,8 @@ end)
 __openreaper_register_handler_module("items/d13_items_core_route.lua", function()
 -- Extracted D13 handler: items core read/write controls.
 
+local D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID = 41051
+
 local function d13_items_error(code, message, details, recoverable)
   return nil, {
     code = code,
@@ -6819,6 +6821,14 @@ local function d13_items_active_take(item)
   return ok_take and take or nil
 end
 
+local function d13_items_take_reverse_state(take)
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if not ok_source or not source then return nil end
+  local ok_info, available, _, _, reversed = call_reaper("PCM_Source_GetSectionInfo", source)
+  if not ok_info or available ~= true then return nil end
+  return reversed == true or reversed == 1
+end
+
 local function d13_items_take_name(take)
   local ok, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
   return bounded_string(ok and first_string(name) or "", 160)
@@ -6890,7 +6900,7 @@ local function d13_items_item_summary(item, include_take_summary)
       summary.take_pan = d13_items_take_number(take, "D_PAN")
       summary.start_offset_seconds = d13_items_take_number(take, "D_STARTOFFS")
       summary.channel_mode = d13_items_channel_mode_label(d13_items_take_number(take, "I_CHANMODE"))
-      summary.reverse = d13_items_take_number(take, "B_REVERSE") == 1
+      summary.reverse = d13_items_take_reverse_state(take)
       summary.pitch_shift_mode = d13_items_pitch_mode_label(d13_items_take_number(take, "I_PITCHMODE"))
       summary.stretch_marker_fade_size_ms = d13_items_take_number(take, "F_STRETCHFADESIZE") * 1000
     else
@@ -7146,8 +7156,175 @@ local function d13_items_set_channel_mode(request)
   return d13_items_set_take_value(request, "I_CHANMODE", mode)
 end
 
+local function d13_items_all_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local rows = {}
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", item, "B_UISEL")
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_selected or not ok_take then return nil end
+    rows[#rows + 1] = { item = item, selected = first_number(selected) == 1, active_take = take }
+  end
+  return rows
+end
+
+local function d13_items_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then return nil end
+  local rows = {}
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track or not track then return nil end
+    rows[#rows + 1] = track
+  end
+  return rows
+end
+
+local function d13_items_same_pointers(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  for index = 1, #expected do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function d13_items_clear_track_selection()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master then
+    local ok_set, accepted = call_reaper("SetTrackSelected", master, false)
+    if not ok_set or accepted == false then return false end
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track then return false end
+    local ok_set, accepted = call_reaper("SetTrackSelected", track, false)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
+local function d13_items_apply_item_selection(items, target_item)
+  for index = 1, #items do
+    local selected = items[index].item == target_item
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", items[index].item, selected)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
+local function d13_items_restore_reverse_context(snapshot)
+  local selection_ok = d13_items_clear_track_selection()
+  for index = 1, #snapshot.selected_tracks do
+    local ok_set, accepted = call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true)
+    if not ok_set or accepted == false then selection_ok = false end
+  end
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", saved.item, saved.selected)
+    if not ok_set or accepted == false then selection_ok = false end
+  end
+  local active_ok = true
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_current, current = call_reaper("GetActiveTake", saved.item)
+    if not ok_current then
+      active_ok = false
+    elseif current ~= saved.active_take then
+      if not saved.active_take then
+        active_ok = false
+      else
+        local ok_set, accepted = call_reaper("SetActiveTake", saved.active_take)
+        if not ok_set or accepted == false then active_ok = false end
+      end
+    end
+  end
+  local restored_tracks = d13_items_selected_tracks()
+  if not d13_items_same_pointers(restored_tracks, snapshot.selected_tracks) then selection_ok = false end
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", saved.item, "B_UISEL")
+    if not ok_selected or (first_number(selected) == 1) ~= saved.selected then selection_ok = false end
+  end
+  return selection_ok, active_ok
+end
+
 local function d13_items_set_reverse(request)
-  return d13_items_set_take_value(request, "B_REVERSE", request.params.reverse == true and 1 or 0)
+  local item, failure = d13_items_item_for_write(request)
+  if not item then return d13_items_error(failure.code, failure.message, failure.details) end
+  local take, take_failure = d13_items_take_for_write(request, item)
+  if not take then return d13_items_error(take_failure.code, take_failure.message, take_failure.details) end
+  local requested = request.params.reverse == true
+  local before = d13_items_take_reverse_state(take)
+  if before == nil then
+    return d13_items_error("COMMAND_FAILED", "REAPER did not expose the active Take reverse state.", {
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
+  if before == requested then
+    local summary, err, artifacts, jobs, refs = d13_items_write_summary(request, item)
+    summary.changed = false
+    summary.fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID
+    summary.selection_restored = true
+    summary.active_take_restored = true
+    return summary, err, artifacts, jobs, refs
+  end
+
+  local items = d13_items_all_items()
+  local selected_tracks = d13_items_selected_tracks()
+  if not items or not selected_tracks then
+    return d13_items_error("COMMAND_FAILED", "Take reverse could not snapshot selection and active Takes.", {}, false)
+  end
+  local snapshot = { items = items, selected_tracks = selected_tracks }
+  local selected = d13_items_apply_item_selection(items, item)
+  local ok_active, accepted_active = call_reaper("SetActiveTake", take)
+  local ok_readback, active_take = call_reaper("GetActiveTake", item)
+  if not selected or not ok_active or accepted_active == false or not ok_readback or active_take ~= take then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "Take reverse could not target the exact active Take.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "REAPER rejected the fixed native Take reverse action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  call_reaper("UpdateItemInProject", item)
+  call_reaper("UpdateArrange")
+  local readback = d13_items_take_reverse_state(take)
+  local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+  if readback ~= requested then
+    return d13_items_error("VERIFY_FAILED", "Native Take reverse readback did not match the requested state.", {
+      requested = requested,
+      readback = readback == nil and JSON_NULL or readback,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  if not selection_restored or not active_take_restored then
+    return d13_items_error("VERIFY_FAILED", "Take reverse could not restore selection and active Takes.", {
+      requested = requested,
+      readback = readback,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  local summary, err, artifacts, jobs, refs = d13_items_write_summary(request, item)
+  summary.changed = true
+  summary.fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID
+  summary.selection_restored = true
+  summary.active_take_restored = true
+  return summary, err, artifacts, jobs, refs
 end
 
 local function d13_items_set_pitch_shift_mode(request)
@@ -14948,42 +15125,55 @@ local function ensure_fx_parameter_envelope(request)
 end
 
 local function e5_automation_fx_parameter_envelope_from_request(request)
-  local track, slot_index = e5_routing_fx_from_request_refs(request)
-  local param_index = math.floor(tonumber(request.params and request.params.param_index) or -1)
-  if not track or param_index < 0 then
+  local owner_kind, owner, slot_index, owner_ref, fx_ref = e5_routing_fx_owner_from_request_refs(request)
+  local param_index = tonumber(request.params and request.params.param_index)
+  if not owner or type(param_index) ~= "number" or param_index ~= math.floor(param_index) or param_index < 0 then
     return nil, nil, nil
   end
-  local ok_count, param_count = call_reaper("TrackFX_GetNumParams", track, slot_index)
-  param_count = ok_count and math.floor(first_number(param_count) or 0) or 0
-  if param_index >= param_count then
+  local param_count = e5_automation_fx_parameter_count(owner_kind, owner, slot_index)
+  if param_count == nil or param_index >= param_count then
     return nil, nil, {
       code = "FX_PARAMETER_NOT_FOUND",
       message = "FX parameter index is outside the FX parameter count.",
       details = {
+        fx_ref = fx_ref or JSON_NULL,
         slot_index = slot_index,
         param_index = param_index,
-        parameter_count = param_count,
+        parameter_count = param_count or JSON_NULL,
       },
     }
   end
-  local ok_env, envelope = call_reaper("GetFXEnvelope", track, slot_index, param_index, false)
+  local ok_env, envelope = e5_automation_get_fx_envelope(owner_kind, owner, slot_index, param_index, false)
   if not ok_env or not envelope then
     return nil, nil, {
       code = "ENVELOPE_NOT_FOUND",
       message = "FX parameter envelope is not available for point insertion.",
       details = {
-        fx_ref = "fx:" .. e5_routing_track_ref_string(track) .. ":" .. tostring(slot_index),
+        fx_ref = fx_ref or JSON_NULL,
         param_index = param_index,
       },
     }
   end
-  local ok_name, _, name = call_reaper("TrackFX_GetParamName", track, slot_index, param_index, "")
-  local envelope_ref = "envelope:fx:track:" .. tostring(slot_index) .. ":param:" .. tostring(param_index)
+  local guid = e5_automation_envelope_guid(envelope)
+  if not guid then
+    return nil, nil, {
+      code = "VERIFY_FAILED",
+      message = "FX parameter envelope did not expose a canonical GUID for point insertion.",
+      details = {
+        fx_ref = fx_ref or JSON_NULL,
+        param_index = param_index,
+      },
+    }
+  end
+  local envelope_ref = "envelope:guid:" .. guid
   return envelope, envelope_ref, {
-    track = track,
+    owner_kind = owner_kind,
+    owner = owner,
+    owner_ref = owner_ref,
+    fx_ref = fx_ref,
     slot_index = slot_index,
     param_index = param_index,
-    param_name = bounded_string(ok_name and first_string(name) or "", 160),
+    param_name = e5_automation_fx_parameter_name(owner_kind, owner, slot_index, param_index),
   }
 end
 
@@ -14996,7 +15186,9 @@ local function insert_fx_parameter_envelope_points(request)
   if err then
     return nil, err
   end
-  summary.fx_ref = "fx:" .. e5_routing_track_ref_string(info.track) .. ":" .. tostring(info.slot_index)
+  summary.fx_ref = info.fx_ref
+  summary.owner_kind = info.owner_kind
+  summary.owner_ref = info.owner_ref
   summary.param_index = info.param_index
   summary.param_ident = request.params.param_ident or JSON_NULL
   summary.param_name = info.param_name
@@ -16951,7 +17143,11 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/project/d30_project_container_route.lua
 __openreaper_register_handler_module("project/d30_project_container_route.lua", function()
--- Extracted D30 handler: bounded project tab/subproject container ledger.
+-- Extracted D30 handler: native project tab/subproject container lifecycle.
+
+local D30_NEW_PROJECT_TAB_ACTION = 40859
+local D30_SAVE_RENDER_SUBPROJECT_ACTION = 42332
+local D30_SAVE_AS_OPTIONS = 8
 
 local function d30_project_error(code, message, details, recoverable)
   return nil, {
@@ -16962,12 +17158,15 @@ local function d30_project_error(code, message, details, recoverable)
   }
 end
 
-local function d30_project_current()
-  local ok, project = call_reaper("EnumProjects", -1, "")
-  if ok then
-    return project or 0
+local function d30_project_current_state()
+  local ok, project, path = call_reaper("EnumProjects", -1, "")
+  if not ok or not project or not is_string(path) then
+    return nil
   end
-  return 0
+  return {
+    project = project,
+    path = path,
+  }
 end
 
 local function d30_project_safe_id(request, prefix)
@@ -16982,12 +17181,13 @@ local function d30_project_safe_id(request, prefix)
 end
 
 local function d30_project_ref_object(ref, summary)
+  local scheme, value = ref:match("^project:([^:]+):(.+)$")
   return {
     kind = "project",
     ref = ref,
     identity = {
-      scheme = ref:match("^project:([^:]+):") or "current",
-      value = ref,
+      scheme = scheme or "current",
+      value = value or "current",
     },
     summary = summary,
   }
@@ -17015,24 +17215,25 @@ end
 
 local function d30_item_ref_object(item, summary)
   local ref = d30_item_ref(item)
+  local scheme, value = ref:match("^item:([^:]+):(.+)$")
   return {
     kind = "item",
     ref = ref,
     identity = {
-      scheme = ref:match("^item:([^:]+):") or "placeholder",
-      value = ref,
+      scheme = scheme or "placeholder",
+      value = value or tostring(item),
     },
     summary = summary,
   }
 end
 
 local function d30_project_write_ledger(request, key, row)
-  local project = d30_project_current()
-  local ok = call_reaper("SetProjExtState", project, "OPENREAPER_PROJECT_CONTAINERS", key, json.encode(row))
-  if not ok then
+  local state = d30_project_current_state()
+  if not state then
     return false
   end
-  return true
+  local ok = call_reaper("SetProjExtState", state.project, "OPENREAPER_PROJECT_CONTAINERS", key, json.encode(row))
+  return ok == true
 end
 
 local function d30_project_summary(request, fields)
@@ -17044,8 +17245,406 @@ local function d30_project_summary(request, fields)
   fields.undo_evidence = "required"
   fields.artifacts_allowed = false
   fields.truncated = false
-  fields.live_materialization = "ledger_only_waiting_fixture"
+  fields.live_materialization = fields.live_materialization or "ledger_only_waiting_fixture"
   return fields
+end
+
+local function d30_project_restore(parent_project)
+  local ok = call_reaper("SelectProjectInstance", parent_project)
+  if not ok then
+    return false
+  end
+  local current = d30_project_current_state()
+  return current ~= nil and current.project == parent_project
+end
+
+local function d30_project_failure_after_restore(parent_project, code, message, details, recoverable)
+  if parent_project and not d30_project_restore(parent_project) then
+    return d30_project_error("RESTORE_FAILED", "Subproject operation failed and the parent project could not be restored.", {
+      original_code = code,
+      original_blocker = details and details.blocker or nil,
+    }, false)
+  end
+  return d30_project_error(code, message, details, recoverable)
+end
+
+local function d30_project_call_void(api_name, ...)
+  local results = { call_reaper(api_name, ...) }
+  if results[1] ~= true then
+    return false, "pcall_failed_or_binding_unavailable"
+  end
+  if results[2] ~= nil and results[2] ~= true then
+    return false, "failure_return"
+  end
+  return true
+end
+
+local function d30_project_call_command(api_name, ...)
+  local results = { call_reaper(api_name, ...) }
+  if results[1] ~= true then
+    return false, "pcall_failed_or_binding_unavailable"
+  end
+  if results[2] == false then
+    return false, "failure_return"
+  end
+  return true
+end
+
+local function d30_project_time_selection(project)
+  local ok, start_time, end_time = call_reaper("GetSet_LoopTimeRange2", project, false, false, 0, 0, false)
+  if not ok or type(start_time) ~= "number" or type(end_time) ~= "number" then
+    return nil
+  end
+  return {
+    start_time = start_time,
+    end_time = end_time,
+  }
+end
+
+local function d30_project_set_time_selection(project, selection)
+  local ok = call_reaper(
+    "GetSet_LoopTimeRange2",
+    project,
+    true,
+    false,
+    selection.start_time,
+    selection.end_time,
+    false
+  )
+  if not ok then
+    return false
+  end
+  local readback = d30_project_time_selection(project)
+  return readback ~= nil
+    and math.abs(readback.start_time - selection.start_time) <= 0.000001
+    and math.abs(readback.end_time - selection.end_time) <= 0.000001
+end
+
+local function d30_project_path_parts(path)
+  if not is_string(path) or path == "" then
+    return nil
+  end
+  local directory, separator, basename = path:match("^(.*)([/\\])([^/\\]+)$")
+  if directory == nil or not separator or not basename or basename == "" then
+    return nil
+  end
+  return directory, separator
+end
+
+local function d30_project_child_path(request, parent_path, name)
+  local directory, separator = d30_project_path_parts(parent_path)
+  if not directory then
+    return nil
+  end
+  local stem = tostring(name):gsub("[^A-Za-z0-9 _%-]", "_"):gsub("%s+", "_"):gsub("_+", "_")
+  stem = stem:gsub("^[_.%-]+", ""):gsub("[_.%-]+$", "")
+  if stem == "" then
+    stem = "subproject"
+  end
+  if #stem > 72 then
+    stem = stem:sub(1, 72)
+  end
+  return directory .. separator .. stem .. "__" .. d30_project_safe_id(request, "subproject") .. ".RPP"
+end
+
+local function d30_project_path_ref_from_object(ref)
+  if not is_object(ref) or ref.kind ~= "project" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil
+  end
+  local path = ref.ref:match("^project:path:(.+)$")
+  if not path or ref.identity.scheme ~= "path" or tostring(ref.identity.value) ~= path then
+    return nil
+  end
+  return path
+end
+
+local function d30_project_path_from_request(request)
+  local found = nil
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      if is_object(request.refs[index]) and request.refs[index].kind == "project" then
+        local path = d30_project_path_ref_from_object(request.refs[index])
+        if not path or found then
+          return nil, "invalid_or_duplicate_project_ref"
+        end
+        found = path
+      end
+    end
+  end
+  if not found then
+    return nil, "project_ref_missing"
+  end
+  return found
+end
+
+local function d30_project_find_open_by_path(path)
+  local index = 0
+  while true do
+    local ok, project, project_path = call_reaper("EnumProjects", index, "")
+    if not ok then
+      return nil
+    end
+    if not project then
+      return nil
+    end
+    if project_path == path then
+      return project
+    end
+    index = index + 1
+  end
+end
+
+local function d30_track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+local function d30_track_name(track)
+  local ok, _, name = call_reaper("GetTrackName", track, "")
+  return ok and first_string(name) or nil
+end
+
+local function d30_find_track_by_guid(project, guid)
+  local ok_count, count = call_reaper("CountTracks", project)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    if ok_track and track and d30_track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+local function d30_find_track_by_name(project, name)
+  local ok_count, count = call_reaper("CountTracks", project)
+  local total = ok_count and first_number(count) or 0
+  local found = nil
+  local matches = 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    if ok_track and track and d30_track_name(track) == name then
+      found = track
+      matches = matches + 1
+    end
+  end
+  if matches == 1 then
+    return found
+  end
+  return nil
+end
+
+local function d30_track_from_ref(project, ref)
+  if not is_object(ref) or ref.kind ~= "track" or not is_string(ref.ref) or not is_object(ref.identity) then
+    return nil
+  end
+  local scheme, value = ref.ref:match("^track:([^:]+):(.+)$")
+  if not scheme or tostring(ref.identity.scheme) ~= scheme or tostring(ref.identity.value) ~= value then
+    return nil
+  end
+  if scheme == "guid" then
+    return d30_find_track_by_guid(project, value)
+  elseif scheme == "index" and value:match("^%d+$") then
+    local ok, track = call_reaper("GetTrack", project, tonumber(value))
+    return ok and track or nil
+  elseif scheme == "selected" and value:match("^%d+$") then
+    local ok, track = call_reaper("GetSelectedTrack", project, tonumber(value))
+    return ok and track or nil
+  elseif scheme == "name" then
+    return d30_find_track_by_name(project, value)
+  end
+  return nil
+end
+
+local function d30_track_from_request(project, request)
+  local target = nil
+  local supplied = false
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local ref = request.refs[index]
+      if is_object(ref) and ref.kind == "track" then
+        if supplied then
+          return nil, "duplicate"
+        end
+        supplied = true
+        target = d30_track_from_ref(project, ref)
+        if not target then
+          return nil, "invalid"
+        end
+      end
+    end
+  end
+  return target, supplied and nil or "missing"
+end
+
+local function d30_first_track(project)
+  local ok_track, track = call_reaper("GetTrack", project, 0)
+  if ok_track and track then
+    return track
+  end
+  local ok_insert = call_reaper("InsertTrackAtIndex", 0, true)
+  if not ok_insert then
+    return nil
+  end
+  ok_track, track = call_reaper("GetTrack", project, 0)
+  return ok_track and track or nil
+end
+
+local function d30_snapshot_project_ui(project)
+  local ok_tracks, track_count = call_reaper("CountTracks", project)
+  local ok_items, item_count = call_reaper("CountMediaItems", project)
+  local ok_cursor, cursor = call_reaper("GetCursorPositionEx", project)
+  if not ok_tracks or not ok_items or not ok_cursor then
+    return nil
+  end
+  local snapshot = {
+    tracks = {},
+    items = {},
+    cursor = first_number(cursor) or 0,
+  }
+  for index = 0, (first_number(track_count) or 0) - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    local ok_selected, selected = false, false
+    if ok_track and track then
+      ok_selected, selected = call_reaper("IsTrackSelected", track)
+    end
+    if not ok_track or not track or not ok_selected then
+      return nil
+    end
+    snapshot.tracks[track] = selected == true
+  end
+  for index = 0, (first_number(item_count) or 0) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", project, index)
+    local ok_selected, selected = false, false
+    if ok_item and item then
+      ok_selected, selected = call_reaper("IsMediaItemSelected", item)
+    end
+    if not ok_item or not item or not ok_selected then
+      return nil
+    end
+    snapshot.items[item] = selected == true
+  end
+  return snapshot
+end
+
+local function d30_restore_project_ui(project, snapshot)
+  if not snapshot then
+    return false
+  end
+  local ok_tracks, track_count = call_reaper("CountTracks", project)
+  local ok_items, item_count = call_reaper("CountMediaItems", project)
+  if not ok_tracks or not ok_items then
+    return false
+  end
+  for index = 0, (first_number(track_count) or 0) - 1 do
+    local ok_track, track = call_reaper("GetTrack", project, index)
+    if not ok_track or not track or not call_reaper("SetTrackSelected", track, snapshot.tracks[track] == true) then
+      return false
+    end
+  end
+  for index = 0, (first_number(item_count) or 0) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", project, index)
+    if not ok_item or not item or not call_reaper("SetMediaItemSelected", item, snapshot.items[item] == true) then
+      return false
+    end
+  end
+  local ok_cursor = call_reaper("SetEditCurPos2", project, snapshot.cursor, false, false)
+  call_reaper("UpdateArrange")
+  return ok_cursor == true
+end
+
+local function d30_item_set(project)
+  local ok_count, count = call_reaper("CountMediaItems", project)
+  if not ok_count then
+    return nil
+  end
+  local result = {}
+  for index = 0, (first_number(count) or 0) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", project, index)
+    if not ok_item or not item then
+      return nil
+    end
+    result[item] = true
+  end
+  return result
+end
+
+local function d30_unique_new_item(project, before)
+  local after = d30_item_set(project)
+  if not after then
+    return nil, 0
+  end
+  local found = nil
+  local count = 0
+  for item in pairs(after) do
+    if not before[item] then
+      found = item
+      count = count + 1
+    end
+  end
+  return count == 1 and found or nil, count
+end
+
+local function d30_item_source_truth(item, expected_proxy_path)
+  local ok_track, track = call_reaper("GetMediaItem_Track", item)
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  if not ok_track or not track or not ok_take or not take then
+    return nil
+  end
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if not ok_source or not source then
+    return nil
+  end
+  local ok_path, path_a, path_b = call_reaper("GetMediaSourceFileName", source, "")
+  local source_path = ok_path and first_string(path_a, path_b) or nil
+  local ok_subproject, subproject = call_reaper("GetSubProjectFromSource", source)
+  if source_path ~= expected_proxy_path or not ok_subproject or not subproject then
+    return nil
+  end
+  return {
+    track = track,
+    take = take,
+    source = source,
+    subproject = subproject,
+    source_path = source_path,
+  }
+end
+
+local function d30_item_from_request(project, request)
+  if not is_json_array(request.refs) then
+    return nil
+  end
+  local item_ref = nil
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "item" then
+      if item_ref then
+        return nil
+      end
+      item_ref = ref
+    end
+  end
+  if not item_ref or not is_string(item_ref.ref) or not is_object(item_ref.identity) then
+    return nil
+  end
+  local scheme, value = item_ref.ref:match("^item:([^:]+):(.+)$")
+  if not scheme or item_ref.identity.scheme ~= scheme or tostring(item_ref.identity.value) ~= value then
+    return nil
+  end
+  local ok_count, count = call_reaper("CountMediaItems", project)
+  local total = ok_count and first_number(count) or 0
+  if scheme == "index" and value:match("^%d+$") then
+    local ok_item, item = call_reaper("GetMediaItem", project, tonumber(value))
+    return ok_item and item or nil
+  elseif scheme == "guid" then
+    for index = 0, total - 1 do
+      local ok_item, item = call_reaper("GetMediaItem", project, index)
+      if ok_item and item and d30_item_guid(item) == value then
+        return item
+      end
+    end
+  end
+  return nil
 end
 
 local function create_subproject(request)
@@ -17055,31 +17654,122 @@ local function create_subproject(request)
       field = "name",
     })
   end
-  local id = d30_project_safe_id(request, "subproject")
-  local subproject_ref = "project:subproject:" .. id
-  local parent_ref = "project:current"
-  local row = {
-    kind = "subproject",
-    id = id,
-    name = name,
-    parent_project_ref = parent_ref,
-    activate = request.params.activate == true,
-    inherit_time_selection = request.params.inherit_time_selection == true,
-    materialization = "ledger_only_waiting_fixture",
-  }
-  if not d30_project_write_ledger(request, id, row) then
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected subproject ledger write.", {
-      blocker = "project_ext_state_write_failed",
+  if is_json_array(request.refs) and #request.refs > 0 then
+    return d30_project_error("REF_INVALID", "create_subproject does not accept caller-supplied refs.", {})
+  end
+  local parent = d30_project_current_state()
+  if not parent or parent.path == "" then
+    return d30_project_error("COMMAND_FAILED", "create_subproject requires a saved parent project.", {
+      blocker = "parent_project_unsaved_or_unreadable",
+    })
+  end
+  local inherited_time_selection = nil
+  if request.params.inherit_time_selection == true then
+    inherited_time_selection = d30_project_time_selection(parent.project)
+    if not inherited_time_selection then
+      return d30_project_error("COMMAND_FAILED", "create_subproject could not read the parent time selection requested for inheritance.", {
+        blocker = "parent_time_selection_unreadable",
+      }, false)
+    end
+  end
+  local child_path = d30_project_child_path(request, parent.path, name)
+  if not child_path then
+    return d30_project_error("COMMAND_FAILED", "create_subproject could not derive a child path beside the parent project.", {
+      blocker = "parent_project_directory_unavailable",
+    })
+  end
+  local proxy_path = child_path .. "-PROX"
+  if file_exists(child_path) or file_exists(proxy_path) then
+    return d30_project_error("FILE_EXISTS", "create_subproject refuses to overwrite an existing child project or proxy.", {
+      blocker = "subproject_target_exists",
+      child_project_path = child_path,
+      proxy_path = proxy_path,
+    })
+  end
+
+  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, parent.project)
+  if not created_tab then
+    return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab for the subproject.", {
+      blocker = "new_project_tab_failed",
+      reason = create_reason,
     }, false)
   end
-  local subproject_object_ref = d30_project_ref_object(subproject_ref, row)
-  local parent_object_ref = d30_project_ref_object(parent_ref, { kind = "project", role = "parent" })
+  local child = d30_project_current_state()
+  if not child or child.project == parent.project then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab did not become the active project.", {
+      blocker = "new_project_tab_readback_failed",
+    }, false)
+  end
+  if inherited_time_selection and not d30_project_set_time_selection(child.project, inherited_time_selection) then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject did not inherit the parent time selection exactly.", {
+      blocker = "child_time_selection_readback_failed",
+      expected_start_seconds = inherited_time_selection.start_time,
+      expected_end_seconds = inherited_time_selection.end_time,
+    }, false)
+  end
+
+  local saved, save_reason = d30_project_call_void("Main_SaveProjectEx", child.project, child_path, D30_SAVE_AS_OPTIONS)
+  if not saved then
+    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected saving the child subproject.", {
+      blocker = "subproject_save_failed",
+      reason = save_reason,
+    }, false)
+  end
+  child = d30_project_current_state()
+  if not child or child.path ~= child_path or not file_exists(child_path) then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject path did not read back exactly after save.", {
+      blocker = "subproject_save_readback_failed",
+      expected_path = child_path,
+      actual_path = child and child.path or "",
+    }, false)
+  end
+
+  local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, child.project)
+  if not rendered then
+    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected subproject proxy rendering.", {
+      blocker = "subproject_proxy_render_failed",
+      reason = render_reason,
+    }, false)
+  end
+  if not file_exists(proxy_path) then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Subproject proxy file did not exist after native render.", {
+      blocker = "subproject_proxy_missing",
+      proxy_path = proxy_path,
+    }, false)
+  end
+  if not d30_project_restore(parent.project) then
+    return d30_project_error("RESTORE_FAILED", "Created subproject but could not restore the parent project.", {
+      child_project_path = child_path,
+    }, false)
+  end
+
+  local child_ref = "project:path:" .. child_path
+  local parent_ref = "project:path:" .. parent.path
+  local row = {
+    kind = "subproject",
+    name = name,
+    child_project_path = child_path,
+    proxy_path = proxy_path,
+    parent_project_ref = parent_ref,
+    materialization = "native_rpp_proxy_verified",
+  }
+  d30_project_write_ledger(request, d30_project_safe_id(request, "subproject"), row)
+  local child_object_ref = d30_project_ref_object(child_ref, row)
+  local parent_object_ref = d30_project_ref_object(parent_ref, { kind = "project", role = "parent", path = parent.path })
   return d30_project_summary(request, {
-    subproject_project_ref = subproject_ref,
+    subproject_project_ref = child_ref,
     parent_project_ref = parent_ref,
     name = name,
+    child_project_path = child_path,
+    proxy_path = proxy_path,
     created = true,
-  }), nil, json_array({ subproject_object_ref, parent_object_ref }), json_array({}), json_array({ subproject_object_ref, parent_object_ref })
+    parent_restored = true,
+    requested_activate = request.params.activate == true,
+    inherited_time_selection = inherited_time_selection ~= nil,
+    inherited_time_selection_start_seconds = inherited_time_selection and inherited_time_selection.start_time or nil,
+    inherited_time_selection_end_seconds = inherited_time_selection and inherited_time_selection.end_time or nil,
+    live_materialization = "native_rpp_proxy_verified",
+  }), nil, json_array({ child_object_ref, parent_object_ref }), json_array({}), json_array({ child_object_ref, parent_object_ref })
 end
 
 local function create_project_tab(request)
@@ -17112,57 +17802,133 @@ local function create_project_tab(request)
   }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
 end
 
-local function d30_first_track()
-  local ok_track, track = call_reaper("GetTrack", 0, 0)
-  if ok_track and track then
-    return track
-  end
-  local ok_insert = call_reaper("InsertTrackAtIndex", 0, true)
-  if not ok_insert then
-    return nil
-  end
-  ok_track, track = call_reaper("GetTrack", 0, 0)
-  return ok_track and track or nil
-end
-
 local function insert_subproject_item(request)
-  local track = d30_first_track()
+  local parent = d30_project_current_state()
+  if not parent then
+    return d30_project_error("COMMAND_FAILED", "insert_subproject_item could not read the active parent project.", {
+      blocker = "parent_project_unreadable",
+    })
+  end
+  local child_path, project_ref_reason = d30_project_path_from_request(request)
+  if not child_path then
+    return d30_project_error("REF_INVALID", "insert_subproject_item requires one exact project:path ref.", {
+      blocker = project_ref_reason,
+    })
+  end
+  local proxy_path = child_path .. "-PROX"
+  if not file_exists(child_path) or not file_exists(proxy_path) then
+    return d30_project_error("FILE_NOT_FOUND", "Subproject project or proxy file does not exist.", {
+      child_project_path = child_path,
+      proxy_path = proxy_path,
+    })
+  end
+  local position = tonumber(request.params.position_seconds)
+  if not position or position ~= position or position == math.huge or position == -math.huge or position < 0 then
+    return d30_project_error("PARAMS_INVALID", "insert_subproject_item position_seconds must be a finite non-negative number.", {
+      field = "position_seconds",
+    })
+  end
+  local track, track_reason = d30_track_from_request(parent.project, request)
+  if track_reason == "invalid" or track_reason == "duplicate" then
+    return d30_project_error("REF_INVALID", "insert_subproject_item target track ref is invalid or duplicated.", {
+      blocker = "target_track_ref_" .. track_reason,
+    })
+  end
+  if not track then
+    track = d30_first_track(parent.project)
+  end
   if not track then
     return d30_project_error("TRACK_NOT_FOUND", "insert_subproject_item requires or creates a target track.", {
       blocker = "target_track_unavailable",
     })
   end
-  local ok_item, item = call_reaper("AddMediaItemToTrack", track)
-  if not ok_item or not item then
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected placeholder subproject item creation.", {
-      blocker = "add_media_item_failed",
+
+  local ui_snapshot = d30_snapshot_project_ui(parent.project)
+  local items_before = d30_item_set(parent.project)
+  if not ui_snapshot or not items_before then
+    return d30_project_error("COMMAND_FAILED", "Could not snapshot parent selection and item identity before subproject insertion.", {
+      blocker = "parent_ui_snapshot_failed",
     }, false)
   end
-  local position = tonumber(request.params.position_seconds) or 0
-  if position < 0 then
-    position = 0
+  for selected_track in pairs(ui_snapshot.tracks) do
+    call_reaper("SetTrackSelected", selected_track, selected_track == track)
   end
-  call_reaper("SetMediaItemInfo_Value", item, "D_POSITION", position)
-  call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", 1)
+  call_reaper("SetEditCurPos2", parent.project, position, false, false)
+
+  local inserted, insert_reason = d30_project_call_command("InsertMedia", proxy_path, 0)
+  if not inserted then
+    d30_restore_project_ui(parent.project, ui_snapshot)
+    return d30_project_error("COMMAND_FAILED", "REAPER rejected insertion of the subproject proxy.", {
+      blocker = "insert_media_failed",
+      reason = insert_reason,
+    }, false)
+  end
+  local item, new_item_count = d30_unique_new_item(parent.project, items_before)
+  if not item then
+    d30_restore_project_ui(parent.project, ui_snapshot)
+    return d30_project_error("VERIFY_FAILED", "Subproject insertion did not create exactly one identifiable Item.", {
+      blocker = "new_item_identity_ambiguous",
+      new_item_count = new_item_count,
+    }, false)
+  end
+  local truth = d30_item_source_truth(item, proxy_path)
+  if not truth or truth.track ~= track then
+    d30_restore_project_ui(parent.project, ui_snapshot)
+    return d30_project_error("VERIFY_FAILED", "Inserted Item did not read back on the exact Track with a real subproject source.", {
+      blocker = truth and "target_track_mismatch" or "subproject_source_readback_failed",
+      proxy_path = proxy_path,
+    }, false)
+  end
+  local ok_position, actual_position = call_reaper("GetMediaItemInfo_Value", item, "D_POSITION")
+  if not ok_position or type(actual_position) ~= "number" or math.abs(actual_position - position) > 0.000001 then
+    d30_restore_project_ui(parent.project, ui_snapshot)
+    return d30_project_error("VERIFY_FAILED", "Inserted subproject Item did not read back at the requested position.", {
+      blocker = "subproject_item_position_readback_failed",
+      expected_position_seconds = position,
+      actual_position_seconds = actual_position,
+    }, false)
+  end
+  local requested_name = bounded_string(request.params.name or "", 160)
+  if requested_name ~= "" then
+    local ok_name, name_retval = call_reaper("GetSetMediaItemTakeInfo_String", truth.take, "P_NAME", requested_name, true)
+    local ok_read, _, actual_name = call_reaper("GetSetMediaItemTakeInfo_String", truth.take, "P_NAME", "", false)
+    if not ok_name or name_retval == false or not ok_read or actual_name ~= requested_name then
+      d30_restore_project_ui(parent.project, ui_snapshot)
+      return d30_project_error("VERIFY_FAILED", "Inserted subproject Item name did not read back exactly.", {
+        blocker = "subproject_item_name_readback_failed",
+      }, false)
+    end
+  end
+  if not d30_restore_project_ui(parent.project, ui_snapshot) then
+    return d30_project_error("RESTORE_FAILED", "Inserted subproject Item but could not restore selection and edit cursor.", {
+      item_ref = d30_item_ref(item),
+    }, false)
+  end
+
   local item_ref = d30_item_ref(item)
-  local subproject_ref = "project:subproject:" .. d30_project_safe_id(request, "linked")
+  local child_ref = "project:path:" .. child_path
   local item_object_ref = d30_item_ref_object(item, {
-    kind = "subproject_item_placeholder",
+    kind = "subproject_item",
     position_seconds = position,
-    materialization = "placeholder_item_waiting_fixture",
+    source_path = proxy_path,
+    materialization = "native_subproject_source_verified",
   })
-  local subproject_object_ref = d30_project_ref_object(subproject_ref, {
+  local child_object_ref = d30_project_ref_object(child_ref, {
     kind = "subproject",
     role = "source",
-    materialization = "ledger_only_waiting_fixture",
+    path = child_path,
   })
   return d30_project_summary(request, {
     item_ref = item_ref,
-    subproject_project_ref = subproject_ref,
+    subproject_project_ref = child_ref,
     inserted = true,
     position_seconds = position,
-    subproject_item_status = "placeholder_item_waiting_fixture",
-  }), nil, json_array({ item_object_ref, subproject_object_ref }), json_array({}), json_array({ item_object_ref, subproject_object_ref })
+    proxy_path = proxy_path,
+    source_path = truth.source_path,
+    parent_ui_restored = true,
+    subproject_item_status = "native_source_verified",
+    live_materialization = "native_subproject_source_verified",
+  }), nil, json_array({ item_object_ref, child_object_ref }), json_array({}), json_array({ item_object_ref, child_object_ref })
 end
 
 local function render_or_update_subproject(request)
@@ -17172,8 +17938,99 @@ local function render_or_update_subproject(request)
       mode = mode,
     })
   end
+  local child_path, project_ref_reason = d30_project_path_from_request(request)
+  if not child_path then
+    return d30_project_error("REF_INVALID", "render_or_update_subproject requires one exact project:path ref.", {
+      blocker = project_ref_reason,
+    })
+  end
+  if not file_exists(child_path) then
+    return d30_project_error("FILE_NOT_FOUND", "Subproject project file does not exist.", {
+      child_project_path = child_path,
+    })
+  end
+  local parent = d30_project_current_state()
+  if not parent then
+    return d30_project_error("COMMAND_FAILED", "render_or_update_subproject could not read the active parent project.", {
+      blocker = "parent_project_unreadable",
+    })
+  end
+  local linked_item = d30_item_from_request(parent.project, request)
+  local item_ref_supplied = false
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      if is_object(request.refs[index]) and request.refs[index].kind == "item" then
+        item_ref_supplied = true
+      end
+    end
+  end
+  if item_ref_supplied and not linked_item then
+    return d30_project_error("REF_INVALID", "render_or_update_subproject optional Item ref could not be resolved exactly.", {
+      blocker = "linked_item_ref_invalid",
+    })
+  end
+
+  local child_project = d30_project_find_open_by_path(child_path)
+  if child_project then
+    if not d30_project_call_void("SelectProjectInstance", child_project) then
+      return d30_project_error("COMMAND_FAILED", "REAPER could not activate the requested subproject tab.", {
+        blocker = "subproject_tab_activation_failed",
+      }, false)
+    end
+  else
+    local created = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, parent.project)
+    if not created then
+      return d30_project_error("COMMAND_FAILED", "REAPER could not create a tab to open the requested subproject.", {
+        blocker = "subproject_open_tab_failed",
+      }, false)
+    end
+    local opened = d30_project_call_void("Main_openProject", child_path)
+    if not opened then
+      return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER could not open the requested subproject path.", {
+        blocker = "subproject_open_failed",
+      }, false)
+    end
+    local opened_state = d30_project_current_state()
+    child_project = opened_state and opened_state.project or nil
+  end
+  local active_child = d30_project_current_state()
+  if not child_project or not active_child or active_child.project ~= child_project or active_child.path ~= child_path then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Active subproject path did not match the requested project ref.", {
+      blocker = "active_subproject_path_mismatch",
+      expected_path = child_path,
+      actual_path = active_child and active_child.path or "",
+    }, false)
+  end
+
+  local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, child_project)
+  if not rendered then
+    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected native subproject save/render.", {
+      blocker = "subproject_render_action_failed",
+      reason = render_reason,
+    }, false)
+  end
+  local proxy_path = child_path .. "-PROX"
+  active_child = d30_project_current_state()
+  if not active_child or active_child.path ~= child_path or not file_exists(proxy_path) then
+    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Subproject proxy did not read back after native save/render.", {
+      blocker = "subproject_render_readback_failed",
+      proxy_path = proxy_path,
+    }, false)
+  end
+  if not d30_project_restore(parent.project) then
+    return d30_project_error("RESTORE_FAILED", "Rendered subproject but could not restore the parent project.", {
+      child_project_path = child_path,
+    }, false)
+  end
+  if linked_item and not d30_item_source_truth(linked_item, proxy_path) then
+    return d30_project_error("VERIFY_FAILED", "Linked subproject Item did not retain exact source association after render.", {
+      blocker = "linked_item_source_readback_failed",
+      proxy_path = proxy_path,
+    }, false)
+  end
+
   local id = d30_project_safe_id(request, "subproject_job")
-  local subproject_ref = "project:subproject:" .. id
+  local child_ref = "project:path:" .. child_path
   local job_ref = {
     kind = "job",
     ref = "job:job_id:project.subproject." .. id,
@@ -17185,20 +18042,29 @@ local function render_or_update_subproject(request)
       template_id = "template.project.render_or_update_subproject",
       pack = "project",
       mode = mode,
-      materialization = "ledger_only_waiting_fixture",
+      state = "completed",
+      synchronous = true,
     },
   }
-  local subproject_object_ref = d30_project_ref_object(subproject_ref, {
+  local child_object_ref = d30_project_ref_object(child_ref, {
     kind = "subproject",
     mode = mode,
-    materialization = "ledger_only_waiting_fixture",
+    path = child_path,
+    proxy_path = proxy_path,
+    materialization = "native_rpp_proxy_verified",
   })
   return d30_project_summary(request, {
-    subproject_project_ref = subproject_ref,
+    subproject_project_ref = child_ref,
     job_ref = job_ref.ref,
-    queued = true,
+    queued = false,
+    completed = true,
+    synchronous = true,
     mode = mode,
-  }), nil, json_array({ subproject_object_ref }), json_array({ job_ref }), json_array({ subproject_object_ref })
+    proxy_path = proxy_path,
+    parent_restored = true,
+    linked_item_verified = linked_item ~= nil,
+    live_materialization = "native_rpp_proxy_verified",
+  }), nil, json_array({ child_object_ref }), json_array({ job_ref }), json_array({ child_object_ref })
 end
 return {
   exports = { create_project_tab = create_project_tab, create_subproject = create_subproject, insert_subproject_item = insert_subproject_item, render_or_update_subproject = render_or_update_subproject },
@@ -25485,10 +26351,10 @@ end)
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/midi/insert_text_sysex_events.lua
 __openreaper_register_handler_module("midi/insert_text_sysex_events.lua", function()
 local READ_B_MIDI = __openreaper_shared_table("READ_B_MIDI")
-local function read_take_event_counts(...)
-  return OPENREAPER_HANDLER_EXPORTS.read_take_event_counts(...)
-end
 -- Extracted Safe-Write-A handler: template.midi.insert_text_sysex_events.
+
+local SAFE_WRITE_A_TEXT_MAX_BYTES = 4096
+local SAFE_WRITE_A_SYSEX_MAX_BYTES = 65535
 
 local function handler_error(code, message, details, recoverable)
   return nil, {
@@ -25522,20 +26388,6 @@ local function safe_write_a_refs(...)
   return refs
 end
 
-local function bounded_number(value, fallback)
-  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
-    return value
-  end
-  return fallback or 0
-end
-
-local function integer_value(value)
-  if type(value) == "number" and value == math.floor(value) then
-    return value
-  end
-  return nil
-end
-
 local function resolve_midi_take_for_request(request)
   return READ_B_MIDI.resolve_midi_take_for_request(request)
 end
@@ -25553,24 +26405,29 @@ local function take_object_ref(take)
   }
 end
 
-local function ppq_position(take, event, key)
-  local value = event[key]
-  if type(value) == "number" then
+local function safe_write_a_ppq_position(take, event, position_unit)
+  local value = event.ppq
+  if position_unit == "ppq"
+    and type(value) == "number"
+    and value == value
+    and value ~= math.huge
+    and value ~= -math.huge
+    and value >= 0 then
     return value
   end
-  local seconds_key = "seconds"
-  if key == "start_ppq" then
-    seconds_key = "start_seconds"
-  elseif key == "end_ppq" then
-    seconds_key = "end_seconds"
-  elseif key == "ppq" then
-    seconds_key = "position_seconds"
+  if position_unit == "seconds"
+    and type(event.position_seconds) == "number"
+    and event.position_seconds == event.position_seconds
+    and event.position_seconds ~= math.huge
+    and event.position_seconds ~= -math.huge
+    and event.position_seconds >= 0 then
+    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event.position_seconds)
+    local resolved = ok and first_number(ppq) or nil
+    if type(resolved) == "number" and resolved == resolved and resolved ~= math.huge and resolved ~= -math.huge then
+      return resolved
+    end
   end
-  if type(event[seconds_key]) == "number" then
-    local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjTime", take, event[seconds_key])
-    return ok and first_number(ppq) or 0
-  end
-  return 0
+  return nil
 end
 
 local function text_sysex_type_value(kind)
@@ -25580,8 +26437,182 @@ local function text_sysex_type_value(kind)
     return 5
   elseif kind == "notation" then
     return 15
+  elseif kind == "text" then
+    return 1
   end
-  return 1
+  return nil
+end
+
+local function safe_write_a_sysex_bytes_from_array(value)
+  if not is_json_array(value) or #value < 2 or #value > SAFE_WRITE_A_SYSEX_MAX_BYTES then
+    return nil
+  end
+  local parts = {}
+  for index = 1, #value do
+    local byte = value[index]
+    if type(byte) ~= "number" or byte ~= math.floor(byte) or byte < 0 or byte > 255 then
+      return nil
+    end
+    parts[index] = string.char(byte)
+  end
+  return table.concat(parts)
+end
+
+local function safe_write_a_sysex_bytes_from_hex(value)
+  if not is_string(value) then
+    return nil
+  end
+  local bytes = {}
+  for token in value:gmatch("%S+") do
+    local normalized = token:gsub("^0[xX]", "")
+    if not normalized:match("^[%x][%x]?$") then
+      return nil
+    end
+    local byte = tonumber(normalized, 16)
+    if not byte or byte < 0 or byte > 255 then
+      return nil
+    end
+    bytes[#bytes + 1] = byte
+    if #bytes > SAFE_WRITE_A_SYSEX_MAX_BYTES then
+      return nil
+    end
+  end
+  return safe_write_a_sysex_bytes_from_array(bytes)
+end
+
+local function safe_write_a_sysex_payload(value)
+  local payload = nil
+  if is_json_array(value) then
+    payload = safe_write_a_sysex_bytes_from_array(value)
+  elseif is_string(value) then
+    payload = safe_write_a_sysex_bytes_from_hex(value)
+  end
+  if not payload or #payload < 3 or payload:byte(1) ~= 0xF0 or payload:byte(#payload) ~= 0xF7 then
+    return nil
+  end
+  for index = 2, #payload - 1 do
+    if payload:byte(index) > 0x7F then
+      return nil
+    end
+  end
+  -- REAPER's type=-1 API stores the binary SysEx body without bounding F0/F7.
+  return payload:sub(2, #payload - 1)
+end
+
+local function safe_write_a_prepare_event(take, raw_event, index, position_unit)
+  if not is_object(raw_event) then
+    return nil, {
+      index = index,
+      blocker = "event_not_object",
+    }
+  end
+  local kind = raw_event.event_kind or "text"
+  local type_value = text_sysex_type_value(kind)
+  if not type_value then
+    return nil, {
+      index = index,
+      blocker = "event_kind_invalid",
+      event_kind = bounded_string(kind, 40),
+    }
+  end
+  local ppq = safe_write_a_ppq_position(take, raw_event, position_unit)
+  if ppq == nil then
+    return nil, {
+      index = index,
+      blocker = "event_position_invalid",
+    }
+  end
+  local payload = nil
+  if kind == "sysex" then
+    payload = safe_write_a_sysex_payload(raw_event.bytes)
+    if not payload then
+      return nil, {
+        index = index,
+        blocker = "sysex_bytes_invalid",
+        required = "F0 ... F7 as an integer byte array or whitespace-separated hex string",
+      }
+    end
+  else
+    if not is_string(raw_event.text) or #raw_event.text > SAFE_WRITE_A_TEXT_MAX_BYTES then
+      return nil, {
+        index = index,
+        blocker = "text_payload_invalid",
+        max_bytes = SAFE_WRITE_A_TEXT_MAX_BYTES,
+      }
+    end
+    payload = raw_event.text
+  end
+  return {
+    kind = kind,
+    type_value = type_value,
+    selected = raw_event.selected == true,
+    muted = raw_event.muted == true,
+    ppq = ppq,
+    payload = payload,
+  }
+end
+
+local function safe_write_a_event_signature(event)
+  return table.concat({
+    tostring(event.type_value),
+    event.selected and "1" or "0",
+    event.muted and "1" or "0",
+    string.format("%.9f", event.ppq),
+    tostring(#event.payload) .. ":" .. event.payload,
+  }, "\31")
+end
+
+local function safe_write_a_text_sysex_snapshot(take)
+  local ok_count, count_retval, note_count, cc_count, text_sysex_count = call_reaper("MIDI_CountEvts", take)
+  local total = ok_count and count_retval ~= false and first_number(text_sysex_count) or nil
+  if type(total) ~= "number" or total < 0 or total ~= math.floor(total) then
+    return nil
+  end
+  local signatures = {}
+  for index = 0, total - 1 do
+    local ok_event, event_retval, selected, muted, ppq, type_value, payload = call_reaper("MIDI_GetTextSysexEvt", take, index)
+    if not ok_event or event_retval == false or selected == nil or muted == nil or type(ppq) ~= "number" or type(type_value) ~= "number" or not is_string(payload) then
+      return nil
+    end
+    local signature = safe_write_a_event_signature({
+      type_value = type_value,
+      selected = selected == true,
+      muted = muted == true,
+      ppq = ppq,
+      payload = payload,
+    })
+    signatures[signature] = (signatures[signature] or 0) + 1
+  end
+  return {
+    note_count = first_number(note_count) or 0,
+    cc_count = first_number(cc_count) or 0,
+    text_sysex_count = total,
+    signatures = signatures,
+  }
+end
+
+local function safe_write_a_requested_signatures(events)
+  local counts = {}
+  for index = 1, #events do
+    local signature = safe_write_a_event_signature(events[index])
+    counts[signature] = (counts[signature] or 0) + 1
+  end
+  return counts
+end
+
+local function safe_write_a_verify_delta(before, after, requested)
+  if after.text_sysex_count - before.text_sysex_count ~= #requested then
+    return false, "aggregate_count_delta_mismatch"
+  end
+  local required = safe_write_a_requested_signatures(requested)
+  for signature, count in pairs(required) do
+    local before_count = before.signatures[signature] or 0
+    local after_count = after.signatures[signature] or 0
+    if after_count - before_count < count then
+      return false, "requested_event_missing"
+    end
+  end
+  return true
 end
 
 local function safe_write_insert_text_sysex_events(request)
@@ -25589,30 +26620,106 @@ local function safe_write_insert_text_sysex_events(request)
   if not take then
     return handler_error(failure.code, failure.message, failure.details)
   end
-  local events = is_json_array(request.params.events) and request.params.events or json_array({})
-  local inserted = 0
+  local raw_events = is_json_array(request.params.events) and request.params.events or nil
+  if not raw_events or #raw_events == 0 then
+    return handler_error("PARAMS_INVALID", "insert_text_sysex_events requires at least one event.", {
+      blocker = "events_empty_or_invalid",
+    })
+  end
+  local position_unit = request.params.position_unit
+  if position_unit ~= "ppq" and position_unit ~= "seconds" then
+    return handler_error("PARAMS_INVALID", "insert_text_sysex_events position_unit must be ppq or seconds.", {
+      blocker = "position_unit_invalid",
+    })
+  end
+  local events = {}
+  local verified_by_kind = {
+    text = 0,
+    lyric = 0,
+    notation = 0,
+    sysex = 0,
+  }
+  for index = 1, #raw_events do
+    local event, event_failure = safe_write_a_prepare_event(take, raw_events[index], index, position_unit)
+    if not event then
+      return handler_error("PARAMS_INVALID", "MIDI text/SysEx event failed pre-mutation validation.", event_failure)
+    end
+    events[index] = event
+    verified_by_kind[event.kind] = verified_by_kind[event.kind] + 1
+  end
+
+  local before = safe_write_a_text_sysex_snapshot(take)
+  if not before then
+    return handler_error("VERIFY_FAILED", "Could not snapshot MIDI text/SysEx rows before mutation.", {
+      blocker = "before_rows_unreadable",
+    }, false)
+  end
+  local dispatched = 0
   for index = 1, #events do
-    local event = is_object(events[index]) and events[index] or {}
-    local ppq = ppq_position(take, event, "ppq")
+    local event = events[index]
     local ok, success = call_reaper(
       "MIDI_InsertTextSysexEvt",
       take,
-      event.selected == true,
-      event.muted == true,
-      ppq,
-      text_sysex_type_value(event.event_kind),
-      bounded_string(event.text or event.bytes or "", 240),
+      event.selected,
+      event.muted,
+      event.ppq,
+      event.type_value,
+      event.payload,
       true
     )
-    if ok and success ~= false then
-      inserted = inserted + 1
+    if not ok or success == false then
+      if request.params.sort_events ~= false then
+        call_reaper("MIDI_Sort", take)
+      end
+      return handler_error("COMMAND_FAILED", "REAPER rejected one MIDI text/SysEx event insertion.", {
+        blocker = "event_dispatch_failed",
+        failed_index = index,
+        dispatch_succeeded_count = dispatched,
+      }, false)
     end
+    dispatched = dispatched + 1
   end
   if request.params.sort_events ~= false then
-    call_reaper("MIDI_Sort", take)
+    local ok_sort, sort_retval = call_reaper("MIDI_Sort", take)
+    if not ok_sort or sort_retval == false then
+      return handler_error("COMMAND_FAILED", "REAPER rejected MIDI event sorting after insertion.", {
+        blocker = "midi_sort_failed",
+        dispatch_succeeded_count = dispatched,
+      }, false)
+    end
   end
-  local summary = read_take_event_counts({ refs = json_array({ take_object_ref(take) }), params = {}, budget = request.budget })
-  summary.inserted_text_sysex_count = inserted
+
+  local after = safe_write_a_text_sysex_snapshot(take)
+  if not after then
+    return handler_error("VERIFY_FAILED", "Could not read MIDI text/SysEx rows after mutation.", {
+      blocker = "after_rows_unreadable",
+      dispatch_succeeded_count = dispatched,
+    }, false)
+  end
+  local verified, verify_reason = safe_write_a_verify_delta(before, after, events)
+  if not verified then
+    return handler_error("VERIFY_FAILED", "Dispatched MIDI text/SysEx events did not all persist in exact live readback.", {
+      blocker = verify_reason,
+      dispatch_succeeded_count = dispatched,
+      before_text_sysex_count = before.text_sysex_count,
+      after_text_sysex_count = after.text_sysex_count,
+      requested_count = #events,
+    }, false)
+  end
+
+  local take_ref = READ_B_MIDI.take_ref_string(take)
+  local summary = {
+    take_ref = take_ref,
+    note_count = after.note_count,
+    cc_count = after.cc_count,
+    text_sysex_count = after.text_sysex_count,
+    take_hash = take_ref .. ":" .. tostring(after.note_count) .. ":" .. tostring(after.cc_count) .. ":" .. tostring(after.text_sysex_count),
+    inserted_count = #events,
+    inserted_text_sysex_count = #events,
+    verified_text_sysex_count = #events,
+    verified_by_kind = verified_by_kind,
+    verification_mode = "exact_row_multiset_delta",
+  }
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end
 return {

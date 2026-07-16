@@ -1,5 +1,7 @@
 -- Extracted D13 handler: items core read/write controls.
 
+local D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID = 41051
+
 local function d13_items_error(code, message, details, recoverable)
   return nil, {
     code = code,
@@ -393,6 +395,14 @@ local function d13_items_active_take(item)
   return ok_take and take or nil
 end
 
+local function d13_items_take_reverse_state(take)
+  local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
+  if not ok_source or not source then return nil end
+  local ok_info, available, _, _, reversed = call_reaper("PCM_Source_GetSectionInfo", source)
+  if not ok_info or available ~= true then return nil end
+  return reversed == true or reversed == 1
+end
+
 local function d13_items_take_name(take)
   local ok, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
   return bounded_string(ok and first_string(name) or "", 160)
@@ -464,7 +474,7 @@ local function d13_items_item_summary(item, include_take_summary)
       summary.take_pan = d13_items_take_number(take, "D_PAN")
       summary.start_offset_seconds = d13_items_take_number(take, "D_STARTOFFS")
       summary.channel_mode = d13_items_channel_mode_label(d13_items_take_number(take, "I_CHANMODE"))
-      summary.reverse = d13_items_take_number(take, "B_REVERSE") == 1
+      summary.reverse = d13_items_take_reverse_state(take)
       summary.pitch_shift_mode = d13_items_pitch_mode_label(d13_items_take_number(take, "I_PITCHMODE"))
       summary.stretch_marker_fade_size_ms = d13_items_take_number(take, "F_STRETCHFADESIZE") * 1000
     else
@@ -720,8 +730,175 @@ local function d13_items_set_channel_mode(request)
   return d13_items_set_take_value(request, "I_CHANMODE", mode)
 end
 
+local function d13_items_all_items()
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return nil end
+  local rows = {}
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if not ok_item or not item then return nil end
+    local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", item, "B_UISEL")
+    local ok_take, take = call_reaper("GetActiveTake", item)
+    if not ok_selected or not ok_take then return nil end
+    rows[#rows + 1] = { item = item, selected = first_number(selected) == 1, active_take = take }
+  end
+  return rows
+end
+
+local function d13_items_selected_tracks()
+  local ok_count, count = call_reaper("CountSelectedTracks2", 0, true)
+  if not ok_count then return nil end
+  local rows = {}
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_track, track = call_reaper("GetSelectedTrack2", 0, index, true)
+    if not ok_track or not track then return nil end
+    rows[#rows + 1] = track
+  end
+  return rows
+end
+
+local function d13_items_same_pointers(actual, expected)
+  if not actual or #actual ~= #expected then return false end
+  for index = 1, #expected do
+    if actual[index] ~= expected[index] then return false end
+  end
+  return true
+end
+
+local function d13_items_clear_track_selection()
+  local ok_master, master = call_reaper("GetMasterTrack", 0)
+  if ok_master and master then
+    local ok_set, accepted = call_reaper("SetTrackSelected", master, false)
+    if not ok_set or accepted == false then return false end
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false end
+  for index = 0, math.max(0, math.floor(first_number(count) or 0)) - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if not ok_track or not track then return false end
+    local ok_set, accepted = call_reaper("SetTrackSelected", track, false)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
+local function d13_items_apply_item_selection(items, target_item)
+  for index = 1, #items do
+    local selected = items[index].item == target_item
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", items[index].item, selected)
+    if not ok_set or accepted == false then return false end
+  end
+  return true
+end
+
+local function d13_items_restore_reverse_context(snapshot)
+  local selection_ok = d13_items_clear_track_selection()
+  for index = 1, #snapshot.selected_tracks do
+    local ok_set, accepted = call_reaper("SetTrackSelected", snapshot.selected_tracks[index], true)
+    if not ok_set or accepted == false then selection_ok = false end
+  end
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_set, accepted = call_reaper("SetMediaItemSelected", saved.item, saved.selected)
+    if not ok_set or accepted == false then selection_ok = false end
+  end
+  local active_ok = true
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_current, current = call_reaper("GetActiveTake", saved.item)
+    if not ok_current then
+      active_ok = false
+    elseif current ~= saved.active_take then
+      if not saved.active_take then
+        active_ok = false
+      else
+        local ok_set, accepted = call_reaper("SetActiveTake", saved.active_take)
+        if not ok_set or accepted == false then active_ok = false end
+      end
+    end
+  end
+  local restored_tracks = d13_items_selected_tracks()
+  if not d13_items_same_pointers(restored_tracks, snapshot.selected_tracks) then selection_ok = false end
+  for index = 1, #snapshot.items do
+    local saved = snapshot.items[index]
+    local ok_selected, selected = call_reaper("GetMediaItemInfo_Value", saved.item, "B_UISEL")
+    if not ok_selected or (first_number(selected) == 1) ~= saved.selected then selection_ok = false end
+  end
+  return selection_ok, active_ok
+end
+
 local function d13_items_set_reverse(request)
-  return d13_items_set_take_value(request, "B_REVERSE", request.params.reverse == true and 1 or 0)
+  local item, failure = d13_items_item_for_write(request)
+  if not item then return d13_items_error(failure.code, failure.message, failure.details) end
+  local take, take_failure = d13_items_take_for_write(request, item)
+  if not take then return d13_items_error(take_failure.code, take_failure.message, take_failure.details) end
+  local requested = request.params.reverse == true
+  local before = d13_items_take_reverse_state(take)
+  if before == nil then
+    return d13_items_error("COMMAND_FAILED", "REAPER did not expose the active Take reverse state.", {
+      item_ref = d13_items_item_ref_string(item),
+    }, false)
+  end
+  if before == requested then
+    local summary, err, artifacts, jobs, refs = d13_items_write_summary(request, item)
+    summary.changed = false
+    summary.fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID
+    summary.selection_restored = true
+    summary.active_take_restored = true
+    return summary, err, artifacts, jobs, refs
+  end
+
+  local items = d13_items_all_items()
+  local selected_tracks = d13_items_selected_tracks()
+  if not items or not selected_tracks then
+    return d13_items_error("COMMAND_FAILED", "Take reverse could not snapshot selection and active Takes.", {}, false)
+  end
+  local snapshot = { items = items, selected_tracks = selected_tracks }
+  local selected = d13_items_apply_item_selection(items, item)
+  local ok_active, accepted_active = call_reaper("SetActiveTake", take)
+  local ok_readback, active_take = call_reaper("GetActiveTake", item)
+  if not selected or not ok_active or accepted_active == false or not ok_readback or active_take ~= take then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "Take reverse could not target the exact active Take.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+
+  local command_ok, command_result = call_reaper("Main_OnCommandEx", D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID, 0, 0)
+  if not command_ok or command_result == false then
+    local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+    return d13_items_error("COMMAND_FAILED", "REAPER rejected the fixed native Take reverse action.", {
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  call_reaper("UpdateItemInProject", item)
+  call_reaper("UpdateArrange")
+  local readback = d13_items_take_reverse_state(take)
+  local selection_restored, active_take_restored = d13_items_restore_reverse_context(snapshot)
+  if readback ~= requested then
+    return d13_items_error("VERIFY_FAILED", "Native Take reverse readback did not match the requested state.", {
+      requested = requested,
+      readback = readback == nil and JSON_NULL or readback,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  if not selection_restored or not active_take_restored then
+    return d13_items_error("VERIFY_FAILED", "Take reverse could not restore selection and active Takes.", {
+      requested = requested,
+      readback = readback,
+      selection_restored = selection_restored,
+      active_take_restored = active_take_restored,
+    }, false)
+  end
+  local summary, err, artifacts, jobs, refs = d13_items_write_summary(request, item)
+  summary.changed = true
+  summary.fixed_action_id = D13_ITEMS_TOGGLE_TAKE_REVERSE_ACTION_ID
+  summary.selection_restored = true
+  summary.active_take_restored = true
+  return summary, err, artifacts, jobs, refs
 end
 
 local function d13_items_set_pitch_shift_mode(request)
