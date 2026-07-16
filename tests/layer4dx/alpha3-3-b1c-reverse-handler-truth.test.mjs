@@ -48,10 +48,10 @@ describe("Alpha3.3-B1c Take reverse handler truth", () => {
 track_a = { guid = "{TRACK-A}", selected = false }
 track_b = { guid = "{TRACK-B}", selected = true }
 tracks = { track_a, track_b }
-take_a = { guid = "{TAKE-A}", source = { reversed = false } }
-take_a_other = { guid = "{TAKE-A-OTHER}", source = { reversed = false } }
-take_b = { guid = "{TAKE-B}", source = { reversed = false } }
-take_b_other = { guid = "{TAKE-B-OTHER}", source = { reversed = false } }
+take_a = { guid = "{TAKE-A}", source = { section_available = false, reversed = false } }
+take_a_other = { guid = "{TAKE-A-OTHER}", source = { section_available = false, reversed = false } }
+take_b = { guid = "{TAKE-B}", source = { section_available = false, reversed = false } }
+take_b_other = { guid = "{TAKE-B-OTHER}", source = { section_available = false, reversed = false } }
 item_a = { guid = "{ITEM-A}", track = track_a, selected = false, takes = { take_a, take_a_other }, active = take_a }
 item_b = { guid = "{ITEM-B}", track = track_b, selected = true, takes = { take_b, take_b_other }, active = take_b }
 take_a.item = item_a
@@ -96,7 +96,7 @@ reaper.GetMediaItemTakeInfo_Value = function(take, key)
   return 0
 end
 reaper.GetMediaItemTake_Source = function(take) return take.source end
-reaper.PCM_Source_GetSectionInfo = function(source) return true, 0, 1, source.reversed end
+reaper.PCM_Source_GetSectionInfo = function(source) return source.section_available, 0, 1, source.reversed end
 reaper.UpdateItemInProject = function() return true end
 reaper.UpdateArrange = function() return true end
 reaper.Main_OnCommandEx = function(action_id, flag, project)
@@ -106,7 +106,10 @@ reaper.Main_OnCommandEx = function(action_id, flag, project)
   track_a.selected = true
   track_b.selected = false
   item_b.active = take_b_other
-  if action_mode == "toggle" then take_a.source.reversed = not take_a.source.reversed end
+  if action_mode == "toggle" then
+    take_a.source.section_available = true
+    take_a.source.reversed = not take_a.source.reversed
+  end
   return true
 end
 

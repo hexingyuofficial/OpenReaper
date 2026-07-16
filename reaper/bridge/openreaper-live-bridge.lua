@@ -6825,7 +6825,8 @@ local function d13_items_take_reverse_state(take)
   local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
   if not ok_source or not source then return nil end
   local ok_info, available, _, _, reversed = call_reaper("PCM_Source_GetSectionInfo", source)
-  if not ok_info or available ~= true then return nil end
+  if not ok_info then return nil end
+  if available ~= true then return false end
   return reversed == true or reversed == 1
 end
 
