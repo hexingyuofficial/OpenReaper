@@ -2191,13 +2191,16 @@ async function runPackagedDoctorFixture({
   try {
     if (provideReadResult) {
       let requestPath;
+      let request;
       try {
-        requestPath = await waitForFirstJsonFile(requestsDir, { attempts: 200, delayMs: 20 });
+        ({ requestPath, request } = await waitForFirstCompleteJsonRequest(requestsDir, {
+          attempts: 200,
+          delayMs: 20,
+        }));
       } catch (error) {
         const early = await runPromise;
         throw new Error(`Packaged doctor exited before read request: ${early.stderr || early.stdout || error.message}`);
       }
-      const request = JSON.parse(await readFile(requestPath, "utf8"));
       const bridge = new FakeFoundationBridge({ owner, generation });
       const result = bridge.dispatch(request);
       await writeFile(path.join(resultsDir, path.basename(requestPath)), `${JSON.stringify(result)}\n`, "utf8");
@@ -2245,6 +2248,25 @@ async function waitForFirstJsonFile(directory, { attempts = 200, delayMs = 20 } 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   throw new Error(`Timed out waiting for JSON request in ${directory}`);
+}
+
+async function waitForFirstCompleteJsonRequest(directory, { attempts = 200, delayMs = 20 } = {}) {
+  let lastParseError = null;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const entries = (await readdir(directory)).filter((name) => name.endsWith(".json")).sort();
+    if (entries.length > 0) {
+      const requestPath = path.join(directory, entries[0]);
+      try {
+        return { requestPath, request: JSON.parse(await readFile(requestPath, "utf8")) };
+      } catch (error) {
+        lastParseError = error;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(
+    `Timed out waiting for complete JSON request in ${directory}: ${lastParseError?.message ?? "no request file"}`,
+  );
 }
 
 async function clearDirectoryEntries(directory) {
