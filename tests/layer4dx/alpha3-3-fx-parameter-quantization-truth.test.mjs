@@ -99,4 +99,36 @@ updated, mode = e2_fx_parameter_readback_matches(0.4, "1/4", 0.375, "1/4", 0.000
 assert(updated == true and mode == "native_discrete_format")
 `);
   });
+
+  it("infers only stable low-cardinality native format plateaus when step metadata is absent", () => {
+    runLua(`
+local owner = {}
+local mode = "toggle"
+reaper = {
+  TrackFX_FormatParamValueNormalized = function(actual_owner, slot, param, value)
+    assert(actual_owner == owner and slot == 2 and param == 7)
+    if mode == "toggle" then
+      return true, value >= 0.5 and "On" or "Off"
+    end
+    if mode == "constant" then
+      return true, "Same"
+    end
+    if mode == "high_cardinality" then
+      return true, string.format("%.3f", value)
+    end
+    if mode == "isolated" then
+      return true, math.abs(value - 0.5) < 0.000001 and "Target" or string.format("%.3f", value)
+    end
+    return false, ""
+  end,
+}
+assert(e2_fx_infer_native_discrete_format("track", owner, 2, 7, "On") == true)
+mode = "constant"
+assert(e2_fx_infer_native_discrete_format("track", owner, 2, 7, "Same") == false)
+mode = "high_cardinality"
+assert(e2_fx_infer_native_discrete_format("track", owner, 2, 7, "0.500") == false)
+mode = "isolated"
+assert(e2_fx_infer_native_discrete_format("track", owner, 2, 7, "Target") == false)
+`);
+  });
 });

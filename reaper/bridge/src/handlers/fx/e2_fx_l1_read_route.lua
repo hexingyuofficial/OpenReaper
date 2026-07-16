@@ -467,6 +467,45 @@ local function e2_fx_read_param_step_sizes(owner_kind, owner, slot_index, param_
   }
 end
 
+local function e2_fx_infer_native_discrete_format(
+  owner_kind,
+  owner,
+  slot_index,
+  param_index,
+  target_formatted_value
+)
+  if type(target_formatted_value) ~= "string" or target_formatted_value == "" then
+    return false
+  end
+  local unique = {}
+  local unique_count = 0
+  local target_count = 0
+  local sample_intervals = 32
+  for sample_index = 0, sample_intervals do
+    local formatted = e2_fx_format_param_normalized(
+      owner_kind,
+      owner,
+      slot_index,
+      param_index,
+      sample_index / sample_intervals
+    )
+    if type(formatted) ~= "string" or formatted == "" then
+      return false
+    end
+    if not unique[formatted] then
+      unique[formatted] = true
+      unique_count = unique_count + 1
+      if unique_count > 16 then
+        return false
+      end
+    end
+    if formatted == target_formatted_value then
+      target_count = target_count + 1
+    end
+  end
+  return unique_count >= 2 and target_count >= 2
+end
+
 local function e2_fx_parameter_readback_matches(
   requested_normalized_value,
   requested_formatted_value,
@@ -1184,6 +1223,18 @@ local function set_fx_parameter_normalized(request)
   local values = e2_fx_read_param_value(owner_kind, owner, slot_index, param_index)
   local readback_normalized = e2_fx_read_param_normalized(owner_kind, owner, slot_index, param_index)
   local readback_formatted_value = e2_fx_read_param_formatted(owner_kind, owner, slot_index, param_index)
+  if step_sizes.is_discrete ~= true
+      and type(requested_formatted_value) == "string"
+      and requested_formatted_value == readback_formatted_value
+      and e2_fx_infer_native_discrete_format(
+        owner_kind,
+        owner,
+        slot_index,
+        param_index,
+        requested_formatted_value
+      ) then
+    step_sizes.is_discrete = true
+  end
   local updated, verification_mode = e2_fx_parameter_readback_matches(
     normalized_value,
     requested_formatted_value,
