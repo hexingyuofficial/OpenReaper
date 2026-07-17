@@ -27,9 +27,17 @@ import {
   attachAlpha3_3B1AgentContextProductMetadata,
   createAlpha3_3B1AgentContextMacroGuide,
 } from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
+import {
+  createOpenReaperMcpInitializationInstructions,
+  OPENREAPER_AGENT_FIRST_ROUND_FLOW,
+  OPENREAPER_AGENT_START_HERE_DOCUMENT,
+  OPENREAPER_PUBLIC_TOOL_IDS,
+} from "./openreaper-agent-start-here-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
+const TOOL_SURFACE = OPENREAPER_PUBLIC_TOOL_IDS;
+const AGENT_START_HERE_HINT = `Follow ${OPENREAPER_AGENT_START_HERE_DOCUMENT} (MCP initialization instructions): ${OPENREAPER_AGENT_FIRST_ROUND_FLOW}. Macro-first; full manuals only on exact ids.`;
 
 async function main() {
   const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
@@ -63,10 +71,13 @@ async function main() {
       : { opted_in: false },
   });
   const recipeDiscovery = createDiscoveryCatalog({ recipes: [] });
+  const initializationInstructions = createOpenReaperMcpInitializationInstructions({
+    package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
+  });
 
   process.stderr.write(
     `[openreaper-mcp] ${KERNEL}\n` +
-      `[openreaper-mcp] tools=ping,get_state,list_templates,list_recipes,call_template\n` +
+      `[openreaper-mcp] tools=${TOOL_SURFACE.join(",")}\n` +
       `[openreaper-mcp] live_bridge_configured=${liveBridge.configured}\n` +
       `[openreaper-mcp] project_index=${projectIndexRuntime?.status?.().lifecycle ?? "not_configured"}\n`,
   );
@@ -74,11 +85,13 @@ async function main() {
   const server = new McpServer({
     name: "openreaper",
     version: VERSION,
+  }, {
+    instructions: initializationInstructions,
   });
 
   server.tool(
     "ping",
-    "Check whether the OpenReaper MCP server is loaded and whether a live bridge is configured.",
+    `Check whether the OpenReaper MCP server is loaded and whether a live bridge is configured. ${AGENT_START_HERE_HINT}`,
     {},
     async () => {
       const runtimeReadiness = await composeAlpha3_2B3RuntimeDoctorReadiness({
@@ -90,7 +103,7 @@ async function main() {
         product: "OpenReaper",
         kernel: KERNEL,
         version: VERSION,
-        tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
+        tools: [...TOOL_SURFACE],
         live_bridge_configured: liveBridge.configured,
         live_bridge: runtimeReadiness.bridge,
         runtime_readiness: runtimeReadiness,
@@ -101,12 +114,16 @@ async function main() {
           sqlite_is_truth: false,
           blockers: [{ code: "PROJECT_INDEX_NOT_CONFIGURED", message: "Use the managed package wrapper to configure the Project Index state root." }],
         },
-        user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect.",
+        user_reminder: "REAPER must be started through OpenReaper for live MCP execution to connect. See docs/AGENT_START_HERE.md and MCP initialization instructions.",
         agent_startup_guidance: createOpenReaperAgentStartupGuidance({
           package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
         }),
         product_surface: {
           agent_context_macro_guide: createAlpha3_3B1AgentContextMacroGuide(),
+          agent_start_here: {
+            document: OPENREAPER_AGENT_START_HERE_DOCUMENT,
+            first_round: OPENREAPER_AGENT_FIRST_ROUND_FLOW,
+          },
         },
       });
     },
@@ -114,7 +131,7 @@ async function main() {
 
   server.tool(
     "list_templates",
-    "List OpenReaper runtime actions plus exact-id Alpha3.3 Macro manuals. Check capability truth before call_template.",
+    `List OpenReaper runtime actions plus exact-id Alpha3.3 Macro manuals. Check capability truth before call_template. ${AGENT_START_HERE_HINT}`,
     {
       surface: z.enum(["executable", "catalog"]).optional(),
       ids: z.array(z.string()).optional(),
@@ -133,7 +150,7 @@ async function main() {
 
   server.tool(
     "list_recipes",
-    "List OpenReaper recipe contracts. Recipes are agent-readable plans, not server-executed tools.",
+    `List OpenReaper recipe contracts. Recipes are agent-readable plans, not server-executed tools. ${AGENT_START_HERE_HINT}`,
     {
       ids: z.array(z.string()).optional(),
       fields: z.array(z.string()).optional(),
@@ -152,7 +169,7 @@ async function main() {
 
   server.tool(
     "call_template",
-    "Run one accepted runtime-bound Template or registered executable Macro program. Legacy Macro ids return typed replacement guidance; contract-only guide ids are rejected and no hidden recipe executor is exposed.",
+    `Run one accepted runtime-bound Template or registered executable Macro program. Legacy Macro ids return typed replacement guidance; contract-only guide ids are rejected and no hidden recipe executor is exposed. ${AGENT_START_HERE_HINT}`,
     {
       id: z.string().optional(),
       name: z.string().optional(),
@@ -184,7 +201,7 @@ async function main() {
 
   server.tool(
     "get_state",
-    "Read bounded OpenReaper state. Alpha package supports artifact reads when OPENREAPER_ARTIFACT_ROOT is configured.",
+    `Read bounded OpenReaper state. Alpha package supports artifact reads when OPENREAPER_ARTIFACT_ROOT is configured. Use cursor/budget recovery and artifact get_state when public responses truncate; see docs/AGENT_START_HERE.md.`,
     {
       scope: z.string().optional(),
       artifact_ref: z.string().optional(),
@@ -207,7 +224,7 @@ async function main() {
             : "This alpha stdio server reserves get_state for bounded artifact reads; inspect live project state with executable macro.project.inspect or macro.project.query through call_template.",
           recoverable: true,
         },
-        user_reminder: "Use call_template with macro.project.inspect or macro.project.query for live project state; use get_state with scope=artifact only for artifact refs.",
+        user_reminder: "Use call_template with macro.project.inspect or macro.project.query for live project state; use get_state with scope=artifact only for artifact refs. Truncation is not knowledge loss: follow cursor/budget/artifact recovery in docs/AGENT_START_HERE.md.",
       }, true);
     },
   );

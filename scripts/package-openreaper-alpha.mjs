@@ -290,6 +290,21 @@ async function copyOpenReaperKernel() {
     await mkdir(path.join(target, "scripts"), { recursive: true });
     await cp(path.join(repoRoot, "scripts", "start-openreaper-alpha3.mjs"), path.join(target, "scripts", "start-openreaper-alpha3.mjs"));
   });
+  await copyAgentStartHereDocument({
+    sourcePath: path.join(repoRoot, "docs", "AGENT_START_HERE.md"),
+    destinations: [
+      path.join(target, "docs", "AGENT_START_HERE.md"),
+      path.join(packageRoot, "docs", "AGENT_START_HERE.md"),
+    ],
+  });
+}
+
+async function copyAgentStartHereDocument({ sourcePath, destinations }) {
+  const source = await readFile(sourcePath);
+  for (const destination of destinations) {
+    await mkdir(path.dirname(destination), { recursive: true });
+    await writeFile(destination, source);
+  }
 }
 
 async function copyVitalAgentCompanion() {
@@ -372,6 +387,12 @@ What this package does:
 - creates the managed render root ~/.openreaper/current/session/renders and reuses it for MCP/start sessions
 - provides ~/.openreaper/current/bin/openreaper-start for REAPER sessions that MCP can connect to
 - provides companion MCP server "vital-agent-mcp" for Vital planning and OpenReaper handoff plans
+
+Agent entry (unique):
+  docs/AGENT_START_HERE.md
+Also shipped byte-identical at:
+  vendor/openreaper-kernel/docs/AGENT_START_HERE.md
+MCP initialization instructions are projected from that document's compact marked section. Read it first: ping -> list_templates with the user's original query -> exact-id expansion -> call_template -> live readback. Macro-first; no product bypass.
 
 Important:
 REAPER must be started through OpenReaper for MCP to connect. Normal double-click REAPER launches are not OpenReaper MCP sessions.

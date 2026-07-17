@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { readEvidenceEvents, readEvidenceSummary } from "../../scripts/lib/alpha3-4-harness-evidence-v1.mjs";
-import { INSTALLED_CANARY_BUDGET, runInstalledWrapperCanary } from "../../scripts/smoke-alpha3-4-harness-installed-canary.mjs";
+import {
+  INSTALLED_CANARY_BUDGET,
+  runInstalledWrapperCanary,
+} from "../../scripts/smoke-alpha3-4-harness-installed-canary.mjs";
+import {
+  createOpenReaperMcpInitializationInstructions,
+} from "../../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
 
 test("installed-wrapper canary keeps inline values at 2 KiB while allowing the bounded response envelope", () => {
   assert.deepEqual(INSTALLED_CANARY_BUDGET, {
@@ -23,7 +29,9 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
   await writeFile(sourceProject, "RPP fixture", "utf8");
   const requests = [];
   let closed = false;
+  const instructions = createOpenReaperMcpInitializationInstructions();
   const client = {
+    getInstructions() { return instructions; },
     async callTool(request) {
       requests.push(request);
       if (request.name === "ping") return jsonResponse(runtimePing());
@@ -43,6 +51,8 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
     assert.equal(report.status, "passed");
     assert.equal(requests.length, 2);
     assert.deepEqual(requests.map((request) => request.name), ["ping", "call_template"]);
+    assert.equal(report.initialization_instructions.utf8_bytes, Buffer.byteLength(instructions, "utf8"));
+    assert.equal(report.initialization_instructions.macro_ids.length, 15);
     assert.equal(closed, true);
     assert.equal(report.provenance.transport, "installed_wrapper_only");
     assert.equal(report.provenance.package_provenance.contract, "openreaper.package.provenance.v1");
@@ -76,6 +86,7 @@ test("installed-wrapper canary fails if the supposedly read-only run changes the
   await writeFile(sourceProject, "RPP fixture", "utf8");
   try {
     const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
+      getInstructions() { return createOpenReaperMcpInitializationInstructions(); },
       async callTool({ name }) {
         if (name === "ping") return jsonResponse(runtimePing());
         await writeFile(sourceProject, "unexpected mutation", "utf8");
@@ -102,6 +113,7 @@ test("installed-wrapper canary records a failed read and closes the injected cli
   let closeCount = 0;
   try {
     const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
+      getInstructions() { return createOpenReaperMcpInitializationInstructions(); },
       async callTool({ name }) {
         if (name === "ping") return jsonResponse(runtimePing());
         return jsonResponse({ ok: true, result: { summary: { path: "/wrong/project.RPP" } } });
@@ -150,6 +162,7 @@ test("canary source statically uses only the installed wrapper transport and the
   assert.doesNotMatch(source, /process\.execPath|root_override|rootOverrides|raw Lua|shell/u);
   assert.equal((source.match(/tool: "ping"/gu) ?? []).length, 1);
   assert.equal((source.match(/template\.project\.read_summary/gu) ?? []).length, 1);
+  assert.match(source, /getInstructions/u);
 });
 
 test("installed-wrapper canary rejects a ping that does not identify the OpenReaper kernel", async () => {
@@ -160,6 +173,7 @@ test("installed-wrapper canary rejects a ping that does not identify the OpenRea
   await writeFile(sourceProject, "RPP fixture", "utf8");
   try {
     const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
+      getInstructions() { return createOpenReaperMcpInitializationInstructions(); },
       async callTool() { return jsonResponse({ ok: true, product: "Other", kernel: "other", version: "0.3.0-alpha" }); },
       async close() {},
     }) });

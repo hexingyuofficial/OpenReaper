@@ -1,3 +1,8 @@
+import {
+  OPENREAPER_AGENT_FIRST_ROUND_FLOW,
+  OPENREAPER_AGENT_START_HERE_DOCUMENT,
+} from "./openreaper-agent-start-here-v1.mjs";
+
 export const OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT = "openreaper.alpha3_1.agent_startup_guidance.v1";
 
 export const OPENREAPER_DEFAULT_INSTALL_ROOT = "~/.openreaper/current";
@@ -11,7 +16,9 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
   contract: OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT,
   mode: "agent_startup_guidance",
   product_goal: "Tell a zero-premise agent how to start or reconnect a REAPER session that OpenReaper MCP can use.",
-  exposed_through: ["ping", "list_templates.product_surface"],
+  agent_start_here: OPENREAPER_AGENT_START_HERE_DOCUMENT,
+  first_round_flow: OPENREAPER_AGENT_FIRST_ROUND_FLOW,
+  exposed_through: ["ping", "list_templates.product_surface", "mcp.instructions"],
   tool_surface: {
     added_tools: 0,
     mcp_server_name: "openreaper",
@@ -59,7 +66,9 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
     contract: OPENREAPER_AGENT_STARTUP_GUIDANCE_CONTRACT,
     mode: "agent_startup_guidance",
     status: "ready",
-    user_reminder: "Only REAPER sessions started through OpenReaper can use the OpenReaper MCP.",
+    user_reminder: "Only REAPER sessions started through OpenReaper can use the OpenReaper MCP. Follow docs/AGENT_START_HERE.md for the unique Agent entry, first-round Macro flow, and safety boundary.",
+    agent_start_here: OPENREAPER_AGENT_START_HERE_DOCUMENT,
+    first_round_flow: OPENREAPER_AGENT_FIRST_ROUND_FLOW,
     mcp_server_name: "openreaper",
     commands: {
       installed_start_reaper_for_mcp: OPENREAPER_INSTALLED_START_COMMAND,

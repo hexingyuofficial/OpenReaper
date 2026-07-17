@@ -5,12 +5,17 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { createEvidenceJournal, serializeError } from "./lib/alpha3-4-harness-evidence-v1.mjs";
+import {
+  OPENREAPER_FLAT_FIFTEEN_MACRO_IDS,
+} from "../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
 
 export const INSTALLED_CANARY_BUDGET = Object.freeze({
   max_response_bytes: 4_096,
   max_items: 50,
   max_inline_value_bytes: 2_048,
 });
+
+export const INSTALLED_CANARY_REQUIRED_MACROS = OPENREAPER_FLAT_FIFTEEN_MACRO_IDS;
 
 export async function connectInstalledWrapperCanary({ installedWrapper }) {
   assertAbsolute(installedWrapper, "installedWrapper");
@@ -22,6 +27,49 @@ export async function connectInstalledWrapperCanary({ installedWrapper }) {
     env: process.env,
   }));
   return client;
+}
+
+export function captureInstalledCanaryInstructions(client) {
+  if (!client || typeof client.getInstructions !== "function") {
+    throw canaryError("CANARY_INSTRUCTIONS_API_MISSING", "MCP client must expose getInstructions().");
+  }
+  const instructions = client.getInstructions();
+  if (typeof instructions !== "string" || instructions.trim() === "") {
+    throw canaryError("CANARY_INSTRUCTIONS_MISSING", "Installed wrapper did not publish MCP initialization instructions.");
+  }
+  const utf8Bytes = Buffer.byteLength(instructions, "utf8");
+  if (utf8Bytes > 16_384) {
+    throw canaryError("CANARY_INSTRUCTIONS_BUDGET_EXCEEDED", "Initialization instructions exceed the 16 KiB UTF-8 budget.", {
+      utf8_bytes: utf8Bytes,
+      max_utf8_bytes: 16_384,
+    });
+  }
+  for (const macroId of INSTALLED_CANARY_REQUIRED_MACROS) {
+    if (!instructions.includes(macroId)) {
+      throw canaryError("CANARY_INSTRUCTIONS_MACRO_MISSING", `Initialization instructions omit Macro ${macroId}.`, { macro_id: macroId });
+    }
+  }
+  for (const phrase of [
+    "ping",
+    "list_templates",
+    "call_template",
+    "exact-id",
+    "live",
+    "Macro-first",
+    "cursor",
+    "get_state",
+    "openreaper-start",
+  ]) {
+    if (!instructions.includes(phrase)) {
+      throw canaryError("CANARY_INSTRUCTIONS_FLOW_MISSING", `Initialization instructions omit required phrase: ${phrase}.`, { phrase });
+    }
+  }
+  return {
+    instructions,
+    utf8_bytes: utf8Bytes,
+    max_utf8_bytes: 16_384,
+    macro_ids: [...INSTALLED_CANARY_REQUIRED_MACROS],
+  };
 }
 
 export async function runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory = connectInstalledWrapperCanary, evidenceSink = null } = {}) {
@@ -70,6 +118,14 @@ export async function runInstalledWrapperCanary({ installedWrapper, sourceProjec
     journal.setProvenance?.({ package_provenance: report.provenance.package_provenance });
     report.source_hashes.before = await sha256(projectPath);
     client = await connectFactory({ installedWrapper: wrapperPath, sourceProject: projectPath, clientName: "canary" });
+    report.initialization_instructions = captureInstalledCanaryInstructions(client);
+    journal.setProvenance?.({
+      initialization_instructions: {
+        utf8_bytes: report.initialization_instructions.utf8_bytes,
+        max_utf8_bytes: report.initialization_instructions.max_utf8_bytes,
+        macro_count: report.initialization_instructions.macro_ids.length,
+      },
+    });
     const ping = await canaryCall({ journal, client, step: "installed-wrapper-ping", tool: "ping", args: {}, report });
     assertCanary(ping?.ok === true, "CANARY_PING_NOT_OK", { response: ping });
     assertCanary(
@@ -97,6 +153,7 @@ export async function runInstalledWrapperCanary({ installedWrapper, sourceProjec
     assertCanary(typeof currentPath === "string" && path.isAbsolute(currentPath) && path.resolve(currentPath) === projectPath, "CANARY_PROJECT_PATH_MISMATCH", { expected: projectPath, observed: currentPath });
     const observedChanges = read?.result?.changes ?? [];
     assertCanary(Array.isArray(observedChanges) && observedChanges.length === 0, "CANARY_READ_REPORTED_MUTATION", { observed_changes: observedChanges });
+    assertCanary(report.calls.length === 2, "CANARY_TOOL_CALL_COUNT_INVALID", { call_count: report.calls.length });
     report.status = "passed";
     report.ok = true;
   } catch (error) {

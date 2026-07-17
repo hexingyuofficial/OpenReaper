@@ -274,11 +274,26 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   if (id === "macro.midi.apply") {
     const createClipReadiness = canonical.action_manual.required_readiness ?? [];
     const createClipRecovery = canonical.action_manual.recovery_steps ?? [];
+    const createClipExamples = Array.isArray(canonical.action_manual.examples)
+      ? canonical.action_manual.examples.map((entry) => {
+        if (!entry || typeof entry !== "object") return entry;
+        const input = entry.input && typeof entry.input === "object" ? entry.input : {};
+        if (input.mode !== undefined) return entry;
+        return {
+          ...entry,
+          input: {
+            mode: "create_clips",
+            ...input,
+          },
+        };
+      })
+      : [];
+    const createClipInputShape = canonical.action_manual.input_shape;
     const editing = createAlpha3_3MidiApplyExactManual().action_manual;
     canonical.action_manual.input_shape = {
-      mode: "create_clips | edit_notes | quantize | write_cc; create_clips remains the compatibility mode, while existing-Take modes require operations[].",
-      create_clips: canonical.action_manual.input_shape,
+      create_clips: createClipInputShape,
       ...editing.input_shape,
+      mode: "create_clips | edit_notes | quantize | write_cc; create_clips remains the compatibility mode, while existing-Take modes require operations[].",
     };
     canonical.action_manual.when_to_use = [
       "Use create_clips for one new bounded MIDI Item, edit_notes for indexed existing-note fields, quantize for existing notes, and write_cc for PPQ CC insertion.",
@@ -295,6 +310,10 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     canonical.action_manual.common_blockers = editing.common_blockers;
     canonical.action_manual.recovery_steps = [...createClipRecovery, ...editing.recovery_steps];
     canonical.action_manual.dry_run_shape = editing.dry_run_shape;
+    canonical.action_manual.examples = [
+      ...createClipExamples,
+      ...(Array.isArray(editing.examples) ? editing.examples : []),
+    ];
   }
   if (id === "macro.routing.apply") {
     canonical.action_manual.when_to_use = [

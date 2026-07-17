@@ -61,8 +61,14 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     assert.equal(guide.requested_expansions.items.every((entry) => entry.runnable === true), true);
     assert.match(
       guide.requested_expansions.items[0].action_manual.input_shape.mode,
+      /create_clips/i,
+    );
+    assert.match(
+      guide.requested_expansions.items[0].action_manual.input_shape.mode,
       /edit_notes/i,
     );
+    const createClipExample = guide.requested_expansions.items[0].action_manual.examples.find((entry) => entry?.input?.notes);
+    assert.equal(createClipExample.input.mode, "create_clips");
     assert.deepEqual(
       guide.requested_expansions.items[3].action_manual.input_shape.profile,
       "quick | audio | timing | full; defaults to quick.",
