@@ -7,7 +7,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { createEvidenceJournal, serializeError } from "./lib/alpha3-4-harness-evidence-v1.mjs";
 
 export const INSTALLED_CANARY_BUDGET = Object.freeze({
-  max_response_bytes: 2_048,
+  max_response_bytes: 4_096,
   max_items: 50,
   max_inline_value_bytes: 2_048,
 });

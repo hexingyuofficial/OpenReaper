@@ -7,6 +7,14 @@ import test from "node:test";
 import { readEvidenceEvents, readEvidenceSummary } from "../../scripts/lib/alpha3-4-harness-evidence-v1.mjs";
 import { INSTALLED_CANARY_BUDGET, runInstalledWrapperCanary } from "../../scripts/smoke-alpha3-4-harness-installed-canary.mjs";
 
+test("installed-wrapper canary keeps inline values at 2 KiB while allowing the bounded response envelope", () => {
+  assert.deepEqual(INSTALLED_CANARY_BUDGET, {
+    max_response_bytes: 4_096,
+    max_items: 50,
+    max_inline_value_bytes: 2_048,
+  });
+});
+
 test("installed-wrapper canary performs exactly ping plus one bounded project read, closes the client, and preserves the source hash", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-canary-"));
   const installedWrapper = await writeInstalledFixture(root);
@@ -51,7 +59,7 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
     assert.deepEqual(report.rendered_outputs, []);
     const events = await readEvidenceEvents(evidenceRoot);
     assert.deepEqual(events.map((event) => [event.tool, event.requested_id, event.status]), [["ping", null, "success"], ["call_template", "template.project.read_summary", "success"]]);
-    assert.equal(events[1].budget.max_response_bytes, 2048);
+    assert.equal(events[1].budget.max_response_bytes, 4096);
     const summary = await readEvidenceSummary(evidenceRoot);
     assert.equal(summary.client_close.ok, true);
     assert.equal(summary.error, null);
