@@ -48,6 +48,14 @@ describe("Alpha3.2-E routing apply planner", () => {
     const plan = planAlpha3_2ERoutingApplyMacro({ ...input, dry_run: false });
     assert.equal(plan.ok, true);
     assert.deepEqual(plan.preflight_requests.map((request) => request.id), ["template.routing.read_project_routing_graph"]);
+    assert.deepEqual(plan.preflight_requests[0].input, {
+      include_master_parent: true,
+      include_tracks: true,
+      max_tracks: 128,
+      max_edges: 256,
+      resolve_track_refs: ["track:guid:{SRC}", "track:guid:{DST}"],
+      state_track_refs: ["track:guid:{SRC}"],
+    });
     assert.deepEqual(plan.mutation_requests.map((request) => request.id), [
       "template.routing.create_track_send",
       "template.routing.set_send_volume",
@@ -63,7 +71,22 @@ describe("Alpha3.2-E routing apply planner", () => {
     assert.equal(plan.child_requests.length, plan.preflight_requests.length + plan.mutation_requests.length + plan.readback_requests.length);
   });
 
-  it("keeps complete internal readback coverage when fifty sends affect one hundred tracks", () => {
+  it("keeps route-only preflight compact and resolves existing Sends from graph edges", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [{ id: "send_a", action: "update", send_ref: "send:track:guid:{SRC}:0", volume: 1 }],
+      dry_run: false,
+    });
+
+    assert.equal(plan.ok, true);
+    assert.deepEqual(plan.preflight_requests[0].input, {
+      include_master_parent: false,
+      include_tracks: false,
+      max_tracks: 128,
+      max_edges: 256,
+    });
+  });
+
+  it("keeps complete internal readback coverage when fifty sends affect fifty source tracks", () => {
     const routes = Array.from({ length: 50 }, (_, index) => ({
       id: `send_${index + 1}`,
       action: "create",
@@ -73,9 +96,9 @@ describe("Alpha3.2-E routing apply planner", () => {
     const plan = planAlpha3_2ERoutingApplyMacro({ routes, dry_run: false });
 
     assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
-    assert.equal(plan.readback_requests.length, 100);
+    assert.equal(plan.readback_requests.length, 50);
     assert.equal(plan.readback_requests[0].refs.track_ref, "track:guid:{SRC-1}");
-    assert.equal(plan.readback_requests.at(-1).refs.track_ref, "track:guid:{DST-50}");
+    assert.equal(plan.readback_requests.at(-1).refs.track_ref, "track:guid:{SRC-50}");
   });
 
   it("emits exact internal send removals in descending source-slot order", () => {

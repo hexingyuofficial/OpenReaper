@@ -27,6 +27,8 @@ const READ_SUMMARY_ID = "template.project.read_summary";
 const READ_DIRTY_ID = "template.project.read_dirty_state";
 const READ_RENDER_SETTINGS_ID = "template.render.read_settings";
 const OBSERVATION_BUNDLE_ID = "template.project.create_observation_bundle";
+const ITEM_OVERVIEW_ID = "template.project.read_track_item_overview";
+const ROUTING_GRAPH_ID = "template.routing.read_project_routing_graph";
 const AUTOMATION_INVENTORY_ID = "template.automation.list_project_envelopes";
 const MAX_HYDRATION_CALLS = 16;
 const MAX_EXACT_SELECTOR_REFS = 100;
@@ -35,6 +37,8 @@ const MINIMUM_PUBLIC_QUERY_BUDGET = 2_048;
 const PROJECT_INDEX_HYDRATION_TRACK_LIMIT = 32;
 const PROJECT_INDEX_HYDRATION_AUTOMATION_LIMIT = 32;
 const PROJECT_INDEX_MAX_TRACK_CHUNKS = 128;
+const PROJECT_INDEX_MAX_ITEM_PAGES = 128;
+const PROJECT_INDEX_MAX_ROUTING_PAGES = 128;
 const PROJECT_INDEX_MAX_AUTOMATION_PAGES = 128;
 const PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS = 2;
 const PROJECT_INDEX_HYDRATION_BUDGET = Object.freeze({
@@ -762,10 +766,43 @@ async function hydrateForQuery({
   }
   const completeTracks = request.input?.entity === "tracks"
     && (forceColdBundle || forceRefresh || plan.ok !== true);
+  const completeItems = request.input?.entity === "items"
+    && exactSelectorRequestedRefs(request).length === 0
+    && (forceColdBundle || forceRefresh || plan.ok !== true);
+  const completeRouting = request.input?.entity === "routing"
+    && (forceColdBundle || forceRefresh || plan.ok !== true);
   const completeAutomation = request.input?.entity === "automation"
     && (forceColdBundle || forceRefresh || plan.ok !== true);
   if (completeTracks) {
     const cold = await runCompleteTrackRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision,
+      now,
+    });
+    if (!cold.ok) return cold;
+    executions.push(...cold.executions);
+    artifactRefs.push(...cold.artifactRefs);
+    evidenceRefs.push(...cold.evidenceRefs);
+    logicalRefresh = cold.logicalRefresh ?? null;
+    revisionProbeCount += cold.revisionProbeCount ?? 0;
+  } else if (completeItems) {
+    const cold = await runCompleteItemRefresh({
+      request,
+      projectIndexRuntime,
+      executeAtomic,
+      expectedRevision,
+      now,
+    });
+    if (!cold.ok) return cold;
+    executions.push(...cold.executions);
+    artifactRefs.push(...cold.artifactRefs);
+    evidenceRefs.push(...cold.evidenceRefs);
+    logicalRefresh = cold.logicalRefresh ?? null;
+    revisionProbeCount += cold.revisionProbeCount ?? 0;
+  } else if (completeRouting) {
+    const cold = await runCompleteRoutingRefresh({
       request,
       projectIndexRuntime,
       executeAtomic,
@@ -1146,6 +1183,224 @@ async function runCompleteTrackRefresh({
   return hydrationFailure(
     "PROJECT_INDEX_LOGICAL_REFRESH_RETRY_EXHAUSTED",
     "Complete track hydration exhausted its bounded retry policy without a stable REAPER revision.",
+    [],
+    { executions, artifactRefs, evidenceRefs },
+  );
+}
+
+async function runCompleteItemRefresh(options) {
+  return runCompleteDirectLogicalRefresh({
+    ...options,
+    scope: "items",
+    templateId: ITEM_OVERVIEW_ID,
+    maxPages: PROJECT_INDEX_MAX_ITEM_PAGES,
+    cursorField: "item_cursor",
+    requestForCursor: itemInventoryRequest,
+    pageFacts: itemPageFacts,
+    pageLabel: "Item inventory",
+    countField: "declared_item_count",
+  });
+}
+
+async function runCompleteRoutingRefresh(options) {
+  return runCompleteDirectLogicalRefresh({
+    ...options,
+    scope: "routing",
+    templateId: ROUTING_GRAPH_ID,
+    maxPages: PROJECT_INDEX_MAX_ROUTING_PAGES,
+    cursorField: "edge_cursor",
+    requestForCursor: routingInventoryRequest,
+    pageFacts: routingPageFacts,
+    pageLabel: "Routing inventory",
+    countField: "declared_send_count",
+  });
+}
+
+async function runCompleteDirectLogicalRefresh({
+  request,
+  projectIndexRuntime,
+  executeAtomic,
+  expectedRevision,
+  now = () => new Date(),
+  scope,
+  templateId,
+  maxPages,
+  cursorField,
+  requestForCursor,
+  pageFacts,
+  pageLabel,
+  countField,
+}) {
+  if (
+    typeof projectIndexRuntime?.beginLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.commitLogicalRefresh !== "function"
+    || typeof projectIndexRuntime?.abortLogicalRefresh !== "function"
+  ) {
+    return hydrationFailure(
+      "PROJECT_INDEX_LOGICAL_REFRESH_UNAVAILABLE",
+      `Complete ${pageLabel} hydration requires the managed Project Index logical-refresh transaction runtime.`,
+    );
+  }
+  if (typeof expectedRevision !== "string") {
+    return hydrationFailure(
+      "PROJECT_INDEX_REFRESH_REVISION_REQUIRED",
+      `Complete ${pageLabel} hydration requires a validated REAPER revision before paging.`,
+    );
+  }
+
+  const executions = [];
+  const artifactRefs = [];
+  const evidenceRefs = [];
+  let revisionProbeCount = 0;
+  let attemptRevision = expectedRevision;
+
+  for (let attempt = 1; attempt <= PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS; attempt += 1) {
+    const begun = projectIndexRuntime.beginLogicalRefresh({
+      scopes: [scope],
+      expected_revision: attemptRevision,
+      observed_at: safeNowIso(now),
+    });
+    if (begun?.ok !== true || typeof begun.transaction_id !== "string") {
+      return hydrationFailure(
+        begun?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_BEGIN_FAILED",
+        begun?.blockers?.[0]?.message ?? `Project Index logical ${pageLabel} refresh could not begin.`,
+        begun?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const transactionId = begun.transaction_id;
+    const attemptExecutionStart = executions.length;
+    let cursor = 0;
+    let declaredCount = null;
+    let completed = false;
+
+    for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+      const child = requestForCursor(cursor);
+      const execution = await executeAtomic({
+        id: child.id,
+        input: child.input,
+        refs: child.refs,
+        context: request.context,
+        budget: PROJECT_INDEX_HYDRATION_BUDGET,
+        observeProjectIndex: true,
+        projectIndexObservationContext: {
+          logical_refresh: {
+            transaction_id: transactionId,
+            scope,
+            [cursorField]: cursor,
+            revision: attemptRevision,
+          },
+        },
+      });
+      executions.push(execution);
+      evidenceRefs.push(...executionEvidenceRefs(execution));
+      artifactRefs.push(...executionArtifactRefs(execution));
+      if (execution?.ok !== true || execution?.result?.project_index_observation?.ok !== true) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: `${scope}_page_observation_failed`, observed_at: safeNowIso(now) });
+        const failed = execution?.ok === true
+          ? {
+              error: {
+                code: execution.result?.project_index_observation?.blockers?.[0]?.code ?? "PROJECT_INDEX_OBSERVATION_FAILED",
+                message: `A ${pageLabel} page was not accepted into logical-refresh staging.`,
+              },
+              blockers: execution.result?.project_index_observation?.blockers ?? [],
+            }
+          : readFailure(child.id, execution);
+        return hydrationFailure(failed.error.code, failed.error.message, failed.blockers, { executions, artifactRefs, evidenceRefs });
+      }
+
+      const facts = pageFacts(executionReadback(execution), cursor, declaredCount);
+      if (!facts.ok) {
+        projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: facts.code, observed_at: safeNowIso(now) });
+        return hydrationFailure(facts.code, facts.message, [facts.blocker], { executions, artifactRefs, evidenceRefs });
+      }
+      declaredCount = facts.total_count;
+      if (!facts.truncated) {
+        completed = true;
+        break;
+      }
+      cursor = facts.next_cursor;
+    }
+
+    if (!completed) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: `${scope}_page_limit_exceeded`, observed_at: safeNowIso(now) });
+      return hydrationFailure(
+        `PROJECT_INDEX_${scope.toUpperCase()}_PAGE_LIMIT_EXCEEDED`,
+        `Complete ${pageLabel} hydration exceeded ${maxPages} hidden pages and was not committed.`,
+        [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const postRevision = await runRevisionProbe({ request, projectIndexRuntime, executeAtomic });
+    revisionProbeCount += 1;
+    evidenceRefs.push(...(postRevision.evidenceRefs ?? []));
+    artifactRefs.push(...(postRevision.artifactRefs ?? []));
+    if (!postRevision.ok) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "post_revision_probe_failed", observed_at: safeNowIso(now) });
+      return hydrationFailure(postRevision.error.code, postRevision.error.message, postRevision.blockers, { executions, artifactRefs, evidenceRefs });
+    }
+
+    const observedRevision = revisionKey(postRevision);
+    if (observedRevision !== attemptRevision) {
+      projectIndexRuntime.abortLogicalRefresh({ transaction_id: transactionId, reason: "revision_changed_during_refresh", observed_at: safeNowIso(now) });
+      if (attempt < PROJECT_INDEX_LOGICAL_REFRESH_ATTEMPTS && typeof observedRevision === "string") {
+        attemptRevision = observedRevision;
+        continue;
+      }
+      return hydrationFailure(
+        "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+        `REAPER changed while ${pageLabel} pages were being read; the mixed snapshot was discarded.`,
+        [{
+          code: "PROJECT_INDEX_REFRESH_REVISION_CHANGED",
+          message: `Expected ${attemptRevision}, observed ${String(observedRevision)} after hydration.`,
+          recoverable: true,
+        }],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+
+    const committed = projectIndexRuntime.commitLogicalRefresh({
+      transaction_id: transactionId,
+      observed_revision: observedRevision,
+      observed_at: safeNowIso(now),
+    });
+    if (committed?.ok !== true) {
+      return hydrationFailure(
+        committed?.blockers?.[0]?.code ?? "PROJECT_INDEX_LOGICAL_REFRESH_COMMIT_FAILED",
+        committed?.blockers?.[0]?.message ?? `Complete ${pageLabel} hydration could not be committed atomically.`,
+        committed?.blockers ?? [],
+        { executions, artifactRefs, evidenceRefs },
+      );
+    }
+    return {
+      ok: true,
+      executions,
+      artifactRefs: unique(artifactRefs),
+      evidenceRefs: unique(evidenceRefs),
+      blockers: [],
+      error: null,
+      revisionProbeCount,
+      logicalRefresh: {
+        status: "committed",
+        transaction_id: transactionId,
+        attempt_count: attempt,
+        page_count: executions.length - attemptExecutionStart,
+        expected_revision: attemptRevision,
+        observed_revision: observedRevision,
+        [countField]: declaredCount,
+        applied_scopes: committed.applied_scopes ?? [scope],
+        row_counts: committed.row_counts ?? {},
+        coverage: committed.coverage ?? { [scope]: "complete" },
+      },
+      summary: `Merged ${executions.length - attemptExecutionStart} hidden ${pageLabel} page(s) and committed one complete logical scope.`,
+    };
+  }
+
+  return hydrationFailure(
+    "PROJECT_INDEX_LOGICAL_REFRESH_RETRY_EXHAUSTED",
+    `Complete ${pageLabel} hydration exhausted its bounded retry policy without a stable REAPER revision.`,
     [],
     { executions, artifactRefs, evidenceRefs },
   );
@@ -1992,6 +2247,39 @@ function coldObservationBundleRequest(trackCursor = 0) {
   };
 }
 
+function itemInventoryRequest(itemCursor = 0) {
+  return {
+    id: ITEM_OVERVIEW_ID,
+    input: {
+      max_tracks: 1,
+      max_items_per_track: 0,
+      max_items: 64,
+      max_selected_items: 1,
+      track_cursor: 0,
+      item_cursor: itemCursor,
+      include_selected_items: false,
+      include_track_items: false,
+    },
+    refs: [],
+    read_only: true,
+  };
+}
+
+function routingInventoryRequest(edgeCursor = 0) {
+  return {
+    id: ROUTING_GRAPH_ID,
+    input: {
+      max_tracks: 128,
+      max_edges: 32,
+      edge_cursor: edgeCursor,
+      include_tracks: false,
+      include_master_parent: false,
+    },
+    refs: [],
+    read_only: true,
+  };
+}
+
 function automationInventoryRequest(envelopeCursor = 0) {
   return {
     id: AUTOMATION_INVENTORY_ID,
@@ -2069,6 +2357,97 @@ function trackChunkFacts(readback, expectedCursor, priorTrackCount) {
     );
   }
   return { ok: true, track_count: trackCount, truncated: true, next_cursor: nextCursor };
+}
+
+function itemPageFacts(readback, expectedCursor, priorItemCount) {
+  return pagedInventoryFacts({
+    readback,
+    expectedCursor,
+    priorCount: priorItemCount,
+    rows: readback?.items,
+    totalCount: readback?.item_count,
+    returnedCount: readback?.returned_item_count,
+    truncated: readback?.items_truncated,
+    nextCursor: readback?.next_item_cursor,
+    coverageStatus: readback?.item_coverage_status,
+    internallyComplete: readback?.item_coverage?.internally_complete,
+    scopeFullyEnumerated: true,
+    noun: "Item",
+    codePrefix: "PROJECT_INDEX_ITEM",
+  });
+}
+
+function routingPageFacts(readback, expectedCursor, priorSendCount) {
+  return pagedInventoryFacts({
+    readback,
+    expectedCursor,
+    priorCount: priorSendCount,
+    rows: readback?.edges,
+    totalCount: readback?.total_edge_count,
+    returnedCount: readback?.returned_edge_count,
+    truncated: readback?.truncated,
+    nextCursor: readback?.next_edge_cursor,
+    coverageStatus: readback?.coverage_status,
+    internallyComplete: readback?.coverage?.internally_complete,
+    scopeFullyEnumerated: readback?.coverage?.track_truncated === false,
+    noun: "Routing Send",
+    codePrefix: "PROJECT_INDEX_ROUTING",
+  });
+}
+
+function pagedInventoryFacts({
+  expectedCursor,
+  priorCount,
+  rows,
+  totalCount,
+  returnedCount,
+  truncated,
+  nextCursor,
+  coverageStatus,
+  internallyComplete,
+  scopeFullyEnumerated,
+  noun,
+  codePrefix,
+}) {
+  const pageRows = Array.isArray(rows) ? rows : [];
+  const invalid = (suffix, message, details = {}) => {
+    const code = `${codePrefix}_${suffix}`;
+    return { ok: false, code, message, blocker: { code, message, recoverable: true, details } };
+  };
+  if (!Number.isInteger(totalCount) || totalCount < 0) {
+    return invalid("COUNT_INVALID", `A hidden ${noun} page did not report a non-negative live total.`);
+  }
+  if (priorCount !== null && totalCount !== priorCount) {
+    return invalid("COUNT_CHANGED", `The live ${noun} total changed between hidden pages.`, { expected_count: priorCount, observed_count: totalCount });
+  }
+  if (!Number.isInteger(returnedCount) || returnedCount < 0 || returnedCount !== pageRows.length) {
+    return invalid("RETURNED_COUNT_INVALID", `A hidden ${noun} page returned count did not match its canonical rows.`, { returned_count: returnedCount, row_count: pageRows.length });
+  }
+  if (typeof truncated !== "boolean" || internallyComplete !== true || scopeFullyEnumerated !== true) {
+    return invalid("COVERAGE_UNKNOWN", `A hidden ${noun} page did not prove complete internal REAPER enumeration.`, {
+      truncated,
+      coverage_status: coverageStatus,
+      internally_complete: internallyComplete,
+      scope_fully_enumerated: scopeFullyEnumerated,
+    });
+  }
+  const normalizedNext = nextCursor === null || nextCursor === undefined
+    ? null
+    : typeof nextCursor === "string" && /^(?:0|[1-9][0-9]*)$/u.test(nextCursor)
+      ? Number(nextCursor)
+      : Number.isInteger(nextCursor)
+        ? nextCursor
+        : null;
+  if (!truncated) {
+    if (normalizedNext !== null || coverageStatus !== "complete" || expectedCursor + returnedCount !== totalCount) {
+      return invalid("TERMINAL_PAGE_INVALID", `The terminal ${noun} page did not exactly close the declared live total.`, { expected_cursor: expectedCursor, returned_count: returnedCount, total_count: totalCount, next_cursor: nextCursor, coverage_status: coverageStatus });
+    }
+    return { ok: true, total_count: totalCount, truncated: false, next_cursor: null };
+  }
+  if (coverageStatus !== "paged" || !Number.isInteger(normalizedNext) || normalizedNext !== expectedCursor + returnedCount || normalizedNext > totalCount || returnedCount === 0) {
+    return invalid("CURSOR_INVALID", `A paged ${noun} read did not provide one continuous advancing cursor.`, { expected_cursor: expectedCursor, returned_count: returnedCount, total_count: totalCount, next_cursor: nextCursor, coverage_status: coverageStatus });
+  }
+  return { ok: true, total_count: totalCount, truncated: true, next_cursor: normalizedNext };
 }
 
 function automationPageFacts(readback, expectedCursor, priorEnvelopeCount) {

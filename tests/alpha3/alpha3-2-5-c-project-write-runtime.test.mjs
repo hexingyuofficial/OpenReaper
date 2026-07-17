@@ -33,7 +33,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(calls.some((call) => isWrite(call.id)), false);
   });
 
-  it("executes fixed routing dependencies, live-resolves refs, and verifies readback", async () => {
+  it("executes fixed routing dependencies, reuses live preflight refs, and verifies readback", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
@@ -53,7 +53,8 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
     assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(calls.some((call) => call.id === "template.routing.create_track_send"), true);
-    assert.equal(calls.some((call) => call.id === "template.routing.resolve_send_ref"), true);
+    assert.equal(calls.some((call) => call.id === "template.tracks.resolve_track_ref"), false);
+    assert.equal(calls.some((call) => call.id === "template.routing.resolve_send_ref"), false);
     assert.equal(calls.some((call) => call.id === "template.routing.read_track_routing"), true);
     assert.equal(calls.filter((call) => isWrite(call.id)).every((call) => !JSON.stringify(call.refs).includes("planned:")), true);
   });
@@ -67,7 +68,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
         }),
       },
-      executeAtomic: fakeAtomic(calls, { wrongTrackRef: "track:guid:{WRONG}" }),
+      executeAtomic: fakeAtomic(calls, { wrongTrackRef: "track:guid:{WRONG}", omitRoutingGraphObjectRefs: true }),
       now: () => new Date(NOW),
     });
 
@@ -134,7 +135,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
       [{ routingGraphCoverageStatus: "incomplete" }, "ROUTING_GRAPH_COVERAGE_INCOMPLETE"],
       [{ routingGraphMissingTracks: true }, "ROUTING_GRAPH_SHAPE_INVALID"],
       [{ routingGraphMissingEdges: true }, "ROUTING_GRAPH_SHAPE_INVALID"],
-      [{ routingGraphTrackCount: 3 }, "ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE"],
+      [{ routingGraphTrackCount: 3, routingGraphScannedTrackCount: 2 }, "ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE"],
       [{ routingGraphReturnedTrackCount: 1 }, "ROUTING_GRAPH_TRACK_COUNT_MISMATCH"],
       [{ routingGraphEdgeCount: 1 }, "ROUTING_GRAPH_EDGE_COUNT_MISMATCH"],
     ];
@@ -162,7 +163,7 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     }
   });
 
-  it("does not report a write attempt when ref materialization fails before executor dispatch", async () => {
+  it("does not report a write attempt when exact preflight object refs are missing", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
@@ -171,13 +172,13 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
           routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
         }),
       },
-      executeAtomic: fakeAtomic(calls, { omitResolverObjectRefs: true }),
+      executeAtomic: fakeAtomic(calls, { omitResolverObjectRefs: true, omitRoutingGraphObjectRefs: true }),
       now: () => new Date(NOW),
     });
 
     assert.equal(result.ok, false);
     assert.equal(result.execution.status, "failed");
-    assert.equal(result.error.code, "PROJECT_WRITE_OBJECT_REF_REQUIRED");
+    assert.equal(result.error.code, "LIVE_REF_RESOLUTION_FAILED");
     assert.equal(calls.some((call) => isWrite(call.id)), false);
     assert.equal(result.recovery.replay_policy, "correct_and_retry");
   });
@@ -279,14 +280,14 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.changes[0].index_maintenance.status, "skipped");
   });
 
-  it("keeps fifty routing rows inside the inline detail ceiling with per-row live truth", async () => {
+  it("keeps sixty-one routing rows inside the inline detail ceiling with cached preflight refs and per-row live truth", async () => {
     const calls = [];
-    const routes = routingRows(50);
+    const routes = routingRows(61);
     const result = await executeAlpha3_2_5CProjectWriteMacro({
       request: {
         id: "macro.routing.apply",
         input: confirmedRoutingInput({ routes }),
-        budget: { max_response_bytes: 65_536, max_items: 50, max_inline_value_bytes: 2_048 },
+        budget: { max_response_bytes: 65_536, max_items: 64, max_inline_value_bytes: 2_048 },
       },
       executeAtomic: fakeAtomic(calls, {
         batchRouting: true,
@@ -296,16 +297,66 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     });
 
     assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.result.changes.length, 50);
+    assert.equal(result.result.changes.length, 61);
     assert.deepEqual(result.result.changes.map((change) => change.operation_id), routes.map((row) => row.id));
     assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
     assert.equal(result.result.changes.every((change) => change.mutation.status === "completed"), true);
     assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "skipped"), true);
     assert.equal(result.result.changes.every((change) => !Object.hasOwn(change, "template_ids")), true);
-    assert.equal(calls.filter((call) => call.id === "template.routing.create_track_send").length, 50);
+    assert.equal(calls.filter((call) => call.id === "template.routing.create_track_send").length, 61);
+    assert.equal(calls.filter((call) => call.id === "template.tracks.resolve_track_ref").length, 0);
+    assert.equal(calls.filter((call) => call.id === "template.routing.resolve_send_ref").length, 0);
+    assert.equal(calls.filter((call) => call.id === "template.routing.read_track_routing").length, 61);
     assert.equal(inlineDetailBytes(result) <= 24_576, true);
     assert.equal(result.budget.actual_bytes <= 65_536, true);
+  });
+
+  it("keeps a 104-Track 61-Send route-only preflight compact and applies every existing Send from live readback", async () => {
+    const calls = [];
+    const graphTracks = Array.from({ length: 104 }, (_, index) => ({
+      track_ref: `track:guid:{30000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}}`,
+      master_parent_enabled: true,
+      channel_count: 2,
+    }));
+    const graphEdges = Array.from({ length: 61 }, (_, index) => ({
+      send_ref: `send:${graphTracks[index + 1].track_ref}:0`,
+      source_track_ref: graphTracks[index + 1].track_ref,
+      destination_track_ref: graphTracks[0].track_ref,
+      index: 0,
+    }));
+    const routes = graphEdges.map((edge, index) => ({
+      id: `update_${index + 1}`,
+      action: "update",
+      send_ref: edge.send_ref,
+      volume: 1,
+    }));
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({ routes }),
+        budget: { max_response_bytes: 65_536, max_items: 64, max_inline_value_bytes: 2_048 },
+      },
+      executeAtomic: fakeAtomic(calls, {
+        routingGraphTracks: graphTracks,
+        routingGraphEdges: graphEdges,
+        existingRoutingUpdates: true,
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 61);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    const graphCall = calls.find((call) => call.id === "template.routing.read_project_routing_graph");
+    assert.equal(graphCall.input.include_tracks, false);
+    assert.equal(graphCall.input.include_master_parent, false);
+    assert.equal(Object.hasOwn(graphCall.input, "resolve_track_refs"), false);
+    assert.equal(calls.some((call) => call.id === "template.tracks.resolve_track_ref"), false);
+    assert.equal(calls.some((call) => call.id === "template.routing.resolve_send_ref"), false);
+    assert.equal(Buffer.byteLength(JSON.stringify({ tracks: [], edges: graphEdges }), "utf8") < 24_576, true);
+    assert.equal(Buffer.byteLength(JSON.stringify({ tracks: graphTracks, edges: graphEdges }), "utf8") > 24_576, true);
   });
 
   it("blocks an oversized explicit full routing response before the first mutation", async () => {
@@ -1145,14 +1196,25 @@ function fakeAtomic(calls, options = {}) {
     const ref = firstRef(refs);
     const summary = {};
     if (id === "template.routing.read_project_routing_graph") {
-      summary.tracks = options.routingGraphTracks ?? [
+      const allTracks = options.routingGraphTracks ?? [
         { track_ref: "track:guid:{SRC}", master_parent_enabled: true, channel_count: 2 },
         { track_ref: "track:guid:{DST}", master_parent_enabled: true, channel_count: 2 },
       ];
+      const stateTrackRefs = new Set(input.state_track_refs ?? []);
+      summary.tracks = input.include_tracks === false
+        ? []
+        : stateTrackRefs.size > 0
+          ? allTracks.filter((row) => stateTrackRefs.has(row.track_ref))
+          : allTracks;
       summary.edges = options.routingGraphEdges ?? [];
-      summary.track_count = options.routingGraphTrackCount ?? summary.tracks.length;
+      summary.track_count = options.routingGraphTrackCount ?? allTracks.length;
+      summary.scanned_track_count = options.routingGraphScannedTrackCount ?? summary.track_count;
       summary.returned_track_count = options.routingGraphReturnedTrackCount ?? summary.tracks.length;
       summary.edge_count = options.routingGraphEdgeCount ?? summary.edges.length;
+      summary.total_edge_count = options.routingGraphTotalEdgeCount ?? summary.edges.length;
+      summary.requested_track_ref_count = (input.resolve_track_refs ?? []).length;
+      summary.resolved_track_ref_count = options.routingGraphResolvedTrackRefCount ?? summary.requested_track_ref_count;
+      summary.missing_track_refs = options.routingGraphMissingTrackRefs ?? [];
       summary.truncated = options.routingGraphTruncated === true;
       summary.coverage_status = options.routingGraphCoverageStatus ?? "complete";
       summary.coverage = { internally_complete: options.routingGraphInternallyComplete !== false };
@@ -1189,7 +1251,16 @@ function fakeAtomic(calls, options = {}) {
             pan: 0,
             muted: false,
           };
-      if (options.batchRouting) {
+      if (options.existingRoutingUpdates) {
+        summary.sends = (options.routingGraphEdges ?? [])
+          .filter((edge) => edge.source_track_ref === ref)
+          .map((edge) => ({
+            ...edge,
+            volume: calls.some((call) => call.id === "template.routing.set_send_volume" && firstRef(call.refs) === edge.send_ref) ? 1 : 0.5,
+            pan: 0,
+            muted: false,
+          }));
+      } else if (options.batchRouting) {
         summary.sends = calls
           .filter((call) => call.id === "template.routing.create_track_send")
           .map((call, index) => ({ call, index }))
@@ -1276,7 +1347,13 @@ function fakeAtomic(calls, options = {}) {
         || (options.markerRegionReadbackTruncatedAfterWrite === true && created.length > 0);
     }
     else if (id.startsWith("template.media.import_file")) summary.imported_item_refs = ["item:guid:{IMPORTED}"];
-    const resultRefs = Object.values(summary).flatMap((value) => Array.isArray(value) ? value.map(objectRef) : typeof value === "string" ? [objectRef(value)] : []);
+    const resultRefs = id === "template.routing.read_project_routing_graph" && !options.omitRoutingGraphObjectRefs
+      ? [
+          ...(input.resolve_track_refs ?? []).map(objectRef),
+          ...(summary.edges ?? []).map((row) => objectRef(row.send_ref)),
+          ...[...new Set((summary.edges ?? []).flatMap((row) => [row.source_track_ref, row.destination_track_ref]))].map(objectRef),
+        ]
+      : Object.values(summary).flatMap((value) => Array.isArray(value) ? value.map(objectRef) : typeof value === "string" ? [objectRef(value)] : []);
     return {
       ok: true,
       request: { id: options.realLengthRequestIds ? realLengthRequestId(calls.length, id) : id },

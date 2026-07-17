@@ -980,6 +980,110 @@ describe("Alpha3.2-D Product Project Index runtime", () => {
     }
   });
 
+  it("atomically commits complete Item and Routing knowledge across hidden pages without exposing partial SQLite truth", async () => {
+    const fixture = await makeFixture();
+    let runtime;
+    try {
+      runtime = await openRuntime(fixture);
+      const identity = runtimeIdentity(runtime);
+      assertObserved(runtime, execution("template.items.read_item_summary", identity, {
+        item_ref: "item:guid:{KEEP-ITEM}",
+        track_ref: "track:guid:{KEEP}",
+      }));
+      assertObserved(runtime, execution("template.routing.read_project_routing_graph", identity, {
+        edges: [{ send_ref: "send:guid:{KEEP-SEND}", source_track_ref: "track:guid:{KEEP}", destination_track_ref: "track:guid:{DST}" }],
+        edge_count: 1,
+        total_edge_count: 1,
+        returned_edge_count: 1,
+        edge_cursor: 0,
+        truncated: false,
+        coverage_status: "complete",
+        coverage: { internally_complete: true },
+      }));
+      assertObserved(runtime, execution("template.project.read_summary", identity, { project_ref: identity.project_ref, change_count: 71 }));
+
+      const itemRefresh = runtime.beginLogicalRefresh({ scope: "items", expected_revision: "reaper-change-count:71", declared_item_count: 130 });
+      assert.equal(itemRefresh.ok, true, JSON.stringify(itemRefresh));
+      for (const [cursor, count] of [[0, 64], [64, 64], [128, 2]]) {
+        const nextCursor = cursor + count < 130 ? cursor + count : null;
+        const items = Array.from({ length: count }, (_, offset) => ({
+          item_ref: `item:guid:{ITEM-${cursor + offset + 1}}`,
+          track_ref: "track:guid:{TRACK-1}",
+          index: cursor + offset,
+          position_seconds: cursor + offset,
+          length_seconds: 1,
+        }));
+        const staged = runtime.observeSuccessfulTemplateExecution(execution(
+          "template.project.read_track_item_overview",
+          identity,
+          {
+            project_ref: identity.project_ref,
+            track_count: 1,
+            tracks: [],
+            selected_items: [],
+            item_count: 130,
+            items,
+            item_cursor: cursor,
+            returned_item_count: count,
+            next_item_cursor: nextCursor === null ? null : String(nextCursor),
+            items_truncated: nextCursor !== null,
+            item_coverage_status: nextCursor === null ? "complete" : "paged",
+            item_coverage: { internally_complete: true },
+            truncated: true,
+          },
+          { logical_refresh: { transaction_id: itemRefresh.transaction_id, scope: "items", item_cursor: cursor, revision: "reaper-change-count:71" } },
+        ));
+        assert.equal(staged.ok, true, JSON.stringify(staged));
+        assert.deepEqual(runtime.adapter.snapshot().rows.items.map((row) => row.ref), ["item:guid:{KEEP-ITEM}"]);
+      }
+      const committedItems = runtime.commitLogicalRefresh({ transaction_id: itemRefresh.transaction_id, observed_revision: "reaper-change-count:71" });
+      assert.equal(committedItems.ok, true, JSON.stringify(committedItems));
+      assert.deepEqual(committedItems.row_counts, { items: 130 });
+      assert.equal(runtime.adapter.snapshot().rows.items.length, 130);
+      assert.equal(runtime.adapter.snapshot().rows.items.at(-1).ref, "item:guid:{ITEM-130}");
+
+      const routingRefresh = runtime.beginLogicalRefresh({ scope: "routing", expected_revision: "reaper-change-count:71", declared_send_count: 61 });
+      assert.equal(routingRefresh.ok, true, JSON.stringify(routingRefresh));
+      for (const [cursor, count] of [[0, 32], [32, 29]]) {
+        const nextCursor = cursor + count < 61 ? cursor + count : null;
+        const edges = Array.from({ length: count }, (_, offset) => ({
+          send_ref: `send:guid:{SEND-${cursor + offset + 1}}`,
+          source_track_ref: `track:guid:{SRC-${cursor + offset + 1}}`,
+          destination_track_ref: "track:guid:{BUS}",
+        }));
+        const staged = runtime.observeSuccessfulTemplateExecution(execution(
+          "template.routing.read_project_routing_graph",
+          identity,
+          {
+            tracks: [],
+            edges,
+            track_count: 104,
+            returned_track_count: 0,
+            edge_count: count,
+            total_edge_count: 61,
+            returned_edge_count: count,
+            edge_cursor: cursor,
+            next_edge_cursor: nextCursor === null ? null : String(nextCursor),
+            truncated: nextCursor !== null,
+            coverage_status: nextCursor === null ? "complete" : "paged",
+            coverage: { internally_complete: true, track_truncated: false, edges_truncated: nextCursor !== null },
+          },
+          { logical_refresh: { transaction_id: routingRefresh.transaction_id, scope: "routing", edge_cursor: cursor, revision: "reaper-change-count:71" } },
+        ));
+        assert.equal(staged.ok, true, JSON.stringify(staged));
+        assert.deepEqual(runtime.adapter.snapshot().rows.sends.map((row) => row.ref), ["send:guid:{KEEP-SEND}"]);
+      }
+      const committedRouting = runtime.commitLogicalRefresh({ transaction_id: routingRefresh.transaction_id, observed_revision: "reaper-change-count:71" });
+      assert.equal(committedRouting.ok, true, JSON.stringify(committedRouting));
+      assert.deepEqual(committedRouting.row_counts, { routing: 61 });
+      assert.equal(runtime.adapter.snapshot().rows.sends.length, 61);
+      assert.equal(runtime.adapter.snapshot().rows.sends.at(-1).ref, "send:guid:{SEND-61}");
+    } finally {
+      runtime?.close();
+      await fixture.cleanup();
+    }
+  });
+
   it("atomically commits complete 14-envelope knowledge across hidden automation pages and marks it stale after a write", async () => {
     const fixture = await makeFixture();
     let runtime;

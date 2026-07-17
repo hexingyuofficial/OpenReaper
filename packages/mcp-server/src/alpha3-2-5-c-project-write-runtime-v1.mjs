@@ -86,7 +86,7 @@ const PROGRAMS = Object.freeze({
       "template.routing.set_send_mute", "template.routing.set_master_parent_send", "template.routing.set_track_channel_count",
       "template.routing.remove_send", "template.routing.read_track_routing",
     ],
-    dryReads: [read("template.routing.read_project_routing_graph", { include_master_parent: true, max_tracks: 128, max_edges: 256 })],
+    dryReads: [read("template.routing.read_project_routing_graph", { include_master_parent: false, include_tracks: false, max_tracks: 128, max_edges: 256 })],
     internalRoutingOnly: true,
   }),
 });
@@ -142,6 +142,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     markerRegionReadbackRows: new Map(),
     routingReadbackRows: new Map(),
     routingResolvedSends: new Map(),
+    routingResolverCache: request?.id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID ? new Set() : null,
     readbackEvidenceRefs: [],
     layoutPreflightTracks: null,
     layoutPreflightFolders: null,
@@ -394,6 +395,7 @@ async function resolveValue({ program, request, executeAtomic, stages, state, ke
   const local = state.localRefs.get(value);
   const candidate = local ?? value;
   if (allowProducedObjectRefs && local && state.objectRefs.has(candidate)) return candidate;
+  if (state.routingResolverCache?.has(candidate) && state.objectRefs.has(candidate)) return candidate;
   if (candidate.startsWith("track:planned:") || candidate.startsWith("send:planned:") || candidate.startsWith("file:planned:")) throw coded("LIVE_REF_UNRESOLVED", `A planned ref was not produced by the registered program: ${candidate}.`);
   const resolver = resolverFor(key, candidate);
   if (!resolver) return candidate;
@@ -657,13 +659,47 @@ function validateRoutingPreflight(program, plan, child, execution, state) {
   if (!Array.isArray(graph.tracks) || !Array.isArray(graph.edges)) {
     throw coded("ROUTING_GRAPH_SHAPE_INVALID", "Routing mutation requires live tracks[] and edges[] arrays before the first write.");
   }
+  if (!Number.isInteger(graph.scanned_track_count) || graph.scanned_track_count !== graph.track_count) {
+    throw coded("ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE", "Routing graph preflight did not scan every live Track before the first write.");
+  }
   if (!Number.isInteger(graph.returned_track_count) || graph.returned_track_count !== graph.tracks.length) {
     throw coded("ROUTING_GRAPH_TRACK_COUNT_MISMATCH", "Routing graph returned_track_count did not match the live tracks[] rows.");
   }
-  if (!Number.isInteger(graph.track_count) || graph.track_count !== graph.tracks.length) {
-    throw coded("ROUTING_GRAPH_TRACK_COVERAGE_INCOMPLETE", "Routing graph did not contain every live Track row.");
+  const requestedTrackRefs = uniqueUnbounded(child.input?.resolve_track_refs);
+  const stateTrackRefs = uniqueUnbounded(child.input?.state_track_refs);
+  const objectTrackRefs = new Set(executionObjectRefs(execution)
+    .filter((ref) => ref.kind === "track")
+    .map((ref) => ref.ref));
+  const missingRequestedTrackRefs = requestedTrackRefs.filter((ref) => !objectTrackRefs.has(ref));
+  if (missingRequestedTrackRefs.length > 0
+    || graph.requested_track_ref_count !== requestedTrackRefs.length
+    || graph.resolved_track_ref_count !== requestedTrackRefs.length
+    || (Array.isArray(graph.missing_track_refs) && graph.missing_track_refs.length > 0)) {
+    throw coded("LIVE_REF_RESOLUTION_FAILED", "Routing graph preflight could not resolve every exact Track identity required by the mutation batch.");
   }
-  if (!Number.isInteger(graph.edge_count) || graph.edge_count !== graph.edges.length) {
+  if (stateTrackRefs.length === 0 && graph.tracks.length !== 0) {
+    throw coded("ROUTING_GRAPH_TRACK_COUNT_MISMATCH", "Route-only preflight must omit full Track rows so large-project topology stays within the internal response budget.");
+  }
+  if (stateTrackRefs.length > 0) {
+    const rowsByRef = new Map(graph.tracks.map((row) => [row?.track_ref, row]));
+    if (graph.tracks.length !== stateTrackRefs.length || stateTrackRefs.some((ref) => !rowsByRef.has(ref))) {
+      throw coded("ROUTING_GRAPH_TRACK_STATE_INCOMPLETE", "Routing state mutation requires one exact live Track-state row for every affected Track.");
+    }
+    for (const row of plan.preview?.master_parent ?? []) {
+      if (typeof rowsByRef.get(row.track_ref)?.master_parent_enabled !== "boolean") {
+        throw coded("ROUTING_GRAPH_TRACK_STATE_INCOMPLETE", "Master-parent mutation requires exact live master-parent state before the first write.");
+      }
+    }
+    for (const row of plan.preview?.channel_counts ?? []) {
+      if (!Number.isInteger(rowsByRef.get(row.track_ref)?.channel_count)) {
+        throw coded("ROUTING_GRAPH_TRACK_STATE_INCOMPLETE", "Track channel-count mutation requires exact live channel state before the first write.");
+      }
+    }
+  }
+  if (!Number.isInteger(graph.edge_count)
+    || graph.edge_count !== graph.edges.length
+    || !Number.isInteger(graph.total_edge_count)
+    || graph.total_edge_count !== graph.edges.length) {
     throw coded("ROUTING_GRAPH_EDGE_COUNT_MISMATCH", "Routing graph edge_count did not match the live edges[] rows.");
   }
   validateRoutingGraphTopology(plan, graph);
@@ -839,6 +875,7 @@ function childExecutionError(id, execution) {
 function rememberRefs(state, execution) {
   for (const objectRef of executionObjectRefs(execution)) {
     state.objectRefs.set(objectRef.ref, structuredClone(objectRef));
+    state.routingResolverCache?.add(objectRef.ref);
   }
   for (const ref of collectedRefs(execution)) {
     state.canonicalRefs.push(ref);

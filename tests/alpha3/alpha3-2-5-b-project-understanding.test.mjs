@@ -280,6 +280,156 @@ describe("Alpha3.2.5-B executable project understanding", () => {
     }
   });
 
+  it("keeps 254 Items and 61 Sends complete behind 2 KiB public pages while hidden refresh budgets retain full knowledge", async () => {
+    const fixture = await makeFixture();
+    const trackNames = Array.from({ length: 104 }, (_, index) => `Large Project Track ${String(index + 1).padStart(3, "0")}`);
+    const projectItems = Array.from({ length: 254 }, (_, index) => ({
+      item_ref: `item:guid:{LARGE-ITEM-${String(index + 1).padStart(3, "0")}}`,
+      track_ref: `track:guid:{TRACK-${(index % trackNames.length) + 1}}`,
+      position_seconds: index * 0.5,
+      length_seconds: 0.25,
+    }));
+    const routingEdges = Array.from({ length: 61 }, (_, index) => ({
+      send_ref: `send:guid:{LARGE-SEND-${String(index + 1).padStart(3, "0")}}`,
+      source_track_ref: `track:guid:{TRACK-${index + 1}}`,
+      destination_track_ref: "track:guid:{TRACK-104}",
+      send_index: 0,
+      send_kind: "track_send",
+      volume: 1,
+      pan: 0,
+      muted: false,
+    }));
+    const state = {
+      revision: 25461,
+      trackName: trackNames[0],
+      trackNames,
+      projectItems,
+      routingEdges,
+      calls: [],
+      atomicRequests: [],
+    };
+    let indexRuntime;
+    try {
+      indexRuntime = await openIndex(fixture);
+      const runtime = createRuntime({ fixture, indexRuntime, state });
+      const publicBudget = { max_response_bytes: 2_048, max_items: 50, max_inline_value_bytes: 2_048 };
+
+      const collectPages = async (entity, fields, firstContextSequence) => {
+        const rows = [];
+        let cursor = null;
+        let sequence = firstContextSequence;
+        let first = true;
+        do {
+          const page = await runtime.call_template({
+            id: "macro.project.query",
+            input: {
+              entity,
+              fields,
+              refresh_policy: first ? "if_stale" : "never",
+              limit: 100,
+              ...(cursor === null ? {} : { cursor }),
+            },
+            budget: publicBudget,
+            context: callContext(sequence, `large-${entity}-client`),
+          });
+          assert.equal(page.ok, true, JSON.stringify(page));
+          assert.equal(page.budget.actual_bytes <= 2_048, true);
+          assert.equal(page.result.data.rows.length > 0, true);
+          rows.push(...page.result.data.rows);
+          cursor = page.result.data.page.has_more ? page.result.data.page.next_cursor : null;
+          first = false;
+          sequence += 1;
+        } while (cursor !== null);
+        return rows;
+      };
+
+      const itemRows = await collectPages("items", ["ref"], 1);
+      assert.equal(itemRows.length, 254);
+      assert.equal(new Set(itemRows.map((row) => row.ref)).size, 254);
+      assert.equal(indexRuntime.adapter.snapshot().rows.items.length, 254);
+      const itemRefreshRequests = state.atomicRequests.filter((entry) => entry.operation.name === "project.read_track_item_overview");
+      assert.equal(itemRefreshRequests.length, 4);
+      assert.equal(itemRefreshRequests.every((entry) => entry.params.max_items === 64), true);
+      assert.equal(itemRefreshRequests.every((entry) => entry.budget.max_items === 128), true);
+      assert.equal(itemRefreshRequests.every((entry) => entry.budget.max_inline_value_bytes === 24_576), true);
+
+      const lastItem = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "items", selectors: { refs: [projectItems.at(-1).item_ref] }, fields: ["ref"], refresh_policy: "never", limit: 1 },
+        budget: publicBudget,
+        context: callContext(100, "large-item-exact-client"),
+      });
+      assert.equal(lastItem.ok, true, JSON.stringify(lastItem));
+      assert.equal(lastItem.result.data.rows[0].ref, projectItems.at(-1).item_ref);
+
+      const routingRows = await collectPages("routing", ["ref"], 200);
+      assert.equal(routingRows.length, 61);
+      assert.equal(new Set(routingRows.map((row) => row.ref)).size, 61);
+      assert.equal(indexRuntime.adapter.snapshot().rows.sends.length, 61);
+      const routingRefreshRequests = state.atomicRequests.filter((entry) => entry.operation.name === "routing.project_graph.read");
+      assert.equal(routingRefreshRequests.length, 2);
+      assert.equal(routingRefreshRequests.every((entry) => entry.params.max_edges === 32), true);
+      assert.equal(routingRefreshRequests.every((entry) => entry.params.include_tracks === false), true);
+      assert.equal(routingRefreshRequests.every((entry) => entry.budget.max_items === 128), true);
+
+      const lastSend = await runtime.call_template({
+        id: "macro.project.query",
+        input: { entity: "routing", selectors: { refs: [routingEdges.at(-1).send_ref] }, fields: ["ref"], refresh_policy: "never", limit: 1 },
+        budget: publicBudget,
+        context: callContext(500, "large-routing-exact-client"),
+      });
+      assert.equal(lastSend.ok, true, JSON.stringify(lastSend));
+      assert.equal(lastSend.result.data.rows[0].ref, routingEdges.at(-1).send_ref);
+    } finally {
+      indexRuntime?.close();
+      await fixture.cleanup();
+    }
+  });
+
+  it("fails closed on incomplete Item or Routing enumeration instead of returning definitive not-found", async () => {
+    for (const testCase of [
+      {
+        entity: "items",
+        state: {
+          projectItems: [{ item_ref: "item:guid:{INCOMPLETE}", track_ref: "track:guid:{TRACK-1}", position_seconds: 0, length_seconds: 1 }],
+          itemCoverageInternallyComplete: false,
+        },
+        expectedCode: "LOGICAL_REFRESH_COVERAGE_INCOMPLETE",
+      },
+      {
+        entity: "routing",
+        state: {
+          routingEdges: [{ send_ref: "send:guid:{INCOMPLETE}", source_track_ref: "track:guid:{TRACK-1}", destination_track_ref: "track:guid:{TRACK-2}" }],
+          routingTrackTruncated: true,
+        },
+        expectedCode: "LOGICAL_REFRESH_COVERAGE_INCOMPLETE",
+      },
+    ]) {
+      const fixture = await makeFixture();
+      let indexRuntime;
+      try {
+        const state = { revision: 7, trackName: "Incomplete", trackNames: ["Incomplete", "Target"], calls: [], atomicRequests: [], ...testCase.state };
+        indexRuntime = await openIndex(fixture);
+        const runtime = createRuntime({ fixture, indexRuntime, state });
+        const result = await runtime.call_template({
+          id: "macro.project.query",
+          input: { entity: testCase.entity, refresh_policy: "if_stale", limit: 1 },
+          context: callContext(1, `incomplete-${testCase.entity}`),
+        });
+        assert.equal(result.ok, false, JSON.stringify(result));
+        assert.equal(result.error.code, testCase.expectedCode);
+        assert.notEqual(result.error.code, testCase.entity === "items" ? "ITEM_NOT_FOUND" : "ROUTING_NOT_FOUND");
+        const indexedRows = testCase.entity === "items"
+          ? indexRuntime.adapter.snapshot().rows.items
+          : indexRuntime.adapter.snapshot().rows.sends;
+        assert.equal(indexedRows.length, 0);
+      } finally {
+        indexRuntime?.close();
+        await fixture.cleanup();
+      }
+    }
+  });
+
   it("blocks conflicting query budgets and unsupported filters before any live read", async () => {
     const fixture = await makeFixture();
     const state = { revision: 14, trackName: "Highway 01", calls: [], atomicRequests: [] };
@@ -1141,9 +1291,62 @@ function createRuntime({ fixture, indexRuntime, state }) {
           path: fixture.projectPath,
           change_count: state.revision,
           track_count: state.trackNames?.length ?? 1,
-          item_count: 1,
+          item_count: state.projectItems?.length ?? 1,
           marker_count: 0,
           region_count: 1,
+        };
+        response.result.readback = response.result.summary;
+      } else if (request.operation.name === "project.read_track_item_overview") {
+        const rows = state.projectItems ?? [];
+        const cursor = Number(request.params.item_cursor ?? 0);
+        const limit = request.params.max_items ?? 64;
+        const end = Math.min(rows.length, cursor + limit);
+        const truncated = end < rows.length;
+        const internallyComplete = state.itemCoverageInternallyComplete !== false;
+        response.result.summary = {
+          project_ref: projectRef,
+          tracks: [],
+          selected_items: [],
+          track_count: state.trackNames?.length ?? 1,
+          item_count: rows.length,
+          track_cursor: request.params.track_cursor ?? 0,
+          returned_track_count: 0,
+          truncated: true,
+          items: structuredClone(rows.slice(cursor, end)),
+          item_cursor: cursor,
+          returned_item_count: end - cursor,
+          next_item_cursor: truncated ? String(end) : null,
+          items_truncated: truncated,
+          item_coverage_status: internallyComplete ? (truncated ? "paged" : "complete") : "incomplete",
+          item_coverage: { internally_complete: internallyComplete },
+        };
+        response.result.readback = response.result.summary;
+        response.result.refs = rows.slice(cursor, end).map((row) => ({
+          kind: "item",
+          ref: row.item_ref,
+          identity: { scheme: "guid", value: row.item_ref.slice("item:guid:".length) },
+        }));
+      } else if (request.operation.name === "routing.project_graph.read") {
+        const rows = state.routingEdges ?? [];
+        const cursor = Number(request.params.edge_cursor ?? 0);
+        const limit = request.params.max_edges ?? 64;
+        const end = Math.min(rows.length, cursor + limit);
+        const truncated = end < rows.length;
+        const internallyComplete = state.routingCoverageInternallyComplete !== false;
+        const trackTruncated = state.routingTrackTruncated === true;
+        response.result.summary = {
+          tracks: [],
+          edges: structuredClone(rows.slice(cursor, end)),
+          track_count: state.trackNames?.length ?? 1,
+          returned_track_count: 0,
+          edge_count: end - cursor,
+          total_edge_count: rows.length,
+          returned_edge_count: end - cursor,
+          edge_cursor: cursor,
+          next_edge_cursor: truncated ? String(end) : null,
+          truncated,
+          coverage_status: !internallyComplete ? "incomplete" : (truncated || trackTruncated ? "paged" : "complete"),
+          coverage: { internally_complete: internallyComplete, track_truncated: trackTruncated, edges_truncated: truncated },
         };
         response.result.readback = response.result.summary;
       } else if (

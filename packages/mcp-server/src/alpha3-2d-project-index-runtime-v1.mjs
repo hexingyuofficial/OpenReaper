@@ -28,6 +28,7 @@ export const ALPHA3_2D_PROJECT_INDEX_REFRESH_TEMPLATE_IDS = Object.freeze([
   "template.project.read_summary",
   "template.project.create_observation_bundle",
   "template.project.create_project_map_snapshot",
+  "template.project.read_track_item_overview",
   "template.tracks.list_tracks",
   "template.tracks.read_mixer_controls",
   "template.items.list_selected_items",
@@ -72,6 +73,33 @@ const LOGICAL_REFRESH_SCOPE_CONFIG = Object.freeze({
     next_cursor_field: "next_track_cursor",
     count_mismatch_code: "LOGICAL_REFRESH_TRACK_COUNT_MISMATCH",
     source_template_id: "template.project.create_observation_bundle",
+    truncated_field: "truncated",
+  }),
+  items: Object.freeze({
+    projection_scope: "items",
+    store_method: "replaceItems",
+    row_noun: "item",
+    row_plural: "items",
+    declared_count_field: "declared_item_count",
+    returned_count_field: "returned_item_count",
+    cursor_field: "item_cursor",
+    next_cursor_field: "next_item_cursor",
+    count_mismatch_code: "LOGICAL_REFRESH_ITEM_COUNT_MISMATCH",
+    source_template_id: "template.project.read_track_item_overview",
+    truncated_field: "items_truncated",
+  }),
+  routing: Object.freeze({
+    projection_scope: "routing",
+    store_method: "replaceSends",
+    row_noun: "send",
+    row_plural: "sends",
+    declared_count_field: "declared_send_count",
+    returned_count_field: "returned_edge_count",
+    cursor_field: "edge_cursor",
+    next_cursor_field: "next_edge_cursor",
+    count_mismatch_code: "LOGICAL_REFRESH_SEND_COUNT_MISMATCH",
+    source_template_id: "template.routing.read_project_routing_graph",
+    truncated_field: "truncated",
   }),
   automation: Object.freeze({
     projection_scope: "automation",
@@ -84,6 +112,7 @@ const LOGICAL_REFRESH_SCOPE_CONFIG = Object.freeze({
     next_cursor_field: "next_envelope_cursor",
     count_mismatch_code: "LOGICAL_REFRESH_ENVELOPE_COUNT_MISMATCH",
     source_template_id: "template.automation.list_project_envelopes",
+    truncated_field: "truncated",
   }),
 });
 
@@ -813,7 +842,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     const scope = scopes.length === 1 ? scopes[0] : null;
     const scopeConfig = logicalRefreshScopeConfig(scope);
     if (!scopeConfig) {
-      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime supports one complete logical refresh scope at a time: tracks or automation.", { scopes });
+      return logicalRefreshFailure("unsupported_scope", "LOGICAL_REFRESH_SCOPE_UNSUPPORTED", "This bounded runtime supports one complete logical refresh scope at a time: tracks, items, routing, or automation.", { scopes });
     }
     const requestedRevision = input.expected_revision ?? input.expectedRevision;
     const expectedRevision = typeof requestedRevision === "string" ? normalizeProjectRevisionToken(requestedRevision) : null;
@@ -1147,7 +1176,13 @@ function stageLogicalRefreshProjection({ logicalRefresh, logicalRefreshes, pendi
     return failStage("LOGICAL_REFRESH_CURSOR_CONFLICT", `Logical refresh page evidence must agree on one next ${scopeConfig.row_noun} cursor.`, { cursor, scope, next_cursor_values: nextCursorEvidence.values });
   }
   const rawNextCursor = nextCursorEvidence.provided ? nextCursorEvidence.values[0] : undefined;
-  const truncated = firstDefined(logicalRefresh.truncated, overview.truncated, pageEvidence.truncated);
+  const truncated = firstDefined(
+    logicalRefresh.truncated,
+    overview[scopeConfig.truncated_field],
+    overview.truncated,
+    pageEvidence[scopeConfig.truncated_field],
+    pageEvidence.truncated,
+  );
   let nextCursor;
   if (rawNextCursor === null || (rawNextCursor === undefined && truncated === false)) nextCursor = null;
   else nextCursor = logicalCursor(rawNextCursor);
@@ -1288,6 +1323,23 @@ function logicalRefreshDeclaredCountEvidence(scope, ...sources) {
     if (!isObject(source)) continue;
     if (scope === "tracks") {
       candidates.push(source.declared_track_count, source.declaredTrackCount, source.track_count, source.declared_counts?.tracks);
+    } else if (scope === "items") {
+      candidates.push(
+        source.declared_item_count,
+        source.declaredItemCount,
+        source.item_count,
+        source.total_item_count,
+        source.declared_counts?.items,
+      );
+    } else if (scope === "routing") {
+      candidates.push(
+        source.declared_send_count,
+        source.declaredSendCount,
+        source.total_edge_count,
+        source.total_send_count,
+        source.declared_counts?.routing,
+        source.declared_counts?.sends,
+      );
     } else if (scope === "automation") {
       candidates.push(
         source.declared_envelope_count,
@@ -1391,7 +1443,11 @@ function logicalRefreshPageCoverage({ scope, projection, readback, overview, pag
   if (!config) return "unknown";
   const scopeSpecificCoverage = scope === "tracks"
     ? readback?.coverage?.project_map ?? readback?.coverage?.tracks
-    : readback?.coverage?.automation ?? readback?.coverage?.envelopes;
+    : scope === "items"
+      ? readback?.item_coverage_status ?? readback?.coverage?.items
+      : scope === "routing"
+        ? readback?.coverage_status ?? readback?.coverage?.routing
+        : readback?.coverage?.automation ?? readback?.coverage?.envelopes;
   return normalizeCoverage(firstDefined(
     scopeSpecificCoverage,
     overview.coverage_status,
@@ -1693,6 +1749,12 @@ function projectReadback(templateId, readback, projectRef) {
       return simpleProjection("media_sources", mapMedia(readback), coverageOf(readback, "complete"), Array.isArray(readback) ? readback.length : arrayOf(readback.sources).length + arrayOf(readback.file_refs).length);
     case "template.project.create_project_map_snapshot":
       return projectMapPayload(readback.overview ?? readback.project_map ?? readback, projectRef, readback.coverage);
+    case "template.project.read_track_item_overview":
+      return projectMapPayload(readback, projectRef, {
+        tracks: readback.truncated === true ? "paged" : "complete",
+        items: readback.item_coverage_status,
+        selected_items: readback.selected_items_truncated === true ? "bounded" : "selected_only",
+      });
     case "template.project.create_observation_bundle": {
       const map = projectMapPayload(readback.project_map ?? readback.overview ?? {}, projectRef, readback.coverage);
       const markerRows = mapMarkers(readback.markers_regions?.items ?? readback.markers_regions);
@@ -1744,9 +1806,10 @@ function projectMapPayload(overview, projectRef, coverage = {}) {
   for (const track of arrayOf(overview.tracks)) {
     for (const item of arrayOf(track?.items)) nestedItems.push({ ...item, track_ref: item.track_ref ?? track.track_ref ?? track.ref });
   }
+  const projectItems = mapItems(overview.items);
   const selectedItems = mapItems(overview.selected_items);
-  const itemSource = [...nestedItems, ...arrayOf(overview.selected_items)];
-  const items = dedupeRows([...mapItems(nestedItems), ...selectedItems]);
+  const itemSource = [...arrayOf(overview.items), ...nestedItems, ...arrayOf(overview.selected_items)];
+  const items = dedupeRows([...projectItems, ...mapItems(nestedItems), ...selectedItems]);
   const takes = mapTakesFromItems(itemSource);
   const selectedContext = projectHeadRows(overview, projectRef, selectedItems.map((row) => ({
     ref: row.ref, owner_ref: row.track_ref, scope_kind: "item", summary: { selected: true },
@@ -1754,7 +1817,10 @@ function projectMapPayload(overview, projectRef, coverage = {}) {
   const scopes = { tracks, items, selected_context: selectedContext };
   const projectedCoverage = {
     tracks: trackCoverage,
-    items: normalizeCoverage(coverage.track_items, overview.truncated ? "paged" : "partial"),
+    items: normalizeCoverage(
+      coverage.items ?? overview.item_coverage_status ?? coverage.track_items,
+      overview.items_truncated ? "paged" : (Array.isArray(overview.items) ? "complete" : (overview.truncated ? "paged" : "partial")),
+    ),
     takes: normalizeCoverage(coverage.track_items, overview.truncated ? "paged" : "partial"),
     selected_context: normalizeCoverage(coverage.selected_items, "selected_only"),
   };

@@ -51,6 +51,10 @@ local function d10_overview_budget_item_limit(request, requested, track_limit)
   return math.min(requested_limit, 2)
 end
 
+local function d10_overview_project_item_limit(request, requested)
+  return d10_overview_bounded_limit(request, requested, 32, 64)
+end
+
 local function d10_overview_track_guid(track)
   local ok, guid = call_reaper("GetTrackGUID", track)
   return ok and first_string(guid) or nil
@@ -163,11 +167,11 @@ local function d10_overview_item_ref(item)
   }
 end
 
-local function d10_overview_item_summary(item, track)
+local function d10_overview_item_summary(item, track, item_index)
   return {
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
-    index = d10_overview_item_index(item),
+    index = item_index or d10_overview_item_index(item),
     position_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_POSITION"))) or 0,
     length_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH"))) or 0,
     selected = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_UISEL"))) or 0) == 1,
@@ -211,7 +215,9 @@ end
 
 local function read_track_item_overview(request)
   local track_cursor = d10_overview_bounded_offset(request.params and request.params.track_cursor)
+  local item_cursor = d10_overview_bounded_offset(request.params and request.params.item_cursor)
   local max_tracks = d10_overview_budget_track_limit(request, request.params and request.params.max_tracks)
+  local max_items = d10_overview_project_item_limit(request, request.params and request.params.max_items)
   local include_track_items = request.params and request.params.include_track_items ~= false
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
@@ -221,6 +227,7 @@ local function read_track_item_overview(request)
   local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
   local total_items = ok_items and math.max(0, math.floor(first_number(item_count) or 0)) or 0
   local tracks = json_array({})
+  local items = json_array({})
   local selected_items = json_array({})
   local refs = json_array({ d10_overview_project_ref() })
 
@@ -230,6 +237,22 @@ local function read_track_item_overview(request)
     if ok_track and track then
       tracks[#tracks + 1] = d10_overview_track_summary(track, max_items_per_track)
       refs[#refs + 1] = d10_overview_track_ref(track)
+    end
+  end
+
+  local items_internally_complete = ok_items == true
+  local end_item = math.min(total_items, item_cursor + max_items)
+  for index = item_cursor, end_item - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item then
+      local ok_track, track = call_reaper("GetMediaItemTrack", item)
+      if not ok_track or not track then
+        items_internally_complete = false
+      end
+      items[#items + 1] = d10_overview_item_summary(item, ok_track and track or nil, index)
+      refs[#refs + 1] = d10_overview_item_ref(item)
+    else
+      items_internally_complete = false
     end
   end
 
@@ -251,18 +274,29 @@ local function read_track_item_overview(request)
   local summary = {
     project_ref = "project:current",
     tracks = tracks,
+    items = items,
     selected_items = selected_items,
     track_count = total_tracks,
     item_count = total_items,
     track_cursor = track_cursor,
+    item_cursor = item_cursor,
     returned_track_count = #tracks,
+    returned_item_count = #items,
     max_tracks_effective = max_tracks,
     max_items_per_track_effective = max_items_per_track,
     selected_items_truncated = include_selected_items and total_selected ~= nil and total_selected > #selected_items or false,
+    items_truncated = end_item < total_items,
+    item_coverage_status = not items_internally_complete and "incomplete" or (end_item < total_items and "paged" or "complete"),
+    item_coverage = {
+      internally_complete = items_internally_complete,
+    },
     truncated = end_track < total_tracks,
   }
   if end_track < total_tracks then
     summary.next_track_cursor = tostring(end_track)
+  end
+  if end_item < total_items then
+    summary.next_item_cursor = tostring(end_item)
   end
   return summary, nil, json_array({}), json_array({}), refs
 end

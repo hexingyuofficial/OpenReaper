@@ -975,6 +975,20 @@ local function list_available_audio_outputs(request)
 end
 
 local function read_project_routing_graph(request)
+  local function requested_track_refs(value)
+    local ordered = json_array({})
+    local lookup = {}
+    if is_json_array(value) then
+      for index = 1, #value do
+        local ref = value[index]
+        if is_string(ref) and not lookup[ref] then
+          lookup[ref] = true
+          ordered[#ordered + 1] = ref
+        end
+      end
+    end
+    return ordered, lookup
+  end
   local internally_complete = true
   local incomplete_reasons = json_array({})
   local seen_incomplete_reasons = {}
@@ -993,33 +1007,59 @@ local function read_project_routing_graph(request)
   end
   local max_tracks = READ_B_MEDIA.bounded_limit(request, request.params.max_tracks, 8, 128)
   local max_edges = READ_B_MEDIA.bounded_limit(request, request.params.max_edges, 24, 256)
+  local edge_cursor = math.max(0, math.floor(tonumber(request.params.edge_cursor) or 0))
+  local include_tracks = request.params.include_tracks ~= false
+  local resolve_track_refs, resolve_track_lookup = requested_track_refs(request.params.resolve_track_refs)
+  local state_track_refs, state_track_lookup = requested_track_refs(request.params.state_track_refs)
+  local filter_track_state = #state_track_refs > 0
+  local resolved_track_lookup = {}
+  local resolved_track_ref_count = 0
+  local emitted_track_ref_lookup = {}
+  local edge_track_ref_lookup = {}
+  local scanned_track_refs = json_array({})
+  local track_objects_by_ref = {}
   local tracks = json_array({})
   local edges = json_array({})
   local refs = json_array({})
-  local truncated = total > max_tracks
+  local track_truncated = total > max_tracks
+  local total_edge_count = 0
+  local scanned_track_count = 0
   for index = 0, math.min(total, max_tracks) - 1 do
+    scanned_track_count = scanned_track_count + 1
     local ok_track, track = call_reaper("GetTrack", 0, index)
     if ok_track and track then
       local track_ref = e5_routing_track_ref_string(track)
-      local channel_count = e5_routing_channel_count_exact(track)
-      if channel_count == nil then
-        mark_incomplete("TRACK_CHANNEL_COUNT_UNAVAILABLE")
-      end
-      local master_parent_enabled = JSON_NULL
-      if request.params.include_master_parent ~= false then
-        master_parent_enabled = e5_routing_master_parent_exact(track)
-        if master_parent_enabled == nil then
-          master_parent_enabled = JSON_NULL
-          mark_incomplete("MASTER_PARENT_STATE_UNAVAILABLE")
+      scanned_track_refs[#scanned_track_refs + 1] = track_ref
+      track_objects_by_ref[track_ref] = track
+      local include_track_row = include_tracks and (not filter_track_state or state_track_lookup[track_ref] == true)
+      if include_track_row then
+        local channel_count = e5_routing_channel_count_exact(track)
+        if channel_count == nil then
+          mark_incomplete("TRACK_CHANNEL_COUNT_UNAVAILABLE")
         end
+        local master_parent_enabled = JSON_NULL
+        if request.params.include_master_parent ~= false then
+          master_parent_enabled = e5_routing_master_parent_exact(track)
+          if master_parent_enabled == nil then
+            master_parent_enabled = JSON_NULL
+            mark_incomplete("MASTER_PARENT_STATE_UNAVAILABLE")
+          end
+        end
+        tracks[#tracks + 1] = {
+          track_ref = track_ref,
+          index = index,
+          channel_count = channel_count == nil and JSON_NULL or channel_count,
+          master_parent_enabled = master_parent_enabled,
+        }
       end
-      tracks[#tracks + 1] = {
-        track_ref = track_ref,
-        index = index,
-        channel_count = channel_count == nil and JSON_NULL or channel_count,
-        master_parent_enabled = master_parent_enabled,
-      }
-      refs[#refs + 1] = e5_routing_track_object_ref(track)
+      if resolve_track_lookup[track_ref] == true or include_track_row then
+        refs[#refs + 1] = e5_routing_track_object_ref(track)
+        emitted_track_ref_lookup[track_ref] = true
+      end
+      if resolve_track_lookup[track_ref] == true and not resolved_track_lookup[track_ref] then
+        resolved_track_lookup[track_ref] = true
+        resolved_track_ref_count = resolved_track_ref_count + 1
+      end
       local ok_send_count, send_count = call_reaper("GetTrackNumSends", track, 0)
       send_count = ok_send_count and first_number(send_count) or nil
       if type(send_count) ~= "number" or send_count ~= send_count or send_count == math.huge or send_count == -math.huge or send_count < 0 or send_count ~= math.floor(send_count) then
@@ -1027,14 +1067,15 @@ local function read_project_routing_graph(request)
         mark_incomplete("SEND_COUNT_UNAVAILABLE")
       end
       for send_index = 0, send_count - 1 do
-        if #edges >= max_edges then
-          truncated = true
-          break
-        end
         local summary = e5_routing_compact_send_summary(track, send_index)
         if summary then
-          edges[#edges + 1] = summary
-          refs[#refs + 1] = e5_routing_send_object_ref(track, send_index)
+          if total_edge_count >= edge_cursor and #edges < max_edges then
+            edges[#edges + 1] = summary
+            refs[#refs + 1] = e5_routing_send_object_ref(track, send_index)
+            edge_track_ref_lookup[summary.source_track_ref] = true
+            edge_track_ref_lookup[summary.destination_track_ref] = true
+          end
+          total_edge_count = total_edge_count + 1
         else
           mark_incomplete("SEND_SUMMARY_UNAVAILABLE")
         end
@@ -1042,22 +1083,46 @@ local function read_project_routing_graph(request)
     else
       mark_incomplete("TRACK_READ_FAILED")
     end
-    if #edges >= max_edges then
-      break
+  end
+  local next_edge_cursor = edge_cursor + #edges
+  local edges_truncated = next_edge_cursor < total_edge_count
+  local truncated = track_truncated or edges_truncated
+  for index = 1, #scanned_track_refs do
+    local track_ref = scanned_track_refs[index]
+    if edge_track_ref_lookup[track_ref] and not emitted_track_ref_lookup[track_ref] then
+      refs[#refs + 1] = e5_routing_track_object_ref(track_objects_by_ref[track_ref])
+      emitted_track_ref_lookup[track_ref] = true
+    end
+  end
+  local missing_track_refs = json_array({})
+  for index = 1, #resolve_track_refs do
+    local ref = resolve_track_refs[index]
+    if not resolved_track_lookup[ref] then
+      missing_track_refs[#missing_track_refs + 1] = ref
     end
   end
   return e5_routing_summary(request, {
     track_count = total,
+    scanned_track_count = scanned_track_count,
     returned_track_count = #tracks,
+    requested_track_ref_count = #resolve_track_refs,
+    resolved_track_ref_count = resolved_track_ref_count,
+    missing_track_refs = missing_track_refs,
     edge_count = #edges,
+    total_edge_count = total_edge_count,
+    returned_edge_count = #edges,
+    edge_cursor = edge_cursor,
     tracks = tracks,
     edges = edges,
     truncated = truncated,
-    coverage_status = internally_complete and "complete" or "incomplete",
+    coverage_status = not internally_complete and "incomplete" or (truncated and "paged" or "complete"),
     coverage = {
       internally_complete = internally_complete,
       incomplete_reasons = incomplete_reasons,
+      track_truncated = track_truncated,
+      edges_truncated = edges_truncated,
     },
+    next_edge_cursor = edges_truncated and tostring(next_edge_cursor) or nil,
   }), nil, nil, nil, refs
 end
 

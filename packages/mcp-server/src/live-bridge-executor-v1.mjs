@@ -4,6 +4,7 @@ import { resolve, join } from "node:path";
 import {
   FOUNDATION_BRIDGE_CONTRACT,
   FOUNDATION_BRIDGE_DEFAULT_BUDGET,
+  foundationBridgeRequestFingerprint,
   validateFoundationBridgeResult,
 } from "../../core/src/foundation-bridge-v1.mjs";
 
@@ -51,6 +52,7 @@ const DEFAULT_REAPER_BRIDGE_SCRIPT_PATH = resolve(
 );
 const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
+const MAX_IDEMPOTENCY_RECORDS = 256;
 const REQUEST_ID_PATTERN = /^cmd_[A-Za-z0-9_]+$/;
 const HEARTBEAT_MAX_BYTES = 2_048;
 const HEARTBEAT_OWNER_MAX_LENGTH = 256;
@@ -81,14 +83,14 @@ export function createLiveBridgeExecutorFromEnv(env = process.env, options = {})
     normalizeNonEmptyString(env[LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]) ??
     options.bridgeScriptPath ??
     DEFAULT_REAPER_BRIDGE_SCRIPT_PATH;
-  const timeoutMs = normalizePositiveInteger(
-    env[LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms],
-    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
+  const envTimeoutMs = normalizeExplicitPositiveInteger(env[LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]);
+  const optionTimeoutMs = normalizeExplicitPositiveInteger(options.timeoutMs);
+  const timeoutMs = envTimeoutMs ?? optionTimeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutCapExplicit = envTimeoutMs !== null || optionTimeoutMs !== null;
   const executor = createLiveBridgeExecutor({
     transportDir,
     bridgeScriptPath,
-    timeoutMs,
+    ...(timeoutCapExplicit ? { timeoutMs } : {}),
     pollIntervalMs: options.pollIntervalMs,
     heartbeatMaxAgeMs: options.heartbeatMaxAgeMs,
     now: options.now,
@@ -107,10 +109,13 @@ export function createLiveBridgeExecutor(options = {}) {
   const transportDir = normalizeNonEmptyString(options.transportDir);
   const bridgeScriptPath =
     normalizeNonEmptyString(options.bridgeScriptPath) ?? DEFAULT_REAPER_BRIDGE_SCRIPT_PATH;
-  const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const explicitTimeoutMs = normalizeExplicitPositiveInteger(options.timeoutMs);
+  const timeoutCapExplicit = explicitTimeoutMs !== null;
+  const timeoutMs = explicitTimeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollIntervalMs = normalizePositiveInteger(options.pollIntervalMs, DEFAULT_POLL_INTERVAL_MS);
   const heartbeatMaxAgeMs = normalizeHeartbeatMaxAge(options.heartbeatMaxAgeMs);
   const now = typeof options.now === "function" ? options.now : () => new Date();
+  const idempotencyRecords = new Map();
 
   const config = deepFreeze({
     contract: LIVE_BRIDGE_EXECUTOR_CONTRACT,
@@ -159,10 +164,85 @@ export function createLiveBridgeExecutor(options = {}) {
       });
     }
 
+    const liveness = await probeLiveness({
+      expectedOwner: request?.bridge?.expected_owner,
+      expectedGeneration: request?.bridge?.expected_generation,
+    });
+    const dispatchTimeoutMs = resolveDispatchTimeoutMs({
+      requestTimeoutMs: request?.timeout_ms,
+      executorTimeoutMs: timeoutMs,
+      timeoutCapExplicit,
+      bridgeReady: liveness.status === LIVE_BRIDGE_LIVENESS_STATUS.READY,
+    });
+
     const paths = transportPaths(transportDir, request?.id);
+    const idempotency = prepareIdempotencyDispatch(request, idempotencyRecords);
+    if (idempotency.error) {
+      return bridgeErrorEnvelope(request, {
+        code: "REQUEST_INVALID",
+        message: "Live bridge request failed idempotency validation.",
+        recoverable: false,
+        queueState: "failed",
+        startedAt,
+        details: {
+          reason: "idempotency_request_invalid",
+          message: boundedString(idempotency.error.message),
+        },
+        now,
+      });
+    }
+    if (idempotency.conflict) {
+      return idempotencyConflictEnvelope(request, { startedAt, now });
+    }
+    if (idempotency.existing) {
+      return waitForBridgeResult({
+        request,
+        resultPath: idempotency.existing.resultPath,
+        expectedResultIdentity: idempotency.existing.resultIdentity,
+        timeoutMs: dispatchTimeoutMs,
+        pollIntervalMs,
+        startedAt,
+        now,
+        onResult(result) {
+          idempotency.existing.state = "terminal";
+          return replayBridgeResult(result, request, now);
+        },
+      });
+    }
+    if (idempotency.capacityExceeded) {
+      return bridgeErrorEnvelope(request, {
+        code: "QUEUE_CONFLICT",
+        message: "Live bridge retry state is full of unresolved idempotent requests.",
+        recoverable: true,
+        queueState: "failed",
+        startedAt,
+        details: {
+          reason: "idempotency_retry_state_full",
+          max_records: MAX_IDEMPOTENCY_RECORDS,
+          next_action: "Resolve or restart the managed bridge generation before issuing another idempotent mutation.",
+        },
+        now,
+      });
+    }
+
+    const idempotencyRecord = idempotency.record;
+    if (idempotencyRecord) idempotencyRecord.resultPath = paths.result;
     try {
       await writeFile(paths.request, `${JSON.stringify(request)}\n`, { flag: "wx" });
     } catch (error) {
+      const recovered = error?.code === "EEXIST"
+        ? await recoverExistingTransportRequest({
+          request,
+          paths,
+          timeoutMs: dispatchTimeoutMs,
+          pollIntervalMs,
+          startedAt,
+          now,
+          idempotencyRecord,
+        })
+        : null;
+      if (recovered) return recovered;
+      forgetIdempotencyRecord(idempotencyRecords, idempotencyRecord);
       return bridgeBlockerEnvelope(request, {
         blocker: "live_bridge_request_write_failed",
         message: "Live bridge request could not be written to the configured transport.",
@@ -179,10 +259,14 @@ export function createLiveBridgeExecutor(options = {}) {
     return waitForBridgeResult({
       request,
       resultPath: paths.result,
-      timeoutMs: Math.min(timeoutMs, request?.timeout_ms ?? timeoutMs),
+      timeoutMs: dispatchTimeoutMs,
       pollIntervalMs,
       startedAt,
       now,
+      onResult(result) {
+        if (idempotencyRecord) idempotencyRecord.state = "terminal";
+        return result;
+      },
     });
   }
 
@@ -193,6 +277,17 @@ export function createLiveBridgeExecutor(options = {}) {
     dispatch,
     probeLiveness,
   });
+}
+
+function resolveDispatchTimeoutMs({
+  requestTimeoutMs,
+  executorTimeoutMs,
+  timeoutCapExplicit,
+  bridgeReady,
+}) {
+  const normalizedRequestTimeoutMs = normalizePositiveInteger(requestTimeoutMs, executorTimeoutMs);
+  if (timeoutCapExplicit) return Math.min(executorTimeoutMs, normalizedRequestTimeoutMs);
+  return bridgeReady ? normalizedRequestTimeoutMs : executorTimeoutMs;
 }
 
 export async function probeLiveBridgeLiveness(options = {}) {
@@ -428,14 +523,24 @@ async function checkTransport({ transportDir, bridgeScriptPath }) {
   return {};
 }
 
-async function waitForBridgeResult({ request, resultPath, timeoutMs, pollIntervalMs, startedAt, now }) {
+async function waitForBridgeResult({
+  request,
+  resultPath,
+  expectedResultIdentity = expectedBridgeResultIdentity(request),
+  timeoutMs,
+  pollIntervalMs,
+  startedAt,
+  now,
+  onResult,
+}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() <= deadline) {
     try {
       const raw = await readFile(resultPath, "utf8");
       const result = JSON.parse(raw);
       validateFoundationBridgeResult(result);
-      return result;
+      validateBridgeResultIdentity(result, expectedResultIdentity);
+      return typeof onResult === "function" ? onResult(result) : result;
     } catch (error) {
       if (error?.code === "ENOENT") {
         await sleep(pollIntervalMs);
@@ -462,12 +567,167 @@ async function waitForBridgeResult({ request, resultPath, timeoutMs, pollInterva
     details: {
       result_path: resultPath,
       timeout_ms: timeoutMs,
+      outcome: "unknown",
+      request_state: "result_pending_or_completion_unknown",
+      retry_policy: request?.idempotency_key
+        ? "retry_only_with_same_idempotency_key"
+        : "inspect_bounded_state_before_retry",
     },
     recoverable: true,
     queueState: "timeout",
     startedAt,
     now,
   });
+}
+
+function expectedBridgeResultIdentity(request) {
+  return {
+    id: request?.id,
+    owner: request?.bridge?.expected_owner,
+    generation: request?.bridge?.expected_generation,
+  };
+}
+
+function validateBridgeResultIdentity(result, expected) {
+  if (result.id !== expected.id) {
+    throw new Error(`Bridge result id does not match the dispatched request: expected ${String(expected.id)}, received ${String(result.id)}.`);
+  }
+  if (result.bridge.owner !== expected.owner) {
+    throw new Error(`Bridge result owner does not match the dispatched request: expected ${String(expected.owner)}, received ${String(result.bridge.owner)}.`);
+  }
+  if (result.bridge.generation !== expected.generation) {
+    throw new Error(`Bridge result generation does not match the dispatched request: expected ${String(expected.generation)}, received ${String(result.bridge.generation)}.`);
+  }
+}
+
+function prepareIdempotencyDispatch(request, records) {
+  if (typeof request?.idempotency_key !== "string") return {};
+
+  let fingerprint;
+  try {
+    fingerprint = foundationBridgeRequestFingerprint(request);
+  } catch (error) {
+    return { error };
+  }
+
+  const scope = idempotencyScope(request);
+  const existing = records.get(scope);
+  if (existing) {
+    return existing.fingerprint === fingerprint
+      ? { existing }
+      : { conflict: true };
+  }
+
+  evictTerminalIdempotencyRecords(records);
+  if (records.size >= MAX_IDEMPOTENCY_RECORDS) return { capacityExceeded: true };
+
+  const record = {
+    scope,
+    fingerprint,
+    requestId: request.id,
+    resultIdentity: expectedBridgeResultIdentity(request),
+    resultPath: null,
+    state: "pending",
+  };
+  records.set(scope, record);
+  return { record };
+}
+
+function idempotencyScope(request) {
+  return JSON.stringify([
+    request.bridge.expected_owner,
+    request.bridge.expected_generation,
+    request.idempotency_key,
+  ]);
+}
+
+function evictTerminalIdempotencyRecords(records) {
+  if (records.size < MAX_IDEMPOTENCY_RECORDS) return;
+  for (const [scope, record] of records) {
+    if (record.state === "terminal") records.delete(scope);
+    if (records.size < MAX_IDEMPOTENCY_RECORDS) return;
+  }
+}
+
+function forgetIdempotencyRecord(records, record) {
+  if (record && records.get(record.scope) === record) records.delete(record.scope);
+}
+
+async function recoverExistingTransportRequest({
+  request,
+  paths,
+  timeoutMs,
+  pollIntervalMs,
+  startedAt,
+  now,
+  idempotencyRecord,
+}) {
+  let existingRequest;
+  try {
+    existingRequest = JSON.parse(await readFile(paths.request, "utf8"));
+  } catch {
+    return null;
+  }
+
+  if (!sameTransportRequest(existingRequest, request)) return null;
+  if (idempotencyRecord) idempotencyRecord.resultPath = paths.result;
+  return waitForBridgeResult({
+    request,
+    resultPath: paths.result,
+    timeoutMs,
+    pollIntervalMs,
+    startedAt,
+    now,
+    onResult(result) {
+      if (idempotencyRecord) idempotencyRecord.state = "terminal";
+      return request.idempotency_key ? replayBridgeResult(result, request, now) : result;
+    },
+  });
+}
+
+function sameTransportRequest(existing, request) {
+  try {
+    return existing?.id === request?.id
+      && existing?.bridge?.expected_owner === request?.bridge?.expected_owner
+      && existing?.bridge?.expected_generation === request?.bridge?.expected_generation
+      && (existing?.idempotency_key ?? null) === (request?.idempotency_key ?? null)
+      && foundationBridgeRequestFingerprint(existing) === foundationBridgeRequestFingerprint(request);
+  } catch {
+    return false;
+  }
+}
+
+function idempotencyConflictEnvelope(request, { startedAt, now }) {
+  return bridgeErrorEnvelope(request, {
+    code: "IDEMPOTENCY_CONFLICT",
+    message: "idempotency_key was reused with a different request fingerprint.",
+    recoverable: false,
+    queueState: "failed",
+    startedAt,
+    details: {
+      reason: "idempotency_key_reused_with_different_request",
+    },
+    now,
+  });
+}
+
+function replayBridgeResult(result, request, now) {
+  const replayed = structuredClone(result);
+  const completedAt = safeNowIso(now);
+  replayed.id = request.id;
+  replayed.completed_at = completedAt;
+  replayed.queue = {
+    ...replayed.queue,
+    state: "replayed",
+    completed_at: completedAt,
+  };
+  replayed.idempotency = {
+    key: request.idempotency_key,
+    replayed: true,
+  };
+  replayed.budget.response_bytes = encodedBytes(replayed);
+  validateFoundationBridgeResult(replayed);
+  return deepFreeze(replayed);
 }
 
 function transportPaths(transportDir, requestId) {
@@ -972,6 +1232,16 @@ function normalizePositiveInteger(value, fallback) {
   const number = typeof value === "number" ? value : Number.parseInt(value, 10);
   if (!Number.isInteger(number) || number < 1) return fallback;
   return number;
+}
+
+function normalizeExplicitPositiveInteger(value) {
+  const trimmed = typeof value === "string" ? value.trim() : null;
+  const number = typeof value === "number"
+    ? value
+    : trimmed !== null && /^\d+$/.test(trimmed)
+      ? Number(trimmed)
+      : Number.NaN;
+  return Number.isSafeInteger(number) && number >= 1 ? number : null;
 }
 
 function sleep(ms) {

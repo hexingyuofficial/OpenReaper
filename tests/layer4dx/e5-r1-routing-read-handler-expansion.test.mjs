@@ -281,8 +281,17 @@ describe("E5-R1 routing read live handler expansion", () => {
   it("keeps project graph reads bounded but permits large-project truth above the old 8/24 caps", () => {
     assert.match(E5_R1_HANDLER_SOURCE, /bounded_limit\(request, request\.params\.max_tracks, 8, 128\)/);
     assert.match(E5_R1_HANDLER_SOURCE, /bounded_limit\(request, request\.params\.max_edges, 24, 256\)/);
-    assert.match(E5_R1_HANDLER_SOURCE, /truncated = total > max_tracks/);
-    assert.match(E5_R1_HANDLER_SOURCE, /if #edges >= max_edges then[\s\S]*?truncated = true/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local edge_cursor = math\.max\(0, math\.floor\(tonumber\(request\.params\.edge_cursor\) or 0\)\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local track_truncated = total > max_tracks/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local resolve_track_refs, resolve_track_lookup = requested_track_refs\(request\.params\.resolve_track_refs\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local state_track_refs, state_track_lookup = requested_track_refs\(request\.params\.state_track_refs\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local include_track_row = include_tracks and \(not filter_track_state or state_track_lookup\[track_ref\] == true\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /if resolve_track_lookup\[track_ref\] == true or include_track_row then[\s\S]*?e5_routing_track_object_ref\(track\)/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /if include_tracks then[\s\S]*?end[\s\S]*?refs\[#refs \+ 1\] = e5_routing_track_object_ref\(track\)/);
+    assert.match(E5_R1_HANDLER_SOURCE, /if total_edge_count >= edge_cursor and #edges < max_edges then/);
+    assert.match(E5_R1_HANDLER_SOURCE, /local edges_truncated = next_edge_cursor < total_edge_count/);
+    assert.match(E5_R1_HANDLER_SOURCE, /next_edge_cursor = edges_truncated and tostring\(next_edge_cursor\) or nil/);
+    assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /if #edges >= max_edges then[\s\S]*?break/);
     assert.match(E5_R1_HANDLER_SOURCE, /GetTrackNumSends", track, 0/);
     assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /GetTrackNumSends", track, 1[\s\S]*?read_project_routing_graph/);
   });
@@ -294,8 +303,10 @@ describe("E5-R1 routing read live handler expansion", () => {
     assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("TRACK_READ_FAILED"\)/);
     assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("SEND_COUNT_UNAVAILABLE"\)/);
     assert.match(E5_R1_HANDLER_SOURCE, /mark_incomplete\("SEND_SUMMARY_UNAVAILABLE"\)/);
-    assert.match(E5_R1_HANDLER_SOURCE, /coverage_status = internally_complete and "complete" or "incomplete"/);
+    assert.match(E5_R1_HANDLER_SOURCE, /coverage_status = not internally_complete and "incomplete" or \(truncated and "paged" or "complete"\)/);
     assert.match(E5_R1_HANDLER_SOURCE, /coverage = \{[\s\S]*?internally_complete = internally_complete,[\s\S]*?incomplete_reasons = incomplete_reasons/);
+    assert.match(E5_R1_HANDLER_SOURCE, /track_truncated = track_truncated/);
+    assert.match(E5_R1_HANDLER_SOURCE, /edges_truncated = edges_truncated/);
     assert.doesNotMatch(E5_R1_HANDLER_SOURCE, /local function read_project_routing_graph[\s\S]*?GetTrackNumSends", track, 1/);
   });
 

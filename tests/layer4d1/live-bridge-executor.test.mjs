@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { link, mkdir, mkdtemp, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, readFile, readdir, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
+import { buildTemplateBridgeRequest } from "../../packages/core/src/template-execution-harness-v1.mjs";
+import { createTemplateCatalogWave1aTemplates } from "../../packages/core/src/template-catalog-fixtures-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_CONTRACT,
+  CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE0_LIVE_TEMPLATE_IDS,
   CALL_TEMPLATE_RUNTIME_WAVE1A_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -137,11 +140,223 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       timeoutMs: 20,
       pollIntervalMs: 1,
     });
-    const timeout = await dispatchOne(timeoutExecutor);
-    assert.equal(timeout.error.source, "bridge");
+    const timeoutStartedAt = Date.now();
+    const timeout = await timeoutExecutor.dispatch(idempotentProjectRequest({
+      id: "cmd_handshake_timeout",
+      idempotencyKey: "handshake-timeout",
+      name: "Handshake Timeout",
+      timeoutMs: 300_000,
+    }));
     assert.equal(timeout.error.code, "BRIDGE_TIMEOUT");
     assert.equal(timeout.error.details.blocker, "live_bridge_handshake_failed");
+    assert.equal(timeout.error.details.timeout_ms, 20);
+    assert.equal(Date.now() - timeoutStartedAt < 500, true);
     assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
+    const [writtenRequestPath] = await readdir(join(transport.root, "requests"));
+    const writtenRequest = JSON.parse(await readFile(join(transport.root, "requests", writtenRequestPath), "utf8"));
+    assert.equal(writtenRequest.timeout_ms, 300_000);
+  });
+
+  it("uses the descriptor timeout as the live transport wait budget", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      pollIntervalMs: 1,
+    });
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor,
+        executor_config: executor.config,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS,
+      },
+    });
+
+    const responsePromise = runtime.call_template({
+      id: "template.project.create_subproject",
+      input: { name: "Timeout Propagation", activate: true, inherit_time_selection: false },
+      refs: [],
+      context: context(),
+      idempotency_key: "timeout-propagation",
+    });
+    const requestPath = await waitForSingleRequest(transport.root);
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    assert.equal(request.timeout_ms, 300_000);
+
+    await delay(20);
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const result = bridge.okEnvelope(request, request.created_at, {
+      summary: { created: true },
+    });
+    await writeFile(join(transport.root, "results", `${request.id}.json`), `${JSON.stringify(result)}\n`);
+
+    const response = await responsePromise;
+    assert.equal(response.ok, true);
+    assert.equal(response.request.timeout_ms, 300_000);
+    assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
+  });
+
+  it("rejects a bridge result whose id does not match the dispatched request", async () => {
+    await assertRejectsBridgeResultIdentityMismatch({
+      mutateResult(result) {
+        result.id = "cmd_wrong_result_id";
+      },
+      messagePattern: /result id does not match the dispatched request/u,
+    });
+  });
+
+  it("rejects a bridge result whose owner does not match the dispatched request", async () => {
+    await assertRejectsBridgeResultIdentityMismatch({
+      mutateResult(result) {
+        result.bridge.owner = "owner-stale";
+      },
+      messagePattern: /result owner does not match the dispatched request/u,
+    });
+  });
+
+  it("rejects a bridge result whose generation does not match the dispatched request", async () => {
+    await assertRejectsBridgeResultIdentityMismatch({
+      mutateResult(result) {
+        result.bridge.generation = 2;
+      },
+      messagePattern: /result generation does not match the dispatched request/u,
+    });
+  });
+
+  it("caps a ready bridge at an explicitly configured executor timeout", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      timeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    const request = idempotentProjectRequest({
+      id: "cmd_explicit_timeout_cap",
+      idempotencyKey: "explicit-timeout-cap",
+      name: "Explicit Timeout Cap",
+      timeoutMs: 300_000,
+    });
+
+    const startedAt = Date.now();
+    const response = await executor.dispatch(request);
+    assert.equal(response.error.code, "BRIDGE_TIMEOUT");
+    assert.equal(response.error.details.timeout_ms, 5);
+    assert.equal(Date.now() - startedAt < 250, true);
+    const writtenRequest = JSON.parse(await readFile(
+      join(transport.root, "requests", `${request.id}.json`),
+      "utf8",
+    ));
+    assert.equal(writtenRequest.timeout_ms, 300_000);
+  });
+
+  it("does not turn a blank environment timeout into an explicit cap", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    const now = new Date("2026-07-17T12:00:00.000Z");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+      mtime: now,
+    });
+    const configured = createLiveBridgeExecutorFromEnv({
+      [LIVE_BRIDGE_EXECUTOR_ENV.transport_dir]: transport.root,
+      [LIVE_BRIDGE_EXECUTOR_ENV.bridge_script_path]: bridgeScriptPath,
+      [LIVE_BRIDGE_EXECUTOR_ENV.timeout_ms]: "   ",
+    }, {
+      pollIntervalMs: 1,
+      now: () => now,
+    });
+    const request = idempotentProjectRequest({
+      id: "cmd_blank_env_timeout",
+      idempotencyKey: "blank-env-timeout",
+      name: "Blank Environment Timeout",
+      timeoutMs: 300_000,
+    });
+
+    const originalDateNow = Date.now;
+    let monotonicMs = 0;
+    Date.now = () => {
+      monotonicMs += 10_000;
+      return monotonicMs;
+    };
+    try {
+      const response = await configured.executor.dispatch(request);
+      assert.equal(response.error.code, "BRIDGE_TIMEOUT");
+      assert.equal(response.error.details.timeout_ms, 300_000);
+    } finally {
+      Date.now = originalDateNow;
+    }
+  });
+
+  it("recovers a late idempotent result without dispatching a duplicate mutation", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      timeoutMs: 5,
+      pollIntervalMs: 1,
+    });
+    const firstRequest = idempotentProjectRequest({
+      id: "cmd_timeout_first",
+      idempotencyKey: "late-result-recovery",
+      name: "Late Result",
+      timeoutMs: 10,
+    });
+
+    const timedOut = await executor.dispatch(firstRequest);
+    assert.equal(timedOut.error.code, "BRIDGE_TIMEOUT");
+    assert.equal(timedOut.error.details.outcome, "unknown");
+    assert.equal(timedOut.error.details.retry_policy, "retry_only_with_same_idempotency_key");
+
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const lateResult = bridge.okEnvelope(firstRequest, firstRequest.created_at, {
+      summary: { created: true },
+    });
+    await writeFile(join(transport.root, "results", `${firstRequest.id}.json`), `${JSON.stringify(lateResult)}\n`);
+
+    const retryRequest = idempotentProjectRequest({
+      id: "cmd_timeout_retry",
+      idempotencyKey: "late-result-recovery",
+      name: "Late Result",
+      timeoutMs: 50,
+    });
+    const replay = await executor.dispatch(retryRequest);
+    assert.equal(replay.ok, true);
+    assert.equal(replay.id, retryRequest.id);
+    assert.equal(replay.queue.state, "replayed");
+    assert.deepEqual(replay.idempotency, { key: "late-result-recovery", replayed: true });
+    assert.deepEqual(await readdir(join(transport.root, "requests")), [`${firstRequest.id}.json`]);
+
+    const conflict = await executor.dispatch(idempotentProjectRequest({
+      id: "cmd_timeout_conflict",
+      idempotencyKey: "late-result-recovery",
+      name: "Different Mutation",
+      timeoutMs: 50,
+    }));
+    assert.equal(conflict.error.code, "IDEMPOTENCY_CONFLICT");
+    assert.equal(conflict.error.recoverable, false);
+    assert.deepEqual(await readdir(join(transport.root, "requests")), [`${firstRequest.id}.json`]);
   });
 
   it("probes basic liveness states without dispatching and recursively freezes results", async () => {
@@ -649,6 +864,73 @@ async function makeTransport() {
   await mkdir(join(root, "requests"));
   await mkdir(join(root, "results"));
   return { root };
+}
+
+async function waitForSingleRequest(root) {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() <= deadline) {
+    const filenames = await readdir(join(root, "requests"));
+    if (filenames.length === 1) return join(root, "requests", filenames[0]);
+    await delay(2);
+  }
+  throw new Error("Timed out waiting for one live bridge request fixture.");
+}
+
+function idempotentProjectRequest({ id, idempotencyKey, name, timeoutMs }) {
+  const descriptor = createTemplateCatalogWave1aTemplates()
+    .find((entry) => entry.id === "template.project.create_subproject");
+  const request = buildTemplateBridgeRequest({
+    descriptor,
+    input: { name, activate: true, inherit_time_selection: false },
+    refs: [],
+    context: context(),
+    idempotencyKey,
+    requestId: id,
+  });
+  return {
+    ...request,
+    timeout_ms: timeoutMs,
+  };
+}
+
+async function assertRejectsBridgeResultIdentityMismatch({ mutateResult, messagePattern }) {
+  const transport = await makeTransport();
+  const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+  await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+  await writeHeartbeat(transport.root, {
+    active_owner: "owner-test",
+    active_generation: 1,
+  });
+  const executor = createLiveBridgeExecutor({
+    transportDir: transport.root,
+    bridgeScriptPath,
+    timeoutMs: 250,
+    pollIntervalMs: 1,
+  });
+  const request = idempotentProjectRequest({
+    id: "cmd_result_identity_check",
+    idempotencyKey: "result-identity-check",
+    name: "Result Identity Check",
+    timeoutMs: 250,
+  });
+
+  const responsePromise = executor.dispatch(request);
+  await waitForSingleRequest(transport.root);
+  const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+  const result = structuredClone(bridge.okEnvelope(request, request.created_at, {
+    summary: { created: true },
+  }));
+  mutateResult(result);
+  await writeFile(join(transport.root, "results", `${request.id}.json`), `${JSON.stringify(result)}\n`);
+
+  const response = await responsePromise;
+  assert.equal(response.ok, false);
+  assert.equal(response.error.details.blocker, "live_bridge_result_invalid");
+  assert.match(response.error.details.message, messagePattern);
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 async function writeHeartbeat(root, overrides = {}) {

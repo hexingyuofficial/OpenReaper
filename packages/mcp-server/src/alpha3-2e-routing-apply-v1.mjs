@@ -49,9 +49,10 @@ export function planAlpha3_2ERoutingApplyMacro(input = {}, requestPosture = {}) 
   if (preview.target_counts.total_operations === 0) return blockedPlan([blocker("ROUTING_APPLY_EMPTY", "macro.routing.apply requires at least one route, master_parent, or channel_count operation.")], preview);
   if (dryRun) return dryRunPlan(preview);
 
+  const preflight = preflightRequests(operations);
   const mutationRequests = buildMutationRequests(operations);
   const readback = readbackRequests(operations);
-  const childRequests = [...preflightRequests(), ...mutationRequests, ...readback];
+  const childRequests = [...preflight, ...mutationRequests, ...readback];
   return deepFreeze({
     contract: ALPHA3_2E_ROUTING_APPLY_MACRO_CONTRACT,
     version: ALPHA3_2E_ROUTING_APPLY_MACRO_VERSION,
@@ -60,7 +61,7 @@ export function planAlpha3_2ERoutingApplyMacro(input = {}, requestPosture = {}) 
     mode: "plan_only_agent_executed_child_requests",
     dry_run: false,
     preview,
-    preflight_requests: preflightRequests(),
+    preflight_requests: preflight,
     mutation_requests: mutationRequests,
     readback_requests: readback,
     child_requests: childRequests,
@@ -356,8 +357,25 @@ function buildPreview(operations) {
   });
 }
 
-function preflightRequests() {
-  return deepFreeze([childRequest(1, "preflight", READ_PROJECT_ROUTING_ID, {}, { include_master_parent: true, max_tracks: 128, max_edges: 256 }, "Read project routing graph before planning internal routing changes.")]);
+function preflightRequests(operations) {
+  const stateTrackRefs = [...new Set([
+    ...operations.master_parent.map((row) => row.track_ref),
+    ...operations.channel_counts.map((row) => row.track_ref),
+  ])];
+  const resolveTrackRefs = [...new Set([
+    ...operations.routes
+      .filter((row) => row.action === "create")
+      .flatMap((row) => [row.source_track_ref, row.destination_track_ref]),
+    ...stateTrackRefs,
+  ].filter(Boolean))];
+  return deepFreeze([childRequest(1, "preflight", READ_PROJECT_ROUTING_ID, {}, {
+    include_master_parent: operations.master_parent.length > 0,
+    include_tracks: stateTrackRefs.length > 0,
+    max_tracks: 128,
+    max_edges: 256,
+    ...(resolveTrackRefs.length > 0 ? { resolve_track_refs: resolveTrackRefs } : {}),
+    ...(stateTrackRefs.length > 0 ? { state_track_refs: stateTrackRefs } : {}),
+  }, "Read complete project routing topology plus only the exact Track identities/state needed by this mutation batch.")]);
 }
 
 function buildMutationRequests(operations) {
@@ -382,7 +400,6 @@ function readbackRequests(operations) {
   const tracks = new Set();
   for (const row of operations.routes) {
     if (row.source_track_ref) tracks.add(row.source_track_ref);
-    if (row.destination_track_ref) tracks.add(row.destination_track_ref);
     const exact = parseExactSendRef(row.send_ref);
     if (exact) tracks.add(exact.source_track_ref);
   }
