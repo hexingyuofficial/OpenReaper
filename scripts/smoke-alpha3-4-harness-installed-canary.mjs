@@ -73,10 +73,17 @@ export async function runInstalledWrapperCanary({ installedWrapper, sourceProjec
     const ping = await canaryCall({ journal, client, step: "installed-wrapper-ping", tool: "ping", args: {}, report });
     assertCanary(ping?.ok === true, "CANARY_PING_NOT_OK", { response: ping });
     assertCanary(
-      ping?.version === report.provenance.package_provenance.package_version,
-      "CANARY_PACKAGE_VERSION_MISMATCH",
-      { provenance_version: report.provenance.package_provenance.package_version, ping_version: ping?.version ?? null },
+      ping?.product === "OpenReaper" && ping?.kernel === "openreaper-mcp alpha kernel",
+      "CANARY_RUNTIME_IDENTITY_MISMATCH",
+      { product: ping?.product ?? null, kernel: ping?.kernel ?? null },
     );
+    assertCanary(
+      typeof ping?.version === "string" && /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(ping.version),
+      "CANARY_RUNTIME_VERSION_INVALID",
+      { runtime_version: ping?.version ?? null },
+    );
+    report.provenance.runtime_ping = { product: ping.product, kernel: ping.kernel, version: ping.version };
+    journal.setProvenance?.({ runtime_ping: report.provenance.runtime_ping });
     const read = await canaryCall({
       journal,
       client,

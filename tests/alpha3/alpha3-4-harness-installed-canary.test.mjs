@@ -18,7 +18,7 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
   const client = {
     async callTool(request) {
       requests.push(request);
-      if (request.name === "ping") return jsonResponse({ ok: true, version: "3.3.0-alpha.0" });
+      if (request.name === "ping") return jsonResponse(runtimePing());
       assert.equal(request.name, "call_template");
       assert.deepEqual(request.arguments, { id: "template.project.read_summary", input: { include_counts: true }, budget: INSTALLED_CANARY_BUDGET });
       return jsonResponse({ ok: true, result: { summary: { path: sourceProject, track_count: 0, item_count: 0 } } });
@@ -39,6 +39,11 @@ test("installed-wrapper canary performs exactly ping plus one bounded project re
     assert.equal(report.provenance.transport, "installed_wrapper_only");
     assert.equal(report.provenance.package_provenance.contract, "openreaper.package.provenance.v1");
     assert.equal(report.provenance.package_provenance.package_version, "3.3.0-alpha.0");
+    assert.deepEqual(report.provenance.runtime_ping, {
+      product: "OpenReaper",
+      kernel: "openreaper-mcp alpha kernel",
+      version: "0.3.0-alpha",
+    });
     assert.match(report.provenance.package_provenance.provenance_sha256, /^[0-9a-f]{64}$/u);
     assert.equal(report.source_hashes.before, before);
     assert.equal(report.source_hashes.after, before);
@@ -64,7 +69,7 @@ test("installed-wrapper canary fails if the supposedly read-only run changes the
   try {
     const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
       async callTool({ name }) {
-        if (name === "ping") return jsonResponse({ ok: true, version: "3.3.0-alpha.0" });
+        if (name === "ping") return jsonResponse(runtimePing());
         await writeFile(sourceProject, "unexpected mutation", "utf8");
         return jsonResponse({ ok: true, result: { summary: { path: sourceProject }, changes: [] } });
       },
@@ -90,7 +95,7 @@ test("installed-wrapper canary records a failed read and closes the injected cli
   try {
     const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
       async callTool({ name }) {
-        if (name === "ping") return jsonResponse({ ok: true, version: "3.3.0-alpha.0" });
+        if (name === "ping") return jsonResponse(runtimePing());
         return jsonResponse({ ok: true, result: { summary: { path: "/wrong/project.RPP" } } });
       },
       async close() { closeCount += 1; },
@@ -139,8 +144,30 @@ test("canary source statically uses only the installed wrapper transport and the
   assert.equal((source.match(/template\.project\.read_summary/gu) ?? []).length, 1);
 });
 
+test("installed-wrapper canary rejects a ping that does not identify the OpenReaper kernel", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-canary-runtime-"));
+  const installedWrapper = await writeInstalledFixture(root);
+  const sourceProject = path.join(root, "source.RPP");
+  const evidenceRoot = path.join(root, "evidence");
+  await writeFile(sourceProject, "RPP fixture", "utf8");
+  try {
+    const report = await runInstalledWrapperCanary({ installedWrapper, sourceProject, evidenceRoot, connectFactory: async () => ({
+      async callTool() { return jsonResponse({ ok: true, product: "Other", kernel: "other", version: "0.3.0-alpha" }); },
+      async close() {},
+    }) });
+    assert.equal(report.ok, false);
+    assert.equal(report.error.code, "CANARY_RUNTIME_IDENTITY_MISMATCH");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function jsonResponse(value) {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
+}
+
+function runtimePing() {
+  return { ok: true, product: "OpenReaper", kernel: "openreaper-mcp alpha kernel", version: "0.3.0-alpha" };
 }
 
 async function writeInstalledFixture(root) {
