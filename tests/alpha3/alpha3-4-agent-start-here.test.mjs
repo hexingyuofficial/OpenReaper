@@ -144,6 +144,9 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /cursor/u);
   assert.match(instructions, /get_state/u);
   assert.match(instructions, /openreaper-start/u);
+  assert.match(instructions, /macro_recommendations/u);
+  assert.match(instructions, /first_try_execution_guide/u);
+  assert.match(instructions, /next_call/u);
   assert.doesNotMatch(instructions, /\{TRACK\}|\{TAKE\}|\{ITEM\}/u);
   assert.match(instructions, /No `call_recipe`/u);
   assert.match(instructions, /Raw Lua/u);

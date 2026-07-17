@@ -28,6 +28,11 @@ import {
   ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
   createAlpha3_3MediaPlaceAssetsExactManual,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
+import {
+  attachAlpha34BFirstTryGuideToExpansion,
+  createAlpha34BMacroRecommendations,
+  createAlpha34BRecommendationRowsForIds,
+} from "./alpha3-4-b-discovery-manual-v1.mjs";
 
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT = "alpha3.3.agent_context_macro_guide.v1";
 export const ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION = "1.0.0";
@@ -37,64 +42,81 @@ const MENU_ROWS = deepFreeze(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.map((id) => comp
 const INTENT_ROUTES = deepFreeze([
   intent("macro.project.inspect", [
     term("inspect project", 8), term("project overview", 8), term("project map", 7), term("what is in this project", 9),
-    term("检查项目", 8), term("项目概览", 8), term("项目地图", 7), term("项目里有什么", 9),
+    term("project status", 7), term("show project", 7), term("current project", 6), term("project summary", 8),
+    term("检查项目", 8), term("项目概览", 8), term("项目地图", 7), term("项目里有什么", 9), term("项目状态", 7), term("查看项目", 7),
   ]),
   intent("macro.project.query", [
     term("find track", 8), term("find item", 8), term("find fx", 8), term("search project", 7), term("locate", 5), term("query", 5),
-    term("查找", 6), term("搜索", 6), term("查询", 6), term("定位", 5),
+    term("list tracks", 8), term("which track", 7), term("lookup ref", 8), term("get refs", 8), term("canonical ref", 9),
+    term("查找", 6), term("搜索", 6), term("查询", 6), term("定位", 5), term("找轨道", 8), term("找item", 8), term("拿ref", 8),
   ]),
   intent("macro.project.delete_targets", [
     term("delete target", 9), term("delete track", 9), term("delete item", 9), term("delete fx", 10), term("remove fx", 9), term("remove track", 8), term("remove item", 8), term("cleanup project", 6),
-    term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("删除fx", 10), term("移除效果器", 9), term("移除轨道", 8), term("清理项目", 6),
+    term("trash track", 8), term("drop fx", 8), term("erase item", 8),
+    term("删除目标", 9), term("删除轨道", 9), term("删除item", 9), term("删除fx", 10), term("移除效果器", 9), term("移除轨道", 8), term("清理项目", 6), term("删掉轨道", 8),
   ]),
   intent("macro.project.apply_layout", [
     term("create track", 9), term("create folder", 9), term("track layout", 8), term("organize tracks", 8), term("create marker", 10), term("create region", 10), term("timeline marker", 9),
-    term("创建轨道", 9), term("创建文件夹", 9), term("轨道布局", 8), term("整理轨道", 8), term("创建标记", 10), term("创建区域", 10), term("时间线标记", 9), term("标记", 8), term("区域", 8),
+    term("add track", 8), term("new folder", 8), term("make region", 9), term("add marker", 9),
+    term("创建轨道", 9), term("创建文件夹", 9), term("轨道布局", 8), term("整理轨道", 8), term("创建标记", 10), term("创建区域", 10), term("时间线标记", 9), term("标记", 8), term("区域", 8), term("新建轨道", 8),
   ]),
   intent("macro.project.file", [
-    term("save as", 10), term("save project", 9), term("save", 6), term("另存为", 10), term("保存项目", 9), term("保存", 6),
+    term("save as", 10), term("save project", 9), term("save", 6), term("write project", 7), term("persist project", 7),
+    term("另存为", 10), term("保存项目", 9), term("保存", 6), term("存盘", 7),
   ], ["new project", "open project", "create project", "新建项目", "打开项目", "创建项目"]),
   intent("macro.routing.apply", [
     term("routing", 8), term("route track", 8), term("create send", 9), term("remove send", 10), term("delete send", 10), term("send to", 7), term("sidechain", 8), term("bus", 5),
-    term("路由", 8), term("发送到", 7), term("创建send", 9), term("删除send", 10), term("移除发送", 10), term("侧链", 8), term("总线", 5),
+    term("track send", 9), term("reverb send", 8), term("aux send", 8),
+    term("路由", 8), term("发送到", 7), term("创建send", 9), term("删除send", 10), term("移除发送", 10), term("侧链", 8), term("总线", 5), term("发送", 6),
   ]),
   intent("macro.media.place_assets", [
     term("search sound library", 10), term("find a sound", 9), term("find a sample", 10), term("media explorer", 10), term("sound library", 9), term("find a kick", 10),
     term("import audio", 10), term("import media", 10), term("import sample", 9), term("place assets", 9), term("place media", 9),
+    term("drop sample", 8), term("insert audio file", 9), term("bring in media", 8),
     term("搜索音效库", 10), term("找音效", 9), term("找素材", 10), term("媒体浏览器", 10), term("找kick", 10),
-    term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入采样", 9), term("放置素材", 9),
+    term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入采样", 9), term("放置素材", 9), term("放音频", 8),
   ]),
   intent("macro.items.analyze", [
     term("analyze item", 9), term("analyze audio", 9), term("loudness", 8), term("transient", 8), term("silence", 7), term("peak analysis", 8),
+    term("measure loudness", 9), term("detect silence", 8), term("item analysis", 8),
     term("分析 item", 9), term("分析item", 9), term("分析音频", 9), term("分析", 7), term("响度", 8), term("瞬态", 8), term("静音检测", 7), term("峰值分析", 8),
   ]),
   intent("macro.items.apply", [
     term("arrange items", 10), term("align items", 9), term("align item starts", 9), term("align starts", 9), term("sequence items", 9), term("move items", 8), term("item properties", 7),
+    term("fade", 9), term("fades", 9), term("fade in", 10), term("fade out", 10), term("apply fades", 10), term("item fade", 10),
+    term("trim item", 8), term("split silence", 7), term("stack items", 8), term("nudge items", 7),
     term("排列 item", 10), term("排列item", 10), term("对齐 item", 9), term("对齐item", 9), term("对齐开头", 9), term("排序 item", 9), term("排序item", 9), term("移动 item", 8), term("移动item", 8), term("item属性", 7),
-  ], ["normalize", "normalise", "lufs", "fade", "标准化", "归一化", "淡入", "淡出"]),
+    term("淡入", 10), term("淡出", 10), term("淡入淡出", 10), term("加淡入", 10), term("加淡出", 10), term("item淡入", 10),
+  ], ["normalize", "normalise", "lufs", "标准化", "归一化"]),
   intent("macro.midi.apply", [
     term("midi clip", 10), term("create midi", 9), term("midi note", 8), term("midi", 6), term("quantize", 10), term("edit midi", 10), term("edit existing notes", 10), term("write cc", 10), term("control change", 9),
-    term("midi片段", 10), term("创建midi", 9), term("midi音符", 8), term("音符片段", 8), term("量化", 10), term("编辑midi", 10), term("编辑现有音符", 10), term("写入cc", 10), term("控制器", 9),
+    term("make midi", 8), term("draw notes", 8), term("midi item", 9), term("piano roll", 7),
+    term("midi片段", 10), term("创建midi", 9), term("midi音符", 8), term("音符片段", 8), term("量化", 10), term("编辑midi", 10), term("编辑现有音符", 10), term("写入cc", 10), term("控制器", 9), term("做一段midi", 9),
   ]),
   intent("macro.fx.apply_chain", [
     term("add compressor", 10), term("add a compressor", 10), term("apply compressor", 10), term("apply a compressor", 10), term("compressor chain", 9), term("add reacomp", 10), term("apply reacomp", 10), term("add fx chain", 8),
-    term("添加压缩器", 10), term("应用压缩器", 10), term("压缩器链", 9), term("添加reacomp", 10), term("添加效果链", 8),
+    term("add fx", 8), term("insert fx", 8), term("put a compressor", 9), term("add eq", 8), term("plugin chain", 8),
+    term("添加压缩器", 10), term("应用压缩器", 10), term("压缩器链", 9), term("添加reacomp", 10), term("添加效果链", 8), term("加压缩", 9), term("加效果器", 8), term("加eq", 8),
   ]),
   intent("macro.fx.set_controls", [
     term("adjust compressor", 10), term("compressor controls", 9), term("fx controls", 8), term("plugin controls", 8), term("threshold", 7), term("ratio", 6),
-    term("调整压缩器", 10), term("压缩器参数", 9), term("效果参数", 8), term("插件参数", 8), term("阈值", 7), term("压缩比", 6),
+    term("tweak fx", 8), term("set plugin params", 9), term("change fx settings", 8),
+    term("调整压缩器", 10), term("压缩器参数", 9), term("效果参数", 8), term("插件参数", 8), term("阈值", 7), term("压缩比", 6), term("调效果", 8),
   ]),
   intent("macro.controls.set", [
     term("project bpm", 10), term("set bpm", 9), term("tempo", 8), term("project grid", 10), term("set grid", 9), term("snap", 8), term("track volume", 8), term("track pan", 8), term("transport", 6),
-    term("项目bpm", 10), term("设置bpm", 9), term("速度", 7), term("项目网格", 10), term("设置网格", 9), term("吸附", 8), term("轨道音量", 8), term("轨道声像", 8), term("传输控制", 6),
+    term("change bpm", 9), term("set tempo", 9), term("mute track", 7), term("solo transport", 6),
+    term("项目bpm", 10), term("设置bpm", 9), term("速度", 7), term("项目网格", 10), term("设置网格", 9), term("吸附", 8), term("轨道音量", 8), term("轨道声像", 8), term("传输控制", 6), term("改bpm", 9),
   ]),
   intent("macro.automation.apply", [
-    term("automation item", 10), term("automation", 9), term("automate", 9), term("envelope", 8), term("automation curve", 9), term("automation points", 9),
-    term("自动化项", 10), term("自动化", 9), term("包络", 8), term("自动化曲线", 9), term("自动化点", 9),
+    term("automation item", 10), term("automation", 6), term("automate", 7), term("envelope", 8), term("automation curve", 9), term("automation points", 9),
+    term("volume automation", 7), term("draw envelope", 8), term("write automation", 8),
+    term("自动化项", 10), term("自动化", 3), term("包络", 8), term("自动化曲线", 9), term("自动化点", 9), term("音量自动化", 7), term("写自动化", 8),
   ]),
   intent("macro.render.targets", [
     term("render", 9), term("export audio", 9), term("bounce", 8), term("render wav", 10), term("render ogg", 10),
-    term("渲染", 9), term("导出音频", 9), term("导出wav", 10), term("导出ogg", 10),
+    term("export mix", 9), term("print stems", 8), term("render region", 9),
+    term("渲染", 9), term("导出音频", 9), term("导出wav", 10), term("导出ogg", 10), term("导出混音", 9), term("渲染区域", 9),
   ], ["mp3"]),
 ]);
 
@@ -102,6 +124,8 @@ export function createAlpha3_3B1AgentContextMacroGuide({
   requested_ids = [],
   missing_ids = [],
   recommended_macro_ids = [],
+  query = null,
+  discovery_items_by_id = null,
 } = {}) {
   const requestedIds = stringArray(requested_ids);
   const missingIds = stringArray(missing_ids);
@@ -109,12 +133,23 @@ export function createAlpha3_3B1AgentContextMacroGuide({
     .filter((id) => isAlpha3_3B1VisibleExecutableMacroId(id))
     .slice(0, 3);
   const expansions = requestedIds
-    .map((id) => createAlpha3_3B1ExactMacroExpansion(id))
+    .map((id) => {
+      const base = createAlpha3_3B1ExactMacroExpansion(id);
+      if (!base) return null;
+      const discoveryItem = discovery_items_by_id?.get?.(id) ?? discovery_items_by_id?.[id] ?? null;
+      return attachAlpha34BFirstTryGuideToExpansion(base, discoveryItem);
+    })
     .filter(Boolean);
   const unresolvedIds = [...new Set([
     ...missingIds,
     ...requestedIds.filter((id) => !expansions.some((entry) => entry.id === id)),
   ])];
+  const recommendationProjection = typeof query === "string" && query.trim() !== ""
+    ? createAlpha34BMacroRecommendations(query)
+    : createAlpha34BMacroRecommendations(null);
+  const macroRecommendations = recommendedIds.length > 0
+    ? createAlpha34BRecommendationRowsForIds(recommendedIds)
+    : recommendationProjection.recommendations;
 
   return deepFreeze({
     contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
@@ -136,6 +171,7 @@ export function createAlpha3_3B1AgentContextMacroGuide({
       exact_manual_request: { tool: "list_templates", ids: ["macro.project.inspect"] },
     },
     recommended_macro_ids: recommendedIds,
+    macro_recommendations: macroRecommendations,
     requested_expansions: {
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
       version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -172,6 +208,7 @@ export function createAlpha3_3B1AgentContextMacroGuide({
       hardware_or_device_io: false,
       sqlite_write_authority: false,
     },
+    search_phrases_are_metadata_only: true,
   });
 }
 

@@ -1,6 +1,6 @@
 # OpenReaper Agent Start Here
 
-Status: Alpha3.4-A unique Agent startup source.
+Status: Alpha3.4-B unique Agent startup source.
 
 This document is the only long-form Agent entry for OpenReaper. Runtime MCP
 initialization projects the marked compact section below. Do not invent a second
@@ -28,6 +28,21 @@ recording one typed fallback reason
 (`macro_missing_for_task`, `macro_task_out_of_scope`,
 `macro_target_ambiguous_or_unavailable`, `macro_domain_not_accepted`,
 `macro_budget_prefers_atomic_template`).
+
+On `list_templates` with a non-empty `query`, read
+`product_surface.agent_context_macro_guide.macro_recommendations` (1-3 rows).
+Each row has lowercase `id`, ready `exact_expansion_call`, required target facts,
+`preview_or_dry_run_mandatory`, and typed Template fallback posture. Do not echo
+the full user text. Search phrases are metadata only, never executable aliases.
+
+On exact-id expansion, read each item's `first_try_execution_guide` for accepted
+modes, public fields, units/bounds, selector/ref requirements, paging/budget
+recovery, and deterministic `next_calls`. If live identity is unresolved, the
+guide marks the mutation non-executable and pairs an immediately executable
+`macro.project.query` prerequisite. Never treat placeholder refs as executable.
+
+On covered validation/replacement/budget/readiness errors, follow machine-readable
+`error.next_call` or `error.request_patch` when present; keep existing failure codes.
 
 ## Flat 15 Macro menu
 

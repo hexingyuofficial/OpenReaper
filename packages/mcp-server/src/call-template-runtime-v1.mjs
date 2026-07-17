@@ -217,6 +217,9 @@ import {
   rankAlpha3_3B1MacroIntents,
 } from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import {
+  enrichAlpha34BRuntimeError,
+} from "./alpha3-4-b-discovery-manual-v1.mjs";
+import {
   ALPHA3_3_B1B_ITEMS_ANALYZE_REGISTRY,
   createAlpha3_3B1bItemsAnalyzeDiscoveryItems,
   executeAlpha3_3B1bItemsAnalyzeMacro,
@@ -1475,6 +1478,7 @@ export function createCallTemplateRuntime(options = {}) {
         error,
         now,
         budget: safeRuntimeBudget(request?.budget),
+        request,
       });
       retainEvidence(retainedEvidence, evidenceFromRuntimeError(envelope, live.evidence), evidenceLimit);
       return envelope;
@@ -1928,7 +1932,7 @@ function assertLiveRuntimeDispatchAllowed(live, id) {
   }
 }
 
-function runtimeErrorEnvelope({ id, error, now, budget }) {
+function runtimeErrorEnvelope({ id, error, now, budget, request = null }) {
   const normalized = normalizeRuntimeError(error);
   const envelope = {
     contract: CALL_TEMPLATE_RUNTIME_CONTRACT,
@@ -1951,7 +1955,7 @@ function runtimeErrorEnvelope({ id, error, now, budget }) {
         code: normalized.code,
         details: normalized.details,
         recoverable: normalized.recoverable,
-      }),
+      }, request ?? { id: id ?? normalized.id, input: normalized.details?.replacement_input }),
     },
     budget: {
       max_response_bytes: budget.max_response_bytes,
@@ -1985,7 +1989,7 @@ function enforceRuntimeResponseContract(response, request, now) {
         ...response,
         error: {
           ...response.error,
-          ...runtimeFailureDiagnostics(response.error),
+          ...runtimeFailureDiagnostics(response.error, request),
         },
       }
     : response;
@@ -2128,18 +2132,23 @@ function compactCopyPasteSafeGuidance(failureLayer) {
   return `OpenReaper MCP only (${failureLayer ?? "runtime"}); no direct bridge, Lua, shell, or UI execution.`;
 }
 
-function runtimeFailureDiagnostics(error = {}) {
+function runtimeFailureDiagnostics(error = {}, request = null) {
   const source = error.source;
   const code = error.code;
   const details = isPlainObject(error.details) ? error.details : {};
   const blocker = details.blocker;
   const failureLayer = runtimeFailureLayer({ source, code, blocker });
   const action = runtimeRecommendedNextAction({ failureLayer, code, blocker, details });
-  return {
+  const base = {
     failure_layer: failureLayer,
     recommended_next_action: action,
     copy_paste_safe_guidance: runtimeCopyPasteSafeGuidance({ failureLayer, code, blocker }),
   };
+  return enrichAlpha34BRuntimeError({
+    code,
+    details,
+    ...base,
+  }, request);
 }
 
 function runtimeFailureLayer({ source, code, blocker }) {
@@ -2528,12 +2537,17 @@ function runtimeDiscoveryRequestHasIds(request) {
 function runtimeActionDiscoveryResponse(response, surface, templatesById, productSurface = {}, request = {}) {
   const attachActionMetadata = runtimeShouldAttachActionMetadata(request);
   const macroFirstRouting = runtimeMacroFirstRoutingDecision({ response, surface, request });
+  const discoveryItemsById = new Map(
+    (Array.isArray(response.items) ? response.items : []).map((item) => [item.id, item]),
+  );
   return deepFreeze({
     ...response,
     product_surface: runtimeProductSurfaceMetadata(surface, productSurface, {
       detail_level: response.mode === "ids" ? "expanded" : "compact",
       requested_ids: response.mode === "ids" ? response.applied.ids : [],
       missing_ids: response.missing_ids,
+      query: typeof request?.query === "string" ? request.query : null,
+      discovery_items_by_id: discoveryItemsById,
     }, macroFirstRouting),
     items: response.items.map((item) => {
       if (!attachActionMetadata) return item;
@@ -2565,7 +2579,7 @@ function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
     ? rankAlpha3_3B1MacroIntents(request.query)
     : [];
   const selectedMacroIds = queryPresent
-    ? [...new Set([...macroIds, ...intentMacroIds])].slice(0, 3)
+    ? (intentMacroIds.length > 0 ? intentMacroIds : macroIds.slice(0, 3)).slice(0, 3)
     : macroIds;
   let route = "macro_first";
   let fallbackGap = null;
@@ -2605,6 +2619,9 @@ function runtimeMacroFirstRoutingDecision({ response, surface, request }) {
 
 function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideRequest = {}, macroFirstRouting = null) {
   const expanded = guideRequest.detail_level === "expanded";
+  const recommendedIds = macroFirstRouting?.query_present === true
+    ? macroFirstRouting.selected_macro_ids?.slice(0, 3) ?? []
+    : [];
   return {
     contract: CALL_TEMPLATE_RUNTIME_PRODUCT_SURFACE_CONTRACT,
     surface,
@@ -2616,9 +2633,9 @@ function runtimeProductSurfaceMetadata(surface, productSurface = {}, guideReques
     agent_context_macro_guide: createAlpha3_3B1AgentContextMacroGuide({
       requested_ids: guideRequest.requested_ids,
       missing_ids: guideRequest.missing_ids,
-      recommended_macro_ids: macroFirstRouting?.query_present === true
-        ? macroFirstRouting.selected_macro_ids?.slice(0, 3) ?? []
-        : [],
+      recommended_macro_ids: recommendedIds,
+      query: guideRequest.query ?? null,
+      discovery_items_by_id: guideRequest.discovery_items_by_id ?? null,
     }),
     macro_first_routing: macroFirstRouting,
     item_schema: {

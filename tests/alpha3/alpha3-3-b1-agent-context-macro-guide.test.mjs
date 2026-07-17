@@ -181,6 +181,8 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     assert.deepEqual(rankAlpha3_3B1MacroIntents("quantize existing MIDI notes"), ["macro.midi.apply"]);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("render MP3"), []);
     assert.deepEqual(rankAlpha3_3B1MacroIntents("open project"), []);
+    assert.deepEqual(rankAlpha3_3B1MacroIntents("add fade in to selected items"), ["macro.items.apply"]);
+    assert.deepEqual(rankAlpha3_3B1MacroIntents("给选中 item 加淡入"), ["macro.items.apply"]);
   });
 
   it("attaches the same flat guide to non-template product surfaces", () => {
