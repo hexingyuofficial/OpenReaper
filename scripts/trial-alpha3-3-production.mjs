@@ -26,16 +26,17 @@ try {
     mediaRoots: options.media_roots,
     mediaAssets: options.media_assets,
     thirdPartyFxQuery: options.third_party_fx_query,
+    evidenceRoot: options.evidence_root,
   });
-  console.log(JSON.stringify(report, null, 2));
+  if (mode === "execute" && !options.full_report) console.log(JSON.stringify(compactExecutionEnvelope(report)));
+  else console.log(JSON.stringify(report, null, 2));
   if (mode === "execute" && report.ok !== true) process.exitCode = 1;
 } catch (error) {
   if (error instanceof CliUsageError) {
-    console.error(error.message);
-    printHelp();
+    console.log(JSON.stringify(compactErrorEnvelope(error, 2)));
     process.exit(2);
   }
-  console.error(error?.stack ?? String(error));
+  console.log(JSON.stringify(compactErrorEnvelope(error, 1)));
   process.exit(1);
 }
 
@@ -47,6 +48,7 @@ function parseArgs(argv) {
     help: false,
     media_roots: [],
     media_assets: [],
+    full_report: false,
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -61,6 +63,10 @@ function parseArgs(argv) {
     }
     if (argument === "--dry-run") {
       result.dry_run = true;
+      continue;
+    }
+    if (argument === "--full-report") {
+      result.full_report = true;
       continue;
     }
     if (argument === "--help" || argument === "-h") {
@@ -85,6 +91,7 @@ function parseArgs(argv) {
       "installed-wrapper": "installed_wrapper",
       "source-project": "source_project",
       "evidence-project": "evidence_project",
+      "evidence-root": "evidence_root",
       "managed-render-root": "managed_render_root",
       "third-party-fx-query": "third_party_fx_query",
     }[key];
@@ -107,6 +114,7 @@ function validateExecutionOptions(options) {
     ["installed_wrapper", "--installed-wrapper"],
     ["source_project", "--source-project"],
     ["evidence_project", "--evidence-project"],
+    ["evidence_root", "--evidence-root"],
     ["managed_render_root", "--managed-render-root"],
   ]) {
     if (!options[property]) throw new CliUsageError(`Actual execution requires ${flag} <absolute-path>.`);
@@ -125,11 +133,41 @@ function printHelp() {
   trial-alpha3-3-production.mjs --all --dry-run
   trial-alpha3-3-production.mjs --scenario <name> --installed-wrapper <absolute-path> \\
     --source-project <absolute-.RPP-path> --evidence-project <absolute-.RPP-path> \\
-    --managed-render-root <absolute-directory> [--media-root <absolute-directory>] \\
+    --evidence-root <fresh-absolute-directory> --managed-render-root <absolute-directory> [--media-root <absolute-directory>] \\
     [--media-asset <absolute-file>] [--third-party-fx-query <exact-query>]
 
 Modes:
   --describe   Print the immutable manifests; never connect or claim success.
   --dry-run    Print the execution plan; never connect or claim success.
   execute      Default when neither planning flag is present.`);
+}
+
+function compactExecutionEnvelope(report) {
+  return {
+    contract: "openreaper.alpha3.4.trial_execution_envelope.v1",
+    type: "alpha3.4_trial_execution",
+    ok: report?.ok === true,
+    status: report?.status ?? "failed",
+    summary_path: report?.evidence?.summary_path ?? null,
+    events_path: report?.evidence?.events_path ?? null,
+    error: report?.error ?? report?.evidence_error ?? null,
+    recovery_posture: report?.backup_recovery_posture ?? null,
+  };
+}
+
+function compactErrorEnvelope(error, exitCode) {
+  return {
+    contract: "openreaper.alpha3.4.trial_execution_envelope.v1",
+    type: "alpha3.4_trial_execution",
+    ok: false,
+    status: "cli_invalid",
+    summary_path: null,
+    events_path: null,
+    error: {
+      code: error?.code ?? "TRIAL_CLI_ERROR",
+      message: String(error?.message ?? error).replace(/[\r\n\t]+/gu, " ").slice(0, 512),
+      exit_code: exitCode,
+    },
+    recovery_posture: null,
+  };
 }

@@ -6,6 +6,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import {
+  createEvidenceJournal,
+  readEvidenceEvents,
+  readEvidenceSummary,
+} from "../../scripts/lib/alpha3-4-harness-evidence-v1.mjs";
+import {
   LARGE_PROJECTION_BUDGET,
   MAX_MEDIA_ASSETS_PER_CALL,
   MINIMUM_BUDGET,
@@ -68,6 +73,7 @@ test("runs the complete large-production trial with exact bounded writes and fil
   const sourceProject = path.join(root, "source.RPP");
   const evidenceProject = path.join(root, "trial.RPP");
   const managedRenderRoot = path.join(root, "renders");
+  const evidenceRoot = path.join(root, "harness-evidence");
   const mediaRoot = path.join(root, "media");
   const mediaAsset = path.join(mediaRoot, "nested", "source.wav");
   await writeFile(installedWrapper, "installed-wrapper-fixture", "utf8");
@@ -83,6 +89,7 @@ test("runs the complete large-production trial with exact bounded writes and fil
       sourceProject,
       evidenceProject,
       managedRenderRoot,
+      evidenceRoot,
       mediaRoots: [mediaRoot],
       connectFactory: harness.connectFactory,
     });
@@ -265,6 +272,7 @@ test("runs the minimal mixing-delivery trial and only inventories explicitly req
   const installedWrapper = path.join(root, "openreaper-mcp");
   const sourceProject = path.join(root, "source.RPP");
   const evidenceProject = path.join(root, "mix.RPP");
+  const evidenceRoot = path.join(root, "harness-evidence");
   const managedRenderRoot = path.join(root, "renders");
   const mediaAsset = path.join(root, "source.wav");
   await writeFile(installedWrapper, "installed-wrapper-fixture", "utf8");
@@ -278,6 +286,7 @@ test("runs the minimal mixing-delivery trial and only inventories explicitly req
       installedWrapper,
       sourceProject,
       evidenceProject,
+      evidenceRoot,
       managedRenderRoot,
       mediaAssets: [mediaAsset],
       connectFactory: harness.connectFactory,
@@ -298,6 +307,13 @@ test("runs the minimal mixing-delivery trial and only inventories explicitly req
     assert.ok(report.rendered_outputs.every((row) => row.verification.ok));
     assert.deepEqual(report.rendered_outputs.map((row) => row.actual_format).sort(), ["mp3", "ogg", "wav"]);
     assert.equal(report.backup_recovery_posture.source_project_unchanged, true);
+    const evidenceEvents = await readEvidenceEvents(evidenceRoot);
+    assert.equal(evidenceEvents.length, report.calls.length);
+    const evidenceSummary = await readEvidenceSummary(evidenceRoot);
+    assert.equal(evidenceSummary.ok, true);
+    assert.equal(evidenceSummary.events.total, report.calls.length);
+    assert.equal(evidenceSummary.client_close.ok, true);
+    assert.equal(evidenceSummary.client_close.attempted_count, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -400,6 +416,111 @@ test("a malformed MCP response fails the scenario and records the failed call", 
   assert.equal(context.failures[0].step_id, "installed-product-handshake");
 });
 
+test("fails closed when call journaling fails instead of silently returning Trial success", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-trial-journal-fail-"));
+  const installedWrapper = path.join(root, "openreaper-mcp");
+  const sourceProject = path.join(root, "source.RPP");
+  const evidenceProject = path.join(root, "mix.RPP");
+  const managedRenderRoot = path.join(root, "renders");
+  const mediaAsset = path.join(root, "source.wav");
+  await writeFile(installedWrapper, "installed-wrapper-fixture", "utf8");
+  await writeFile(sourceProject, "source-project-fixture", "utf8");
+  await writeFile(mediaAsset, wavFixture());
+  const harness = createProductionMock({ evidenceProject, managedRenderRoot });
+  const evidenceSink = {
+    paths: { summary_path: "/tmp/not-written-summary.json", events_path: "/tmp/not-written-events.jsonl" },
+    setProvenance() {},
+    async recordCall() { throw Object.assign(new Error("journal unavailable"), { code: "EVIDENCE_APPEND_UNAVAILABLE" }); },
+    async finalize() {},
+  };
+  try {
+    const report = await runInstalledTrial({
+      scenarios: ["mixing-delivery"], installedWrapper, sourceProject, evidenceProject, managedRenderRoot,
+      mediaAssets: [mediaAsset], connectFactory: harness.connectFactory, evidenceSink,
+    });
+    assert.equal(report.ok, false);
+    assert.equal(report.status, "failed");
+    assert.equal(report.error.code, "TRIAL_EVIDENCE_APPEND_FAILED");
+    assert.equal(report.evidence_error.code, "EVIDENCE_APPEND_UNAVAILABLE");
+    assert.ok(harness.clients.every((client) => client.closed));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("retains every call event when final summary construction fails", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-trial-finalize-fail-"));
+  const installedWrapper = path.join(root, "openreaper-mcp");
+  const sourceProject = path.join(root, "source.RPP");
+  const evidenceProject = path.join(root, "mix.RPP");
+  const managedRenderRoot = path.join(root, "renders");
+  const mediaAsset = path.join(root, "source.wav");
+  const evidenceRoot = path.join(root, "evidence");
+  await writeFile(installedWrapper, "installed-wrapper-fixture", "utf8");
+  await writeFile(sourceProject, "source-project-fixture", "utf8");
+  await writeFile(mediaAsset, wavFixture());
+  const harness = createProductionMock({ evidenceProject, managedRenderRoot });
+  const journal = await createEvidenceJournal({ evidenceRoot });
+  const evidenceSink = {
+    paths: journal.paths,
+    setProvenance: (value) => journal.setProvenance(value),
+    recordCall: (value) => journal.recordCall(value),
+    async finalize() { throw Object.assign(new Error("summary unavailable"), { code: "EVIDENCE_SUMMARY_UNAVAILABLE" }); },
+  };
+  try {
+    const report = await runInstalledTrial({
+      scenarios: ["mixing-delivery"], installedWrapper, sourceProject, evidenceProject, managedRenderRoot,
+      mediaAssets: [mediaAsset], connectFactory: harness.connectFactory, evidenceSink,
+    });
+    assert.equal(report.ok, false);
+    assert.equal(report.evidence_error.code, "EVIDENCE_SUMMARY_UNAVAILABLE");
+    const events = await readEvidenceEvents(evidenceRoot);
+    assert.equal(events.length, report.calls.length);
+    assert.ok(events.length > 10);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("fails the Trial and records close truth when an installed-wrapper client cannot close", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-trial-close-fail-"));
+  const installedWrapper = path.join(root, "openreaper-mcp");
+  const sourceProject = path.join(root, "source.RPP");
+  const evidenceProject = path.join(root, "mix.RPP");
+  const evidenceRoot = path.join(root, "evidence");
+  const managedRenderRoot = path.join(root, "renders");
+  const mediaAsset = path.join(root, "source.wav");
+  await writeFile(installedWrapper, "installed-wrapper-fixture", "utf8");
+  await writeFile(sourceProject, "source-project-fixture", "utf8");
+  await writeFile(mediaAsset, wavFixture());
+  const harness = createProductionMock({ evidenceProject, managedRenderRoot });
+  const connectFactory = async (options) => {
+    const client = await harness.connectFactory(options);
+    if (options.clientName === "secondary") client.close = async () => { throw Object.assign(new Error("close unavailable"), { code: "CLIENT_CLOSE_UNAVAILABLE" }); };
+    return client;
+  };
+  try {
+    const report = await runInstalledTrial({
+      scenarios: ["mixing-delivery"], installedWrapper, sourceProject, evidenceProject, evidenceRoot, managedRenderRoot,
+      mediaAssets: [mediaAsset], connectFactory,
+    });
+    assert.equal(report.ok, false);
+    assert.equal(report.error.code, "TRIAL_CLIENT_CLOSE_FAILED");
+    assert.deepEqual(report.client_close, {
+      attempted_count: 2,
+      succeeded_count: 1,
+      failed_count: 1,
+      ok: false,
+      errors: [{ client: "secondary", error: { name: "Error", code: "CLIENT_CLOSE_UNAVAILABLE", message: "close unavailable", recoverable: null } }],
+    });
+    const summary = await readEvidenceSummary(evidenceRoot);
+    assert.equal(summary.client_close.ok, false);
+    assert.equal(summary.error.code, "TRIAL_CLIENT_CLOSE_FAILED");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("describe and dry-run never connect or claim completion", async () => {
   for (const mode of ["describe", "dry-run"]) {
     const report = mode === "describe"
@@ -415,6 +536,18 @@ test("describe and dry-run never connect or claim completion", async () => {
     assert.equal(result.status, 0, result.stderr);
     assert.notEqual(JSON.parse(result.stdout).status, "completed");
   }
+
+  const missingEvidenceRoot = spawnSync(process.execPath, [CLI_FILE,
+    "--scenario", "large-production",
+    "--installed-wrapper", "/tmp/openreaper-mcp",
+    "--source-project", "/tmp/source.RPP",
+    "--evidence-project", "/tmp/evidence.RPP",
+    "--managed-render-root", "/tmp/renders",
+  ], { cwd: REPO, encoding: "utf8" });
+  assert.equal(missingEvidenceRoot.status, 2);
+  assert.equal(missingEvidenceRoot.stderr, "");
+  assert.equal(missingEvidenceRoot.stdout.trim().split(/\r?\n/u).length, 1);
+  assert.match(JSON.parse(missingEvidenceRoot.stdout).error.message, /--evidence-root/u);
 });
 
 test("uses only the absolute installed wrapper as the transport command", async () => {

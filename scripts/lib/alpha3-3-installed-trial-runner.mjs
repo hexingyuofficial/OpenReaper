@@ -3,6 +3,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { createEvidenceJournal, serializeError } from "./alpha3-4-harness-evidence-v1.mjs";
 
 export const MINIMUM_BUDGET = Object.freeze({
   max_response_bytes: 2_048,
@@ -500,6 +501,8 @@ export async function runInstalledTrial({
   mediaAssets = [],
   thirdPartyFxQuery = null,
   connectFactory = connectInstalledWrapper,
+  evidenceRoot = null,
+  evidenceSink = null,
 } = {}) {
   const selected = selectManifests(scenarios);
   for (const manifest of selected) {
@@ -518,6 +521,7 @@ export async function runInstalledTrial({
   if (!path.isAbsolute(managedRenderRoot ?? "")) throw new Error("Actual execution requires an absolute managedRenderRoot path.");
   assertAbsolutePaths(mediaRoots, "mediaRoots");
   assertAbsolutePaths(mediaAssets, "mediaAssets");
+  if (evidenceRoot !== null && !path.isAbsolute(evidenceRoot)) throw new Error("Actual execution requires an absolute evidenceRoot path.");
 
   const started = performance.now();
   const report = createBaseReport({
@@ -529,6 +533,18 @@ export async function runInstalledTrial({
     manifests: selected,
   });
   report.provenance.installed_wrapper_sha256 = await sha256(installedWrapper);
+  let activeEvidenceSink = evidenceSink;
+  if (!activeEvidenceSink && evidenceRoot) {
+    activeEvidenceSink = await createEvidenceJournal({
+      evidenceRoot,
+      provenance: {
+        trial_contract: report.contract,
+        mode,
+        scenarios: report.scenarios,
+        runtime: "installed_wrapper_only",
+      },
+    });
+  }
   const context = createExecutionContext({
     installedWrapper,
     sourceProject,
@@ -538,9 +554,11 @@ export async function runInstalledTrial({
     mediaAssets,
     thirdPartyFxQuery,
     connectFactory,
+    evidenceSink: activeEvidenceSink,
   });
-  context.source_hashes.before = await sha256(sourceProject);
   try {
+    context.source_hashes.before = await sha256(sourceProject);
+    activeEvidenceSink?.setProvenance?.({ installed_wrapper_sha256: report.provenance.installed_wrapper_sha256 });
     for (const manifest of selected) {
       await connectScenarioClients(context, manifest.scenario);
       if (manifest.scenario === "large-production") await runLargeProduction(context);
@@ -565,6 +583,18 @@ export async function runInstalledTrial({
     await closeScenarioClients(context);
     report.duration_ms = Math.round(performance.now() - started);
   }
+  report.client_close = context.client_close;
+  if (context.client_close.failed_count > 0) {
+    report.ok = false;
+    report.status = "failed";
+    report.outcome = "failed";
+    report.error ??= {
+      name: "TrialClientCloseError",
+      code: "TRIAL_CLIENT_CLOSE_FAILED",
+      message: "One or more installed-wrapper MCP clients did not close cleanly.",
+      details: context.client_close,
+    };
+  }
   report.calls = context.calls;
   report.failed_calls = context.failures;
   report.expected_failures = context.expectedFailures;
@@ -578,6 +608,18 @@ export async function runInstalledTrial({
   report.copy_hashes = context.copy_hashes;
   report.media_hashes = context.media_hashes;
   report.backup_recovery_posture = context.backup_recovery_posture;
+  if (context.evidence_error) report.evidence_error = context.evidence_error;
+  if (activeEvidenceSink) {
+    report.evidence = activeEvidenceSink.paths;
+    try {
+      await activeEvidenceSink.finalize(report);
+    } catch (error) {
+      report.evidence_error = serializeError(error);
+      report.ok = false;
+      report.status = "failed";
+      report.outcome = "failed";
+    }
+  }
   return report;
 }
 
@@ -593,7 +635,7 @@ export async function connectInstalledWrapper({ installedWrapper, scenario = "tr
   return client;
 }
 
-export function createExecutionContext({ installedWrapper, sourceProject = null, evidenceProject, managedRenderRoot, mediaRoots = [], mediaAssets = [], thirdPartyFxQuery = null, connectFactory = connectInstalledWrapper }) {
+export function createExecutionContext({ installedWrapper, sourceProject = null, evidenceProject, managedRenderRoot, mediaRoots = [], mediaAssets = [], thirdPartyFxQuery = null, connectFactory = connectInstalledWrapper, evidenceSink = null }) {
   return {
     clients: { primary: null, secondary: null },
     refs: new Map(),
@@ -621,6 +663,15 @@ export function createExecutionContext({ installedWrapper, sourceProject = null,
       source_media_preserved: null,
     },
     connectFactory,
+    evidenceSink,
+    evidence_error: null,
+    client_close: {
+      attempted_count: 0,
+      succeeded_count: 0,
+      failed_count: 0,
+      ok: null,
+      errors: [],
+    },
     scenario: null,
   };
 }
@@ -1725,9 +1776,22 @@ async function connectScenarioClients(context, scenario) {
 
 async function closeScenarioClients(context) {
   for (const name of ["primary", "secondary"]) {
-    await context.clients[name]?.close?.().catch(() => {});
-    context.clients[name] = null;
+    const client = context.clients[name];
+    if (!client) continue;
+    context.client_close.attempted_count += 1;
+    try {
+      await client.close?.();
+      context.client_close.succeeded_count += 1;
+    } catch (error) {
+      context.client_close.failed_count += 1;
+      context.client_close.errors.push({ client: name, error: serializeError(error) });
+    } finally {
+      context.clients[name] = null;
+    }
   }
+  context.client_close.ok = context.client_close.attempted_count === 0
+    ? null
+    : context.client_close.failed_count === 0;
 }
 
 async function reconnectClient(context, clientName) {
@@ -1826,6 +1890,7 @@ async function callJson(context, clientName, stepId, tool, args, { expectedError
     ok: false,
     error: null,
     value: null,
+    wire_response: null,
   };
   try {
     const client = context.clients[clientName];
@@ -1835,11 +1900,12 @@ async function callJson(context, clientName, stepId, tool, args, { expectedError
       undefined,
       { timeout: CALL_TIMEOUT_MS, maxTotalTimeout: MAX_TOTAL_TIMEOUT_MS },
     );
+    call.wire_response = response;
     const text = response?.content?.find((entry) => entry.type === "text")?.text;
     if (typeof text !== "string") throw new Error(`${tool} returned no JSON text.`);
+    call.response_bytes = Buffer.byteLength(text, "utf8");
     const value = JSON.parse(text);
     call.value = value;
-    call.response_bytes = Buffer.byteLength(text, "utf8");
     call.actual_bytes = value?.budget?.actual_bytes ?? value?.budget?.response_bytes ?? call.response_bytes;
     call.truncated = findTruncation(value);
     call.artifact_fallback = findArtifactFallback(value);
@@ -1867,6 +1933,19 @@ async function callJson(context, clientName, stepId, tool, args, { expectedError
   } finally {
     call.duration_ms = Math.round(performance.now() - started);
     context.calls.push(call);
+    if (context.evidenceSink) {
+      try {
+        await context.evidenceSink.recordCall({ ...call, response: call.wire_response ?? call.value ?? null });
+      } catch (error) {
+        context.evidence_error = serializeError(error);
+        throw Object.assign(new Error("Trial evidence append failed."), {
+          name: "TrialEvidenceError",
+          code: "TRIAL_EVIDENCE_APPEND_FAILED",
+          cause: context.evidence_error,
+        });
+      }
+    }
+    delete call.wire_response;
   }
 }
 
