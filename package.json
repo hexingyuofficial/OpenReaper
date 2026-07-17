@@ -61,7 +61,8 @@
     "check:alpha3-2-5-d": "node --test tests/alpha3/alpha3-2-5-d-midi-macro.test.mjs tests/alpha3/alpha3-2-5-d-fx-macro.test.mjs tests/alpha3/alpha3-2-5-d-runtime-integration.test.mjs",
     "check:alpha3-2-5-e": "node --test tests/alpha3/alpha3-2-5-e-routing-compact-results.test.mjs tests/alpha3/alpha3-2d-generic-project-query.test.mjs tests/alpha3/alpha3-2-5-d-runtime-integration.test.mjs",
     "check:alpha3-2-5-f": "node --test tests/alpha3/alpha3-2-5-f-product-truth.test.mjs",
-    "check:alpha3-2f": "node --test tests/alpha3/alpha3-2f-transport-budget-error-recovery.test.mjs"
+    "check:alpha3-2f": "node --test tests/alpha3/alpha3-2f-transport-budget-error-recovery.test.mjs",
+    "check:alpha3-4-harness": "node --test tests/alpha3/alpha3-4-task-packet.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"
