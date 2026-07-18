@@ -30,11 +30,44 @@ const LIST_NOTES_ID = "template.midi.list_take_notes";
 const PROJECT_QUERY_ID = "macro.project.query";
 const PROJECT_INDEX_RUNTIME_CAPABILITY = "project_index.runtime.v1";
 const PROJECT_UNDERSTANDING_RUNTIME_CAPABILITY = "project_understanding.runtime.v1";
-const INPUT_FIELDS = new Set(["start_seconds", "end_seconds", "notes", "selector", "dry_run"]);
+const INPUT_FIELDS = new Set(["start_seconds", "end_seconds", "duration_quarter_notes", "notes", "selector", "dry_run"]);
 const MIN_RESPONSE_BUDGET = 2_048;
 const MAX_NOTES = 128;
 const MAX_NOTE_PAGE = 64;
 const MAX_NOTE_VERIFICATION_PAGES = Math.ceil(MAX_NOTES / MAX_NOTE_PAGE);
+const LEGACY_NOTE_FIELDS = Object.freeze(["start_ppq", "end_ppq", "pitch", "velocity", "channel"]);
+const MUSICAL_NOTE_FIELDS = Object.freeze([
+  "start_offset_quarter_notes",
+  "end_offset_quarter_notes",
+  "pitch",
+  "velocity",
+  "channel",
+]);
+const QN_MATCH_EPSILON = 1e-6;
+const LEGACY_NOTE_INPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    start_ppq: { type: "integer", minimum: 0 },
+    end_ppq: { type: "integer", minimum: 1 },
+    pitch: { type: "integer", minimum: 0, maximum: 127 },
+    velocity: { type: "integer", minimum: 1, maximum: 127 },
+    channel: { type: "integer", minimum: 0, maximum: 15 },
+  },
+  required: ["start_ppq", "end_ppq", "pitch", "velocity", "channel"],
+});
+const MUSICAL_NOTE_INPUT_SCHEMA = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    start_offset_quarter_notes: { type: "number", minimum: 0 },
+    end_offset_quarter_notes: { type: "number", exclusiveMinimum: 0 },
+    pitch: { type: "integer", minimum: 0, maximum: 127 },
+    velocity: { type: "integer", minimum: 1, maximum: 127 },
+    channel: { type: "integer", minimum: 0, maximum: 15 },
+  },
+  required: ["start_offset_quarter_notes", "end_offset_quarter_notes", "pitch", "velocity", "channel"],
+});
 const INTERNAL_ATOMIC_BUDGET = Object.freeze({
   max_response_bytes: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
   max_items: MAX_NOTE_PAGE,
@@ -55,11 +88,28 @@ const REGISTRY_ENTRIES = Object.freeze([{
     properties: {
       start_seconds: { type: "number" },
       end_seconds: { type: "number" },
-      notes: { type: "array", maxItems: MAX_NOTES },
+      duration_quarter_notes: { type: "number" },
+      notes: { type: "array", minItems: 1, maxItems: MAX_NOTES },
       selector: { type: "object" },
       dry_run: { type: "boolean" },
     },
-    required: ["start_seconds", "end_seconds", "notes"],
+    required: ["start_seconds", "notes"],
+    oneOf: [
+      {
+        required: ["duration_quarter_notes"],
+        not: { required: ["end_seconds"] },
+        properties: {
+          notes: { type: "array", minItems: 1, maxItems: MAX_NOTES, items: MUSICAL_NOTE_INPUT_SCHEMA },
+        },
+      },
+      {
+        required: ["end_seconds"],
+        not: { required: ["duration_quarter_notes"] },
+        properties: {
+          notes: { type: "array", minItems: 1, maxItems: MAX_NOTES, items: LEGACY_NOTE_INPUT_SCHEMA },
+        },
+      },
+    ],
   },
   selector_policy: {
     task_shaped: true,
@@ -125,9 +175,16 @@ export function createAlpha3_2_5DMidiMacroDiscoveryItem({ liveRunnableNow = fals
     support_status: "executable_runtime_bound",
     live_runnable_now: liveRunnableNow,
     user_label: "Create MIDI clip",
-    tags: ["macro", "midi", "clip", "create", "notes", "ppq", "alpha3_2_5_d"],
-    task_intents: ["create a MIDI clip", "write MIDI notes", "add a melody", "make a bounded MIDI item"],
-    summary: "Create one bounded PPQ MIDI clip on an existing track and verify its notes.",
+    tags: ["macro", "midi", "clip", "create", "notes", "musical", "project_qn", "ppq", "alpha3_2_5_d"],
+    task_intents: [
+      "create a MIDI clip",
+      "write MIDI notes",
+      "write four quarter notes",
+      "写四个四分音符",
+      "add a melody",
+      "make a bounded MIDI item",
+    ],
+    summary: "Create one bounded musical MIDI clip on an existing track and verify its notes.",
     inputSchema: REGISTRY_ENTRIES[0].input_schema,
     outputSchema: {
       type: "object",
@@ -151,13 +208,18 @@ export function createAlpha3_2_5DMidiMacroDiscoveryItem({ liveRunnableNow = fals
       kind: "write",
       action: "create_midi_clip",
       entities: ["item", "take", "midi_note"],
-      summary: "Creates one MIDI item, inserts bounded PPQ notes, and verifies exact count/list readback.",
+      summary: "Creates one MIDI item, inserts musical-relative notes via native project QN, and verifies exact count/list readback.",
     },
     examples: [{
       input: {
         start_seconds: 0,
-        end_seconds: 2,
-        notes: [{ start_ppq: 0, end_ppq: 480, pitch: 60, velocity: 96, channel: 0 }],
+        duration_quarter_notes: 4,
+        notes: [
+          { start_offset_quarter_notes: 0, end_offset_quarter_notes: 1, pitch: 60, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 1, end_offset_quarter_notes: 2, pitch: 62, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 2, end_offset_quarter_notes: 3, pitch: 64, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 3, end_offset_quarter_notes: 4, pitch: 65, velocity: 96, channel: 0 },
+        ],
         selector: { name: "Instrument" },
         dry_run: false,
       },
@@ -261,7 +323,7 @@ export async function executeAlpha3_2_5DMidiMacro({
 
     if (plan.dryRun) {
       pushStage(stages, "midi-create-clip-create-item", "template_execute", "skipped", "MIDI item creation skipped during dry_run.");
-      pushStage(stages, "midi-create-clip-insert-notes", "template_execute", "skipped", "PPQ note insertion skipped during dry_run.");
+      pushStage(stages, "midi-create-clip-insert-notes", "template_execute", "skipped", "MIDI note insertion skipped during dry_run.");
       pushStage(stages, "midi-create-clip-resolve-take", "live_ref_resolve", "skipped", "MIDI take resolution skipped during dry_run.");
       pushStage(stages, "midi-create-clip-verify-count", "verify", "skipped", "MIDI readback skipped during dry_run.");
       pushStage(stages, "midi-create-clip-verify-list", "verify", "skipped", "MIDI note list readback skipped during dry_run.");
@@ -273,20 +335,26 @@ export async function executeAlpha3_2_5DMidiMacro({
         data: {
           track_ref: liveTrackRef,
           start_seconds: plan.startSeconds,
-          end_seconds: plan.endSeconds,
+          ...(plan.timingMode === "musical"
+            ? { duration_quarter_notes: plan.durationQuarterNotes }
+            : { end_seconds: plan.endSeconds }),
+          coordinate_mode: plan.timingMode,
           note_count: plan.notes.length,
-          notes: plan.notes,
+          notes: plan.publicNotes,
           sqlite_selector_used: target.sqliteUsed,
         },
       });
     }
 
+    const createInput = plan.timingMode === "musical"
+      ? { start_seconds: plan.startSeconds, duration_quarter_notes: plan.durationQuarterNotes }
+      : { start_seconds: plan.startSeconds, end_seconds: plan.endSeconds };
     const created = await runAtomic({
       request,
       executeAtomic,
       state,
       id: CREATE_ITEM_ID,
-      input: { start_seconds: plan.startSeconds, end_seconds: plan.endSeconds },
+      input: createInput,
       refs: { track_ref: liveTrackRef },
       stages,
       stageId: "midi-create-clip-create-item",
@@ -300,6 +368,8 @@ export async function executeAlpha3_2_5DMidiMacro({
     if (typeof itemRef !== "string" || !itemRef.startsWith("item:") || typeof takeRef !== "string" || !takeRef.startsWith("take:")) {
       throw coded("MIDI_CREATE_TAKE_REF_MISSING", "template.midi.create_midi_item did not return a real take_ref.");
     }
+    const liveStartQn = createdReadback.start_qn;
+    const liveEndQn = createdReadback.end_qn;
     state.canonicalRefs.push(itemRef, takeRef);
     state.created = { itemRef, takeRef };
     state.changes.push({
@@ -311,13 +381,43 @@ export async function executeAlpha3_2_5DMidiMacro({
       live_readback: { status: "pending" },
       index_maintenance: { status: "pending" },
     });
+    if (plan.timingMode === "musical") {
+      if (!Number.isFinite(liveStartQn) || !Number.isFinite(liveEndQn)) {
+        throw coded("MIDI_CREATE_QN_READBACK_MISSING", "template.midi.create_midi_item did not return finite live start_qn/end_qn for musical create_clips.");
+      }
+      const liveDurationQn = liveEndQn - liveStartQn;
+      if (liveDurationQn <= 0 || Math.abs(liveDurationQn - plan.durationQuarterNotes) > QN_MATCH_EPSILON) {
+        throw coded(
+          "MIDI_CREATE_QN_EXTENT_MISMATCH",
+          `Created MIDI item live QN duration was ${String(liveDurationQn)}; expected ${String(plan.durationQuarterNotes)}.`,
+        );
+      }
+    }
 
+    const insertNotes = plan.timingMode === "musical"
+      ? plan.notes.map((note) => ({
+        start_qn: liveStartQn + note.start_offset_quarter_notes,
+        end_qn: liveStartQn + note.end_offset_quarter_notes,
+        pitch: note.pitch,
+        velocity: note.velocity,
+        channel: note.channel,
+      }))
+      : plan.notes;
+    if (plan.timingMode === "musical" && insertNotes.some((note) => (
+      note.start_qn < liveStartQn - QN_MATCH_EPSILON
+      || note.end_qn > liveEndQn + QN_MATCH_EPSILON
+    ))) {
+      throw coded("MIDI_NOTE_LIVE_QN_OUT_OF_RANGE", "Musical note QN bounds fell outside the created Item live QN extent.");
+    }
+    const insertInput = plan.timingMode === "musical"
+      ? { position_unit: "project_qn", notes: insertNotes, sort_events: true }
+      : { position_unit: "ppq", notes: insertNotes, sort_events: true };
     const inserted = await runAtomic({
       request,
       executeAtomic,
       state,
       id: INSERT_NOTES_ID,
-      input: { position_unit: "ppq", notes: plan.notes, sort_events: true },
+      input: insertInput,
       refs: { take_ref: takeRef },
       stages,
       stageId: "midi-create-clip-insert-notes",
@@ -381,10 +481,17 @@ export async function executeAlpha3_2_5DMidiMacro({
       takeRef: resolvedTakeRef,
       stages,
       now,
+      requireProjectCoordinates: plan.timingMode === "musical",
     });
     const actualNotes = listed.notes;
-    if (actualNotes.length !== noteCount || actualNotes.length !== plan.notes.length || !notesMatch(plan.notes, actualNotes)) {
-      throw coded("MIDI_NOTE_LIST_READBACK_MISMATCH", "MIDI note list readback did not exactly match the bounded PPQ notes.");
+    const expectedForMatch = plan.timingMode === "musical" ? insertNotes : plan.notes;
+    if (actualNotes.length !== noteCount || actualNotes.length !== plan.notes.length || !notesMatch(expectedForMatch, actualNotes, plan.timingMode)) {
+      throw coded("MIDI_NOTE_LIST_READBACK_MISMATCH", plan.timingMode === "musical"
+        ? "MIDI note list readback did not exactly match the musical project-QN notes with complete live coordinates."
+        : "MIDI note list readback did not exactly match the bounded PPQ notes.");
+    }
+    if (plan.timingMode === "musical" && !liveNotesHaveCompleteCoordinates(actualNotes)) {
+      throw coded("MIDI_NOTE_LIVE_COORDINATE_INCOMPLETE", "MIDI note list readback omitted required live PPQ, project QN, or project-time bounds.");
     }
     state.changes[0].status = "applied";
     state.changes[0].live_readback = {
@@ -393,15 +500,17 @@ export async function executeAlpha3_2_5DMidiMacro({
       item_ref: itemRef,
       take_ref: resolvedTakeRef,
       note_count: noteCount,
+      ...(plan.timingMode === "musical" ? { start_qn: liveStartQn, end_qn: liveEndQn } : {}),
     };
     state.changes[1].status = "applied";
     state.changes[1].live_readback = {
       status: "passed",
-      source: "live_note_count_and_list_readback",
+      source: plan.timingMode === "musical" ? "live_note_count_and_project_qn_list_readback" : "live_note_count_and_list_readback",
       take_ref: resolvedTakeRef,
       note_count: noteCount,
       page_count: listed.pageCount,
       list_truncated: false,
+      ...(plan.timingMode === "musical" ? { coordinate_mode: "project_qn" } : {}),
     };
 
     const invalidation = invalidateProjectIndex(projectIndexRuntime, now);
@@ -421,7 +530,9 @@ export async function executeAlpha3_2_5DMidiMacro({
     pushStage(stages, "midi-create-clip-result", "result_project", "completed", "Created the MIDI clip and passed exact count/list readback.");
     return successEnvelope({
       entry, request, startedAt, now, stages, state,
-      summary: "Created and verified one bounded PPQ MIDI clip.",
+      summary: plan.timingMode === "musical"
+        ? "Created and verified one bounded musical MIDI clip."
+        : "Created and verified one bounded PPQ MIDI clip.",
       data: {
         track_ref: liveTrackRef,
         sqlite_selector_used: target.sqliteUsed,
@@ -429,10 +540,22 @@ export async function executeAlpha3_2_5DMidiMacro({
         take_ref: takeRef,
         note_count: noteCount,
         inserted_count: insertedCount ?? plan.notes.length,
+        coordinate_mode: plan.timingMode,
+        ...(plan.timingMode === "musical"
+          ? {
+            duration_quarter_notes: plan.durationQuarterNotes,
+            start_qn: liveStartQn,
+            end_qn: liveEndQn,
+          }
+          : {
+            start_seconds: plan.startSeconds,
+            end_seconds: plan.endSeconds,
+          }),
         verification: {
           note_count: actualNotes.length,
           page_count: listed.pageCount,
           cursor_complete: true,
+          ...(plan.timingMode === "musical" ? { include_project_qn: true, include_project_time: true } : {}),
         },
         index_update: compact(invalidation),
         outcome: midiOutcome(state),
@@ -542,9 +665,8 @@ async function runAtomic({ request, executeAtomic, state, id, input, refs, stage
   return execution;
 }
 
-async function listAllNotes({ request, executeAtomic, state, takeRef, stages, now }) {
+async function listAllNotes({ request, executeAtomic, state, takeRef, stages, now, requireProjectCoordinates = false }) {
   const notes = [];
-  const pageFingerprints = new Set();
   let cursor = "0";
   let pageCount = 0;
 
@@ -554,7 +676,9 @@ async function listAllNotes({ request, executeAtomic, state, takeRef, stages, no
       executeAtomic,
       state,
       id: LIST_NOTES_ID,
-      input: { cursor, limit: MAX_NOTE_PAGE, include_project_time: false },
+      input: requireProjectCoordinates
+        ? { cursor, limit: MAX_NOTE_PAGE, include_project_qn: true, include_project_time: true }
+        : { cursor, limit: MAX_NOTE_PAGE, include_project_time: false },
       refs: { take_ref: takeRef },
       stages,
       stageId: "midi-create-clip-verify-list",
@@ -575,11 +699,6 @@ async function listAllNotes({ request, executeAtomic, state, takeRef, stages, no
     if (notes.length + pageNotes.length > MAX_NOTES) {
       throw coded("MIDI_NOTE_LIST_LIMIT_EXCEEDED", `MIDI note verification exceeded the ${MAX_NOTES}-note bound.`);
     }
-    const fingerprint = JSON.stringify(pageNotes);
-    if (pageFingerprints.has(fingerprint)) {
-      throw coded("MIDI_NOTE_LIST_PAGE_REPEATED", "MIDI note verification repeated a previously returned page.");
-    }
-    pageFingerprints.add(fingerprint);
     notes.push(...pageNotes);
     pageCount += 1;
 
@@ -624,28 +743,152 @@ function validateInput(input, request) {
 
 function validateClipInput(input) {
   const blockers = [];
-  if (!Number.isFinite(input.start_seconds) || input.start_seconds < 0) blockers.push(blocker("MIDI_CLIP_START_INVALID", "start_seconds must be a finite number >= 0."));
-  if (!Number.isFinite(input.end_seconds) || input.end_seconds <= input.start_seconds) blockers.push(blocker("MIDI_CLIP_END_INVALID", "end_seconds must be greater than start_seconds."));
-  if (!Array.isArray(input.notes) || input.notes.length < 1 || input.notes.length > MAX_NOTES) blockers.push(blocker("MIDI_CLIP_NOTES_INVALID", `notes must contain 1 to ${MAX_NOTES} bounded PPQ notes.`));
+  if (!Number.isFinite(input.start_seconds) || input.start_seconds < 0) {
+    blockers.push(blocker("MIDI_CLIP_START_INVALID", "start_seconds must be a finite number >= 0."));
+  }
+
+  const hasEndSeconds = input.end_seconds !== undefined;
+  const hasDuration = input.duration_quarter_notes !== undefined;
+  if (hasEndSeconds === hasDuration) {
+    blockers.push(blocker(
+      "MIDI_CLIP_BOUNDS_AMBIGUOUS",
+      "create_clips requires exactly one of end_seconds or duration_quarter_notes with start_seconds.",
+    ));
+  }
+
+  let timingMode = null;
+  if (hasDuration && !hasEndSeconds) {
+    if (!Number.isFinite(input.duration_quarter_notes) || input.duration_quarter_notes <= 0) {
+      blockers.push(blocker("MIDI_CLIP_DURATION_INVALID", "duration_quarter_notes must be a finite number > 0."));
+    } else {
+      timingMode = "musical";
+    }
+  } else if (hasEndSeconds && !hasDuration) {
+    if (!Number.isFinite(input.end_seconds) || input.end_seconds <= input.start_seconds) {
+      blockers.push(blocker("MIDI_CLIP_END_INVALID", "end_seconds must be greater than start_seconds."));
+    } else {
+      timingMode = "legacy_ppq";
+    }
+  }
+
+  if (!Array.isArray(input.notes) || input.notes.length < 1 || input.notes.length > MAX_NOTES) {
+    blockers.push(blocker("MIDI_CLIP_NOTES_INVALID", `notes must contain 1 to ${MAX_NOTES} bounded notes.`));
+  }
+
   const notes = Array.isArray(input.notes) ? input.notes : [];
+  const noteModes = new Set();
+  const normalizedNotes = [];
   for (const [index, note] of notes.entries()) {
-    if (isObject(note) && Object.keys(note).some((key) => key.endsWith("_seconds") || key === "seconds")) {
-      blockers.push(blocker("MIDI_SECONDS_MODE_BLOCKED", "seconds-based note insertion is fail-closed; use start_ppq/end_ppq."));
+    if (!isObject(note)) {
+      blockers.push(blocker("MIDI_NOTE_SHAPE_INVALID", `notes[${index}] must be an object.`));
       continue;
     }
-    if (!isObject(note) || Object.keys(note).some((key) => !["start_ppq", "end_ppq", "pitch", "velocity", "channel"].includes(key))) {
+    const keys = Object.keys(note);
+    if (keys.some((key) => key.endsWith("_seconds") || key === "seconds")) {
+      blockers.push(blocker("MIDI_SECONDS_MODE_BLOCKED", "seconds-based note coordinates are fail-closed; use quarter-note offsets or legacy PPQ fields."));
+      continue;
+    }
+
+    const hasPpq = note.start_ppq !== undefined || note.end_ppq !== undefined;
+    const hasMusical = note.start_offset_quarter_notes !== undefined || note.end_offset_quarter_notes !== undefined;
+    if (hasPpq && hasMusical) {
+      blockers.push(blocker("MIDI_NOTE_COORDINATE_MIXED", `notes[${index}] must not mix PPQ and quarter-note-offset fields.`));
+      continue;
+    }
+    if (!hasPpq && !hasMusical) {
+      blockers.push(blocker("MIDI_NOTE_COORDINATE_MISSING", `notes[${index}] requires either start_offset_quarter_notes/end_offset_quarter_notes or start_ppq/end_ppq.`));
+      continue;
+    }
+
+    if (hasMusical) {
+      noteModes.add("musical");
+      if (keys.some((key) => !MUSICAL_NOTE_FIELDS.includes(key))) {
+        blockers.push(blocker("MIDI_NOTE_SHAPE_INVALID", `notes[${index}] must contain only musical-relative note fields.`));
+        continue;
+      }
+      const startOffset = note.start_offset_quarter_notes;
+      const endOffset = note.end_offset_quarter_notes;
+      if (!Number.isFinite(startOffset) || startOffset < 0 || !Number.isFinite(endOffset) || endOffset <= startOffset) {
+        blockers.push(blocker("MIDI_NOTE_OFFSET_INVALID", `notes[${index}] must use finite quarter-note offsets with end_offset_quarter_notes > start_offset_quarter_notes >= 0.`));
+        continue;
+      }
+      if (timingMode === "musical" && Number.isFinite(input.duration_quarter_notes) && endOffset > input.duration_quarter_notes) {
+        blockers.push(blocker("MIDI_NOTE_OFFSET_OUT_OF_RANGE", `notes[${index}] ends after duration_quarter_notes.`));
+        continue;
+      }
+      if (!Number.isInteger(note.pitch) || note.pitch < 0 || note.pitch > 127) blockers.push(blocker("MIDI_NOTE_PITCH_INVALID", `notes[${index}].pitch must be an integer from 0 to 127.`));
+      if (!Number.isInteger(note.velocity) || note.velocity < 1 || note.velocity > 127) blockers.push(blocker("MIDI_NOTE_VELOCITY_INVALID", `notes[${index}].velocity must be an integer from 1 to 127.`));
+      if (!Number.isInteger(note.channel) || note.channel < 0 || note.channel > 15) blockers.push(blocker("MIDI_NOTE_CHANNEL_INVALID", `notes[${index}].channel must be an integer from 0 to 15.`));
+      normalizedNotes.push({
+        start_offset_quarter_notes: startOffset,
+        end_offset_quarter_notes: endOffset,
+        pitch: note.pitch,
+        velocity: note.velocity,
+        channel: note.channel,
+      });
+      continue;
+    }
+
+    noteModes.add("legacy_ppq");
+    if (keys.some((key) => !LEGACY_NOTE_FIELDS.includes(key))) {
       blockers.push(blocker("MIDI_NOTE_SHAPE_INVALID", `notes[${index}] must contain only bounded PPQ note fields.`));
       continue;
     }
-    if (!Number.isInteger(note.start_ppq) || note.start_ppq < 0 || !Number.isInteger(note.end_ppq) || note.end_ppq <= note.start_ppq) blockers.push(blocker("MIDI_NOTE_PPQ_INVALID", `notes[${index}] must use integer PPQ bounds with end_ppq > start_ppq.`));
+    if (!Number.isInteger(note.start_ppq) || note.start_ppq < 0 || !Number.isInteger(note.end_ppq) || note.end_ppq <= note.start_ppq) {
+      blockers.push(blocker("MIDI_NOTE_PPQ_INVALID", `notes[${index}] must use integer PPQ bounds with end_ppq > start_ppq.`));
+    }
     if (!Number.isInteger(note.pitch) || note.pitch < 0 || note.pitch > 127) blockers.push(blocker("MIDI_NOTE_PITCH_INVALID", `notes[${index}].pitch must be an integer from 0 to 127.`));
     if (!Number.isInteger(note.velocity) || note.velocity < 1 || note.velocity > 127) blockers.push(blocker("MIDI_NOTE_VELOCITY_INVALID", `notes[${index}].velocity must be an integer from 1 to 127.`));
     if (!Number.isInteger(note.channel) || note.channel < 0 || note.channel > 15) blockers.push(blocker("MIDI_NOTE_CHANNEL_INVALID", `notes[${index}].channel must be an integer from 0 to 15.`));
+    normalizedNotes.push({
+      start_ppq: note.start_ppq,
+      end_ppq: note.end_ppq,
+      pitch: note.pitch,
+      velocity: note.velocity,
+      channel: note.channel,
+    });
   }
-  return blockers.length > 0 ? { ok: false, blockers } : { ok: true, dryRun: input.dry_run === true, startSeconds: input.start_seconds, endSeconds: input.end_seconds, notes: input.notes.map((note) => ({ ...note })) };
+
+  if (noteModes.has("musical") && noteModes.has("legacy_ppq")) {
+    blockers.push(blocker("MIDI_NOTE_COORDINATE_MIXED", "notes must not mix PPQ and quarter-note-offset coordinates in one create_clips request."));
+  }
+  if (timingMode === "musical" && noteModes.has("legacy_ppq")) {
+    blockers.push(blocker("MIDI_NOTE_COORDINATE_MIXED", "duration_quarter_notes create_clips requires musical-relative note offsets, not PPQ fields."));
+  }
+  if (timingMode === "legacy_ppq" && noteModes.has("musical")) {
+    blockers.push(blocker("MIDI_NOTE_COORDINATE_MIXED", "end_seconds create_clips requires legacy PPQ note fields, not quarter-note offsets."));
+  }
+  if (timingMode === "musical" && noteModes.size === 0 && notes.length > 0) {
+    // note-level blockers already recorded
+  } else if (timingMode === "musical" && !noteModes.has("musical") && notes.length > 0 && blockers.length === 0) {
+    blockers.push(blocker("MIDI_NOTE_COORDINATE_MISSING", "duration_quarter_notes create_clips requires musical-relative note offsets."));
+  } else if (timingMode === "legacy_ppq" && !noteModes.has("legacy_ppq") && notes.length > 0 && blockers.length === 0) {
+    blockers.push(blocker("MIDI_NOTE_COORDINATE_MISSING", "end_seconds create_clips requires legacy PPQ note fields."));
+  }
+
+  if (blockers.length > 0) return { ok: false, blockers };
+  return {
+    ok: true,
+    dryRun: input.dry_run === true,
+    timingMode,
+    startSeconds: input.start_seconds,
+    endSeconds: timingMode === "legacy_ppq" ? input.end_seconds : undefined,
+    durationQuarterNotes: timingMode === "musical" ? input.duration_quarter_notes : undefined,
+    notes: normalizedNotes,
+    publicNotes: normalizedNotes.map((note) => ({ ...note })),
+  };
 }
 
-function notesMatch(expected, actual) {
+function notesMatch(expected, actual, timingMode = "legacy_ppq") {
+  if (timingMode === "musical") {
+    const unmatched = actual.map((note) => ({ note, matched: false }));
+    return expected.every((expectedNote) => {
+      const match = unmatched.find((entry) => !entry.matched && musicalNotesEqual(expectedNote, entry.note));
+      if (!match) return false;
+      match.matched = true;
+      return true;
+    }) && unmatched.every((entry) => entry.matched);
+  }
   const normalized = (notes) => notes.map((note) => [
     note?.start_ppq,
     note?.end_ppq,
@@ -654,6 +897,34 @@ function notesMatch(expected, actual) {
     note?.channel,
   ]).sort(compareNoteTuples);
   return JSON.stringify(normalized(expected)) === JSON.stringify(normalized(actual));
+}
+
+function musicalNotesEqual(expected, actual) {
+  return qnMatches(expected?.start_qn, actual?.start_qn)
+    && qnMatches(expected?.end_qn, actual?.end_qn)
+    && expected?.pitch === actual?.pitch
+    && expected?.velocity === actual?.velocity
+    && expected?.channel === actual?.channel;
+}
+
+function qnMatches(expected, actual) {
+  return Number.isFinite(expected)
+    && Number.isFinite(actual)
+    && Math.abs(expected - actual) <= QN_MATCH_EPSILON;
+}
+
+function liveNotesHaveCompleteCoordinates(notes) {
+  return notes.every((note) => (
+    Number.isFinite(note?.start_ppq)
+    && Number.isFinite(note?.end_ppq)
+    && note.end_ppq > note.start_ppq
+    && Number.isFinite(note?.start_qn)
+    && Number.isFinite(note?.end_qn)
+    && note.end_qn > note.start_qn
+    && Number.isFinite(note?.start_seconds)
+    && Number.isFinite(note?.end_seconds)
+    && note.end_seconds > note.start_seconds
+  ));
 }
 
 function compareNoteTuples(left, right) {

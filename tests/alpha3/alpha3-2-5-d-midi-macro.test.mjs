@@ -168,7 +168,7 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
     assert.equal(new Set(servedStarts).size, 128);
   });
 
-  it("fails closed for non-progressing cursors, repeated pages, and incomplete aggregation", async () => {
+  it("fails closed for non-progressing cursors, wrong advancing pages, and incomplete aggregation", async () => {
     const notes = generatedNotes(128);
     const cases = [
       {
@@ -176,7 +176,7 @@ describe("Alpha3.2.5-D MIDI create clip Macro", () => {
         listReadback: () => pageReadback(notes.slice(0, 64), true, "0"),
       },
       {
-        expectedCode: "MIDI_NOTE_LIST_PAGE_REPEATED",
+        expectedCode: "MIDI_NOTE_LIST_READBACK_MISMATCH",
         listReadback: (child) => Number(child.input.cursor) === 0
           ? pageReadback(notes.slice(0, 64), true, "64")
           : pageReadback(notes.slice(0, 64), false),

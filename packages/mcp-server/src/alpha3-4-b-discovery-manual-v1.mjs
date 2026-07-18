@@ -451,15 +451,20 @@ function buildFirstTryNextCalls(id, {
         input: {
           mode: "create_clips",
           start_seconds: 0,
-          end_seconds: 2,
-          notes: [{ start_ppq: 0, end_ppq: 480, pitch: 60, velocity: 96, channel: 0 }],
+          duration_quarter_notes: 4,
+          notes: [
+            { start_offset_quarter_notes: 0, end_offset_quarter_notes: 1, pitch: 60, velocity: 96, channel: 0 },
+            { start_offset_quarter_notes: 1, end_offset_quarter_notes: 2, pitch: 62, velocity: 96, channel: 0 },
+            { start_offset_quarter_notes: 2, end_offset_quarter_notes: 3, pitch: 64, velocity: 96, channel: 0 },
+            { start_offset_quarter_notes: 3, end_offset_quarter_notes: 4, pitch: 65, velocity: 96, channel: 0 },
+          ],
           selector: { name: "Instrument" },
           dry_run: true,
         },
       },
       missing_fields: [],
       missing_target_facts: ["an existing unambiguous destination Track selector or canonical track_ref"],
-      purpose: "Schema-valid create_clips dry-run shape; replace the example Track selector with a live-resolved destination before execution.",
+      purpose: "Schema-valid musical create_clips dry-run shape; replace the example Track selector with a live-resolved destination before execution.",
     });
   }
   if (id === "macro.project.inspect") {

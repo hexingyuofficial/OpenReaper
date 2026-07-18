@@ -91,7 +91,9 @@ const INTENT_ROUTES = deepFreeze([
   intent("macro.midi.apply", [
     term("midi clip", 10), term("create midi", 9), term("midi note", 8), term("midi", 6), term("quantize", 10), term("edit midi", 10), term("edit existing notes", 10), term("write cc", 10), term("control change", 9),
     term("make midi", 8), term("draw notes", 8), term("midi item", 9), term("piano roll", 7),
+    term("write four quarter notes", 10), term("four quarter notes", 10), term("quarter notes", 8),
     term("midi片段", 10), term("创建midi", 9), term("midi音符", 8), term("音符片段", 8), term("量化", 10), term("编辑midi", 10), term("编辑现有音符", 10), term("写入cc", 10), term("控制器", 9), term("做一段midi", 9),
+    term("写四个四分音符", 10), term("四个四分音符", 10), term("四分音符", 8),
   ]),
   intent("macro.fx.apply_chain", [
     term("add compressor", 10), term("add a compressor", 10), term("apply compressor", 10), term("apply a compressor", 10), term("compressor chain", 9), term("add reacomp", 10), term("apply reacomp", 10), term("add fx chain", 8),
@@ -311,42 +313,71 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   if (id === "macro.midi.apply") {
     const createClipReadiness = canonical.action_manual.required_readiness ?? [];
     const createClipRecovery = canonical.action_manual.recovery_steps ?? [];
-    const createClipExamples = Array.isArray(canonical.action_manual.examples)
-      ? canonical.action_manual.examples.map((entry) => {
-        if (!entry || typeof entry !== "object") return entry;
-        const input = entry.input && typeof entry.input === "object" ? entry.input : {};
-        if (input.mode !== undefined) return entry;
-        return {
-          ...entry,
-          input: {
-            mode: "create_clips",
-            ...input,
-          },
-        };
-      })
-      : [];
-    const createClipInputShape = canonical.action_manual.input_shape;
+    const createClipExamples = [{
+      name: "create four quarter notes",
+      input: {
+        mode: "create_clips",
+        start_seconds: 0,
+        duration_quarter_notes: 4,
+        notes: [
+          { start_offset_quarter_notes: 0, end_offset_quarter_notes: 1, pitch: 60, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 1, end_offset_quarter_notes: 2, pitch: 62, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 2, end_offset_quarter_notes: 3, pitch: 64, velocity: 96, channel: 0 },
+          { start_offset_quarter_notes: 3, end_offset_quarter_notes: 4, pitch: 65, velocity: 96, channel: 0 },
+        ],
+        selector: { name: "Instrument" },
+        dry_run: false,
+      },
+    }];
+    const createClipInputShape = {
+      start_seconds: "Required clip start time in project seconds.",
+      duration_quarter_notes: "Preferred clip duration in project quarter notes; mutually exclusive with end_seconds.",
+      end_seconds: "Legacy absolute clip end time; mutually exclusive with duration_quarter_notes.",
+      notes: "Preferred musical rows use start_offset_quarter_notes/end_offset_quarter_notes. Legacy PPQ rows use start_ppq/end_ppq with end_seconds.",
+      selector: "Optional singular fresh SQLite-backed track selector instead of manual low-level ref assembly.",
+      dry_run: "Boolean; performs target resolution and validation without creating the item or notes.",
+    };
     const editing = createAlpha3_3MidiApplyExactManual().action_manual;
     canonical.action_manual.input_shape = {
       create_clips: createClipInputShape,
       ...editing.input_shape,
-      mode: "create_clips | edit_notes | quantize | write_cc; create_clips remains the compatibility mode, while existing-Take modes require operations[].",
+      mode: "create_clips | edit_notes | quantize | write_cc; create_clips defaults to musical-relative timing, while existing-Take modes require operations[].",
     };
     canonical.action_manual.when_to_use = [
-      "Use create_clips for one new bounded MIDI Item, edit_notes for indexed existing-note fields, quantize for existing notes, and write_cc for PPQ CC insertion.",
+      "Use create_clips for one new bounded musical MIDI Item (duration_quarter_notes + relative offsets), edit_notes for indexed existing-note fields, quantize for existing notes, and write_cc for PPQ CC insertion.",
+      "For English or Chinese asks such as write four quarter notes / 写四个四分音符, prefer macro.midi.apply create_clips with musical coordinates.",
       ...editing.when_to_use,
     ];
-    canonical.action_manual.when_not_to_use = editing.when_not_to_use;
+    canonical.action_manual.when_not_to_use = [
+      "Do not use create_clips to edit an existing Take, write CC/text/sysex, load an instrument, or claim audible playback.",
+      "Do not use existing-Take edit modes to create a new MIDI Item; use create_clips instead.",
+    ];
     canonical.action_manual.required_readiness = [
       ...createClipReadiness,
       "For existing-Take modes, use macro.project.query to obtain exact take:guid refs; do not assemble Take GUID refs manually.",
       ...editing.required_readiness,
     ];
-    canonical.action_manual.readback_steps = editing.readback_steps;
-    canonical.action_manual.success_criteria = editing.success_criteria;
-    canonical.action_manual.common_blockers = editing.common_blockers;
+    canonical.action_manual.readback_steps = [
+      "For create_clips musical mode, require live start_qn/end_qn from create, insert with position_unit project_qn, and page list_take_notes with include_project_qn and include_project_time to completion before applied.",
+      ...editing.readback_steps,
+    ];
+    canonical.action_manual.success_criteria = [
+      "For create_clips, the created Item live QN duration matches duration_quarter_notes and every applied note has complete matching PPQ, project-QN, and project-time readback.",
+      ...editing.success_criteria,
+    ];
+    canonical.action_manual.common_blockers = [
+      { code: "MIDI_CLIP_BOUNDS_AMBIGUOUS", message: "Supply exactly one of duration_quarter_notes or legacy end_seconds.", recoverable: true },
+      { code: "MIDI_NOTE_COORDINATE_MIXED", message: "Do not mix musical-relative and legacy PPQ note coordinates.", recoverable: true },
+      { code: "MIDI_NOTE_OFFSET_OUT_OF_RANGE", message: "Keep every musical note inside duration_quarter_notes.", recoverable: true },
+      { code: "MIDI_CREATE_QN_EXTENT_MISMATCH", message: "The created Item live QN extent did not preserve the requested musical duration.", recoverable: false },
+      { code: "MIDI_NOTE_LIST_READBACK_MISMATCH", message: "Complete live note rows did not match the requested musical or PPQ state.", recoverable: true },
+      ...editing.common_blockers,
+    ];
     canonical.action_manual.recovery_steps = [...createClipRecovery, ...editing.recovery_steps];
-    canonical.action_manual.dry_run_shape = editing.dry_run_shape;
+    canonical.action_manual.dry_run_shape = {
+      supported: true,
+      behavior: "create_clips validates its musical or legacy shape and live-resolves the destination Track without mutation; existing-Take modes live-resolve exact Takes and perform complete preflight reads without mutation or index invalidation.",
+    };
     canonical.action_manual.examples = [
       ...createClipExamples,
       ...(Array.isArray(editing.examples) ? editing.examples : []),

@@ -107,7 +107,7 @@ ping {}
 list_templates {"query":"create a MIDI clip and add a compressor","limit":25}
 list_templates {"ids":["macro.midi.apply"],"fields":["id","inputSchema"]}
 call_template {"id":"macro.project.inspect","input":{"include":["project_path","dirty_state","markers_regions"],"fields_by_scope":{"markers_regions":["ref","name","position_seconds"]},"limit":25,"compact_response":true,"ref_policy":"canonical_only"}}
-call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_seconds":0,"end_seconds":2,"notes":[{"start_ppq":0,"end_ppq":480,"pitch":60,"velocity":96,"channel":0}],"selector":{"name":"Instrument"},"dry_run":false}}
+call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_seconds":0,"duration_quarter_notes":4,"notes":[{"start_offset_quarter_notes":0,"end_offset_quarter_notes":1,"pitch":60,"velocity":96,"channel":0},{"start_offset_quarter_notes":1,"end_offset_quarter_notes":2,"pitch":62,"velocity":96,"channel":0},{"start_offset_quarter_notes":2,"end_offset_quarter_notes":3,"pitch":64,"velocity":96,"channel":0},{"start_offset_quarter_notes":3,"end_offset_quarter_notes":4,"pitch":65,"velocity":96,"channel":0}],"selector":{"name":"Instrument"},"dry_run":false}}
 call_template {"id":"macro.items.apply","input":{"mode":"align_starts","target":"selected","dry_run":false}}
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
