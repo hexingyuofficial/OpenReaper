@@ -79,7 +79,7 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
   readDescriptor({
     id: "template.items.read_item_summary",
     title: "Read item summary",
-    summary: "Read compact timeline, fade, snap, and active-take facts for one resolved item.",
+    summary: "Read compact timeline, fade, snap, volume, and active-take control facts for one resolved item.",
     entity_kind: "item",
     tags: ["items", "item", "read", "summary"],
     bridge: bridge({
@@ -99,8 +99,20 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
       snap_offset_seconds: { type: "number" },
       fade_in_seconds: { type: "number" },
       fade_out_seconds: { type: "number" },
+      volume_db: { type: "number" },
+      active_take_ref: {
+        oneOf: [
+          { type: "string" },
+          { type: "null" },
+        ],
+      },
       active_take_name: { type: "string" },
       take_count: { type: "integer" },
+      take_volume_db: { type: "number" },
+      take_pan: { type: "number" },
+      take_pitch_semitones: { type: "number" },
+      playrate: { type: "number" },
+      preserve_pitch: { type: "boolean" },
     }, ["item_ref", "position_seconds", "length_seconds"]),
     refs: refs({
       input: [ref("item_ref", "item", true, "Item ref whose compact summary is read.")],

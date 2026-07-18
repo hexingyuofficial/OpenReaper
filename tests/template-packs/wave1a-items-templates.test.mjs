@@ -104,6 +104,23 @@ describe("Wave 1A items template descriptors", () => {
     }
   });
 
+  it("exposes optional native D1 readback fields on read_item_summary without new templates", () => {
+    const summary = createWave1AItemsTemplates().find((descriptor) => descriptor.id === "template.items.read_item_summary");
+    assert.ok(summary);
+    const properties = summary.outputSchema.properties;
+    assert.equal(properties.volume_db.type, "number");
+    assert.deepEqual(properties.active_take_ref.oneOf, [{ type: "string" }, { type: "null" }]);
+    assert.equal(properties.take_volume_db.type, "number");
+    assert.equal(properties.take_pan.type, "number");
+    assert.equal(properties.take_pitch_semitones.type, "number");
+    assert.equal(properties.playrate.type, "number");
+    assert.equal(properties.preserve_pitch.type, "boolean");
+    assert.deepEqual(summary.outputSchema.required, ["item_ref", "position_seconds", "length_seconds"]);
+    assert.equal(Object.hasOwn(properties, "active_take_name"), true);
+    assert.equal(Object.hasOwn(properties, "take_count"), true);
+    assert.equal(createWave1AItemsTemplates().length, ALLOWLIST.length);
+  });
+
   it("passes Layer 4A descriptor validation with items ownership and risk posture", () => {
     for (const descriptor of createWave1AItemsTemplates()) {
       const validation = validateTemplateDescriptor(descriptor);
