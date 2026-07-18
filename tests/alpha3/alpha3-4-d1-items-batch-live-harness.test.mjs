@@ -178,11 +178,24 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
             assert.equal(request.input.changes.every((row) => row.item_ref.startsWith("item:guid:")), true);
             assert.equal(request.input.changes.every((row) => row.take_ref.startsWith("take:guid:")), true);
           }
+          if ([
+            "template.items.list_selected_items",
+            "template.tracks.create_track",
+            "template.midi.create_midi_item",
+            "template.items.read_item_summary",
+          ].includes(request.id)) {
+            assert.deepEqual(request.budget, {
+              max_response_bytes: 12_000,
+              max_items: 8,
+              max_inline_value_bytes: 1_024,
+            });
+          }
           return transport.callTemplate(request);
         },
       });
       assert.equal(report.ok, true, JSON.stringify(report.error ?? report));
       assert.equal(report.runtime.source, "installed_wrapper");
+      assert.equal(report.fixture_budget.max_inline_value_bytes, 1_024);
       assert.equal(seenBatchRequests, 2);
       assert.equal(report.fixture_items.length, 8);
       assert.equal(report.cold.calls.mutation, 40);
@@ -258,6 +271,16 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
       assert.equal(connectCalls, 1);
       assert.equal(closed, true);
       assert.equal(report.client_close.ok, true);
+      assert.deepEqual(report.live_environment, {
+        transport_dir: path.join(root, "transport"),
+        artifact_root: path.join(root, "artifacts"),
+        render_root: path.join(root, "render"),
+        index_root: path.join(root, "index"),
+        bridge_owner: "d1-owner",
+        bridge_generation: 1,
+        project_path: project,
+      });
+      assert.equal(report.save.ok, true);
       assert.equal(report.cold.calls.readback, 8);
       assert.equal(report.warm.calls.index, 1);
     } finally {
@@ -305,6 +328,50 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
       assert.equal(report.status, "failed");
       assert.equal(report.error?.code, "TEST_CLOSE_FAILED");
       assert.equal(report.client_close?.ok, false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails the live report when save_current does not complete", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-save-fail-"));
+    const project = path.join(root, "fixture.RPP");
+    await writeFile(project, "<REAPER_PROJECT\n>");
+    const transport = makeLiveLikeTransport();
+    try {
+      const report = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: path.join(root, "openreaper-mcp"),
+        sourceProject: project,
+        evidenceRoot: path.join(root, "evidence"),
+        executeLive: true,
+        liveEnvironment: {
+          transportDir: path.join(root, "transport"),
+          artifactRoot: path.join(root, "artifacts"),
+          renderRoot: path.join(root, "render"),
+          indexRoot: path.join(root, "index"),
+          bridgeOwner: "d1-owner",
+          bridgeGeneration: 1,
+          projectPath: project,
+        },
+        connectFactory: async () => ({
+          async callTool({ arguments: args }) {
+            const response = args.id === "macro.project.file"
+              ? { ok: false, error: { code: "TEST_SAVE_FAILED", message: "save failed" } }
+              : await transport.callTemplate({
+                  id: args.id,
+                  input: args.input,
+                  refs: args.refs,
+                  budget: args.budget,
+                });
+            return { content: [{ type: "text", text: JSON.stringify(response) }] };
+          },
+          async close() {},
+        }),
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.error?.code, "TEST_SAVE_FAILED");
+      assert.equal(report.save?.ok, false);
+      assert.equal(report.client_close?.ok, true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

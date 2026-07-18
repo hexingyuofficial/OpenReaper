@@ -13,6 +13,11 @@ const PUBLIC_BUDGET = Object.freeze({
   max_items: 8,
   max_inline_value_bytes: 256,
 });
+const FIXTURE_BUDGET = Object.freeze({
+  max_response_bytes: 12_000,
+  max_items: 8,
+  max_inline_value_bytes: 1_024,
+});
 
 export async function connectInstalledWrapperD1ItemsBatch({
   installedWrapper,
@@ -76,6 +81,7 @@ export async function runAlpha34D1ItemsBatchHarness({
     max_items: 8,
     max_inline_value_bytes: 256,
   });
+  const fixtureBudget = FIXTURE_BUDGET;
   const journal = await createEvidenceJournal({
     evidenceRoot: path.resolve(evidenceRoot),
     provenance: {
@@ -94,12 +100,15 @@ export async function runAlpha34D1ItemsBatchHarness({
     runtime: { source: "installed_wrapper", command: path.resolve(installedWrapper) },
     source_project: path.resolve(sourceProject),
     budget,
+    fixture_budget: fixtureBudget,
+    live_environment: null,
     fixture_items: null,
     cold: null,
     warm: null,
     warm_latency_ceiling_ms: warmLatencyCeilingMs,
     source_media_deleted: false,
     rendered_outputs: [],
+    save: null,
     project_before_hash: null,
     project_after_hash: null,
     recovery_posture: {
@@ -115,6 +124,15 @@ export async function runAlpha34D1ItemsBatchHarness({
     report.project_before_hash = await sha256File(sourceProject);
     if (executeLive === true) {
       const env = normalizeLiveEnvironment(liveEnvironment, sourceProject);
+      report.live_environment = {
+        transport_dir: env.transportDir,
+        artifact_root: env.artifactRoot,
+        render_root: env.renderRoot,
+        index_root: env.indexRoot,
+        bridge_owner: env.bridgeOwner,
+        bridge_generation: env.bridgeGeneration,
+        project_path: env.projectPath,
+      };
       client = await connectFactory({
         installedWrapper: path.resolve(installedWrapper),
         liveEnvironment: env,
@@ -128,7 +146,7 @@ export async function runAlpha34D1ItemsBatchHarness({
     const fixtureItems = await ensureEightItemsWithActiveTakes({
       callTemplate: transportCall,
       journal,
-      budget,
+      budget: fixtureBudget,
     });
     report.fixture_items = fixtureItems;
     const changes = buildEightRowChanges(fixtureItems);
@@ -165,16 +183,28 @@ export async function runAlpha34D1ItemsBatchHarness({
       if (report.status !== "warm_latency_exceeded") report.status = "failed";
     }
     if (executeLive === true) {
-      await transportCall({
+      const saveResponse = await transportCall({
         id: "macro.project.file",
         input: { operation: "save_current", dry_run: false },
-        budget: { max_response_bytes: 12_000, max_items: 8, max_inline_value_bytes: 256 },
+        budget: fixtureBudget,
         context: {
           request_id: "d1-items-batch-save-current-request-30c",
           session_id: "d1-items-batch",
           request_sequence: 99,
         },
       });
+      const saveOk = saveResponse?.ok === true || saveResponse?.execution?.status === "completed";
+      report.save = {
+        ok: saveOk,
+        status: saveResponse?.execution?.status ?? null,
+        response_bytes: Buffer.byteLength(JSON.stringify(saveResponse ?? {}), "utf8"),
+      };
+      if (!saveOk) {
+        throw coded(
+          saveResponse?.error?.code ?? "D1_HARNESS_SAVE_FAILED",
+          saveResponse?.error?.message ?? "Saving the live fixture project did not complete.",
+        );
+      }
     }
     report.project_after_hash = await sha256File(sourceProject);
   } catch (error) {
