@@ -19426,13 +19426,25 @@ local function read_b_midi_notes_cursor(value)
   return cursor
 end
 
+local function finite_number(value)
+  if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
+    return value
+  end
+  return nil
+end
+
 local function list_take_notes(request)
   local take, failure = READ_B_MIDI.resolve_midi_take_for_request(request)
   if not take then
     return nil, failure
   end
   local ok_count, count_retval, note_count = call_reaper("MIDI_CountEvts", take)
-  local total = (ok_count and count_retval ~= false) and first_number(note_count) or 0
+  local total = ok_count and count_retval ~= false and finite_number(first_number(note_count)) or nil
+  if total == nil or total < 0 or total ~= math.floor(total) then
+    return READ_B_MIDI.handler_error("COMMAND_FAILED", "Could not read the complete MIDI note count.", {
+      stage = "count_notes",
+    }, false)
+  end
   local cursor = read_b_midi_notes_cursor(request.params.cursor)
   if cursor == nil then
     return READ_B_MIDI.handler_error("PARAMS_INVALID", "MIDI note cursor must be a non-negative decimal string.", {
@@ -19440,6 +19452,8 @@ local function list_take_notes(request)
       cursor = bounded_string(request.params.cursor, 80),
     })
   end
+  local include_project_time = request.params.include_project_time == true
+  local include_project_qn = request.params.include_project_qn == true
   local limit = READ_B_MIDI.bounded_limit(request, request.params.limit, 16, 100)
   local notes = json_array({})
   for index = cursor, math.max(total - 1, cursor - 1) do
@@ -19447,25 +19461,56 @@ local function list_take_notes(request)
       break
     end
     local ok_note, note_retval, selected, muted, start_ppq, end_ppq, channel, pitch, velocity = call_reaper("MIDI_GetNote", take, index)
-    if ok_note and note_retval ~= false and selected ~= nil then
-      local note = {
-        index = index,
-        selected = selected == true,
-        muted = muted == true,
-        start_ppq = first_number(start_ppq) or 0,
-        end_ppq = first_number(end_ppq) or 0,
-        channel = first_number(channel) or 0,
-        pitch = first_number(pitch) or 0,
-        velocity = first_number(velocity) or 0,
-      }
-      if request.params.include_project_time == true then
+    if not ok_note or note_retval == false or selected == nil then
+      return READ_B_MIDI.handler_error("COMMAND_FAILED", "Could not read a complete MIDI note row.", {
+        stage = "read_note",
+        note_index = index,
+        cursor = cursor,
+      }, false)
+    end
+    local note = {
+      index = index,
+      selected = selected == true,
+      muted = muted == true,
+      start_ppq = first_number(start_ppq) or 0,
+      end_ppq = first_number(end_ppq) or 0,
+      channel = first_number(channel) or 0,
+      pitch = first_number(pitch) or 0,
+      velocity = first_number(velocity) or 0,
+    }
+    if include_project_time then
         local ok_start, start_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.start_ppq)
         local ok_end, end_time = call_reaper("MIDI_GetProjTimeFromPPQPos", take, note.end_ppq)
-        note.start_seconds = ok_start and first_number(start_time) or nil
-        note.end_seconds = ok_end and first_number(end_time) or nil
-      end
-      notes[#notes + 1] = note
+        local start_seconds = ok_start and finite_number(first_number(start_time)) or nil
+        local end_seconds = ok_end and finite_number(first_number(end_time)) or nil
+        if start_seconds == nil or end_seconds == nil then
+          return READ_B_MIDI.handler_error("COMMAND_FAILED", "Native PPQ to project-time conversion failed while listing MIDI notes.", {
+            note_index = index,
+            include_project_time = true,
+            start_ppq = note.start_ppq,
+            end_ppq = note.end_ppq,
+          }, false)
+        end
+        note.start_seconds = start_seconds
+        note.end_seconds = end_seconds
     end
+    if include_project_qn then
+        local ok_start, start_qn_value = call_reaper("MIDI_GetProjQNFromPPQPos", take, note.start_ppq)
+        local ok_end, end_qn_value = call_reaper("MIDI_GetProjQNFromPPQPos", take, note.end_ppq)
+        local start_qn = ok_start and finite_number(first_number(start_qn_value)) or nil
+        local end_qn = ok_end and finite_number(first_number(end_qn_value)) or nil
+        if start_qn == nil or end_qn == nil then
+          return READ_B_MIDI.handler_error("COMMAND_FAILED", "Native PPQ to project-QN conversion failed while listing MIDI notes.", {
+            note_index = index,
+            include_project_qn = true,
+            start_ppq = note.start_ppq,
+            end_ppq = note.end_ppq,
+          }, false)
+        end
+        note.start_qn = start_qn
+        note.end_qn = end_qn
+    end
+    notes[#notes + 1] = note
   end
   return READ_B_MIDI.fit_paginated_summary(request, notes, math.max(total - cursor, 0), function()
     local has_more = total > cursor + #notes
@@ -26652,10 +26697,18 @@ local function time_matches(actual, expected)
   return type(actual) == "number" and math.abs(actual - expected) <= 0.000001
 end
 
+local function finite_number(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge and value or nil
+end
+
 local function project_time_to_qn(seconds)
   local ok, value = call_reaper("TimeMap2_timeToQN", 0, seconds)
-  local qn = ok and first_number(value) or nil
-  return type(qn) == "number" and qn == qn and qn ~= math.huge and qn ~= -math.huge and qn or nil
+  return finite_number(ok and first_number(value) or nil)
+end
+
+local function project_qn_to_time(qn)
+  local ok, value = call_reaper("TimeMap2_QNToTime", 0, qn)
+  return finite_number(ok and first_number(value) or nil)
 end
 
 local function discard_created_item(track, item)
@@ -26663,37 +26716,120 @@ local function discard_created_item(track, item)
   return ok and removed ~= false
 end
 
+local function resolve_create_midi_item_bounds(params)
+  local has_end = params.end_seconds ~= nil
+  local has_duration = params.duration_quarter_notes ~= nil
+  if has_end == has_duration then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item create requires exactly one of end_seconds or duration_quarter_notes with start_seconds.",
+      details = {
+        has_end_seconds = has_end,
+        has_duration_quarter_notes = has_duration,
+      },
+    }
+  end
+  local start_seconds = finite_number(params.start_seconds)
+  if start_seconds == nil then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item start_seconds must be a finite number.",
+      details = { start_seconds = params.start_seconds },
+    }
+  end
+  if has_end then
+    local end_seconds = finite_number(params.end_seconds)
+    if end_seconds == nil or end_seconds <= start_seconds then
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI item end_seconds must be a finite number greater than start_seconds.",
+        details = { start_seconds = start_seconds, end_seconds = params.end_seconds },
+      }
+    end
+    local start_qn = project_time_to_qn(start_seconds)
+    local end_qn = project_time_to_qn(end_seconds)
+    if start_qn == nil or end_qn == nil or end_qn <= start_qn then
+      return nil, {
+        code = "COMMAND_FAILED",
+        message = "Could not convert MIDI item time bounds to project quarter notes.",
+        details = { start_seconds = start_seconds, end_seconds = end_seconds },
+        recoverable = false,
+      }
+    end
+    return {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+      start_qn = start_qn,
+      end_qn = end_qn,
+      route = "end_seconds",
+    }
+  end
+  local duration_quarter_notes = finite_number(params.duration_quarter_notes)
+  if duration_quarter_notes == nil or duration_quarter_notes <= 0 then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item duration_quarter_notes must be a finite positive number.",
+      details = { duration_quarter_notes = params.duration_quarter_notes },
+    }
+  end
+  local start_qn = project_time_to_qn(start_seconds)
+  if start_qn == nil then
+    return nil, {
+      code = "COMMAND_FAILED",
+      message = "Could not convert MIDI item start_seconds to project quarter notes.",
+      details = { start_seconds = start_seconds },
+      recoverable = false,
+    }
+  end
+  local end_qn = start_qn + duration_quarter_notes
+  local end_seconds = project_qn_to_time(end_qn)
+  if end_seconds == nil or end_seconds <= start_seconds or end_qn <= start_qn then
+    return nil, {
+      code = "COMMAND_FAILED",
+      message = "Could not convert MIDI item duration_quarter_notes bounds through native project QN mapping.",
+      details = {
+        start_seconds = start_seconds,
+        start_qn = start_qn,
+        duration_quarter_notes = duration_quarter_notes,
+        end_qn = end_qn,
+        end_seconds = end_seconds,
+      },
+      recoverable = false,
+    }
+  end
+  return {
+    start_seconds = start_seconds,
+    end_seconds = end_seconds,
+    start_qn = start_qn,
+    end_qn = end_qn,
+    route = "duration_quarter_notes",
+  }
+end
+
 local function safe_write_create_midi_item(request)
   local track, failure = track_from_request_refs(request)
   if not track then
     return handler_error(failure.code, failure.message, failure.details)
   end
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
-  if end_seconds <= start_seconds then
-    return handler_error("PARAMS_INVALID", "MIDI item end_seconds must be greater than start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
+  local bounds, bounds_failure = resolve_create_midi_item_bounds(request.params or {})
+  if not bounds then
+    return handler_error(
+      bounds_failure.code,
+      bounds_failure.message,
+      bounds_failure.details,
+      bounds_failure.recoverable
+    )
   end
-  local start_qn = project_time_to_qn(start_seconds)
-  local end_qn = project_time_to_qn(end_seconds)
-  if start_qn == nil or end_qn == nil or end_qn <= start_qn then
-    return handler_error("COMMAND_FAILED", "Could not convert MIDI item time bounds to project quarter notes.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    }, false)
-  end
-  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_qn, end_qn, true)
+  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, bounds.start_qn, bounds.end_qn, true)
   if not ok_item or not item then
     return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
   end
-  local ok_extents, extents_set = call_reaper("MIDI_SetItemExtents", item, start_qn, end_qn)
+  local ok_extents, extents_set = call_reaper("MIDI_SetItemExtents", item, bounds.start_qn, bounds.end_qn)
   if not ok_extents or extents_set == false then
     return handler_error("COMMAND_FAILED", "Could not set created MIDI item extents.", {
       cleanup_succeeded = discard_created_item(track, item),
-      start_qn = start_qn,
-      end_qn = end_qn,
+      start_qn = bounds.start_qn,
+      end_qn = bounds.end_qn,
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
@@ -26706,13 +26842,24 @@ local function safe_write_create_midi_item(request)
   local readback_start = item_time_value(item, "D_POSITION")
   local readback_length = item_time_value(item, "D_LENGTH")
   local readback_end = readback_start and readback_length and readback_start + readback_length or nil
-  if not time_matches(readback_start, start_seconds) or not time_matches(readback_end, end_seconds) then
+  local readback_start_qn = readback_start and project_time_to_qn(readback_start) or nil
+  local readback_end_qn = readback_end and project_time_to_qn(readback_end) or nil
+  if not time_matches(readback_start, bounds.start_seconds)
+    or not time_matches(readback_end, bounds.end_seconds)
+    or readback_start_qn == nil
+    or readback_end_qn == nil
+    or math.abs(readback_start_qn - bounds.start_qn) > 0.000001
+    or math.abs(readback_end_qn - bounds.end_qn) > 0.000001 then
     local cleanup_succeeded = discard_created_item(track, item)
     return handler_error("VERIFY_FAILED", "Created MIDI item time readback did not match the request.", {
-      requested_start_seconds = start_seconds,
-      requested_end_seconds = end_seconds,
+      requested_start_seconds = bounds.start_seconds,
+      requested_end_seconds = bounds.end_seconds,
+      requested_start_qn = bounds.start_qn,
+      requested_end_qn = bounds.end_qn,
       readback_start_seconds = readback_start,
       readback_end_seconds = readback_end,
+      readback_start_qn = readback_start_qn,
+      readback_end_qn = readback_end_qn,
       cleanup_succeeded = cleanup_succeeded,
     }, false)
   end
@@ -26720,6 +26867,8 @@ local function safe_write_create_midi_item(request)
   summary.item_ref = item_ref_string(item)
   summary.start_seconds = readback_start
   summary.end_seconds = readback_end
+  summary.start_qn = readback_start_qn
+  summary.end_qn = readback_end_qn
   summary.created = true
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
 end
@@ -26769,11 +26918,11 @@ local function safe_write_a_refs(...)
   return refs
 end
 
-local function bounded_number(value, fallback)
+local function finite_number(value)
   if type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge then
     return value
   end
-  return fallback
+  return nil
 end
 
 local function integer_value(value)
@@ -26800,63 +26949,237 @@ local function take_object_ref(take)
   }
 end
 
-local function text_sysex_type_value(kind)
-  if kind == "sysex" then
-    return -1
-  elseif kind == "lyric" then
-    return 5
-  elseif kind == "notation" then
-    return 15
+local function note_has_any(note, keys)
+  for index = 1, #keys do
+    if note[keys[index]] ~= nil then
+      return true
+    end
   end
-  return 1
+  return false
 end
 
-local function safe_write_insert_notes_batch(request)
-  if request.params.position_unit ~= "ppq" then
-    return handler_error("PARAMS_INVALID", "Seconds-based MIDI note insertion is temporarily blocked; use position_unit ppq.", {
-      blocker_code = "MIDI_SECONDS_MODE_MALFORMED",
-      allowed_position_units = json_array({ "ppq" }),
-      recovery = "Convert note positions to PPQ and retry with position_unit ppq.",
-    })
+local function native_ppq_from_project_qn(take, qn, note_index, field)
+  local ok, ppq = call_reaper("MIDI_GetPPQPosFromProjQN", take, qn)
+  local value = ok and finite_number(first_number(ppq)) or nil
+  if value == nil then
+    return nil, {
+      code = "COMMAND_FAILED",
+      message = "Native project-QN to PPQ conversion failed before MIDI note insertion.",
+      details = {
+        note_index = note_index,
+        field = field,
+        project_qn = qn,
+        zero_writes = true,
+      },
+      recoverable = false,
+    }
+  end
+  return value
+end
+
+local function prepare_insert_notes(request)
+  local position_unit = request.params.position_unit
+  if position_unit ~= "ppq" and position_unit ~= "project_qn" then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = position_unit == "seconds"
+        and "Seconds-based MIDI note insertion is temporarily blocked; use position_unit ppq or project_qn."
+        or "MIDI note insertion position_unit must be ppq or project_qn.",
+      details = {
+        blocker_code = position_unit == "seconds" and "MIDI_SECONDS_MODE_MALFORMED" or "MIDI_POSITION_UNIT_INVALID",
+        allowed_position_units = json_array({ "ppq", "project_qn" }),
+        recovery = "Use position_unit ppq with start_ppq/end_ppq, or position_unit project_qn with start_qn/end_qn.",
+      },
+    }
   end
   local notes = is_json_array(request.params.notes) and request.params.notes or json_array({})
   if #notes < 1 then
-    return handler_error("PARAMS_INVALID", "MIDI note insertion requires at least one note.", {
-      field = "notes",
-    })
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI note insertion requires at least one note.",
+      details = { field = "notes" },
+    }
   end
+  local prepared = json_array({})
+  local ppq_fields = { "start_ppq", "end_ppq" }
+  local qn_fields = { "start_qn", "end_qn" }
   for index = 1, #notes do
     local note = notes[index]
     if not is_object(note) then
-      return handler_error("PARAMS_INVALID", "Every MIDI note must be an object.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "Every MIDI note must be an object.",
+        details = { note_index = index - 1 },
+      }
     end
-    local start_ppq = bounded_number(note.start_ppq, nil)
-    local end_ppq = bounded_number(note.end_ppq, nil)
+    local has_ppq = note_has_any(note, ppq_fields)
+    local has_qn = note_has_any(note, qn_fields)
+    if position_unit == "ppq" then
+      if has_qn or not has_ppq then
+        return nil, {
+          code = "PARAMS_INVALID",
+          message = "PPQ note insertion requires start_ppq/end_ppq and forbids project_qn fields.",
+          details = {
+            note_index = index - 1,
+            position_unit = position_unit,
+            zero_writes = true,
+          },
+        }
+      end
+      local start_ppq = finite_number(note.start_ppq)
+      local end_ppq = finite_number(note.end_ppq)
+      if start_ppq == nil or end_ppq == nil or end_ppq <= start_ppq then
+        return nil, {
+          code = "PARAMS_INVALID",
+          message = "MIDI note PPQ bounds are invalid.",
+          details = { note_index = index - 1, zero_writes = true },
+        }
+      end
+      prepared[#prepared + 1] = {
+        start_ppq = start_ppq,
+        end_ppq = end_ppq,
+        channel = note.channel,
+        pitch = note.pitch,
+        velocity = note.velocity,
+        selected = note.selected,
+        muted = note.muted,
+      }
+    else
+      if has_ppq or not has_qn then
+        return nil, {
+          code = "PARAMS_INVALID",
+          message = "Project-QN note insertion requires start_qn/end_qn and forbids PPQ fields.",
+          details = {
+            note_index = index - 1,
+            position_unit = position_unit,
+            zero_writes = true,
+          },
+        }
+      end
+      local start_qn = finite_number(note.start_qn)
+      local end_qn = finite_number(note.end_qn)
+      if start_qn == nil or end_qn == nil or end_qn <= start_qn then
+        return nil, {
+          code = "PARAMS_INVALID",
+          message = "MIDI note project-QN bounds are invalid.",
+          details = { note_index = index - 1, zero_writes = true },
+        }
+      end
+      prepared[#prepared + 1] = {
+        start_qn = start_qn,
+        end_qn = end_qn,
+        channel = note.channel,
+        pitch = note.pitch,
+        velocity = note.velocity,
+        selected = note.selected,
+        muted = note.muted,
+      }
+    end
     local channel = integer_value(note.channel)
     local pitch = integer_value(note.pitch)
     local velocity = integer_value(note.velocity)
-    if start_ppq == nil or end_ppq == nil or end_ppq <= start_ppq then
-      return handler_error("PARAMS_INVALID", "MIDI note PPQ bounds are invalid.", { note_index = index - 1 })
-    end
     if channel == nil or channel < 0 or channel > 15 then
-      return handler_error("PARAMS_INVALID", "MIDI note channel must be an integer from 0 through 15.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI note channel must be an integer from 0 through 15.",
+        details = { note_index = index - 1, zero_writes = true },
+      }
     end
     if pitch == nil or pitch < 0 or pitch > 127 then
-      return handler_error("PARAMS_INVALID", "MIDI note pitch must be an integer from 0 through 127.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI note pitch must be an integer from 0 through 127.",
+        details = { note_index = index - 1, zero_writes = true },
+      }
     end
     if velocity == nil or velocity < 1 or velocity > 127 then
-      return handler_error("PARAMS_INVALID", "MIDI note velocity must be an integer from 1 through 127.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI note velocity must be an integer from 1 through 127.",
+        details = { note_index = index - 1, zero_writes = true },
+      }
     end
     if note.selected ~= nil and type(note.selected) ~= "boolean" then
-      return handler_error("PARAMS_INVALID", "MIDI note selected must be boolean when supplied.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI note selected must be boolean when supplied.",
+        details = { note_index = index - 1, zero_writes = true },
+      }
     end
     if note.muted ~= nil and type(note.muted) ~= "boolean" then
-      return handler_error("PARAMS_INVALID", "MIDI note muted must be boolean when supplied.", { note_index = index - 1 })
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI note muted must be boolean when supplied.",
+        details = { note_index = index - 1, zero_writes = true },
+      }
     end
+    prepared[#prepared].channel = channel
+    prepared[#prepared].pitch = pitch
+    prepared[#prepared].velocity = velocity
+  end
+  return {
+    position_unit = position_unit,
+    notes = prepared,
+  }
+end
+
+local function convert_prepared_notes_to_ppq(take, prepared)
+  local converted = json_array({})
+  for index = 1, #prepared.notes do
+    local note = prepared.notes[index]
+    local start_ppq = note.start_ppq
+    local end_ppq = note.end_ppq
+    if prepared.position_unit == "project_qn" then
+      local start_value, start_failure = native_ppq_from_project_qn(take, note.start_qn, index - 1, "start_qn")
+      if not start_value then
+        return nil, start_failure
+      end
+      local end_value, end_failure = native_ppq_from_project_qn(take, note.end_qn, index - 1, "end_qn")
+      if not end_value then
+        return nil, end_failure
+      end
+      start_ppq = start_value
+      end_ppq = end_value
+      if end_ppq <= start_ppq then
+        return nil, {
+          code = "PARAMS_INVALID",
+          message = "Native project-QN conversion produced invalid PPQ bounds before insertion.",
+          details = {
+            note_index = index - 1,
+            start_qn = note.start_qn,
+            end_qn = note.end_qn,
+            start_ppq = start_ppq,
+            end_ppq = end_ppq,
+            zero_writes = true,
+          },
+        }
+      end
+    end
+    converted[#converted + 1] = {
+      start_ppq = start_ppq,
+      end_ppq = end_ppq,
+      channel = note.channel,
+      pitch = note.pitch,
+      velocity = note.velocity,
+      selected = note.selected == true,
+      muted = note.muted == true,
+    }
+  end
+  return converted
+end
+
+local function safe_write_insert_notes_batch(request)
+  local prepared, prepare_failure = prepare_insert_notes(request)
+  if not prepared then
+    return handler_error(prepare_failure.code, prepare_failure.message, prepare_failure.details, prepare_failure.recoverable)
   end
   local take, failure = resolve_midi_take_for_request(request)
   if not take then
     return handler_error(failure.code, failure.message, failure.details)
+  end
+  local notes, convert_failure = convert_prepared_notes_to_ppq(take, prepared)
+  if not notes then
+    return handler_error(convert_failure.code, convert_failure.message, convert_failure.details, convert_failure.recoverable)
   end
   local inserted = 0
   for index = 1, #notes do
@@ -26864,8 +27187,8 @@ local function safe_write_insert_notes_batch(request)
     local ok, success = call_reaper(
       "MIDI_InsertNote",
       take,
-      note.selected == true,
-      note.muted == true,
+      note.selected,
+      note.muted,
       note.start_ppq,
       note.end_ppq,
       note.channel,
@@ -26897,6 +27220,7 @@ local function safe_write_insert_notes_batch(request)
   end
   summary.inserted_count = inserted
   summary.inserted_note_count = inserted
+  summary.position_unit = prepared.position_unit
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(take_object_ref(take))
 end
 return {

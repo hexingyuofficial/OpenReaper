@@ -72,12 +72,15 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
     inputSchema: objectSchema({
       start_seconds: { type: "number" },
       end_seconds: { type: "number" },
-    }, ["start_seconds", "end_seconds"]),
+      duration_quarter_notes: { type: "number" },
+    }, ["start_seconds"]),
     outputSchema: objectSchema({
       item_ref: { type: "string" },
       take_ref: { type: "string" },
       start_seconds: { type: "number" },
       end_seconds: { type: "number" },
+      start_qn: { type: "number" },
+      end_qn: { type: "number" },
     }, ["item_ref", "take_ref"]),
     refs: refs({
       input: [ref("track_ref", "track", true, "Track ref that receives the MIDI item.")],
@@ -105,8 +108,13 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
     examples: [
       {
         name: "create_one_bar_midi_item",
-        summary: "Create an empty MIDI item on a resolved track.",
+        summary: "Create an empty MIDI item on a resolved track with absolute seconds.",
         input: { start_seconds: 0, end_seconds: 2 },
+      },
+      {
+        name: "create_four_quarter_note_midi_item",
+        summary: "Create an empty MIDI item from start_seconds plus native project quarter-note duration.",
+        input: { start_seconds: 1.25, duration_quarter_notes: 4 },
       },
     ],
   }),
@@ -158,6 +166,7 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
     }),
     inputSchema: pagedInputSchema({
       include_project_time: { type: "boolean" },
+      include_project_qn: { type: "boolean" },
     }),
     outputSchema: objectSchema({
       take_ref: { type: "string" },
@@ -183,18 +192,23 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
         summary: "List the first page of notes in a resolved MIDI take.",
         input: { limit: 16 },
       },
+      {
+        name: "list_notes_with_project_qn",
+        summary: "List notes with native project quarter-note coordinates.",
+        input: { limit: 16, include_project_qn: true, include_project_time: true },
+      },
     ],
   }),
   commandDescriptor({
     id: "template.midi.insert_notes_batch",
     title: "Insert MIDI notes batch",
-    summary: "Insert a bounded PPQ-positioned batch of MIDI notes into one resolved MIDI take.",
+    summary: "Insert a bounded PPQ or project-QN positioned batch of MIDI notes into one resolved MIDI take.",
     entity_kind: "midi_note",
     tags: ["midi", "note", "insert", "batch"],
     bridge: writeBridge({ capability: "midi.insert_notes_batch" }),
     inputSchema: objectSchema({
       notes: { type: "array" },
-      position_unit: { enum: ["ppq"] },
+      position_unit: { enum: ["ppq", "project_qn"] },
       sort_events: { type: "boolean" },
     }, ["notes", "position_unit"]),
     outputSchema: objectSchema({
@@ -202,6 +216,7 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
       inserted_count: { type: "integer" },
       note_count: { type: "integer" },
       take_hash: { type: "string" },
+      position_unit: { enum: ["ppq", "project_qn"] },
     }, ["take_ref", "inserted_count"]),
     refs: midiTakeMutationRefs(),
     expectedDelta: mutationDelta({
@@ -229,6 +244,19 @@ export const WAVE2A_MIDI_TEMPLATES = deepFreeze([
           notes: [
             { start_ppq: 0, end_ppq: 480, pitch: 60, velocity: 96, channel: 0 },
             { start_ppq: 480, end_ppq: 960, pitch: 64, velocity: 88, channel: 0 },
+          ],
+        },
+      },
+      {
+        name: "insert_four_quarter_notes_project_qn",
+        summary: "Insert four project-QN notes using native live-Take conversion.",
+        input: {
+          position_unit: "project_qn",
+          notes: [
+            { start_qn: 4, end_qn: 5, pitch: 60, velocity: 96, channel: 0 },
+            { start_qn: 5, end_qn: 6, pitch: 62, velocity: 96, channel: 0 },
+            { start_qn: 6, end_qn: 7, pitch: 64, velocity: 96, channel: 0 },
+            { start_qn: 7, end_qn: 8, pitch: 65, velocity: 96, channel: 0 },
           ],
         },
       },

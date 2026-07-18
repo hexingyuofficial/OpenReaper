@@ -225,10 +225,18 @@ local function time_matches(actual, expected)
   return type(actual) == "number" and math.abs(actual - expected) <= 0.000001
 end
 
+local function finite_number(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge and value or nil
+end
+
 local function project_time_to_qn(seconds)
   local ok, value = call_reaper("TimeMap2_timeToQN", 0, seconds)
-  local qn = ok and first_number(value) or nil
-  return type(qn) == "number" and qn == qn and qn ~= math.huge and qn ~= -math.huge and qn or nil
+  return finite_number(ok and first_number(value) or nil)
+end
+
+local function project_qn_to_time(qn)
+  local ok, value = call_reaper("TimeMap2_QNToTime", 0, qn)
+  return finite_number(ok and first_number(value) or nil)
 end
 
 local function discard_created_item(track, item)
@@ -236,37 +244,120 @@ local function discard_created_item(track, item)
   return ok and removed ~= false
 end
 
+local function resolve_create_midi_item_bounds(params)
+  local has_end = params.end_seconds ~= nil
+  local has_duration = params.duration_quarter_notes ~= nil
+  if has_end == has_duration then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item create requires exactly one of end_seconds or duration_quarter_notes with start_seconds.",
+      details = {
+        has_end_seconds = has_end,
+        has_duration_quarter_notes = has_duration,
+      },
+    }
+  end
+  local start_seconds = finite_number(params.start_seconds)
+  if start_seconds == nil then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item start_seconds must be a finite number.",
+      details = { start_seconds = params.start_seconds },
+    }
+  end
+  if has_end then
+    local end_seconds = finite_number(params.end_seconds)
+    if end_seconds == nil or end_seconds <= start_seconds then
+      return nil, {
+        code = "PARAMS_INVALID",
+        message = "MIDI item end_seconds must be a finite number greater than start_seconds.",
+        details = { start_seconds = start_seconds, end_seconds = params.end_seconds },
+      }
+    end
+    local start_qn = project_time_to_qn(start_seconds)
+    local end_qn = project_time_to_qn(end_seconds)
+    if start_qn == nil or end_qn == nil or end_qn <= start_qn then
+      return nil, {
+        code = "COMMAND_FAILED",
+        message = "Could not convert MIDI item time bounds to project quarter notes.",
+        details = { start_seconds = start_seconds, end_seconds = end_seconds },
+        recoverable = false,
+      }
+    end
+    return {
+      start_seconds = start_seconds,
+      end_seconds = end_seconds,
+      start_qn = start_qn,
+      end_qn = end_qn,
+      route = "end_seconds",
+    }
+  end
+  local duration_quarter_notes = finite_number(params.duration_quarter_notes)
+  if duration_quarter_notes == nil or duration_quarter_notes <= 0 then
+    return nil, {
+      code = "PARAMS_INVALID",
+      message = "MIDI item duration_quarter_notes must be a finite positive number.",
+      details = { duration_quarter_notes = params.duration_quarter_notes },
+    }
+  end
+  local start_qn = project_time_to_qn(start_seconds)
+  if start_qn == nil then
+    return nil, {
+      code = "COMMAND_FAILED",
+      message = "Could not convert MIDI item start_seconds to project quarter notes.",
+      details = { start_seconds = start_seconds },
+      recoverable = false,
+    }
+  end
+  local end_qn = start_qn + duration_quarter_notes
+  local end_seconds = project_qn_to_time(end_qn)
+  if end_seconds == nil or end_seconds <= start_seconds or end_qn <= start_qn then
+    return nil, {
+      code = "COMMAND_FAILED",
+      message = "Could not convert MIDI item duration_quarter_notes bounds through native project QN mapping.",
+      details = {
+        start_seconds = start_seconds,
+        start_qn = start_qn,
+        duration_quarter_notes = duration_quarter_notes,
+        end_qn = end_qn,
+        end_seconds = end_seconds,
+      },
+      recoverable = false,
+    }
+  end
+  return {
+    start_seconds = start_seconds,
+    end_seconds = end_seconds,
+    start_qn = start_qn,
+    end_qn = end_qn,
+    route = "duration_quarter_notes",
+  }
+end
+
 local function safe_write_create_midi_item(request)
   local track, failure = track_from_request_refs(request)
   if not track then
     return handler_error(failure.code, failure.message, failure.details)
   end
-  local start_seconds = bounded_number(request.params.start_seconds, 0)
-  local end_seconds = bounded_number(request.params.end_seconds, start_seconds + 1)
-  if end_seconds <= start_seconds then
-    return handler_error("PARAMS_INVALID", "MIDI item end_seconds must be greater than start_seconds.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    })
+  local bounds, bounds_failure = resolve_create_midi_item_bounds(request.params or {})
+  if not bounds then
+    return handler_error(
+      bounds_failure.code,
+      bounds_failure.message,
+      bounds_failure.details,
+      bounds_failure.recoverable
+    )
   end
-  local start_qn = project_time_to_qn(start_seconds)
-  local end_qn = project_time_to_qn(end_seconds)
-  if start_qn == nil or end_qn == nil or end_qn <= start_qn then
-    return handler_error("COMMAND_FAILED", "Could not convert MIDI item time bounds to project quarter notes.", {
-      start_seconds = start_seconds,
-      end_seconds = end_seconds,
-    }, false)
-  end
-  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, start_qn, end_qn, true)
+  local ok_item, item = call_reaper("CreateNewMIDIItemInProj", track, bounds.start_qn, bounds.end_qn, true)
   if not ok_item or not item then
     return handler_error("COMMAND_FAILED", "Could not create Safe-Write-A MIDI item.", {}, false)
   end
-  local ok_extents, extents_set = call_reaper("MIDI_SetItemExtents", item, start_qn, end_qn)
+  local ok_extents, extents_set = call_reaper("MIDI_SetItemExtents", item, bounds.start_qn, bounds.end_qn)
   if not ok_extents or extents_set == false then
     return handler_error("COMMAND_FAILED", "Could not set created MIDI item extents.", {
       cleanup_succeeded = discard_created_item(track, item),
-      start_qn = start_qn,
-      end_qn = end_qn,
+      start_qn = bounds.start_qn,
+      end_qn = bounds.end_qn,
     }, false)
   end
   call_reaper("UpdateItemInProject", item)
@@ -279,13 +370,24 @@ local function safe_write_create_midi_item(request)
   local readback_start = item_time_value(item, "D_POSITION")
   local readback_length = item_time_value(item, "D_LENGTH")
   local readback_end = readback_start and readback_length and readback_start + readback_length or nil
-  if not time_matches(readback_start, start_seconds) or not time_matches(readback_end, end_seconds) then
+  local readback_start_qn = readback_start and project_time_to_qn(readback_start) or nil
+  local readback_end_qn = readback_end and project_time_to_qn(readback_end) or nil
+  if not time_matches(readback_start, bounds.start_seconds)
+    or not time_matches(readback_end, bounds.end_seconds)
+    or readback_start_qn == nil
+    or readback_end_qn == nil
+    or math.abs(readback_start_qn - bounds.start_qn) > 0.000001
+    or math.abs(readback_end_qn - bounds.end_qn) > 0.000001 then
     local cleanup_succeeded = discard_created_item(track, item)
     return handler_error("VERIFY_FAILED", "Created MIDI item time readback did not match the request.", {
-      requested_start_seconds = start_seconds,
-      requested_end_seconds = end_seconds,
+      requested_start_seconds = bounds.start_seconds,
+      requested_end_seconds = bounds.end_seconds,
+      requested_start_qn = bounds.start_qn,
+      requested_end_qn = bounds.end_qn,
       readback_start_seconds = readback_start,
       readback_end_seconds = readback_end,
+      readback_start_qn = readback_start_qn,
+      readback_end_qn = readback_end_qn,
       cleanup_succeeded = cleanup_succeeded,
     }, false)
   end
@@ -293,6 +395,8 @@ local function safe_write_create_midi_item(request)
   summary.item_ref = item_ref_string(item)
   summary.start_seconds = readback_start
   summary.end_seconds = readback_end
+  summary.start_qn = readback_start_qn
+  summary.end_qn = readback_end_qn
   summary.created = true
   return safe_write_a_summary(request, summary), nil, nil, nil, safe_write_a_refs(item_object_ref(item), take_object_ref(take))
 end

@@ -145,7 +145,8 @@ describe("Wave 2A midi template descriptors", () => {
 
     assert.deepEqual(createItem.refs.input.map((entry) => entry.kind), ["track"]);
     assert.deepEqual(createItem.refs.output.map((entry) => entry.kind), ["item", "take"]);
-    assert.deepEqual(Object.keys(createItem.inputSchema.properties), ["start_seconds", "end_seconds"]);
+    assert.deepEqual(Object.keys(createItem.inputSchema.properties), ["start_seconds", "end_seconds", "duration_quarter_notes"]);
+    assert.deepEqual(createItem.inputSchema.required, ["start_seconds"]);
     assert.equal(createItem.summary.includes("empty MIDI item"), true);
 
     assert.deepEqual(setNotes.inputSchema.required, ["notes", "expected_take_hash"]);
@@ -166,8 +167,9 @@ describe("Wave 2A midi template descriptors", () => {
     assert.equal(quantizeSelectedNotes.inputSchema.properties.grid_unit.enum.includes("ppq"), true);
     assert.equal(quantizeSelectedNotes.summary.includes("selected MIDI note"), true);
     assert.deepEqual(setCc.inputSchema.required, ["events", "expected_take_hash"]);
-    assert.deepEqual(insertNotes.inputSchema.properties.position_unit.enum, ["ppq"]);
-    assert.match(insertNotes.summary, /PPQ-positioned/);
+    assert.deepEqual(insertNotes.inputSchema.properties.position_unit.enum, ["ppq", "project_qn"]);
+    assert.deepEqual(insertNotes.outputSchema.properties.position_unit.enum, ["ppq", "project_qn"]);
+    assert.match(insertNotes.summary, /PPQ or project-QN positioned/);
     assert.equal(grid.risk, "read");
     assert.equal(grid.summary.includes("project grid"), false);
 
