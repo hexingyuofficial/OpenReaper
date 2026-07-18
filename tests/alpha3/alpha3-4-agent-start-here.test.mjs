@@ -105,7 +105,17 @@ const APPROVED_EXAMPLES = Object.freeze([
     tool: "call_template",
     args: {
       id: "macro.items.apply",
-      input: { mode: "align_starts", target: "selected", dry_run: false },
+      input: {
+        mode: "set_item_take_controls",
+        dry_run: false,
+        changes: [{
+          id: "clipA",
+          item_ref: "item:guid:{ITEM-GUID}",
+          take_ref: "take:guid:{TAKE-GUID}",
+          item: { volume_db: -3, fade_in_seconds: 0.01, fade_out_seconds: 0.05 },
+          take: { pan: -0.2, playrate: 1, preserve_pitch: true },
+        }],
+      },
     },
   },
   {

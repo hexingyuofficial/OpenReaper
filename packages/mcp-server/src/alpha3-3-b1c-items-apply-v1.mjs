@@ -24,7 +24,23 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "set_snap_offset",
   "remove_silence",
   "align_onsets",
+  "set_item_take_controls",
 ]);
+export const ALPHA3_3_B1C_ITEMS_BATCH_ITEM_FIELDS = deepFreeze([
+  "volume_db",
+  "length_seconds",
+  "fade_in_seconds",
+  "fade_out_seconds",
+  "snap_offset_seconds",
+]);
+export const ALPHA3_3_B1C_ITEMS_BATCH_TAKE_FIELDS = deepFreeze([
+  "volume_db",
+  "pan",
+  "pitch_semitones",
+  "playrate",
+  "preserve_pitch",
+]);
+export const ALPHA3_3_B1C_ITEMS_BATCH_ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,12}$/u;
 export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES = deepFreeze([
   "set_snap_offset_to_onset",
   "normalize_peak",
@@ -59,6 +75,9 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.items.list_selected_items",
   "template.items.move_item",
   "template.items.set_item_volume",
+  "template.items.set_take_volume",
+  "template.items.set_take_pan",
+  "template.items.set_take_pitch",
   "template.items.set_mute",
   "template.items.set_lock",
   "template.items.set_loop_source",
@@ -80,6 +99,10 @@ const READ_ITEM_ID = "template.items.read_item_summary";
 const LIST_SELECTED_ID = "template.items.list_selected_items";
 const MOVE_ITEM_ID = "template.items.move_item";
 const SET_ACTIVE_TAKE_ID = "template.items.set_active_take";
+const SET_ITEM_VOLUME_ID = "template.items.set_item_volume";
+const SET_TAKE_VOLUME_ID = "template.items.set_take_volume";
+const SET_TAKE_PAN_ID = "template.items.set_take_pan";
+const SET_TAKE_PITCH_ID = "template.items.set_take_pitch";
 const SET_ITEM_FADES_ID = "template.items.set_item_fades";
 const TRIM_ITEM_ID = "template.items.trim_item";
 const SET_TAKE_PLAYRATE_ID = "template.items.set_take_playrate";
@@ -132,7 +155,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.3.0",
+  program_version: "1.4.0",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -142,6 +165,43 @@ const REGISTRY_ENTRY = deepFreeze({
       mode: { type: "string", enum: ALPHA3_3_B1C_ITEMS_APPLY_MODES },
       target: { type: "string", enum: ["selected"] },
       target_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+      changes: {
+        type: "array",
+        minItems: 1,
+        maxItems: MAX_TARGETS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 12 },
+            item_ref: { type: "string" },
+            take_ref: { type: "string" },
+            item: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                volume_db: { type: "number", minimum: -120, maximum: 24 },
+                length_seconds: { type: "number", exclusiveMinimum: 0 },
+                fade_in_seconds: { type: "number", minimum: 0 },
+                fade_out_seconds: { type: "number", minimum: 0 },
+                snap_offset_seconds: { type: "number", minimum: 0 },
+              },
+            },
+            take: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                volume_db: { type: "number", minimum: -120, maximum: 24 },
+                pan: { type: "number", minimum: -1, maximum: 1 },
+                pitch_semitones: { type: "number" },
+                playrate: { type: "number", exclusiveMinimum: 0, maximum: 16 },
+                preserve_pitch: { type: "boolean" },
+              },
+            },
+          },
+          required: ["id", "item_ref"],
+        },
+      },
       limit: { type: "integer", minimum: 1, maximum: MAX_TARGETS },
       dry_run: { type: "boolean" },
       anchor_seconds: { type: "number", minimum: 0 },
@@ -261,7 +321,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     support_state: "supported_with_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, or apply bounded fades, exact trims, Take playback, and snap offsets.",
+    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, apply bounded fades/trims/Take playback/snap offsets, or batch Item and Active-Take controls.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1C_ITEMS_APPLY_MODES,
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
@@ -276,6 +336,20 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
       { name: "set_take_playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{ITEM-GUID}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
       { name: "remove_silence", input: { mode: "remove_silence", target_refs: ["item:guid:{ITEM-GUID}"], silence_threshold_dbfs: -60, min_silence_ms: 50, dry_run: false } },
       { name: "align_audio_onsets", input: { mode: "align_onsets", target_refs: ["item:guid:{ITEM-A}", "item:guid:{ITEM-B}"], dry_run: false } },
+      {
+        name: "batch_item_take_controls",
+        input: {
+          mode: "set_item_take_controls",
+          dry_run: false,
+          changes: [{
+            id: "row1",
+            item_ref: "item:guid:{ITEM-GUID}",
+            take_ref: "take:guid:{TAKE-GUID}",
+            item: { volume_db: -3, length_seconds: 2 },
+            take: { volume_db: -6, pan: 0.25, pitch_semitones: 1, playrate: 1.1, preserve_pitch: true },
+          }],
+        },
+      },
     ],
   }]);
 }
@@ -291,6 +365,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use set_active_take with one to eight explicit item_ref/take_ref assignment rows; each exact Take is applied only to its paired exact Item.",
         "Use stack_on_existing_tracks with one to eight explicit item_ref/target_track_ref rows; every destination must already exist.",
         "Use apply_fades, trim_exact, set_take_playback, set_snap_offset, remove_silence, or align_onsets for bounded common edits backed by accepted native Item/Take atoms.",
+        "Use set_item_take_controls for one-call multi-Item multi-field Item/Active-Take control rows with exact item_ref and take_ref when Take fields are present; Item pan remains unsupported.",
       ],
       when_not_to_use: [
         "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, arbitrary transient splitting, and crossfades remain held.",
@@ -304,9 +379,9 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
       ],
       input_shape: {
         mode: ALPHA3_3_B1C_ITEMS_APPLY_MODES.join(" | "),
-        target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take.",
-        target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take.",
-        limit: "1-8; defaults to the complete explicit exact-ref set (at most 8), or 4 for implicit selected targets. Selected writes fail closed instead of truncating an oversized selection. set_active_take is bounded by its assignment rows instead.",
+        target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take and set_item_take_controls.",
+        target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take and set_item_take_controls.",
+        changes: "For set_item_take_controls only: 1-8 rows of {id,item_ref,take_ref?,item?,take?}. id is 1-12 ASCII [A-Za-z0-9_-]. take_ref is required exactly when take fields are present. Item fields: volume_db,length_seconds,fade_in_seconds,fade_out_seconds,snap_offset_seconds. Take fields: volume_db,pan,pitch_semitones,playrate,preserve_pitch. Item pan remains unsupported.",
         dry_run: "Defaults to true. false is required to mutate REAPER.",
         anchor_seconds: "Non-negative project time; required by move_to_anchor and optional for other arrangement modes.",
         gap_seconds: "Non-negative gap for sequence_with_gap; defaults to 0.",
@@ -381,6 +456,20 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         { name: "trim exact visible length", input: { mode: "trim_exact", target_refs: ["item:guid:{A}"], length_seconds: 1.25, dry_run: false } },
         { name: "set Active Take playback", input: { mode: "set_take_playback", target_refs: ["item:guid:{A}"], playrate: 1.25, preserve_pitch: true, dry_run: false } },
         { name: "set Item snap offset", input: { mode: "set_snap_offset", target_refs: ["item:guid:{A}"], snap_offset_seconds: 0.05, dry_run: false } },
+        {
+          name: "batch Item and Active-Take controls",
+          input: {
+            mode: "set_item_take_controls",
+            dry_run: false,
+            changes: [{
+              id: "clipA",
+              item_ref: "item:guid:{ITEM-A}",
+              take_ref: "take:guid:{TAKE-A}",
+              item: { volume_db: -3, fade_in_seconds: 0.01, fade_out_seconds: 0.05 },
+              take: { pan: -0.2, pitch_semitones: 0, playrate: 1, preserve_pitch: true },
+            }],
+          },
+        },
       ],
     },
   });
@@ -391,12 +480,27 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   executeAtomic,
   projectIndexRuntime,
   now = () => new Date(),
+  monoNow = () => performance.now(),
 } = {}) {
   const entry = ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.get(ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID);
   const startedAt = safeNowIso(now);
   const stages = [];
   const state = createState();
   const activeBudget = responseBudget(request);
+  if (isPlainObject(request.input) && request.input.mode === "set_item_take_controls") {
+    return executeSetItemTakeControlsBatch({
+      entry,
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+    });
+  }
   const normalized = normalizeInput(request.input);
   if (!normalized.ok) {
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers });
@@ -1154,6 +1258,790 @@ async function executeArrangementPlan({ plan, request, executeAtomic, state }) {
   return firstFailure;
 }
 
+async function executeSetItemTakeControlsBatch({
+  entry,
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  now,
+  monoNow = () => performance.now(),
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+}) {
+  const t0 = monoTick(monoNow);
+  state.batchMode = true;
+  state.calls = emptyCalls();
+  state.timings = emptyTimings();
+  const normalized = normalizeSetItemTakeControlsInput(request.input);
+  if (!normalized.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: normalized.code,
+      message: normalized.message,
+      blockers: normalized.blockers,
+      data: compactBatchData(state, { dry_run: request.input?.dry_run !== false }),
+    });
+  }
+  const dryRun = normalized.input.dry_run;
+  const programRequest = {
+    macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
+    input: { mode: "set_item_take_controls", dry_run: dryRun, changes: normalized.input.changes },
+    refs: request.refs ?? {},
+    dry_run: dryRun,
+  };
+  const validation = validateMacroProgramRequest(programRequest, { registry: ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY });
+  if (!validation.valid) {
+    const message = validation.errors.join("; ");
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_REQUEST_INVALID",
+      message,
+      blockers: validation.errors.map((error) => blocker("ITEM_APPLY_REQUEST_INVALID", error)),
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+  if (typeof executeAtomic !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED",
+      message: "macro.items.apply requires the managed OpenReaper live executor.",
+      data: compactBatchData(state, { dry_run: dryRun }),
+    });
+  }
+
+  const resolveStarted = monoTick(monoNow);
+  const resolvedRows = [];
+  for (const row of normalized.input.changes) {
+    let resolveExecution;
+    try {
+      resolveExecution = await runAtomicCounted(executeAtomic, request, state, "resolve", {
+        id: RESOLVE_ITEM_ID,
+        input: { ref: row.item_ref },
+        refs: {},
+      });
+    } catch (error) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: "ITEM_APPLY_ATOMIC_FAILED",
+        message: error?.message ?? "Item resolve failed.",
+        blockers: [blocker("ITEM_APPLY_ATOMIC_FAILED", error?.message ?? "Item resolve failed.")],
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    collectExecutionEvidence(state, resolveExecution);
+    if (resolveExecution?.ok !== true) {
+      const failure = atomicFailure(resolveExecution, RESOLVE_ITEM_ID);
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: failure.code,
+        message: failure.message,
+        blockers: failure.blockers,
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    const resolvedRef = executionObjectRefs(resolveExecution).find((ref) => ref.kind === "item");
+    if (!isAuthoritativeItemObjectRef(resolvedRef)) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: "ITEM_APPLY_RESOLVE_REF_REQUIRED",
+        message: `Item resolver for ${row.item_ref} did not return an authoritative Item object ref.`,
+        blockers: [blocker("ITEM_APPLY_RESOLVE_REF_REQUIRED", `Item resolver for ${row.item_ref} did not return an authoritative Item object ref.`)],
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    if (resolvedRef.ref !== row.item_ref) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: "ITEM_APPLY_ITEM_IDENTITY_MISMATCH",
+        message: `Live resolver returned ${resolvedRef.ref} for requested ${row.item_ref}.`,
+        blockers: [blocker("ITEM_APPLY_ITEM_IDENTITY_MISMATCH", `Live resolver returned ${resolvedRef.ref} for requested ${row.item_ref}.`)],
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    state.canonicalRefs.push(resolvedRef.ref);
+    resolvedRows.push({ ...row, item_object: resolvedRef });
+  }
+  state.timings.target_resolution_ms = monoElapsed(resolveStarted, monoNow);
+  pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${resolvedRows.length} exact live Item target(s).`, state.evidenceRefs);
+
+  const preflightStarted = monoTick(monoNow);
+  const preflightRows = [];
+  for (const row of resolvedRows) {
+    let readExecution;
+    try {
+      readExecution = await runAtomicCounted(executeAtomic, request, state, "preflight", {
+        id: READ_ITEM_ID,
+        input: { include_take_summary: true },
+        refs: { item_ref: row.item_object },
+      });
+    } catch (error) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: "ITEM_APPLY_ATOMIC_FAILED",
+        message: error?.message ?? "Item preflight read failed.",
+        blockers: [blocker("ITEM_APPLY_ATOMIC_FAILED", error?.message ?? "Item preflight read failed.")],
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    collectExecutionEvidence(state, readExecution);
+    if (readExecution?.ok !== true) {
+      const failure = atomicFailure(readExecution, READ_ITEM_ID);
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: failure.code,
+        message: failure.message,
+        blockers: failure.blockers,
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    const summary = executionSummary(readExecution);
+    if (summary.item_ref !== row.item_ref) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: "ITEM_APPLY_ITEM_IDENTITY_MISMATCH",
+        message: `Preflight summary returned ${String(summary.item_ref)} for ${row.item_ref}.`,
+        blockers: [blocker("ITEM_APPLY_ITEM_IDENTITY_MISMATCH", `Preflight summary returned ${String(summary.item_ref)} for ${row.item_ref}.`)],
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    if (row.take) {
+      if (typeof summary.active_take_ref !== "string" || summary.active_take_ref.length === 0) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state, activeBudget,
+          code: "ITEM_APPLY_ACTIVE_TAKE_REQUIRED",
+          message: `${row.item_ref} has no Active Take for requested Take fields.`,
+          blockers: [blocker("ITEM_APPLY_ACTIVE_TAKE_REQUIRED", `${row.item_ref} has no Active Take for requested Take fields.`)],
+          data: compactBatchData(state, { dry_run: dryRun }),
+        });
+      }
+      if (summary.active_take_ref !== row.take_ref) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state, activeBudget,
+          code: "ITEM_APPLY_TAKE_IDENTITY_MISMATCH",
+          message: `${row.id} requires active_take_ref=${row.take_ref}; live Active Take is ${summary.active_take_ref}.`,
+          blockers: [blocker("ITEM_APPLY_TAKE_IDENTITY_MISMATCH", `${row.id} requires active_take_ref=${row.take_ref}; live Active Take is ${summary.active_take_ref}.`)],
+          data: compactBatchData(state, { dry_run: dryRun }),
+        });
+      }
+    }
+    const finalLength = row.item?.length_seconds ?? summary.length_seconds;
+    if (row.item?.snap_offset_seconds !== undefined) {
+      if (!Number.isFinite(finalLength) || row.item.snap_offset_seconds > finalLength + POSITION_TOLERANCE) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state, activeBudget,
+          code: "ITEM_APPLY_SNAP_OFFSET_OUTSIDE_ITEM",
+          message: `${row.id} snap_offset_seconds exceeds the final Item length.`,
+          blockers: [blocker("ITEM_APPLY_SNAP_OFFSET_OUTSIDE_ITEM", `${row.id} snap_offset_seconds exceeds the final Item length.`)],
+          data: compactBatchData(state, { dry_run: dryRun }),
+        });
+      }
+    }
+    const planned = buildBatchRowPlan(row, summary);
+    if (!planned.ok) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state, activeBudget,
+        code: planned.code,
+        message: planned.message,
+        blockers: planned.blockers,
+        data: compactBatchData(state, { dry_run: dryRun }),
+      });
+    }
+    preflightRows.push({ row, summary, plan: planned.operations });
+  }
+  state.timings.preflight_ms = monoElapsed(preflightStarted, monoNow);
+  pushStage(stages, "items-apply-preflight", "template_execute", "completed", `Preflighted ${preflightRows.length} Item/Take control row(s).`, state.evidenceRefs);
+
+  state.operations = preflightRows.flatMap((entry) => entry.plan);
+  state.changes = preflightRows.map((entry) => batchRowChange(entry.row, {
+    status: dryRun ? "planned" : "pending",
+    mutation: dryRun ? "not_run" : "pending",
+    readback: dryRun ? "not_run" : "pending",
+    index: dryRun ? "skipped" : "pending",
+  }));
+
+  if (dryRun) {
+    state.timings.mutation_ms = 0;
+    state.timings.final_readback_ms = 0;
+    state.timings.index_maintenance_ms = 0;
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    pushStage(stages, "items-apply-mutate", "template_execute", "skipped", "dry_run=true; no Item/Take mutation was dispatched.", []);
+    pushStage(stages, "items-apply-verify", "verify", "completed", "Validated the complete deterministic multi-row preview against live facts.", state.evidenceRefs);
+    pushStage(stages, "items-apply-index", "index_update", "skipped", "Dry run did not stale the Project Index.", []);
+    pushStage(stages, "items-apply-result", "result_project", "completed", "Projected the compact multi-row Item/Take control preview.", state.evidenceRefs);
+    return successEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "dry_run_completed",
+      summary: `Previewed ${preflightRows.length} Item/Take control row(s) with no mutation.`,
+      data: compactBatchData(state, { dry_run: true }),
+      compact: activeBudget <= MIN_RESPONSE_BUDGET,
+    });
+  }
+
+  let executionFailure = null;
+  let failedIndex = -1;
+  let mutationWallMs = 0;
+  let readbackWallMs = 0;
+  for (let index = 0; index < preflightRows.length; index += 1) {
+    const entryRow = preflightRows[index];
+    const change = state.changes[index];
+    let mutationUnknown = false;
+    let mutationFailed = false;
+    let mutationError = null;
+    const rowMutationStarted = monoTick(monoNow);
+    for (const operation of entryRow.plan) {
+      let execution;
+      try {
+        execution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+          id: operation.template_id,
+          input: operation.input,
+          refs: { item_ref: entryRow.row.item_object },
+        });
+      } catch (error) {
+        mutationUnknown = true;
+        mutationError = executionError(error, operation.template_id, "mutation");
+        break;
+      }
+      collectExecutionEvidence(state, execution);
+      if (execution?.ok !== true) {
+        mutationFailed = true;
+        mutationError = { ...atomicFailure(execution, operation.template_id), phase: "mutation" };
+        break;
+      }
+    }
+    mutationWallMs += monoElapsed(rowMutationStarted, monoNow);
+    if (mutationFailed || mutationUnknown) {
+      change.mutation = { status: mutationUnknown ? "unknown_or_partial" : "failed" };
+      change.status = mutationUnknown ? "unknown_or_partial" : "failed";
+    } else {
+      change.mutation = { status: "completed" };
+    }
+
+    const readbackStarted = monoTick(monoNow);
+    let readExecution;
+    try {
+      readExecution = await runAtomicCounted(executeAtomic, request, state, "readback", {
+        id: READ_ITEM_ID,
+        input: { include_take_summary: true },
+        refs: { item_ref: entryRow.row.item_object },
+      });
+    } catch (error) {
+      change.live_readback = { status: "failed" };
+      change.status = mutationUnknown || mutationFailed ? change.status : "readback_failed";
+      executionFailure = executionError(error, READ_ITEM_ID, "readback");
+      failedIndex = index;
+      readbackWallMs += monoElapsed(readbackStarted, monoNow);
+      break;
+    }
+    collectExecutionEvidence(state, readExecution);
+    readbackWallMs += monoElapsed(readbackStarted, monoNow);
+    if (readExecution?.ok !== true) {
+      change.live_readback = { status: "failed" };
+      change.status = mutationUnknown || mutationFailed ? change.status : "readback_failed";
+      executionFailure = { ...atomicFailure(readExecution, READ_ITEM_ID), phase: "readback" };
+      failedIndex = index;
+      break;
+    }
+    const summary = executionSummary(readExecution);
+    const mismatch = batchRowMismatches(entryRow.row, summary);
+    if (mismatch.length === 0 && summary.item_ref === entryRow.row.item_ref) {
+      change.live_readback = { status: "passed", source: "final_read_item_summary" };
+      if (!mutationFailed && !mutationUnknown) change.status = "applied";
+      else change.status = "live_matched_with_mutation_uncertainty";
+    } else {
+      change.live_readback = { status: "failed", source: "final_read_item_summary", fields: mismatch };
+      change.status = mutationUnknown || mutationFailed ? change.status : "readback_failed";
+      change.fields = mismatch;
+      change.code = "ITEM_APPLY_READBACK_MISMATCH";
+      if (!mutationFailed && !mutationUnknown) {
+        executionFailure = {
+          ...failed(
+            "ITEM_APPLY_READBACK_MISMATCH",
+            `Final live readback for ${entryRow.row.id} did not match requested fields.`,
+            [blocker("ITEM_APPLY_READBACK_MISMATCH", `Final live readback for ${entryRow.row.id} mismatched: ${mismatch.join(",")}.`)],
+          ),
+          phase: "readback",
+        };
+      } else {
+        executionFailure = mutationError ?? {
+          ...failed("ITEM_APPLY_ATOMIC_FAILED", `Row ${entryRow.row.id} mutation failed with final mismatch.`),
+          phase: "mutation",
+        };
+      }
+      failedIndex = index;
+      break;
+    }
+    if (mutationFailed || mutationUnknown) {
+      executionFailure = mutationError;
+      failedIndex = index;
+      break;
+    }
+  }
+  state.timings.mutation_ms = mutationWallMs;
+  state.timings.final_readback_ms = readbackWallMs;
+
+  if (failedIndex >= 0) {
+    for (let later = failedIndex + 1; later < state.changes.length; later += 1) {
+      state.changes[later] = batchRowChange(preflightRows[later].row, {
+        status: "not_run",
+        mutation: "not_run",
+        readback: "not_run",
+        index: "not_run",
+      });
+    }
+  }
+
+  const indexStarted = monoTick(monoNow);
+  const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+  state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
+  state.timings.total_ms = monoElapsed(t0, monoNow);
+  applyBatchIndexMaintenance(state.changes, indexResult);
+  pushStage(
+    stages,
+    "items-apply-mutate",
+    "template_execute",
+    executionFailure?.phase === "mutation" ? "failed" : "completed",
+    `${state.changes.filter((change) => change.mutation?.status === "completed" || change.status === "applied").length} row mutation phase(s) completed.`,
+    state.evidenceRefs,
+  );
+  pushStage(
+    stages,
+    "items-apply-verify",
+    "verify",
+    executionFailure?.phase === "readback" ? "failed" : "completed",
+    `${state.changes.filter((change) => change.live_readback?.status === "passed").length} row(s) passed final live readback.`,
+    state.evidenceRefs,
+  );
+  pushStage(
+    stages,
+    "items-apply-index",
+    "index_update",
+    indexResult.ok === false ? "failed" : indexResult.status === "skipped" ? "skipped" : "completed",
+    indexResult.message,
+    [],
+  );
+
+  if (executionFailure) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: state.changes.some((change) => change.mutation?.status === "completed" || change.status === "applied" || change.status === "live_matched_with_mutation_uncertainty")
+        ? "partial_failure"
+        : "failed",
+      code: executionFailure.code,
+      message: executionFailure.message,
+      blockers: executionFailure.blockers,
+      data: compactBatchData(state, { dry_run: false }),
+      compact: activeBudget <= MIN_RESPONSE_BUDGET,
+    });
+  }
+  if (indexResult.ok === false) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state, activeBudget,
+      status: "partial_failure",
+      code: indexResult.code,
+      message: indexResult.message,
+      blockers: indexResult.blockers,
+      data: compactBatchData(state, { dry_run: false }),
+      compact: activeBudget <= MIN_RESPONSE_BUDGET,
+    });
+  }
+  pushStage(stages, "items-apply-result", "result_project", "completed", "Projected compact multi-row Item/Take control truth.", state.evidenceRefs);
+  return successEnvelope({
+    entry, request, startedAt, now, stages, state, activeBudget,
+    status: "completed",
+    summary: `Applied and verified ${state.changes.filter((change) => change.status === "applied").length} Item/Take control row(s).`,
+    data: compactBatchData(state, { dry_run: false }),
+    compact: activeBudget <= MIN_RESPONSE_BUDGET,
+  });
+}
+
+function normalizeSetItemTakeControlsInput(input) {
+  if (!isPlainObject(input)) return failed("ITEM_APPLY_REQUEST_INVALID", "macro.items.apply input must be an object.");
+  const allowed = new Set(["mode", "changes", "dry_run"]);
+  const unknown = Object.keys(input).filter((field) => !allowed.has(field));
+  if (unknown.length > 0) {
+    return failed(
+      "ITEM_APPLY_BATCH_FIELDS_INVALID",
+      `set_item_take_controls accepts only mode, changes, and dry_run; unsupported field(s): ${unknown.join(", ")}.`,
+    );
+  }
+  if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") {
+    return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
+  }
+  if (!Array.isArray(input.changes) || input.changes.length < 1 || input.changes.length > MAX_TARGETS) {
+    return failed("ITEM_APPLY_BATCH_CHANGES_INVALID", `changes must contain 1-${MAX_TARGETS} rows.`);
+  }
+  const rows = [];
+  const seenIds = new Set();
+  const seenItems = new Set();
+  for (const [index, raw] of input.changes.entries()) {
+    if (!isPlainObject(raw)) return failed("ITEM_APPLY_BATCH_CHANGES_INVALID", `changes[${index}] must be an object.`);
+    const rowUnknown = Object.keys(raw).filter((field) => !["id", "item_ref", "take_ref", "item", "take"].includes(field));
+    if (rowUnknown.length > 0) {
+      return failed("ITEM_APPLY_BATCH_CHANGES_INVALID", `changes[${index}] has unsupported field(s): ${rowUnknown.join(", ")}.`);
+    }
+    if (typeof raw.id !== "string" || !ALPHA3_3_B1C_ITEMS_BATCH_ROW_ID_PATTERN.test(raw.id)) {
+      return failed("ITEM_APPLY_BATCH_ROW_ID_INVALID", `changes[${index}].id must match ^[A-Za-z0-9_-]{1,12}$.`);
+    }
+    if (seenIds.has(raw.id)) return failed("ITEM_APPLY_BATCH_ROW_ID_DUPLICATE", `changes repeats id ${raw.id}.`);
+    seenIds.add(raw.id);
+    if (!isExactGuidRef(raw.item_ref, "item")) {
+      return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", `changes[${index}].item_ref must be an exact item:guid ref.`);
+    }
+    if (seenItems.has(raw.item_ref)) return failed("ITEM_APPLY_BATCH_ITEM_DUPLICATE", `changes repeats item_ref ${raw.item_ref}.`);
+    seenItems.add(raw.item_ref);
+    const item = normalizeBatchItemFields(raw.item, index);
+    if (!item.ok) return item;
+    const take = normalizeBatchTakeFields(raw.take, index);
+    if (!take.ok) return take;
+    const hasItem = item.value !== null;
+    const hasTake = take.value !== null;
+    if (!hasItem && !hasTake) {
+      return failed("ITEM_APPLY_BATCH_FIELDS_REQUIRED", `changes[${index}] requires at least one accepted item or take field.`);
+    }
+    if (hasTake) {
+      if (!isExactGuidRef(raw.take_ref, "take")) {
+        return failed("ITEM_APPLY_TAKE_REF_REQUIRED", `changes[${index}].take_ref is required and must be an exact take:guid ref when take fields are present.`);
+      }
+    } else if (raw.take_ref !== undefined) {
+      return failed("ITEM_APPLY_TAKE_REF_FORBIDDEN", `changes[${index}].take_ref is allowed only when take fields are requested.`);
+    }
+    rows.push({
+      id: raw.id,
+      item_ref: raw.item_ref,
+      take_ref: hasTake ? raw.take_ref : undefined,
+      item: item.value,
+      take: take.value,
+    });
+  }
+  return {
+    ok: true,
+    input: {
+      mode: "set_item_take_controls",
+      dry_run: input.dry_run !== false,
+      changes: rows,
+    },
+  };
+}
+
+function normalizeBatchItemFields(value, index) {
+  if (value === undefined) return { ok: true, value: null };
+  if (!isPlainObject(value) || Object.keys(value).length === 0) {
+    return failed("ITEM_APPLY_BATCH_ITEM_FIELDS_INVALID", `changes[${index}].item must be a non-empty object when present.`);
+  }
+  const unknown = Object.keys(value).filter((field) => !ALPHA3_3_B1C_ITEMS_BATCH_ITEM_FIELDS.includes(field));
+  if (unknown.length > 0) {
+    return failed("ITEM_APPLY_BATCH_ITEM_FIELDS_INVALID", `changes[${index}].item has unsupported field(s): ${unknown.join(", ")}.`);
+  }
+  const normalized = {};
+  if (value.volume_db !== undefined) {
+    if (!Number.isFinite(value.volume_db) || value.volume_db < -120 || value.volume_db > 24) {
+      return failed("ITEM_APPLY_PROPERTY_INVALID", `changes[${index}].item.volume_db must be a finite number from -120 to 24.`);
+    }
+    normalized.volume_db = value.volume_db;
+  }
+  if (value.length_seconds !== undefined) {
+    if (!Number.isFinite(value.length_seconds) || value.length_seconds <= 0) {
+      return failed("ITEM_APPLY_LENGTH_INVALID", `changes[${index}].item.length_seconds must be a finite number greater than zero.`);
+    }
+    normalized.length_seconds = value.length_seconds;
+  }
+  if (value.fade_in_seconds !== undefined) {
+    if (!Number.isFinite(value.fade_in_seconds) || value.fade_in_seconds < 0) {
+      return failed("ITEM_APPLY_FADES_INVALID", `changes[${index}].item.fade_in_seconds must be a non-negative finite number.`);
+    }
+    normalized.fade_in_seconds = value.fade_in_seconds;
+  }
+  if (value.fade_out_seconds !== undefined) {
+    if (!Number.isFinite(value.fade_out_seconds) || value.fade_out_seconds < 0) {
+      return failed("ITEM_APPLY_FADES_INVALID", `changes[${index}].item.fade_out_seconds must be a non-negative finite number.`);
+    }
+    normalized.fade_out_seconds = value.fade_out_seconds;
+  }
+  if (value.snap_offset_seconds !== undefined) {
+    if (!Number.isFinite(value.snap_offset_seconds) || value.snap_offset_seconds < 0) {
+      return failed("ITEM_APPLY_SNAP_OFFSET_INVALID", `changes[${index}].item.snap_offset_seconds must be a non-negative finite number.`);
+    }
+    normalized.snap_offset_seconds = value.snap_offset_seconds;
+  }
+  return { ok: true, value: normalized };
+}
+
+function normalizeBatchTakeFields(value, index) {
+  if (value === undefined) return { ok: true, value: null };
+  if (!isPlainObject(value) || Object.keys(value).length === 0) {
+    return failed("ITEM_APPLY_BATCH_TAKE_FIELDS_INVALID", `changes[${index}].take must be a non-empty object when present.`);
+  }
+  const unknown = Object.keys(value).filter((field) => !ALPHA3_3_B1C_ITEMS_BATCH_TAKE_FIELDS.includes(field));
+  if (unknown.length > 0) {
+    return failed("ITEM_APPLY_BATCH_TAKE_FIELDS_INVALID", `changes[${index}].take has unsupported field(s): ${unknown.join(", ")}.`);
+  }
+  const normalized = {};
+  if (value.volume_db !== undefined) {
+    if (!Number.isFinite(value.volume_db) || value.volume_db < -120 || value.volume_db > 24) {
+      return failed("ITEM_APPLY_PROPERTY_INVALID", `changes[${index}].take.volume_db must be a finite number from -120 to 24.`);
+    }
+    normalized.volume_db = value.volume_db;
+  }
+  if (value.pan !== undefined) {
+    if (!Number.isFinite(value.pan) || value.pan < -1 || value.pan > 1) {
+      return failed("ITEM_APPLY_TAKE_PAN_INVALID", `changes[${index}].take.pan must be a finite number from -1 to 1.`);
+    }
+    normalized.pan = value.pan;
+  }
+  if (value.pitch_semitones !== undefined) {
+    if (!Number.isFinite(value.pitch_semitones)) {
+      return failed("ITEM_APPLY_TAKE_PITCH_INVALID", `changes[${index}].take.pitch_semitones must be a finite number.`);
+    }
+    normalized.pitch_semitones = value.pitch_semitones;
+  }
+  if (value.playrate !== undefined) {
+    if (!Number.isFinite(value.playrate) || value.playrate <= 0 || value.playrate > 16) {
+      return failed("ITEM_APPLY_PLAYRATE_INVALID", `changes[${index}].take.playrate must be a finite number greater than zero and at most 16.`);
+    }
+    normalized.playrate = value.playrate;
+  }
+  if (value.preserve_pitch !== undefined) {
+    if (typeof value.preserve_pitch !== "boolean") {
+      return failed("ITEM_APPLY_PRESERVE_PITCH_REQUIRED", `changes[${index}].take.preserve_pitch must be boolean.`);
+    }
+    normalized.preserve_pitch = value.preserve_pitch;
+  }
+  return { ok: true, value: normalized };
+}
+
+function buildBatchRowPlan(row, summary) {
+  const plan = [];
+  if (row.item?.volume_db !== undefined) {
+    plan.push({ template_id: SET_ITEM_VOLUME_ID, field: "volume_db", input: { volume_db: row.item.volume_db } });
+  }
+  if (row.item?.length_seconds !== undefined) {
+    plan.push({ template_id: TRIM_ITEM_ID, field: "length_seconds", input: { length_seconds: row.item.length_seconds } });
+  }
+  if (row.item?.fade_in_seconds !== undefined || row.item?.fade_out_seconds !== undefined) {
+    const fadeIn = row.item?.fade_in_seconds !== undefined ? row.item.fade_in_seconds : summary.fade_in_seconds;
+    const fadeOut = row.item?.fade_out_seconds !== undefined ? row.item.fade_out_seconds : summary.fade_out_seconds;
+    if (!Number.isFinite(fadeIn) || fadeIn < 0) {
+      return failed(
+        "ITEM_APPLY_FADE_COUNTERPART_INVALID",
+        `${row.id} omitted fade_in_seconds but live preflight fade_in_seconds is absent or invalid.`,
+      );
+    }
+    if (!Number.isFinite(fadeOut) || fadeOut < 0) {
+      return failed(
+        "ITEM_APPLY_FADE_COUNTERPART_INVALID",
+        `${row.id} omitted fade_out_seconds but live preflight fade_out_seconds is absent or invalid.`,
+      );
+    }
+    plan.push({
+      template_id: SET_ITEM_FADES_ID,
+      field: "fades",
+      input: {
+        fade_in_seconds: fadeIn,
+        fade_out_seconds: fadeOut,
+      },
+    });
+  }
+  if (row.item?.snap_offset_seconds !== undefined) {
+    plan.push({ template_id: SET_ITEM_SNAP_OFFSET_ID, field: "snap_offset_seconds", input: { snap_offset_seconds: row.item.snap_offset_seconds } });
+  }
+  if (row.take?.volume_db !== undefined) {
+    plan.push({ template_id: SET_TAKE_VOLUME_ID, field: "take_volume_db", input: { volume_db: row.take.volume_db } });
+  }
+  if (row.take?.pan !== undefined) {
+    plan.push({ template_id: SET_TAKE_PAN_ID, field: "take_pan", input: { pan: row.take.pan } });
+  }
+  if (row.take?.pitch_semitones !== undefined) {
+    plan.push({ template_id: SET_TAKE_PITCH_ID, field: "take_pitch_semitones", input: { semitones: row.take.pitch_semitones } });
+  }
+  if (row.take?.playrate !== undefined || row.take?.preserve_pitch !== undefined) {
+    const playrate = row.take?.playrate !== undefined ? row.take.playrate : summary.playrate;
+    const preservePitch = row.take?.preserve_pitch !== undefined ? row.take.preserve_pitch : summary.preserve_pitch;
+    if (!Number.isFinite(playrate) || playrate <= 0 || playrate > 16) {
+      return failed(
+        "ITEM_APPLY_PLAYBACK_COUNTERPART_INVALID",
+        `${row.id} omitted playrate but live preflight playrate is absent or invalid.`,
+      );
+    }
+    if (typeof preservePitch !== "boolean") {
+      return failed(
+        "ITEM_APPLY_PLAYBACK_COUNTERPART_INVALID",
+        `${row.id} omitted preserve_pitch but live preflight preserve_pitch is not an actual boolean.`,
+      );
+    }
+    plan.push({
+      template_id: SET_TAKE_PLAYRATE_ID,
+      field: "take_playback",
+      input: {
+        playrate,
+        preserve_pitch: preservePitch,
+      },
+    });
+  }
+  return { ok: true, operations: plan };
+}
+
+function isAuthoritativeItemObjectRef(value) {
+  return isPlainObject(value)
+    && value.kind === "item"
+    && typeof value.ref === "string"
+    && value.ref.startsWith("item:guid:")
+    && isExactGuidRef(value.ref, "item")
+    && isPlainObject(value.identity)
+    && value.identity.scheme === "guid"
+    && value.identity.value === value.ref.slice("item:guid:".length);
+}
+
+function batchRowMismatches(row, summary) {
+  const mismatched = [];
+  if (summary.item_ref !== row.item_ref) mismatched.push("item_ref");
+  if (row.item?.volume_db !== undefined && !valuesMatch(summary.volume_db, row.item.volume_db)) mismatched.push("volume_db");
+  if (row.item?.length_seconds !== undefined && !valuesMatch(summary.length_seconds, row.item.length_seconds)) mismatched.push("length_seconds");
+  if (row.item?.fade_in_seconds !== undefined && !valuesMatch(summary.fade_in_seconds, row.item.fade_in_seconds)) mismatched.push("fade_in_seconds");
+  if (row.item?.fade_out_seconds !== undefined && !valuesMatch(summary.fade_out_seconds, row.item.fade_out_seconds)) mismatched.push("fade_out_seconds");
+  if (row.item?.snap_offset_seconds !== undefined && !valuesMatch(summary.snap_offset_seconds, row.item.snap_offset_seconds)) mismatched.push("snap_offset_seconds");
+  if (row.take) {
+    if (summary.active_take_ref !== row.take_ref) mismatched.push("active_take_ref");
+    if (row.take.volume_db !== undefined && !valuesMatch(summary.take_volume_db, row.take.volume_db)) mismatched.push("take_volume_db");
+    if (row.take.pan !== undefined && !valuesMatch(summary.take_pan, row.take.pan)) mismatched.push("take_pan");
+    if (row.take.pitch_semitones !== undefined && !valuesMatch(summary.take_pitch_semitones, row.take.pitch_semitones)) mismatched.push("take_pitch_semitones");
+    if (row.take.playrate !== undefined && !valuesMatch(summary.playrate, row.take.playrate)) mismatched.push("playrate");
+    if (row.take.preserve_pitch !== undefined && summary.preserve_pitch !== row.take.preserve_pitch) mismatched.push("preserve_pitch");
+  }
+  return mismatched;
+}
+
+function batchRowChange(row, { status, mutation, readback, index, code, fields } = {}) {
+  return compactObject({
+    id: row.id,
+    status,
+    mutation: { status: mutation },
+    live_readback: { status: readback },
+    index_maintenance: { status: index, scopes: [] },
+    code,
+    fields,
+    item_ref: row.item_ref,
+    take_ref: row.take_ref,
+  });
+}
+
+function compactBatchData(state, { dry_run }) {
+  return {
+    mode: "set_item_take_controls",
+    timings: {
+      target_resolution_ms: state.timings?.target_resolution_ms ?? 0,
+      preflight_ms: state.timings?.preflight_ms ?? 0,
+      mutation_ms: state.timings?.mutation_ms ?? 0,
+      final_readback_ms: state.timings?.final_readback_ms ?? 0,
+      index_maintenance_ms: state.timings?.index_maintenance_ms ?? 0,
+      total_ms: state.timings?.total_ms ?? 0,
+    },
+    calls: finalizeCalls(state.calls),
+    dry_run: dry_run === true,
+  };
+}
+
+function emptyCalls() {
+  return { resolve: 0, preflight: 0, mutation: 0, readback: 0, index: 0, total: 0 };
+}
+
+function emptyTimings() {
+  return {
+    target_resolution_ms: 0,
+    preflight_ms: 0,
+    mutation_ms: 0,
+    final_readback_ms: 0,
+    index_maintenance_ms: 0,
+    total_ms: 0,
+  };
+}
+
+function finalizeCalls(calls) {
+  const value = calls ?? emptyCalls();
+  return {
+    resolve: value.resolve,
+    preflight: value.preflight,
+    mutation: value.mutation,
+    readback: value.readback,
+    index: value.index,
+    total: value.resolve + value.preflight + value.mutation + value.readback + value.index,
+  };
+}
+
+function runAtomicCounted(executeAtomic, request, state, counter, child) {
+  if (state.calls && Object.hasOwn(state.calls, counter)) state.calls[counter] += 1;
+  return runAtomic(executeAtomic, request, child);
+}
+
+function maintainBatchProjectIndex(runtime, state, now) {
+  const attempted = state.changes.some((change) => ["completed", "unknown_or_partial", "failed"].includes(change.mutation?.status));
+  if (!attempted) return { ok: true, status: "skipped", message: "No mutation was attempted; Project Index scopes were left unchanged.", scopes: [] };
+  if (typeof runtime?.invalidateScopes !== "function") {
+    return { ok: true, status: "skipped", message: "No Project Index runtime was configured; live readback remains the result authority.", scopes: [] };
+  }
+  const scopes = ["items", "takes"];
+  if (state.calls) state.calls.index += 1;
+  let result;
+  try {
+    result = runtime.invalidateScopes({ scopes, observed_at: safeNowIso(now) });
+  } catch (error) {
+    return {
+      ok: false,
+      status: "failed",
+      code: "ITEM_APPLY_INDEX_INVALIDATION_FAILED",
+      message: error?.message ?? "Project Index invalidation threw.",
+      blockers: [blocker("ITEM_APPLY_INDEX_INVALIDATION_FAILED", error?.message ?? "Project Index invalidation threw.")],
+      scopes,
+    };
+  }
+  state.sqlite = sqliteEvidence(runtime, { used: true, freshness: "stale" });
+  if (result?.ok === false) {
+    return {
+      ok: false,
+      status: "failed",
+      code: result?.blockers?.[0]?.code ?? "ITEM_APPLY_INDEX_INVALIDATION_FAILED",
+      message: result?.blockers?.[0]?.message ?? "Project Index invalidation failed.",
+      blockers: result?.blockers ?? [blocker("ITEM_APPLY_INDEX_INVALIDATION_FAILED", "Project Index invalidation failed.")],
+      scopes,
+    };
+  }
+  return { ok: true, status: "completed", message: `Invalidated Project Index scopes once: ${scopes.join(", ")}.`, scopes };
+}
+
+function applyBatchIndexMaintenance(changes, indexResult) {
+  for (const change of changes) {
+    if (change.status === "not_run" || change.mutation?.status === "not_run" || change.mutation?.status === "pending") {
+      if (change.index_maintenance?.status === "pending") {
+        change.index_maintenance = { status: "not_run", scopes: [] };
+      }
+      continue;
+    }
+    if (["completed", "unknown_or_partial", "failed"].includes(change.mutation?.status) || change.status === "applied" || change.status === "live_matched_with_mutation_uncertainty") {
+      change.index_maintenance = {
+        status: indexResult.ok === false ? "failed" : indexResult.status === "skipped" ? "skipped" : "completed",
+        scopes: indexResult.scopes ?? [],
+      };
+    }
+  }
+}
+
+function monoTick(monoNow) {
+  if (typeof monoNow === "function") {
+    try {
+      const value = monoNow();
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+    } catch {
+      // fall through
+    }
+  }
+  return performance.now();
+}
+
+function monoElapsed(started, monoNow) {
+  return Math.max(0, monoTick(monoNow) - started);
+}
+
 function normalizeInput(input) {
   if (!isPlainObject(input)) return failed("ITEM_APPLY_REQUEST_INVALID", "macro.items.apply input must be an object.");
   const unknown = Object.keys(input).filter((field) => !INPUT_FIELDS.has(field));
@@ -1162,6 +2050,9 @@ function normalizeInput(input) {
   if (!ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes(mode)) {
     const held = ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES.includes(mode);
     return failed(held ? "ITEM_APPLY_MODE_HELD" : "ITEM_APPLY_MODE_UNSUPPORTED", `mode=${String(mode)} is not executable; supported modes are ${ALPHA3_3_B1C_ITEMS_APPLY_MODES.join(", ")}.`);
+  }
+  if (mode === "set_item_take_controls") {
+    return failed("ITEM_APPLY_REQUEST_INVALID", "set_item_take_controls must be handled by the dedicated batch path.");
   }
   const target = input.target ?? "selected";
   if (target !== "selected") return failed("ITEM_APPLY_TARGET_SELECTOR_UNSUPPORTED", "target must be selected when exact target_refs are not supplied.");
@@ -1428,7 +2319,7 @@ function applyIndexMaintenance(changes, indexResult) {
   }
 }
 
-function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status, summary, data }) {
+function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status, summary, data, compact = false }) {
   return finalizeEnvelope(buildSuccessEnvelope({
     entry,
     request,
@@ -1440,63 +2331,237 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, active
     status,
     summary,
     data,
+    compact,
   }));
 }
 
-function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) {
+function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data, compact = false }) {
+  const useCompact = compact === true || (state.batchMode === true && activeBudget <= MIN_RESPONSE_BUDGET);
   return {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: true,
-    macro: macroIdentity(entry),
+    macro: useCompact ? compactMacroIdentity(entry) : macroIdentity(entry),
     request: requestSummary(request),
-    execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages },
-    sqlite: state.sqlite ?? sqliteEvidence(),
+    execution: useCompact
+      ? { status, started_at: compactIso(startedAt), completed_at: compactIso(completedAt), stage_count: 0, stages: [] }
+      : { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages },
+    sqlite: useCompact
+      ? compactSqliteEvidence(state.sqlite)
+      : (state.sqlite ?? sqliteEvidence()),
     result: {
-      summary,
-      canonical_refs: uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
-      changes: clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
-      verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count) },
-      data,
+      summary: useCompact ? String(summary ?? "").slice(0, 48) : summary,
+      canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
+      changes: useCompact
+        ? projectCompactBatchChanges(state.changes)
+        : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
+      verification: {
+        status: "passed",
+        evidence_refs: useCompact ? [] : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
+      },
+      data: useCompact ? projectCompactBatchData(data) : data,
     },
     blockers: [],
     error: null,
     recovery: null,
-    budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
+    budget: useCompact
+      ? { max_bytes: activeBudget, actual_bytes: 0, truncated: false }
+      : { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
 }
 
-function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
+function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {}, compact = false }) {
+  const useCompact = compact === true || (state.batchMode === true && activeBudget <= MIN_RESPONSE_BUDGET);
   const verified = state.changes.length > 0
-    && state.changes.filter((change) => change.mutation.status === "completed").every((change) => change.live_readback.status === "passed");
+    && state.changes
+      .filter((change) => change.mutation?.status === "completed" || change.status === "applied")
+      .every((change) => change.live_readback?.status === "passed");
   return finalizeEnvelope({
     contract: MACRO_EXECUTION_CONTRACT,
     ok: false,
-    macro: macroIdentity(entry),
+    macro: useCompact ? compactMacroIdentity(entry) : macroIdentity(entry),
     request: requestSummary(request, { forceNonDry: true }),
-    execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
-    sqlite: state.sqlite ?? sqliteEvidence(),
+    execution: useCompact
+      ? { status, started_at: compactIso(startedAt), completed_at: compactIso(safeNowIso(now)), stage_count: 0, stages: [] }
+      : { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages },
+    sqlite: useCompact
+      ? compactSqliteEvidence(state.sqlite)
+      : (state.sqlite ?? sqliteEvidence()),
     result: {
-      summary: message,
-      canonical_refs: uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
-      changes: clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
-      verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : [] },
-      data,
+      summary: useCompact ? String(message ?? "").slice(0, 48) : message,
+      canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
+      changes: useCompact
+        ? projectCompactBatchChanges(state.changes)
+        : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
+      verification: {
+        status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
+        evidence_refs: useCompact ? [] : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
+      },
+      data: useCompact ? projectCompactBatchData(data) : data,
     },
-    blockers: (blockers.length > 0 ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count),
-    error: { code, message, recoverable: true },
-    recovery: {
-      undo_policy: REGISTRY_ENTRY.undo_policy,
-      partial_changes_possible: status === "partial_failure",
-      source_media_deleted: false,
-      action: status === "partial_failure" ? "Inspect row truth and use the reported per-stage REAPER undo entries before retrying only the remaining task." : "Fix the typed preflight blocker and retry the bounded request.",
+    blockers: (blockers.length > 0 ? blockers : [blocker(code, message)])
+      .slice(0, useCompact ? 1 : MACRO_CONTRACT_CEILINGS.blocker_max_count)
+      .map((entry) => useCompact
+        ? { code: entry.code, message: String(entry.message ?? "").slice(0, 64), recoverable: entry.recoverable !== false }
+        : entry),
+    error: {
+      code,
+      message: useCompact ? String(message ?? "").slice(0, 64) : message,
+      recoverable: true,
     },
-    budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
+    recovery: useCompact
+      ? null
+      : {
+        undo_policy: REGISTRY_ENTRY.undo_policy,
+        partial_changes_possible: status === "partial_failure",
+        source_media_deleted: false,
+        action: status === "partial_failure" ? "Inspect row truth and use the reported per-stage REAPER undo entries before retrying only the remaining task." : "Fix the typed preflight blocker and retry the bounded request.",
+      },
+    budget: useCompact
+      ? { max_bytes: activeBudget, actual_bytes: 0, truncated: false }
+      : { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
+}
+
+function projectCompactBatchChanges(changes) {
+  return (Array.isArray(changes) ? changes : []).slice(0, MAX_TARGETS).map((change) => {
+    const mutation = typeof change.mutation === "string" ? change.mutation : (change.mutation?.status ?? "not_run");
+    const readback = typeof change.live_readback === "string"
+      ? change.live_readback
+      : (change.live_readback?.status ?? "not_run");
+    const index = typeof change.index_maintenance === "string"
+      ? change.index_maintenance
+      : (change.index_maintenance?.status ?? "not_run");
+    return compactObject({
+      id: change.id,
+      status: compactStatusToken(change.status),
+      mutation: compactStatusToken(mutation),
+      readback: compactStatusToken(readback),
+      index: compactStatusToken(index),
+      code: change.code ? String(change.code).replace(/^ITEM_APPLY_/u, "").slice(0, 24) : undefined,
+      fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
+    });
+  });
+}
+
+function compactStatusToken(value) {
+  switch (value) {
+    case "applied": return "ok";
+    case "planned": return "plan";
+    case "pending": return "pend";
+    case "not_run": return "skip";
+    case "completed": return "done";
+    case "failed": return "fail";
+    case "passed": return "pass";
+    case "skipped": return "skip";
+    case "unknown_or_partial": return "unk";
+    case "live_matched_with_mutation_uncertainty": return "unk";
+    case "readback_failed": return "rbf";
+    default: return String(value ?? "skip").slice(0, 8);
+  }
+}
+
+function projectCompactBatchData(data) {
+  const value = isPlainObject(data) ? data : {};
+  return {
+    mode: "set_item_take_controls",
+    timings: {
+      target_resolution_ms: Math.round(Number(value.timings?.target_resolution_ms) || 0),
+      preflight_ms: Math.round(Number(value.timings?.preflight_ms) || 0),
+      mutation_ms: Math.round(Number(value.timings?.mutation_ms) || 0),
+      final_readback_ms: Math.round(Number(value.timings?.final_readback_ms) || 0),
+      index_maintenance_ms: Math.round(Number(value.timings?.index_maintenance_ms) || 0),
+      total_ms: Math.round(Number(value.timings?.total_ms) || 0),
+    },
+    calls: finalizeCalls(value.calls),
+  };
+}
+
+function compactMacroIdentity(entry) {
+  return {
+    id: entry.macro_id,
+    program_id: entry.program_id,
+    program_version: entry.program_version,
+    risk: entry.risk,
+  };
+}
+
+function compactSqliteEvidence(sqlite) {
+  if (sqlite?.used === true) {
+    return {
+      used: true,
+      source: SQLITE_SOURCE_VALUES_HAS(sqlite.source) ? sqlite.source : "warm_index",
+      freshness: sqlite.freshness === "refreshed" ? "refreshed" : "stale",
+      snapshot_ref: null,
+      revision: null,
+      refreshed: sqlite.refreshed === true,
+    };
+  }
+  return {
+    used: false,
+    source: "not_used",
+    freshness: "not_applicable",
+    snapshot_ref: null,
+    revision: null,
+    refreshed: false,
+  };
+}
+
+function SQLITE_SOURCE_VALUES_HAS(value) {
+  return value === "cold_hydration" || value === "warm_index" || value === "refreshed_index";
+}
+
+function compactIso(value) {
+  if (typeof value !== "string") return safeNowIso(() => new Date());
+  // keep ISO but drop milliseconds to save bytes
+  return value.replace(/\.\d{3}Z$/u, "Z");
 }
 
 function finalizeEnvelope(envelope) {
   const result = structuredClone(envelope);
-  for (let attempt = 0; attempt < 3; attempt += 1) result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  const isCompactBatch = Array.isArray(result.execution?.stages)
+    && result.execution.stages.length === 0
+    && result.result?.data?.mode === "set_item_take_controls"
+    && Number.isInteger(result.budget?.max_bytes)
+    && result.budget.max_bytes <= MIN_RESPONSE_BUDGET;
+  if (isCompactBatch) {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+      if (result.budget.actual_bytes <= result.budget.max_bytes) break;
+      // Reclaim only optional prose/evidence. Never drop rows or failure code/fields.
+      result.recovery = null;
+      if (result.result?.summary) result.result.summary = String(result.result.summary).slice(0, 24);
+      if (result.error?.message) result.error.message = String(result.error.message).slice(0, 24);
+      if (Array.isArray(result.blockers)) {
+        result.blockers = result.blockers.slice(0, 1).map((entry) => ({
+          code: entry.code,
+          message: String(entry.message ?? "").slice(0, 24),
+          recoverable: entry.recoverable !== false,
+        }));
+      }
+      if (Array.isArray(result.result?.changes)) {
+        result.result.changes = result.result.changes.map((change) => {
+          const next = { ...change };
+          if (Array.isArray(next.fields) && next.fields.length > 4) next.fields = next.fields.slice(0, 4);
+          if (next.code && String(next.code).length > 24) next.code = String(next.code).slice(0, 24);
+          return next;
+        });
+      }
+      if (result.sqlite?.used === true) {
+        result.sqlite = {
+          used: true,
+          source: "warm_index",
+          freshness: "stale",
+          snapshot_ref: null,
+          revision: null,
+          refreshed: false,
+        };
+      }
+    }
+  }
+  // Recompute until stable: actual_bytes field width can change serialized size.
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8");
+  }
   const validation = validateMacroExecutionEnvelope(result);
   if (!validation.valid) throw new TypeError(`Invalid Alpha3.3-B1c items.apply envelope: ${validation.errors.join("; ")}`);
   return deepFreeze(result);
@@ -1547,6 +2612,9 @@ function createState() {
     canonicalRefs: [],
     evidenceRefs: [],
     sqlite: null,
+    batchMode: false,
+    calls: emptyCalls(),
+    timings: emptyTimings(),
   };
 }
 

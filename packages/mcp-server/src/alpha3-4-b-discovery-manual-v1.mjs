@@ -66,10 +66,10 @@ const MACRO_TARGET_FACTS = deepFreeze({
     notes: "Read-only analysis; selected or exact item targets.",
   },
   "macro.items.apply": {
-    required_targets: ["selected or exact item refs"],
+    required_targets: ["selected or exact item refs; set_item_take_controls requires exact item_ref rows and take_ref for Take fields"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "align/move/sequence/fades/properties; selected target is accepted for several modes.",
+    notes: "align/move/sequence/fades/properties plus set_item_take_controls batch; Item pan unsupported; Active-Take pan requires take_ref.",
   },
   "macro.midi.apply": {
     required_targets: ["selector or track_ref for create_clips; exact take_ref for edit modes"],
@@ -255,6 +255,9 @@ export function auditAlpha34BVisibleManuals({ discovery_items_by_id = null } = {
     }
     if (id === "macro.items.apply" && !modes.includes("apply_fades")) {
       findings.push(finding(id, "ITEMS_APPLY_FADES_MODE_MISSING", "macro.items.apply must expose apply_fades mode."));
+    }
+    if (id === "macro.items.apply" && !modes.includes("set_item_take_controls")) {
+      findings.push(finding(id, "ITEMS_APPLY_BATCH_MODE_MISSING", "macro.items.apply must expose set_item_take_controls mode."));
     }
     const guide = createAlpha34BFirstTryExecutionGuide(id, discoveryItem);
     for (const audit of guide.example_audit) {

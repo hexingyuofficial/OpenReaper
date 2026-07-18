@@ -85,8 +85,10 @@ const INTENT_ROUTES = deepFreeze([
     term("arrange items", 10), term("align items", 9), term("align item starts", 9), term("align starts", 9), term("sequence items", 9), term("move items", 8), term("item properties", 7),
     term("fade", 9), term("fades", 9), term("fade in", 10), term("fade out", 10), term("apply fades", 10), term("item fade", 10),
     term("trim item", 8), term("split silence", 7), term("stack items", 8), term("nudge items", 7),
+    term("set_item_take_controls", 10), term("batch item controls", 10), term("item take controls", 10), term("active take pan", 9), term("take pan", 8), term("item volume batch", 8),
     term("排列 item", 10), term("排列item", 10), term("对齐 item", 9), term("对齐item", 9), term("对齐开头", 9), term("排序 item", 9), term("排序item", 9), term("移动 item", 8), term("移动item", 8), term("item属性", 7),
     term("淡入", 10), term("淡出", 10), term("淡入淡出", 10), term("加淡入", 10), term("加淡出", 10), term("item淡入", 10),
+    term("批量item", 9), term("批量 take", 9), term("take声像", 8), term("item批量控制", 9),
   ], ["normalize", "normalise", "lufs", "标准化", "归一化"]),
   intent("macro.midi.apply", [
     term("midi clip", 10), term("create midi", 9), term("midi note", 8), term("midi", 6), term("quantize", 10), term("edit midi", 10), term("edit existing notes", 10), term("write cc", 10), term("control change", 9),

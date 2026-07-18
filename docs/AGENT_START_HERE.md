@@ -62,7 +62,7 @@ All Macros are peers. Expand manuals only by exact id.
 - `macro.routing.apply` — internal sends, master-parent, channel counts
 - `macro.media.place_assets` — search/import/place media assets
 - `macro.items.analyze` — loudness/transient/silence analysis
-- `macro.items.apply` — align/move/sequence/properties/fades
+- `macro.items.apply` — align/move/sequence/properties/fades + set_item_take_controls batch
 - `macro.midi.apply` — create_clips | edit_notes | quantize | write_cc
 - `macro.fx.apply_chain` — add/configure bounded FX (legacy single-node or chain[])
 - `macro.fx.set_controls` — semantic (proven only) or exact_parameters highway for any FX
@@ -108,7 +108,7 @@ list_templates {"query":"create a MIDI clip and add a compressor","limit":25}
 list_templates {"ids":["macro.midi.apply"],"fields":["id","inputSchema"]}
 call_template {"id":"macro.project.inspect","input":{"include":["project_path","dirty_state","markers_regions"],"fields_by_scope":{"markers_regions":["ref","name","position_seconds"]},"limit":25,"compact_response":true,"ref_policy":"canonical_only"}}
 call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_seconds":0,"duration_quarter_notes":4,"notes":[{"start_offset_quarter_notes":0,"end_offset_quarter_notes":1,"pitch":60,"velocity":96,"channel":0},{"start_offset_quarter_notes":1,"end_offset_quarter_notes":2,"pitch":62,"velocity":96,"channel":0},{"start_offset_quarter_notes":2,"end_offset_quarter_notes":3,"pitch":64,"velocity":96,"channel":0},{"start_offset_quarter_notes":3,"end_offset_quarter_notes":4,"pitch":65,"velocity":96,"channel":0}],"selector":{"name":"Instrument"},"dry_run":false}}
-call_template {"id":"macro.items.apply","input":{"mode":"align_starts","target":"selected","dry_run":false}}
+call_template {"id":"macro.items.apply","input":{"mode":"set_item_take_controls","dry_run":false,"changes":[{"id":"clipA","item_ref":"item:guid:{ITEM-GUID}","take_ref":"take:guid:{TAKE-GUID}","item":{"volume_db":-3,"fade_in_seconds":0.01,"fade_out_seconds":0.05},"take":{"pan":-0.2,"playrate":1,"preserve_pitch":true}}]}}
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
 ```
