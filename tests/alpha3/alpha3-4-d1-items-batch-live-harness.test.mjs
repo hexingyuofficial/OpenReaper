@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -8,6 +8,7 @@ import {
   runAlpha34D1ItemsBatchHarness,
   validateBatchResponse,
 } from "../../scripts/smoke-alpha3-4-d1-items-batch.mjs";
+import { readEvidenceEvents, readEvidenceSummary } from "../../scripts/lib/alpha3-4-harness-evidence-v1.mjs";
 import { executeAlpha3_3B1cItemsApplyMacro } from "../../packages/mcp-server/src/alpha3-3-b1c-items-apply-v1.mjs";
 
 function itemRef(n) {
@@ -150,6 +151,27 @@ function makeLiveLikeTransport({ discoverExisting = true } = {}) {
   return { callTemplate, index, dispatchLog, state };
 }
 
+async function createInstalledFixture(root, overrides = {}) {
+  const installRoot = path.join(root, "installed");
+  const binRoot = path.join(installRoot, "bin");
+  const wrapper = path.join(binRoot, "openreaper-mcp");
+  await mkdir(binRoot, { recursive: true });
+  await writeFile(wrapper, "#!/bin/sh\nexit 0\n", "utf8");
+  await writeFile(path.join(installRoot, "provenance.json"), `${JSON.stringify({
+    contract: "openreaper.package.provenance.v1",
+    package_version: "3.3.0-alpha.0",
+    build_id: "alpha34-d1-test",
+    openreaper_git_commit: "0123456789abcdef0123456789abcdef01234567",
+    build_time_utc: "2026-07-18T00:00:00.000Z",
+    source_tree_clean: true,
+    accepted_macro_count: 15,
+    accepted_template_count: 232,
+    bridge_handler_count: 91,
+    ...overrides,
+  })}\n`, "utf8");
+  return wrapper;
+}
+
 describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
   it("uses the same eight-row live request path without rewriting production requests", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-harness-"));
@@ -190,14 +212,35 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
               max_inline_value_bytes: 1_024,
             });
           }
+          if (request.id === "template.midi.create_midi_item") {
+            assert.equal(request.refs?.track_ref?.kind, "track");
+            assert.equal(request.refs?.track_ref?.identity?.scheme, "guid");
+            assert.equal(request.refs.track_ref.ref, `track:guid:${request.refs.track_ref.identity.value}`);
+          }
+          if (request.id === "template.items.read_item_summary") {
+            assert.equal(request.refs?.item_ref?.kind, "item");
+            assert.equal(request.refs?.item_ref?.identity?.scheme, "guid");
+            assert.equal(request.refs.item_ref.ref, `item:guid:${request.refs.item_ref.identity.value}`);
+          }
+          if (request.id === "macro.project.file") {
+            assert.deepEqual(request.budget, {
+              max_response_bytes: 65_536,
+              max_items: 8,
+              max_inline_value_bytes: 4_096,
+            });
+          }
           return transport.callTemplate(request);
         },
       });
       assert.equal(report.ok, true, JSON.stringify(report.error ?? report));
       assert.equal(report.runtime.source, "installed_wrapper");
       assert.equal(report.fixture_budget.max_inline_value_bytes, 1_024);
+      assert.equal(report.save_budget.max_response_bytes, 65_536);
       assert.equal(seenBatchRequests, 2);
       assert.equal(report.fixture_items.length, 8);
+      assert.equal(report.fixture_setup.created_tracks.length, 8);
+      assert.equal(report.fixture_setup.created_items.length, 8);
+      assert.equal(report.fixture_setup.mutation_attempts.every((attempt) => attempt.outcome === "created" && typeof attempt.ref === "string"), true);
       assert.equal(report.cold.calls.mutation, 40);
       assert.equal(report.cold.calls.readback, 8);
       assert.equal(report.cold.calls.index, 1);
@@ -215,6 +258,35 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
       assert.equal(createMidiCalls.every((request) => !Object.hasOwn(request.input, "length_seconds")), true);
       assert.equal(typeof report.project_before_hash, "string");
       assert.equal(typeof report.project_after_hash, "string");
+      const summary = await readEvidenceSummary(path.join(root, "evidence"));
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      assert.equal(summary.ok, true);
+      assert.equal(summary.status, "fake");
+      assert.deepEqual(summary.source_hashes, report.source_hashes);
+      assert.equal(summary.project_changes.total, 4);
+      assert.equal(summary.project_changes.items[0].operation, "template.tracks.create_track");
+      assert.equal(summary.project_changes.items[1].operation, "template.midi.create_midi_item");
+      assert.equal(events.some((event) => event.step === "cold" && event.status === "success"), true);
+      assert.equal(events.some((event) => event.step === "warm" && event.status === "success"), true);
+      const fixtureCalls = events.filter((event) => event.type === "call" && event.step?.startsWith("fixture-"));
+      assert.equal(fixtureCalls.length, 25);
+      assert.equal(fixtureCalls.filter((event) => event.requested_id === "template.items.list_selected_items").length, 1);
+      assert.equal(fixtureCalls.filter((event) => event.requested_id === "template.tracks.create_track").length, 8);
+      assert.equal(fixtureCalls.filter((event) => event.requested_id === "template.midi.create_midi_item").length, 8);
+      assert.equal(fixtureCalls.filter((event) => event.requested_id === "template.items.read_item_summary").length, 8);
+      assert.equal(fixtureCalls.every((event) => event.artifacts?.request?.sha256 && event.artifacts?.response?.sha256), true);
+      const productCallBytes = events
+        .filter((event) => event.type === "call" && event.tool === "call_template")
+        .reduce((total, event) => total + event.response_bytes, 0);
+      assert.equal(report.response_bytes.total, productCallBytes);
+      assert.equal(summary.response_bytes.total, productCallBytes);
+      const finalEvent = events.find((event) => event.step === "report-pre-finalize");
+      assert.equal(finalEvent?.status, "success");
+      const persistedReport = JSON.parse(await readFile(path.join(root, "evidence", finalEvent.artifacts.response.path), "utf8"));
+      assert.equal(persistedReport.contract, report.contract);
+      assert.equal(persistedReport.ok, true);
+      assert.equal(persistedReport.project_before_hash, report.project_before_hash);
+      assert.equal(summary.artifacts.paths.items.some((artifact) => artifact.sha256 === finalEvent.artifacts.response.sha256), true);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -224,12 +296,15 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-connect-"));
     const project = path.join(root, "fixture.RPP");
     await writeFile(project, "<REAPER_PROJECT\n>");
+    const installedWrapper = await createInstalledFixture(root);
+    await mkdir(path.join(root, "recovery"), { recursive: true });
+    await writeFile(path.join(root, "recovery", "fixture.before.RPP"), "<REAPER_PROJECT\n>", "utf8");
     const transport = makeLiveLikeTransport();
     let connectCalls = 0;
     let closed = false;
     try {
       const report = await runAlpha34D1ItemsBatchHarness({
-        installedWrapper: path.join(root, "openreaper-mcp"),
+        installedWrapper,
         sourceProject: project,
         evidenceRoot: path.join(root, "evidence"),
         executeLive: true,
@@ -283,6 +358,17 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
       assert.equal(report.save.ok, true);
       assert.equal(report.cold.calls.readback, 8);
       assert.equal(report.warm.calls.index, 1);
+      assert.equal(report.provenance.package_provenance.build_id, "alpha34-d1-test");
+      assert.equal(typeof report.provenance.installed_wrapper_sha256, "string");
+      assert.equal(typeof report.backup_recovery_posture.backup_project_sha256, "string");
+      const summary = await readEvidenceSummary(path.join(root, "evidence"));
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      assert.equal(summary.ok, true);
+      assert.equal(summary.provenance.package_provenance.build_id, "alpha34-d1-test");
+      assert.equal(summary.project_changes.total, 3);
+      assert.equal(summary.recovery.source_project_saved, true);
+      assert.equal(events.some((event) => event.step === "save" && event.status === "success"), true);
+      assert.equal(events.at(-1)?.step, "report-pre-finalize");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -292,10 +378,11 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-close-fail-"));
     const project = path.join(root, "fixture.RPP");
     await writeFile(project, "<REAPER_PROJECT\n>");
+    const installedWrapper = await createInstalledFixture(root);
     const transport = makeLiveLikeTransport();
     try {
       const report = await runAlpha34D1ItemsBatchHarness({
-        installedWrapper: path.join(root, "openreaper-mcp"),
+        installedWrapper,
         sourceProject: project,
         evidenceRoot: path.join(root, "evidence"),
         executeLive: true,
@@ -333,14 +420,15 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
     }
   });
 
-  it("fails the live report when save_current does not complete", async () => {
+  it("records and fails the live report when save_current throws", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-save-fail-"));
     const project = path.join(root, "fixture.RPP");
     await writeFile(project, "<REAPER_PROJECT\n>");
+    const installedWrapper = await createInstalledFixture(root);
     const transport = makeLiveLikeTransport();
     try {
       const report = await runAlpha34D1ItemsBatchHarness({
-        installedWrapper: path.join(root, "openreaper-mcp"),
+        installedWrapper,
         sourceProject: project,
         evidenceRoot: path.join(root, "evidence"),
         executeLive: true,
@@ -355,25 +443,269 @@ describe("Alpha3.4-D1 items batch live harness (fake transport)", () => {
         },
         connectFactory: async () => ({
           async callTool({ arguments: args }) {
-            const response = args.id === "macro.project.file"
-              ? { ok: false, error: { code: "TEST_SAVE_FAILED", message: "save failed" } }
-              : await transport.callTemplate({
-                  id: args.id,
-                  input: args.input,
-                  refs: args.refs,
-                  budget: args.budget,
-                });
+            if (args.id === "macro.project.file") {
+              throw Object.assign(new Error("save threw"), { code: "TEST_SAVE_THROWN" });
+            }
+            const response = await transport.callTemplate({
+              id: args.id,
+              input: args.input,
+              refs: args.refs,
+              budget: args.budget,
+            });
             return { content: [{ type: "text", text: JSON.stringify(response) }] };
           },
           async close() {},
         }),
       });
       assert.equal(report.ok, false);
-      assert.equal(report.error?.code, "TEST_SAVE_FAILED");
+      assert.equal(report.error?.code, "TEST_SAVE_THROWN");
       assert.equal(report.save?.ok, false);
+      assert.equal(report.save?.status, "unknown");
+      assert.equal(report.save?.recovery_required, true);
+      assert.equal(report.backup_recovery_posture.source_project_saved, null);
+      assert.equal(report.backup_recovery_posture.source_project_save_status, "unknown");
+      assert.equal(report.backup_recovery_posture.recovery_required, true);
+      assert.deepEqual(report.project_changes.at(-1), {
+        operation: "macro.project.file",
+        phase: "save",
+        status: "unknown",
+        recovery_required: true,
+      });
       assert.equal(report.client_close?.ok, true);
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      const saveEvent = events.find((event) => event.step === "save");
+      assert.equal(saveEvent?.status, "failure");
+      assert.equal(saveEvent?.error?.code, "TEST_SAVE_THROWN");
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains partial fixture mutations when a later setup read fails", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-partial-fixture-"));
+    const project = path.join(root, "fixture.RPP");
+    await writeFile(project, "<REAPER_PROJECT\n>", "utf8");
+    const transport = makeLiveLikeTransport({ discoverExisting: false });
+    try {
+      const report = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: path.join(root, "openreaper-mcp"),
+        sourceProject: project,
+        evidenceRoot: path.join(root, "evidence"),
+        fakeTransportOnly: true,
+        callTemplate: async (request) => {
+          if (request.id === "template.items.read_item_summary") {
+            throw Object.assign(new Error("fixture summary failed"), { code: "TEST_FIXTURE_SUMMARY_FAILED" });
+          }
+          return transport.callTemplate(request);
+        },
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.error?.code, "TEST_FIXTURE_SUMMARY_FAILED");
+      assert.equal(report.fixture_setup.created_tracks.length, 1);
+      assert.equal(report.fixture_setup.created_items.length, 1);
+      assert.deepEqual(report.project_changes.map((change) => change.operation), [
+        "template.tracks.create_track",
+        "template.midi.create_midi_item",
+      ]);
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      assert.equal(events.find((event) => event.step === "fixture-created-summary-1")?.status, "failure");
+      assert.equal(report.response_bytes.total, events
+        .filter((event) => event.type === "call" && event.tool === "call_template")
+        .reduce((total, event) => total + event.response_bytes, 0));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports an unknown fixture mutation when a successful create response lacks a canonical ref", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-unknown-fixture-"));
+    const project = path.join(root, "fixture.RPP");
+    await writeFile(project, "<REAPER_PROJECT\n>", "utf8");
+    const transport = makeLiveLikeTransport({ discoverExisting: false });
+    try {
+      const report = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: path.join(root, "openreaper-mcp"),
+        sourceProject: project,
+        evidenceRoot: path.join(root, "evidence"),
+        fakeTransportOnly: true,
+        callTemplate: async (request) => {
+          if (request.id === "template.tracks.create_track") return { ok: true, result: { refs: [] } };
+          return transport.callTemplate(request);
+        },
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.error?.code, "D1_HARNESS_TRACK_CREATE_FAILED");
+      assert.deepEqual(report.fixture_setup.mutation_attempts, [{
+        operation: "template.tracks.create_track",
+        step_id: "fixture-create-track-1",
+        outcome: "unknown",
+        ref: null,
+      }]);
+      assert.deepEqual(report.project_changes, [{
+        operation: "template.tracks.create_track",
+        phase: "fixture",
+        status: "unknown",
+        count: 1,
+        recovery_required: true,
+        step_ids: ["fixture-create-track-1"],
+      }]);
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      assert.equal(events.find((event) => event.step === "fixture-create-track-1")?.status, "success");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accounts a thrown batch call as zero response bytes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-batch-throw-"));
+    const project = path.join(root, "fixture.RPP");
+    await writeFile(project, "<REAPER_PROJECT\n>", "utf8");
+    const transport = makeLiveLikeTransport();
+    try {
+      const report = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: path.join(root, "openreaper-mcp"),
+        sourceProject: project,
+        evidenceRoot: path.join(root, "evidence"),
+        fakeTransportOnly: true,
+        callTemplate: async (request) => {
+          if (request.id === "macro.items.apply") {
+            throw Object.assign(new Error("batch threw"), { code: "TEST_BATCH_THROWN" });
+          }
+          return transport.callTemplate(request);
+        },
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.error?.code, "TEST_BATCH_THROWN");
+      assert.equal(report.cold?.outcome, "unknown");
+      assert.equal(report.cold?.recovery_required, true);
+      assert.deepEqual(report.project_changes, [{
+        operation: "macro.items.apply",
+        phase: "cold",
+        status: "unknown",
+        recovery_required: true,
+        requested_rows: 8,
+        live_readback_rows: 0,
+        mutation_calls: 0,
+        index_maintenance_calls: 0,
+      }]);
+      assert.equal(report.backup_recovery_posture.recovery_required, true);
+      const events = await readEvidenceEvents(path.join(root, "evidence"));
+      const summary = await readEvidenceSummary(path.join(root, "evidence"));
+      assert.equal(summary.recovery.recovery_required, true);
+      const coldEvent = events.find((event) => event.step === "cold");
+      assert.equal(coldEvent?.status, "failure");
+      assert.equal(coldEvent?.response_bytes, 0);
+      assert.equal(report.response_bytes.total, events
+        .filter((event) => event.type === "call" && event.tool === "call_template")
+        .reduce((total, event) => total + event.response_bytes, 0));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when the live project hash is missing before or after mutation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-d1-hash-truth-"));
+    try {
+      const missingProject = path.join(root, "missing-before.RPP");
+      const beforeWrapper = await createInstalledFixture(path.join(root, "before"));
+      const beforeReport = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: beforeWrapper,
+        sourceProject: missingProject,
+        evidenceRoot: path.join(root, "before-evidence"),
+        executeLive: true,
+        liveEnvironment: {
+          transportDir: path.join(root, "before-transport"),
+          artifactRoot: path.join(root, "before-artifacts"),
+          renderRoot: path.join(root, "before-render"),
+          indexRoot: path.join(root, "before-index"),
+          bridgeOwner: "d1-before-owner",
+          bridgeGeneration: 1,
+          projectPath: missingProject,
+        },
+        connectFactory: async () => assert.fail("missing before hash must fail before connect"),
+      });
+      assert.equal(beforeReport.ok, false);
+      assert.equal(beforeReport.error?.code, "D1_HARNESS_SOURCE_PROJECT_UNREADABLE");
+      assert.equal(beforeReport.source_hashes.before, null);
+
+      const afterRoot = path.join(root, "after");
+      const afterProject = path.join(afterRoot, "fixture.RPP");
+      await mkdir(afterRoot, { recursive: true });
+      await writeFile(afterProject, "<REAPER_PROJECT\n>", "utf8");
+      const afterWrapper = await createInstalledFixture(afterRoot);
+      const transport = makeLiveLikeTransport();
+      const afterReport = await runAlpha34D1ItemsBatchHarness({
+        installedWrapper: afterWrapper,
+        sourceProject: afterProject,
+        evidenceRoot: path.join(afterRoot, "evidence"),
+        executeLive: true,
+        liveEnvironment: {
+          transportDir: path.join(afterRoot, "transport"),
+          artifactRoot: path.join(afterRoot, "artifacts"),
+          renderRoot: path.join(afterRoot, "render"),
+          indexRoot: path.join(afterRoot, "index"),
+          bridgeOwner: "d1-after-owner",
+          bridgeGeneration: 1,
+          projectPath: afterProject,
+        },
+        connectFactory: async () => ({
+          async callTool({ arguments: args }) {
+            const response = await transport.callTemplate({
+              id: args.id,
+              input: args.input,
+              refs: args.refs,
+              budget: args.budget,
+            });
+            if (args.id === "macro.project.file") await rm(afterProject, { force: true });
+            return { content: [{ type: "text", text: JSON.stringify(response) }] };
+          },
+          async close() {},
+        }),
+      });
+      assert.equal(afterReport.ok, false);
+      assert.equal(afterReport.error?.code, "D1_HARNESS_SOURCE_PROJECT_UNREADABLE");
+      assert.equal(afterReport.source_hashes.after, null);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects incomplete or drifted installed package provenance before connecting", async () => {
+    const cases = [
+      ["package_version", "alpha3.4"],
+      ["build_id", ""],
+      ["build_time_utc", "not-a-time"],
+      ["accepted_macro_count", 14],
+      ["accepted_template_count", 231],
+      ["bridge_handler_count", 90],
+    ];
+    for (const [field, invalidValue] of cases) {
+      const root = await mkdtemp(path.join(os.tmpdir(), `openreaper-d1-provenance-${field}-`));
+      try {
+        const project = path.join(root, "fixture.RPP");
+        await writeFile(project, "<REAPER_PROJECT\n>", "utf8");
+        const installedWrapper = await createInstalledFixture(root, { [field]: invalidValue });
+        const report = await runAlpha34D1ItemsBatchHarness({
+          installedWrapper,
+          sourceProject: project,
+          evidenceRoot: path.join(root, "evidence"),
+          executeLive: true,
+          liveEnvironment: {
+            transportDir: path.join(root, "transport"),
+            artifactRoot: path.join(root, "artifacts"),
+            renderRoot: path.join(root, "render"),
+            indexRoot: path.join(root, "index"),
+            bridgeOwner: "d1-provenance-owner",
+            bridgeGeneration: 1,
+            projectPath: project,
+          },
+          connectFactory: async () => assert.fail(`invalid ${field} must fail before connect`),
+        });
+        assert.equal(report.ok, false, field);
+        assert.equal(report.error?.code, "D1_HARNESS_PACKAGE_PROVENANCE_INVALID", field);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     }
   });
 
