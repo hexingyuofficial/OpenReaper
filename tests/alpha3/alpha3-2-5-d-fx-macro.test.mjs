@@ -6,6 +6,7 @@ import {
   createAlpha3_2_5DNativeFxMacroDiscoveryItems,
   executeAlpha3_2_5DNativeFxMacro,
 } from "../../packages/mcp-server/src/alpha3-2-5-d-fx-macro-v1.mjs";
+import { STOCK_SEMANTIC_UNIT_UNPROVEN } from "../../packages/mcp-server/src/alpha3-4-c-fx-semantic-truth-v1.mjs";
 import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 
 const NOW = "2026-07-12T10:00:00.000Z";
@@ -133,6 +134,358 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.equal(result.result.data.final_chain.fx[0].fx_ref, `fx:${TAKE_REF}:0`);
   });
 
+  it("blocks unproven chain controls before a write request mutates or exposes a new FX ref", async () => {
+    const bridge = chainAtomic();
+    const invalidations = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{ plugin_name: "VST: ReaComp (Cockos)", controls: { threshold_db: -18 } }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: indexRuntime(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, ["threshold_db"]);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(result.result.canonical_refs.filter((ref) => ref.startsWith("fx:")), []);
+    assert.deepEqual(bridge.writes, []);
+    assert.deepEqual(invalidations, []);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.tracks.resolve_track_ref",
+      "template.fx.list_track_fx_chain",
+      "template.fx.search_installed_fx",
+    ]);
+    assert.equal(result.recovery.partial_changes_possible, false);
+    assert.equal(result.recovery.next_call.arguments.id, "macro.fx.apply_chain");
+    assert.equal(Object.hasOwn(result.recovery.next_call.arguments.input.chain[0], "controls"), false);
+    assert.equal(JSON.stringify(result.recovery.next_call).includes("fx:"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("blocks an unproven starter-action-only node before any chain mutation", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{
+            plugin_name: "VST: ReaComp (Cockos)",
+            starter_action: "gentle_vocal_compression",
+          }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, [
+      "threshold_db",
+      "ratio",
+      "attack_ms",
+      "release_ms",
+      "wet_mix_percent",
+    ]);
+    assert.deepEqual(result.result.data.semantic_fields, ["starter_action"]);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+    assert.equal(Object.hasOwn(result.recovery.next_call.arguments.input.chain[0], "starter_action"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("applies the same semantic proof gate to chain dry-run", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{ plugin_query: "ReaComp", controls: { ratio: 3 } }],
+          dry_run: true,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, ["ratio"]);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
+  });
+
+  it("continues a controls-bearing chain dry-run when semantic proof succeeds", async () => {
+    const bridge = chainAtomic();
+    const proofCalls = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{ plugin_query: "ReaComp", controls: { ratio: 3 } }],
+          dry_run: true,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      semanticProofChecker: (pluginId, controlIds) => {
+        proofCalls.push([pluginId, [...controlIds]]);
+        return { ok: true, unproven: [] };
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "dry_run_completed");
+    assert.deepEqual(proofCalls, [["reacomp", ["ratio"]]]);
+    assert.deepEqual(bridge.writes, []);
+    assert.deepEqual(result.result.data.planned_chain.map((row) => row.plugin_name), [
+      "VST: ReaComp (Cockos)",
+    ]);
+    assert.equal(result.result.changes.every((change) => change.status === "planned"), true);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("preflights a later unproven controls node before mutating an earlier node", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [
+            { plugin_name: "VST: ReaEQ (Cockos)", enabled: false },
+            { plugin_name: "VST: ReaComp (Cockos)", controls: { release_ms: 100 } },
+          ],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.equal(result.result.data.chain_index, 1);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+    assert.deepEqual(bridge.calls.map((call) => call.id), [
+      "template.tracks.resolve_track_ref",
+      "template.fx.list_track_fx_chain",
+      "template.fx.search_installed_fx",
+      "template.fx.search_installed_fx",
+    ]);
+  });
+
+  it("preflights a later starter-action-only node before mutating an earlier node", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [
+            { plugin_name: "VST: ReaEQ (Cockos)", enabled: false },
+            {
+              plugin_name: "VST: ReaComp (Cockos)",
+              starter_action: "gentle_vocal_compression",
+            },
+          ],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.equal(result.result.data.chain_index, 1);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+  });
+
+  it("rejects non-ReaComp initial semantic controls before any chain mutation", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{ plugin_name: "VST: ReaEQ (Cockos)", controls: { low_mid_gain_db: 2 } }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, "FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED");
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
+  });
+
+  it("uses the real C semantic executor after whole-chain proof succeeds", async () => {
+    const bridge = chainAtomic();
+    const invalidations = [];
+    const proofCalls = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{
+            plugin_name: "VST: ReaComp (Cockos)",
+            controls: { threshold_db: -18, ratio: 3 },
+          }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: indexRuntime(invalidations),
+      semanticProofChecker: (pluginId, controlIds) => {
+        proofCalls.push([pluginId, [...controlIds]]);
+        return { ok: true, unproven: [] };
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.execution.status, "completed");
+    assert.deepEqual(proofCalls, [
+      ["reacomp", ["threshold_db", "ratio"]],
+      ["reacomp", ["threshold_db", "ratio"]],
+    ]);
+    assert.deepEqual(bridge.writes.map((call) => call.id), [
+      "template.fx.add_track_fx",
+      "template.fx.set_fx_parameter_normalized",
+      "template.fx.set_fx_parameter_normalized",
+    ]);
+    assert.equal(bridge.calls.filter((call) => call.id === "template.fx.read_fx_parameter").length, 2);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.deepEqual(invalidations, [["fx"], ["fx"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("executes a proven starter action with overrides through C and verifies every live readback", async () => {
+    const bridge = chainAtomic({ parameterRows: completeReaCompParameterRows() });
+    const invalidations = [];
+    const proofCalls = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{
+            plugin_name: "VST: ReaComp (Cockos)",
+            starter_action: "gentle_vocal_compression",
+            control_overrides: { ratio: 4 },
+          }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      projectIndexRuntime: indexRuntime(invalidations),
+      semanticProofChecker: (pluginId, controlIds) => {
+        proofCalls.push([pluginId, [...controlIds]]);
+        return { ok: true, unproven: [] };
+      },
+      now: () => new Date(NOW),
+    });
+
+    const expectedControls = [
+      "threshold_db",
+      "ratio",
+      "attack_ms",
+      "release_ms",
+      "wet_mix_percent",
+    ];
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.deepEqual(proofCalls, [
+      ["reacomp", expectedControls],
+      ["reacomp", expectedControls],
+    ]);
+    assert.deepEqual(bridge.writes.map((call) => call.id), [
+      "template.fx.add_track_fx",
+      ...Array.from({ length: 5 }, () => "template.fx.set_fx_parameter_normalized"),
+    ]);
+    const ratioWrite = bridge.writes.find((call) =>
+      call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 1);
+    assert.equal(ratioWrite.input.normalized_value, 0.157895);
+    assert.equal(bridge.calls.filter((call) => call.id === "template.fx.read_fx_parameter").length, 5);
+    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
+    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
+    assert.deepEqual(invalidations, [["fx"], ["fx"]]);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("rejects action parameters without a starter action instead of silently ignoring them", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{
+            plugin_name: "VST: ReaComp (Cockos)",
+            action_parameters: { tempo_bpm: 120 },
+          }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      semanticProofChecker: () => {
+        throw new Error("invalid semantic intent must not reach proof");
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, "CONTROL_FIELDS_REQUIRED");
+    assert.deepEqual(result.result.data.semantic_fields, ["action_parameters"]);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+  });
+
+  it("rejects an explicitly empty semantic field instead of degrading to a plain FX add", async () => {
+    const bridge = chainAtomic();
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          chain: [{ plugin_name: "VST: ReaComp (Cockos)", controls: {} }],
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, "CONTROL_FIELDS_REQUIRED");
+    assert.deepEqual(result.result.data.semantic_fields, ["controls"]);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(bridge.writes, []);
+  });
+
   it("fails closed on incomplete inventory or chain coverage and never treats dispatch as applied", async () => {
     for (const options of [
       { inventoryTruncated: true },
@@ -170,6 +523,8 @@ describe("Alpha3.2.5-D native FX Macro", () => {
       { chain: [{ plugin_query: "ReaEQ", duplicate_policy: "maybe" }] },
       { chain: [{ plugin_query: "ReaEQ", preset_name: "A", preset_index: 0 }] },
       { chain: [{ plugin_query: "ReaEQ", enabled: "yes" }] },
+      { chain: [{ plugin_query: "ReaComp", starter_action: "" }] },
+      { chain: [{ plugin_query: "ReaComp", action_parameters: [] }] },
       { chain: Array.from({ length: 9 }, () => ({ plugin_query: "ReaEQ" })) },
     ];
     for (const input of invalidInputs) {
@@ -188,7 +543,103 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     }
   });
 
-  it("dry-runs the default gentle ReaComp chain after live track resolution", async () => {
+  it("reports an unavailable executor before evaluating semantic proof", async () => {
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: { controls: { threshold_db: -18 }, dry_run: false },
+        refs: { track_ref: TRACK_REF },
+      },
+      semanticProofChecker: () => {
+        throw new Error("semantic proof must not run without an atomic executor");
+      },
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, "NATIVE_FX_EXECUTOR_UNAVAILABLE");
+    assert.deepEqual(result.result.changes, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("rejects malformed and empty legacy semantic input without default-starter fallback", async () => {
+    for (const [input, expectedCode] of [
+      [{ controls: "bad" }, "NATIVE_FX_SEMANTIC_FIELD_INVALID"],
+      [{ controls: {} }, "CONTROL_FIELDS_REQUIRED"],
+      [{ action_parameters: {} }, "CONTROL_FIELDS_REQUIRED"],
+      [{ control_overrides: {} }, "CONTROL_FIELDS_REQUIRED"],
+    ]) {
+      const calls = [];
+      let proofCalls = 0;
+      const result = await executeAlpha3_2_5DNativeFxMacro({
+        request: {
+          id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+          input,
+          refs: { track_ref: TRACK_REF },
+        },
+        executeAtomic: async (request) => {
+          calls.push(request);
+          throw new Error("invalid semantic input must not dispatch");
+        },
+        semanticProofChecker: () => {
+          proofCalls += 1;
+          throw new Error("invalid semantic input must not reach proof");
+        },
+        now: () => new Date(NOW),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, expectedCode);
+      assert.deepEqual(calls, []);
+      assert.equal(proofCalls, 0);
+      assert.deepEqual(result.result.changes, []);
+    }
+  });
+
+  it("blocks the default gentle ReaComp controls before live track resolution", async () => {
+    const calls = [];
+    const invalidations = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: { insert_at_index: 2, dry_run: true },
+        refs: { track_ref: TRACK_REF },
+      },
+      executeAtomic: fxAtomic(calls, new Map()),
+      projectIndexRuntime: indexRuntime(invalidations),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, [
+      "threshold_db",
+      "ratio",
+      "attack_ms",
+      "release_ms",
+      "wet_mix_percent",
+    ]);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(invalidations, []);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(result.result.canonical_refs, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
+    assert.equal(result.result.data.next_call.arguments.id, "macro.fx.apply_chain");
+    assert.deepEqual(result.result.data.next_call.arguments.refs, { track_ref: TRACK_REF });
+    assert.deepEqual(result.result.data.next_call.arguments.input.chain, [{
+      plugin_query: "ReaComp",
+      duplicate_policy: "allow",
+      insert_at_index: 2,
+    }]);
+    assert.equal(JSON.stringify(result.result.data.next_call).includes("DRY-RUN"), false);
+    assert.equal(JSON.stringify(result.result.data.next_call).includes("fx:"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("continues the legacy dry-run when every resolved starter control is proven", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5DNativeFxMacro({
       request: {
@@ -197,6 +648,17 @@ describe("Alpha3.2.5-D native FX Macro", () => {
         refs: { track_ref: TRACK_REF },
       },
       executeAtomic: fxAtomic(calls, new Map()),
+      semanticProofChecker: (pluginId, controlIds) => {
+        assert.equal(pluginId, "reacomp");
+        assert.deepEqual(controlIds, [
+          "threshold_db",
+          "ratio",
+          "attack_ms",
+          "release_ms",
+          "wet_mix_percent",
+        ]);
+        return { ok: true, unproven: [] };
+      },
       now: () => new Date(NOW),
     });
 
@@ -208,7 +670,7 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
-  it("adds ReaComp, runs semantic controls, and returns exact readback", async () => {
+  it("blocks explicit ReaComp controls with zero mutation and an executable chain recovery", async () => {
     const calls = [];
     const values = new Map();
     const invalidations = [];
@@ -227,12 +689,57 @@ describe("Alpha3.2.5-D native FX Macro", () => {
       now: () => new Date(NOW),
     });
 
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, ["threshold_db", "ratio"]);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(invalidations, []);
+    assert.deepEqual(result.result.changes, []);
+    assert.deepEqual(result.result.canonical_refs, []);
+    assert.equal(result.result.verification.status, "not_required");
+    assert.equal(result.recovery.partial_changes_possible, false);
+    assert.deepEqual(result.recovery.next_call, result.result.data.next_call);
+    assert.equal(result.recovery.next_call.arguments.id, "macro.fx.apply_chain");
+    assert.deepEqual(result.recovery.next_call.arguments.input.chain, [{
+      plugin_query: "ReaComp",
+      duplicate_policy: "allow",
+    }]);
+    assert.equal(Object.hasOwn(result.recovery.next_call.arguments.input, "controls"), false);
+    assert.equal(JSON.stringify(result.recovery.next_call).includes("fx:"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("continues legacy add, configure, readback, and index maintenance when controls are proven", async () => {
+    const calls = [];
+    const values = new Map();
+    const invalidations = [];
+    const result = await executeAlpha3_2_5DNativeFxMacro({
+      request: {
+        id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
+        input: {
+          controls: { threshold_db: -18, ratio: 3 },
+          dry_run: false,
+        },
+        refs: { track_ref: TRACK_REF },
+        context: { request_id: "fx-d-proof-ok", session_id: "fx-d", request_sequence: 2 },
+      },
+      executeAtomic: fxAtomic(calls, values),
+      projectIndexRuntime: indexRuntime(invalidations),
+      semanticProofChecker: (pluginId, controlIds) => {
+        assert.equal(pluginId, "reacomp");
+        assert.deepEqual(controlIds, ["threshold_db", "ratio"]);
+        return { ok: true, unproven: [] };
+      },
+      now: () => new Date(NOW),
+    });
+
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.execution.status, "completed");
     assert.equal(result.result.data.fx_ref, FX_REF);
     assert.equal(result.result.data.readback.length, 2);
-    assert.equal(result.result.data.readback.every((row) => row.requested_normalized_value === row.observed_normalized_value), true);
-    assert.deepEqual(calls.find((call) => call.id === "template.fx.add_track_fx").refs.track_ref, objectRef("track", TRACK_REF));
+    assert.equal(result.result.data.readback.every((row) =>
+      row.requested_normalized_value === row.observed_normalized_value), true);
     assert.deepEqual(calls.map((call) => call.id), [
       "template.tracks.resolve_track_ref",
       "template.fx.add_track_fx",
@@ -253,61 +760,69 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
-  it("prefers the plugin Wet parameter over REAPER's trailing host-wrapper Wet parameter", async () => {
+  it("proof-gates resolved starter controls and overrides before parameter inventory", async () => {
     const calls = [];
-    const values = new Map();
     const result = await executeAlpha3_2_5DNativeFxMacro({
       request: {
         id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
-        input: { dry_run: false },
-        refs: { track_ref: TRACK_REF },
+        input: {
+          starter_action: "gentle_vocal_compression",
+          control_overrides: { ratio: 4 },
+          selector: { name: "Lead Vocal" },
+          dry_run: false,
+        },
       },
-      executeAtomic: fxAtomic(calls, values, { parameterRows: duplicateReaCompWetRows() }),
+      executeAtomic: fxAtomic(calls, new Map(), { parameterRows: duplicateReaCompWetRows() }),
       projectIndexRuntime: indexRuntime([]),
       now: () => new Date(NOW),
     });
 
-    assert.equal(result.ok, true, JSON.stringify(result));
-    assert.equal(result.result.data.readback.length, 5);
-    const wetWrite = calls.find((call) =>
-      call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 11);
-    assert.ok(wetWrite, "the plugin-owned Wet parameter was not selected");
-    assert.equal(calls.some((call) =>
-      call.id === "template.fx.set_fx_parameter_normalized" && call.input.param_index === 22), false);
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(result.result.data.unproven_controls, [
+      "threshold_db",
+      "ratio",
+      "attack_ms",
+      "release_ms",
+      "wet_mix_percent",
+    ]);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(result.result.data.next_call.arguments.input.selector, { name: "Lead Vocal" });
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
   });
 
-  it("keeps verified FX changes applied when only index maintenance fails", async () => {
+  it("does not reach index maintenance when semantic units are unproven", async () => {
+    const calls = [];
+    const invalidations = [];
     const result = await executeAlpha3_2_5DNativeFxMacro({
       request: {
         id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
         input: { controls: { threshold_db: -18 }, dry_run: false },
         refs: { track_ref: TRACK_REF },
       },
-      executeAtomic: fxAtomic([], new Map()),
-      projectIndexRuntime: indexRuntime([], { fail: true }),
+      executeAtomic: fxAtomic(calls, new Map()),
+      projectIndexRuntime: indexRuntime(invalidations, { fail: true }),
       now: () => new Date(NOW),
     });
 
     assert.equal(result.ok, false);
-    assert.equal(result.execution.status, "partial_failure");
-    assert.equal(result.error.code, "INDEX_WRITE_FAILED");
-    assert.equal(result.result.verification.status, "passed");
-    assert.equal(result.result.changes.every((change) => change.status === "applied"), true);
-    assert.equal(result.result.changes.every((change) => change.live_readback.status === "passed"), true);
-    assert.equal(result.result.changes.every((change) => change.index_maintenance.status === "failed"), true);
-    assert.equal(result.result.data.outcome.live_readback.status, "passed");
-    assert.equal(result.result.data.outcome.index_maintenance.status, "failed");
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(invalidations, []);
+    assert.deepEqual(result.result.changes, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
   });
 
-  it("keeps equally ranked non-wrapper parameter names ambiguous", async () => {
+  it("does not inspect ambiguous parameter metadata before semantic proof", async () => {
+    const calls = [];
     const result = await executeAlpha3_2_5DNativeFxMacro({
       request: {
         id: ALPHA3_2_5_D_NATIVE_FX_MACRO_ID,
         input: { controls: { threshold_db: -18 }, dry_run: false },
         refs: { track_ref: TRACK_REF },
       },
-      executeAtomic: fxAtomic([], new Map(), {
+      executeAtomic: fxAtomic(calls, new Map(), {
         parameterRows: [
           { param_index: 0, name: "Threshold", normalized_value: 0.5 },
           { param_index: 4, name: "Threshold", normalized_value: 0.5 },
@@ -321,11 +836,12 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     });
 
     assert.equal(result.ok, false);
-    assert.equal(result.execution.status, "partial_failure");
-    assert.equal(result.error.code, "STOCK_PARAMETER_MATCH_AMBIGUOUS");
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(calls, []);
   });
 
-  it("reports partial failure when FX creation lacks accepted Template verification", async () => {
+  it("does not create an FX before semantic proof even if creation verification would fail", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5DNativeFxMacro({
       request: {
@@ -339,11 +855,11 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     });
 
     assert.equal(result.ok, false);
-    assert.equal(result.execution.status, "partial_failure");
-    assert.equal(result.error.code, "NATIVE_FX_CHILD_VERIFICATION_FAILED");
-    assert.equal(calls.some((call) => call.id === "template.fx.set_fx_parameter_normalized"), false);
-    assert.equal(result.result.verification.status, "failed");
-    assert.equal(result.result.changes.every((change) => change.status !== "applied"), true);
+    assert.equal(result.execution.status, "blocked");
+    assert.equal(result.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(result.result.changes, []);
+    assert.equal(result.recovery.partial_changes_possible, false);
   });
 
   it("rejects unsupported plugins and non-idempotent replay keys before dispatch", async () => {
@@ -417,6 +933,7 @@ function chainAtomic(options = {}) {
     track: (options.initial ?? []).map((row, index) => fxRow("track", index, row)),
     take: [],
   };
+  const parameterValues = new Map();
   let chainReadCount = 0;
 
   const executeAtomic = async ({ id, input = {}, refs = {} }) => {
@@ -459,6 +976,24 @@ function chainAtomic(options = {}) {
         ? execution(id, { ...row }, [objectRef("fx", row.fx_ref)])
         : failure(id, "FX_REF_NOT_FOUND", "FX not found");
     }
+    if (id === "template.fx.read_fx_summary") {
+      const fxRef = refValue(refs.fx_ref);
+      const located = locateFx(chains, fxRef);
+      return located
+        ? execution(id, { ...located.row }, [objectRef("fx", located.row.fx_ref)])
+        : failure(id, "FX_REF_NOT_FOUND", "FX not found");
+    }
+    if (id === "template.fx.list_fx_parameters") {
+      const parameterRows = options.parameterRows ?? [
+        { param_index: 0, name: "Threshold", normalized_value: 0.5 },
+        { param_index: 1, name: "Ratio", normalized_value: 0.1 },
+      ];
+      return execution(id, {
+        parameter_count: parameterRows.length,
+        parameters: parameterRows,
+        truncated: false,
+      });
+    }
     const ownerKind = id === "template.fx.add_take_fx" ? "take" : "track";
     if (id === "template.fx.add_track_fx" || id === "template.fx.add_take_fx") {
       writes.push(call);
@@ -469,6 +1004,23 @@ function chainAtomic(options = {}) {
     const fxRef = refValue(refs.fx_ref);
     const located = locateFx(chains, fxRef);
     if (!located) return failure(id, "FX_REF_NOT_FOUND", "FX not found");
+    if (id === "template.fx.set_fx_parameter_normalized") {
+      writes.push(call);
+      parameterValues.set(`${fxRef}:${input.param_index}`, input.normalized_value);
+      return execution(
+        id,
+        { fx_ref: fxRef, param_index: input.param_index, normalized_value: input.normalized_value },
+        [objectRef("fx", fxRef)],
+        { status: "passed" },
+      );
+    }
+    if (id === "template.fx.read_fx_parameter") {
+      return execution(id, {
+        fx_ref: fxRef,
+        param_index: input.param_index,
+        normalized_value: parameterValues.get(`${fxRef}:${input.param_index}`),
+      }, [objectRef("fx", fxRef)]);
+    }
     if (id === "template.fx.set_fx_bypass") {
       writes.push(call);
       located.row.enabled = input.enabled;
@@ -538,6 +1090,16 @@ function duplicateReaCompWetRows() {
     { param_index: 21, name: "Bypass", normalized_value: 0 },
     { param_index: 22, name: "Wet", normalized_value: 1 },
     { param_index: 23, name: "Delta", normalized_value: 0 },
+  ];
+}
+
+function completeReaCompParameterRows() {
+  return [
+    { param_index: 0, param_ident: "threshold_db", name: "Threshold", normalized_value: 0.5 },
+    { param_index: 1, param_ident: "ratio", name: "Ratio", normalized_value: 0.1 },
+    { param_index: 2, param_ident: "attack_ms", name: "Attack", normalized_value: 0.01 },
+    { param_index: 3, param_ident: "release_ms", name: "Release", normalized_value: 0.02 },
+    { param_index: 4, param_ident: "wet_mix_percent", name: "Wet", normalized_value: 1 },
   ];
 }
 

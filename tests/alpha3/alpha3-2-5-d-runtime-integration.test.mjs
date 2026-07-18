@@ -8,6 +8,7 @@ import {
 import { ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID } from "../../packages/mcp-server/src/alpha3-2-5-d-midi-macro-v1.mjs";
 import { ALPHA3_2_5_D_NATIVE_FX_MACRO_ID } from "../../packages/mcp-server/src/alpha3-2-5-d-fx-macro-v1.mjs";
 import { ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT } from "../../packages/mcp-server/src/alpha3-2d-project-index-runtime-v1.mjs";
+import { STOCK_SEMANTIC_UNIT_UNPROVEN } from "../../packages/mcp-server/src/alpha3-4-c-fx-semantic-truth-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
@@ -78,10 +79,15 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
       refs: { track_ref: TRACK_REF },
       context: context(2),
     });
-    assert.equal(nativeFx.ok, true, JSON.stringify(nativeFx));
-    assert.equal(nativeFx.result.data.fx_ref, FX_REF);
-    assert.equal(nativeFx.result.data.readback.length, 2);
-    assert.equal(nativeFx.result.verification.status, "passed");
+    assert.equal(nativeFx.ok, false, JSON.stringify(nativeFx));
+    assert.equal(nativeFx.execution.status, "blocked");
+    assert.equal(nativeFx.error.code, STOCK_SEMANTIC_UNIT_UNPROVEN);
+    assert.deepEqual(nativeFx.result.changes, []);
+    assert.deepEqual(nativeFx.result.canonical_refs, []);
+    assert.equal(nativeFx.result.verification.status, "not_required");
+    assert.equal(nativeFx.recovery.partial_changes_possible, false);
+    assert.equal(nativeFx.result.data.next_call.arguments.id, "macro.fx.apply_chain");
+    assert.equal(JSON.stringify(nativeFx.result.data.next_call).includes("fx:"), false);
     assert.equal(nativeFx.macro.id, "macro.fx.apply_chain");
     assert.equal(nativeFx.macro.program_id, "openreaper.macro.fx.apply_chain");
     assert.equal(nativeFx.budget.actual_bytes <= nativeFx.budget.max_bytes, true, JSON.stringify(nativeFx.budget));
@@ -95,9 +101,9 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
       "midi.read_take_event_counts",
       "midi.list_take_notes",
     ]);
-    assert.equal(capabilities.includes("fx.add_track"), true);
-    assert.equal(capabilities.filter((capability) => capability === "fx.set_parameter_normalized").length, 2);
-    assert.deepEqual(invalidations, [["items", "takes", "selection"], ["fx"]]);
+    assert.equal(capabilities.includes("fx.add_track"), false);
+    assert.equal(capabilities.includes("fx.set_parameter_normalized"), false);
+    assert.deepEqual(invalidations, [["items", "takes", "selection"]]);
 
     const oldMidi = await runtime.call_template({
       id: ALPHA3_2_5_D_MIDI_CREATE_CLIP_MACRO_ID,
@@ -189,6 +195,37 @@ describe("Alpha3.2.5-D call_template runtime integration", () => {
       "fx.set_bypass",
       "fx.list_track_chain",
     ]);
+  });
+
+  it("rejects malformed or empty legacy semantic input publicly while preserving the plain-input default proof gate", async () => {
+    for (const [input, expectedCode] of [
+      [{ controls: "bad" }, "NATIVE_FX_SEMANTIC_FIELD_INVALID"],
+      [{ controls: {} }, "CONTROL_FIELDS_REQUIRED"],
+      [{}, STOCK_SEMANTIC_UNIT_UNPROVEN],
+    ]) {
+      const bridge = new DRuntimeBridge();
+      const runtime = createRuntime({ bridge });
+      const result = await runtime.call_template({
+        id: "macro.fx.apply_chain",
+        input,
+        refs: { track_ref: TRACK_REF },
+        context: context(20),
+      });
+
+      assert.equal(result.ok, false, JSON.stringify(result));
+      assert.equal(result.error.code, expectedCode);
+      assert.deepEqual(result.result.changes, []);
+      assert.deepEqual(bridge.seen, []);
+      if (Object.keys(input).length === 0) {
+        assert.deepEqual(result.result.data.unproven_controls, [
+          "threshold_db",
+          "ratio",
+          "attack_ms",
+          "release_ms",
+          "wet_mix_percent",
+        ]);
+      }
+    }
   });
 });
 

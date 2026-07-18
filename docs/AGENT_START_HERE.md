@@ -44,6 +44,12 @@ guide marks the mutation non-executable and pairs an immediately executable
 On covered validation/replacement/budget/readiness errors, follow machine-readable
 `error.next_call` or `error.request_patch` when present; keep existing failure codes.
 
+FX parameters: prefer `macro.fx.set_controls`. Use `mode=exact_parameters` with
+exact `param_index` or one unique returned name/ident after complete internal
+paging (not fuzzy guesses). `mode=semantic` is compatibility-only and fails closed
+with `STOCK_SEMANTIC_UNIT_UNPROVEN` until native low/mid/high proof exists
+(including ReaSynth/RS5k Attack). Direct parameter Templates are debug fallback.
+
 ## Flat 15 Macro menu
 
 All Macros are peers. Expand manuals only by exact id.
@@ -59,7 +65,7 @@ All Macros are peers. Expand manuals only by exact id.
 - `macro.items.apply` — align/move/sequence/properties/fades
 - `macro.midi.apply` — create_clips | edit_notes | quantize | write_cc
 - `macro.fx.apply_chain` — add/configure bounded FX (legacy single-node or chain[])
-- `macro.fx.set_controls` — adjust accepted semantic FX controls
+- `macro.fx.set_controls` — semantic (proven only) or exact_parameters highway for any FX
 - `macro.controls.set` — BPM, grid, track/item/take/transport/send controls
 - `macro.automation.apply` — automation points/curves on exact live refs
 - `macro.render.targets` — bounded render/export targets

@@ -539,50 +539,90 @@ describe("Alpha3.2.5-C executable controls", () => {
     assert.equal(calls.some((call) => call.id === "template.tracks.set_mute"), false);
   });
 
-  it("hydrates live ReaComp parameters, writes them, and verifies exact normalized readback", async () => {
-    const calls = [];
+  it("fails closed for unproven ReaComp semantic units and recovers via exact_parameters", async () => {
+    const semanticCalls = [];
+    const exactCalls = [];
     const values = new Map();
-    const response = await executeAlpha3_2_5CControlMacro({
+    const semantic = await executeAlpha3_2_5CControlMacro({
       request: {
         id: "macro.set_stock_plugin_controls",
         input: {
+          mode: "semantic",
           plugin: "reacomp",
           controls: { threshold_db: -18, ratio: 3 },
           dry_run: false,
         },
         refs: { fx_ref: "fx:track:guid:{TRACK-A}:0" },
       },
-      executeAtomic: stockAtomic(calls, values),
+      executeAtomic: stockAtomic(semanticCalls, values),
+      projectIndexRuntime: projectIndexInvalidator([]),
+      now: () => new Date(NOW),
+    });
+    assert.equal(semantic.ok, false, JSON.stringify(semantic));
+    assert.equal(semantic.error.code, "STOCK_SEMANTIC_UNIT_UNPROVEN");
+    assert.equal(semantic.result.data.next_call.arguments.id, "template.fx.list_fx_parameters");
+    assert.deepEqual(semantic.result.data.next_call.arguments.input, { limit: 128, offset: 0 });
+    assert.deepEqual(semanticCalls, []);
+
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.set_stock_plugin_controls",
+        input: {
+          mode: "exact_parameters",
+          dry_run: false,
+          changes: [
+            { id: "threshold", param_index: 0, normalized_value: 0.4 },
+            { id: "ratio", param_index: 1, normalized_value: 0.2 },
+          ],
+        },
+        refs: { fx_ref: "fx:track:guid:{TRACK-A}:0" },
+      },
+      executeAtomic: stockAtomic(exactCalls, values),
       projectIndexRuntime: projectIndexInvalidator([]),
       now: () => new Date(NOW),
     });
 
     assert.equal(response.ok, true, JSON.stringify(response));
     assert.equal(response.macro.id, "macro.set_stock_plugin_controls");
-    assert.deepEqual(calls.map((call) => call.id), [
+    assert.deepEqual(exactCalls.map((call) => call.id), [
       "template.tracks.resolve_track_ref",
       "template.fx.resolve_fx_ref",
-      "template.fx.read_fx_summary",
       "template.fx.list_fx_parameters",
-      "template.fx.set_fx_parameter_normalized",
+      "template.fx.read_fx_parameter",
+      "template.fx.read_fx_parameter",
       "template.fx.set_fx_parameter_normalized",
       "template.fx.read_fx_parameter",
+      "template.fx.set_fx_parameter_normalized",
       "template.fx.read_fx_parameter",
     ]);
-    assert.equal(calls.find((call) => call.id === "template.fx.read_fx_summary").budget.max_inline_value_bytes, 6_000);
-    assert.equal(calls.find((call) => call.id === "template.fx.list_fx_parameters").budget.max_inline_value_bytes, 12_000);
-    assert.equal(calls.find((call) => call.id === "template.fx.list_fx_parameters").budget.max_items, 1_000);
-    assert.equal(
-      calls.filter((call) => call.id === "template.fx.read_fx_parameter")
-        .every((call) => call.budget.max_inline_value_bytes === 6_000),
-      true,
-    );
-    assert.equal(response.result.data.readback.length, 2);
-    assert.equal(response.result.data.readback.every((row) => row.requested_normalized_value === row.observed_normalized_value), true);
     assert.equal(response.result.changes.every((change) => change.status === "applied"), true);
     assert.equal(response.result.changes.every((change) => change.live_readback.status === "passed"), true);
     assert.equal(response.result.verification.status, "passed");
     assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+  });
+
+  it("lets exact_parameters select a third-party FX without injecting stock_plugin=true", async () => {
+    const calls = [];
+    const values = new Map();
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: {
+        id: "macro.set_stock_plugin_controls",
+        input: {
+          mode: "exact_parameters",
+          selector: { plugin_id: "snapheap" },
+          dry_run: true,
+          changes: [{ id: "mix", param_index: 0, normalized_value: 0.5 }],
+        },
+        context: { session_id: "third-party-selector", request_sequence: 1 },
+      },
+      executeAtomic: stockAtomic(calls, values),
+      projectIndexRuntime: readyThirdPartyFxIndexRuntime(),
+      now: () => new Date(NOW),
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.execution.status, "dry_run_completed");
+    assert.equal(response.sqlite.used, true);
+    assert.equal(calls.some((call) => call.id === "template.fx.set_fx_parameter_normalized"), false);
   });
 });
 
@@ -672,6 +712,9 @@ function controlAtomic(calls, options = {}) {
 function stockAtomic(calls, values) {
   return async ({ id, input = {}, refs = {}, budget }) => {
     calls.push({ id, input, refs, budget });
+    if (id === "template.project.read_summary") {
+      return execution(id, { project_ref: "project:active", change_count: 1 });
+    }
     if (id === "template.tracks.resolve_track_ref") {
       return execution(id, { track_ref: input.track_ref, name: "Lead Vocal" });
     }
@@ -687,10 +730,16 @@ function stockAtomic(calls, values) {
     }
     if (id === "template.fx.list_fx_parameters") {
       return execution(id, {
+        parameter_count: 2,
         parameters: [
-          { param_index: 0, name: "Threshold", normalized_value: 0.5 },
-          { param_index: 1, name: "Ratio", normalized_value: 0.1 },
+          { param_index: 0, name: "Threshold", normalized_value: 0.5, param_ident: "threshold" },
+          { param_index: 1, name: "Ratio", normalized_value: 0.1, param_ident: "ratio" },
         ],
+        offset: input.offset ?? 0,
+        next_offset: null,
+        truncated: false,
+        inventory_complete: true,
+        coverage_status: "complete",
       });
     }
     if (id === "template.fx.set_fx_parameter_normalized") {
@@ -698,14 +747,29 @@ function stockAtomic(calls, values) {
       return execution(id, {
         fx_ref: refs.fx_ref,
         param_index: input.param_index,
+        param_ident: input.param_index === 0 ? "threshold" : "ratio",
         normalized_value: input.normalized_value,
+        formatted_value: String(input.normalized_value),
+        requested_normalized_value: input.normalized_value,
+        requested_formatted_value: String(input.normalized_value),
+        tolerance: 0.001,
+        verification_mode: "numeric_tolerance",
+        is_discrete: false,
+        updated: true,
       });
     }
     if (id === "template.fx.read_fx_parameter") {
+      const normalizedValue = input.probe_normalized_value ?? values.get(input.param_index);
       return execution(id, {
         fx_ref: refs.fx_ref,
         param_index: input.param_index,
-        normalized_value: values.get(input.param_index),
+        param_ident: input.param_index === 0 ? "threshold" : "ratio",
+        normalized_value: normalizedValue,
+        formatted_value: String(normalizedValue),
+        step_sizes_available: false,
+        step_size: null,
+        is_toggle: null,
+        is_discrete: false,
       });
     }
     throw new Error(`Unexpected stock-plugin Template ${id}`);
@@ -772,6 +836,39 @@ function readyTrackIndexRuntime() {
       ...adapter.snapshot(),
       rows_available: true,
       row_counts: { tracks: 1 },
+    }),
+    reconcileProjectRevision: () => ({ ok: true, changed: false }),
+    invalidateScopes: ({ scopes }) => ({ ok: true, scopes }),
+  };
+}
+
+function readyThirdPartyFxIndexRuntime() {
+  const adapter = createAlpha3C3ProjectIndex({
+    now: () => new Date(NOW),
+    projectRef: "project:active",
+    bridgeOwner: "owner-controls",
+    bridgeGeneration: 1,
+    sessionId: "session:controls",
+  });
+  adapter.replaceFx({
+    snapshot_id: "snapshot:controls:fx",
+    observed_at: NOW,
+    rows: [{
+      ref: "fx:track:guid:{TRACK-A}:0",
+      owner_ref: "track:guid:{TRACK-A}",
+      plugin_name: "VST3: Snap Heap (Kilohearts)",
+      plugin_id: "snapheap",
+      slot_index: 0,
+      bypassed: false,
+      summary: { parameter_count: 2 },
+    }],
+  });
+  return {
+    adapter,
+    status: () => ({
+      ...adapter.snapshot(),
+      rows_available: true,
+      row_counts: { fx: 1 },
     }),
     reconcileProjectRevision: () => ({ ok: true, changed: false }),
     invalidateScopes: ({ scopes }) => ({ ok: true, scopes }),

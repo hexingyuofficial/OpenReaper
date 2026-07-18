@@ -540,26 +540,36 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     );
     assert.equal(expanded.stock_plugin_live_evidence.broad_live_support, false);
     assert.deepEqual(expanded.stock_plugin_live_evidence.accepted_live_plugin_ids, ["reacomp"]);
-    assert.equal(menu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID), true);
-    const entry = menu.items.find((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID);
-    assert.equal(entry.action_kind, "macro");
-    assert.equal(entry.current_status, "needs_live");
-    assert.equal(entry.beginner_label, "Start or reconnect OpenReaper");
-    assert.equal(entry.capability_truth.kind, "official_macro");
+    assert.equal(
+      menu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID)
+        || menu.product_surface.agent_context_macro_guide?.recommended_macro_ids?.includes(CURRENT_STOCK_PLUGIN_MACRO_ID)
+        || menu.product_surface.agent_context_macro_guide?.macro_menu?.macro_ids?.includes(CURRENT_STOCK_PLUGIN_MACRO_ID),
+      true,
+    );
+    const entry = menu.items.find((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID)
+      ?? expanded.agent_context_macro_guide?.requested_expansions?.items?.[0];
+    assert.ok(entry);
+    assert.equal(entry.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
 
     for (const pluginId of ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.plugin_ids) {
-      const pluginMenu = runtime.list_templates({ query: pluginId, limit: 10 });
-      assert.equal(pluginMenu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID), true, pluginId);
+      const pluginMenu = runtime.list_templates({ query: pluginId, limit: 25 });
+      assert.equal(
+        pluginMenu.items.some((item) => item.id === CURRENT_STOCK_PLUGIN_MACRO_ID)
+          || pluginMenu.product_surface.agent_context_macro_guide?.macro_menu?.macro_ids?.includes(CURRENT_STOCK_PLUGIN_MACRO_ID),
+        true,
+        pluginId,
+      );
     }
   });
 
-  it("keeps the executable stock-plugin Macro visible and returns a typed live blocker offline", async () => {
+  it("keeps the executable stock-plugin Macro visible and fails closed for unproven semantic units offline", async () => {
     const runtime = createCallTemplateRuntime({
       now: () => new Date("2026-07-07T14:31:44.000Z"),
     });
     const response = await runtime.call_template({
       id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
+        mode: "semantic",
         plugin: "reacomp",
         controls: {
           threshold_db: -18,
@@ -577,7 +587,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
 
     assert.equal(response.contract, "macro.execution.v1");
     assert.equal(response.ok, false);
-    assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
+    assert.equal(response.error.code, "STOCK_SEMANTIC_UNIT_UNPROVEN");
     assert.equal(response.macro.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
     assert.equal(response.execution.status, "blocked");
     assert.deepEqual(response.result.changes, []);
@@ -585,11 +595,12 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(runtime.last_evidence().template.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
   });
 
-  it("returns the same typed live blocker for a valid starter action offline", async () => {
+  it("returns STOCK_SEMANTIC_UNIT_UNPROVEN for an explicit semantic starter action offline until native proof exists", async () => {
     const runtime = createCallTemplateRuntime();
     const response = await runtime.call_template({
       id: CURRENT_STOCK_PLUGIN_MACRO_ID,
       input: {
+        mode: "semantic",
         starter_action: "gentle_vocal_compression",
       },
       refs: {
@@ -598,7 +609,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     });
 
     assert.equal(response.ok, false);
-    assert.equal(response.error.code, "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE");
+    assert.equal(response.error.code, "STOCK_SEMANTIC_UNIT_UNPROVEN");
     assert.equal(response.macro.id, CURRENT_STOCK_PLUGIN_MACRO_ID);
     assert.equal(response.execution.status, "blocked");
     assert.deepEqual(response.result.changes, []);

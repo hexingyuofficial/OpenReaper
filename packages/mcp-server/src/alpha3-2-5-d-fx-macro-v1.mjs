@@ -22,6 +22,10 @@ import {
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
   planAlpha3E1StockPluginMacro,
 } from "./alpha3-e1-stock-plugin-fluency-v1.mjs";
+import {
+  assertAlpha34CSemanticUnitsProven,
+  STOCK_SEMANTIC_UNIT_UNPROVEN,
+} from "./alpha3-4-c-fx-semantic-truth-v1.mjs";
 
 export const ALPHA3_2_5_D_NATIVE_FX_MACRO_ID = "macro.fx.apply_native_chain";
 export const ALPHA3_2_5_D_NATIVE_FX_RUNTIME_CONTRACT =
@@ -252,6 +256,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
   executeAtomic,
   projectIndexRuntime,
   catalog,
+  semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now = () => new Date(),
 } = {}) {
   const entry = ALPHA3_2_5_D_NATIVE_FX_REGISTRY.get(ALPHA3_2_5_D_NATIVE_FX_MACRO_ID);
@@ -284,7 +289,6 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       message: "macro.fx.apply_native_chain needs the managed OpenReaper atomic route.",
     });
   }
-
   if (Array.isArray(input.chain)) {
     return executeBoundedFxChain({
       entry,
@@ -293,6 +297,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       executeAtomic,
       projectIndexRuntime,
       catalog,
+      semanticProofChecker,
       now,
       startedAt,
       state,
@@ -319,6 +324,29 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       code: blocker.code,
       message: blocker.message,
       blockers: [blocker],
+    });
+  }
+
+  const requestedSemanticControls = stockPreflight.hydration_flow?.wanted_controls
+    ?? stockPreflight.customer_readback?.requested_controls?.map((item) => item.control)
+    ?? [];
+  const semanticPluginId = stockPreflight.plugin.id;
+  const semanticProof = semanticProofChecker(semanticPluginId, requestedSemanticControls);
+  if (!semanticProof.ok) {
+    const nextCall = createLegacyReaCompRecoveryCall({ request, input });
+    return failure({
+      entry, request, startedAt, now, stages, state,
+      code: STOCK_SEMANTIC_UNIT_UNPROVEN,
+      message: semanticProof.message,
+      blockers: [codedBlocker(STOCK_SEMANTIC_UNIT_UNPROVEN, semanticProof.message)],
+      data: {
+        mode: "semantic",
+        plugin_id: semanticPluginId,
+        unproven_controls: semanticProof.unproven,
+        next_call: nextCall,
+      },
+      recoveryAction: "Run next_call to add ReaComp without semantic controls, then use its returned FX ref to list exact parameters and call macro.fx.set_controls mode=exact_parameters.",
+      recoveryNextCall: nextCall,
     });
   }
 
@@ -393,6 +421,7 @@ export async function executeAlpha3_2_5DNativeFxMacro({
       executeAtomic,
       projectIndexRuntime,
       catalog,
+      semanticProofChecker,
       now,
     });
     collectMacro(state, configured);
@@ -502,6 +531,7 @@ async function executeBoundedFxChain({
   executeAtomic,
   projectIndexRuntime,
   catalog,
+  semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now,
   startedAt,
   state,
@@ -540,11 +570,47 @@ async function executeBoundedFxChain({
     });
     const initialChain = requireCompleteFxChain(initialExecution, "initial");
     const knownRows = initialChain.fx.map((row) => ({ ...row }));
-    const operations = [];
-
+    const preparedNodes = [];
     for (let index = 0; index < input.chain.length; index += 1) {
       const node = input.chain[index];
       const installed = await resolveInstalledFx({ node, request, executeAtomic, state });
+      preparedNodes.push({ index, node, installed });
+    }
+
+    const semanticPreflight = preflightBoundedFxChainSemanticControls({
+      nodes: preparedNodes,
+      catalog,
+      semanticProofChecker,
+    });
+    if (!semanticPreflight.ok) {
+      const nextCall = createChainSemanticRecoveryCall({ request, input });
+      return failure({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages,
+        state,
+        code: semanticPreflight.code,
+        message: semanticPreflight.message,
+        blockers: semanticPreflight.blockers,
+        data: {
+          mode: "semantic",
+          owner_kind: owner.ownerKind,
+          owner_ref: owner.ownerRef,
+          initial_chain: compactFxChain(initialChain),
+          ...semanticPreflight.data,
+          next_call: nextCall,
+        },
+        recoveryAction: "Run next_call to apply the installed chain without semantic controls, then use each returned real FX ref to list exact parameters and call macro.fx.set_controls mode=exact_parameters.",
+        recoveryNextCall: nextCall,
+      });
+    }
+
+    const operations = [];
+
+    for (const prepared of preparedNodes) {
+      const { index, node, installed } = prepared;
       const duplicatePolicy = node.duplicate_policy ?? "allow";
       const duplicateRows = knownRows.filter((row) => fxNamesEqual(row.name, installed.name));
       let fxRef = null;
@@ -690,7 +756,7 @@ async function executeBoundedFxChain({
         mutationActions.push({ template_id: REORDER_FX_ID, status: "completed" });
         change.mutation.status = "completed";
       }
-      if (!dryRun && !skipped && object(node.controls) && Object.keys(node.controls).length > 0) {
+      if (!dryRun && !skipped && prepared.semantic) {
         if (!normalizeFxName(installed.name).includes("reacomp")) {
           throw coded(
             "FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED",
@@ -715,6 +781,7 @@ async function executeBoundedFxChain({
           executeAtomic,
           projectIndexRuntime,
           catalog,
+          semanticProofChecker,
           now,
         });
         collectMacro(state, configured);
@@ -981,6 +1048,104 @@ async function resolveInstalledFx({ node, request, executeAtomic, state }) {
   return { name: matches[0].name, ident: matches[0].ident ?? matches[0].name };
 }
 
+function preflightBoundedFxChainSemanticControls({ nodes, catalog, semanticProofChecker }) {
+  let firstFailure = null;
+  for (const prepared of nodes) {
+    const { index, node, installed } = prepared;
+    if (!hasFxChainSemanticIntent(node)) continue;
+
+    const semanticFields = requestedFxChainSemanticFields(node);
+
+    if (!normalizeFxName(installed.name).includes("reacomp")) {
+      firstFailure ??= {
+        ok: false,
+        code: "FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED",
+        message: `Initial semantic controls are accepted only for the reviewed ReaComp mapping; ${installed.name} must be configured through macro.fx.set_controls mode=exact_parameters.`,
+        blockers: [codedBlocker(
+          "FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED",
+          `Initial semantic controls are accepted only for the reviewed ReaComp mapping; ${installed.name} must be configured through macro.fx.set_controls mode=exact_parameters.`,
+        )],
+        data: {
+          chain_index: index,
+          plugin_name: installed.name,
+          plugin_id: null,
+          requested_controls: Object.keys(node.controls ?? {}),
+          semantic_fields: semanticFields,
+        },
+      };
+      continue;
+    }
+
+    const stockInput = pruneUndefined({
+      plugin: "reacomp",
+      controls: node.controls,
+      starter_action: node.starter_action,
+      action_parameters: node.action_parameters,
+      control_overrides: node.control_overrides,
+    });
+    const plan = planAlpha3E1StockPluginMacro(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID, stockInput, { catalog });
+    const hardBlockers = (plan.blockers ?? []).filter((item) => ![
+      "REQUIRED_REF_MISSING",
+      "PARAMETER_METADATA_REQUIRED",
+      "PARAMETER_METADATA_NOT_FRESH",
+      "PARAMETER_INDEX_REQUIRED",
+    ].includes(item.code));
+    if (plan.plugin?.id !== "reacomp" || hardBlockers.length > 0) {
+      const blocker = plan.plugin?.id !== "reacomp"
+        ? codedBlocker("FX_CHAIN_INITIAL_CONTROLS_UNSUPPORTED", `The installed FX ${installed.name} did not resolve to the reviewed ReaComp semantic mapping.`)
+        : normalizeBlocker(hardBlockers[0]);
+      firstFailure ??= {
+        ok: false,
+        code: blocker.code,
+        message: blocker.message,
+        blockers: [blocker],
+        data: {
+          chain_index: index,
+          plugin_name: installed.name,
+          plugin_id: plan.plugin?.id ?? null,
+          requested_controls: Object.keys(node.controls ?? {}),
+          semantic_fields: semanticFields,
+        },
+      };
+      continue;
+    }
+
+    const controlIds = plan.hydration_flow?.wanted_controls
+      ?? plan.customer_readback?.requested_controls?.map((item) => item.control)
+      ?? Object.keys(node.controls ?? {});
+    prepared.semantic = { pluginId: plan.plugin.id, controlIds };
+    const proof = semanticProofChecker(plan.plugin.id, controlIds);
+    if (!proof.ok) {
+      const message = proof.message
+        ?? `Semantic unit conversion is unproven for ${plan.plugin.id}: ${(proof.unproven ?? controlIds).join(", ")}.`;
+      firstFailure ??= {
+        ok: false,
+        code: STOCK_SEMANTIC_UNIT_UNPROVEN,
+        message,
+        blockers: [codedBlocker(STOCK_SEMANTIC_UNIT_UNPROVEN, message)],
+        data: {
+          chain_index: index,
+          plugin_name: installed.name,
+          plugin_id: plan.plugin.id,
+          unproven_controls: proof.unproven ?? controlIds,
+          semantic_fields: semanticFields,
+        },
+      };
+    }
+  }
+  return firstFailure ?? { ok: true };
+}
+
+function hasFxChainSemanticIntent(node) {
+  return ["controls", "starter_action", "action_parameters", "control_overrides"]
+    .some((field) => Object.hasOwn(node, field));
+}
+
+function requestedFxChainSemanticFields(node) {
+  return ["controls", "starter_action", "action_parameters", "control_overrides"]
+    .filter((field) => Object.hasOwn(node, field));
+}
+
 async function resolveExactFxObject({ fxRef, owner, preferredSlot, request, executeAtomic, state }) {
   let slotIndex = preferredSlot;
   if (!Number.isInteger(slotIndex)) {
@@ -1182,8 +1347,14 @@ function validateInput(input, request) {
       if (node.enabled !== undefined && typeof node.enabled !== "boolean") {
         return codedBlocker("FX_CHAIN_ENABLED_INVALID", `chain[${index}].enabled must be boolean.`);
       }
-      if (node.controls !== undefined && !object(node.controls)) {
-        return codedBlocker("FX_CHAIN_CONTROLS_INVALID", `chain[${index}].controls must be an object.`);
+      for (const field of ["controls", "action_parameters", "control_overrides"]) {
+        if (node[field] !== undefined && !object(node[field])) {
+          return codedBlocker("FX_CHAIN_SEMANTIC_FIELD_INVALID", `chain[${index}].${field} must be an object.`);
+        }
+      }
+      if (node.starter_action !== undefined
+          && (typeof node.starter_action !== "string" || node.starter_action.trim().length === 0)) {
+        return codedBlocker("FX_CHAIN_STARTER_ACTION_INVALID", `chain[${index}].starter_action must be a non-empty string.`);
       }
     }
     const legacyFields = ["plugin", "controls", "starter_action", "action_parameters", "control_overrides", "insert_at_index"];
@@ -1192,6 +1363,15 @@ function validateInput(input, request) {
     return null;
   }
   if (input.plugin !== undefined && input.plugin !== "reacomp") return codedBlocker("NATIVE_FX_PLUGIN_NOT_ACCEPTED", "Alpha3.2.5-D currently adds only plugin=reacomp.");
+  for (const field of ["controls", "action_parameters", "control_overrides"]) {
+    if (Object.hasOwn(input, field) && !object(input[field])) {
+      return codedBlocker("NATIVE_FX_SEMANTIC_FIELD_INVALID", `${field} must be an object.`);
+    }
+  }
+  if (Object.hasOwn(input, "starter_action")
+      && (typeof input.starter_action !== "string" || input.starter_action.trim().length === 0)) {
+    return codedBlocker("NATIVE_FX_STARTER_ACTION_INVALID", "starter_action must be a non-empty string.");
+  }
   if (input.starter_action !== undefined && input.starter_action !== DEFAULT_STARTER_ACTION) return codedBlocker("NATIVE_FX_STARTER_NOT_ACCEPTED", `Alpha3.2.5-D currently accepts only starter_action=${DEFAULT_STARTER_ACTION}.`);
   if (input.insert_at_index !== undefined && (!Number.isInteger(input.insert_at_index) || input.insert_at_index < 0 || input.insert_at_index > 127)) {
     return codedBlocker("NATIVE_FX_INSERT_INDEX_INVALID", "insert_at_index must be an integer from 0 through 127.");
@@ -1200,14 +1380,64 @@ function validateInput(input, request) {
 }
 
 function normalizeStockInput(input) {
-  const hasControls = object(input.controls) && Object.keys(input.controls).length > 0;
+  const hasExplicitSemanticInput = ["controls", "starter_action", "action_parameters", "control_overrides"]
+    .some((field) => Object.hasOwn(input, field));
   return pruneUndefined({
     plugin: "reacomp",
     controls: input.controls,
-    starter_action: input.starter_action ?? (hasControls ? undefined : DEFAULT_STARTER_ACTION),
+    starter_action: input.starter_action ?? (hasExplicitSemanticInput ? undefined : DEFAULT_STARTER_ACTION),
     action_parameters: input.action_parameters,
     control_overrides: input.control_overrides,
   });
+}
+
+function createLegacyReaCompRecoveryCall({ request, input }) {
+  const refs = normalizeNamedRefs(request.refs);
+  return {
+    tool: "call_template",
+    arguments: {
+      id: "macro.fx.apply_chain",
+      input: pruneUndefined({
+        owner_kind: "track",
+        chain: [pruneUndefined({
+          plugin_query: "ReaComp",
+          duplicate_policy: "allow",
+          insert_at_index: input.insert_at_index,
+        })],
+        selector: input.selector,
+        dry_run: false,
+      }),
+      ...(Object.keys(refs).length > 0 ? { refs } : {}),
+    },
+    instruction: "This adds ReaComp without semantic parameter writes. Use the returned real fx_ref to list parameters and continue through macro.fx.set_controls mode=exact_parameters.",
+  };
+}
+
+function createChainSemanticRecoveryCall({ request, input }) {
+  const refs = normalizeNamedRefs(request.refs);
+  return {
+    tool: "call_template",
+    arguments: {
+      id: "macro.fx.apply_chain",
+      input: pruneUndefined({
+        owner_kind: input.owner_kind,
+        chain: input.chain.map((node) => pruneUndefined({
+          plugin_name: node.plugin_name,
+          plugin_query: node.plugin_query,
+          duplicate_policy: node.duplicate_policy,
+          insert_at_index: node.insert_at_index,
+          preset_name: node.preset_name,
+          preset_index: node.preset_index,
+          enabled: node.enabled,
+          target_index: node.target_index,
+        })),
+        selector: input.selector,
+        dry_run: false,
+      }),
+      ...(Object.keys(refs).length > 0 ? { refs } : {}),
+    },
+    instruction: "This applies the installed chain without semantic parameter writes. Use each returned real fx_ref to list parameters and continue through macro.fx.set_controls mode=exact_parameters.",
+  };
 }
 
 function success({ entry, request, startedAt, now, stages, state, status = "completed", summary, data }) {
@@ -1233,7 +1463,21 @@ function success({ entry, request, startedAt, now, stages, state, status = "comp
   });
 }
 
-function failure({ entry, request, startedAt, now, stages, state, status = "blocked", code, message, blockers = [], data = {} }) {
+function failure({
+  entry,
+  request,
+  startedAt,
+  now,
+  stages,
+  state,
+  status = "blocked",
+  code,
+  message,
+  blockers = [],
+  data = {},
+  recoveryAction,
+  recoveryNextCall,
+}) {
   const normalized = boundedBlockers(blockers.length > 0 ? blockers : [codedBlocker(code, message)]);
   const verifiedByLiveReadback = state.changes.length > 0
     && state.changes.every((change) => change.live_readback?.status === "passed");
@@ -1258,9 +1502,10 @@ function failure({ entry, request, startedAt, now, stages, state, status = "bloc
       partial_changes_possible: status === "partial_failure",
       undo_policy: entry.undo_policy,
       sqlite_rows_authorize_writes: false,
-      action: status === "partial_failure"
+      action: recoveryAction ?? (status === "partial_failure"
         ? "Inspect the created FX and stage evidence, use per-stage undo if needed, refresh the FX index scope, then retry only the remaining task."
-        : "Resolve the typed blocker, then retry the same registered Macro.",
+        : "Resolve the typed blocker, then retry the same registered Macro."),
+      ...(recoveryNextCall ? { next_call: clone(recoveryNextCall) } : {}),
     },
     budget: budget(entry),
   });

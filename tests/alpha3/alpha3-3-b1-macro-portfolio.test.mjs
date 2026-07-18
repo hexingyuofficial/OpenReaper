@@ -136,18 +136,24 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
 
     const applyChain = await runtime.call_template({
       id: "macro.fx.apply_chain",
-      input: { controls: { threshold_db: -18, ratio: 3 } },
+      input: { plugin: "reacomp", dry_run: true },
       refs: { track_ref: TRACK_REF },
       context: context(2),
     });
     assert.equal(applyChain.ok, true, JSON.stringify(applyChain));
     assert.equal(applyChain.macro.id, "macro.fx.apply_chain");
     assert.equal(applyChain.macro.program_id, "openreaper.macro.fx.apply_chain");
-    assert.equal(applyChain.result.verification.status, "passed");
 
     const setControls = await runtime.call_template({
       id: "macro.fx.set_controls",
-      input: { plugin: "reacomp", controls: { threshold_db: -18, ratio: 3 } },
+      input: {
+        mode: "exact_parameters",
+        dry_run: false,
+        changes: [
+          { id: "threshold", param_index: 0, normalized_value: 0.4 },
+          { id: "ratio", param_index: 1, normalized_value: 0.2 },
+        ],
+      },
       refs: { fx_ref: FX_REF },
       context: context(3),
     });
@@ -293,16 +299,45 @@ function emitted(capability, request, parameterValues, bridge) {
   if (capability === "fx.list_parameters") return output([], {
     parameter_count: 2,
     parameters: [
-      { param_index: 0, name: "Threshold", normalized_value: 0.5 },
-      { param_index: 1, name: "Ratio", normalized_value: 0.1 },
+      { param_index: 0, name: "Threshold", normalized_value: 0.5, param_ident: "threshold" },
+      { param_index: 1, name: "Ratio", normalized_value: 0.1, param_ident: "ratio" },
     ],
+    offset: request.params.offset ?? 0,
+    next_offset: null,
+    inventory_complete: true,
+    coverage_status: "complete",
     truncated: false,
   });
   if (capability === "fx.set_parameter_normalized") {
     parameterValues.set(request.params.param_index, request.params.normalized_value);
-    return output([FX_OBJECT], { fx_ref: FX_REF, param_index: request.params.param_index, normalized_value: request.params.normalized_value });
+    return output([FX_OBJECT], {
+      fx_ref: FX_REF,
+      param_index: request.params.param_index,
+      param_ident: request.params.param_index === 0 ? "threshold" : "ratio",
+      normalized_value: request.params.normalized_value,
+      formatted_value: String(request.params.normalized_value),
+      requested_normalized_value: request.params.normalized_value,
+      requested_formatted_value: String(request.params.normalized_value),
+      tolerance: 0.001,
+      verification_mode: "numeric_tolerance",
+      is_discrete: false,
+      updated: true,
+    });
   }
-  if (capability === "fx.read_parameter") return output([FX_OBJECT], { fx_ref: FX_REF, param_index: request.params.param_index, normalized_value: parameterValues.get(request.params.param_index) });
+  if (capability === "fx.read_parameter") {
+    const normalizedValue = request.params.probe_normalized_value ?? parameterValues.get(request.params.param_index);
+    return output([FX_OBJECT], {
+      fx_ref: FX_REF,
+      param_index: request.params.param_index,
+      param_ident: request.params.param_index === 0 ? "threshold" : "ratio",
+      normalized_value: normalizedValue,
+      formatted_value: String(normalizedValue),
+      step_sizes_available: false,
+      step_size: null,
+      is_toggle: null,
+      is_discrete: false,
+    });
+  }
   return output([], {});
 }
 

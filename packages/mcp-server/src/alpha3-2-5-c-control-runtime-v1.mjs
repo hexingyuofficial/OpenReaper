@@ -21,10 +21,20 @@ import {
 import {
   ALPHA3_E1_STOCK_PLUGIN_MACRO_ID,
   ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+  ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
   ALPHA3_E1_STOCK_PLUGIN_SUMMARY_BUDGET,
   getAlpha3E1StockPluginMap,
   planAlpha3E1StockPluginMacro,
 } from "./alpha3-e1-stock-plugin-fluency-v1.mjs";
+import {
+  assertAlpha34CSemanticUnitsProven,
+  createAlpha34CExactParametersPublicResult,
+  createExactParametersRecoveryCall,
+  hydrateCompleteFxParameterInventory,
+  normalizeAlpha34CFxSetControlsInput,
+  resolveExactParameterTargets,
+  STOCK_SEMANTIC_UNIT_UNPROVEN,
+} from "./alpha3-4-c-fx-semantic-truth-v1.mjs";
 
 export const ALPHA3_2_5_C_CONTROL_RUNTIME_CONTRACT =
   "alpha3.2.5.c.control_runtime.v1";
@@ -54,6 +64,7 @@ const CONTROL_BATCH_MAX_ROWS = 8;
 const STOCK_INPUT_FIELDS = new Set([
   "plugin", "plugin_id", "plugin_name", "controls", "starter_action",
   "action_parameters", "control_overrides", "parameter_metadata", "selector", "dry_run",
+  "mode", "changes",
 ]);
 const CONTROL_TARGET_KINDS = ALPHA3_2_5_C_CONTROL_TARGET_KINDS;
 const SQLITE_IDENTITY_FIELDS = Object.freeze([
@@ -569,6 +580,7 @@ async function executeStockPluginControls({
   executeAtomic,
   projectIndexRuntime,
   catalog,
+  semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now = () => new Date(),
 } = {}) {
   const entry = ALPHA3_2_5_C_CONTROL_REGISTRY.get(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
@@ -579,6 +591,39 @@ async function executeStockPluginControls({
   const state = executionState();
   rememberInputObjectRefs(state, request.refs);
   const inputBlockers = validateInputFields(input, STOCK_INPUT_FIELDS, "STOCK_PLUGIN_INPUT_FIELD_UNSUPPORTED");
+  const normalizedMode = normalizeAlpha34CFxSetControlsInput(input);
+  if (!normalizedMode.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: normalizedMode.code,
+      message: normalizedMode.message,
+      blockers: [{ code: normalizedMode.code, message: normalizedMode.message, recoverable: true }],
+    });
+  }
+  if (inputBlockers.length > 0) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: inputBlockers[0].code,
+      message: inputBlockers[0].message,
+      blockers: inputBlockers,
+    });
+  }
+  if (normalizedMode.mode === "exact_parameters") {
+    return executeExactFxParameters({
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      catalog,
+      now,
+      entry,
+      startedAt,
+      stages,
+      state,
+      normalized: normalizedMode,
+    });
+  }
   const requestValidation = validateMacroProgramRequest({
     macro_id: request.id,
     input,
@@ -613,6 +658,40 @@ async function executeStockPluginControls({
       message: hardBlockers[0].message,
       blockers: hardBlockers,
     });
+  }
+  const wantedControls = preliminary.hydration_flow?.wanted_controls
+    ?? Object.keys(isPlainObject(input.controls) ? input.controls : {});
+  const pluginId = preliminary.plugin?.id ?? getAlpha3E1StockPluginMap(input.plugin ?? input.plugin_id ?? input.plugin_name)?.id ?? null;
+  if (pluginId && wantedControls.length > 0) {
+    const proof = semanticProofChecker(pluginId, wantedControls);
+    if (!proof.ok) {
+      const recovery = createExactParametersRecoveryCall({
+        plugin_id: pluginId,
+        unproven_controls: proof.unproven,
+        fx_ref: directRefs.fx_ref ?? null,
+      });
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: "blocked",
+        code: STOCK_SEMANTIC_UNIT_UNPROVEN,
+        message: proof.message,
+        blockers: [{
+          code: STOCK_SEMANTIC_UNIT_UNPROVEN,
+          message: proof.message,
+          recoverable: true,
+          details: {
+            plugin_id: pluginId,
+            unproven_controls: proof.unproven,
+            ...(recovery ? { recovery } : {}),
+          },
+        }],
+        data: {
+          mode: "semantic",
+          unproven_controls: proof.unproven,
+          ...(recovery ? { next_call: recovery } : {}),
+        },
+      });
+    }
   }
   if (typeof executeAtomic !== "function") {
     return failureEnvelope({
@@ -846,6 +925,465 @@ async function executeStockPluginControls({
   }
 }
 
+async function executeExactFxParameters({
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  catalog,
+  now,
+  entry,
+  startedAt,
+  stages,
+  state,
+  normalized,
+}) {
+  if (typeof executeAtomic !== "function") {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: "STOCK_PLUGIN_LIVE_EXECUTOR_UNAVAILABLE",
+      message: "macro.fx.set_controls exact_parameters needs the managed OpenReaper atomic route.",
+    });
+  }
+  const directRefs = normalizeNamedRefs(request.refs);
+  const selected = await resolveFxTarget({
+    refs: directRefs,
+    selector: normalized.selector ?? request.input?.selector,
+    plugin: null,
+    request,
+    executeAtomic,
+    projectIndexRuntime,
+    catalog,
+    now,
+    stages,
+    state,
+  });
+  if (!selected.ok) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: "blocked",
+      code: selected.blockers[0]?.code ?? "STOCK_PLUGIN_TARGET_BLOCKED",
+      message: selected.blockers[0]?.message ?? "The FX target could not be resolved for exact_parameters.",
+      blockers: selected.blockers,
+    });
+  }
+
+  try {
+    const inventory = await hydrateCompleteFxParameterInventory({
+      executeAtomic: async (childRequest) => {
+        const execution = await runAtomic({
+          executeAtomic,
+          request,
+          state,
+          child: {
+            id: childRequest.id,
+            input: childRequest.input,
+            refs: childRequest.refs,
+            budget: childRequest.budget,
+          },
+          idempotencyKey: childRequest.idempotency_key,
+        });
+        collectExecution(state, execution);
+        return execution;
+      },
+      request,
+      fxRef: selected.fxRef,
+      listTemplateId: LIST_FX_PARAMETERS_ID,
+      budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+    });
+    if (!inventory.ok) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: "blocked",
+        code: inventory.code,
+        message: inventory.message,
+        data: {
+          mode: "exact_parameters",
+          fx_ref: selected.fxRef,
+          rows_collected: inventory.rows_collected ?? null,
+        },
+      });
+    }
+    const resolved = resolveExactParameterTargets(normalized.changes, inventory.parameters);
+    if (!resolved.ok) {
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: "blocked",
+        code: resolved.code,
+        message: resolved.message,
+        data: {
+          mode: "exact_parameters",
+          fx_ref: selected.fxRef,
+          suggestions: resolved.suggestions ?? resolved.matches ?? [],
+          parameter_count: inventory.parameter_count,
+        },
+      });
+    }
+
+    const preparedChanges = [];
+    for (const change of resolved.resolved) {
+      const probeExecution = await runAtomic({
+        executeAtomic,
+        request,
+        state,
+        child: {
+          id: READ_FX_PARAMETER_ID,
+          input: {
+            param_index: change.param_index,
+            ...(change.param_ident ? { param_ident: change.param_ident } : {}),
+            probe_normalized_value: change.normalized_value,
+          },
+          refs: { fx_ref: selected.fxRef },
+          budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+        },
+      });
+      collectExecution(state, probeExecution);
+      const probe = executionReadback(probeExecution);
+      const probeIndexMatches = probe?.param_index === change.param_index;
+      const probeIdentMatches = !change.param_ident || probe?.param_ident === change.param_ident;
+      const probeNormalized = Number(probe?.normalized_value);
+      const probeFormatted = probe?.formatted_value;
+      if (!probeIndexMatches
+          || !probeIdentMatches
+          || !Number.isFinite(probeNormalized)
+          || Math.abs(probeNormalized - change.normalized_value) > 0.000001
+          || typeof probeFormatted !== "string"
+          || probeFormatted.length === 0) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state,
+          status: "blocked",
+          code: "FX_EXACT_PARAMETERS_PREFLIGHT_INVALID",
+          message: `Native preflight for exact parameter ${change.param_index} did not return matching identity and formatted target truth.`,
+          data: {
+            mode: "exact_parameters",
+            fx_ref: selected.fxRef,
+            change_id: change.id,
+            param_index: change.param_index,
+          },
+        });
+      }
+      if (typeof change.requested_formatted_value === "string"
+          && change.requested_formatted_value !== probeFormatted) {
+        return failureEnvelope({
+          entry, request, startedAt, now, stages, state,
+          status: "blocked",
+          code: "FX_EXACT_PARAMETERS_FORMATTED_TARGET_MISMATCH",
+          message: `changes[${change.id}] requested_formatted_value does not match REAPER native formatting for the requested normalized value.`,
+          data: {
+            mode: "exact_parameters",
+            fx_ref: selected.fxRef,
+            change_id: change.id,
+            param_index: change.param_index,
+            requested_formatted_value: change.requested_formatted_value,
+            native_formatted_value: probeFormatted,
+          },
+        });
+      }
+      preparedChanges.push({
+        ...change,
+        native_target_formatted_value: probeFormatted,
+        step_sizes_available: probe?.step_sizes_available ?? false,
+        step_size: probe?.step_size ?? null,
+        is_toggle: probe?.is_toggle ?? null,
+        is_discrete: probe?.is_discrete ?? null,
+      });
+    }
+    pushStage(
+      stages,
+      "stock-plugin-live-resolve",
+      "live_ref_resolve",
+      "completed",
+      `Hydrated all ${inventory.parameter_count} FX parameters across ${inventory.pages} page(s) and preflighted ${preparedChanges.length} native target value(s).`,
+      state.evidenceRefs,
+    );
+
+    if (normalized.dry_run) {
+      pushStage(stages, "stock-plugin-execute", "runtime_execute", "skipped", "exact_parameters dry_run skipped mutation.");
+      pushStage(stages, "stock-plugin-verify", "verify", "skipped", "exact_parameters dry_run skipped readback.");
+      pushStage(stages, "stock-plugin-index-update", "index_update", "skipped", "No FX index change during dry_run.");
+      pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected exact parameter targets without mutation.");
+      return successEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: "dry_run_completed",
+        summary: `Validated ${preparedChanges.length} exact FX parameter target(s) without mutation.`,
+        data: createAlpha34CExactParametersPublicResult({
+          fxRef: selected.fxRef,
+          inventory,
+          changes: preparedChanges,
+        }),
+      });
+    }
+
+    let failedAt = null;
+    let rowFailure = null;
+    for (let index = 0; index < preparedChanges.length; index += 1) {
+      const change = preparedChanges[index];
+      if (failedAt !== null) {
+        state.changes.push({
+          id: change.id,
+          template_id: SET_FX_PARAMETER_ID,
+          param_index: change.param_index,
+          normalized_value: change.normalized_value,
+          status: "not_run",
+          mutation: { status: "not_run" },
+          live_readback: { status: "not_run" },
+          index_maintenance: { status: "not_run" },
+        });
+        continue;
+      }
+      const writeChild = {
+        id: SET_FX_PARAMETER_ID,
+        input: {
+          param_index: change.param_index,
+          normalized_value: change.normalized_value,
+          ...(change.param_ident ? { param_ident: change.param_ident } : {}),
+        },
+        refs: { fx_ref: selected.fxRef },
+        budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+      };
+      let writeExecution;
+      try {
+        writeExecution = await runAtomic({
+          executeAtomic,
+          request,
+          state,
+          child: writeChild,
+          idempotencyKey: childIdempotencyKey(request.idempotency_key, index),
+        });
+        collectExecution(state, writeExecution);
+      } catch (error) {
+        failedAt = index;
+        rowFailure = error;
+        state.changes.push({
+          id: change.id,
+          template_id: SET_FX_PARAMETER_ID,
+          param_index: change.param_index,
+          normalized_value: change.normalized_value,
+          status: "failed",
+          mutation: {
+            status: "unknown",
+            dispatch_status: "attempted",
+            error_code: error.code ?? "MACRO_ATOMIC_STAGE_FAILED",
+            reason: "The managed write returned failure after dispatch; REAPER may have mutated before verification failed.",
+          },
+          live_readback: { status: "not_run" },
+          index_maintenance: { status: "not_run" },
+        });
+        continue;
+      }
+      const writeReadback = executionReadback(writeExecution);
+      const changeRow = {
+        id: change.id,
+        template_id: SET_FX_PARAMETER_ID,
+        param_index: change.param_index,
+        param_ident: change.param_ident ?? null,
+        name: change.name ?? null,
+        normalized_value: change.normalized_value,
+        status: "mutation_completed",
+        mutation: {
+          status: "completed",
+          dispatch_status: "completed",
+          native_verification_mode: writeReadback?.verification_mode ?? null,
+          native_target_formatted_value: change.native_target_formatted_value,
+        },
+        live_readback: { status: "pending" },
+        index_maintenance: { status: "pending" },
+      };
+      state.changes.push(changeRow);
+
+      const readChild = {
+        id: READ_FX_PARAMETER_ID,
+        input: {
+          param_index: change.param_index,
+          ...(change.param_ident ? { param_ident: change.param_ident } : {}),
+        },
+        refs: { fx_ref: selected.fxRef },
+        budget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+      };
+      let readExecution;
+      try {
+        readExecution = await runAtomic({ executeAtomic, request, state, child: readChild });
+        collectExecution(state, readExecution);
+      } catch (error) {
+        failedAt = index;
+        rowFailure = error;
+        changeRow.status = "failed";
+        changeRow.live_readback = {
+          status: "failed",
+          source: "live_parameter_readback",
+          error_code: error.code ?? "MACRO_ATOMIC_STAGE_FAILED",
+        };
+        continue;
+      }
+      const observed = executionReadback(readExecution);
+      const actual = Number(observed?.normalized_value);
+      const expected = change.normalized_value;
+      const nativeTolerance = Number(writeReadback?.tolerance);
+      const tolerance = Number.isFinite(nativeTolerance) && nativeTolerance >= 0 ? nativeTolerance : 0.001;
+      const identityOk = observed?.param_index === change.param_index
+        && (!change.param_ident || observed?.param_ident === change.param_ident)
+        && writeReadback?.param_index === change.param_index
+        && (!change.param_ident || writeReadback?.param_ident === change.param_ident)
+        && writeReadback?.updated === true;
+      const discrete = observed?.is_discrete === true
+        || change.is_discrete === true
+        || writeReadback?.is_discrete === true
+        || writeReadback?.verification_mode === "native_discrete_format";
+      const formattedOk = discrete
+        && change.native_target_formatted_value === (observed?.formatted_value ?? null);
+      const continuousOk = Number.isFinite(actual) && Number.isFinite(expected) && Math.abs(actual - expected) <= tolerance;
+      const valueOk = discrete ? formattedOk : continuousOk;
+      if (!identityOk || !valueOk) {
+        failedAt = index;
+        rowFailure = coded(
+          "FX_EXACT_PARAMETERS_READBACK_MISMATCH",
+          `Live readback for exact parameter ${change.param_index} did not match native identity/value truth.`,
+        );
+        changeRow.status = "failed";
+        changeRow.live_readback = {
+          status: "failed",
+          source: "live_parameter_readback",
+          requested_normalized_value: expected,
+          observed_normalized_value: Number.isFinite(actual) ? actual : null,
+          native_target_formatted_value: change.native_target_formatted_value,
+          observed_formatted_value: observed?.formatted_value ?? null,
+          identity_matched: identityOk,
+          tolerance,
+        };
+        continue;
+      }
+      changeRow.status = "applied";
+      changeRow.live_readback = {
+        status: "passed",
+        source: "live_parameter_readback",
+        requested_normalized_value: expected,
+        observed_normalized_value: actual,
+        native_target_formatted_value: change.native_target_formatted_value,
+        observed_formatted_value: observed?.formatted_value ?? null,
+        verification: formattedOk ? "native_formatted" : "normalized_tolerance",
+        tolerance,
+      };
+    }
+
+    if (failedAt !== null) {
+      for (let index = failedAt + 1; index < preparedChanges.length; index += 1) {
+        if (state.changes[index]) continue;
+        const change = preparedChanges[index];
+        state.changes.push({
+          id: change.id,
+          template_id: SET_FX_PARAMETER_ID,
+          param_index: change.param_index,
+          normalized_value: change.normalized_value,
+          status: "not_run",
+          mutation: { status: "not_run" },
+          live_readback: { status: "not_run" },
+          index_maintenance: { status: "not_run" },
+        });
+      }
+    }
+
+    const possiblyMutated = state.changes.some((change) => ["completed", "unknown"].includes(change.mutation?.status));
+    pushStage(
+      stages,
+      "stock-plugin-execute",
+      "runtime_execute",
+      failedAt === null ? "completed" : "failed",
+      failedAt === null ? "exact_parameters mutation phase completed." : "exact_parameters stopped on the first row mutation/readback failure.",
+      state.evidenceRefs,
+    );
+    pushStage(
+      stages,
+      "stock-plugin-verify",
+      "verify",
+      failedAt === null ? "completed" : "failed",
+      failedAt === null ? "Every exact parameter row passed independent live readback." : "At least one exact parameter row lacked matching live readback truth.",
+      state.evidenceRefs,
+    );
+    let invalidation = null;
+    if (possiblyMutated) {
+      invalidation = invalidateKnownScopes(projectIndexRuntime, ["fx"], now);
+      state.indexUpdate = invalidation;
+      applyIndexMaintenanceToChanges(
+        state.changes.filter((change) => ["completed", "unknown"].includes(change.mutation?.status)),
+        invalidation?.ok === false ? "failed" : (invalidation ? "completed" : "skipped"),
+        invalidation,
+      );
+      if (invalidation) state.sqlite = sqliteEvidence(projectIndexRuntime, { used: true, freshness: "stale" });
+      pushStage(
+        stages,
+        "stock-plugin-index-update",
+        "index_update",
+        invalidation?.ok === false ? "failed" : (invalidation ? "completed" : "skipped"),
+        invalidation ? "Invalidated FX Project Index scope once after mutation phase." : "No configured Project Index runtime required invalidation.",
+      );
+    } else {
+      pushStage(stages, "stock-plugin-index-update", "index_update", "skipped", "No mutation completed; FX index unchanged.");
+    }
+
+    const readbackRows = state.changes
+      .filter((change) => change.live_readback?.status === "passed")
+      .map((change) => ({
+        id: change.id,
+        param_index: change.param_index,
+        requested_normalized_value: change.normalized_value,
+        observed_normalized_value: change.live_readback.observed_normalized_value,
+        observed_formatted_value: change.live_readback.observed_formatted_value ?? null,
+      }));
+    pushStage(stages, "stock-plugin-result", "result_project", "completed", "Projected exact parameter highway result.");
+
+    if (failedAt !== null || invalidation?.ok === false) {
+      const indexFailed = invalidation?.ok === false;
+      return failureEnvelope({
+        entry, request, startedAt, now, stages, state,
+        status: possiblyMutated ? "partial_failure" : "failed",
+        code: indexFailed
+          ? (invalidation.blockers?.[0]?.code ?? "FX_EXACT_PARAMETERS_INDEX_INVALIDATION_FAILED")
+          : (rowFailure?.code ?? "FX_EXACT_PARAMETERS_PARTIAL_FAILURE"),
+        message: indexFailed
+          ? (invalidation.blockers?.[0]?.message ?? "FX writes completed but the Project Index FX scope could not be invalidated.")
+          : "exact_parameters stopped after a row-level mutation or live-readback failure; earlier verified truth is preserved.",
+        data: {
+          ...createAlpha34CExactParametersPublicResult({
+            fxRef: selected.fxRef,
+            inventory,
+            changes: preparedChanges,
+            readbackRows,
+          }),
+          index_update: compactObject(invalidation),
+          outcome: outcomeEvidence(state),
+        },
+      });
+    }
+
+    return successEnvelope({
+      entry, request, startedAt, now, stages, state,
+      summary: `Applied and verified ${readbackRows.length} exact FX parameter change(s).`,
+      data: {
+        ...createAlpha34CExactParametersPublicResult({
+          fxRef: selected.fxRef,
+          inventory,
+          changes: preparedChanges,
+          readbackRows,
+        }),
+        index_update: compactObject(invalidation),
+        outcome: outcomeEvidence(state),
+      },
+    });
+  } catch (error) {
+    return failureEnvelope({
+      entry, request, startedAt, now, stages, state,
+      status: state.changes.length > 0 ? "partial_failure" : "failed",
+      code: error.code ?? "FX_EXACT_PARAMETERS_FAILED",
+      message: error.message ?? "exact_parameters execution failed.",
+      blockers: error.blockers,
+      data: {
+        mode: "exact_parameters",
+        outcome: outcomeEvidence(state),
+      },
+    });
+  }
+}
+
 async function resolveControlTarget(options) {
   const targetKind = options.targetKind;
   if (!CONTROL_TARGET_KINDS.includes(targetKind)) {
@@ -929,7 +1467,7 @@ async function resolveFxTarget(options) {
       ...(options.plugin?.id && options.selector.plugin_id === undefined
         ? { plugin_id: options.plugin.id }
         : {}),
-      stock_plugin: true,
+      ...(options.plugin?.id ? { stock_plugin: true } : {}),
     };
     const query = await querySelector({
       entity: "fx",
@@ -1339,11 +1877,14 @@ function applyIndexMaintenanceToChanges(changes, status, invalidation) {
 function outcomeEvidence(state) {
   const changes = Array.isArray(state.changes) ? state.changes : [];
   const readbackPassed = changes.filter((change) => change.live_readback?.status === "passed").length;
+  const mutationCompleted = changes.filter((change) => change.mutation?.status === "completed").length;
+  const mutationUnknown = changes.filter((change) => change.mutation?.status === "unknown").length;
   const indexStatuses = unique(changes.map((change) => change.index_maintenance?.status).filter(Boolean), 8);
   return {
     mutation: {
-      status: changes.length > 0 ? "completed" : "not_run",
-      completed_count: changes.filter((change) => change.mutation?.status === "completed").length,
+      status: mutationUnknown > 0 ? (mutationCompleted > 0 ? "partial_unknown" : "unknown") : changes.length > 0 ? "completed" : "not_run",
+      completed_count: mutationCompleted,
+      unknown_count: mutationUnknown,
     },
     live_readback: {
       status: changes.length > 0 && readbackPassed === changes.length ? "passed" : readbackPassed > 0 ? "partial" : "not_passed",

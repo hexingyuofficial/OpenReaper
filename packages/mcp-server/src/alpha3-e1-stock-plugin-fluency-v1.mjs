@@ -563,8 +563,10 @@ function officialStockPluginMacroDiscoveryItem(maps, options = {}) {
     tags: [
       "macro",
       "stock_plugin",
+      "stock plugin controls",
       "fx",
       "semantic_control",
+      "exact_parameters",
       "alpha3_e1",
       "reaeq",
       "reacomp",
@@ -603,20 +605,7 @@ function officialStockPluginMacroDiscoveryItem(maps, options = {}) {
     risk_domain: "fx_parameter_control",
     plugin_ids: maps.plugins.map((pluginMap) => pluginMap.id),
     starter_action_ids: maps.starter_actions.map((action) => action.id),
-    inputSchema: {
-      type: "object",
-      required: [],
-      properties: {
-        plugin: { type: "string" },
-        controls: { type: "object", additionalProperties: true },
-        starter_action: { type: "string" },
-        action_parameters: { type: "object", additionalProperties: true },
-        control_overrides: { type: "object", additionalProperties: true },
-        selector: { type: "object", additionalProperties: true },
-        dry_run: { type: "boolean" },
-      },
-      additionalProperties: false,
-    },
+    inputSchema: stockPluginControlInputSchema(),
     outputSchema: {
       type: "object",
       required: ["contract", "ok", "macro", "execution", "result"],
@@ -1355,6 +1344,71 @@ function plugin(id, displayName, aliases, category, parameters) {
       no_baked_param_indexes: true,
     },
   });
+}
+
+function stockPluginControlInputSchema() {
+  const targetProperties = {
+    id: { type: "string", minLength: 1 },
+    param_index: { type: "integer", minimum: 0 },
+    param_ident: { type: "string", minLength: 1 },
+    param_name: { type: "string", minLength: 1 },
+    normalized_value: { type: "number", minimum: 0, maximum: 1 },
+    requested_formatted_value: { type: "string", minLength: 1 },
+  };
+  return {
+    type: "object",
+    required: [],
+    properties: {
+      mode: { enum: ["semantic", "exact_parameters"] },
+      plugin: { type: "string", minLength: 1 },
+      controls: { type: "object", additionalProperties: true },
+      starter_action: { type: "string", minLength: 1 },
+      action_parameters: { type: "object", additionalProperties: true },
+      control_overrides: { type: "object", additionalProperties: true },
+      selector: { type: "object", additionalProperties: true },
+      changes: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: "object",
+          required: ["normalized_value"],
+          properties: targetProperties,
+          additionalProperties: false,
+          oneOf: [
+            { required: ["param_index"] },
+            { required: ["param_ident"], not: { required: ["param_index"] } },
+            { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+          ],
+        },
+      },
+      dry_run: { type: "boolean" },
+    },
+    additionalProperties: false,
+    oneOf: [
+      {
+        properties: {
+          mode: { const: "semantic" },
+        },
+        not: { required: ["changes"] },
+      },
+      {
+        required: ["mode", "changes"],
+        properties: {
+          mode: { const: "exact_parameters" },
+        },
+        not: {
+          anyOf: [
+            { required: ["plugin"] },
+            { required: ["controls"] },
+            { required: ["starter_action"] },
+            { required: ["action_parameters"] },
+            { required: ["control_overrides"] },
+          ],
+        },
+      },
+    ],
+  };
 }
 
 function parameter(id, label, unit, min, max, mapping, aliases, readbackTemplate) {

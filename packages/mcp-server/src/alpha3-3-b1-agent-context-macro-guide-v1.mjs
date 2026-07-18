@@ -532,7 +532,39 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   }
   if (id === "macro.fx.set_controls") {
     canonical.action_manual.when_to_use = [
-      "Adjust accepted semantic controls on an existing supported FX; Alpha3.3-B1a evidence remains bounded to the accepted ReaComp mapping.",
+      "Prefer this Macro for FX parameter work: mode=semantic (default) for stock semantic controls only when native low/mid/high proof exists, or mode=exact_parameters for any plugin via exact param_index/name/ident.",
+      "exact_parameters is the general highway for ReaPlugs, third-party, and large parameter inventories; direct parameter Templates remain compatibility/debug fallback.",
+    ];
+    canonical.action_manual.when_not_to_use = [
+      "Do not invent semantic unit conversions without native proof; unproven semantic fields fail closed with STOCK_SEMANTIC_UNIT_UNPROVEN and an exact_parameters recovery call.",
+      "Do not guess fuzzy parameter names; exact_parameters requires param_index or one unique exact returned name/ident after complete inventory paging.",
+    ];
+    canonical.action_manual.input_shape = {
+      mode: "semantic | exact_parameters; defaults to semantic for compatibility.",
+      semantic: "plugin/controls/starter_action as before; executable only when each control has native low/mid/high proof.",
+      exact_parameters: "changes[] 1-8 rows with id, normalized_value in [0,1], and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
+      dry_run: "Boolean; preflight and inventory without mutation when true.",
+    };
+    canonical.action_manual.examples = [
+      {
+        name: "exact parameters dry_run",
+        input: {
+          mode: "exact_parameters",
+          selector: { plugin_id: "reacomp" },
+          dry_run: true,
+          changes: [{ id: "p0", param_index: 0, normalized_value: 0.5 }],
+        },
+      },
+      {
+        name: "semantic unproven recovery path",
+        input: {
+          mode: "semantic",
+          plugin: "reasynth",
+          controls: { attack_ms: 250 },
+          selector: { name: "Synth" },
+          dry_run: true,
+        },
+      },
     ];
   }
   if (id === "macro.controls.set") {
