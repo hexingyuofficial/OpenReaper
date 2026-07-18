@@ -60,7 +60,7 @@ test("Chinese/English broad wording routes fades to items.apply and expands lexi
 test("exact expansion attaches schema-derived first-try guide and query prerequisite for identity-bound Macros", () => {
   const runtime = createCallTemplateRuntime();
   const exact = runtime.list_templates({
-    ids: ["macro.automation.apply", "macro.midi.apply", "macro.routing.apply", "macro.items.apply"],
+    ids: ["macro.automation.apply", "macro.midi.apply", "macro.routing.apply", "macro.items.apply", "macro.fx.set_controls"],
     fields: ["id", "inputSchema", "examples"],
   });
   const byId = new Map(
@@ -79,6 +79,10 @@ test("exact expansion attaches schema-derived first-try guide and query prerequi
 
   const items = byId.get("macro.items.apply");
   assert.ok(items.first_try_execution_guide.accepted_modes.includes("apply_fades"));
+
+  const fx = byId.get("macro.fx.set_controls");
+  assert.equal(fx.first_try_execution_guide.identity_required ?? fx.first_try_execution_guide.selector_or_ref_requirements.identity_required, true);
+  assert.ok(fx.first_try_execution_guide.next_calls.some((call) => call.arguments?.id === "macro.project.query"));
 });
 
 test("all 15 manuals audit and every executable first-try call passes the current public runtime validation", async () => {

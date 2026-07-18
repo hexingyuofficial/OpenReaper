@@ -114,7 +114,7 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
     assert.equal(held.code, "MIDI_APPLY_MODE_UNSUPPORTED");
   });
 
-  it("executes the three canonical ids through the existing fixed programs with canonical envelope identity", async () => {
+  it("routes the three canonical ids through the existing fixed programs with canonical envelope identity", async () => {
     const runtime = createFacadeRuntime();
     const notes = [{ start_ppq: 0, end_ppq: 480, pitch: 60, velocity: 96, channel: 0 }];
 
@@ -140,9 +140,10 @@ describe("Alpha3.3-B1 Macro portfolio", () => {
       refs: { track_ref: TRACK_REF },
       context: context(2),
     });
-    assert.equal(applyChain.ok, true, JSON.stringify(applyChain));
+    assert.equal(applyChain.ok, false, JSON.stringify(applyChain));
     assert.equal(applyChain.macro.id, "macro.fx.apply_chain");
     assert.equal(applyChain.macro.program_id, "openreaper.macro.fx.apply_chain");
+    assert.equal(applyChain.error.code, "STOCK_SEMANTIC_UNIT_UNPROVEN");
 
     const setControls = await runtime.call_template({
       id: "macro.fx.set_controls",

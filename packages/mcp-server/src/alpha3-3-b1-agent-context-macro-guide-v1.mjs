@@ -565,18 +565,20 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
   }
   if (id === "macro.fx.set_controls") {
     canonical.action_manual.when_to_use = [
-      "Prefer this Macro for FX parameter work: mode=semantic (default) for stock semantic controls only when native low/mid/high proof exists, or mode=exact_parameters for any plugin via exact param_index/name/ident.",
-      "exact_parameters is the general highway for ReaPlugs, third-party, and large parameter inventories; direct parameter Templates remain compatibility/debug fallback.",
+      "Prefer this Macro for FX parameter work: mode=semantic (default) for stock semantic controls only when native low/mid/high proof exists; mode=exact_parameters for 1-8 parameters on one FX; mode=exact_assignments for 1-8 parameters across one or more exact fx_ref targets.",
+      "exact_parameters and exact_assignments are the general highways for ReaPlugs, third-party, and large parameter inventories; direct parameter Templates remain compatibility/debug fallback.",
     ];
     canonical.action_manual.when_not_to_use = [
       "Do not invent semantic unit conversions without native proof; unproven semantic fields fail closed with STOCK_SEMANTIC_UNIT_UNPROVEN and an exact_parameters recovery call.",
-      "Do not guess fuzzy parameter names; exact_parameters requires param_index or one unique exact returned name/ident after complete inventory paging.",
+      "Do not guess fuzzy parameter names; exact modes require param_index or one unique exact returned name/ident after complete inventory paging.",
+      "Do not mix selectors or legacy plugin/controls fields into exact_assignments; obtain exact fx_ref values first.",
     ];
     canonical.action_manual.input_shape = {
-      mode: "semantic | exact_parameters; defaults to semantic for compatibility.",
+      mode: "semantic | exact_parameters | exact_assignments; defaults to semantic for compatibility.",
       semantic: "plugin/controls/starter_action as before; executable only when each control has native low/mid/high proof.",
       exact_parameters: "changes[] 1-8 rows with id, normalized_value in [0,1], and param_index (optional param_ident) or one unique exact param_name/param_ident; selector or exact fx_ref required.",
-      dry_run: "Boolean; preflight and inventory without mutation when true.",
+      exact_assignments: "assignments[] 1-8 rows of {id,fx_ref,param_index|param_ident|param_name,normalized_value,requested_formatted_value?}. dry_run defaults true; set dry_run:false to mutate.",
+      dry_run: "Boolean; preflight and inventory without mutation when true. exact_assignments defaults true when omitted.",
     };
     canonical.action_manual.examples = [
       {
@@ -586,6 +588,17 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
           selector: { plugin_id: "reacomp" },
           dry_run: true,
           changes: [{ id: "p0", param_index: 0, normalized_value: 0.5 }],
+        },
+      },
+      {
+        name: "exact assignments multi-FX",
+        input: {
+          mode: "exact_assignments",
+          dry_run: false,
+          assignments: [
+            { id: "a1", fx_ref: "fx:track:guid:{TRACK-A}:0", param_index: 0, normalized_value: 0.4 },
+            { id: "a2", fx_ref: "fx:track:guid:{TRACK-B}:0", param_index: 1, normalized_value: 0.6 },
+          ],
         },
       },
       {

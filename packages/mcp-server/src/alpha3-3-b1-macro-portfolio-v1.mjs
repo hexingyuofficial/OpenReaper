@@ -189,7 +189,7 @@ export function canonicalizeAlpha3_3B1MacroDiscoveryItem(item, canonicalId) {
   } else if (canonicalId === "macro.fx.set_controls") {
     canonical.title = "Set supported FX controls";
     canonical.user_label = "Set FX controls";
-    canonical.summary = "Set FX controls via proven stock semantic mappings or generic exact_parameters with complete inventory paging and live readback.";
+    canonical.summary = "Set FX controls via proven stock semantic mappings, one-FX exact_parameters, or multi-FX exact_assignments with complete inventory paging and live readback.";
     canonical.macro_kind = "fx_set_controls";
   }
 

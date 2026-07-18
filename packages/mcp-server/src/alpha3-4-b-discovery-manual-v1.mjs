@@ -84,10 +84,10 @@ const MACRO_TARGET_FACTS = deepFreeze({
     notes: "Legacy single-node plugin=reacomp accepted; chain[] is canonical multi-node when used.",
   },
   "macro.fx.set_controls": {
-    required_targets: ["exact fx_ref or unambiguous selector", "semantic controls or exact_parameters changes[]"],
+    required_targets: ["exact fx_ref or unambiguous selector for semantic/exact_parameters; exact_assignments requires exact fx_ref rows"],
     preview_or_dry_run_mandatory: false,
     identity_required: true,
-    notes: "mode=semantic only when native proof exists; otherwise use mode=exact_parameters with complete parameter inventory paging.",
+    notes: "mode=semantic only when native proof exists; exact_parameters for one FX; exact_assignments for multi-FX exact rows; complete inventory paging before param_index/ident.",
   },
   "macro.controls.set": {
     required_targets: ["target_kind + fields, or changes[]"],

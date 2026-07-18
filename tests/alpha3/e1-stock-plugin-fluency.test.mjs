@@ -192,6 +192,8 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(entry.inputSchema.required.includes("plugin"), false);
     assert.equal(entry.inputSchema.required.includes("controls"), false);
     assert.equal(Object.hasOwn(entry.inputSchema.properties, "starter_action"), true);
+    assert.equal(entry.inputSchema.properties.mode.enum.includes("exact_assignments"), true);
+    assert.equal(entry.inputSchema.properties.assignments.items.properties.id.pattern, "^[A-Za-z0-9_-]{1,12}$");
     assert.equal(entry.starter_action_ids.includes("gentle_vocal_compression"), true);
     assert.equal(entry.task_intents.includes("monster voice"), true);
     assert.equal(entry.refs.input[0].name, "fx_ref");

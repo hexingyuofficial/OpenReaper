@@ -35,6 +35,10 @@ import {
   resolveExactParameterTargets,
   STOCK_SEMANTIC_UNIT_UNPROVEN,
 } from "./alpha3-4-c-fx-semantic-truth-v1.mjs";
+import {
+  executeExactAssignmentsBatch,
+  isExactAssignmentsMode,
+} from "./alpha3-4-d2-fx-batch-v1.mjs";
 
 export const ALPHA3_2_5_C_CONTROL_RUNTIME_CONTRACT =
   "alpha3.2.5.c.control_runtime.v1";
@@ -582,6 +586,7 @@ async function executeStockPluginControls({
   catalog,
   semanticProofChecker = assertAlpha34CSemanticUnitsProven,
   now = () => new Date(),
+  monoNow = () => performance.now(),
 } = {}) {
   const entry = ALPHA3_2_5_C_CONTROL_REGISTRY.get(ALPHA3_E1_STOCK_PLUGIN_MACRO_ID);
   const startedAt = safeNowIso(now);
@@ -590,6 +595,21 @@ async function executeStockPluginControls({
   const stages = [];
   const state = executionState();
   rememberInputObjectRefs(state, request.refs);
+  if (isExactAssignmentsMode(input)) {
+    return executeExactAssignmentsBatch({
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      entry,
+      startedAt,
+      stages,
+      state,
+      listBudget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_LIST_BUDGET,
+      readBudget: ALPHA3_E1_STOCK_PLUGIN_PARAMETER_READBACK_BUDGET,
+    });
+  }
   const inputBlockers = validateInputFields(input, STOCK_INPUT_FIELDS, "STOCK_PLUGIN_INPUT_FIELD_UNSUPPORTED");
   const normalizedMode = normalizeAlpha34CFxSetControlsInput(input);
   if (!normalizedMode.ok) {

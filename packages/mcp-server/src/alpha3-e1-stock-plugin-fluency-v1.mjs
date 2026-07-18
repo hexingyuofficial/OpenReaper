@@ -1355,11 +1355,20 @@ function stockPluginControlInputSchema() {
     normalized_value: { type: "number", minimum: 0, maximum: 1 },
     requested_formatted_value: { type: "string", minLength: 1 },
   };
+  const assignmentProperties = {
+    id: { type: "string", minLength: 1, maxLength: 12, pattern: "^[A-Za-z0-9_-]{1,12}$" },
+    fx_ref: { type: "string", minLength: 1 },
+    param_index: { type: "integer", minimum: 0 },
+    param_ident: { type: "string", minLength: 1 },
+    param_name: { type: "string", minLength: 1 },
+    normalized_value: { type: "number", minimum: 0, maximum: 1 },
+    requested_formatted_value: { type: "string", minLength: 1 },
+  };
   return {
     type: "object",
     required: [],
     properties: {
-      mode: { enum: ["semantic", "exact_parameters"] },
+      mode: { enum: ["semantic", "exact_parameters", "exact_assignments"] },
       plugin: { type: "string", minLength: 1 },
       controls: { type: "object", additionalProperties: true },
       starter_action: { type: "string", minLength: 1 },
@@ -1382,6 +1391,22 @@ function stockPluginControlInputSchema() {
           ],
         },
       },
+      assignments: {
+        type: "array",
+        minItems: 1,
+        maxItems: 8,
+        items: {
+          type: "object",
+          required: ["id", "fx_ref", "normalized_value"],
+          properties: assignmentProperties,
+          additionalProperties: false,
+          oneOf: [
+            { required: ["param_index"] },
+            { required: ["param_ident"], not: { required: ["param_index"] } },
+            { required: ["param_name"], not: { anyOf: [{ required: ["param_index"] }, { required: ["param_ident"] }] } },
+          ],
+        },
+      },
       dry_run: { type: "boolean" },
     },
     additionalProperties: false,
@@ -1390,22 +1415,50 @@ function stockPluginControlInputSchema() {
         properties: {
           mode: { const: "semantic" },
         },
-        not: { required: ["changes"] },
-      },
-      {
-        required: ["mode", "changes"],
-        properties: {
-          mode: { const: "exact_parameters" },
-        },
         not: {
           anyOf: [
-            { required: ["plugin"] },
-            { required: ["controls"] },
-            { required: ["starter_action"] },
-            { required: ["action_parameters"] },
-            { required: ["control_overrides"] },
+            { required: ["changes"] },
+            { required: ["assignments"] },
           ],
         },
+      },
+      {
+        // Keep oneOf length 2 for compatibility while exposing exact_parameters and exact_assignments.
+        anyOf: [
+          {
+            required: ["mode", "changes"],
+            properties: {
+              mode: { const: "exact_parameters" },
+            },
+            not: {
+              anyOf: [
+                { required: ["plugin"] },
+                { required: ["controls"] },
+                { required: ["starter_action"] },
+                { required: ["action_parameters"] },
+                { required: ["control_overrides"] },
+                { required: ["assignments"] },
+              ],
+            },
+          },
+          {
+            required: ["mode", "assignments"],
+            properties: {
+              mode: { const: "exact_assignments" },
+            },
+            not: {
+              anyOf: [
+                { required: ["plugin"] },
+                { required: ["controls"] },
+                { required: ["starter_action"] },
+                { required: ["action_parameters"] },
+                { required: ["control_overrides"] },
+                { required: ["selector"] },
+                { required: ["changes"] },
+              ],
+            },
+          },
+        ],
       },
     ],
   };
