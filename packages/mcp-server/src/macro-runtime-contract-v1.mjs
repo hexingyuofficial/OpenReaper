@@ -278,7 +278,10 @@ export function validateMacroExecutionEnvelope(envelope) {
   } else {
     requireCondition(["blocked", "failed", "partial_failure"].includes(status), "failed Macro execution has an invalid status", errors);
   }
-  if (dryRun === true) requireCondition(status === "dry_run_completed", "dry_run execution must use dry_run_completed status", errors);
+  // Successful dry-run must use dry_run_completed. Failed dry-run retains blocked/failed/partial_failure.
+  if (dryRun === true && envelope.ok === true) {
+    requireCondition(status === "dry_run_completed", "successful dry_run execution must use dry_run_completed status", errors);
+  }
   if (dryRun === false) requireCondition(status !== "dry_run_completed", "non-dry-run execution cannot use dry_run_completed status", errors);
 
   validateSerializedBudget(envelope, errors);

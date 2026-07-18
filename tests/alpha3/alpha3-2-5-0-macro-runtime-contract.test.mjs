@@ -185,6 +185,39 @@ describe("Alpha3.2.5-0 Macro runtime contract", () => {
     assert.equal(validateMacroExecutionEnvelope(invalidData).valid, false);
   });
 
+  it("allows failed dry-run envelopes to keep request.dry_run=true with blocked/failed/partial_failure", () => {
+    for (const status of ["blocked", "failed", "partial_failure"]) {
+      const envelope = failedDryRunEnvelope(status);
+      assert.equal(envelope.request.dry_run, true);
+      assert.equal(envelope.ok, false);
+      assert.equal(envelope.execution.status, status);
+      assert.equal(envelope.error !== null, true);
+      assert.equal(Array.isArray(envelope.blockers) && envelope.blockers.length >= 1, true);
+      stabilizeBudget(envelope);
+      assert.deepEqual(validateMacroExecutionEnvelope(envelope), { valid: true, errors: [] }, status);
+    }
+  });
+
+  it("rejects successful dry-run without dry_run_completed and non-dry-run with dry_run_completed", () => {
+    const successfulDryCompleted = structuredClone(successfulEnvelope());
+    successfulDryCompleted.request.dry_run = true;
+    successfulDryCompleted.execution.status = "completed";
+    stabilizeBudget(successfulDryCompleted);
+    assert.equal(validateMacroExecutionEnvelope(successfulDryCompleted).valid, false);
+
+    const successfulDryOk = structuredClone(successfulEnvelope());
+    successfulDryOk.request.dry_run = true;
+    successfulDryOk.execution.status = "dry_run_completed";
+    stabilizeBudget(successfulDryOk);
+    assert.deepEqual(validateMacroExecutionEnvelope(successfulDryOk), { valid: true, errors: [] });
+
+    const nonDryWithDryStatus = structuredClone(successfulEnvelope());
+    nonDryWithDryStatus.request.dry_run = false;
+    nonDryWithDryStatus.execution.status = "dry_run_completed";
+    stabilizeBudget(nonDryWithDryStatus);
+    assert.equal(validateMacroExecutionEnvelope(nonDryWithDryStatus).valid, false);
+  });
+
   it("keeps the architecture boundary explicit in the approved ABI documents", async () => {
     const [macroAbi, foundation, layout, ratchet] = await Promise.all([
       readFile(new URL("../../docs/abi/MACRO_RUNTIME_CONTRACT_V1.md", import.meta.url), "utf8"),
@@ -292,6 +325,89 @@ function successfulEnvelope() {
     budget: {
       max_bytes: 65_536,
       actual_bytes: 2_048,
+      truncated: false,
+      artifact_fallback: false,
+    },
+  };
+}
+
+function stabilizeBudget(envelope) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function failedDryRunEnvelope(status) {
+  return {
+    contract: "macro.execution.v1",
+    ok: false,
+    macro: {
+      id: "macro.controls.set",
+      program_id: "openreaper.macro.controls.set",
+      program_version: "1.0.0",
+      risk: "write",
+    },
+    request: {
+      request_id: `request-dry-fail-${status}`,
+      dry_run: true,
+    },
+    execution: {
+      status,
+      started_at: "2026-07-12T00:00:00.000Z",
+      completed_at: "2026-07-12T00:00:01.000Z",
+      stage_count: 1,
+      stages: [
+        {
+          id: "resolve-track",
+          kind: "live_ref_resolve",
+          status: status === "partial_failure" ? "completed" : "failed",
+          evidence_refs: [],
+        },
+      ],
+    },
+    sqlite: {
+      used: false,
+      source: "not_used",
+      freshness: "not_applicable",
+      snapshot_ref: null,
+      revision: null,
+      refreshed: false,
+    },
+    result: {
+      summary: `Dry-run ${status} with typed preflight truth.`,
+      canonical_refs: [],
+      changes: status === "partial_failure"
+        ? [{ kind: "track.volume", status: "planned" }]
+        : [],
+      verification: {
+        status: status === "partial_failure" ? "failed" : "not_required",
+        evidence_refs: [],
+      },
+      artifact_refs: [],
+      data: {
+        dry_run: true,
+        status,
+      },
+    },
+    blockers: [{
+      code: "DRY_RUN_PREFLIGHT_BLOCKED",
+      message: `Truthful dry-run ${status} retained request.dry_run=true.`,
+      recoverable: true,
+    }],
+    error: {
+      code: "DRY_RUN_PREFLIGHT_BLOCKED",
+      message: `Truthful dry-run ${status} retained request.dry_run=true.`,
+      recoverable: true,
+    },
+    recovery: {
+      partial_changes_possible: status === "partial_failure",
+      undo_policy: "single_undo",
+      action: "Fix the typed dry-run blocker and retry.",
+    },
+    budget: {
+      max_bytes: 65_536,
+      actual_bytes: 0,
       truncated: false,
       artifact_fallback: false,
     },
