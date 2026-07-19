@@ -72,6 +72,7 @@
     "check:alpha3-4-d1-items-batch": "node --test tests/alpha3/alpha3-4-d1-items-batch.test.mjs tests/alpha3/alpha3-4-d1-items-batch-live-harness.test.mjs",
     "check:alpha3-4-d2-fx-batch": "node --test tests/alpha3/alpha3-4-d2-fx-batch.test.mjs tests/alpha3/alpha3-4-d2-fx-batch-live-harness.test.mjs",
     "check:alpha3-4-d3-project-switching-atoms": "node --test tests/layer4dx/alpha3-4-d3-project-switching-native-atoms.test.mjs tests/template-packs/wave1a-project-templates.test.mjs tests/layer4dr/bridge-handler-registry.test.mjs",
+    "check:alpha3-4-d3-bridge-continuation": "node --test tests/layer4d2/openreaper-live-bridge.test.mjs tests/layer4dx/alpha3-4-d3-project-switching-native-atoms.test.mjs tests/layer4dx/alpha3-3-subproject-sysex-truth.test.mjs",
     "check:alpha3-4-d3-project-file-highway": "node --test tests/alpha3/alpha3-4-d3-project-switching-macro.test.mjs tests/alpha3/alpha3-4-d3-project-switching-live-harness.test.mjs tests/alpha3/alpha3-2c3d-project-file-macro.test.mjs"
   },
   "devDependencies": {

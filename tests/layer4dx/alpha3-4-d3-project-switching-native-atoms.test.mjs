@@ -220,11 +220,17 @@ function install_project_tab_fake(config)
     end
     error("unexpected action " .. tostring(action))
   end
+  pending_select = nil
   reaper.SelectProjectInstance = function(project)
     calls.select_project = calls.select_project + 1
-    if not config.select_project_noop then
-      current_project = project
+    if config.select_project_noop then
+      return
     end
+    if config.select_project_deferred then
+      pending_select = project
+      return
+    end
+    current_project = project
   end
   reaper.Main_openProject = function(arg)
     calls.open_project = calls.open_project + 1
@@ -244,6 +250,29 @@ function install_project_tab_fake(config)
   reaper.SetProjExtState = function()
     error("ledger writes must not replace native tab materialization")
   end
+end
+
+function apply_pending_select()
+  if pending_select then
+    current_project = pending_select
+    pending_select = nil
+  end
+end
+
+function run_with_continuation(handler, request)
+  local cont = nil
+  for _ = 1, 12 do
+    if cont then
+      apply_pending_select()
+    end
+    local summary, failure, artifacts, jobs, refs = handler(request, cont)
+    if type(summary) == "table" and summary.contract == "openreaper.bridge.internal_continuation.v1" then
+      cont = summary
+    else
+      return summary, failure, artifacts, jobs, refs
+    end
+  end
+  error("handler continuation did not reach a terminal result")
 end
 `;
 
@@ -285,6 +314,21 @@ describe("Alpha3.4-D3 native project-switching atoms", () => {
     assert.match(HANDLER_SOURCE, /Main_openProject/);
     assert.match(HANDLER_SOURCE, /D30_NEW_PROJECT_TAB_ACTION = 41929/);
     assert.match(HANDLER_SOURCE, /live_materialization = "native_project_tab_verified"/);
+    assert.match(HANDLER_SOURCE, /openreaper\.bridge\.internal_continuation\.v1/);
+    assert.match(HANDLER_SOURCE, /d30_project_continue/);
+    assert.match(HANDLER_SOURCE, /create_project_tab\.mutate_create/);
+    assert.match(HANDLER_SOURCE, /create_project_tab\.verify_created/);
+    assert.match(HANDLER_SOURCE, /create_project_tab\.verify_selection/);
+    assert.match(HANDLER_SOURCE, /open_project_in_tab\.mutate_create/);
+    assert.match(HANDLER_SOURCE, /open_project_in_tab\.verify_created/);
+    assert.match(HANDLER_SOURCE, /open_project_in_tab\.verify_blank_selection/);
+    assert.match(HANDLER_SOURCE, /open_project_in_tab\.open_into_active/);
+    assert.match(HANDLER_SOURCE, /activate_project_tab\.mutate_select/);
+    assert.match(HANDLER_SOURCE, /activate_project_tab\.verify_selection/);
+    assert.match(HANDLER_SOURCE, /next_phase_may_mutate/);
+    assert.doesNotMatch(HANDLER_SOURCE, /D30_NEXT_PROJECT_TAB_ACTION\s*=\s*40861/);
+    assert.doesNotMatch(HANDLER_SOURCE, /Main_OnCommandEx\",\s*D30_NEXT_PROJECT_TAB_ACTION/);
+    assert.doesNotMatch(HANDLER_SOURCE, /Main_OnCommandEx\",\s*40861/);
     assert.doesNotMatch(HANDLER_SOURCE, /materialization = "ledger_only_waiting_fixture"/);
     assert.doesNotMatch(HANDLER_SOURCE, /\bSWS\b/);
   });
@@ -389,8 +433,8 @@ assert(dup.details.zero_write == true and calls.actions[41929] == nil)
 
   it("creates a real blank tab with exact identity and fails closed on zero/two added tabs", () => {
     runLua(String.raw`
-install_project_tab_fake({ only_parent = true, dirty_a = 2 })
-local created, failure = create_project_tab(project_request("project.create_project_tab", { name = "sound design", activate = true }, {}))
+      install_project_tab_fake({ only_parent = true, dirty_a = 2 })
+local created, failure = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = "sound design", activate = true }, {}))
 assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker) .. ":" .. tostring(failure.message)))
 assert(created.created == true, "created flag")
 assert(created.live_materialization == "native_project_tab_verified", tostring(created.live_materialization))
@@ -400,25 +444,25 @@ assert(calls.actions[41929] == 1 and #projects == 2 and current_project ~= saved
 assert(saved_a.dirty == 2)
 
 install_project_tab_fake({ only_parent = true, ambiguous_new_tabs = true })
-local _, amb = create_project_tab(project_request("project.create_project_tab", { name = "x" }, {}))
+local _, amb = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = "x" }, {}))
 assert(amb ~= nil, "ambiguous failure missing")
 assert(amb.details.blocker == "new_project_tab_identity_ambiguous", tostring(amb.details and amb.details.blocker))
 assert(amb.details.added_project_count == 2, tostring(amb.details.added_project_count))
 assert(amb.details.partial_state ~= nil)
 
 install_project_tab_fake({ only_parent = true, zero_new_tabs = true })
-local _, zero = create_project_tab(project_request("project.create_project_tab", { name = "x" }, {}))
+local _, zero = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = "x" }, {}))
 assert(zero ~= nil, "zero failure missing")
 assert(zero.details.blocker == "new_project_tab_identity_ambiguous", tostring(zero.details and zero.details.blocker))
 assert(zero.details.added_project_count == 0, tostring(zero.details and zero.details.added_project_count))
 
 install_project_tab_fake({ only_parent = true, replace_old_tab = true })
-local _, replaced = create_project_tab(project_request("project.create_project_tab", { name = "x" }, {}))
+local _, replaced = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = "x" }, {}))
 assert(replaced ~= nil and replaced.details.blocker == "project_tab_prior_instance_missing", tostring(replaced and replaced.details and replaced.details.blocker))
 
 install_project_tab_fake({ only_parent = true, open_target_path = "/session/Child.RPP", replace_old_tab = true })
 files["/session/Child.RPP"] = true
-local _, open_replaced = open_project_in_tab(project_request("project.open_project_in_tab", { path = "/session/Child.RPP" }, {}))
+local _, open_replaced = run_with_continuation(open_project_in_tab, project_request("project.open_project_in_tab", { path = "/session/Child.RPP" }, {}))
 assert(open_replaced ~= nil and open_replaced.details.blocker == "project_tab_prior_instance_missing")
 
 install_project_tab_fake({ only_parent = true })
@@ -431,7 +475,7 @@ assert(calls.actions[41929] == nil)
 
 install_project_tab_fake({ only_parent = true })
 local long_cn = string.rep("工程标签名称", 40)
-local labeled, label_err = create_project_tab(project_request("project.create_project_tab", { name = long_cn, activate = true }, {}))
+local labeled, label_err = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = long_cn, activate = true }, {}))
 assert(label_err == nil, label_err and label_err.code)
 assert(labeled.openreaper_label ~= nil and #labeled.openreaper_label <= 160)
 assert(labeled.title_claim == "openreaper_label_only")
@@ -444,7 +488,7 @@ assert(type(encoded) == "string" and #encoded > 0)
     runLua(String.raw`
 local target = "/session/项目/demo 声音.RPP"
 install_project_tab_fake({ only_parent = true, dirty_a = 4, open_target_path = target })
-local opened, failure = open_project_in_tab(project_request("project.open_project_in_tab", { path = target }, {}))
+local opened, failure = run_with_continuation(open_project_in_tab, project_request("project.open_project_in_tab", { path = target }, {}))
 assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker)))
 assert(opened.opened == true and opened.project_ref == "project:path:" .. target)
 assert(opened.prior_project_remains_open == true and opened.prior_dirty_unchanged == true)
@@ -462,7 +506,7 @@ assert(already ~= nil and already.details.blocker == "PROJECT_ALREADY_OPEN")
 assert(already.details.zero_write == true and calls.actions[41929] == nil and calls.open_project == 0)
 
 install_project_tab_fake({ only_parent = true, dirty_a = 7, open_target_path = target, open_failure = true })
-local _, open_fail = open_project_in_tab(project_request("project.open_project_in_tab", { path = target }, {}))
+local _, open_fail = run_with_continuation(open_project_in_tab, project_request("project.open_project_in_tab", { path = target }, {}))
 assert(open_fail ~= nil and open_fail.details.blocker == "main_open_project_failed")
 assert(open_fail.details.partial_state == "blank_tab_may_remain")
 assert(open_fail.details.rollback_claimed == false)
@@ -471,7 +515,7 @@ assert(current_project == saved_a and saved_a.dirty == 7)
 `);
   });
 
-  it("activates exact saved and unsaved refs, supports already-active and next-tab fallback", () => {
+  it("activates exact saved and unsaved refs, supports already-active and deferred post-yield select", () => {
     runLua(String.raw`
 install_project_tab_fake({ two_saved_one_unsaved = true, dirty_a = 1, dirty_b = 2 })
 local listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
@@ -480,7 +524,7 @@ local unsaved_ref = listed.projects[3].project_ref
 assert(saved_ref == "project:path:/session/Other.RPP")
 assert(unsaved_ref:match("^project:tab:") ~= nil)
 
-local activated, failure = activate_project_tab(project_request("project.activate_project_tab", {}, {
+local activated, failure = run_with_continuation(activate_project_tab, project_request("project.activate_project_tab", {}, {
   { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
 }, "safe"))
 assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker)))
@@ -494,20 +538,77 @@ local again, again_failure = activate_project_tab(project_request("project.activ
 assert(again_failure == nil and again.already_active == true and again.selection_mode == "already_active")
 assert(calls.select_project >= 1)
 
-local tab_act, tab_failure = activate_project_tab(project_request("project.activate_project_tab", { project_ref = unsaved_ref }, {}, "safe"))
+local tab_act, tab_failure = run_with_continuation(activate_project_tab, project_request("project.activate_project_tab", { project_ref = unsaved_ref }, {}, "safe"))
 assert(tab_failure == nil, tab_failure and (tab_failure.code .. ":" .. tostring(tab_failure.details and tab_failure.details.blocker)))
 assert(tab_act.activated == true and current_project == unsaved)
 
-install_project_tab_fake({ two_saved_one_unsaved = true, select_project_noop = true })
+install_project_tab_fake({ two_saved_one_unsaved = true, select_project_deferred = true, dirty_a = 1, dirty_b = 2 })
 listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
 saved_ref = listed.projects[2].project_ref
-local fallback, fallback_failure = activate_project_tab(project_request("project.activate_project_tab", {}, {
+local req = project_request("project.activate_project_tab", {}, {
   { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
-}, "safe"))
-assert(fallback_failure == nil, fallback_failure and (fallback_failure.code .. ":" .. tostring(fallback_failure.details and fallback_failure.details.blocker)))
-assert(fallback.selection_mode == "next_project_tab_action")
-assert(calls.actions[40861] ~= nil and calls.actions[40861] >= 1)
+}, "safe")
+local pre = activate_project_tab(req)
+assert(pre.phase == "activate_project_tab.mutate_select" and pre.next_phase_may_mutate == true)
+assert(calls.select_project == 0)
+local first = activate_project_tab(req, pre)
+assert(type(first) == "table" and first.contract == "openreaper.bridge.internal_continuation.v1")
+assert(first.phase == "activate_project_tab.verify_selection")
+assert(first.next_phase_may_mutate == false)
+assert(calls.select_project == 1)
+assert(current_project == saved_a)
+apply_pending_select()
+local deferred, deferred_failure = activate_project_tab(req, first)
+assert(deferred_failure == nil, deferred_failure and deferred_failure.code)
+assert(deferred.activated == true and deferred.selection_mode == "select_scheduled")
 assert(current_project == saved_b)
+assert(calls.select_project == 1)
+assert(calls.actions[40861] == nil)
+
+-- Immediate SelectProjectInstance application still requires a later verify tick.
+install_project_tab_fake({ two_saved_one_unsaved = true, dirty_a = 1, dirty_b = 2 })
+listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
+saved_ref = listed.projects[2].project_ref
+req = project_request("project.activate_project_tab", {}, {
+  { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
+}, "safe")
+local pre2 = activate_project_tab(req)
+local immediate = activate_project_tab(req, pre2)
+assert(type(immediate) == "table" and immediate.contract == "openreaper.bridge.internal_continuation.v1")
+assert(immediate.phase == "activate_project_tab.verify_selection")
+assert(current_project == saved_b)
+assert(calls.select_project == 1)
+local finished, finished_failure = activate_project_tab(req, immediate)
+assert(finished_failure == nil and finished.activated == true)
+assert(calls.select_project == 1)
+
+-- create: preflight zero-write, mutate create once, verify on later tick.
+install_project_tab_fake({ only_parent = true, dirty_a = 2 })
+local create_req = project_request("project.create_project_tab", { name = "phase", activate = true }, {})
+local c0 = create_project_tab(create_req)
+assert(c0.phase == "create_project_tab.mutate_create" and c0.next_phase_may_mutate == true)
+assert(calls.actions[41929] == nil)
+local c1 = create_project_tab(create_req, c0)
+assert(c1.phase == "create_project_tab.verify_created" and c1.next_phase_may_mutate == false)
+assert(calls.actions[41929] == 1 and calls.select_project == 0)
+local c2, c2_fail = create_project_tab(create_req, c1)
+assert(c2_fail == nil and c2.created == true)
+assert(calls.actions[41929] == 1 and calls.select_project == 0)
+
+-- create with inactive new tab: select once after create verify, then post-yield verify.
+install_project_tab_fake({ only_parent = true, dirty_a = 2, inactive_new_tab = true, select_project_deferred = true })
+create_req = project_request("project.create_project_tab", { name = "phase2", activate = true }, {})
+c0 = create_project_tab(create_req)
+c1 = create_project_tab(create_req, c0)
+assert(c1.phase == "create_project_tab.verify_created")
+local c1b = create_project_tab(create_req, c1)
+assert(c1b.phase == "create_project_tab.mutate_select" and c1b.next_phase_may_mutate == true)
+local c2b = create_project_tab(create_req, c1b)
+assert(c2b.phase == "create_project_tab.verify_selection" and c2b.next_phase_may_mutate == false)
+assert(calls.select_project == 1)
+apply_pending_select()
+local c3, c3_fail = create_project_tab(create_req, c2b)
+assert(c3_fail == nil and c3.created == true and calls.select_project == 1)
 `);
   });
 
@@ -549,6 +650,85 @@ local _, dirty_fail = list_open_projects(project_request("project.list_open_proj
 assert(dirty_fail ~= nil)
 
 assert(calls.sws == 0)
+`);
+  });
+
+  it("open failure after mutation restores prior only after a verified later tick", () => {
+    runLua(String.raw`
+local target = "/session/项目/demo 声音.RPP"
+install_project_tab_fake({ only_parent = true, dirty_a = 7, open_target_path = target, open_failure = true, select_project_deferred = true })
+local req = project_request("project.open_project_in_tab", { path = target }, {})
+local p0 = open_project_in_tab(req)
+assert(p0.phase == "open_project_in_tab.mutate_create" and p0.next_phase_may_mutate == true)
+assert(calls.actions[41929] == nil)
+local p1 = open_project_in_tab(req, p0)
+assert(p1.phase == "open_project_in_tab.verify_created" and p1.next_phase_may_mutate == false)
+assert(calls.actions[41929] == 1 and calls.open_project == 0)
+local p2 = open_project_in_tab(req, p1)
+assert(p2.phase == "open_project_in_tab.mutate_select" or p2.phase == "open_project_in_tab.open_into_active" or p2.phase == "open_project_in_tab.verify_blank_selection")
+if p2.phase == "open_project_in_tab.mutate_select" then
+  p2 = open_project_in_tab(req, p2)
+end
+if p2.phase == "open_project_in_tab.verify_blank_selection" then
+  apply_pending_select()
+  p2 = open_project_in_tab(req, p2)
+end
+assert(p2.phase == "open_project_in_tab.open_into_active" and p2.next_phase_may_mutate == true)
+local p3 = open_project_in_tab(req, p2)
+assert(p3.phase == "open_project_in_tab.schedule_restore_after_fail" and p3.next_phase_may_mutate == false)
+assert(calls.open_project == 1)
+local p4 = open_project_in_tab(req, p3)
+assert(p4.phase == "open_project_in_tab.mutate_restore_after_fail" and p4.next_phase_may_mutate == true)
+local p5 = open_project_in_tab(req, p4)
+assert(p5.phase == "open_project_in_tab.verify_restore_after_fail" and p5.next_phase_may_mutate == false)
+apply_pending_select()
+local _, fail = open_project_in_tab(req, p5)
+assert(fail ~= nil and fail.details.blocker == "main_open_project_failed")
+assert(fail.details.prior_project_restored == true)
+assert(current_project == saved_a and saved_a.dirty == 7)
+`);
+  });
+
+  it("keeps create/open mutation at-most-once and never identifies new tabs on the 41929 tick", () => {
+    runLua(String.raw`
+install_project_tab_fake({ only_parent = true, dirty_a = 2 })
+local req = project_request("project.create_project_tab", { name = "once", activate = true }, {})
+local p0 = create_project_tab(req)
+assert(p0.phase == "create_project_tab.mutate_create")
+assert(p0.next_phase_may_mutate == true)
+assert(calls.actions[41929] == nil)
+local p1 = create_project_tab(req, p0)
+assert(p1.phase == "create_project_tab.verify_created")
+assert(calls.actions[41929] == 1)
+assert(p1.state.projects_before ~= nil)
+assert(p1.state.added_project == nil)
+local p2 = create_project_tab(req, p1)
+assert(p2.created == true)
+assert(calls.actions[41929] == 1)
+
+install_project_tab_fake({ only_parent = true, dirty_a = 3, open_target_path = "/session/Child.RPP" })
+files["/session/Child.RPP"] = true
+local oreq = project_request("project.open_project_in_tab", { path = "/session/Child.RPP" }, {})
+local o0 = open_project_in_tab(oreq)
+assert(o0.phase == "open_project_in_tab.mutate_create" and calls.actions[41929] == nil)
+local o1 = open_project_in_tab(oreq, o0)
+assert(o1.phase == "open_project_in_tab.verify_created" and calls.actions[41929] == 1)
+assert(o1.state.blank_project == nil and o1.state.projects_before ~= nil)
+local cont = o1
+local opened = nil
+for _ = 1, 12 do
+  apply_pending_select()
+  local summary, failure = open_project_in_tab(oreq, cont)
+  if type(summary) == "table" and summary.contract == "openreaper.bridge.internal_continuation.v1" then
+    cont = summary
+  else
+    opened = summary
+    assert(failure == nil, failure and failure.code)
+    break
+  end
+end
+assert(opened ~= nil and opened.opened == true)
+assert(calls.actions[41929] == 1 and calls.open_project == 1)
 `);
   });
 });

@@ -968,14 +968,14 @@ local ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS = {
   ["project.save_project_as"] = save_project_as,
 }
 
-local function dispatch_template_execute(request)
+local function dispatch_template_execute(request, resume_continuation)
   local handler = SAFE_WRITE_A_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = E3_MEDIA_ROUTE_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = E4_ITEM_ROUTE_HANDLERS[request.pack.capability]
   if handler then
@@ -1043,7 +1043,7 @@ local function dispatch_template_execute(request)
   end
   handler = D30_PROJECT_CONTAINER_HANDLERS[request.pack.capability]
   if handler then
-    return handler(request)
+    return handler(request, resume_continuation)
   end
   handler = ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS[request.pack.capability]
   if handler then
@@ -1467,8 +1467,39 @@ local ALLOWED_OPERATIONS = {
   },
 }
 
-local function dispatch_request(request, fallback_id)
-  local started_at = now_iso()
+local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+
+local function is_bridge_internal_continuation(value)
+  return type(value) == "table"
+    and value.contract == BRIDGE_INTERNAL_CONTINUATION_CONTRACT
+    and type(value.phase) == "string"
+    and value.phase ~= ""
+    and type(value.state) == "table"
+    and type(value.mutations_may_have_happened) == "boolean"
+    and type(value.next_phase_may_mutate) == "boolean"
+end
+
+local function bridge_internal_continuation(phase, state, mutations_may_have_happened, next_phase_may_mutate)
+  return {
+    contract = BRIDGE_INTERNAL_CONTINUATION_CONTRACT,
+    phase = phase,
+    state = state or {},
+    mutations_may_have_happened = mutations_may_have_happened == true,
+    next_phase_may_mutate = next_phase_may_mutate == true,
+  }
+end
+
+local function unknown_outcome_details(mutated, extra)
+  local details = extra or {}
+  if mutated then
+    details.outcome = "unknown"
+    details.next_action = "Inspect live project state before deciding whether any mutation should be retried."
+  end
+  return details
+end
+
+local function dispatch_request(request, fallback_id, resume_continuation, runtime)
+  local started_at = (runtime and runtime.started_at) or now_iso()
   local valid, validation_error = validate_request(request)
   if not valid then
     return bridge_error_envelope(request, "REQUEST_INVALID", "Bridge request failed validation.", {
@@ -1478,25 +1509,58 @@ local function dispatch_request(request, fallback_id)
       details = { reason = validation_error },
     })
   end
-  if request.bridge.expected_owner ~= ACTIVE_OWNER then
-    return bridge_error_envelope(request, "BRIDGE_OWNER_MISMATCH", "Bridge owner token changed.", {
-      recoverable = true,
+  if resume_continuation ~= nil and not is_bridge_internal_continuation(resume_continuation) then
+    local mutated = type(resume_continuation) == "table" and resume_continuation.mutations_may_have_happened == true
+    return bridge_error_envelope(request, "INTERNAL_ERROR", "Bridge continuation state is malformed.", {
+      recoverable = false,
       started_at = started_at,
-      details = {
+      details = unknown_outcome_details(mutated, { reason = "malformed_internal_continuation" }),
+    })
+  end
+  if request.bridge.expected_owner ~= ACTIVE_OWNER then
+    local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
+    return bridge_error_envelope(request, "BRIDGE_OWNER_MISMATCH", "Bridge owner token changed.", {
+      recoverable = not mutated,
+      started_at = started_at,
+      details = unknown_outcome_details(mutated, {
         expected_owner = request.bridge.expected_owner,
         actual_owner = ACTIVE_OWNER,
-      },
+      }),
     })
   end
   if request.bridge.expected_generation ~= ACTIVE_GENERATION then
+    local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
     return bridge_error_envelope(request, "BRIDGE_GENERATION_MISMATCH", "Bridge generation changed.", {
-      recoverable = true,
+      recoverable = not mutated,
       started_at = started_at,
-      details = {
+      details = unknown_outcome_details(mutated, {
         expected_generation = request.bridge.expected_generation,
         actual_generation = ACTIVE_GENERATION,
-      },
+      }),
     })
+  end
+
+  if runtime and type(runtime.deadline_monotonic) == "number" then
+    local now_mono = runtime.now_monotonic
+    if type(now_mono) ~= "number" then
+      if reaper and type(reaper.time_precise) == "function" then
+        now_mono = reaper.time_precise()
+      else
+        now_mono = os.clock()
+      end
+    end
+    if now_mono > runtime.deadline_monotonic then
+      local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
+      return bridge_error_envelope(request, "BRIDGE_TIMEOUT", "Bridge request exceeded timeout_ms before a terminal result.", {
+        recoverable = not mutated,
+        started_at = started_at,
+        queue_state = "timeout",
+        details = unknown_outcome_details(mutated, {
+          reason = "continuation_timeout",
+          timeout_ms = request.timeout_ms,
+        }),
+      })
+    end
   end
 
   local key = request.operation.family .. ":" .. request.operation.name
@@ -1522,24 +1586,104 @@ local function dispatch_request(request, fallback_id)
     })
   end
 
-  open_required_undo_block(request, key)
-  local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request)
-  close_required_undo_block(request, key)
-  if not ok then
-    return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
-      recoverable = false,
+  local capability = is_object(request.pack) and request.pack.capability or nil
+  local project_switch_capability = capability == "project.create_project_tab"
+    or capability == "project.open_project_in_tab"
+    or capability == "project.activate_project_tab"
+    or capability == "project.create_subproject"
+    or capability == "project.render_or_update_subproject"
+  local phase_may_mutate = true
+  if resume_continuation then
+    phase_may_mutate = resume_continuation.next_phase_may_mutate == true
+  end
+  -- Project-switch first tick is always preflight/zero-write; mutation phases
+  -- are entered only through continuation with next_phase_may_mutate=true.
+  if project_switch_capability and not resume_continuation then
+    phase_may_mutate = false
+  end
+  local exact_undo_project = nil
+  if resume_continuation and is_object(resume_continuation.state) then
+    exact_undo_project = resume_continuation.state.undo_project
+  end
+  if phase_may_mutate and project_switch_capability and exact_undo_project == nil then
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required exact project Undo target is missing before mutation.", {
+      recoverable = true,
       started_at = started_at,
       details = {
-        operation_name = request.operation.name,
-        message = bounded_string(summary, 240),
+        blocker = "required_undo_exact_project_missing",
+        zero_write = true,
       },
     })
   end
-  if handler_failure then
-    return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
-      recoverable = handler_failure.recoverable ~= false,
+  request.__openreaper_undo_phase = {
+    skip_undo = not phase_may_mutate,
+    require_project_identity = project_switch_capability and phase_may_mutate,
+    exact_project = exact_undo_project,
+  }
+  open_required_undo_block(request, key)
+  if phase_may_mutate and project_switch_capability and request.__openreaper_undo_block_open ~= true then
+    request.__openreaper_undo_phase = nil
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required project-targeted Undo block could not be opened before mutation.", {
+      recoverable = true,
       started_at = started_at,
-      details = handler_failure.details or {},
+      details = {
+        blocker = "required_undo_project_identity_unavailable",
+        zero_write = true,
+      },
+    })
+  end
+  local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request, resume_continuation)
+  close_required_undo_block(request, key)
+  if not ok then
+    local mutated = (resume_continuation and resume_continuation.mutations_may_have_happened == true) or (phase_may_mutate and project_switch_capability) or request.__openreaper_undo_required_any == true
+    return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
+      recoverable = false,
+      started_at = started_at,
+      details = unknown_outcome_details(mutated, {
+        operation_name = request.operation.name,
+        message = bounded_string(summary, 240),
+      }),
+    })
+  end
+  if request.__openreaper_undo_close_failed == true and request.__openreaper_undo_required_any == true then
+    return bridge_error_envelope(request, "INTERNAL_ERROR", "Required Undo block could not be closed after a mutation phase.", {
+      recoverable = false,
+      started_at = started_at,
+      details = unknown_outcome_details(true, {
+        blocker = "required_undo_close_failed",
+      }),
+    })
+  end
+  if type(summary) == "table" and summary.contract == BRIDGE_INTERNAL_CONTINUATION_CONTRACT then
+    if not is_bridge_internal_continuation(summary) then
+      local mutated = (resume_continuation and resume_continuation.mutations_may_have_happened == true) or phase_may_mutate
+      return bridge_error_envelope(request, "INTERNAL_ERROR", "Bridge continuation payload is malformed.", {
+        recoverable = false,
+        started_at = started_at,
+        details = unknown_outcome_details(mutated, { reason = "malformed_internal_continuation" }),
+      })
+    end
+    if handler_failure then
+      local mutated = summary.mutations_may_have_happened == true
+      return bridge_error_envelope(request, "INTERNAL_ERROR", "Bridge continuation cannot carry a handler failure.", {
+        recoverable = false,
+        started_at = started_at,
+        details = unknown_outcome_details(mutated, { reason = "malformed_internal_continuation" }),
+      })
+    end
+    summary.started_at = started_at
+    return summary
+  end
+  if handler_failure then
+    local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
+    local details = handler_failure.details or {}
+    if mutated and details.outcome == nil then
+      details = unknown_outcome_details(true, details)
+    end
+    return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
+      recoverable = mutated and false or (handler_failure.recoverable ~= false),
+      started_at = started_at,
+      details = details,
     })
   end
   return bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)

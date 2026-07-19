@@ -458,37 +458,124 @@ local function required_undo_capability(request, operation_key)
   return operation_key == "run_job:render.targets" or template_execute_write_capability(request, operation_key)
 end
 
-local function open_required_undo_block(request, operation_key)
-  if not required_undo_capability(request, operation_key) then
+local function clear_required_undo_project_handle(request)
+  if not is_object(request) then
     return
+  end
+  request.__openreaper_undo_project = nil
+  request.__openreaper_undo_used_project_api = nil
+  request.__openreaper_undo_block_open = nil
+end
+
+-- Phase-local required Undo. Begin/End must use the same exact project handle.
+-- options.skip_undo: verification-only / preflight phase; do not open an empty block and
+-- do not erase prior aggregate terminal Undo truth across continuation ticks.
+-- options.require_project_identity: fail closed when Undo_BeginBlock2 cannot pair on the
+-- exact active project (used by project-switching mutations). Unrelated ops may still
+-- fall back to Undo_BeginBlock without crossing a retained project handle.
+local function open_required_undo_block(request, operation_key)
+  local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
+  clear_required_undo_project_handle(request)
+  if options.skip_undo == true then
+    return true
+  end
+  if not required_undo_capability(request, operation_key) then
+    return true
   end
   if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
-    return
+    return true
   end
-  local ok_project, project = call_reaper("EnumProjects", -1, "")
-  project = ok_project and project or 0
+  local project = options.exact_project
+  local used_exact = project ~= nil
+  if not used_exact then
+    local ok_project, active_project = call_reaper("EnumProjects", -1, "")
+    if not ok_project or active_project == nil then
+      request.__openreaper_undo_block_open = false
+      return false
+    end
+    project = active_project
+  end
+  if options.require_project_identity == true and project == nil then
+    request.__openreaper_undo_block_open = false
+    return false
+  end
   local ok = call_reaper("Undo_BeginBlock2", project)
-  if not ok then
-    ok = call_reaper("Undo_BeginBlock")
+  if ok == true then
+    request.__openreaper_undo_block_open = true
+    request.__openreaper_undo_project = project
+    request.__openreaper_undo_used_project_api = true
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_required_any = true
+    return true
   end
-  request.__openreaper_undo_opened = ok == true
+  if options.require_project_identity == true or used_exact then
+    request.__openreaper_undo_block_open = false
+    return false
+  end
+  ok = call_reaper("Undo_BeginBlock")
+  request.__openreaper_undo_block_open = ok == true
+  request.__openreaper_undo_project = nil
+  request.__openreaper_undo_used_project_api = false
+  if ok == true then
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_required_any = true
+  end
+  return ok == true
 end
 
 local function close_required_undo_block(request, operation_key)
+  local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
+  if options.skip_undo == true then
+    clear_required_undo_project_handle(request)
+    if is_object(request) then
+      request.__openreaper_undo_phase = nil
+    end
+    return true
+  end
   if not required_undo_capability(request, operation_key) then
-    return
+    clear_required_undo_project_handle(request)
+    if is_object(request) then
+      request.__openreaper_undo_phase = nil
+    end
+    return true
   end
   if not is_object(request) or not is_object(request.undo) or request.undo.mode ~= "required" then
-    return
+    clear_required_undo_project_handle(request)
+    if is_object(request) then
+      request.__openreaper_undo_phase = nil
+    end
+    return true
+  end
+  if request.__openreaper_undo_block_open ~= true then
+    clear_required_undo_project_handle(request)
+    request.__openreaper_undo_phase = nil
+    return false
   end
   local label = is_string(request.undo.label) and request.undo.label or "OpenReaper Safe-Write-A"
-  local ok_project, project = call_reaper("EnumProjects", -1, "")
-  project = ok_project and project or 0
-  local ok = call_reaper("Undo_EndBlock2", project, label, -1)
-  if not ok then
-    ok = call_reaper("Undo_EndBlock", label, -1)
+  local ok = false
+  if request.__openreaper_undo_used_project_api == true and request.__openreaper_undo_project ~= nil then
+    local results = { call_reaper("Undo_EndBlock2", request.__openreaper_undo_project, label, -1) }
+    ok = results[1] == true and (results[2] == nil or results[2] == true)
+  else
+    local results = { call_reaper("Undo_EndBlock", label, -1) }
+    ok = results[1] == true and (results[2] == nil or results[2] == true)
   end
-  request.__openreaper_undo_closed = ok == true
+  -- Aggregate terminal truth across ticks: once a required block opened, closed stays true
+  -- only while every close succeeds.
+  request.__openreaper_undo_opened = true
+  if request.__openreaper_undo_closed == false then
+    -- keep prior close failure
+  elseif ok then
+    request.__openreaper_undo_closed = true
+  else
+    request.__openreaper_undo_closed = false
+  end
+  if not ok then
+    request.__openreaper_undo_close_failed = true
+  end
+  clear_required_undo_project_handle(request)
+  request.__openreaper_undo_phase = nil
+  return ok
 end
 
 local function validate_request(request)

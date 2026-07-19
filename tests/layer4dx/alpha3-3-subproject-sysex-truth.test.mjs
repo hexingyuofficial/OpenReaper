@@ -50,7 +50,7 @@ describe("Alpha3.3 native Subproject and SysEx truth", () => {
 install_subproject_fake({ copy_import_media = true })
 local create_request = project_request("project.create_subproject", { name = "Dialog Edit", activate = true, inherit_time_selection = true }, {})
 create_request.id = "req_create"
-local created, failure, output_refs, _, refs = create_subproject(create_request)
+local created, failure, output_refs, _, refs = run_with_continuation(create_subproject, create_request)
 assert(failure == nil and created.created == true and created.parent_restored == true)
 assert(created.child_project_path == "/session/Dialog_Edit__subproject_req_create.RPP")
 assert(created.proxy_path == created.child_project_path .. "-PROX")
@@ -88,7 +88,7 @@ local update_request = project_request("project.render_or_update_subproject", { 
   refs[1], inserted_refs[1],
 })
 update_request.id = "req_update"
-local updated, update_failure, _, jobs = render_or_update_subproject(update_request)
+local updated, update_failure, _, jobs = run_with_continuation(render_or_update_subproject, update_request)
 assert(update_failure == nil and updated.completed == true and updated.queued == false and updated.synchronous == true)
 assert(updated.linked_item_verified == true and updated.parent_restored == true)
 assert(jobs[1].summary.state == "completed" and current_project == parent_project)
@@ -101,14 +101,14 @@ assert(calls.actions[42332] == 2)
 install_subproject_fake({ existing_child = true })
 local request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
-local summary, failure = create_subproject(request)
+local summary, failure = run_with_continuation(create_subproject, request)
 assert(summary == nil and failure.code == "FILE_EXISTS")
 assert(calls.actions[41929] == nil and current_project == parent_project)
 
 install_subproject_fake({ no_proxy = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
-summary, failure = create_subproject(request)
+summary, failure = run_with_continuation(create_subproject, request)
 assert(summary == nil and failure.code == "VERIFY_FAILED")
 assert(failure.details.blocker == "subproject_proxy_missing")
 assert(current_project == parent_project and calls.select_project >= 1)
@@ -116,7 +116,7 @@ assert(current_project == parent_project and calls.select_project >= 1)
 install_subproject_fake({ save_failure = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
-summary, failure = create_subproject(request)
+summary, failure = run_with_continuation(create_subproject, request)
 assert(summary == nil and failure.code == "COMMAND_FAILED")
 assert(failure.details.blocker == "subproject_save_failed" and current_project == parent_project)
 `);
@@ -127,7 +127,7 @@ assert(failure.details.blocker == "subproject_save_failed" and current_project =
 install_subproject_fake({ inactive_new_tab = true })
 local request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
-local summary, failure = create_subproject(request)
+local summary, failure = run_with_continuation(create_subproject, request)
 assert(failure == nil and summary.created == true and summary.parent_restored == true)
 assert(current_project == parent_project and calls.select_project == 0)
 assert(files[summary.child_project_path] == true and files[summary.proxy_path] == true)
@@ -136,7 +136,7 @@ assert(calls.actions[40861] == nil)
 install_subproject_fake({ ambiguous_new_tabs = true })
 request = project_request("project.create_subproject", { name = "Dialog Edit" }, {})
 request.id = "req_create"
-summary, failure = create_subproject(request)
+summary, failure = run_with_continuation(create_subproject, request)
 assert(summary == nil and failure.code == "VERIFY_FAILED")
 assert(failure.details.blocker == "new_project_tab_identity_ambiguous")
 assert(failure.details.added_project_count == 2 and current_project == parent_project)
@@ -150,7 +150,7 @@ files["/session/ClosedChild.RPP"] = true
 local child_ref = { kind = "project", ref = "project:path:/session/ClosedChild.RPP", identity = { scheme = "path", value = "/session/ClosedChild.RPP" } }
 local request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
 request.id = "closed_child"
-local summary, failure = render_or_update_subproject(request)
+local summary, failure = run_with_continuation(render_or_update_subproject, request)
 assert(summary == nil and failure.code == "COMMAND_FAILED")
 assert(failure.details.blocker == "subproject_must_be_open_for_native_update")
 assert(current_project == parent_project and calls.actions[41929] == nil and calls.actions[42332] == nil)
@@ -158,7 +158,7 @@ assert(current_project == parent_project and calls.actions[41929] == nil and cal
 install_subproject_fake({ open_child_path = "/session/ClosedChild.RPP" })
 request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
 request.id = "open_child"
-summary, failure = render_or_update_subproject(request)
+summary, failure = run_with_continuation(render_or_update_subproject, request)
 assert(failure == nil and summary.completed == true and summary.queued == false)
 assert(summary.proxy_path == "/session/ClosedChild.RPP-PROX" and files[summary.proxy_path] == true)
 assert(current_project == parent_project and calls.actions[42332] == 1 and calls.select_project == 0)
@@ -167,7 +167,7 @@ install_subproject_fake({ open_child_path = "/session/ClosedChild.RPP", render_f
 files["/session/ClosedChild.RPP"] = true
 request = project_request("project.render_or_update_subproject", { mode = "render" }, { child_ref })
 request.id = "closed_child_failure"
-summary, failure = render_or_update_subproject(request)
+summary, failure = run_with_continuation(render_or_update_subproject, request)
 assert(summary == nil and failure.code == "COMMAND_FAILED")
 assert(failure.details.blocker == "subproject_render_action_failed" and current_project == parent_project)
 `);
@@ -374,11 +374,11 @@ assert(inserted.source_path_mode == "exact_requested_child_project")
 local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
   child_ref, inserted_refs[1],
 })
-local updated, update_failure = render_or_update_subproject(update_request)
+local updated, update_failure = run_with_continuation(render_or_update_subproject, update_request)
 assert(update_failure == nil and updated.completed == true and updated.linked_item_verified == true)
 
 inserted_source.parent.subproject = nil
-updated, update_failure = render_or_update_subproject(update_request)
+updated, update_failure = run_with_continuation(render_or_update_subproject, update_request)
 assert(updated == nil and update_failure.code == "VERIFY_FAILED")
 assert(update_failure.details.blocker == "linked_item_source_readback_failed")
 `);
@@ -406,7 +406,21 @@ assert(d30_item_source_truth(item, "/session/Child.RPP-PROX", "/session/Child.RP
 `);
   });
 
-  it("persists mixed text and duplicate SysEx from integer-array and hex inputs with exact row-delta readback", () => {
+    it("succeeds when new-tab materialization and SelectProjectInstance apply only after a later tick", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+install_subproject_fake({ deferred_new_tab = true, select_project_deferred = true, copy_import_media = true })
+local create_request = project_request("project.create_subproject", { name = "Dialog Edit", activate = true, inherit_time_selection = true }, {})
+create_request.id = "req_create"
+local created, failure = run_with_continuation(create_subproject, create_request)
+assert(failure == nil and created.created == true and created.parent_restored == true, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker)))
+assert(calls.actions[41929] == 1 and calls.select_project >= 1)
+assert(current_project == parent_project)
+assert(files[created.child_project_path] == true and files[created.proxy_path] == true)
+assert(calls.actions[42332] == 1)
+`);
+  });
+
+it("persists mixed text and duplicate SysEx from integer-array and hex inputs with exact row-delta readback", () => {
     runLua(SYSEX_SOURCE, String.raw`
 install_midi_fake({})
 local request = midi_request({
@@ -489,17 +503,36 @@ function install_subproject_fake(config)
   function file_exists(path) return files[path] == true end
 
   reaper = {}
+  project_ext = {}
+  reaper.SetProjExtState = function(project, section, key, value)
+    project_ext[tostring(project) .. "|" .. tostring(section) .. "|" .. tostring(key)] = value
+    return true
+  end
+  reaper.GetProjExtState = function(project, section, key)
+    local v = project_ext[tostring(project) .. "|" .. tostring(section) .. "|" .. tostring(key)]
+    if v == nil then return 0, "" end
+    return 1, v
+  end
   reaper.EnumProjects = function(index)
     if index == -1 then return current_project, current_project.path or "" end
     local project = projects[index + 1]
     if not project then return nil, "" end
     return project, project.path or ""
   end
+  pending_new_tab = nil
   reaper.Main_OnCommandEx = function(action, flag, project)
     calls.actions[action] = (calls.actions[action] or 0) + 1
     if action == 41929 then
       assert(flag == 0 and project == 0)
-      child_project = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
+      local blank = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
+      if config.deferred_new_tab then
+        pending_new_tab = blank
+        if config.ambiguous_new_tabs then
+          pending_new_tab = { blank, { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 } }
+        end
+        return nil
+      end
+      child_project = blank
       projects[#projects + 1] = child_project
       if config.ambiguous_new_tabs then
         projects[#projects + 1] = { path = "", tracks = {}, items = {}, time_start = 0, time_end = 0 }
@@ -529,11 +562,49 @@ function install_subproject_fake(config)
     files[path] = true
     return nil
   end
+  pending_select = nil
   reaper.SelectProjectInstance = function(project)
     calls.select_project = calls.select_project + 1
+    if config.select_project_deferred then
+      pending_select = project
+      return
+    end
     if not config.select_project_noop then current_project = project end
   end
-  reaper.SetProjExtState = function(project) assert(project == parent_project); return 1 end
+  function apply_pending_tick()
+    if pending_new_tab then
+      if type(pending_new_tab) == "table" and pending_new_tab[1] then
+        for _, tab in ipairs(pending_new_tab) do
+          projects[#projects + 1] = tab
+        end
+        child_project = pending_new_tab[1]
+      else
+        child_project = pending_new_tab
+        projects[#projects + 1] = child_project
+      end
+      if not config.inactive_new_tab and not config.ambiguous_new_tabs then
+        current_project = child_project
+      end
+      pending_new_tab = nil
+    end
+    if pending_select then
+      current_project = pending_select
+      pending_select = nil
+    end
+  end
+  function run_with_continuation(handler, request)
+    local cont = nil
+    for _ = 1, 20 do
+      if cont then apply_pending_tick() end
+      local summary, failure, a, b, c = handler(request, cont)
+      if type(summary) == "table" and summary.contract == "openreaper.bridge.internal_continuation.v1" then
+        cont = summary
+      else
+        return summary, failure, a, b, c
+      end
+    end
+    error("subproject continuation did not terminate")
+  end
   reaper.GetSet_LoopTimeRange2 = function(project, is_set, is_loop, start_time, end_time)
     assert(is_loop == false)
     if is_set then

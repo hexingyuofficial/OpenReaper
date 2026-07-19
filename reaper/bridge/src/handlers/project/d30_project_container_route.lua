@@ -1,7 +1,6 @@
 -- Extracted D30 handler: native project tab/subproject container lifecycle.
 
 local D30_NEW_PROJECT_TAB_ACTION = 41929
-local D30_NEXT_PROJECT_TAB_ACTION = 40861
 local D30_SAVE_RENDER_SUBPROJECT_ACTION = 42332
 local D30_SAVE_AS_OPTIONS = 8
 local D30_PROJECT_TAB_NAME_MAX_BYTES = 160
@@ -15,8 +14,6 @@ local d30_project_tab_tokens = {}
 local d30_project_tab_owner = nil
 local d30_project_tab_generation = nil
 local d30_project_tab_seq = 0
-
-local d30_project_select_exact
 
 local function d30_project_error(code, message, details, recoverable)
   return nil, {
@@ -96,12 +93,16 @@ local function d30_item_ref_object(item, summary)
   }
 end
 
-local function d30_project_write_ledger(request, key, row)
-  local state = d30_project_current_state()
-  if not state then
-    return false
+local function d30_project_write_ledger(request, key, row, project)
+  local target = project
+  if not target then
+    local state = d30_project_current_state()
+    if not state then
+      return false
+    end
+    target = state.project
   end
-  local ok = call_reaper("SetProjExtState", state.project, "OPENREAPER_PROJECT_CONTAINERS", key, json.encode(row))
+  local ok = call_reaper("SetProjExtState", target, "OPENREAPER_PROJECT_CONTAINERS", key, json.encode(row))
   return ok == true
 end
 
@@ -116,20 +117,6 @@ local function d30_project_summary(request, fields)
   fields.truncated = false
   fields.live_materialization = fields.live_materialization or "ledger_only_waiting_fixture"
   return fields
-end
-
-local function d30_project_restore(parent_project)
-  return d30_project_select_exact(parent_project) == true
-end
-
-local function d30_project_failure_after_restore(parent_project, code, message, details, recoverable)
-  if parent_project and not d30_project_restore(parent_project) then
-    return d30_project_error("RESTORE_FAILED", "Subproject operation failed and the parent project could not be restored.", {
-      original_code = code,
-      original_blocker = details and details.blocker or nil,
-    }, false)
-  end
-  return d30_project_error(code, message, details, recoverable)
 end
 
 local function d30_project_call_void(api_name, ...)
@@ -297,37 +284,55 @@ local function d30_project_open_instances()
   end
 end
 
-d30_project_select_exact = function(target_project)
-  if not target_project then
-    return false, "target_project_missing"
+local D30_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+
+local function d30_project_continue(phase, state, mutations_may_have_happened, next_phase_may_mutate, undo_project)
+  state = state or {}
+  if next_phase_may_mutate == true then
+    if undo_project == nil then
+      undo_project = state.undo_project
+    end
+    if undo_project == nil then
+      error("OpenReaper D30 continuation mutation phase missing exact undo_project: " .. tostring(phase))
+    end
+    state.undo_project = undo_project
+  else
+    state.undo_project = nil
   end
+  return {
+    contract = D30_INTERNAL_CONTINUATION_CONTRACT,
+    phase = phase,
+    state = state,
+    mutations_may_have_happened = mutations_may_have_happened == true,
+    next_phase_may_mutate = next_phase_may_mutate == true,
+  }
+end
+
+local function d30_project_active_is(target_project)
   local current = d30_project_current_state()
-  if current and current.project == target_project then
-    return true, "already_active"
-  end
+  return current ~= nil and current.project == target_project, current
+end
 
+-- Schedule selection mutation at most once. Same-tick post-mutation EnumProjects
+-- is never treated as terminal success for continuation routes; callers verify later.
+local function d30_project_schedule_select(target_project)
+  if not target_project then
+    return nil, "target_project_missing"
+  end
+  local active, current = d30_project_active_is(target_project)
+  if active then
+    return "already_active", current
+  end
   d30_project_call_void("SelectProjectInstance", target_project)
-  current = d30_project_current_state()
-  if current and current.project == target_project then
-    return true, "select_project_instance"
-  end
+  return "select_scheduled", current
+end
 
-  local instances = d30_project_open_instances()
-  if not instances then
-    return false, "project_tab_enumeration_failed"
+local function d30_project_verify_active(target_project)
+  local active, current = d30_project_active_is(target_project)
+  if active then
+    return true, current
   end
-  for _ = 1, #instances do
-    current = d30_project_current_state()
-    local advanced = d30_project_call_void("Main_OnCommandEx", D30_NEXT_PROJECT_TAB_ACTION, 0, 0)
-    if not advanced then
-      return false, "next_project_tab_action_failed"
-    end
-    current = d30_project_current_state()
-    if current and current.project == target_project then
-      return true, "next_project_tab_action"
-    end
-  end
-  return false, "project_tab_selection_readback_failed"
+  return false, current
 end
 
 local function d30_project_find_single_added_instance(before)
@@ -724,7 +729,283 @@ local function d30_item_from_request(project, request)
   return nil
 end
 
-local function create_subproject(request)
+local function create_subproject(request, resume_continuation)
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_create" then
+    local state = resume_continuation.state or {}
+    local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
+    if not created_tab then
+      return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab for the subproject.", {
+        blocker = "new_project_tab_failed",
+        reason = create_reason,
+      }, false)
+    end
+    return d30_project_continue("create_subproject.verify_created", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_created" then
+    local state = resume_continuation.state or {}
+    local child, added_reason, added_count = d30_project_find_single_added_instance(state.projects_before)
+    if not child then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "New project tab identity could not be verified exactly.",
+        failure_blocker = added_reason,
+        added_project_count = added_count,
+      }, true, false)
+    end
+    state.child_project = child.project
+    -- Save/render accept an exact project pointer; Undo owns the child handle.
+    return d30_project_continue("create_subproject.mutate_prepare", state, true, true, state.child_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_select_child" then
+    local state = resume_continuation.state or {}
+    local mode = d30_project_schedule_select(state.child_project)
+    state.selection_mode = mode
+    if mode == "already_active" then
+      return d30_project_continue("create_subproject.mutate_prepare", state, true, true, state.child_project)
+    end
+    return d30_project_continue("create_subproject.verify_select_child", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_select_child" then
+    local state = resume_continuation.state or {}
+    if not d30_project_verify_active(state.child_project) then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Child subproject tab could not be activated for native save/render.",
+        failure_blocker = "project_tab_selection_readback_failed",
+      }, true, false)
+    end
+    return d30_project_continue("create_subproject.mutate_prepare", state, true, true, state.child_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_prepare" then
+    local state = resume_continuation.state or {}
+    if state.inherited_time_selection then
+      if not d30_project_set_time_selection(state.child_project, state.inherited_time_selection) then
+        return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+          parent_project = state.parent_project,
+          parent_path = state.parent_path,
+          child_path = state.child_path,
+          proxy_path = state.proxy_path,
+          name = state.name,
+          failure_code = "VERIFY_FAILED",
+          failure_message = "Child subproject did not inherit the parent time selection exactly.",
+          failure_blocker = "child_time_selection_readback_failed",
+          expected_start_seconds = state.inherited_time_selection.start_time,
+          expected_end_seconds = state.inherited_time_selection.end_time,
+        }, true, false)
+      end
+    end
+    local saved, save_reason = d30_project_call_void("Main_SaveProjectEx", state.child_project, state.child_path, D30_SAVE_AS_OPTIONS)
+    if not saved then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "COMMAND_FAILED",
+        failure_message = "REAPER rejected saving the child subproject.",
+        failure_blocker = "subproject_save_failed",
+        reason = save_reason,
+      }, true, false)
+    end
+    local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, state.child_project)
+    if not rendered then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "COMMAND_FAILED",
+        failure_message = "REAPER rejected subproject proxy rendering.",
+        failure_blocker = "subproject_proxy_render_failed",
+        reason = render_reason,
+      }, true, false)
+    end
+    return d30_project_continue("create_subproject.verify_prepared", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_prepared" then
+    local state = resume_continuation.state or {}
+    local child = d30_project_state_for_instance(state.child_project)
+    if not child or child.path ~= state.child_path or not file_exists(state.child_path) then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Child subproject path did not read back exactly after save.",
+        failure_blocker = "subproject_save_readback_failed",
+        expected_path = state.child_path,
+        actual_path = child and child.path or "",
+      }, true, false)
+    end
+    if not file_exists(state.proxy_path) then
+      return d30_project_continue("create_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        parent_path = state.parent_path,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        name = state.name,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Subproject proxy file did not exist after native render.",
+        failure_blocker = "subproject_proxy_missing",
+      }, true, false)
+    end
+    return d30_project_continue("create_subproject.schedule_restore", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.schedule_restore" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.parent_project) then
+      return d30_project_continue("create_subproject.mutate_ledger", state, true, true, state.parent_project)
+    end
+    -- Undo target is the currently active project (pre-selection handle).
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.parent_project
+    return d30_project_continue("create_subproject.mutate_restore", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_restore" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.parent_project)
+    return d30_project_continue("create_subproject.verify_restore", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_restore" then
+    local state = resume_continuation.state or {}
+    if not d30_project_verify_active(state.parent_project) then
+      return d30_project_error("RESTORE_FAILED", "Created subproject but could not restore the parent project.", {
+        child_project_path = state.child_path,
+        prior_project_restored = false,
+      }, false)
+    end
+    return d30_project_continue("create_subproject.mutate_ledger", state, true, true, state.parent_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_ledger" then
+    local state = resume_continuation.state or {}
+    local child_ref = "project:path:" .. state.child_path
+    local parent_ref = "project:path:" .. state.parent_path
+    local row = {
+      kind = "subproject",
+      name = state.name,
+      child_project_path = state.child_path,
+      proxy_path = state.proxy_path,
+      parent_project_ref = parent_ref,
+      materialization = "native_rpp_proxy_verified",
+    }
+    local ledger_key = d30_project_safe_id(request, "subproject")
+    if not d30_project_write_ledger(request, ledger_key, row, state.parent_project) then
+      return d30_project_error("COMMAND_FAILED", "Created subproject but parent ledger write failed.", {
+        blocker = "subproject_ledger_write_failed",
+        child_project_path = state.child_path,
+        parent_restored = true,
+      }, false)
+    end
+    state.ledger_key = ledger_key
+    state.ledger_row = row
+    return d30_project_continue("create_subproject.verify_ledger", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_ledger" then
+    local state = resume_continuation.state or {}
+    local results = { call_reaper("GetProjExtState", state.parent_project, "OPENREAPER_PROJECT_CONTAINERS", state.ledger_key) }
+    local stored = nil
+    if results[1] == true then
+      -- Native GetProjExtState returns retval, value; pcall packs as true, retval, value.
+      if type(results[3]) == "string" then
+        stored = results[3]
+      elseif type(results[2]) == "string" then
+        stored = results[2]
+      elseif type(results[2]) == "number" and type(results[3]) == "string" then
+        stored = results[3]
+      end
+    end
+    if type(stored) ~= "string" or stored == "" then
+      return d30_project_error("VERIFY_FAILED", "Created subproject but parent ledger readback failed.", {
+        blocker = "subproject_ledger_readback_failed",
+        child_project_path = state.child_path,
+        parent_restored = true,
+      }, false)
+    end
+    local child_ref = "project:path:" .. state.child_path
+    local parent_ref = "project:path:" .. state.parent_path
+    local child_object_ref = d30_project_ref_object(child_ref, state.ledger_row)
+    local parent_object_ref = d30_project_ref_object(parent_ref, { kind = "project", role = "parent", path = state.parent_path })
+    return d30_project_summary(request, {
+      subproject_project_ref = child_ref,
+      parent_project_ref = parent_ref,
+      name = state.name,
+      child_project_path = state.child_path,
+      proxy_path = state.proxy_path,
+      created = true,
+      parent_restored = true,
+      requested_activate = state.requested_activate == true,
+      inherited_time_selection = state.inherited_time_selection ~= nil,
+      inherited_time_selection_start_seconds = state.inherited_time_selection and state.inherited_time_selection.start_time or nil,
+      inherited_time_selection_end_seconds = state.inherited_time_selection and state.inherited_time_selection.end_time or nil,
+      live_materialization = "native_rpp_proxy_verified",
+    }), nil, json_array({ child_object_ref, parent_object_ref }), json_array({}), json_array({ child_object_ref, parent_object_ref })
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.schedule_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.parent_project) then
+      return d30_project_continue("create_subproject.verify_restore_after_fail", state, true, false)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.parent_project
+    return d30_project_continue("create_subproject.mutate_restore_after_fail", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.mutate_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.parent_project)
+    return d30_project_continue("create_subproject.verify_restore_after_fail", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_subproject.verify_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    local restored = d30_project_verify_active(state.parent_project)
+    local details = {
+      blocker = state.failure_blocker,
+      prior_project_restored = restored == true,
+      child_project_path = state.child_path,
+      proxy_path = state.proxy_path,
+      added_project_count = state.added_project_count,
+      reason = state.reason,
+      expected_path = state.expected_path,
+      actual_path = state.actual_path,
+      expected_start_seconds = state.expected_start_seconds,
+      expected_end_seconds = state.expected_end_seconds,
+    }
+    return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "create_subproject failed after mutation.", details, false)
+  end
+
+  if resume_continuation then
+    return d30_project_error("INTERNAL_ERROR", "create_subproject received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+
   local name = bounded_string(request.params.name or "", 160)
   if name == "" then
     return d30_project_error("PARAMS_INVALID", "create_subproject requires a non-empty name.", {
@@ -770,90 +1051,17 @@ local function create_subproject(request)
       blocker = "project_tab_preflight_enumeration_failed",
     }, false)
   end
-  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
-  if not created_tab then
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab for the subproject.", {
-      blocker = "new_project_tab_failed",
-      reason = create_reason,
-    }, false)
-  end
-  local child, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
-  if not child then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "New project tab identity could not be verified exactly.", {
-      blocker = added_reason,
-      added_project_count = added_count,
-    }, false)
-  end
-  if inherited_time_selection and not d30_project_set_time_selection(child.project, inherited_time_selection) then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject did not inherit the parent time selection exactly.", {
-      blocker = "child_time_selection_readback_failed",
-      expected_start_seconds = inherited_time_selection.start_time,
-      expected_end_seconds = inherited_time_selection.end_time,
-    }, false)
-  end
 
-  local saved, save_reason = d30_project_call_void("Main_SaveProjectEx", child.project, child_path, D30_SAVE_AS_OPTIONS)
-  if not saved then
-    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected saving the child subproject.", {
-      blocker = "subproject_save_failed",
-      reason = save_reason,
-    }, false)
-  end
-  child = d30_project_state_for_instance(child.project)
-  if not child or child.path ~= child_path or not file_exists(child_path) then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Child subproject path did not read back exactly after save.", {
-      blocker = "subproject_save_readback_failed",
-      expected_path = child_path,
-      actual_path = child and child.path or "",
-    }, false)
-  end
-
-  local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, child.project)
-  if not rendered then
-    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected subproject proxy rendering.", {
-      blocker = "subproject_proxy_render_failed",
-      reason = render_reason,
-    }, false)
-  end
-  if not file_exists(proxy_path) then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Subproject proxy file did not exist after native render.", {
-      blocker = "subproject_proxy_missing",
-      proxy_path = proxy_path,
-    }, false)
-  end
-  if not d30_project_restore(parent.project) then
-    return d30_project_error("RESTORE_FAILED", "Created subproject but could not restore the parent project.", {
-      child_project_path = child_path,
-    }, false)
-  end
-
-  local child_ref = "project:path:" .. child_path
-  local parent_ref = "project:path:" .. parent.path
-  local row = {
-    kind = "subproject",
+  return d30_project_continue("create_subproject.mutate_create", {
     name = name,
-    child_project_path = child_path,
+    parent_project = parent.project,
+    parent_path = parent.path,
+    child_path = child_path,
     proxy_path = proxy_path,
-    parent_project_ref = parent_ref,
-    materialization = "native_rpp_proxy_verified",
-  }
-  d30_project_write_ledger(request, d30_project_safe_id(request, "subproject"), row)
-  local child_object_ref = d30_project_ref_object(child_ref, row)
-  local parent_object_ref = d30_project_ref_object(parent_ref, { kind = "project", role = "parent", path = parent.path })
-  return d30_project_summary(request, {
-    subproject_project_ref = child_ref,
-    parent_project_ref = parent_ref,
-    name = name,
-    child_project_path = child_path,
-    proxy_path = proxy_path,
-    created = true,
-    parent_restored = true,
+    projects_before = projects_before,
+    inherited_time_selection = inherited_time_selection,
     requested_activate = request.params.activate == true,
-    inherited_time_selection = inherited_time_selection ~= nil,
-    inherited_time_selection_start_seconds = inherited_time_selection and inherited_time_selection.start_time or nil,
-    inherited_time_selection_end_seconds = inherited_time_selection and inherited_time_selection.end_time or nil,
-    live_materialization = "native_rpp_proxy_verified",
-  }), nil, json_array({ child_object_ref, parent_object_ref }), json_array({}), json_array({ child_object_ref, parent_object_ref })
+  }, false, true, parent.project)
 end
 
 local function d30_project_tab_scope_ready()
@@ -1343,7 +1551,225 @@ local function list_open_projects(request)
   return summary
 end
 
-local function create_project_tab(request)
+local function d30_create_project_tab_finish(request, state)
+  local after_state = d30_project_state_for_instance(state.added_project)
+  if not after_state then
+    return d30_project_error("VERIFY_FAILED", "Created project tab left the inventory without a stable instance.", {
+      blocker = "created_tab_not_enumerated",
+      prior_project_restored = state.prior_project_restored == true,
+      partial_state = "blank_or_unknown_tab_may_remain",
+    }, false)
+  end
+  if state.activate then
+    local active = d30_project_verify_active(state.added_project)
+    if not active then
+      return d30_project_error("VERIFY_FAILED", "Created project tab did not remain active after selection.", {
+        blocker = "created_tab_not_active",
+        prior_project_restored = false,
+        partial_state = "blank_tab_created",
+      }, false)
+    end
+  elseif state.selection_mode == "restored_prior" then
+    local active = d30_project_verify_active(state.prior_project)
+    if not active then
+      return d30_project_error("RESTORE_FAILED", "Created project tab but could not restore the prior active project.", {
+        blocker = "prior_project_restore_failed",
+        prior_project_restored = false,
+        partial_state = "blank_tab_created",
+      }, false)
+    end
+  end
+
+  local prior_after = d30_project_state_for_instance(state.prior_project)
+  local prior_dirty_after = prior_after and d30_project_raw_dirty(state.prior_project) or nil
+  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= state.prior_raw_dirty_state then
+    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after tab creation.", {
+      blocker = "prior_project_dirty_or_missing",
+      prior_raw_dirty_before = state.prior_raw_dirty_state,
+      prior_raw_dirty_after = prior_dirty_after,
+      partial_state = "blank_tab_created",
+    }, false)
+  end
+
+  local project_ref = d30_project_canonical_ref(state.added_project, after_state.path)
+  local object_ref = d30_project_ref_object(project_ref, {
+    kind = "project_tab",
+    name = state.name,
+    activate = state.activate == true,
+    label_only = true,
+    materialization = "native_project_tab_verified",
+  })
+  return d30_project_summary(request, {
+    project_ref = project_ref,
+    name = state.name,
+    created = true,
+    activate = state.activate == true,
+    active = state.activate == true,
+    path_state = (after_state.path ~= "" and "saved_project") or "unsaved_project",
+    openreaper_label = state.name,
+    title_claim = "openreaper_label_only",
+    selection_mode = state.selection_mode or "none",
+    prior_project_ref = state.prior_project_ref,
+    prior_dirty_unchanged = true,
+    prior_raw_dirty_state = state.prior_raw_dirty_state,
+    live_materialization = "native_project_tab_verified",
+  }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
+end
+
+local function create_project_tab(request, resume_continuation)
+  if resume_continuation and resume_continuation.phase == "create_project_tab.mutate_create" then
+    local state = resume_continuation.state or {}
+    local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
+    if not created_tab then
+      return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab.", {
+        blocker = "new_project_tab_failed",
+        reason = create_reason,
+      }, false)
+    end
+    -- Yield immediately after 41929; identify the new instance only on a later tick.
+    return d30_project_continue("create_project_tab.verify_created", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.verify_created" then
+    local state = resume_continuation.state or {}
+    local added, added_reason, added_count = d30_project_find_single_added_instance(state.projects_before)
+    if not added then
+      return d30_project_continue("create_project_tab.schedule_restore_after_fail", {
+        name = state.name,
+        activate = state.activate,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "New project tab identity could not be verified exactly.",
+        failure_blocker = added_reason or "created_tab_not_enumerated",
+        partial_state = "blank_or_unknown_tab_may_remain",
+        added_project_count = added_count,
+      }, true, false)
+    end
+    state.added_project = added.project
+
+    if state.activate then
+      local active = d30_project_verify_active(state.added_project)
+      if active then
+        state.selection_mode = "already_active"
+        return d30_create_project_tab_finish(request, state)
+      end
+      return d30_project_continue("create_project_tab.mutate_select", state, true, true, state.prior_project)
+    end
+
+    local current = d30_project_current_state()
+    if current and current.project == state.added_project then
+      return d30_project_continue("create_project_tab.schedule_restore", state, true, false)
+    end
+    state.selection_mode = "none"
+    return d30_create_project_tab_finish(request, state)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.mutate_select" then
+    local state = resume_continuation.state or {}
+    local select_mode = d30_project_schedule_select(state.added_project)
+    state.selection_mode = select_mode == "already_active" and "already_active" or "select_scheduled"
+    if select_mode == "already_active" then
+      return d30_create_project_tab_finish(request, state)
+    end
+    return d30_project_continue("create_project_tab.verify_selection", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.schedule_restore" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.prior_project) then
+      state.selection_mode = "restored_prior"
+      state.prior_project_restored = true
+      return d30_create_project_tab_finish(request, state)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.prior_project
+    return d30_project_continue("create_project_tab.mutate_restore", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.mutate_restore" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.prior_project)
+    state.selection_mode = "restore_scheduled"
+    return d30_project_continue("create_project_tab.verify_restore", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.verify_selection" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.added_project)
+    if not active then
+      return d30_project_continue("create_project_tab.schedule_restore_after_fail", {
+        name = state.name,
+        activate = true,
+        added_project = state.added_project,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        selection_mode = state.selection_mode,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Created project tab but could not activate it with native readback.",
+        failure_blocker = "project_tab_selection_readback_failed",
+        partial_state = "blank_tab_created",
+      }, true, false)
+    end
+    return d30_create_project_tab_finish(request, state)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.schedule_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.prior_project) then
+      return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "create_project_tab failed after mutation.", {
+        blocker = state.failure_blocker or "project_tab_selection_readback_failed",
+        prior_project_restored = true,
+        partial_state = state.partial_state or "blank_tab_created",
+        added_project_count = state.added_project_count,
+      }, false)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.prior_project
+    return d30_project_continue("create_project_tab.mutate_restore_after_fail", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.mutate_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.prior_project)
+    return d30_project_continue("create_project_tab.verify_restore_after_fail", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.verify_restore" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.prior_project)
+    if not active then
+      return d30_project_error("RESTORE_FAILED", "Created project tab but could not restore the prior active project.", {
+        blocker = "prior_project_restore_failed",
+        prior_project_restored = false,
+        partial_state = "blank_tab_created",
+      }, false)
+    end
+    state.selection_mode = "restored_prior"
+    state.prior_project_restored = true
+    return d30_create_project_tab_finish(request, state)
+  end
+
+  if resume_continuation and resume_continuation.phase == "create_project_tab.verify_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.prior_project)
+    return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "create_project_tab failed after mutation.", {
+      blocker = state.failure_blocker or "project_tab_selection_readback_failed",
+      prior_project_restored = active == true,
+      partial_state = state.partial_state or "blank_tab_created",
+      added_project_count = state.added_project_count,
+    }, false)
+  end
+
+  if resume_continuation then
+    return d30_project_error("INTERNAL_ERROR", "create_project_tab received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+
   local raw_name = type(request.params.name) == "string" and request.params.name or tostring(request.params.name or "")
   local name = d30_project_bounded_text(raw_name, D30_PROJECT_TAB_NAME_MAX_BYTES)
   if name == "" then
@@ -1380,108 +1806,239 @@ local function create_project_tab(request)
     }, false)
   end
 
-  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
-  if not created_tab then
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a new project tab.", {
-      blocker = "new_project_tab_failed",
-      reason = create_reason,
-    }, false)
-  end
-  local added, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
-  if not added then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("VERIFY_FAILED", "New project tab identity could not be verified exactly.", {
-      blocker = added_reason,
-      added_project_count = added_count,
-      prior_project_restored = restored == true,
-      partial_state = "blank_or_unknown_tab_may_remain",
-    }, false)
-  end
-
-  local activate = request.params.activate == true
-  local selection_mode = "none"
-  if activate then
-    local selected, select_mode = d30_project_select_exact(added.project)
-    if not selected then
-      local restored = d30_project_restore(prior.project)
-      return d30_project_error("VERIFY_FAILED", "Created project tab but could not activate it with native readback.", {
-        blocker = select_mode,
-        prior_project_restored = restored == true,
-        partial_state = "blank_tab_created",
-      }, false)
-    end
-    selection_mode = select_mode
-  else
-    local current = d30_project_current_state()
-    if current and current.project == added.project then
-      if not d30_project_restore(prior.project) then
-        return d30_project_error("RESTORE_FAILED", "Created project tab but could not restore the prior active project.", {
-          blocker = "prior_project_restore_failed",
-          partial_state = "blank_tab_created",
-        }, false)
-      end
-      selection_mode = "restored_prior"
-    end
-  end
-
-  local after_state = d30_project_state_for_instance(added.project)
-  if not after_state then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("VERIFY_FAILED", "Created project tab left the inventory without a stable instance.", {
-      blocker = "created_tab_not_enumerated",
-      prior_project_restored = restored == true,
-      partial_state = "blank_or_unknown_tab_may_remain",
-    }, false)
-  end
-  if activate then
-    local current = d30_project_current_state()
-    if not current or current.project ~= added.project then
-      local restored = d30_project_restore(prior.project)
-      return d30_project_error("VERIFY_FAILED", "Created project tab did not remain active after selection.", {
-        blocker = "created_tab_not_active",
-        prior_project_restored = restored == true,
-        partial_state = "blank_tab_created",
-      }, false)
-    end
-  end
-
-  local prior_after = d30_project_state_for_instance(prior.project)
-  local prior_dirty_after = prior_after and d30_project_raw_dirty(prior.project) or nil
-  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= prior_identity.raw_dirty_state then
-    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after tab creation.", {
-      blocker = "prior_project_dirty_or_missing",
-      prior_raw_dirty_before = prior_identity.raw_dirty_state,
-      prior_raw_dirty_after = prior_dirty_after,
-      partial_state = "blank_tab_created",
-    }, false)
-  end
-
-  local project_ref, scheme, value = d30_project_canonical_ref(added.project, after_state.path)
-  local object_ref = d30_project_ref_object(project_ref, {
-    kind = "project_tab",
+  return d30_project_continue("create_project_tab.mutate_create", {
     name = name,
-    activate = activate,
-    label_only = true,
-    materialization = "native_project_tab_verified",
+    activate = request.params.activate == true,
+    projects_before = projects_before,
+    prior_project = prior.project,
+    prior_project_ref = prior_identity.project_ref,
+    prior_raw_dirty_state = prior_identity.raw_dirty_state,
+    selection_mode = "none",
+  }, false, true, prior.project)
+end
+
+local function d30_open_project_in_tab_finish(request, state)
+  local opened_state = d30_project_state_for_instance(state.blank_project)
+  local current = d30_project_current_state()
+  if not opened_state or opened_state.path ~= state.path or not current or current.project ~= state.blank_project or current.path ~= state.path then
+    return d30_project_error("VERIFY_FAILED", "Opened project path/instance readback did not match the exact requested path.", {
+      blocker = "open_project_path_readback_failed",
+      expected_path = state.path,
+      actual_path = opened_state and opened_state.path or (current and current.path or ""),
+      prior_project_restored = false,
+      partial_state = "blank_or_unknown_tab_may_remain",
+      rollback_claimed = false,
+    }, false)
+  end
+
+  local prior_after = d30_project_state_for_instance(state.prior_project)
+  local prior_dirty_after = prior_after and d30_project_raw_dirty(state.prior_project) or nil
+  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= state.prior_raw_dirty_state then
+    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after open.", {
+      blocker = "prior_project_dirty_or_missing",
+      prior_project_ref = state.prior_project_ref,
+      prior_raw_dirty_before = state.prior_raw_dirty_state,
+      prior_raw_dirty_after = prior_dirty_after,
+      partial_state = "target_may_be_open",
+      rollback_claimed = false,
+    }, false)
+  end
+
+  local project_ref = "project:path:" .. state.path
+  local object_ref = d30_project_ref_object(project_ref, {
+    kind = "project",
+    path = state.path,
+    materialization = "native_open_in_tab_verified",
   })
   return d30_project_summary(request, {
     project_ref = project_ref,
-    name = name,
-    created = true,
-    activate = activate,
-    active = activate,
-    path_state = (after_state.path ~= "" and "saved_project") or "unsaved_project",
-    openreaper_label = name,
-    title_claim = "openreaper_label_only",
-    selection_mode = selection_mode,
-    prior_project_ref = prior_identity.project_ref,
+    path = state.path,
+    opened = true,
+    active = true,
+    prior_project_ref = state.prior_project_ref,
+    prior_project_remains_open = true,
     prior_dirty_unchanged = true,
-    prior_raw_dirty_state = prior_identity.raw_dirty_state,
-    live_materialization = "native_project_tab_verified",
+    prior_raw_dirty_state = state.prior_raw_dirty_state,
+    selection_mode = state.selection_mode,
+    live_materialization = "native_open_in_tab_verified",
   }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
 end
 
-local function open_project_in_tab(request)
+local function open_project_in_tab(request, resume_continuation)
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.mutate_create" then
+    local state = resume_continuation.state or {}
+    local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
+    if not created_tab then
+      return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a blank project tab before open.", {
+        blocker = "new_project_tab_failed",
+        reason = create_reason,
+      }, false)
+    end
+    return d30_project_continue("open_project_in_tab.verify_created", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.verify_created" then
+    local state = resume_continuation.state or {}
+    local blank, added_reason, added_count = d30_project_find_single_added_instance(state.projects_before)
+    if not blank then
+      return d30_project_continue("open_project_in_tab.schedule_restore_after_fail", {
+        path = state.path,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Blank project tab identity could not be verified exactly before open.",
+        failure_blocker = added_reason or "created_tab_not_enumerated",
+        partial_state = "blank_or_unknown_tab_may_remain",
+        added_project_count = added_count,
+      }, true, false)
+    end
+    state.blank_project = blank.project
+    local active = d30_project_verify_active(state.blank_project)
+    if active then
+      state.selection_mode = "already_active"
+      return d30_project_continue("open_project_in_tab.open_into_active", state, true, true, state.blank_project or state.prior_project)
+    end
+    return d30_project_continue("open_project_in_tab.mutate_select", state, true, true, state.prior_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.mutate_select" then
+    local state = resume_continuation.state or {}
+    local select_mode = d30_project_schedule_select(state.blank_project)
+    state.selection_mode = select_mode == "already_active" and "already_active" or "select_scheduled"
+    if select_mode == "already_active" then
+      return d30_project_continue("open_project_in_tab.open_into_active", state, true, true, state.blank_project or state.prior_project)
+    end
+    return d30_project_continue("open_project_in_tab.verify_blank_selection", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.verify_blank_selection" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.blank_project)
+    if not active then
+      return d30_project_continue("open_project_in_tab.schedule_restore_after_fail", {
+        path = state.path,
+        blank_project = state.blank_project,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Blank project tab could not be activated before open.",
+        failure_blocker = "project_tab_selection_readback_failed",
+        partial_state = "blank_tab_created",
+      }, true, false)
+    end
+    return d30_project_continue("open_project_in_tab.open_into_active", state, true, true, state.blank_project or state.prior_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.schedule_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.prior_project) then
+      local details = {
+        blocker = state.failure_blocker,
+        prior_project_restored = true,
+        partial_state = state.partial_state,
+        rollback_claimed = false,
+      }
+      if state.open_reason then
+        details.reason = state.open_reason
+        details.recovery = "An extra blank or unknown tab may remain; OpenReaper did not claim tab closure."
+      end
+      if state.expected_path then
+        details.expected_path = state.expected_path
+        details.actual_path = state.actual_path
+      end
+      return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "open_project_in_tab failed after blank tab mutation.", details, false)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.prior_project
+    return d30_project_continue("open_project_in_tab.mutate_restore_after_fail", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.mutate_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.prior_project)
+    return d30_project_continue("open_project_in_tab.verify_restore_after_fail", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.open_into_active" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.blank_project)
+    if not active then
+      return d30_project_error("VERIFY_FAILED", "Blank project tab was not active at open time.", {
+        blocker = "project_tab_selection_readback_failed",
+        prior_project_restored = false,
+        partial_state = "blank_tab_created",
+        rollback_claimed = false,
+      }, false)
+    end
+    local opened, open_reason = d30_project_open_into_active(state.path)
+    if not opened then
+      return d30_project_continue("open_project_in_tab.schedule_restore_after_fail", {
+        path = state.path,
+        blank_project = state.blank_project,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        failure_code = "COMMAND_FAILED",
+        failure_message = "REAPER rejected Main_openProject after blank tab creation.",
+        failure_blocker = "main_open_project_failed",
+        open_reason = open_reason,
+        partial_state = "blank_tab_may_remain",
+      }, true, false)
+    end
+    return d30_project_continue("open_project_in_tab.verify_open_result", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.verify_open_result" then
+    local state = resume_continuation.state or {}
+    local opened_state = d30_project_state_for_instance(state.blank_project)
+    local current = d30_project_current_state()
+    if not opened_state or opened_state.path ~= state.path or not current or current.project ~= state.blank_project or current.path ~= state.path then
+      return d30_project_continue("open_project_in_tab.schedule_restore_after_fail", {
+        path = state.path,
+        blank_project = state.blank_project,
+        prior_project = state.prior_project,
+        prior_project_ref = state.prior_project_ref,
+        prior_raw_dirty_state = state.prior_raw_dirty_state,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Opened project path/instance readback did not match the exact requested path.",
+        failure_blocker = "open_project_path_readback_failed",
+        expected_path = state.path,
+        actual_path = opened_state and opened_state.path or (current and current.path or ""),
+        partial_state = "blank_or_unknown_tab_may_remain",
+      }, true, false)
+    end
+    return d30_open_project_in_tab_finish(request, state)
+  end
+
+  if resume_continuation and resume_continuation.phase == "open_project_in_tab.verify_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    local active = d30_project_verify_active(state.prior_project)
+    local details = {
+      blocker = state.failure_blocker,
+      prior_project_restored = active == true,
+      partial_state = state.partial_state,
+      rollback_claimed = false,
+    }
+    if state.open_reason then
+      details.reason = state.open_reason
+      details.recovery = "An extra blank or unknown tab may remain; OpenReaper did not claim tab closure."
+    end
+    if state.expected_path then
+      details.expected_path = state.expected_path
+      details.actual_path = state.actual_path
+    end
+    return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "open_project_in_tab failed after blank tab mutation.", details, false)
+  end
+
+  if resume_continuation then
+    return d30_project_error("INTERNAL_ERROR", "open_project_in_tab received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+
   if is_json_array(request.refs) and #request.refs > 0 then
     return d30_project_error("REF_INVALID", "open_project_in_tab does not accept caller-supplied refs.", {})
   end
@@ -1536,97 +2093,75 @@ local function open_project_in_tab(request)
       blocker = "project_tab_preflight_enumeration_failed",
     }, false)
   end
-  local created_tab, create_reason = d30_project_call_void("Main_OnCommandEx", D30_NEW_PROJECT_TAB_ACTION, 0, 0)
-  if not created_tab then
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected creation of a blank project tab before open.", {
-      blocker = "new_project_tab_failed",
-      reason = create_reason,
-    }, false)
-  end
-  local blank, added_reason, added_count = d30_project_find_single_added_instance(projects_before)
-  if not blank then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("VERIFY_FAILED", "Blank project tab identity could not be verified exactly before open.", {
-      blocker = added_reason,
-      added_project_count = added_count,
-      prior_project_restored = restored == true,
-      partial_state = "blank_or_unknown_tab_may_remain",
-      rollback_claimed = false,
-    }, false)
-  end
-
-  local selected, select_mode = d30_project_select_exact(blank.project)
-  if not selected then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("VERIFY_FAILED", "Blank project tab could not be activated before open.", {
-      blocker = select_mode,
-      prior_project_restored = restored == true,
-      partial_state = "blank_tab_created",
-      rollback_claimed = false,
-    }, false)
-  end
-
-  local opened, open_reason = d30_project_open_into_active(path)
-  if not opened then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("COMMAND_FAILED", "REAPER rejected Main_openProject after blank tab creation.", {
-      blocker = "main_open_project_failed",
-      reason = open_reason,
-      prior_project_restored = restored == true,
-      partial_state = "blank_tab_may_remain",
-      rollback_claimed = false,
-      recovery = "An extra blank or unknown tab may remain; OpenReaper did not claim tab closure.",
-    }, false)
-  end
-
-  local opened_state = d30_project_state_for_instance(blank.project)
-  local current = d30_project_current_state()
-  if not opened_state or opened_state.path ~= path or not current or current.project ~= blank.project or current.path ~= path then
-    local restored = d30_project_restore(prior.project)
-    return d30_project_error("VERIFY_FAILED", "Opened project path/instance readback did not match the exact requested path.", {
-      blocker = "open_project_path_readback_failed",
-      expected_path = path,
-      actual_path = opened_state and opened_state.path or (current and current.path or ""),
-      prior_project_restored = restored == true,
-      partial_state = "blank_or_unknown_tab_may_remain",
-      rollback_claimed = false,
-    }, false)
-  end
-
-  local prior_after = d30_project_state_for_instance(prior.project)
-  local prior_dirty_after = prior_after and d30_project_raw_dirty(prior.project) or nil
-  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= prior_identity.raw_dirty_state then
-    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after open.", {
-      blocker = "prior_project_dirty_or_missing",
-      prior_project_ref = prior_identity.project_ref,
-      prior_raw_dirty_before = prior_identity.raw_dirty_state,
-      prior_raw_dirty_after = prior_dirty_after,
-      partial_state = "target_may_be_open",
-      rollback_claimed = false,
-    }, false)
-  end
-
-  local project_ref = "project:path:" .. path
-  local object_ref = d30_project_ref_object(project_ref, {
-    kind = "project",
+  return d30_project_continue("open_project_in_tab.mutate_create", {
     path = path,
-    materialization = "native_open_in_tab_verified",
+    projects_before = projects_before,
+    prior_project = prior.project,
+    prior_project_ref = prior_identity.project_ref,
+    prior_raw_dirty_state = prior_identity.raw_dirty_state,
+    selection_mode = "none",
+  }, false, true, prior.project)
+end
+
+local function d30_activate_project_tab_finish(request, state)
+  local active = d30_project_verify_active(state.target_project)
+  if not active then
+    return d30_project_error("VERIFY_FAILED", "activate_project_tab readback did not show the exact target as current.", {
+      blocker = "activation_readback_failed",
+      project_ref = state.project_ref,
+    }, false)
+  end
+
+  local prior_after = d30_project_state_for_instance(state.prior_project)
+  local prior_dirty_after = prior_after and d30_project_raw_dirty(state.prior_project) or nil
+  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= state.prior_raw_dirty_state then
+    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after activation.", {
+      blocker = "prior_project_dirty_or_missing",
+      prior_project_ref = state.prior_project_ref,
+      prior_raw_dirty_before = state.prior_raw_dirty_state,
+      prior_raw_dirty_after = prior_dirty_after,
+    }, false)
+  end
+
+  local object_ref = d30_project_ref_object(state.project_ref, {
+    kind = "project",
+    active = true,
+    materialization = "native_activate_verified",
   })
   return d30_project_summary(request, {
-    project_ref = project_ref,
-    path = path,
-    opened = true,
-    active = true,
-    prior_project_ref = prior_identity.project_ref,
+    project_ref = state.project_ref,
+    activated = true,
+    already_active = false,
+    selection_mode = state.selection_mode or "select_scheduled",
+    prior_project_ref = state.prior_project_ref,
     prior_project_remains_open = true,
     prior_dirty_unchanged = true,
-    prior_raw_dirty_state = prior_identity.raw_dirty_state,
-    selection_mode = select_mode,
-    live_materialization = "native_open_in_tab_verified",
+    prior_raw_dirty_state = state.prior_raw_dirty_state,
+    live_materialization = "native_activate_verified",
   }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
 end
 
-local function activate_project_tab(request)
+local function activate_project_tab(request, resume_continuation)
+  if resume_continuation and resume_continuation.phase == "activate_project_tab.mutate_select" then
+    local state = resume_continuation.state or {}
+    local select_mode = d30_project_schedule_select(state.target_project)
+    state.selection_mode = select_mode == "already_active" and "already_active" or "select_scheduled"
+    if select_mode == "already_active" then
+      return d30_activate_project_tab_finish(request, state)
+    end
+    return d30_project_continue("activate_project_tab.verify_selection", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "activate_project_tab.verify_selection" then
+    return d30_activate_project_tab_finish(request, resume_continuation.state or {})
+  end
+  if resume_continuation then
+    return d30_project_error("INTERNAL_ERROR", "activate_project_tab received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+
   local project_ref, ref_reason = d30_project_parse_project_ref(request)
   if not project_ref then
     return d30_project_error("REF_INVALID", "activate_project_tab requires exactly one canonical project ref.", {
@@ -1682,48 +2217,15 @@ local function activate_project_tab(request)
     }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
   end
 
-  local selected, select_mode = d30_project_select_exact(target.project)
-  if not selected then
-    return d30_project_error("VERIFY_FAILED", "activate_project_tab could not make the exact project current.", {
-      blocker = select_mode,
-      project_ref = project_ref,
-    }, false)
-  end
-  local current = d30_project_current_state()
-  if not current or current.project ~= target.project then
-    return d30_project_error("VERIFY_FAILED", "activate_project_tab readback did not show the exact target as current.", {
-      blocker = "activation_readback_failed",
-      project_ref = project_ref,
-    }, false)
-  end
-
-  local prior_after = d30_project_state_for_instance(prior.project)
-  local prior_dirty_after = prior_after and d30_project_raw_dirty(prior.project) or nil
-  if not prior_after or prior_dirty_after == nil or prior_dirty_after ~= prior_identity.raw_dirty_state then
-    return d30_project_error("VERIFY_FAILED", "Prior project did not remain open with unchanged dirty state after activation.", {
-      blocker = "prior_project_dirty_or_missing",
-      prior_project_ref = prior_identity.project_ref,
-      prior_raw_dirty_before = prior_identity.raw_dirty_state,
-      prior_raw_dirty_after = prior_dirty_after,
-    }, false)
-  end
-
-  local object_ref = d30_project_ref_object(project_ref, {
-    kind = "project",
-    active = true,
-    materialization = "native_activate_verified",
-  })
-  return d30_project_summary(request, {
+  local state = {
     project_ref = project_ref,
-    activated = true,
-    already_active = false,
-    selection_mode = select_mode,
+    target_project = target.project,
+    prior_project = prior.project,
     prior_project_ref = prior_identity.project_ref,
-    prior_project_remains_open = true,
-    prior_dirty_unchanged = true,
     prior_raw_dirty_state = prior_identity.raw_dirty_state,
-    live_materialization = "native_activate_verified",
-  }), nil, json_array({ object_ref }), json_array({}), json_array({ object_ref })
+    selection_mode = "select_scheduled",
+  }
+  return d30_project_continue("activate_project_tab.mutate_select", state, false, true, prior.project)
 end
 
 local function insert_subproject_item(request)
@@ -1935,7 +2437,174 @@ local function insert_subproject_item(request)
   }), nil, json_array({ item_object_ref, child_object_ref }), json_array({}), json_array({ item_object_ref, child_object_ref })
 end
 
-local function render_or_update_subproject(request)
+local function render_or_update_subproject(request, resume_continuation)
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.mutate_select_child" then
+    local state = resume_continuation.state or {}
+    local mode = d30_project_schedule_select(state.child_project)
+    state.selection_mode = mode
+    if mode == "already_active" then
+      return d30_project_continue("render_or_update_subproject.mutate_render", state, true, true, state.child_project)
+    end
+    return d30_project_continue("render_or_update_subproject.verify_select_child", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.verify_select_child" then
+    local state = resume_continuation.state or {}
+    if not d30_project_verify_active(state.child_project) then
+      return d30_project_continue("render_or_update_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        mode = state.mode,
+        linked_item = state.linked_item,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Open subproject could not be activated for native save/render.",
+        failure_blocker = "project_tab_selection_readback_failed",
+      }, true, false)
+    end
+    return d30_project_continue("render_or_update_subproject.mutate_render", state, true, true, state.child_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.mutate_render" then
+    local state = resume_continuation.state or {}
+    local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, state.child_project)
+    if not rendered then
+      return d30_project_continue("render_or_update_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        mode = state.mode,
+        linked_item = state.linked_item,
+        failure_code = "COMMAND_FAILED",
+        failure_message = "REAPER rejected native subproject save/render.",
+        failure_blocker = "subproject_render_action_failed",
+        reason = render_reason,
+      }, true, false)
+    end
+    return d30_project_continue("render_or_update_subproject.verify_render", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.verify_render" then
+    local state = resume_continuation.state or {}
+    local child_state = d30_project_state_for_instance(state.child_project)
+    if not child_state or child_state.path ~= state.child_path or not file_exists(state.proxy_path) then
+      return d30_project_continue("render_or_update_subproject.schedule_restore_after_fail", {
+        parent_project = state.parent_project,
+        child_path = state.child_path,
+        proxy_path = state.proxy_path,
+        mode = state.mode,
+        linked_item = state.linked_item,
+        failure_code = "VERIFY_FAILED",
+        failure_message = "Subproject proxy did not read back after native save/render.",
+        failure_blocker = "subproject_render_readback_failed",
+      }, true, false)
+    end
+    return d30_project_continue("render_or_update_subproject.schedule_restore", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.schedule_restore" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.parent_project) then
+      return d30_project_continue("render_or_update_subproject.verify_restore", state, true, false)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.parent_project
+    return d30_project_continue("render_or_update_subproject.mutate_restore", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.mutate_restore" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.parent_project)
+    return d30_project_continue("render_or_update_subproject.verify_restore", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.verify_restore" then
+    local state = resume_continuation.state or {}
+    if not d30_project_verify_active(state.parent_project) then
+      return d30_project_error("RESTORE_FAILED", "Rendered subproject but could not restore the parent project.", {
+        child_project_path = state.child_path,
+        prior_project_restored = false,
+      }, false)
+    end
+    if state.linked_item and not d30_item_source_truth(state.linked_item, state.proxy_path, state.child_path) then
+      return d30_project_error("VERIFY_FAILED", "Linked subproject Item did not retain exact source association after render.", {
+        blocker = "linked_item_source_readback_failed",
+        proxy_path = state.proxy_path,
+      }, false)
+    end
+    local id = d30_project_safe_id(request, "subproject_job")
+    local child_ref = "project:path:" .. state.child_path
+    local job_ref = {
+      kind = "job",
+      ref = "job:job_id:project.subproject." .. id,
+      identity = {
+        scheme = "job_id",
+        value = "project.subproject." .. id,
+      },
+      summary = {
+        template_id = "template.project.render_or_update_subproject",
+        pack = "project",
+        mode = state.mode,
+        state = "completed",
+        synchronous = true,
+      },
+    }
+    local child_object_ref = d30_project_ref_object(child_ref, {
+      kind = "subproject",
+      mode = state.mode,
+      path = state.child_path,
+      proxy_path = state.proxy_path,
+      materialization = "native_rpp_proxy_verified",
+    })
+    return d30_project_summary(request, {
+      subproject_project_ref = child_ref,
+      job_ref = job_ref.ref,
+      queued = false,
+      completed = true,
+      synchronous = true,
+      mode = state.mode,
+      proxy_path = state.proxy_path,
+      parent_restored = true,
+      linked_item_verified = state.linked_item ~= nil,
+      live_materialization = "native_rpp_proxy_verified",
+    }), nil, json_array({ child_object_ref }), json_array({ job_ref }), json_array({ child_object_ref })
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.schedule_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    if d30_project_verify_active(state.parent_project) then
+      return d30_project_continue("render_or_update_subproject.verify_restore_after_fail", state, true, false)
+    end
+    local current = d30_project_current_state()
+    local undo_project = current and current.project or state.parent_project
+    return d30_project_continue("render_or_update_subproject.mutate_restore_after_fail", state, true, true, undo_project)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.mutate_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    d30_project_schedule_select(state.parent_project)
+    return d30_project_continue("render_or_update_subproject.verify_restore_after_fail", state, true, false)
+  end
+
+  if resume_continuation and resume_continuation.phase == "render_or_update_subproject.verify_restore_after_fail" then
+    local state = resume_continuation.state or {}
+    local restored = d30_project_verify_active(state.parent_project)
+    return d30_project_error(state.failure_code or "VERIFY_FAILED", state.failure_message or "render_or_update_subproject failed after mutation.", {
+      blocker = state.failure_blocker,
+      reason = state.reason,
+      prior_project_restored = restored == true,
+      child_project_path = state.child_path,
+      proxy_path = state.proxy_path,
+    }, false)
+  end
+
+  if resume_continuation then
+    return d30_project_error("INTERNAL_ERROR", "render_or_update_subproject received an unknown continuation phase.", {
+      blocker = "malformed_internal_continuation",
+      phase = resume_continuation.phase,
+    }, false)
+  end
+
   local mode = request.params.mode or "render_or_update"
   if mode ~= "render" and mode ~= "update" and mode ~= "render_or_update" then
     return d30_project_error("PARAMS_INVALID", "render_or_update_subproject mode is invalid.", {
@@ -1990,67 +2659,14 @@ local function render_or_update_subproject(request)
     }, false)
   end
 
-  local rendered, render_reason = d30_project_call_void("Main_OnCommandEx", D30_SAVE_RENDER_SUBPROJECT_ACTION, 0, child_project)
-  if not rendered then
-    return d30_project_failure_after_restore(parent.project, "COMMAND_FAILED", "REAPER rejected native subproject save/render.", {
-      blocker = "subproject_render_action_failed",
-      reason = render_reason,
-    }, false)
-  end
-  local proxy_path = child_path .. "-PROX"
-  child_state = d30_project_state_for_instance(child_project)
-  if not child_state or child_state.path ~= child_path or not file_exists(proxy_path) then
-    return d30_project_failure_after_restore(parent.project, "VERIFY_FAILED", "Subproject proxy did not read back after native save/render.", {
-      blocker = "subproject_render_readback_failed",
-      proxy_path = proxy_path,
-    }, false)
-  end
-  if not d30_project_restore(parent.project) then
-    return d30_project_error("RESTORE_FAILED", "Rendered subproject but could not restore the parent project.", {
-      child_project_path = child_path,
-    }, false)
-  end
-  if linked_item and not d30_item_source_truth(linked_item, proxy_path, child_path) then
-    return d30_project_error("VERIFY_FAILED", "Linked subproject Item did not retain exact source association after render.", {
-      blocker = "linked_item_source_readback_failed",
-      proxy_path = proxy_path,
-    }, false)
-  end
-
-  local id = d30_project_safe_id(request, "subproject_job")
-  local child_ref = "project:path:" .. child_path
-  local job_ref = {
-    kind = "job",
-    ref = "job:job_id:project.subproject." .. id,
-    identity = {
-      scheme = "job_id",
-      value = "project.subproject." .. id,
-    },
-    summary = {
-      template_id = "template.project.render_or_update_subproject",
-      pack = "project",
-      mode = mode,
-      state = "completed",
-      synchronous = true,
-    },
+  local state = {
+    mode = mode,
+    parent_project = parent.project,
+    child_project = child_project,
+    child_path = child_path,
+    proxy_path = child_path .. "-PROX",
+    linked_item = linked_item,
   }
-  local child_object_ref = d30_project_ref_object(child_ref, {
-    kind = "subproject",
-    mode = mode,
-    path = child_path,
-    proxy_path = proxy_path,
-    materialization = "native_rpp_proxy_verified",
-  })
-  return d30_project_summary(request, {
-    subproject_project_ref = child_ref,
-    job_ref = job_ref.ref,
-    queued = false,
-    completed = true,
-    synchronous = true,
-    mode = mode,
-    proxy_path = proxy_path,
-    parent_restored = true,
-    linked_item_verified = linked_item ~= nil,
-    live_materialization = "native_rpp_proxy_verified",
-  }), nil, json_array({ child_object_ref }), json_array({ job_ref }), json_array({ child_object_ref })
+  -- Native save/render accepts the open child pointer; do not force selection.
+  return d30_project_continue("render_or_update_subproject.mutate_render", state, false, true, child_project)
 end
