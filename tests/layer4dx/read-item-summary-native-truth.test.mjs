@@ -55,11 +55,11 @@ describe("Alpha3.4-D1 read_item_summary native truth", () => {
     const templates = createWave1AItemsTemplates();
     assert.equal(WAVE1A_ITEMS_TEMPLATE_IDS.includes("template.items.read_item_summary"), true);
     assert.equal(templates.some((entry) => entry.id === "template.items.read_item_summary"), true);
-    assert.equal(REGISTRY.entries.length, 232);
+    assert.equal(REGISTRY.entries.length, 235);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
-    assert.equal(registry.entries.length, 232);
+    assert.equal(registry.entries.length, 235);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.match(BRIDGE_SOURCE, /function read_item_summary\(/);
     assert.match(BRIDGE_SOURCE, /volume_db/);

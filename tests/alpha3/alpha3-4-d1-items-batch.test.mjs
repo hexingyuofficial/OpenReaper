@@ -191,14 +191,14 @@ function countLua(dir) {
 }
 
 describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
-  it("keeps mode list and exact public counts 5/15/232/91", () => {
+  it("keeps mode list and exact public counts 5/15/235/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 5);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
-    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 232);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });
     validateBridgeHandlerRegistry({ cwd: ROOT, registry });
-    assert.equal(registry.entries.length, 232);
+    assert.equal(registry.entries.length, 235);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.equal(countLua(path.join(ROOT, "reaper/bridge/src/handlers")), 91);
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY.ids.includes(ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID), true);

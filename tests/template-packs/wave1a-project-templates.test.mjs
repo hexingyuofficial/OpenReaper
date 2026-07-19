@@ -48,6 +48,9 @@ const PROJECT_ALLOWLIST = Object.freeze([
   "template.project.read_track_item_overview",
   "template.project.create_subproject",
   "template.project.create_project_tab",
+  "template.project.list_open_projects",
+  "template.project.open_project_in_tab",
+  "template.project.activate_project_tab",
   "template.project.insert_subproject_item",
   "template.project.render_or_update_subproject",
 ]);
@@ -151,6 +154,7 @@ describe("Wave 1A project template descriptors", () => {
     const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
     const createSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createSubproject);
     const createProjectTab = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createProjectTab);
+    const listOpenProjects = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.listOpenProjects);
     const insertSubprojectItem = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.insertSubprojectItem);
     const renderOrUpdateSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.renderOrUpdateSubproject);
 
@@ -178,6 +182,13 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(createSubproject.bridge.timeout_ms, 300_000);
     assert.equal(Object.hasOwn(createSubproject.inputSchema.properties, "raw_action"), false);
     assert.equal(Object.hasOwn(createProjectTab.inputSchema.properties, "project_file_path"), false);
+    assert.equal(listOpenProjects.risk, "read");
+    assert.equal(listOpenProjects.bridge.operation_family, "query_state");
+    assert.deepEqual(listOpenProjects.inputSchema.properties.cursor.oneOf, [
+      { type: "integer", minimum: 0 },
+      { type: "string", pattern: "^[0-9]+$" },
+    ]);
+    assert.equal(listOpenProjects.outputSchema.properties.next_cursor.type, "string");
   });
 
   it("keeps tempo, BPM, grid, and snap setters as project-owned static atoms", () => {

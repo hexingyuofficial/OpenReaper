@@ -741,9 +741,12 @@ export const CALL_TEMPLATE_RUNTIME_D29_RENDER_OUTPUT_POLICY_TEMPLATE_IDS = deepF
 ]);
 
 export const CALL_TEMPLATE_RUNTIME_D30_PROJECT_CONTAINER_TEMPLATE_IDS = deepFreeze([
+  "template.project.activate_project_tab",
   "template.project.create_project_tab",
   "template.project.create_subproject",
   "template.project.insert_subproject_item",
+  "template.project.list_open_projects",
+  "template.project.open_project_in_tab",
   "template.project.render_or_update_subproject",
 ]);
 
@@ -808,12 +811,19 @@ const LIVE_TEMPLATE_GROUPS = Object.freeze([
   ["alpha3_3_lifecycle_atoms", CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS],
 ]);
 
+const CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS = deepFreeze([
+  "template.project.activate_project_tab",
+  "template.project.list_open_projects",
+  "template.project.open_project_in_tab",
+]);
+
 const CALL_TEMPLATE_RUNTIME_ALPHA3_PRODUCT_TEMPLATE_IDS = new Set([
   "template.project.create_project_map_snapshot",
   "template.project.create_observation_bundle",
   "template.automation.list_project_envelopes",
   "template.automation.delete_envelope_points",
   "template.items.set_active_take",
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3A_PROJECT_FILE_READ_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_2C3BC_PROJECT_FILE_SAVE_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
@@ -852,6 +862,7 @@ export const CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS = deepFreez
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_B1D_AUTOMATION_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_D31_RENDER_TARGETS_TEMPLATE_IDS,
   ...CALL_TEMPLATE_RUNTIME_ALPHA3_3_LIFECYCLE_ATOM_TEMPLATE_IDS,
+  ...CALL_TEMPLATE_RUNTIME_ALPHA3_4_D3_PROJECT_SWITCHING_TEMPLATE_IDS,
 ]);
 
 // Alpha3.3 lifecycle atoms passed fresh-root native/Macro live smoke on 2026-07-14.

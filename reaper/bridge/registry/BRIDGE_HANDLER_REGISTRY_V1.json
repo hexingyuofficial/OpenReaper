@@ -1827,6 +1827,23 @@
       ]
     },
     {
+      "template_id": "template.project.activate_project_tab",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "safe",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "activate_project_tab",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.activate_project_tab"
+    },
+    {
       "template_id": "template.project.create_project_tab",
       "operation": {
         "family": "run_command",
@@ -1876,6 +1893,39 @@
         "tests/layer4dr/bridge-handler-registry.test.mjs"
       ],
       "capability": "project.insert_subproject_item"
+    },
+    {
+      "template_id": "template.project.list_open_projects",
+      "operation": {
+        "family": "query_state",
+        "name": "project.list_open_projects"
+      },
+      "pack": "project",
+      "risk": "read",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "list_open_projects",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ]
+    },
+    {
+      "template_id": "template.project.open_project_in_tab",
+      "operation": {
+        "family": "run_command",
+        "name": "template.execute"
+      },
+      "pack": "project",
+      "risk": "write",
+      "route": "d30-project-container-handlers",
+      "handler_file": "project/d30_project_container_route.lua",
+      "handler_export": "open_project_in_tab",
+      "artifact_policy": "none",
+      "tests": [
+        "tests/layer4dr/bridge-handler-registry.test.mjs"
+      ],
+      "capability": "project.open_project_in_tab"
     },
     {
       "template_id": "template.project.render_or_update_subproject",

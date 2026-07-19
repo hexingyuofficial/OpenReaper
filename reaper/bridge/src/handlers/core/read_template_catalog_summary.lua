@@ -1,7 +1,7 @@
 -- Extracted Wave 1A handler: template.core.read_template_catalog_summary.
 
 local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
-  template_count = 232,
+  template_count = 235,
   by_pack = {
     actions = 8,
     analysis = 7,
@@ -11,7 +11,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     items = 35,
     media = 7,
     midi = 14,
-    project = 30,
+    project = 33,
     render = 26,
     routing = 21,
     system = 3,
@@ -20,12 +20,12 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
   },
   by_risk = {
     destructive = 15,
-    read = 81,
-    safe = 12,
-    write = 124,
+    read = 82,
+    safe = 13,
+    write = 125,
   },
   by_lifecycle = {
-    experimental = 232,
+    experimental = 235,
   },
   by_entity_kind = {
     action = 4,
@@ -69,10 +69,10 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
     playback_rate = 1,
     plugin = 1,
     preset = 2,
-    project = 8,
+    project = 10,
     project_observation = 1,
     project_snapshot = 1,
-    project_tab = 1,
+    project_tab = 2,
     record_mode = 1,
     recording = 2,
     ["recording.punch_range"] = 1,
@@ -111,7 +111,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_COUNTS = {
 }
 
 local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
-  template_count = 232,
+  template_count = 235,
   by_pack = {
     actions = 8,
     analysis = 7,
@@ -121,7 +121,7 @@ local READ_TEMPLATE_CATALOG_SUMMARY_LIVE_HANDLER_COUNTS = {
     items = 35,
     media = 7,
     midi = 14,
-    project = 30,
+    project = 33,
     render = 26,
     routing = 21,
     system = 3,

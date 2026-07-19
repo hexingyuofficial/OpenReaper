@@ -100,11 +100,11 @@ describe("Alpha3.4-C2 MIDI native coordinate atom", () => {
     const templates = createWave2AMidiTemplates();
     assert.equal(WAVE2A_MIDI_TEMPLATE_IDS.length, 14);
     assert.equal(templates.length, 14);
-    assert.equal(REGISTRY.entries.length, 232);
+    assert.equal(REGISTRY.entries.length, 235);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     validateBridgeHandlerRegistry({ cwd: ROOT.pathname, registry });
-    assert.equal(registry.entries.length, 232);
+    assert.equal(registry.entries.length, 235);
     assert.equal(new Set(registry.entries.map((entry) => entry.handler_file)).size, 91);
     assert.match(BRIDGE_SOURCE, /MIDI_GetPPQPosFromProjQN/);
     assert.match(BRIDGE_SOURCE, /MIDI_GetProjQNFromPPQPos/);

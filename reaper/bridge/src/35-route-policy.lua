@@ -186,6 +186,8 @@ local D29_RENDER_JOB_OPERATIONS = {
 local D30_PROJECT_CONTAINER_CAPABILITIES = {
   ["project.create_subproject"] = { pack = "project", risk = "write" },
   ["project.create_project_tab"] = { pack = "project", risk = "write" },
+  ["project.open_project_in_tab"] = { pack = "project", risk = "write" },
+  ["project.activate_project_tab"] = { pack = "project", risk = "safe" },
   ["project.insert_subproject_item"] = { pack = "project", risk = "write" },
   ["project.render_or_update_subproject"] = { pack = "project", risk = "write" },
 }

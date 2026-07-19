@@ -91,7 +91,7 @@ describe("Layer 4D.2 REAPER-side live bridge script", () => {
     assert.doesNotMatch(sourceModules["40-route-pack-handlers.lua"], /local TRANSPORT_DIR = non_empty\(os\.getenv\(TRANSPORT_ENV\)\)/);
     assert.match(
       readFileSync(new URL("../../reaper/bridge/src/handlers/core/read_template_catalog_summary.lua", import.meta.url), "utf8"),
-      /template_count = 232/,
+      /template_count = 235/,
     );
     assert.match(sourceModules["90-file-transport-loop.lua"], /reaper\.EnumerateFiles\(REQUESTS_DIR, index\)/);
     assert.match(sourceModules["90-file-transport-loop.lua"], /local completed_request_files = \{\}/);
@@ -312,6 +312,7 @@ assert(requests["/claims/filename-id.json"] == nil)
       "midi.resolve_midi_take_ref",
       "openreaper.read_status",
       "project.list_markers_regions",
+      "project.list_open_projects",
       "project.read_current_project_path",
       "project.read_dirty_state",
       "project.read_metadata",

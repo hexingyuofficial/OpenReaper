@@ -71,8 +71,8 @@ describe("Alpha3.3 exact lifecycle atom handler truth", () => {
       ["automation/ensure_take_pitch_envelope.lua", "alpha33_ensure_take_pitch_envelope"],
       ["analysis/d27_item_audio_analysis.lua", "alpha33_split_item_by_silence"],
     ]);
-    assert.equal(summary.entryCount, 232);
-    assert.equal(summary.extractedHandlerCount, 232);
+    assert.equal(summary.entryCount, 235);
+    assert.equal(summary.extractedHandlerCount, 235);
     assert.equal(summary.handlerModuleCount, 91);
     assert.equal(summary.routeCount, 34);
 
@@ -795,7 +795,7 @@ assert(summary == nil and failure.code == "REF_INVALID" and calls.action == befo
     }
   });
 
-  it("keeps public catalog and live-handler counts equal to the actual 232-row catalog and registry", () => {
+  it("keeps public catalog and live-handler counts equal to the actual 235-row catalog and registry", () => {
     const templates = createAcceptedOfficialTemplateCatalogTemplates();
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT.pathname });
     const byPack = countBy(templates, "pack");

@@ -99,10 +99,10 @@ describe("Alpha3.2.5-F product truth", () => {
     const facts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
     assert.deepEqual(facts, {
       accepted_macro_count: 15,
-      accepted_template_count: 232,
+      accepted_template_count: 235,
       bridge_handler_count: 91,
     });
-    assert.equal(handlerRegistry.entries.length, 232);
+    assert.equal(handlerRegistry.entries.length, 235);
     assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 91);
   });
 

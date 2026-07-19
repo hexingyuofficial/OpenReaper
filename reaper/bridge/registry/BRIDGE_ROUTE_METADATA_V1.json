@@ -3,12 +3,12 @@
   "generated_from": "reaper/bridge/registry/BRIDGE_HANDLER_REGISTRY_V1.json",
   "registry_summary": {
     "contract": "openreaper.bridge_handler_registry.v1",
-    "entryCount": 232,
+    "entryCount": 235,
     "legacyMonolithCount": 0,
-    "extractedHandlerCount": 232,
+    "extractedHandlerCount": 235,
     "handlerModuleCount": 91,
     "routeCount": 34,
-    "operationCount": 102
+    "operationCount": 103
   },
   "routes": [
     {
@@ -526,13 +526,15 @@
     },
     {
       "route": "d30-project-container-handlers",
-      "template_count": 4,
+      "template_count": 7,
       "handler_module_count": 1,
-      "operation_count": 4,
+      "operation_count": 7,
       "packs": [
         "project"
       ],
       "risks": [
+        "read",
+        "safe",
         "write"
       ],
       "artifact_policies": [
@@ -542,9 +544,12 @@
         "tests/layer4dr/bridge-handler-registry.test.mjs"
       ],
       "template_ids": [
+        "template.project.activate_project_tab",
         "template.project.create_project_tab",
         "template.project.create_subproject",
         "template.project.insert_subproject_item",
+        "template.project.list_open_projects",
+        "template.project.open_project_in_tab",
         "template.project.render_or_update_subproject"
       ]
     },

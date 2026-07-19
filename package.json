@@ -70,7 +70,8 @@
     "check:alpha3-4-c2-upper": "node --test tests/alpha3/alpha3-4-c2-midi-musical-timing.test.mjs",
     "check:alpha3-4-d1-readback-atom": "node --test tests/layer4dx/read-item-summary-native-truth.test.mjs tests/template-packs/wave1a-items-templates.test.mjs",
     "check:alpha3-4-d1-items-batch": "node --test tests/alpha3/alpha3-4-d1-items-batch.test.mjs tests/alpha3/alpha3-4-d1-items-batch-live-harness.test.mjs",
-    "check:alpha3-4-d2-fx-batch": "node --test tests/alpha3/alpha3-4-d2-fx-batch.test.mjs tests/alpha3/alpha3-4-d2-fx-batch-live-harness.test.mjs"
+    "check:alpha3-4-d2-fx-batch": "node --test tests/alpha3/alpha3-4-d2-fx-batch.test.mjs tests/alpha3/alpha3-4-d2-fx-batch-live-harness.test.mjs",
+    "check:alpha3-4-d3-project-switching-atoms": "node --test tests/layer4dx/alpha3-4-d3-project-switching-native-atoms.test.mjs tests/template-packs/wave1a-project-templates.test.mjs tests/layer4dr/bridge-handler-registry.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"

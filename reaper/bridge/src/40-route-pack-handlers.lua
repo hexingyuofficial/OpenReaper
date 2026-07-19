@@ -957,6 +957,8 @@ local D29_RENDER_SETTINGS_WRITE_HANDLERS = {
 local D30_PROJECT_CONTAINER_HANDLERS = {
   ["project.create_subproject"] = create_subproject,
   ["project.create_project_tab"] = create_project_tab,
+  ["project.open_project_in_tab"] = open_project_in_tab,
+  ["project.activate_project_tab"] = activate_project_tab,
   ["project.insert_subproject_item"] = insert_subproject_item,
   ["project.render_or_update_subproject"] = render_or_update_subproject,
 }
@@ -1118,6 +1120,10 @@ local ALLOWED_OPERATIONS = {
   ["query_state:project.read_track_item_overview"] = {
     pack = "project",
     handler = read_track_item_overview,
+  },
+  ["query_state:project.list_open_projects"] = {
+    pack = "project",
+    handler = list_open_projects,
   },
   ["query_state:transport.read_state"] = {
     pack = "transport",
