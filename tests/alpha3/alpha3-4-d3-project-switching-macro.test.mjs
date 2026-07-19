@@ -39,10 +39,11 @@ function makeInventory(rows, { cursor = 0, limit = 100, total = rows.length } = 
 }
 
 function makeExecutor(handlers) {
-  return async ({ id, input, refs }) => {
+  return async (call) => {
+    const { id, input, refs } = call;
     const handler = handlers[id];
     if (!handler) return { ok: false, error: { code: "MISSING", message: `no handler ${id}` } };
-    return handler(input, refs);
+    return handler(input, refs, call);
   };
 }
 
@@ -118,6 +119,54 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION, "1.2.0");
     assert.equal(ALPHA3_2C3D_PROJECT_FILE_MACRO_ID, "macro.project.file");
+  });
+
+  it("uses a bounded internal inventory budget without weakening the public 2 KiB identity gate", async () => {
+    const publicBudget = { max_response_bytes: 2048, max_items: 25, max_inline_value_bytes: 256 };
+    const pathA = "/session/Parent.RPP";
+    let childBudget = null;
+    const listed = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "list_open_projects", cursor: "0", limit: 1 },
+        request_id: "list-budget",
+        budget: publicBudget,
+      },
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": (_input, _refs, call) => {
+          childBudget = call.budget;
+          return makeInventory([row(pathA, { active: true })]);
+        },
+      }),
+    });
+    assert.equal(listed.ok, true, JSON.stringify(listed.error));
+    assert.ok(childBudget.max_response_bytes >= 32_768);
+    assert.ok(childBudget.max_response_bytes <= 65_536);
+    assert.ok(childBudget.max_inline_value_bytes >= 4096);
+    assert.equal(childBudget.max_items, 25);
+    assert.equal(listed.budget.max_bytes, 2048);
+    assert.ok(listed.budget.actual_bytes <= 2048, listed.budget.actual_bytes);
+
+    const longPath = `/session/${"x".repeat(1800)}.RPP`;
+    let longIdentityChildBudget = null;
+    const blocked = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "list_open_projects", cursor: "0", limit: 1 },
+        request_id: "list-long-identity",
+        budget: publicBudget,
+      },
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": (_input, _refs, call) => {
+          longIdentityChildBudget = call.budget;
+          return makeInventory([row(longPath, { active: true })]);
+        },
+      }),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(blocked.error.details?.zero_write, true);
+    assert.ok(longIdentityChildBudget.max_response_bytes >= 32_768);
+    assert.equal(blocked.budget.max_bytes, 2048);
+    assert.ok(blocked.budget.actual_bytes <= 2048, blocked.budget.actual_bytes);
   });
 
   it("preserves full project_ref identities on public pages under 2 KiB and never slices rows", async () => {
@@ -221,16 +270,18 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     ];
     const index = makeIndex({ project_ref: "project:path:/session/a.RPP", project_path: "/session/a.RPP" });
     let listCalls = 0;
+    const listBudgets = [];
     const envelope = await executeAlpha3_2_5CProjectFileMacro({
       request: {
         input: { operation: "activate_project_tab", project_ref: "project:path:/session/c.RPP" },
         request_id: "page-last",
-        budget: { max_response_bytes: 4096 },
+        budget: { max_response_bytes: 2048, max_items: 1, max_inline_value_bytes: 256 },
       },
       projectIndexRuntime: index,
       executeAtomic: makeExecutor({
-        "template.project.list_open_projects": (input) => {
+        "template.project.list_open_projects": (input, _refs, call) => {
           listCalls += 1;
+          listBudgets.push(call.budget);
           const cursor = Number(input.cursor || 0);
           return makeInventory(rows, { cursor, limit: 1, total: rows.length });
         },
@@ -251,6 +302,10 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     });
     assert.equal(envelope.ok, true, JSON.stringify(envelope.error));
     assert.ok(listCalls >= 3, `expected multi-page hydration, got ${listCalls}`);
+    assert.ok(listBudgets.every((budget) => budget.max_response_bytes >= 32_768));
+    assert.ok(listBudgets.every((budget) => budget.max_inline_value_bytes >= 4096));
+    assert.ok(listBudgets.every((budget) => budget.max_items === 1));
+    assert.ok(envelope.budget.actual_bytes <= 2048, envelope.budget.actual_bytes);
   });
 
   it("fails closed on paged/null cursor, zero-row incomplete, and repeated cursor", async () => {

@@ -50,6 +50,7 @@ const PUBLIC_RESPONSE_BUDGET_BYTES = 2_048;
 const LIST_DEFAULT_LIMIT = 25;
 const LIST_HARD_LIMIT = 100;
 const INTERNAL_INVENTORY_CEILING = 256;
+const INTERNAL_LIST_RESPONSE_FLOOR_BYTES = 32_768;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/u;
 const FILE_TEMPLATE_IDS = Object.freeze([
   READ_PATH_ID,
@@ -463,7 +464,7 @@ async function executeListOpenProjects({ entry, request, input, executeAtomic, s
       input: { cursor, limit },
       refs: [],
       context: request.context,
-      budget: request.budget,
+      budget: internalOpenProjectListBudget(request),
     });
     calls.push(execution);
     stages.at(-1).status = execution?.ok === true ? "completed" : "failed";
@@ -982,6 +983,30 @@ function resolvePublicBudgetBytes(request) {
   return PUBLIC_RESPONSE_BUDGET_BYTES;
 }
 
+function internalOpenProjectListBudget(request) {
+  const callerBudget = isPlainObject(request?.budget) ? request.budget : {};
+  const requestedResponseBytes = Number.isInteger(callerBudget.max_response_bytes) && callerBudget.max_response_bytes > 0
+    ? callerBudget.max_response_bytes
+    : 0;
+  const requestedInlineBytes = Number.isInteger(callerBudget.max_inline_value_bytes) && callerBudget.max_inline_value_bytes > 0
+    ? callerBudget.max_inline_value_bytes
+    : 0;
+  const requestedMaxItems = Number.isInteger(callerBudget.max_items) && callerBudget.max_items > 0
+    ? callerBudget.max_items
+    : LIST_HARD_LIMIT;
+  return {
+    max_response_bytes: Math.min(
+      Math.max(requestedResponseBytes, INTERNAL_LIST_RESPONSE_FLOOR_BYTES),
+      MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
+    ),
+    max_items: Math.min(requestedMaxItems, LIST_HARD_LIMIT),
+    max_inline_value_bytes: Math.min(
+      Math.max(requestedInlineBytes, PROJECT_REF_MAX_BYTES),
+      MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes,
+    ),
+  };
+}
+
 function assertSwitchIdentityFitsBudget(operation, input, publicBudgetBytes) {
   const identity = operation === "activate_project_tab"
     ? input.project_ref
@@ -1091,6 +1116,7 @@ function switchBudgetFailureEnvelope({ entry, request, startedAt, now, stages, e
 
 async function hydrateCompleteOpenInventory(executeAtomic, request, calls) {
   const projects = [];
+  const listBudget = internalOpenProjectListBudget(request);
   let cursor = 0;
   let totalCount = null;
   let pages = 0;
@@ -1109,7 +1135,7 @@ async function hydrateCompleteOpenInventory(executeAtomic, request, calls) {
       input: { cursor, limit: LIST_HARD_LIMIT },
       refs: [],
       context: request.context,
-      budget: request.budget,
+      budget: listBudget,
     });
     calls.push(execution);
     if (execution?.ok !== true) throw executionError(LIST_OPEN_ID, execution);
