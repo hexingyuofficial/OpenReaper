@@ -62,8 +62,11 @@ const INTENT_ROUTES = deepFreeze([
   ]),
   intent("macro.project.file", [
     term("save as", 10), term("save project", 9), term("save", 6), term("write project", 7), term("persist project", 7),
+    term("open project", 10), term("switch project", 10), term("activate tab", 10), term("create a new project", 9),
+    term("list open projects", 9), term("project tab", 8),
     term("另存为", 10), term("保存项目", 9), term("保存", 6), term("存盘", 7),
-  ], ["new project", "open project", "create project", "新建项目", "打开项目", "创建项目"]),
+    term("打开工程", 10), term("切换工程", 10), term("激活工程页签", 10), term("新建工程", 9), term("打开项目", 9), term("创建项目", 8),
+  ]),
   intent("macro.routing.apply", [
     term("routing", 8), term("route track", 8), term("create send", 9), term("remove send", 10), term("delete send", 10), term("send to", 7), term("sidechain", 8), term("bus", 5),
     term("track send", 9), term("reverb send", 8), term("aux send", 8),

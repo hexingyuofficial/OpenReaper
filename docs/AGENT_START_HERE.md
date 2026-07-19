@@ -60,7 +60,7 @@ All Macros are peers. Expand manuals only by exact id.
 - `macro.project.query` — bounded SQLite query; obtain canonical refs before writes
 - `macro.project.delete_targets` — delete tracks/items/fx by exact targets
 - `macro.project.apply_layout` — create tracks/folders/markers/regions layout
-- `macro.project.file` — save_current / save_as
+- `macro.project.file` — save_current / save_as / list_open_projects / create_project_tab / open_project_in_tab / activate_project_tab
 - `macro.routing.apply` — internal sends, master-parent, channel counts
 - `macro.media.place_assets` — search/import/place media assets
 - `macro.items.analyze` — loudness/transient/silence analysis
@@ -113,6 +113,8 @@ call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_sec
 call_template {"id":"macro.items.apply","input":{"mode":"set_item_take_controls","dry_run":false,"changes":[{"id":"clipA","item_ref":"item:guid:{ITEM-GUID}","take_ref":"take:guid:{TAKE-GUID}","item":{"volume_db":-3,"fade_in_seconds":0.01,"fade_out_seconds":0.05},"take":{"pan":-0.2,"playrate":1,"preserve_pitch":true}}]}}
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
+call_template {"id":"macro.project.file","input":{"operation":"list_open_projects","cursor":"0","limit":25}}
+call_template {"id":"macro.project.file","input":{"operation":"open_project_in_tab","target_path":"/projects/demo/demo.RPP"}}
 ```
 
 Full Macro manuals stay behind exact-id `list_templates` expansion. Do not

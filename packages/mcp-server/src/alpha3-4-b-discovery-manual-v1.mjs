@@ -45,7 +45,7 @@ const MACRO_TARGET_FACTS = deepFreeze({
     required_targets: ["operation"],
     preview_or_dry_run_mandatory: false,
     identity_required: false,
-    notes: "save_current needs no path; save_as needs absolute target_path and overwrite:true.",
+    notes: "Six operations: save_current, save_as, list_open_projects, create_project_tab, open_project_in_tab, activate_project_tab. save_as/create need absolute .RPP + overwrite:true. activate requires exact saved project:path ref. dry_run only for saves. list pages with string cursor; switches rebind Project Index from live inventory.",
   },
   "macro.routing.apply": {
     required_targets: ["exact track/send refs"],

@@ -86,9 +86,9 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
       [{ operation: "save_as", target_path: "/tmp/demo.RPP", overwrite: false }, "SAVE_AS_OVERWRITE_TRUE_REQUIRED"],
       [{ operation: "save_current", target_path: "/tmp/demo.RPP" }, "SAVE_CURRENT_FIELDS_REJECTED"],
       [{ operation: "save_current", overwrite: true }, "SAVE_CURRENT_FIELDS_REJECTED"],
-      [{ operation: "new" }, "PROJECT_FILE_OPERATION_HELD"],
-      [{ operation: "create" }, "PROJECT_FILE_OPERATION_HELD"],
-      [{ operation: "open" }, "PROJECT_FILE_OPERATION_HELD"],
+      [{ operation: "new" }, "PROJECT_FILE_OPERATION_UNSUPPORTED"],
+      [{ operation: "create" }, "PROJECT_FILE_OPERATION_UNSUPPORTED"],
+      [{ operation: "open" }, "PROJECT_FILE_OPERATION_UNSUPPORTED"],
       [{ operation: "rename" }, "PROJECT_FILE_OPERATION_UNSUPPORTED"],
     ];
 
