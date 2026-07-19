@@ -19031,7 +19031,7 @@ local function list_open_projects(request)
     })
   end
 
-  local page = {}
+  local page = json_array({})
   local max_index = math.min(total_count, cursor + limit)
   for index = cursor + 1, max_index do
     page[#page + 1] = d30_project_row_public(rows[index])
@@ -19053,7 +19053,7 @@ local function list_open_projects(request)
   end
 
   if #page == 0 and cursor < total_count then
-    local single = { d30_project_row_public(rows[cursor + 1]) }
+    local single = json_array({ d30_project_row_public(rows[cursor + 1]) })
     local fits, encoded_bytes = page_fits(single)
     if not fits then
       return d30_project_error("RESPONSE_TOO_LARGE", "One open-project row cannot fit within the request summary budget.", {

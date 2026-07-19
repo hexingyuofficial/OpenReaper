@@ -18,11 +18,12 @@ const REGISTRY = JSON.parse(
 const PRELUDE = String.raw`
 function is_string(value) return type(value) == "string" end
 function is_object(value) return type(value) == "table" end
-function is_json_array(value) return type(value) == "table" end
+local JSON_ARRAY_MT = { __openreaper_json_array = true }
+function is_json_array(value) return type(value) == "table" and getmetatable(value) == JSON_ARRAY_MT end
 function is_non_negative_integer(value)
   return type(value) == "number" and value == math.floor(value) and value >= 0 and value ~= math.huge
 end
-function json_array(value) return value or {} end
+function json_array(value) return setmetatable(value or {}, JSON_ARRAY_MT) end
 function first_number(...)
   for index = 1, select("#", ...) do
     local value = select(index, ...)
@@ -69,8 +70,7 @@ function json.encode(value)
   elseif value_type == "boolean" then
     return value and "true" or "false"
   elseif value_type == "table" then
-    local is_array = #value > 0 or next(value) == nil
-    if is_array then
+    if is_json_array(value) then
       local parts = {}
       for index = 1, #value do
         parts[#parts + 1] = json.encode(value[index])
@@ -97,7 +97,7 @@ function project_request(capability, params, refs, risk, budget)
   return {
     id = "request",
     params = params or {},
-    refs = refs or {},
+    refs = json_array(refs or {}),
     pack = { id = "project", capability = capability, risk = risk or "write" },
     budget = budget or { max_items = 100, max_inline_value_bytes = 4096, max_response_bytes = 65536 },
   }
@@ -304,6 +304,10 @@ assert(failure2 == nil, failure2 and failure2.code)
 assert(page2.coverage_status == "complete" and page2.returned_count == 1 and page2.next_cursor == nil)
 assert(page2.projects[1].path_state == "unsaved_project")
 assert(page2.projects[1].project_ref:match("^project:tab:") ~= nil)
+assert(json.encode(page2):match('"projects":%[%{') ~= nil, json.encode(page2))
+local exhausted = assert(list_open_projects(project_request("project.list_open_projects", { cursor = "3", limit = 2 }, {}, "read")))
+assert(exhausted.returned_count == 0 and exhausted.coverage_status == "complete")
+assert(json.encode(exhausted):match('"projects":%[%]') ~= nil, json.encode(exhausted))
 assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.sws == 0)
 `);
   });
