@@ -576,17 +576,55 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
     const activeRow = inventory.projects.find((row) => row.active === true) ?? null;
     if (!activeRow) throw macroError("PROJECT_FILE_ACTIVE_ROW_MISSING", "Complete open-project inventory has no active project row.");
 
-    invalidation = await synchronizeIndexToLiveActive(projectIndexRuntime, activeRow, now, stages);
-    if (invalidation && invalidation.status !== "skipped") indexUsed = true;
-    if (invalidation?.ok === false && invalidation?.required === true) {
-      throw macroError(invalidation.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_SYNC_FAILED", invalidation.blockers?.[0]?.message ?? "Project Index could not synchronize to the live active saved project.", {
+    // Only one explicitly clean native unsaved state may bypass preflight SQLite.
+    if (
+      activeRow.path_state !== "saved_project"
+      && (
+        activeRow.path_state !== "unsaved_project"
+        || activeRow.saved !== false
+        || activeRow.path !== ""
+        || activeRow.dirty !== false
+        || activeRow.raw_dirty_state !== 0
+      )
+    ) {
+      throw macroError("PROJECT_FILE_ACTIVE_UNSAVED", "Live active project is not a proven clean unsaved tab; refuse switch before mutation.", {
         zero_write: true,
+        path_state: activeRow.path_state,
+        dirty: activeRow.dirty,
+        raw_dirty_state: activeRow.raw_dirty_state ?? null,
       });
+    }
+
+    // Active unsaved + clean: recovery switch is authorized only by complete live
+    // inventory and the exact saved target ref. SQLite rows never authorize selection.
+    if (activeRow.path_state !== "saved_project") {
+      stages.push({
+        id: "file-index-preflight-sync",
+        kind: "runtime_execute",
+        status: "skipped",
+        summary: "Active project is clean unsaved; switch continues from complete live inventory only (no SQLite authorize).",
+        evidence_refs: [],
+      });
+      invalidation = {
+        ok: true,
+        status: "skipped_clean_unsaved_active",
+        required: false,
+        scopes: [],
+        zero_write: true,
+      };
+    } else {
+      invalidation = await synchronizeIndexToLiveActive(projectIndexRuntime, activeRow, now, stages);
+      if (invalidation && invalidation.status !== "skipped") indexUsed = true;
+      if (invalidation?.ok === false && invalidation?.required === true) {
+        throw macroError(invalidation.blockers?.[0]?.code ?? "PROJECT_FILE_INDEX_SYNC_FAILED", invalidation.blockers?.[0]?.message ?? "Project Index could not synchronize to the live active saved project.", {
+          zero_write: true,
+        });
+      }
     }
 
     if (operation === "create_project_tab") {
       mutationAttempted = true;
-      mutationStatus = "completed";
+      mutationStatus = "unknown";
       const created = readback(await run("file-live-create-tab", CREATE_TAB_ID, {
         name: input.name,
         activate: true,
@@ -603,6 +641,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
         });
       }
       createAtomSucceeded = true;
+      mutationStatus = "completed";
       nativeResult = created;
       try {
         saveAsDispatched = true;
@@ -658,7 +697,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
         });
       }
       mutationAttempted = true;
-      mutationStatus = "completed";
+      mutationStatus = "unknown";
       const opened = readback(await run("file-live-open-in-tab", OPEN_IN_TAB_ID, { path: input.target_path }));
       if (
         opened?.opened !== true
@@ -674,6 +713,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
         });
       }
       nativeResult = opened;
+      mutationStatus = "completed";
       verifiedChange = switchChange(operation, {
         project_ref: opened.project_ref,
         path: input.target_path,
@@ -707,7 +747,12 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
           zero_write: true,
         });
       }
-      if (matches.length !== 1 || matches[0].path_state !== "saved_project") {
+      if (
+        matches.length !== 1
+        || matches[0].path_state !== "saved_project"
+        || matches[0].saved !== true
+        || matches[0].path !== targetPathFromRef(projectRef)
+      ) {
         throw macroError("PROJECT_FILE_TARGET_AMBIGUOUS", "Requested project_ref did not resolve to exactly one saved open project.", {
           project_ref: projectRef,
           zero_write: true,
@@ -742,7 +787,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
         verifiedChange.index_maintenance = indexMaintenance("completed", invalidation);
       } else {
         mutationAttempted = true;
-        mutationStatus = "completed";
+        mutationStatus = "unknown";
         const activated = readback(await run("file-live-activate-tab", ACTIVATE_TAB_ID, {}, [{
           kind: "project",
           ref: projectRef,
@@ -760,6 +805,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
           });
         }
         nativeResult = activated;
+        mutationStatus = "completed";
         verifiedChange = switchChange(operation, {
           project_ref: projectRef,
           path: targetPathFromRef(projectRef),
@@ -837,7 +883,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
       blockers: [blocker(error.code ?? "PROJECT_FILE_SWITCH_FAILED", error.message ?? "Project switch Macro failed.", {
         ...(error.details ?? {}),
         ...(partialState ? { partial_state: partialState } : {}),
-      })],
+      }, error.recoverable)],
       summary: error.message ?? "Project switch Macro failed.",
       data: {
         operation,
@@ -847,7 +893,7 @@ async function executeProjectSwitchOperation({ entry, request, input, executeAto
           ? { total_count: inventory.total_count ?? null, coverage_status: inventory.coverage_status ?? null }
           : null,
         outcome: {
-          mutation: { status: mutationAttempted ? mutationStatus : "not_run" },
+          mutation: { status: mutationAttempted ? mutationFailureStatus(error, mutationStatus) : "not_run" },
           live_readback: { status: readbackPassed ? "passed" : "not_run" },
           index_maintenance: {
             status: verifiedChange?.index_maintenance?.status ?? (invalidation?.ok === false ? "failed" : "not_run"),
@@ -885,6 +931,11 @@ function switchEnvelope({
   const failed = status !== "completed";
   const preserveDryRun = request.input?.dry_run === true;
   const sqlite = compactSqliteTruth(indexUsed, invalidation);
+  const primaryBlocker = blockers?.[0] ?? null;
+  const unknownOutcome = primaryBlocker?.details?.outcome === "unknown";
+  const recoveryAction = unknownOutcome && primaryBlocker?.recoverable === false
+    ? "Inspect live project state; do not replay this unknown mutation automatically."
+    : "Repair blocker and retry.";
   const envelope = {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: !failed,
@@ -915,7 +966,7 @@ function switchEnvelope({
       ? blockers.slice(0, 1).map((item) => ({
         code: item.code,
         message: boundedSafeUtf8(item.message, 80),
-        recoverable: true,
+        recoverable: item.recoverable !== false,
         ...(item.details ? { details: compactBlockerDetails(item.details) } : {}),
       }))
       : [],
@@ -923,12 +974,12 @@ function switchEnvelope({
       ? {
         code: blockers[0]?.code ?? "PROJECT_FILE_FAILED",
         message: boundedSafeUtf8(summary, 80),
-        recoverable: true,
+        recoverable: primaryBlocker?.recoverable !== false,
         ...(blockers[0]?.details ? { details: compactBlockerDetails(blockers[0].details) } : {}),
       }
       : null,
     recovery: failed
-      ? { action: "Repair blocker and retry.", sqlite_rows_authorize_writes: false }
+      ? { action: recoveryAction, sqlite_rows_authorize_writes: false }
       : null,
     budget: { max_bytes: publicBudgetBytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   };
@@ -1046,6 +1097,11 @@ function compactBlockerDetails(details) {
   if (details.zero_write === true) out.zero_write = true;
   if (typeof details.partial_state === "string") out.partial_state = boundedSafeUtf8(details.partial_state, 64);
   if (typeof details.recovery === "string") out.recovery = boundedSafeUtf8(details.recovery, 80);
+  if (typeof details.outcome === "string") out.outcome = boundedSafeUtf8(details.outcome, 32);
+  if (typeof details.reason === "string") out.reason = boundedSafeUtf8(details.reason, 64);
+  if (typeof details.queue_state === "string") out.queue_state = boundedSafeUtf8(details.queue_state, 32);
+  if (Number.isInteger(details.timeout_ms)) out.timeout_ms = details.timeout_ms;
+  if (typeof details.recoverable === "boolean") out.recoverable = details.recoverable;
   if (Number.isInteger(details.required_response_bytes)) out.required_response_bytes = details.required_response_bytes;
   if (Number.isInteger(details.max_response_bytes)) out.max_response_bytes = details.max_response_bytes;
   if (isPlainObject(details.request_patch)) out.request_patch = details.request_patch;
@@ -1252,12 +1308,12 @@ function listPageProjection(value) {
     ? value.projects.map((row) => ({
       project_ref: row.project_ref ?? null,
       active: row.active === true,
-      saved: row.saved === true,
+      saved: typeof row.saved === "boolean" ? row.saved : null,
       path_state: row.path_state ?? null,
       name: row.name ?? null,
       path: row.path ?? null,
       path_truncated: row.path_truncated === true,
-      dirty: row.dirty === true,
+      dirty: typeof row.dirty === "boolean" ? row.dirty : null,
       raw_dirty_state: row.raw_dirty_state ?? null,
       tab_index: row.tab_index ?? null,
     }))
@@ -1460,15 +1516,36 @@ function compactStagesForBudget(stages) {
   }));
 }
 
+function mutationFailureStatus(error, currentStatus) {
+  if (error?.details?.outcome === "unknown") return "unknown";
+  if (error?.details?.zero_write === true) return "not_run";
+  return currentStatus === "completed" ? "completed" : "failed";
+}
+
 function executionError(id, execution) {
+  const sourceDetails = isPlainObject(execution?.error?.details) ? execution.error.details : {};
+  const details = {
+    ...sourceDetails,
+    ...(typeof execution?.error?.recoverable === "boolean" && sourceDetails.recoverable === undefined
+      ? { recoverable: execution.error.recoverable }
+      : {}),
+    ...(typeof execution?.queue?.state === "string" && sourceDetails.queue_state === undefined
+      ? { queue_state: execution.queue.state }
+      : {}),
+  };
   return macroError(
     execution?.error?.code ?? "PROJECT_FILE_TEMPLATE_FAILED",
     execution?.error?.message ?? `${id} failed.`,
-    execution?.error?.details,
+    details,
+    execution?.error?.recoverable,
   );
 }
-function macroError(code, message, details = undefined) {
-  return Object.assign(new Error(message), { code, ...(details === undefined ? {} : { details }) });
+function macroError(code, message, details = undefined, recoverable = undefined) {
+  return Object.assign(new Error(message), {
+    code,
+    ...(details === undefined ? {} : { details }),
+    ...(typeof recoverable === "boolean" ? { recoverable } : {}),
+  });
 }
 function readback(execution) { return execution?.result?.readback ?? execution?.result?.summary ?? execution?.result?.data ?? {}; }
 function exactPath(value) { return value?.project_path ?? value?.path ?? value?.current_project_path ?? null; }
@@ -1962,11 +2039,13 @@ function macroRuntimeError(plan) {
   };
 }
 
-function blocker(code, message, details = undefined) {
+function blocker(code, message, details = undefined, recoverable = undefined) {
   return {
     code,
     message,
-    recoverable: true,
+    recoverable: typeof recoverable === "boolean"
+      ? recoverable
+      : (typeof details?.recoverable === "boolean" ? details.recoverable : true),
     ...(details === undefined ? {} : { details }),
   };
 }

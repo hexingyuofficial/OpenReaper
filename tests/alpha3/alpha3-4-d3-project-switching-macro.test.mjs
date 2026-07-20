@@ -456,6 +456,201 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     assert.equal(unsaved.blockers[0].code, "PROJECT_FILE_UNSAVED_REF_UNSUPPORTED");
   });
 
+  it("clean unsaved active recovers via live inventory only; dirty unsaved fails closed zero-write", async () => {
+    const pathTarget = "/session/SavedTarget.RPP";
+    let rebindCalls = 0;
+    let activateCalls = 0;
+    const index = {
+      ...makeIndex({ project_ref: "project:path:/session/Stale.RPP", project_path: "/session/Stale.RPP" }),
+      rebindProjectIdentity: async (args) => {
+        rebindCalls += 1;
+        return {
+          ok: true,
+          status: "rebound",
+          scopes: ["project_identity"],
+          project_path: args.project_path,
+          project_ref: `project:path:${args.project_path}`,
+        };
+      },
+      status: () => ({
+        project_ref: "project:path:/session/Stale.RPP",
+        project_path: "/session/Stale.RPP",
+      }),
+    };
+
+    const clean = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "activate_project_tab", project_ref: `project:path:${pathTarget}` },
+        request_id: "clean-unsaved-active",
+        budget: { max_response_bytes: 4096 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": () => makeInventory([
+          row("", { active: true, dirty: 0, unsaved: true, tab_index: 0 }),
+          row(pathTarget, { active: false, dirty: 0, tab_index: 1 }),
+        ]),
+        "template.project.activate_project_tab": () => {
+          activateCalls += 1;
+          return {
+            ok: true,
+            result: {
+              summary: {
+                activated: true,
+                already_active: false,
+                project_ref: `project:path:${pathTarget}`,
+                prior_project_remains_open: true,
+                prior_dirty_unchanged: true,
+                live_materialization: "native_activate_verified",
+              },
+            },
+          };
+        },
+      }),
+    });
+    assert.equal(clean.ok, true, JSON.stringify(clean.error));
+    assert.equal(activateCalls, 1);
+    // Preflight must not authorize from SQLite while active is unsaved; rebind only after success.
+    assert.equal(rebindCalls, 1);
+    assert.equal(clean.result.data.project_ref, `project:path:${pathTarget}`);
+    assert.equal(clean.result.data.outcome.mutation.status, "completed");
+    assert.ok(clean.execution.stages.some((stage) => (
+      stage.id === "file-index-preflight-sync"
+      && stage.status === "skipped"
+    )));
+
+    activateCalls = 0;
+    rebindCalls = 0;
+    const dirty = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "activate_project_tab", project_ref: `project:path:${pathTarget}` },
+        request_id: "dirty-unsaved-active",
+        budget: { max_response_bytes: 4096 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: makeExecutor({
+        "template.project.list_open_projects": () => makeInventory([
+          row("", { active: true, dirty: 3, unsaved: true, tab_index: 0 }),
+          row(pathTarget, { active: false, dirty: 0, tab_index: 1 }),
+        ]),
+        "template.project.activate_project_tab": () => {
+          activateCalls += 1;
+          return { ok: true, result: { summary: {} } };
+        },
+      }),
+    });
+    assert.equal(dirty.ok, false);
+    assert.equal(dirty.error.code, "PROJECT_FILE_ACTIVE_UNSAVED");
+    assert.equal(dirty.error.details?.zero_write ?? dirty.blockers?.[0]?.details?.zero_write, true);
+    assert.equal(activateCalls, 0);
+    assert.equal(rebindCalls, 0);
+
+    for (const missingField of ["saved", "dirty"]) {
+      const incompleteActive = row("", { active: true, dirty: 0, unsaved: true, tab_index: 0 });
+      delete incompleteActive[missingField];
+      const incomplete = await executeAlpha3_2_5CProjectFileMacro({
+        request: {
+          input: { operation: "activate_project_tab", project_ref: `project:path:${pathTarget}` },
+          request_id: `incomplete-unsaved-${missingField}`,
+          budget: { max_response_bytes: 4096 },
+        },
+        projectIndexRuntime: index,
+        executeAtomic: makeExecutor({
+          "template.project.list_open_projects": () => makeInventory([
+            incompleteActive,
+            row(pathTarget, { active: false, dirty: 0, tab_index: 1 }),
+          ]),
+          "template.project.activate_project_tab": () => {
+            activateCalls += 1;
+            return { ok: true, result: { summary: {} } };
+          },
+        }),
+      });
+      assert.equal(incomplete.ok, false, missingField);
+      assert.equal(incomplete.error.code, "PROJECT_FILE_ACTIVE_UNSAVED", missingField);
+      assert.equal(incomplete.error.details?.zero_write ?? incomplete.blockers?.[0]?.details?.zero_write, true, missingField);
+      assert.equal(activateCalls, 0, missingField);
+      assert.equal(rebindCalls, 0, missingField);
+    }
+  });
+
+  it("preserves nonrecoverable unknown timeout truth for create/open/activate atoms", async () => {
+    const sourcePath = "/session/Source.RPP";
+    const targetPath = "/session/Target.RPP";
+    const timeout = () => ({
+      ok: false,
+      queue: { state: "timeout" },
+      error: {
+        code: "BRIDGE_TIMEOUT",
+        message: "Bridge request exceeded timeout_ms before a terminal result.",
+        recoverable: false,
+        details: {
+          outcome: "unknown",
+          reason: "continuation_timeout",
+          queue_state: "timeout",
+          timeout_ms: 30000,
+          partial_state: "project_tabs_may_have_changed",
+        },
+      },
+    });
+    const cases = [
+      {
+        operation: "create_project_tab",
+        input: { name: "timeout", target_path: targetPath, overwrite: true },
+        atom: "template.project.create_project_tab",
+        rows: [row(sourcePath, { active: true })],
+      },
+      {
+        operation: "open_project_in_tab",
+        input: { target_path: targetPath },
+        atom: "template.project.open_project_in_tab",
+        rows: [row(sourcePath, { active: true })],
+      },
+      {
+        operation: "activate_project_tab",
+        input: { project_ref: `project:path:${targetPath}` },
+        atom: "template.project.activate_project_tab",
+        rows: [row(sourcePath, { active: true }), row(targetPath, { active: false, tab_index: 1 })],
+      },
+    ];
+
+    for (const fixture of cases) {
+      let atomCalls = 0;
+      const envelope = await executeAlpha3_2_5CProjectFileMacro({
+        request: {
+          input: { operation: fixture.operation, ...fixture.input },
+          request_id: `timeout-${fixture.operation}`,
+          budget: { max_response_bytes: 4096 },
+        },
+        executeAtomic: makeExecutor({
+          "template.project.list_open_projects": () => makeInventory(fixture.rows),
+          [fixture.atom]: () => {
+            atomCalls += 1;
+            return timeout();
+          },
+        }),
+      });
+
+      assert.equal(atomCalls, 1, fixture.operation);
+      assert.equal(envelope.ok, false, fixture.operation);
+      assert.equal(envelope.execution.status, "partial_failure", fixture.operation);
+      assert.equal(envelope.result.data.outcome.mutation.status, "unknown", fixture.operation);
+      assert.equal(envelope.result.data.outcome.live_readback.status, "not_run", fixture.operation);
+      assert.equal(envelope.error.code, "BRIDGE_TIMEOUT", fixture.operation);
+      assert.equal(envelope.error.recoverable, false, fixture.operation);
+      assert.equal(envelope.error.details?.outcome, "unknown", fixture.operation);
+      assert.equal(envelope.error.details?.reason, "continuation_timeout", fixture.operation);
+      assert.equal(envelope.error.details?.queue_state, "timeout", fixture.operation);
+      assert.equal(envelope.error.details?.timeout_ms, 30000, fixture.operation);
+      assert.equal(envelope.error.details?.partial_state, "project_tabs_may_have_changed", fixture.operation);
+      assert.equal(envelope.error.details?.recoverable, false, fixture.operation);
+      assert.equal(envelope.blockers[0].recoverable, false, fixture.operation);
+      assert.equal(envelope.blockers[0].details?.outcome, "unknown", fixture.operation);
+      assert.match(envelope.recovery.action, /do not replay/i, fixture.operation);
+      assert.ok(envelope.budget.actual_bytes <= 4096, `${fixture.operation}: ${envelope.budget.actual_bytes}`);
+    }
+  });
+
   it("preserves partial_state across create atom success and Save As/readback failures", async () => {
     const pathA = "/session/Parent.RPP";
     const pathNew = "/session/New.RPP";

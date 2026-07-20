@@ -188,6 +188,23 @@ function install_project_tab_fake(config)
     if config.dirty_invalid then return -1 end
     return project.dirty or 0
   end
+  reaper.Undo_BeginBlock2 = function(project)
+    calls.undo_begins = (calls.undo_begins or 0) + 1
+    calls.last_undo_begin = project
+    if config.undo_end_increments_dirty then
+      -- pairing state only; dirty bump happens on End
+      calls.open_undo = project
+    end
+  end
+  reaper.Undo_EndBlock2 = function(project, label, flags)
+    calls.undo_ends = (calls.undo_ends or 0) + 1
+    calls.last_undo_end = project
+    -- Real REAPER fixture: empty Undo_EndBlock2 can increment project state count.
+    if config.undo_end_increments_dirty and type(project) == "table" then
+      project.dirty = (project.dirty or 0) + 1
+    end
+    calls.open_undo = nil
+  end
   reaper.GetProjectName = function(project)
     if project.name then return true, project.name end
     if project.path and project.path ~= "" then
@@ -609,6 +626,7 @@ assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.deta
 assert(activated.activated == true and activated.already_active == false)
 assert(current_project == saved_b and activated.prior_dirty_unchanged == true)
 assert(saved_a.dirty == 1)
+assert(activated.prior_raw_dirty_state == 1)
 
 local again, again_failure = activate_project_tab(project_request("project.activate_project_tab", {}, {
   { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
@@ -687,6 +705,50 @@ assert(calls.select_project == 1)
 apply_pending_select()
 local c3, c3_fail = create_project_tab(create_req, c2b)
 assert(c3_fail == nil and c3.created == true and calls.select_project == 1)
+`);
+  });
+
+  it("regression: prior dirty must stay exact after activate when Undo_EndBlock2 would +1 state count", () => {
+    runLua(String.raw`
+-- Without product dispatch skip_undo, a content Undo_EndBlock2 on prior would
+-- bump dirty and VERIFY_FAILED prior_project_dirty_or_missing. Handler finish
+-- still requires exact prior dirty equality (no verifier looseness).
+install_project_tab_fake({ two_saved_one_unsaved = true, dirty_a = 0, dirty_b = 0, undo_end_increments_dirty = true })
+local listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
+local saved_ref = listed.projects[2].project_ref
+assert(saved_a.dirty == 0)
+local activated, failure = run_with_continuation(activate_project_tab, project_request("project.activate_project_tab", {}, {
+  { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
+}, "safe"))
+-- Native handler path does not open Undo itself; product dispatch owns that.
+-- Prove finish verifier still demands exact prior dirty equality.
+assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker)))
+assert(activated.prior_dirty_unchanged == true)
+assert(activated.prior_raw_dirty_state == 0)
+assert(saved_a.dirty == 0, "prior dirty must remain 0, got " .. tostring(saved_a.dirty))
+assert(current_project == saved_b)
+
+-- Simulate the pre-fix failure mode: if prior dirty was bumped, finish fails closed.
+install_project_tab_fake({ two_saved_one_unsaved = true, dirty_a = 0, dirty_b = 0 })
+listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
+saved_ref = listed.projects[2].project_ref
+local req = project_request("project.activate_project_tab", {}, {
+  { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
+}, "safe")
+local pre = activate_project_tab(req)
+assert(pre.phase == "activate_project_tab.mutate_select")
+assert(pre.state.prior_raw_dirty_state == 0)
+assert(pre.state.selection_only_no_content_undo == true)
+local mid = activate_project_tab(req, pre)
+assert(mid.phase == "activate_project_tab.verify_selection")
+-- Inject the live REAPER Undo_EndBlock2 dirty bump between select and verify.
+saved_a.dirty = 1
+local _, bumped = activate_project_tab(req, mid)
+assert(bumped ~= nil)
+assert(bumped.code == "VERIFY_FAILED")
+assert(bumped.details.blocker == "prior_project_dirty_or_missing")
+assert(bumped.details.prior_raw_dirty_before == 0)
+assert(bumped.details.prior_raw_dirty_after == 1)
 `);
   });
 

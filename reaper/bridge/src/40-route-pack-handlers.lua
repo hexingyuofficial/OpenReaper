@@ -1601,11 +1601,20 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   if project_switch_capability and not resume_continuation then
     phase_may_mutate = false
   end
+  -- activate_project_tab selection is a pure tab-focus change. Real REAPER
+  -- Undo_EndBlock2(..., -1) on the prior project increments IsProjectDirty even
+  -- when no content changed. Selection-only therefore uses internal no-content
+  -- Undo (skip_undo) strictly for this capability's mutate_select phase. Create /
+  -- open / subproject content mutations keep exact-project required Undo.
+  local selection_only_no_content_undo = capability == "project.activate_project_tab"
+    and phase_may_mutate == true
+    and resume_continuation ~= nil
+    and resume_continuation.phase == "activate_project_tab.mutate_select"
   local exact_undo_project = nil
   if resume_continuation and is_object(resume_continuation.state) then
     exact_undo_project = resume_continuation.state.undo_project
   end
-  if phase_may_mutate and project_switch_capability and exact_undo_project == nil then
+  if phase_may_mutate and project_switch_capability and exact_undo_project == nil and not selection_only_no_content_undo then
     return bridge_error_envelope(request, "COMMAND_FAILED", "Required exact project Undo target is missing before mutation.", {
       recoverable = true,
       started_at = started_at,
@@ -1616,12 +1625,12 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
     })
   end
   request.__openreaper_undo_phase = {
-    skip_undo = not phase_may_mutate,
-    require_project_identity = project_switch_capability and phase_may_mutate,
-    exact_project = exact_undo_project,
+    skip_undo = (not phase_may_mutate) or selection_only_no_content_undo,
+    require_project_identity = project_switch_capability and phase_may_mutate and not selection_only_no_content_undo,
+    exact_project = selection_only_no_content_undo and nil or exact_undo_project,
   }
   open_required_undo_block(request, key)
-  if phase_may_mutate and project_switch_capability and request.__openreaper_undo_block_open ~= true then
+  if phase_may_mutate and project_switch_capability and not selection_only_no_content_undo and request.__openreaper_undo_block_open ~= true then
     request.__openreaper_undo_phase = nil
     return bridge_error_envelope(request, "COMMAND_FAILED", "Required project-targeted Undo block could not be opened before mutation.", {
       recoverable = true,

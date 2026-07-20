@@ -951,6 +951,7 @@ local function create_layer_report() error("unexpected non-D30 handler") end
     "render_or_update_subproject",
     "create_project_tab",
     "open_project_in_tab",
+    "activate_project_tab",
     "list_open_projects",
   ]) {
     productLua = productLua.replaceAll(`local function ${name}`, `function ${name}`);
@@ -1004,6 +1005,8 @@ open_undo_handle = nil
 shared_events = {}
 guard_failures = {}
 force_undo_end_fail = false
+undo_end_block_increments_dirty = false
+allow_selection_without_undo = false
 request_objects = {}
 parent_project = { path = "/session/Parent.RPP", items = {}, tracks = {}, time_start = 3, time_end = 7 }
 child_project = nil
@@ -1157,12 +1160,17 @@ reaper.Undo_BeginBlock2 = function(project)
   undo_begins[#undo_begins + 1] = project
   record_shared_event("undo_begin", project)
 end
-reaper.Undo_EndBlock2 = function(project)
+reaper.Undo_EndBlock2 = function(project, label, flags)
   if open_undo_handle == nil then
     push_guard_failure("Undo_EndBlock2: no open Undo block")
   end
   if open_undo_handle ~= project then
     push_guard_failure("Undo_EndBlock2: handle mismatch with open Undo block")
+  end
+  -- Real REAPER: closing an empty/content Undo block with flags=-1 can bump
+  -- IsProjectDirty / state count even when no content mutation occurred.
+  if undo_end_block_increments_dirty == true and type(project) == "table" then
+    project.dirty = (project.dirty or 0) + 1
   end
   undo_ends[#undo_ends + 1] = project
   record_shared_event("undo_end", project)
@@ -1200,9 +1208,14 @@ reaper.Main_SaveProjectEx = function(project, path, options)
   return true
 end
 reaper.SelectProjectInstance = function(project)
-  -- Selection mutation is bracketed by the pre-selection exact Undo handle,
-  -- which may differ from the project being selected (restore path).
-  require_open_undo_for_mutation("SelectProjectInstance", nil)
+  -- Content mutations (create/open/subproject restore) bracket selection with
+  -- exact-project Undo. activate_project_tab selection-only uses internal
+  -- no-content Undo so real Undo_EndBlock2 cannot dirty the prior project.
+  if open_undo_handle ~= nil then
+    require_open_undo_for_mutation("SelectProjectInstance", nil)
+  elseif allow_selection_without_undo ~= true then
+    require_open_undo_for_mutation("SelectProjectInstance", nil)
+  end
   calls.select_project = calls.select_project + 1
   record_shared_event("select_project", open_undo_handle, project)
   -- Schedule only; apply on the next simulated tick.
@@ -1723,6 +1736,74 @@ assert(calls.open_project == 1)
 assert(calls.select_project == 0)
 assert(current_project.path == target)
 assert(open_undo_handle == nil)
+`);
+  });
+
+  it("activate_project_tab keeps prior dirty unchanged when real Undo_EndBlock2 would increment state count", () => {
+    runActualProductD30CompositionLua(String.raw`
+function dispatch_to_terminal(request)
+  local cont = nil
+  local last = nil
+  for i = 1, 24 do
+    if i > 1 then
+      apply_pending_reaper_effects()
+    end
+    local runtime = { started_at = now_iso(), deadline_monotonic = now + 30, now_monotonic = now }
+    last = dispatch_request(request, request.id, cont, runtime)
+    if type(last) == "table" and last.contract == "openreaper.bridge.internal_continuation.v1" then
+      cont = last
+      now = now + 0.1
+    else
+      return last, cont
+    end
+  end
+  error("continuation did not terminal")
+end
+
+-- Simulate live REAPER: empty Undo_EndBlock2(..., -1) bumps IsProjectDirty.
+undo_end_block_increments_dirty = true
+allow_selection_without_undo = true
+local other = { path = "/session/Other.RPP", dirty = 0, tracks = {}, items = {}, time_start = 0, time_end = 0 }
+parent_project.dirty = 0
+projects = { parent_project, other }
+current_project = parent_project
+files["/session/Other.RPP"] = true
+undo_begins, undo_ends = {}, {}
+open_undo_handle = nil
+shared_events = {}
+calls.select_project = 0
+
+local req = make_d30_request("req_activate_dirty", "project.activate_project_tab", {}, {
+  { kind = "project", ref = "project:path:/session/Other.RPP", identity = { scheme = "path", value = "/session/Other.RPP" } },
+})
+local terminal = select(1, dispatch_to_terminal(req))
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"ok":true', 1, true) ~= nil, "ok true missing: " .. terminal)
+assert(string.find(terminal, '"activated":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"prior_dirty_unchanged":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"prior_project_dirty_or_missing"', 1, true) == nil, terminal)
+assert(parent_project.dirty == 0, "prior dirty must stay 0, got " .. tostring(parent_project.dirty))
+assert(current_project == other)
+assert(calls.select_project == 1)
+-- Selection-only must not open content Undo on prior (would have dirtied it).
+assert(#undo_begins == 0 and #undo_ends == 0, "selection-only must skip content Undo pairs")
+assert(open_undo_handle == nil)
+assert(#guard_failures == 0)
+
+-- create_project_tab still uses exact content Undo (not weakened by activate special-case).
+undo_end_block_increments_dirty = false
+allow_selection_without_undo = false
+projects = { parent_project }
+current_project = parent_project
+parent_project.dirty = 2
+undo_begins, undo_ends = {}, {}
+calls.actions = {}
+local create_req = make_d30_request("req_create_still_undo", "project.create_project_tab", { name = "keep-undo", activate = true })
+local create_terminal = select(1, dispatch_to_terminal(create_req))
+assert(type(create_terminal) == "string", create_terminal)
+assert(string.find(create_terminal, '"ok":true', 1, true) ~= nil, create_terminal)
+assert(#undo_begins >= 1 and #undo_ends == #undo_begins, "create must retain exact Undo pairs")
+assert(calls.actions[41929] == 1)
 `);
   });
 });

@@ -2227,7 +2227,13 @@ local function activate_project_tab(request, resume_continuation)
     prior_project_ref = prior_identity.project_ref,
     prior_raw_dirty_state = prior_identity.raw_dirty_state,
     selection_mode = "select_scheduled",
+    -- Selection-only: bridge dispatch uses no-content Undo for this phase so
+    -- real Undo_EndBlock2 cannot change prior IsProjectDirty. Retain the prior
+    -- handle for identity/readback only; do not require content Undo.
+    selection_only_no_content_undo = true,
   }
+  -- Pass prior.project as undo_project for continuation identity bookkeeping;
+  -- product dispatch skips opening content Undo for this phase only.
   return d30_project_continue("activate_project_tab.mutate_select", state, false, true, prior.project)
 end
 

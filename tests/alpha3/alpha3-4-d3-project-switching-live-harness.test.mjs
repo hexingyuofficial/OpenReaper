@@ -9,6 +9,56 @@ import {
 import {
   executeAlpha3_2_5CProjectFileMacro,
 } from "../../packages/mcp-server/src/alpha3-2c3d-project-file-macro-v1.mjs";
+import { readEvidenceSummary } from "../../scripts/lib/alpha3-4-harness-evidence-v1.mjs";
+
+function harnessInventory(rows) {
+  return {
+    ok: true,
+    result: {
+      data: {
+        operation: "list_open_projects",
+        projects: rows,
+        total_count: rows.length,
+        returned_count: rows.length,
+        cursor: 0,
+        next_cursor: null,
+        coverage_status: "complete",
+        truncated: false,
+      },
+    },
+    budget: { max_bytes: 2048, actual_bytes: 300, truncated: false, artifact_fallback: false },
+  };
+}
+
+function harnessSavedRow(projectPath, { active = false, dirty = false, rawDirty = 0, tabIndex = 0 } = {}) {
+  return {
+    project_ref: `project:path:${projectPath}`,
+    active,
+    saved: true,
+    path_state: "saved_project",
+    name: path.basename(projectPath),
+    path: projectPath,
+    path_truncated: false,
+    dirty,
+    raw_dirty_state: rawDirty,
+    tab_index: tabIndex,
+  };
+}
+
+function harnessUnsavedRow(ref, { active = false, dirty, rawDirty, tabIndex = 1 } = {}) {
+  return {
+    project_ref: ref,
+    active,
+    saved: false,
+    path_state: "unsaved_project",
+    name: "unsaved",
+    path: "",
+    path_truncated: false,
+    ...(dirty === undefined ? {} : { dirty }),
+    ...(rawDirty === undefined ? {} : { raw_dirty_state: rawDirty }),
+    tab_index: tabIndex,
+  };
+}
 
 describe("Alpha3.4-D3 project switching live harness", () => {
   it("requires explicit fake transport for unit mode and never falls back to source runtime", async () => {
@@ -242,8 +292,351 @@ describe("Alpha3.4-D3 project switching live harness", () => {
             }),
           }),
         }),
-        (error) => error.code === "D3_HARNESS_LIST_FAILED" || error.code === "D3_HARNESS_SOURCE_REF_MISSING" || true,
+        (error) => error.code === "D3_HARNESS_LIST_FAILED" || error.code === "D3_HARNESS_SOURCE_REF_MISSING",
       );
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("stops mutation sequence after first mutation failure without replaying timeout and records recovery fields", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "or-d3-harness-failfast-"));
+    const evidenceRoot = path.join(parent, "fresh-root");
+    const sourceProject = path.join(parent, "source.RPP");
+    await writeFile(sourceProject, "<REAPER_PROJECT 0.1\n>");
+    const sourceRef = `project:path:${sourceProject}`;
+    const unsavedRef = "project:tab:recovery-unsaved";
+    let openCalls = 0;
+    let createCalls = 0;
+    let activateCalls = 0;
+    let inventoryRows = [{
+      project_ref: sourceRef,
+      active: true,
+      saved: true,
+      path_state: "saved_project",
+      name: "source.RPP",
+      path: sourceProject,
+      path_truncated: false,
+      dirty: false,
+      raw_dirty_state: 0,
+      tab_index: 0,
+    }];
+    const callTemplate = async ({ id, input = {}, refs = [], budget }) => {
+      if (id === "template.project.activate_project_tab") {
+        activateCalls += 1;
+        assert.equal(refs[0]?.ref, sourceRef);
+        assert.deepEqual(refs[0]?.identity, { scheme: "path", value: sourceProject });
+        inventoryRows = inventoryRows.map((row) => ({
+          ...row,
+          active: row.project_ref === sourceRef,
+        }));
+        return {
+          ok: true,
+          result: {
+            summary: {
+              activated: true,
+              already_active: false,
+              project_ref: sourceRef,
+              prior_project_remains_open: true,
+              prior_dirty_unchanged: true,
+              live_materialization: "native_activate_verified",
+            },
+          },
+        };
+      }
+      assert.equal(id, "macro.project.file");
+      return executeAlpha3_2_5CProjectFileMacro({
+        request: { input, request_id: `harness-${input.operation}`, budget },
+        executeAtomic: async ({ id: atomicId }) => {
+          if (atomicId === "template.project.list_open_projects") {
+            return {
+              ok: true,
+              result: {
+                summary: {
+                  projects: inventoryRows,
+                  total_count: inventoryRows.length,
+                  returned_count: inventoryRows.length,
+                  cursor: 0,
+                  next_cursor: null,
+                  coverage_status: "complete",
+                  truncated: false,
+                },
+              },
+            };
+          }
+          if (atomicId === "template.project.create_project_tab") {
+            createCalls += 1;
+            inventoryRows = [
+              { ...inventoryRows[0], active: false },
+              {
+                project_ref: unsavedRef,
+                active: true,
+                saved: false,
+                path_state: "unsaved_project",
+                name: "recovery-unsaved",
+                path: "",
+                path_truncated: false,
+                dirty: false,
+                raw_dirty_state: 0,
+                tab_index: 1,
+              },
+            ];
+            return {
+              ok: false,
+              error: {
+                code: "BRIDGE_TIMEOUT",
+                message: "Bridge request exceeded timeout_ms before a terminal result.",
+                recoverable: false,
+                details: {
+                  outcome: "unknown",
+                  reason: "continuation_timeout",
+                  timeout_ms: 30000,
+                  queue_state: "timeout",
+                  partial_state: "blank_tab_may_remain",
+                },
+              },
+            };
+          }
+          if (atomicId === "template.project.open_project_in_tab") {
+            openCalls += 1;
+          }
+          throw new Error(`unexpected atomic operation ${atomicId}`);
+        },
+      });
+    };
+
+    try {
+      const report = await runAlpha34D3ProjectSwitchingHarness({
+        installedWrapper: "/tmp/openreaper-mcp",
+        sourceProject,
+        evidenceRoot,
+        fakeTransportOnly: true,
+        callTemplate,
+        callTemplateB: callTemplate,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(createCalls, 1);
+      assert.equal(openCalls, 0, "must not continue mutation sequence after first failure");
+      assert.equal(activateCalls, 1, "recovery must use exactly one public native activation");
+      assert.equal(report.mutation_sequence_stopped_after, "create_project_tab");
+      assert.equal(report.first_mutation_failure?.error_code, "BRIDGE_TIMEOUT");
+      assert.equal(report.first_mutation_failure?.outcome, "unknown");
+      assert.equal(report.first_mutation_failure?.reason, "continuation_timeout");
+      assert.equal(report.recovery_posture.no_timeout_mutation_replay, true);
+      assert.ok(Array.isArray(report.remaining_tabs));
+      assert.equal(typeof report.recovery_posture.source_hash, "string");
+      assert.equal(report.recovery_posture.clients_closed, true);
+      const summary = await readEvidenceSummary(evidenceRoot);
+      assert.equal(summary.recovery.clients_closed, true);
+      assert.equal(summary.recovery.no_timeout_mutation_replay, true);
+      assert.equal(report.recovery_posture.recovery_result, "restored");
+      assert.equal(report.recovery_posture.source_active, true);
+      assert.ok(report.steps.some((step) => step.step === "create_project_tab" && step.ok === false && step.stopped_mutation_sequence === true));
+      assert.ok(report.steps.some((step) => step.step === "final_inventory" && step.read_only === true));
+      // Source already active in inventory; recovery activate may be skipped or used only when not active.
+      assert.equal(report.call_sequence.find((entry) => entry.requested_id === "template.project.activate_project_tab")?.normalized_operation, "activate_project_tab");
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("skips bounded recovery when any inactive unsaved tab is dirty or lacks exact dirty truth", async () => {
+    const cases = [
+      {
+        name: "dirty",
+        badRow: harnessUnsavedRow("project:tab:dirty", { active: false, dirty: true, rawDirty: 1, tabIndex: 2 }),
+      },
+      {
+        name: "missing-dirty",
+        badRow: harnessUnsavedRow("project:tab:missing", { active: false, rawDirty: 0, tabIndex: 2 }),
+      },
+      {
+        name: "missing-raw-dirty",
+        badRow: harnessUnsavedRow("project:tab:missing-raw", { active: false, dirty: false, tabIndex: 2 }),
+      },
+    ];
+
+    for (const fixture of cases) {
+      const parent = await mkdtemp(path.join(os.tmpdir(), `or-d3-harness-${fixture.name}-`));
+      const evidenceRoot = path.join(parent, "fresh-root");
+      const sourceProject = path.join(parent, "source.RPP");
+      const activeProject = path.join(parent, "active-test.RPP");
+      await writeFile(sourceProject, "<REAPER_PROJECT 0.1\n>");
+      let afterFailure = false;
+      let nativeActivateCalls = 0;
+      const initialRows = [harnessSavedRow(sourceProject, { active: true })];
+      const postRows = [
+        harnessSavedRow(sourceProject, { active: false }),
+        harnessSavedRow(activeProject, { active: true, tabIndex: 1 }),
+        fixture.badRow,
+      ];
+      const callTemplate = async ({ id, input = {} }) => {
+        if (id === "template.project.activate_project_tab") {
+          nativeActivateCalls += 1;
+          return { ok: true };
+        }
+        assert.equal(id, "macro.project.file");
+        if (input.operation === "list_open_projects") return harnessInventory(afterFailure ? postRows : initialRows);
+        if (input.operation === "create_project_tab") {
+          afterFailure = true;
+          return {
+            ok: false,
+            error: {
+              code: "BRIDGE_TIMEOUT",
+              message: "timeout",
+              recoverable: false,
+              details: { outcome: "unknown", reason: "continuation_timeout", queue_state: "timeout", timeout_ms: 30000 },
+            },
+          };
+        }
+        throw new Error(`unexpected operation ${input.operation}`);
+      };
+
+      try {
+        const report = await runAlpha34D3ProjectSwitchingHarness({
+          installedWrapper: "/tmp/openreaper-mcp",
+          sourceProject,
+          evidenceRoot,
+          fakeTransportOnly: true,
+          callTemplate,
+          callTemplateB: callTemplate,
+        });
+        assert.equal(report.ok, false, fixture.name);
+        assert.equal(nativeActivateCalls, 0, fixture.name);
+        assert.equal(report.recovery_posture.recovery_allowed, false, fixture.name);
+        assert.equal(report.recovery_posture.recovery_attempted, false, fixture.name);
+        assert.equal(report.recovery_posture.recovery_result, "skipped_dirty_or_incomplete_inventory", fixture.name);
+        assert.equal(
+          report.steps.find((step) => step.step === "bounded_recovery_restore_source")?.reason,
+          "dirty_or_missing_test_tab_state",
+          fixture.name,
+        );
+      } finally {
+        await rm(parent, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not replay an unknown activate-source failure as bounded recovery", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "or-d3-harness-activate-replay-"));
+    const evidenceRoot = path.join(parent, "fresh-root");
+    const sourceProject = path.join(parent, "source.RPP");
+    await writeFile(sourceProject, "<REAPER_PROJECT 0.1\n>");
+    const sourceRef = `project:path:${sourceProject}`;
+    let inventoryRows = [harnessSavedRow(sourceProject, { active: true })];
+    let nativeActivateCalls = 0;
+
+    const callTemplate = async ({ id, input = {} }) => {
+      if (id === "template.project.activate_project_tab") {
+        nativeActivateCalls += 1;
+        return { ok: true };
+      }
+      assert.equal(id, "macro.project.file");
+      if (input.operation === "list_open_projects") return harnessInventory(inventoryRows);
+      if (input.operation === "create_project_tab") {
+        const createdRef = `project:path:${input.target_path}`;
+        inventoryRows = [
+          harnessSavedRow(sourceProject, { active: false }),
+          harnessSavedRow(input.target_path, { active: true, tabIndex: 1 }),
+        ];
+        return {
+          ok: true,
+          result: { data: { project_ref: createdRef } },
+          budget: { max_bytes: 2048, actual_bytes: 300, truncated: false, artifact_fallback: false },
+        };
+      }
+      if (input.operation === "activate_project_tab" && input.project_ref === sourceRef) {
+        return {
+          ok: false,
+          error: {
+            code: "BRIDGE_TIMEOUT",
+            message: "timeout",
+            recoverable: false,
+            details: { outcome: "unknown", reason: "continuation_timeout", queue_state: "timeout", timeout_ms: 30000 },
+          },
+        };
+      }
+      throw new Error(`unexpected operation ${input.operation}`);
+    };
+
+    try {
+      const report = await runAlpha34D3ProjectSwitchingHarness({
+        installedWrapper: "/tmp/openreaper-mcp",
+        sourceProject,
+        evidenceRoot,
+        fakeTransportOnly: true,
+        callTemplate,
+        callTemplateB: callTemplate,
+      });
+      assert.equal(report.ok, false);
+      assert.equal(report.mutation_sequence_stopped_after, "activate_source_project");
+      assert.equal(report.first_mutation_failure?.outcome, "unknown");
+      assert.equal(nativeActivateCalls, 0);
+      assert.equal(report.recovery_posture.recovery_allowed, false);
+      assert.equal(report.recovery_posture.recovery_attempted, false);
+      assert.equal(report.recovery_posture.recovery_result, "skipped_same_unknown_mutation_replay_forbidden");
+      assert.equal(
+        report.steps.find((step) => step.step === "bounded_recovery_restore_source")?.reason,
+        "same_unknown_mutation_replay_forbidden",
+      );
+      assert.equal(report.recovery_posture.no_timeout_mutation_replay, true);
+    } finally {
+      await rm(parent, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim restored when native recovery returns success without active-source readback", async () => {
+    const parent = await mkdtemp(path.join(os.tmpdir(), "or-d3-harness-readback-fail-"));
+    const evidenceRoot = path.join(parent, "fresh-root");
+    const sourceProject = path.join(parent, "source.RPP");
+    await writeFile(sourceProject, "<REAPER_PROJECT 0.1\n>");
+    const sourceRows = [harnessSavedRow(sourceProject, { active: true })];
+    const postRows = [
+      harnessSavedRow(sourceProject, { active: false }),
+      harnessUnsavedRow("project:tab:clean", { active: true, dirty: false, rawDirty: 0 }),
+    ];
+    let afterFailure = false;
+    let nativeActivateCalls = 0;
+    const callTemplate = async ({ id, input = {}, refs = [] }) => {
+      if (id === "template.project.activate_project_tab") {
+        nativeActivateCalls += 1;
+        assert.equal(refs[0]?.ref, `project:path:${sourceProject}`);
+        return { ok: true, result: { summary: { activated: true } } };
+      }
+      assert.equal(id, "macro.project.file");
+      if (input.operation === "list_open_projects") return harnessInventory(afterFailure ? postRows : sourceRows);
+      if (input.operation === "create_project_tab") {
+        afterFailure = true;
+        return {
+          ok: false,
+          error: {
+            code: "BRIDGE_TIMEOUT",
+            message: "timeout",
+            recoverable: false,
+            details: { outcome: "unknown", reason: "continuation_timeout", queue_state: "timeout", timeout_ms: 30000 },
+          },
+        };
+      }
+      throw new Error(`unexpected operation ${input.operation}`);
+    };
+
+    try {
+      const report = await runAlpha34D3ProjectSwitchingHarness({
+        installedWrapper: "/tmp/openreaper-mcp",
+        sourceProject,
+        evidenceRoot,
+        fakeTransportOnly: true,
+        callTemplate,
+        callTemplateB: callTemplate,
+      });
+      assert.equal(nativeActivateCalls, 1);
+      assert.equal(report.recovery_posture.recovery_allowed, true);
+      assert.equal(report.recovery_posture.recovery_attempted, true);
+      assert.equal(report.recovery_posture.recovery_result, "failed_readback");
+      assert.equal(report.recovery_posture.source_project_restored_active, false);
+      assert.equal(report.recovery_posture.source_active, false);
+      assert.equal(report.remaining_tabs.find((row) => row.active)?.project_ref, "project:tab:clean");
+      assert.equal(report.steps.find((step) => step.step === "bounded_recovery_readback")?.ok, false);
     } finally {
       await rm(parent, { recursive: true, force: true });
     }
