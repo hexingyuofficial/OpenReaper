@@ -69,6 +69,7 @@
     "check:alpha3-4-c2-atom": "node --test tests/alpha3/alpha3-4-c2-midi-native-coordinate-atom.test.mjs tests/alpha3/alpha3-2-5-a-midi-safety.test.mjs tests/template-packs/wave2a-midi-templates.test.mjs",
     "check:alpha3-4-c2-upper": "node --test tests/alpha3/alpha3-4-c2-midi-musical-timing.test.mjs",
     "check:alpha3-4-c3-media-identity": "node --test tests/layer4dx/alpha3-4-c3-media-identity-atom.test.mjs tests/template-packs/wave2a-media-templates.test.mjs tests/layer4dx/e3-media-live-handler-expansion.test.mjs",
+    "check:alpha3-4-c3c-d15-media-identity": "node --test tests/layer4dx/d15-items-source-phase-handler-expansion.test.mjs",
     "check:alpha3-4-c3-upper-media-identity": "node --test tests/alpha3/alpha3-4-c3-upper-media-identity.test.mjs",
     "check:alpha3-4-d1-readback-atom": "node --test tests/layer4dx/read-item-summary-native-truth.test.mjs tests/template-packs/wave1a-items-templates.test.mjs",
     "check:alpha3-4-d1-items-batch": "node --test tests/alpha3/alpha3-4-d1-items-batch.test.mjs tests/alpha3/alpha3-4-d1-items-batch-live-harness.test.mjs",

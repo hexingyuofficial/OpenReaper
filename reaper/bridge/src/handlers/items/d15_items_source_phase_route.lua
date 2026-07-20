@@ -30,7 +30,7 @@ end
 
 local function d15_items_item_ref_string(item)
   local guid = d15_items_item_guid(item)
-  if guid then
+  if guid and READ_B_MEDIA.identity_value_within_mutation_bound(guid) then
     return "item:guid:" .. guid
   end
   local ok_count, count = call_reaper("CountMediaItems", 0)
@@ -41,7 +41,7 @@ local function d15_items_item_ref_string(item)
       return "item:index:" .. tostring(index)
     end
   end
-  return "item:unknown"
+  return nil
 end
 
 local function d15_items_find_item_by_guid(guid)
@@ -106,6 +106,9 @@ end
 
 local function d15_items_item_object_ref(item)
   local ref = d15_items_item_ref_string(item)
+  if not ref then
+    return nil
+  end
   local scheme, value = ref:match("^item:([^:]+):(.+)$")
   return {
     kind = "item",
@@ -118,38 +121,7 @@ local function d15_items_item_object_ref(item)
 end
 
 local function d15_items_file_object_ref(path_value)
-  return {
-    kind = "file",
-    ref = "file:path:" .. bounded_string(path_value, 220),
-    identity = {
-      scheme = "path",
-      value = path_value,
-    },
-  }
-end
-
-local function d15_items_file_path_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "file" then
-    return nil
-  end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "path" and is_string(identity.value) then
-    return identity.value
-  end
-  local path_value = is_string(ref.ref) and ref.ref:match("^file:path:(.+)$") or nil
-  return path_value
-end
-
-local function d15_items_file_path_from_request_refs(request)
-  if is_json_array(request.refs) then
-    for index = 1, #request.refs do
-      local path_value = d15_items_file_path_from_ref_object(request.refs[index])
-      if path_value then
-        return path_value
-      end
-    end
-  end
-  return nil
+  return READ_B_MEDIA.file_object_ref(path_value)
 end
 
 local function d15_items_active_take(item)
@@ -165,6 +137,22 @@ end
 local function d15_take_number(take, key)
   local ok, value = call_reaper("GetMediaItemTakeInfo_Value", take, key)
   return ok and first_number(value) or 0
+end
+
+local function d15_items_read_finite_number(api_name, target, key)
+  local ok, value = call_reaper(api_name, target, key)
+  if not ok then
+    return nil
+  end
+  return d15_items_finite_number(first_number(value))
+end
+
+local function d15_items_numbers_match(actual, expected)
+  if actual == nil or expected == nil then
+    return false
+  end
+  local scale = math.max(1, math.abs(actual), math.abs(expected))
+  return math.abs(actual - expected) <= (scale * 1e-9)
 end
 
 local function d15_items_item_for_write(request)
@@ -205,8 +193,16 @@ local function d15_items_refs(...)
 end
 
 local function d15_items_summary(request, item, extra, refs)
+  local item_ref = request.__openreaper_d15_item_ref or d15_items_item_ref_string(item)
+  if not item_ref then
+    return nil, {
+      code = "ITEM_NOT_FOUND",
+      message = "D15 item identity could not be proven without fabrication.",
+      details = { blocker = "item_identity_unavailable" },
+    }
+  end
   local summary = {
-    item_ref = d15_items_item_ref_string(item),
+    item_ref = item_ref,
     capability = request.pack.capability,
     pack = request.pack.id,
     risk = request.pack.risk,
@@ -218,7 +214,8 @@ local function d15_items_summary(request, item, extra, refs)
   for key, value in pairs(extra or {}) do
     summary[key] = value
   end
-  return summary, nil, json_array({}), json_array({}), refs or d15_items_refs(d15_items_item_object_ref(item))
+  local default_item_ref = request.__openreaper_d15_item_object_ref or d15_items_item_object_ref(item)
+  return summary, nil, json_array({}), json_array({}), refs or d15_items_refs(default_item_ref)
 end
 
 local function d15_items_set_no_autofades(request)
@@ -309,30 +306,63 @@ local function d15_items_choose_new_source_file(request)
   if not take then
     return d15_items_error(take_failure.code, take_failure.message, take_failure.details)
   end
-  local path_value = d15_items_file_path_from_request_refs(request)
+  local item_object_ref = request.__openreaper_d15_item_object_ref or d15_items_item_object_ref(item)
+  if not item_object_ref then
+    return d15_items_error("ITEM_NOT_FOUND", "D15 item identity could not be proven without fabrication.", {
+      blocker = "item_identity_unavailable",
+    })
+  end
+  request.__openreaper_d15_item_object_ref = item_object_ref
+  request.__openreaper_d15_item_ref = item_object_ref.ref
+  local path_value = request.__openreaper_d15_source_path
   if not path_value then
-    return d15_items_error("FILE_NOT_FOUND", "D15 source relink requires a file ref.", {})
+    path_value = READ_B_MEDIA.file_path_from_request_refs_strict(request)
+  end
+  if not path_value then
+    return d15_items_error("FILE_NOT_FOUND", "D15 source relink requires a valid file ref.", {})
+  end
+  local preserve_timing = request.params.preserve_timing == true
+  local old_start_offset = nil
+  local old_item_length = nil
+  if preserve_timing then
+    old_start_offset = d15_items_read_finite_number("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
+    old_item_length = d15_items_read_finite_number("GetMediaItemInfo_Value", item, "D_LENGTH")
+    if old_start_offset == nil or old_item_length == nil then
+      return d15_items_error("COMMAND_FAILED", "D15 could not read timing before source relink.", {
+        blocker = "timing_read_failed_before_mutation",
+      })
+    end
   end
   local source, code, message = d15_items_create_source(path_value)
   if not source then
     return d15_items_error(code, message, { path = bounded_string(path_value, 240) })
   end
   local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
-  local old_start_offset = d15_take_number(take, "D_STARTOFFS")
-  local old_item_length = d15_items_number(item, "D_LENGTH")
-  local ok_set = call_reaper("SetMediaItemTake_Source", take, source)
-  if not ok_set then
+  local ok_set_call, source_accepted = call_reaper("SetMediaItemTake_Source", take, source)
+  if not ok_set_call or source_accepted ~= true then
     call_reaper("PCM_Source_Destroy", source)
-    return d15_items_error("COMMAND_FAILED", "REAPER rejected take source relink.", {}, false)
+    return d15_items_error("COMMAND_FAILED", "REAPER rejected take source relink.", {
+      blocker = "source_relink_rejected",
+    }, false)
   end
-  if request.params.preserve_timing == true then
-    call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", old_start_offset)
-    call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", old_item_length)
+  if preserve_timing then
+    local ok_offset_call, offset_accepted = call_reaper("SetMediaItemTakeInfo_Value", take, "D_STARTOFFS", old_start_offset)
+    local ok_length_call, length_accepted = call_reaper("SetMediaItemInfo_Value", item, "D_LENGTH", old_item_length)
+    if not ok_offset_call or offset_accepted ~= true or not ok_length_call or length_accepted ~= true then
+      return d15_items_error("COMMAND_FAILED", "REAPER rejected timing preservation after source relink.", {
+        blocker = "timing_restore_failed",
+      }, false)
+    end
   end
   if ok_old_source and old_source and old_source ~= source then
     call_reaper("PCM_Source_Destroy", old_source)
   end
-  call_reaper("UpdateItemInProject", item)
+  local ok_update = call_reaper("UpdateItemInProject", item)
+  if not ok_update then
+    return d15_items_error("COMMAND_FAILED", "REAPER rejected item update after source relink.", {
+      blocker = "item_update_failed",
+    }, false)
+  end
   local ok_readback_source, readback_source = call_reaper("GetMediaItemTake_Source", take)
   local filename = ok_readback_source and readback_source and d15_items_source_filename(readback_source) or ""
   if filename ~= path_value then
@@ -341,9 +371,26 @@ local function d15_items_choose_new_source_file(request)
       actual_path = bounded_string(filename, 240),
     }, false)
   end
-  local file_ref = d15_items_file_object_ref(path_value)
+  if preserve_timing then
+    local actual_start_offset = d15_items_read_finite_number("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
+    local actual_item_length = d15_items_read_finite_number("GetMediaItemInfo_Value", item, "D_LENGTH")
+    if not d15_items_numbers_match(actual_start_offset, old_start_offset)
+        or not d15_items_numbers_match(actual_item_length, old_item_length) then
+      return d15_items_error("VERIFICATION_FAILED", "Source relink timing readback did not match the preserved values.", {
+        blocker = "timing_readback_mismatch",
+        requested_start_offset = old_start_offset,
+        actual_start_offset = actual_start_offset,
+        requested_item_length = old_item_length,
+        actual_item_length = actual_item_length,
+      }, false)
+    end
+  end
+  local file_ref = d15_items_file_object_ref(filename)
+  if not file_ref then
+    return d15_items_error("VERIFICATION_FAILED", "Take source readback did not provide a canonical file identity.", {}, false)
+  end
   return d15_items_summary(request, item, {
     file_ref = file_ref.ref,
-    preserve_timing = request.params.preserve_timing == true,
-  }, d15_items_refs(d15_items_item_object_ref(item), file_ref))
+    preserve_timing = preserve_timing,
+  }, d15_items_refs(item_object_ref, file_ref))
 end

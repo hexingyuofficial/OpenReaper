@@ -1694,6 +1694,124 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       })
     end
   end
+  -- D15 source relink shares E3's frozen canonical file identity and budget
+  -- helpers, but has its own truthful item/file success shape.
+  local d15_source_relink = capability == "items.choose_new_source_file"
+  if d15_source_relink and phase_may_mutate then
+    request.__openreaper_d15_source_path = nil
+    request.__openreaper_d15_item_ref = nil
+    request.__openreaper_d15_item_object_ref = nil
+    if is_json_array(request.refs) then
+      for index = 1, #request.refs do
+        local ref = request.refs[index]
+        if is_object(ref) and ref.kind == "file" then
+          local prefix = "file:path:"
+          local identity = is_object(ref.identity) and ref.identity or nil
+          if type(ref.ref) ~= "string"
+              or ref.ref:sub(1, #prefix) ~= prefix
+              or not identity
+              or identity.scheme ~= "path"
+              or type(identity.value) ~= "string" then
+            return bridge_error_envelope(request, "PARAMS_INVALID", "D15 source relink requires a complete canonical File ref.", {
+              recoverable = true,
+              started_at = started_at,
+              details = { blocker = "malformed_file_ref", zero_write = true },
+            })
+          end
+          if ref.ref:sub(#prefix + 1) ~= identity.value then
+            return bridge_error_envelope(request, "PARAMS_INVALID", "D15 source relink rejected contradictory File ref identity.", {
+              recoverable = true,
+              started_at = started_at,
+              details = { blocker = "contradictory_file_ref", zero_write = true },
+            })
+          end
+        end
+      end
+    end
+    local path_value, path_reason = READ_B_MEDIA.file_path_from_request_refs_strict(request)
+    if not path_value then
+      local code = path_reason == "contradictory_file_ref" and "PARAMS_INVALID" or "FILE_NOT_FOUND"
+      if path_reason == "relative_path" or path_reason == "empty_path" or path_reason == "nul_char" then
+        code = "PARAMS_INVALID"
+      end
+      return bridge_error_envelope(request, code, "D15 source relink requires one consistent canonical absolute file ref.", {
+        recoverable = true,
+        started_at = started_at,
+        details = { blocker = path_reason or "missing_file_ref", zero_write = true },
+      })
+    end
+    local path, budget_error = READ_B_MEDIA.ensure_identity_inline_budget(request, path_value)
+    if not path then
+      budget_error.details = budget_error.details or {}
+      budget_error.details.zero_write = true
+      return bridge_error_envelope(request, budget_error.code, budget_error.message, {
+        recoverable = budget_error.recoverable ~= false,
+        started_at = started_at,
+        details = budget_error.details,
+      })
+    end
+    local item = d15_items_item_from_request_refs(request)
+    if not item then
+      return bridge_error_envelope(request, "ITEM_NOT_FOUND", "D15 source relink requires a resolvable item ref.", {
+        recoverable = true,
+        started_at = started_at,
+        details = { blocker = "item_not_found", zero_write = true },
+      })
+    end
+    local item_ref = d15_items_item_ref_string(item)
+    if not item_ref then
+      return bridge_error_envelope(request, "ITEM_NOT_FOUND", "D15 item identity could not be proven without fabrication.", {
+        recoverable = true,
+        started_at = started_at,
+        details = { blocker = "item_identity_unavailable", zero_write = true },
+      })
+    end
+    local item_scheme, item_value = item_ref:match("^item:([^:]+):(.+)$")
+    if not item_scheme or not item_value then
+      return bridge_error_envelope(request, "ITEM_NOT_FOUND", "D15 item identity could not be encoded truthfully.", {
+        recoverable = true,
+        started_at = started_at,
+        details = { blocker = "item_identity_invalid", zero_write = true },
+      })
+    end
+    local file_ref = "file:path:" .. path
+    local summary = {
+      item_ref = item_ref,
+      file_ref = file_ref,
+      preserve_timing = request.params and request.params.preserve_timing == true,
+      capability = capability,
+      pack = request.pack.id,
+      risk = request.pack.risk,
+      readback_status = "passed",
+      undo_evidence = "required",
+      artifacts_allowed = false,
+      truncated = false,
+    }
+    local refs = json_array({
+      { kind = "item", ref = item_ref, identity = { scheme = item_scheme, value = item_value } },
+      { kind = "file", ref = file_ref, identity = { scheme = "path", value = path } },
+    })
+    local fits, required_response_bytes, budget = READ_B_MEDIA.complete_success_envelope_fits(request, summary, refs, {
+      undo_opened = true,
+      undo_closed = true,
+      verification_status = "passed",
+    })
+    if not fits then
+      return bridge_error_envelope(request, "RESPONSE_TOO_LARGE", "D15 complete success envelope cannot fit before mutation.", {
+        recoverable = true,
+        started_at = started_at,
+        details = {
+          blocker = "success_envelope_budget_insufficient",
+          required_response_bytes = required_response_bytes,
+          max_response_bytes = budget.max_response_bytes,
+          zero_write = true,
+        },
+      })
+    end
+    request.__openreaper_d15_source_path = path
+    request.__openreaper_d15_item_ref = item_ref
+    request.__openreaper_d15_item_object_ref = refs[1]
+  end
   request.__openreaper_undo_phase = {
     skip_undo = (not phase_may_mutate) or selection_only_no_content_undo,
     require_project_identity = d30_write_capability and phase_may_mutate and not selection_only_no_content_undo,
@@ -1711,11 +1829,13 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       },
     })
   end
-  -- E3 required-Undo writes must not enter the handler when both Undo_BeginBlock2
+  -- Media source writes must not enter the handler when both Undo_BeginBlock2
   -- and fallback Undo_BeginBlock failed (zero-write fail-closed before mutation).
-  if e3_media_write_capability and phase_may_mutate and request.__openreaper_undo_block_open ~= true then
+  if (e3_media_write_capability or d15_source_relink)
+      and phase_may_mutate
+      and request.__openreaper_undo_block_open ~= true then
     request.__openreaper_undo_phase = nil
-    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before E3 media mutation.", {
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before media source mutation.", {
       recoverable = true,
       started_at = started_at,
       details = {
