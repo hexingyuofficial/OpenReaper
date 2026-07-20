@@ -854,11 +854,16 @@ function loadActualProductD30CompositionSources() {
   assert.match(dispatchTemplate, /D30_PROJECT_CONTAINER_HANDLERS/);
   assert.match(d30Handlers, /\["project\.create_subproject"\] = create_subproject/);
   assert.match(d30Handlers, /\["project\.render_or_update_subproject"\] = render_or_update_subproject/);
+  assert.match(d30Handlers, /\["project\.create_project_tab"\] = create_project_tab/);
+  assert.match(d30Handlers, /\["project\.open_project_in_tab"\] = open_project_in_tab/);
   assert.match(allowedOps, /\["run_command:template\.execute"\]/);
   assert.match(allowedOps, /handler = dispatch_template_execute/);
   assert.match(dispatchRequest, /function dispatch_request/);
   assert.match(d30Source, /function create_subproject/);
   assert.match(d30Source, /function render_or_update_subproject/);
+  assert.match(d30Source, /function create_project_tab/);
+  assert.match(d30Source, /function open_project_in_tab/);
+  assert.match(d30Source, /type\(path\) ~= "string"/);
   assert.ok(loopSource.includes("process_request_file") || loopSource.includes("dispatch_request"));
 
   // template_execute_write_capability product text includes many handlers; for composition we bind the real function
@@ -944,6 +949,9 @@ local function create_layer_report() error("unexpected non-D30 handler") end
     "dispatch_request",
     "create_subproject",
     "render_or_update_subproject",
+    "create_project_tab",
+    "open_project_in_tab",
+    "list_open_projects",
   ]) {
     productLua = productLua.replaceAll(`local function ${name}`, `function ${name}`);
   }
@@ -1234,7 +1242,13 @@ reaper.GetSet_LoopTimeRange2 = function(project, is_set, is_loop, start_time, en
   end
   return project.time_start, project.time_end
 end
-reaper.IsProjectDirty = function() return 0 end
+reaper.IsProjectDirty = function(project) return (project and project.dirty) or 0 end
+reaper.GetProjectName = function(project)
+  if project and project.path and project.path ~= "" then
+    return true, project.path:match("([^/\\]+)$")
+  end
+  return true, "unsaved"
+end
 reaper.CountTracks = function(project) return #(project.tracks or {}) end
 reaper.GetTrack = function(project, index) return (project.tracks or {})[index + 1] end
 function run_poll(at)
@@ -1566,6 +1580,149 @@ assert(calls.ledger == 0)
 assert(calls.select_project == 0)
 assert((calls.time_selection_set or 0) == 0)
 assert(calls.actions[41929] == 1)
+`);
+  });
+
+  it("composes create_project_tab with unsaved active blank readback and no SelectProjectInstance", () => {
+    runActualProductD30CompositionLua(String.raw`
+function dispatch_to_terminal(request)
+  local cont = nil
+  local last = nil
+  for i = 1, 24 do
+    if i > 1 then
+      apply_pending_reaper_effects()
+    end
+    local runtime = { started_at = now_iso(), deadline_monotonic = now + 30, now_monotonic = now }
+    last = dispatch_request(request, request.id, cont, runtime)
+    if type(last) == "table" and last.contract == "openreaper.bridge.internal_continuation.v1" then
+      cont = last
+      now = now + 0.1
+    else
+      return last, cont
+    end
+  end
+  error("continuation did not terminal")
+end
+
+local req = make_d30_request("req_tab", "project.create_project_tab", { name = "sound design", activate = true })
+local terminal = select(1, dispatch_to_terminal(req))
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"ok":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"created":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"path_state":"unsaved_project"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"active":true', 1, true) ~= nil, terminal)
+assert(calls.actions[41929] == 1)
+assert(calls.select_project == 0)
+assert(current_project ~= parent_project)
+assert(current_project.path == "")
+-- Exact EnumProjects(-1) authority for unsaved active (empty path string).
+local ok_cur, active_handle, active_path = call_reaper("EnumProjects", -1, "")
+assert(ok_cur == true and active_handle == current_project and active_path == "")
+local active_matches = 0
+for _, p in ipairs(projects) do
+  if p == active_handle then active_matches = active_matches + 1 end
+end
+assert(active_matches == 1)
+assert(#undo_begins >= 1 and #undo_ends == #undo_begins)
+assert(open_undo_handle == nil)
+assert(calls.actions[41929] == 1)
+`);
+  });
+
+  it("retains original 30000ms deadline across a ~20s native 41929 call for create_project_tab", () => {
+    runActualProductD30CompositionLua(String.raw`
+-- Long native call: first/only 41929 advances monotonic clock by ~20s without real wait.
+local original_main = reaper.Main_OnCommandEx
+reaper.Main_OnCommandEx = function(action, flag, project)
+  if action == 41929 then
+    now = now + 20.0
+  end
+  return original_main(action, flag, project)
+end
+
+local req = make_d30_request("req_long_tab", "project.create_project_tab", { name = "long native", activate = true })
+req.timeout_ms = 30000
+local deadline = now + (req.timeout_ms / 1000)
+local cont = dispatch_request(req, req.id, nil, {
+  started_at = now_iso(),
+  deadline_monotonic = deadline,
+  now_monotonic = now,
+})
+assert(type(cont) == "table" and cont.phase == "create_project_tab.mutate_create")
+assert(calls.actions[41929] == nil)
+assert(now < 1)
+
+local mid = dispatch_request(req, req.id, cont, {
+  started_at = now_iso(),
+  deadline_monotonic = deadline,
+  now_monotonic = now,
+})
+assert(type(mid) == "table" and mid.phase == "create_project_tab.verify_created", tostring(mid))
+assert(calls.actions[41929] == 1)
+assert(now >= 20 and now < 21)
+-- Original deadline retained (not refreshed after mutation).
+assert(deadline == 30)
+assert(now < deadline)
+
+apply_pending_reaper_effects()
+local terminal = dispatch_request(req, req.id, mid, {
+  started_at = now_iso(),
+  deadline_monotonic = deadline,
+  now_monotonic = now,
+})
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"ok":true', 1, true) ~= nil, terminal)
+assert(calls.actions[41929] == 1)
+assert(calls.select_project == 0)
+assert(current_project.path == "")
+assert(now < deadline)
+assert(open_undo_handle == nil)
+`);
+  });
+
+  it("composes open_project_in_tab with already-active blank and single Main_openProject", () => {
+    runActualProductD30CompositionLua(String.raw`
+function dispatch_to_terminal(request)
+  local cont = nil
+  local last = nil
+  for i = 1, 24 do
+    if i > 1 then
+      apply_pending_reaper_effects()
+    end
+    local runtime = { started_at = now_iso(), deadline_monotonic = now + 30, now_monotonic = now }
+    last = dispatch_request(request, request.id, cont, runtime)
+    if type(last) == "table" and last.contract == "openreaper.bridge.internal_continuation.v1" then
+      cont = last
+      now = now + 0.1
+    else
+      return last, cont
+    end
+  end
+  error("continuation did not terminal")
+end
+
+local target = "/session/Child.RPP"
+files[target] = true
+calls.open_project = 0
+reaper.Main_openProject = function(arg)
+  calls.open_project = (calls.open_project or 0) + 1
+  require_open_undo_for_mutation("Main_openProject", nil)
+  record_shared_event("open_project", open_undo_handle, arg)
+  local path = arg:match("^noprompt:(.+)$") or arg
+  current_project.path = path
+  return nil
+end
+
+local req = make_d30_request("req_open_tab", "project.open_project_in_tab", { path = target })
+local terminal = select(1, dispatch_to_terminal(req))
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"ok":true', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"opened":true', 1, true) ~= nil, terminal)
+assert(calls.actions[41929] == 1)
+assert(calls.open_project == 1)
+assert(calls.select_project == 0)
+assert(current_project.path == target)
+assert(open_undo_handle == nil)
 `);
   });
 });

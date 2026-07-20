@@ -17859,8 +17859,11 @@ local function d30_project_error(code, message, details, recoverable)
 end
 
 local function d30_project_current_state()
+  -- Active authority is only EnumProjects(-1). An empty-string path is a valid
+  -- unsaved active project; do not require global is_string (which rejects "").
+  -- Falsy project handles (nil/false) and non-string paths fail closed.
   local ok, project, path = call_reaper("EnumProjects", -1, "")
-  if not ok or not project or not is_string(path) then
+  if not ok or not project or type(path) ~= "string" then
     return nil
   end
   return {

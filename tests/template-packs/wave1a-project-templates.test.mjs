@@ -154,6 +154,8 @@ describe("Wave 1A project template descriptors", () => {
     const catalog = createTemplateCatalog({ templates: createWave1aProjectTemplates() });
     const createSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createSubproject);
     const createProjectTab = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.createProjectTab);
+    const openProjectInTab = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.openProjectInTab);
+    const activateProjectTab = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.activateProjectTab);
     const listOpenProjects = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.listOpenProjects);
     const insertSubprojectItem = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.insertSubprojectItem);
     const renderOrUpdateSubproject = catalog.require(WAVE1A_PROJECT_TEMPLATE_IDS.renderOrUpdateSubproject);
@@ -180,6 +182,10 @@ describe("Wave 1A project template descriptors", () => {
     assert.equal(renderOrUpdateSubproject.bridge.operation_family, "run_job");
     assert.equal(renderOrUpdateSubproject.bridge.capability, "project.render_or_update_subproject");
     assert.equal(createSubproject.bridge.timeout_ms, 300_000);
+    assert.equal(createProjectTab.bridge.timeout_ms, 30_000);
+    assert.equal(openProjectInTab.bridge.timeout_ms, 30_000);
+    assert.equal(activateProjectTab.bridge.timeout_ms, 5_000);
+    assert.equal(listOpenProjects.bridge.timeout_ms, 5_000);
     assert.equal(Object.hasOwn(createSubproject.inputSchema.properties, "raw_action"), false);
     assert.equal(Object.hasOwn(createProjectTab.inputSchema.properties, "project_file_path"), false);
     assert.equal(listOpenProjects.risk, "read");

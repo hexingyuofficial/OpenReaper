@@ -1111,6 +1111,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     capability: "project.create_project_tab",
     entityKind: "project_tab",
     tag: "tab",
+    timeoutMs: 30_000,
     properties: {
       name: { type: "string" },
       activate: { type: "boolean" },
@@ -1193,6 +1194,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
     capability: "project.open_project_in_tab",
     entityKind: "project",
     tag: "open",
+    timeoutMs: 30_000,
     properties: {
       path: { type: "string" },
     },

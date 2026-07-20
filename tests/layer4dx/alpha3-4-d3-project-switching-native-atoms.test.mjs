@@ -156,6 +156,8 @@ function install_project_tab_fake(config)
     open_project = 0,
     open_args = {},
     sws = 0,
+    save = 0,
+    ledger = 0,
   }
 
   function file_exists(path) return files[path] == true end
@@ -165,6 +167,12 @@ function install_project_tab_fake(config)
     if config.enum_fail then error("enum failed") end
     if index == -1 then
       if config.current_fail then error("current enum failed") end
+      if config.current_false_handle then
+        return false, ""
+      end
+      if config.current_nonstring_path then
+        return current_project or saved_a, config.current_nonstring_path_value
+      end
       if config.current_missing then
         return { path = "/missing/current.RPP", dirty = 0 }, "/missing/current.RPP"
       end
@@ -247,7 +255,12 @@ function install_project_tab_fake(config)
     calls.sws = calls.sws + 1
     error("SWS must not be used")
   end
+  reaper.Main_SaveProjectEx = function()
+    calls.save = calls.save + 1
+    error("unexpected Main_SaveProjectEx write")
+  end
   reaper.SetProjExtState = function()
+    calls.ledger = calls.ledger + 1
     error("ledger writes must not replace native tab materialization")
   end
 end
@@ -423,11 +436,76 @@ local active_rows = 0
 for _, row in ipairs(listed.projects) do if row.active then active_rows = active_rows + 1 end end
 assert(active_rows == 1)
 
+-- Unsaved active: EnumProjects(-1) returns exact handle + empty path string.
+install_project_tab_fake({ two_saved_one_unsaved = true, dirty_unsaved = 1 })
+current_project = unsaved
+local unsaved_list = list_open_projects(project_request("project.list_open_projects", { cursor = 0, limit = 100 }, {}, "read"))
+assert(unsaved_list ~= nil)
+local active_unsaved = nil
+local active_count = 0
+for _, row in ipairs(unsaved_list.projects) do
+  if row.active then
+    active_count = active_count + 1
+    active_unsaved = row
+  end
+end
+assert(active_count == 1)
+assert(active_unsaved ~= nil)
+assert(active_unsaved.active == true)
+assert(active_unsaved.saved == false)
+assert(active_unsaved.path_state == "unsaved_project")
+assert(active_unsaved.project_ref:match("^project:tab:") ~= nil)
+local current_state = d30_project_current_state()
+assert(current_state ~= nil and current_state.project == unsaved and current_state.path == "")
+
 install_project_tab_fake({ only_parent = true })
 projects[#projects + 1] = { path = saved_a.path, dirty = 0, tracks = {}, items = {} }
 local _, dup = list_open_projects(project_request("project.list_open_projects", {}, {}, "read"))
 assert(dup ~= nil and dup.details.blocker == "project_path_duplicate")
 assert(dup.details.zero_write == true and calls.actions[41929] == nil)
+
+-- Negative: false project handle from EnumProjects(-1) fails closed with zero writes.
+install_project_tab_fake({ only_parent = true, current_false_handle = true })
+local _, false_handle = list_open_projects(project_request("project.list_open_projects", {}, {}, "read"))
+assert(false_handle ~= nil and false_handle.details.blocker == "active_project_unreadable")
+assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.open_project == 0)
+local _, create_false = create_project_tab(project_request("project.create_project_tab", { name = "x", activate = true }, {}))
+assert(create_false ~= nil and create_false.details.blocker == "active_project_unreadable")
+assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.open_project == 0)
+
+-- Negative: real handle + non-string path fails closed with zero writes.
+install_project_tab_fake({ only_parent = true, current_nonstring_path = true, current_nonstring_path_value = 123 })
+local _, nonstring = list_open_projects(project_request("project.list_open_projects", {}, {}, "read"))
+assert(nonstring ~= nil and nonstring.details.blocker == "active_project_unreadable")
+assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.open_project == 0)
+local _, create_nonstring = create_project_tab(project_request("project.create_project_tab", { name = "x" }, {}))
+assert(create_nonstring ~= nil and create_nonstring.details.blocker == "active_project_unreadable")
+assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.open_project == 0)
+
+-- Negative: EnumProjects(-1) API exception fails closed with zero writes (preflight).
+install_project_tab_fake({ only_parent = true, current_fail = true })
+local _, api_exc = create_project_tab(project_request("project.create_project_tab", { name = "x" }, {}))
+assert(api_exc ~= nil and api_exc.details.blocker == "active_project_unreadable")
+assert(calls.actions[41929] == nil and calls.select_project == 0 and calls.open_project == 0)
+`);
+  });
+
+  it("create_subproject rejects unsaved active parent before any mutation", () => {
+    runLua(String.raw`
+install_project_tab_fake({ two_saved_one_unsaved = true, dirty_unsaved = 0 })
+current_project = unsaved
+assert(d30_project_current_state() ~= nil)
+assert(d30_project_current_state().project == unsaved)
+assert(d30_project_current_state().path == "")
+local _, failure = create_subproject(project_request("project.create_subproject", { name = "Dialog Edit", activate = true }, {}))
+assert(failure ~= nil, "expected unsaved-parent failure")
+assert(failure.details.blocker == "parent_project_unsaved_or_unreadable", tostring(failure.details and failure.details.blocker))
+assert(calls.actions[41929] == nil)
+assert(calls.select_project == 0)
+assert(calls.open_project == 0)
+assert((calls.actions[42332] or 0) == 0)
+assert(calls.save == 0)
+assert(calls.ledger == 0)
 `);
   });
 
@@ -729,6 +807,44 @@ for _ = 1, 12 do
 end
 assert(opened ~= nil and opened.opened == true)
 assert(calls.actions[41929] == 1 and calls.open_project == 1)
+`);
+  });
+
+  it("create_project_tab activate=true keeps already-active blank tab without SelectProjectInstance", () => {
+    runLua(String.raw`
+install_project_tab_fake({ only_parent = true, dirty_a = 1 })
+local req = project_request("project.create_project_tab", { name = "sound design", activate = true }, {})
+local created, failure = run_with_continuation(create_project_tab, req)
+assert(failure == nil, failure and failure.code)
+assert(created.created == true and created.activate == true and created.active == true)
+assert(created.path_state == "unsaved_project")
+assert(calls.actions[41929] == 1)
+assert(calls.select_project == 0)
+assert(created.selection_mode == "already_active")
+local active = d30_project_current_state()
+assert(active ~= nil and active.project == current_project and active.path == "")
+assert(current_project ~= saved_a)
+`);
+  });
+
+  it("open_project_in_tab recognizes active unsaved blank then opens path once without extra select", () => {
+    runLua(String.raw`
+local target = "/session/Child.RPP"
+install_project_tab_fake({ only_parent = true, dirty_a = 2, open_target_path = target })
+files[target] = true
+local req = project_request("project.open_project_in_tab", { path = target }, {})
+local opened, failure = run_with_continuation(open_project_in_tab, req)
+assert(failure == nil, failure and (failure.code .. ":" .. tostring(failure.details and failure.details.blocker)))
+assert(opened.opened == true and opened.path == target)
+assert(opened.project_ref == "project:path:" .. target)
+assert(calls.actions[41929] == 1)
+assert(calls.open_project == 1)
+assert(calls.select_project == 0)
+assert(opened.selection_mode == "already_active")
+assert(current_project.path == target)
+local active = d30_project_current_state()
+assert(active ~= nil and active.project == current_project and active.path == target)
+assert(saved_a.dirty == 2)
 `);
   });
 });
