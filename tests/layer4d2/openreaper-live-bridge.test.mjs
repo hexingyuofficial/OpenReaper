@@ -797,12 +797,18 @@ function extractProductLua(source, startMarker, endMarkerExclusive) {
 }
 
 function loadActualProductD30CompositionSources() {
+  const envelopeSource = readFileSync(new URL("../../reaper/bridge/src/20-bridge-envelope-kernel.lua", import.meta.url), "utf8");
   const policySource = readFileSync(new URL("../../reaper/bridge/src/35-route-policy.lua", import.meta.url), "utf8");
   const routeSource = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
   const loopSource = readFileSync(new URL("../../reaper/bridge/src/90-file-transport-loop.lua", import.meta.url), "utf8");
   const d30Source = readFileSync(
     new URL("../../reaper/bridge/src/handlers/project/d30_project_container_route.lua", import.meta.url),
     "utf8",
+  );
+  const envelopeKernel = extractProductLua(
+    envelopeSource,
+    "local function safe_budget(request)",
+    "\nlocal FIXED_FAMILIES = {",
   );
   // Product required_undo_capability depends on D30 capability table + container capability + full template_execute_write_capability.
   // For D30-only composition we extract the real D30 capability path and real required_undo_capability definition text.
@@ -926,6 +932,7 @@ local function create_layer_report() error("unexpected non-D30 handler") end
 `;
 
   let productLua = [
+      envelopeKernel,
       d30Caps,
       d30CapFn,
       nilCapHelpers,
@@ -969,6 +976,7 @@ local function create_layer_report() error("unexpected non-D30 handler") end
     d30Source,
     productLua,
     markers: {
+      envelopeKernel,
       requiredUndoFn,
       dispatchTemplate,
       d30Handlers,
@@ -983,6 +991,9 @@ function runActualProductD30CompositionLua(body, { withTransport = false } = {})
   const env = String.raw`
 ACTIVE_OWNER = "test-owner"
 ACTIVE_GENERATION = 1
+CONTRACT = "foundation.bridge.v1"
+DEFAULT_BUDGET = { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 }
+JSON_NULL = {}
 TRANSPORT_DIR = "/transport"
 REQUESTS_DIR = "/requests"
 RESULTS_DIR = "/results"
@@ -1005,6 +1016,8 @@ open_undo_handle = nil
 shared_events = {}
 guard_failures = {}
 force_undo_end_fail = false
+force_undo_begin_fail = false
+force_delete_track_fail = false
 undo_end_block_increments_dirty = false
 allow_selection_without_undo = false
 request_objects = {}
@@ -1052,7 +1065,10 @@ function is_json_array(value) return type(value) == "table" end
 function is_non_negative_integer(value)
   return type(value) == "number" and value >= 0 and value == math.floor(value)
 end
-function json_array(value) return value or {} end
+function json_array(value)
+  local array = value or {}
+  return setmetatable(array, { __openreaper_json_array = true })
+end
 function first_number(...) for i=1,select("#",...) do local v=select(i,...); if type(v)=="number" then return v end end end
 function first_string(...) for i=1,select("#",...) do local v=select(i,...); if type(v)=="string" then return v end end end
 function artifact_id_from_request(request) return request.id end
@@ -1087,42 +1103,17 @@ function call_reaper(name, ...)
   return pcall(reaper[name], ...)
 end
 function validate_request(request) return true end
-function bridge_error_envelope(request, code, message, options)
-  options = options or {}
-  return json.encode({
-    ok = false,
-    code = code,
-    message = message,
-    recoverable = options.recoverable ~= false,
-    queue_state = options.queue_state or "failed",
-    details = options.details or {},
-    undo = {
-      opened = request and request.__openreaper_undo_opened == true,
-      closed = request and request.__openreaper_undo_closed == true,
-    },
-  })
-end
-function bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)
-  return json.encode({
-    ok = true,
-    id = request.id,
-    summary = summary or {},
-    undo = {
-      opened = request.__openreaper_undo_opened == true,
-      closed = request.__openreaper_undo_closed == true,
-    },
-  })
-end
 json = {
   encode = function(value)
     if type(value) ~= "table" then return tostring(value) end
     local function enc(v)
-      if v == nil then return "null" end
+      if v == nil or v == JSON_NULL then return "null" end
       local t = type(v)
       if t == "string" then return string.format("%q", v) end
       if t == "number" or t == "boolean" then return tostring(v) end
       if t ~= "table" then return "null" end
-      if #v > 0 then
+      local mt = getmetatable(v)
+      if #v > 0 or (mt and mt.__openreaper_json_array == true) then
         local items = {}
         for i = 1, #v do items[i] = enc(v[i]) end
         return "[" .. table.concat(items, ",") .. "]"
@@ -1153,6 +1144,7 @@ reaper.EnumProjects = function(index)
   return project, project.path or ""
 end
 reaper.Undo_BeginBlock2 = function(project)
+  if force_undo_begin_fail then error("forced Undo_BeginBlock2 failure") end
   if open_undo_handle ~= nil then
     push_guard_failure("Undo_BeginBlock2: nested or already-open Undo block")
   end
@@ -1264,6 +1256,25 @@ reaper.GetProjectName = function(project)
 end
 reaper.CountTracks = function(project) return #(project.tracks or {}) end
 reaper.GetTrack = function(project, index) return (project.tracks or {})[index + 1] end
+reaper.InsertTrackAtIndex = function(index, want_defaults)
+  require_open_undo_for_mutation("InsertTrackAtIndex", current_project)
+  assert(index == 0 and want_defaults == true)
+  calls.insert_track = (calls.insert_track or 0) + 1
+  local track = { guid = "{DEFAULT-D30-" .. tostring(calls.insert_track) .. "}", selected = false }
+  table.insert(current_project.tracks, index + 1, track)
+end
+reaper.DeleteTrack = function(track)
+  require_open_undo_for_mutation("DeleteTrack", parent_project)
+  calls.delete_track = (calls.delete_track or 0) + 1
+  if force_delete_track_fail then return false end
+  for index, candidate in ipairs(parent_project.tracks or {}) do
+    if candidate == track then
+      table.remove(parent_project.tracks, index)
+      return true
+    end
+  end
+  return false
+end
 function run_poll(at)
   now = at
   assert(type(deferred_callback) == "function")
@@ -1283,6 +1294,7 @@ function make_d30_request(id, capability, params, refs)
     params = params or {},
     refs = refs or {},
     undo = { mode = "required", label = "OpenReaper D30 composition" },
+    budget = { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 },
   }
   request_objects[id] = req
   return req
@@ -1338,6 +1350,76 @@ files_list = {}
 }
 
 describe("Alpha3.4-D3 actual product D30 composition proof", () => {
+  it("rejects all six low-budget D30 writes before product Undo or native mutation", () => {
+    runActualProductD30CompositionLua(String.raw`
+local capabilities = {
+  "project.create_project_tab",
+  "project.open_project_in_tab",
+  "project.activate_project_tab",
+  "project.create_subproject",
+  "project.insert_subproject_item",
+  "project.render_or_update_subproject",
+}
+for _, budget_bytes in ipairs({ 2048, 4096 }) do
+  for index, capability in ipairs(capabilities) do
+    calls = { actions = {}, select_project = 0, save = 0, ledger = 0, time_selection_set = 0 }
+    undo_begins, undo_ends = {}, {}
+    open_undo_handle = nil
+    shared_events = {}
+    guard_failures = {}
+    pending_new_tab, pending_select = nil, nil
+    local req = make_d30_request("low_" .. tostring(budget_bytes) .. "_" .. tostring(index), capability, {}, {})
+    req.budget.max_response_bytes = budget_bytes
+    local terminal = dispatch_request(req, req.id, nil, {
+      started_at = now_iso(),
+      deadline_monotonic = now + 100,
+      now_monotonic = now,
+    })
+    assert(type(terminal) == "string", capability)
+    assert(string.find(terminal, '"code":"RESPONSE_TOO_LARGE"', 1, true) ~= nil, terminal)
+    assert(string.find(terminal, '"zero_write":true', 1, true) ~= nil, terminal)
+    assert(string.find(terminal, '"required_response_bytes":65536', 1, true) ~= nil, terminal)
+    assert(string.find(terminal, '"max_response_bytes":' .. tostring(budget_bytes), 1, true) ~= nil, terminal)
+    local response_bytes = tonumber(string.match(terminal, '"response_bytes":(%d+)'))
+    assert(response_bytes == #terminal, capability .. ": response_bytes must equal UTF-8 wire bytes")
+    assert(#terminal <= budget_bytes, capability .. ": terminal error must fit request budget")
+    assert(#undo_begins == 0 and #undo_ends == 0, capability .. ": Undo must stay unopened")
+    assert(open_undo_handle == nil, capability .. ": no open Undo handle")
+    assert(#shared_events == 0, capability .. ": no product mutation event")
+    assert(calls.actions[41929] == nil and calls.actions[42332] == nil, capability .. ": no action")
+    assert(calls.select_project == 0 and calls.save == 0 and calls.ledger == 0, capability .. ": no write")
+    assert(calls.time_selection_set == 0, capability .. ": no time-selection write")
+    assert(pending_new_tab == nil and pending_select == nil, capability .. ": no deferred native write")
+  end
+end
+`);
+  });
+
+  it("reports exact UTF-8 response bytes through the product envelope kernel", () => {
+    runActualProductD30CompositionLua(String.raw`
+local request = make_d30_request("utf8_budget", "project.create_project_tab", {}, {})
+local success = bridge_ok_envelope(
+  request,
+  now_iso(),
+  { label = "淡入淡出", status = "完成" },
+  json_array({}),
+  json_array({}),
+  json_array({})
+)
+local success_bytes = tonumber(string.match(success, '"response_bytes":(%d+)'))
+assert(success_bytes == #success, success)
+assert(#success <= request.budget.max_response_bytes, success)
+
+local failure = bridge_error_envelope(request, "COMMAND_FAILED", "读取失败", {
+  recoverable = true,
+  details = { label = "淡入", reason = "原生读取失败" },
+})
+local failure_bytes = tonumber(string.match(failure, '"response_bytes":(%d+)'))
+assert(failure_bytes == #failure, failure)
+assert(#failure <= request.budget.max_response_bytes, failure)
+`);
+  });
+
   it("loads product required_undo_capability, D30 mapping, dispatch and proves create+render", () => {
     const markers = runActualProductD30CompositionLua(String.raw`
 function dispatch_to_terminal(request)
@@ -1357,6 +1439,14 @@ function dispatch_to_terminal(request)
     end
   end
   error("continuation did not terminal")
+end
+
+function assert_terminal_budget(terminal, expected_max)
+  local response_bytes = tonumber(string.match(terminal, '"response_bytes":(%d+)'))
+  local max_response_bytes = tonumber(string.match(terminal, '"max_response_bytes":(%d+)'))
+  assert(response_bytes == #terminal, "response_bytes must equal UTF-8 wire bytes")
+  assert(max_response_bytes == expected_max, "terminal max_response_bytes mismatch")
+  assert(#terminal <= expected_max, "terminal exceeded max_response_bytes")
 end
 
 -- Same-tick verification cannot observe a scheduled new tab.
@@ -1397,6 +1487,11 @@ assert(required_undo_capability(create_req, key) ~= nil and required_undo_capabi
 local terminal = select(1, dispatch_to_terminal(create_req))
 assert(type(terminal) == "string", terminal)
 assert(string.find(terminal, '"ok":true', 1, true) ~= nil, terminal)
+assert_terminal_budget(terminal, 65536)
+assert(string.find(terminal, '"artifacts":[]', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"jobs":[]', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"ref":"project:path:/session/Dialog_Edit__subproject_req_create.RPP"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"ref":"project:path:/session/Parent.RPP"', 1, true) ~= nil, terminal)
 assert(files["/session/Dialog_Edit__subproject_req_create.RPP"] == true)
 assert(files["/session/Dialog_Edit__subproject_req_create.RPP-PROX"] == true)
 assert(current_project == parent_project)
@@ -1428,8 +1523,346 @@ assert(shared_events[12].kind == "undo_begin" and shared_events[12].project == p
 assert(shared_events[13].kind == "ledger" and shared_events[13].project == parent_project)
 assert(shared_events[14].kind == "undo_end" and shared_events[14].project == parent_project)
 
--- Full render_or_update_subproject through the same product dispatch mapping.
+-- Full insert_subproject_item through product dispatch with exact required Undo.
 local child_path = "/session/Dialog_Edit__subproject_req_create.RPP"
+local target_track = { guid = "{TARGET-D30}", selected = false }
+parent_project.tracks = { target_track }
+parent_project.items = {}
+local edit_cursor = 9
+local native_guid_failure = false
+local sws_guid_failure = false
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.CountMediaItems = function(project) return #(project.items or {}) end
+reaper.GetMediaItem = function(project, index) return (project.items or {})[index + 1] end
+reaper.IsTrackSelected = function(track) return track.selected == true end
+reaper.SetTrackSelected = function(track, selected) track.selected = selected == true end
+reaper.IsMediaItemSelected = function(item) return item.selected == true end
+reaper.SetMediaItemSelected = function(item, selected) item.selected = selected == true end
+reaper.GetCursorPositionEx = function(project) assert(project == parent_project); return edit_cursor end
+reaper.SetEditCurPos2 = function(project, value) assert(project == parent_project); edit_cursor = value end
+reaper.UpdateArrange = function() end
+reaper.PCM_Source_CreateFromFile = function(path)
+  require_open_undo_for_mutation("PCM_Source_CreateFromFile", parent_project)
+  calls.create_source = (calls.create_source or 0) + 1
+  return { path = path, source_type = "RPP_PROJECT", length = 6.25, subproject = child_project }
+end
+reaper.PCM_Source_Destroy = function(source)
+  require_open_undo_for_mutation("PCM_Source_Destroy", parent_project)
+  calls.destroy_source = (calls.destroy_source or 0) + 1
+  source.destroyed = true
+end
+reaper.GetMediaSourceType = function(source) return source.source_type end
+reaper.GetMediaSourceFileName = function(source) return source.path end
+reaper.GetMediaSourceLength = function(source) return source.length, false end
+reaper.GetSubProjectFromSource = function(source) return source.subproject end
+reaper.GetMediaSourceParent = function(source) return source.parent end
+reaper.AddMediaItemToTrack = function(track)
+  require_open_undo_for_mutation("AddMediaItemToTrack", parent_project)
+  calls.add_item = (calls.add_item or 0) + 1
+  local item = { guid = "{ITEM-D30-" .. tostring(calls.add_item) .. "}", track = track, selected = true, position = 0, length = 0 }
+  parent_project.items[#parent_project.items + 1] = item
+  return item
+end
+reaper.AddTakeToMediaItem = function(item)
+  require_open_undo_for_mutation("AddTakeToMediaItem", parent_project)
+  calls.add_take = (calls.add_take or 0) + 1
+  item.take = { source = nil }
+  return item.take
+end
+reaper.SetMediaItemInfo_Value = function(item, key, value)
+  require_open_undo_for_mutation("SetMediaItemInfo_Value", parent_project)
+  if key == "D_POSITION" then item.position = value else assert(key == "D_LENGTH"); item.length = value end
+  return true
+end
+reaper.SetMediaItemTake_Source = function(take, source)
+  require_open_undo_for_mutation("SetMediaItemTake_Source", parent_project)
+  take.source = source
+end
+reaper.UpdateItemInProject = function(item)
+  require_open_undo_for_mutation("UpdateItemInProject", parent_project)
+  calls.update_item = (calls.update_item or 0) + 1
+end
+reaper.GetMediaItem_Track = function(item) return item.track end
+reaper.GetActiveTake = function(item) return item.take end
+reaper.GetMediaItemTake_Source = function(take) return take.source end
+reaper.GetMediaItemInfo_Value = function(item, key)
+  if key == "D_POSITION" then return item.position end
+  assert(key == "D_LENGTH")
+  return item.length
+end
+reaper.GetSetMediaItemInfo_String = function(item, key, value, set_new)
+  assert(key == "GUID" and value == "" and set_new == false)
+  calls.native_guid = (calls.native_guid or 0) + 1
+  if native_guid_failure then return false, "" end
+  return true, item.guid
+end
+reaper.BR_GetMediaItemGUID = function(item)
+  calls.sws_guid = (calls.sws_guid or 0) + 1
+  if sws_guid_failure then return nil end
+  return item.guid
+end
+reaper.DeleteTrackMediaItem = function(track, item)
+  require_open_undo_for_mutation("DeleteTrackMediaItem", parent_project)
+  calls.delete_item = (calls.delete_item or 0) + 1
+  for index, candidate in ipairs(parent_project.items) do
+    if candidate == item then table.remove(parent_project.items, index); return true end
+  end
+  return false
+end
+
+local insert_refs = {
+  { kind = "project", ref = "project:path:" .. child_path, identity = { scheme = "path", value = child_path } },
+  { kind = "track", ref = "track:guid:{TARGET-D30}", identity = { scheme = "guid", value = "{TARGET-D30}" } },
+}
+
+local function insert_write_snapshot()
+  return {
+    track_count = #parent_project.tracks,
+    item_count = #parent_project.items,
+    insert_track = calls.insert_track or 0,
+    delete_track = calls.delete_track or 0,
+    create_source = calls.create_source or 0,
+    destroy_source = calls.destroy_source or 0,
+    add_item = calls.add_item or 0,
+    add_take = calls.add_take or 0,
+    update_item = calls.update_item or 0,
+    delete_item = calls.delete_item or 0,
+    native_guid = calls.native_guid or 0,
+    sws_guid = calls.sws_guid or 0,
+  }
+end
+
+local function assert_insert_writes_unchanged(before, label)
+  local after = insert_write_snapshot()
+  for key, value in pairs(before) do
+    assert(after[key] == value, label .. ": unexpected native write/readback delta for " .. key)
+  end
+  assert(#undo_begins == 0 and #undo_ends == 0 and open_undo_handle == nil, label .. ": Undo must stay unopened")
+end
+
+-- Ordinary request/ref/file/track/open-child failures terminal on the preflight
+-- tick before product Undo or any source/Item/Take mutation.
+local closed_child_path = "/session/ClosedChild.RPP"
+files[closed_child_path] = true
+files[closed_child_path .. "-PROX"] = true
+local invalid_insert_cases = {
+  {
+    label = "missing_project_ref",
+    params = { position_seconds = 5 },
+    refs = { insert_refs[2] },
+    blocker = "project_ref_missing",
+  },
+  {
+    label = "missing_child_files",
+    params = { position_seconds = 5 },
+    refs = {
+      { kind = "project", ref = "project:path:/session/MissingChild.RPP", identity = { scheme = "path", value = "/session/MissingChild.RPP" } },
+      insert_refs[2],
+    },
+    code = "FILE_NOT_FOUND",
+  },
+  {
+    label = "invalid_position",
+    params = { position_seconds = -1 },
+    refs = insert_refs,
+    code = "PARAMS_INVALID",
+  },
+  {
+    label = "unknown_track_ref",
+    params = { position_seconds = 5 },
+    refs = {
+      insert_refs[1],
+      { kind = "track", ref = "track:guid:{UNKNOWN-D30}", identity = { scheme = "guid", value = "{UNKNOWN-D30}" } },
+    },
+    blocker = "target_track_ref_invalid",
+  },
+  {
+    label = "child_not_open",
+    params = { position_seconds = 5 },
+    refs = {
+      { kind = "project", ref = "project:path:" .. closed_child_path, identity = { scheme = "path", value = closed_child_path } },
+      insert_refs[2],
+    },
+    blocker = "subproject_must_be_open_for_native_source",
+  },
+}
+for index, case in ipairs(invalid_insert_cases) do
+  undo_begins, undo_ends = {}, {}
+  shared_events = {}
+  guard_failures = {}
+  local before = insert_write_snapshot()
+  local req = make_d30_request("req_insert_preflight_" .. tostring(index), "project.insert_subproject_item", case.params, case.refs)
+  local terminal = dispatch_request(req, req.id, nil, {
+    started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now,
+  })
+  assert(type(terminal) == "string", case.label)
+  if case.code then
+    assert(string.find(terminal, '"code":"' .. case.code .. '"', 1, true) ~= nil, terminal)
+  end
+  if case.blocker then
+    assert(string.find(terminal, '"blocker":"' .. case.blocker .. '"', 1, true) ~= nil, terminal)
+  end
+  assert_terminal_budget(terminal, 65536)
+  assert_insert_writes_unchanged(before, case.label)
+end
+
+-- At the legal 65536 budget, a required Undo-open failure is zero-write.
+undo_begins, undo_ends = {}, {}
+shared_events = {}
+guard_failures = {}
+local before_undo_fail = insert_write_snapshot()
+local undo_fail_req = make_d30_request("req_insert_undo_fail", "project.insert_subproject_item", { position_seconds = 5 }, insert_refs)
+local undo_fail_preflight = dispatch_request(undo_fail_req, undo_fail_req.id, nil, {
+  started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now,
+})
+assert(type(undo_fail_preflight) == "table" and undo_fail_preflight.phase == "insert_subproject_item.mutate_insert")
+assert(undo_fail_preflight.state.undo_project == parent_project)
+assert_insert_writes_unchanged(before_undo_fail, "undo_open_preflight")
+force_undo_begin_fail = true
+local undo_fail_terminal = dispatch_request(undo_fail_req, undo_fail_req.id, undo_fail_preflight, {
+  started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now,
+})
+force_undo_begin_fail = false
+assert(type(undo_fail_terminal) == "string", undo_fail_terminal)
+assert(string.find(undo_fail_terminal, '"blocker":"required_undo_project_identity_unavailable"', 1, true) ~= nil, undo_fail_terminal)
+assert(string.find(undo_fail_terminal, '"zero_write":true', 1, true) ~= nil, undo_fail_terminal)
+assert_terminal_budget(undo_fail_terminal, 65536)
+assert_insert_writes_unchanged(before_undo_fail, "undo_open_failure")
+
+-- Normal insert mutates once under exactly one parent-project Undo pair.
+undo_begins, undo_ends = {}, {}
+shared_events = {}
+guard_failures = {}
+local insert_req = make_d30_request("req_insert", "project.insert_subproject_item", { position_seconds = 5 }, insert_refs)
+local insert_terminal = select(1, dispatch_to_terminal(insert_req))
+assert(type(insert_terminal) == "string", insert_terminal)
+assert(string.find(insert_terminal, '"ok":true', 1, true) ~= nil, insert_terminal)
+assert_terminal_budget(insert_terminal, 65536)
+assert(string.find(insert_terminal, '"artifacts":[]', 1, true) ~= nil, insert_terminal)
+assert(string.find(insert_terminal, '"jobs":[]', 1, true) ~= nil, insert_terminal)
+assert(string.find(insert_terminal, '"ref":"item:guid:{ITEM-D30-1}"', 1, true) ~= nil, insert_terminal)
+assert(string.find(insert_terminal, '"ref":"project:path:' .. child_path .. '"', 1, true) ~= nil, insert_terminal)
+assert(string.find(insert_terminal, 'item:placeholder:', 1, true) == nil, insert_terminal)
+assert(#parent_project.items == 1 and parent_project.items[1].guid == "{ITEM-D30-1}")
+assert(#undo_begins == 1 and #undo_ends == 1)
+assert(undo_begins[1] == parent_project and undo_ends[1] == parent_project)
+assert(open_undo_handle == nil and #guard_failures == 0)
+
+-- Missing native GUID rolls the newly inserted Item back and never falls back to SWS/handle refs.
+undo_begins, undo_ends = {}, {}
+shared_events = {}
+guard_failures = {}
+native_guid_failure = true
+sws_guid_failure = true
+local before_guid_fail_items = #parent_project.items
+local before_guid_fail_add = calls.add_item or 0
+local before_guid_fail_delete = calls.delete_item or 0
+local before_sws_guid = calls.sws_guid or 0
+local guid_fail_req = make_d30_request("req_insert_guid_fail", "project.insert_subproject_item", { position_seconds = 7 }, insert_refs)
+local guid_fail_terminal = select(1, dispatch_to_terminal(guid_fail_req))
+native_guid_failure = false
+sws_guid_failure = false
+assert(type(guid_fail_terminal) == "string", guid_fail_terminal)
+assert(string.find(guid_fail_terminal, '"code":"VERIFY_FAILED"', 1, true) ~= nil, guid_fail_terminal)
+assert(string.find(guid_fail_terminal, '"blocker":"subproject_item_guid_readback_failed"', 1, true) ~= nil, guid_fail_terminal)
+assert(string.find(guid_fail_terminal, '"outcome":"unknown"', 1, true) ~= nil, guid_fail_terminal)
+assert(string.find(guid_fail_terminal, '"recoverable":false', 1, true) ~= nil, guid_fail_terminal)
+assert(string.find(guid_fail_terminal, '"zero_write":false', 1, true) ~= nil, guid_fail_terminal)
+assert(string.find(guid_fail_terminal, 'item:placeholder:', 1, true) == nil, guid_fail_terminal)
+assert_terminal_budget(guid_fail_terminal, 65536)
+assert(#parent_project.items == before_guid_fail_items)
+assert((calls.add_item or 0) == before_guid_fail_add + 1)
+assert((calls.delete_item or 0) == before_guid_fail_delete + 1)
+assert((calls.sws_guid or 0) == before_sws_guid, "insert success identity must not use SWS fallback")
+assert(#undo_begins == 1 and #undo_ends == 1)
+assert(undo_begins[1] == parent_project and undo_ends[1] == parent_project)
+assert(open_undo_handle == nil and #guard_failures == 0)
+
+-- A tab switch between preflight and the implicit default-Track mutation must
+-- never create a Track in the newly active foreign project.
+local saved_parent_tracks = parent_project.tracks
+local saved_parent_items = parent_project.items
+parent_project.tracks = {}
+parent_project.items = {}
+current_project = parent_project
+undo_begins, undo_ends = {}, {}
+shared_events = {}
+guard_failures = {}
+local default_refs = {
+  { kind = "project", ref = "project:path:" .. child_path, identity = { scheme = "path", value = child_path } },
+}
+local drift_req = make_d30_request("req_insert_active_drift", "project.insert_subproject_item", { position_seconds = 8 }, default_refs)
+local before_drift_insert = calls.insert_track or 0
+local before_drift_delete = calls.delete_track or 0
+local before_drift_source = calls.create_source or 0
+local before_drift_add = calls.add_item or 0
+local foreign_track_count = #(child_project.tracks or {})
+local drift_preflight = dispatch_request(drift_req, drift_req.id, nil, {
+  started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now,
+})
+assert(type(drift_preflight) == "table" and drift_preflight.phase == "insert_subproject_item.mutate_insert")
+assert(drift_preflight.state.create_default_track == true and drift_preflight.state.undo_project == parent_project)
+current_project = child_project
+local drift_terminal = dispatch_request(drift_req, drift_req.id, drift_preflight, {
+  started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now,
+})
+assert(type(drift_terminal) == "string", drift_terminal)
+assert(string.find(drift_terminal, '"code":"VERIFY_FAILED"', 1, true) ~= nil, drift_terminal)
+assert(string.find(drift_terminal, '"blocker":"active_parent_changed_before_default_track_create"', 1, true) ~= nil, drift_terminal)
+assert(string.find(drift_terminal, '"recoverable":false', 1, true) ~= nil, drift_terminal)
+assert(string.find(drift_terminal, '"zero_write":true', 1, true) ~= nil, drift_terminal)
+assert(string.find(drift_terminal, '"outcome":"unknown"', 1, true) == nil, drift_terminal)
+assert((calls.insert_track or 0) == before_drift_insert)
+assert((calls.delete_track or 0) == before_drift_delete)
+assert((calls.create_source or 0) == before_drift_source)
+assert((calls.add_item or 0) == before_drift_add)
+assert(#parent_project.tracks == 0 and #(child_project.tracks or {}) == foreign_track_count)
+assert(#undo_begins == 0 and #undo_ends == 0)
+assert(open_undo_handle == nil and #guard_failures == 0)
+
+-- If a later readback fails after an implicit default Track was created, every
+-- mutation executes once. A failed DeleteTrack rollback remains explicit and
+-- the dispatch result cannot claim recovery or zero-write.
+current_project = parent_project
+undo_begins, undo_ends = {}, {}
+shared_events = {}
+guard_failures = {}
+native_guid_failure = true
+force_delete_track_fail = true
+local before_default_insert = calls.insert_track or 0
+local before_default_delete = calls.delete_track or 0
+local before_default_source = calls.create_source or 0
+local before_default_add = calls.add_item or 0
+local before_default_take = calls.add_take or 0
+local before_default_item_delete = calls.delete_item or 0
+local default_fail_req = make_d30_request("req_insert_default_rollback_fail", "project.insert_subproject_item", { position_seconds = 9 }, default_refs)
+local default_fail_terminal = select(1, dispatch_to_terminal(default_fail_req))
+native_guid_failure = false
+force_delete_track_fail = false
+assert(type(default_fail_terminal) == "string", default_fail_terminal)
+assert(string.find(default_fail_terminal, '"code":"RESTORE_FAILED"', 1, true) ~= nil, default_fail_terminal)
+assert(string.find(default_fail_terminal, '"original_blocker":"subproject_item_guid_readback_failed"', 1, true) ~= nil, default_fail_terminal)
+assert(string.find(default_fail_terminal, '"target_track_deleted":false', 1, true) ~= nil, default_fail_terminal)
+assert(string.find(default_fail_terminal, '"outcome":"unknown"', 1, true) ~= nil, default_fail_terminal)
+assert(string.find(default_fail_terminal, '"recoverable":false', 1, true) ~= nil, default_fail_terminal)
+assert(string.find(default_fail_terminal, '"zero_write":false', 1, true) ~= nil, default_fail_terminal)
+assert_terminal_budget(default_fail_terminal, 65536)
+assert((calls.insert_track or 0) == before_default_insert + 1)
+assert((calls.delete_track or 0) == before_default_delete + 1)
+assert((calls.create_source or 0) == before_default_source + 1)
+assert((calls.add_item or 0) == before_default_add + 1)
+assert((calls.add_take or 0) == before_default_take + 1)
+assert((calls.delete_item or 0) == before_default_item_delete + 1)
+assert(#parent_project.tracks == 1 and #parent_project.items == 0)
+assert(#undo_begins == 1 and #undo_ends == 1)
+assert(undo_begins[1] == parent_project and undo_ends[1] == parent_project)
+assert(open_undo_handle == nil and #guard_failures == 0)
+
+parent_project.tracks = saved_parent_tracks
+parent_project.items = saved_parent_items
+current_project = parent_project
+
+-- Full render_or_update_subproject through the same product dispatch mapping.
 assert(files[child_path] == true)
 current_project = parent_project
 if not child_project then error("missing child") end
@@ -1448,10 +1881,16 @@ local before_ledger = calls.ledger
 local before_time_set = calls.time_selection_set or 0
 local render_req = make_d30_request("req_render", "project.render_or_update_subproject", { mode = "render" }, {
   { kind = "project", ref = "project:path:" .. child_path, identity = { scheme = "path", value = child_path } },
+  { kind = "item", ref = "item:guid:{ITEM-D30-1}", identity = { scheme = "guid", value = "{ITEM-D30-1}" } },
 })
 local render_terminal = select(1, dispatch_to_terminal(render_req))
 assert(type(render_terminal) == "string", render_terminal)
 assert(string.find(render_terminal, '"ok":true', 1, true) ~= nil, render_terminal)
+assert_terminal_budget(render_terminal, 65536)
+assert(string.find(render_terminal, '"artifacts":[]', 1, true) ~= nil, render_terminal)
+assert(string.find(render_terminal, '"ref":"job:job_id:project.subproject.subproject_job_req_render"', 1, true) ~= nil, render_terminal)
+assert(string.find(render_terminal, '"state":"completed"', 1, true) ~= nil, render_terminal)
+assert(string.find(render_terminal, '"ref":"project:path:' .. child_path .. '"', 1, true) ~= nil, render_terminal)
 assert((calls.actions[42332] or 0) == before_render + 1)
 assert(calls.select_project == before_select)
 assert(calls.save == before_save)
@@ -1522,11 +1961,14 @@ assert(child_project ~= nil)
 -- Poll 3: past deadline; exact non-recoverable timeout truth; no mutation replay.
 run_poll(1.50)
 assert(results["/results/timeout.json"] == true, writes["/results/timeout.json"])
-local body = writes["/results/timeout.json"]
-assert(string.find(body, '"queue_state":"timeout"', 1, true) ~= nil, body)
+local body = string.gsub(writes["/results/timeout.json"], "\n$", "")
+assert(string.find(body, '"state":"timeout"', 1, true) ~= nil, body)
 assert(string.find(body, '"reason":"continuation_timeout"', 1, true) ~= nil, body)
 assert(string.find(body, '"outcome":"unknown"', 1, true) ~= nil, body)
 assert(string.find(body, '"recoverable":false', 1, true) ~= nil, body)
+local response_bytes = tonumber(string.match(body, '"response_bytes":(%d+)'))
+assert(response_bytes == #body, body)
+assert(#body <= 65536, body)
 assert(calls.actions[41929] == 1)
 assert((calls.actions[42332] or 0) == 0)
 assert(calls.save == 0)
@@ -1535,6 +1977,171 @@ assert((calls.time_selection_set or 0) == 0)
 `,
       { withTransport: true },
     );
+  });
+
+  it("fails a mutation-bearing continuation closed when its retained budget is reduced", () => {
+    runActualProductD30CompositionLua(String.raw`
+calls = { actions = {}, select_project = 0, save = 0, ledger = 0, time_selection_set = 0 }
+undo_begins, undo_ends = {}, {}
+open_undo_handle = nil
+shared_events = {}
+guard_failures = {}
+pending_new_tab, pending_select = nil, nil
+
+local request = make_d30_request("reduced_budget", "project.create_subproject", { name = "Budget Child" }, {})
+local runtime = { started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now }
+local preflight = dispatch_request(request, request.id, nil, runtime)
+assert(type(preflight) == "table" and preflight.phase == "create_subproject.mutate_create")
+assert(calls.actions[41929] == nil)
+
+local mutated = dispatch_request(request, request.id, preflight, runtime)
+assert(type(mutated) == "table" and mutated.phase == "create_subproject.verify_created")
+assert(mutated.mutations_may_have_happened == true)
+assert(calls.actions[41929] == 1)
+assert(#undo_begins == 1 and #undo_ends == 1)
+
+request.budget.max_response_bytes = 4096
+local terminal = dispatch_request(request, request.id, mutated, runtime)
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"code":"RESPONSE_TOO_LARGE"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"recoverable":false', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"outcome":"unknown"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"zero_write":false', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"required_response_bytes":65536', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"max_response_bytes":4096', 1, true) ~= nil, terminal)
+local response_bytes = tonumber(string.match(terminal, '"response_bytes":(%d+)'))
+assert(response_bytes == #terminal, terminal)
+assert(#terminal <= 4096, terminal)
+assert(calls.actions[41929] == 1, "41929 must not replay")
+assert((calls.actions[42332] or 0) == 0)
+assert(calls.save == 0 and calls.ledger == 0)
+assert((calls.time_selection_set or 0) == 0)
+assert(#undo_begins == 1 and #undo_ends == 1, "reduced-budget resume must not open another Undo pair")
+assert(open_undo_handle == nil and #guard_failures == 0)
+`);
+  });
+
+  it("preserves prior mutation truth when a resumed continuation also carries a handler failure", () => {
+    runActualProductD30CompositionLua(String.raw`
+local original_handler = D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"]
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = function(request, resume_continuation)
+  assert(resume_continuation ~= nil)
+  return {
+    contract = BRIDGE_INTERNAL_CONTINUATION_CONTRACT,
+    phase = "fixture.handler_failed",
+    state = { undo_project = parent_project },
+    mutations_may_have_happened = false,
+    next_phase_may_mutate = false,
+  }, {
+    code = "COMMAND_FAILED",
+    message = "fixture handler failure",
+    recoverable = false,
+    details = { blocker = "fixture_handler_failure" },
+  }
+end
+
+local request = make_d30_request("resume_handler_failure", "project.create_subproject", { name = "Budget Child" }, {})
+local prior = {
+  contract = BRIDGE_INTERNAL_CONTINUATION_CONTRACT,
+  phase = "fixture.previous_mutation",
+  state = { undo_project = parent_project },
+  mutations_may_have_happened = true,
+  next_phase_may_mutate = false,
+}
+local terminal = dispatch_request(request, request.id, prior, {
+  started_at = now_iso(),
+  deadline_monotonic = now + 100,
+  now_monotonic = now,
+})
+assert(type(terminal) == "string", terminal)
+assert(string.find(terminal, '"code":"INTERNAL_ERROR"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"recoverable":false', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"outcome":"unknown"', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"zero_write":false', 1, true) ~= nil, terminal)
+assert(string.find(terminal, '"reason":"malformed_internal_continuation"', 1, true) ~= nil, terminal)
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = original_handler
+`);
+  });
+
+  it("keeps real D30 continuation mutation truth monotonic through later fail-closed exits", () => {
+    runActualProductD30CompositionLua(String.raw`
+calls = { actions = {}, select_project = 0, save = 0, ledger = 0, time_selection_set = 0 }
+undo_begins, undo_ends = {}, {}
+open_undo_handle = nil
+shared_events = {}
+guard_failures = {}
+pending_new_tab, pending_select = nil, nil
+
+local request = make_d30_request("monotonic_continuation", "project.create_subproject", { name = "Monotonic Child" }, {})
+local runtime = { started_at = now_iso(), deadline_monotonic = now + 100, now_monotonic = now }
+local preflight = dispatch_request(request, request.id, nil, runtime)
+assert(type(preflight) == "table" and preflight.phase == "create_subproject.mutate_create")
+assert(type(preflight.mutations_may_have_happened) == "boolean")
+assert(preflight.mutations_may_have_happened == false)
+
+local mutated = dispatch_request(request, request.id, preflight, runtime)
+assert(type(mutated) == "table" and mutated.phase == "create_subproject.verify_created")
+assert(mutated.mutations_may_have_happened == true)
+assert(calls.actions[41929] == 1)
+assert(#undo_begins == 1 and #undo_ends == 1)
+
+local original_handler = D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"]
+local fixture_resume_calls = 0
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = function(inner_request, resume_continuation)
+  fixture_resume_calls = fixture_resume_calls + 1
+  assert(inner_request == request)
+  assert(resume_continuation.mutations_may_have_happened == true)
+  return {
+    contract = BRIDGE_INTERNAL_CONTINUATION_CONTRACT,
+    phase = "fixture.read_only_after_mutation",
+    state = resume_continuation.state,
+    mutations_may_have_happened = false,
+    next_phase_may_mutate = false,
+  }
+end
+
+local merged = dispatch_request(request, request.id, mutated, runtime)
+assert(type(merged) == "table" and merged.phase == "fixture.read_only_after_mutation")
+assert(merged.mutations_may_have_happened == true, "prior mutation truth must not downgrade")
+assert(merged.next_phase_may_mutate == false, "next-phase mutation truth remains handler-owned")
+assert(fixture_resume_calls == 1)
+assert(calls.actions[41929] == 1 and #undo_begins == 1 and #undo_ends == 1)
+
+local function assert_unknown_terminal(terminal, code)
+  assert(type(terminal) == "string", terminal)
+  assert(string.find(terminal, '"code":"' .. code .. '"', 1, true) ~= nil, terminal)
+  assert(string.find(terminal, '"recoverable":false', 1, true) ~= nil, terminal)
+  assert(string.find(terminal, '"outcome":"unknown"', 1, true) ~= nil, terminal)
+  assert(string.find(terminal, '"zero_write":false', 1, true) ~= nil, terminal)
+end
+
+request.bridge.expected_owner = "stale-owner"
+assert_unknown_terminal(dispatch_request(request, request.id, merged, runtime), "BRIDGE_OWNER_MISMATCH")
+request.bridge.expected_owner = ACTIVE_OWNER
+request.bridge.expected_generation = ACTIVE_GENERATION + 1
+assert_unknown_terminal(dispatch_request(request, request.id, merged, runtime), "BRIDGE_GENERATION_MISMATCH")
+request.bridge.expected_generation = ACTIVE_GENERATION
+assert_unknown_terminal(dispatch_request(request, request.id, merged, {
+  started_at = now_iso(),
+  deadline_monotonic = now - 1,
+  now_monotonic = now,
+}), "BRIDGE_TIMEOUT")
+assert(fixture_resume_calls == 1, "pre-dispatch failures must not resume the handler")
+
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = function()
+  fixture_resume_calls = fixture_resume_calls + 1
+  error("fixture resume exception")
+end
+assert_unknown_terminal(dispatch_request(request, request.id, merged, runtime), "INTERNAL_ERROR")
+assert(fixture_resume_calls == 2)
+assert(calls.actions[41929] == 1, "native mutation must not replay")
+assert((calls.actions[42332] or 0) == 0)
+assert(calls.save == 0 and calls.ledger == 0)
+assert((calls.time_selection_set or 0) == 0)
+assert(#undo_begins == 1 and #undo_ends == 1, "Undo must not replay")
+assert(open_undo_handle == nil and #guard_failures == 0)
+D30_PROJECT_CONTAINER_HANDLERS["project.create_subproject"] = original_handler
+`);
   });
 
   it("terminates product D30 required Undo close failure as non-recoverable unknown without later writes", () => {

@@ -328,6 +328,14 @@ describe("Alpha3.4-D3 native project-switching atoms", () => {
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
     assert.equal(REGISTRY.entries.length, 235);
     assert.equal(new Set(REGISTRY.entries.map((entry) => entry.handler_file)).size, 91);
+    assert.match(HANDLER_SOURCE, /D30_WRITE_SUCCESS_ENVELOPE_MIN_BYTES\s*=\s*65536/);
+    assert.match(HANDLER_SOURCE, /d30_project_write_budget_gate/);
+    assert.doesNotMatch(HANDLER_SOURCE, /artifacts_allowed\s*=/);
+    const emptyArtifactSites = [
+      ...(HANDLER_SOURCE.match(/nil, json_array\(\{\}\), json_array\(\{\}\), json_array\(\{/g) ?? []),
+      ...(HANDLER_SOURCE.match(/nil, json_array\(\{\}\), json_array\(\{ job_ref \}\), json_array\(\{/g) ?? []),
+    ];
+    assert.ok(emptyArtifactSites.length >= 7, `expected >=7 empty-artifact success returns, got ${emptyArtifactSites.length}`);
     for (const id of [
       "template.project.list_open_projects",
       "template.project.open_project_in_tab",
@@ -523,6 +531,48 @@ assert(calls.open_project == 0)
 assert((calls.actions[42332] or 0) == 0)
 assert(calls.save == 0)
 assert(calls.ledger == 0)
+`);
+  });
+
+  it("D30 write paths zero-write on 2048 and 4096 budgets; handler artifacts empty", () => {
+    runLua(String.raw`
+local function assert_zero_write(budget_bytes)
+  install_project_tab_fake({ only_parent = true, dirty_a = 0 })
+  local tight = { max_items = 100, max_inline_value_bytes = 4096, max_response_bytes = budget_bytes }
+  local _, create_fail = create_project_tab(project_request("project.create_project_tab", { name = "n", activate = true }, {}, "write", tight))
+  assert(create_fail ~= nil and create_fail.code == "RESPONSE_TOO_LARGE", "budget " .. tostring(budget_bytes))
+  assert(create_fail.details.zero_write == true)
+  assert(create_fail.details.required_response_bytes == 65536)
+  assert(calls.actions[41929] == nil and calls.select_project == 0 and (calls.undo_begins or 0) == 0)
+
+  local target = "/session/Other.RPP"
+  files[target] = true
+  local _, open_fail = open_project_in_tab(project_request("project.open_project_in_tab", { path = target }, {}, "write", tight))
+  assert(open_fail ~= nil and open_fail.code == "RESPONSE_TOO_LARGE" and open_fail.details.zero_write == true)
+  assert(calls.open_project == 0 and calls.actions[41929] == nil)
+
+  install_project_tab_fake({ two_saved_one_unsaved = true, dirty_a = 0 })
+  local listed = list_open_projects(project_request("project.list_open_projects", { limit = 10 }, {}, "read"))
+  local saved_ref = listed.projects[2].project_ref
+  local _, act_fail = activate_project_tab(project_request("project.activate_project_tab", {}, {
+    { kind = "project", ref = saved_ref, identity = { scheme = "path", value = "/session/Other.RPP" } },
+  }, "safe", tight))
+  assert(act_fail ~= nil and act_fail.code == "RESPONSE_TOO_LARGE" and act_fail.details.zero_write == true)
+  assert(calls.select_project == 0)
+end
+assert_zero_write(2048)
+assert_zero_write(4096)
+
+-- Room budget: handler returns empty artifacts and unique canonical refs.
+install_project_tab_fake({ only_parent = true, dirty_a = 2 })
+local roomy = { max_items = 100, max_inline_value_bytes = 4096, max_response_bytes = 65536 }
+local created, cfail, cart, cjobs, crefs = run_with_continuation(create_project_tab, project_request("project.create_project_tab", { name = "ok", activate = true }, {}, "write", roomy))
+assert(cfail == nil, cfail and cfail.code)
+assert(created.created == true)
+assert(created.artifacts_allowed == nil)
+assert(is_json_array(cart) and #cart == 0)
+assert(is_json_array(crefs) and #crefs == 1)
+assert(type(crefs[1].ref) == "string" and crefs[1].ref:match("^project:") ~= nil)
 `);
   });
 

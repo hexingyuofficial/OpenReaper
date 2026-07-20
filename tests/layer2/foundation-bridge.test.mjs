@@ -217,7 +217,57 @@ describe("Layer 2 foundation/bridge ABI contract", () => {
     assert.equal(result.undo.opened, true);
     assert.equal(result.undo.closed, true);
     assert.equal(result.verification.status, "failed");
+    assert.equal(result.budget.response_bytes, Buffer.byteLength(JSON.stringify(result), "utf8"));
+    assert.ok(result.budget.response_bytes <= result.budget.max_response_bytes);
     validateFoundationBridgeResult(result);
+  });
+
+  it("marks write-after-success RESPONSE_TOO_LARGE as nonrecoverable unknown, keeps read recoverable", () => {
+    const bridge = new FakeFoundationBridge();
+    const fatRefs = Array.from({ length: 40 }, (_, index) => createObjectRef("project", {
+      scheme: "path",
+      value: `/session/project-${index}-${"p".repeat(40)}.RPP`,
+    }));
+    const writeOver = bridge.dispatch(
+      makeRequest({
+        pack: { id: "project", capability: "project.create_project_tab", risk: "write" },
+        undo: { mode: "required", label: "test-write-budget" },
+        budget: { max_response_bytes: 1_200, max_items: 100, max_inline_value_bytes: 8_192 },
+        params: {
+          emits: {
+            refs: fatRefs,
+          },
+        },
+      }),
+    );
+    assert.equal(writeOver.ok, false);
+    assert.equal(writeOver.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(writeOver.error.recoverable, false);
+    assert.equal(writeOver.error.details?.outcome, "unknown");
+    assert.match(writeOver.error.details?.next_action ?? "", /Inspect live project state/i);
+    assert.equal(writeOver.error.details?.zero_write, false);
+    assert.equal(writeOver.budget.response_bytes, Buffer.byteLength(JSON.stringify(writeOver), "utf8"));
+    assert.ok(writeOver.budget.response_bytes <= writeOver.budget.max_response_bytes);
+
+    const readOver = bridge.dispatch(
+      makeRequest({
+        operation: { family: "query_state", name: "project.summary" },
+        pack: { id: "project", capability: "project.summary", risk: "read" },
+        undo: { mode: "none" },
+        verification: { mode: "none", checks: [] },
+        budget: { max_response_bytes: 1_200, max_items: 100, max_inline_value_bytes: 8_192 },
+        params: {
+          emits: {
+            refs: fatRefs,
+          },
+        },
+      }),
+    );
+    assert.equal(readOver.ok, false);
+    assert.equal(readOver.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(readOver.error.recoverable, true);
+    assert.equal(readOver.budget.response_bytes, Buffer.byteLength(JSON.stringify(readOver), "utf8"));
+    assert.ok(readOver.budget.response_bytes <= readOver.budget.max_response_bytes);
   });
 
   it("keeps large content out of ordinary results and uses artifact refs instead", () => {
@@ -293,6 +343,8 @@ describe("Layer 2 foundation/bridge ABI contract", () => {
     assert.equal(second.id, retry.id);
     assert.equal(second.queue.state, "replayed");
     assert.equal(second.idempotency.replayed, true);
+    assert.equal(second.budget.response_bytes, Buffer.byteLength(JSON.stringify(second), "utf8"));
+    assert.ok(second.budget.response_bytes <= second.budget.max_response_bytes);
     assert.equal(bridge.seen.length, 1);
 
     const conflict = bridge.dispatch({
@@ -306,6 +358,220 @@ describe("Layer 2 foundation/bridge ABI contract", () => {
     });
     assert.equal(conflict.ok, false);
     assert.equal(conflict.error.code, "IDEMPOTENCY_CONFLICT");
+  });
+
+  it("honors a replay retry's lower response budget without redispatching the mutation", () => {
+    const bridge = new FakeFoundationBridge();
+    const request = makeRequest({
+      id: "cmd_20260702000000000_001_replay",
+      idempotency_key: "downshifted-replay-budget",
+      params: {
+        emits: {
+          refs: [createObjectRef("track", { scheme: "guid", value: "{TRACK-REPLAY}" })],
+        },
+      },
+    });
+
+    const first = bridge.dispatch(request);
+    assert.equal(first.ok, true);
+    assert.ok(first.budget.response_bytes > 1_200);
+
+    const downshifted = bridge.dispatch({
+      ...request,
+      id: "cmd_20260702000000000_002_replay",
+      created_at: "2026-07-02T00:00:01.000Z",
+      budget: { ...request.budget, max_response_bytes: 1_200 },
+    });
+    assert.equal(downshifted.ok, false);
+    assert.equal(downshifted.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(downshifted.error.recoverable, true);
+    assert.equal(downshifted.error.details?.outcome, "completed");
+    assert.equal(downshifted.error.details?.zero_write, true);
+    assert.equal(downshifted.error.details?.redispatched, false);
+    assert.match(downshifted.error.details?.next_action ?? "", /same idempotency key.*sufficient max_response_bytes/i);
+    assert.equal(downshifted.queue.state, "replayed");
+    assert.equal(downshifted.idempotency.replayed, true);
+    assert.equal(downshifted.budget.max_response_bytes, 1_200);
+    assert.equal(downshifted.budget.response_bytes, Buffer.byteLength(JSON.stringify(downshifted), "utf8"));
+    assert.ok(downshifted.budget.response_bytes <= downshifted.budget.max_response_bytes);
+    assert.equal(Object.hasOwn(downshifted, "result"), false);
+    assert.equal(bridge.seen.length, 1);
+  });
+
+  it("preserves cached unknown mutation truth when a replay budget is too small", () => {
+    class UnknownMutationBridge extends FakeFoundationBridge {
+      execute(request, startedAt) {
+        return this.errorEnvelope(request, "BRIDGE_TIMEOUT", "x".repeat(400), {
+          recoverable: false,
+          startedAt,
+          queueState: "timeout",
+          details: {
+            outcome: "unknown",
+            zero_write: false,
+            next_action: "Inspect live project state before retrying.",
+          },
+        });
+      }
+    }
+
+    const bridge = new UnknownMutationBridge();
+    const request = makeRequest({
+      id: "cmd_20260702000000000_001_unknown",
+      idempotency_key: "unknown-mutation-replay-budget",
+    });
+
+    const first = bridge.dispatch(request);
+    assert.equal(first.ok, false);
+    assert.equal(first.error.code, "BRIDGE_TIMEOUT");
+    assert.equal(first.error.recoverable, false);
+    assert.equal(first.error.details?.outcome, "unknown");
+    assert.equal(first.error.details?.zero_write, false);
+    assert.ok(first.budget.response_bytes > 800);
+
+    const downshifted = bridge.dispatch({
+      ...request,
+      id: "cmd_20260702000000000_002_unknown",
+      created_at: "2026-07-02T00:00:01.000Z",
+      budget: { ...request.budget, max_response_bytes: 800 },
+    });
+    assert.equal(downshifted.ok, false);
+    assert.equal(downshifted.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(downshifted.error.recoverable, false);
+    assert.equal(downshifted.error.details?.outcome, "unknown");
+    assert.equal(downshifted.error.details?.zero_write, false);
+    assert.equal(downshifted.queue.state, "replayed");
+    assert.equal(downshifted.idempotency.replayed, true);
+    assert.equal(downshifted.budget.max_response_bytes, 800);
+    assert.equal(downshifted.budget.response_bytes, Buffer.byteLength(JSON.stringify(downshifted), "utf8"));
+    assert.ok(downshifted.budget.response_bytes <= downshifted.budget.max_response_bytes);
+    assert.equal(bridge.seen.length, 1);
+  });
+
+  it("keeps replay budget boundaries truthful for mutation-bearing and zero-write failures", () => {
+    class ReplayFailureBridge extends FakeFoundationBridge {
+      constructor(failure) {
+        super();
+        this.failure = failure;
+      }
+
+      execute(request, startedAt) {
+        return this.errorEnvelope(request, this.failure.code, this.failure.message, {
+          recoverable: this.failure.recoverable,
+          startedAt,
+          verificationStatus: this.failure.verificationStatus,
+          details: this.failure.details,
+        });
+      }
+    }
+
+    const cases = [
+      {
+        name: "mutation-bearing verification failure",
+        failure: {
+          code: "VERIFY_FAILED",
+          message: "Verification failed.",
+          recoverable: false,
+          verificationStatus: "failed",
+        },
+        expected: { recoverable: false, outcome: "unknown", zero_write: false },
+      },
+      {
+        name: "pre-dispatch zero-write failure",
+        failure: {
+          code: "COMMAND_FAILED",
+          message: `Pre-dispatch failure: ${"x".repeat(240)}`,
+          recoverable: true,
+          verificationStatus: "skipped",
+          details: {
+            outcome: "failed",
+            zero_write: true,
+            mutations_may_have_happened: false,
+          },
+        },
+        expected: { recoverable: true, outcome: "failed", zero_write: true },
+      },
+    ];
+
+    for (const scenario of cases) {
+      const bridge = new ReplayFailureBridge(scenario.failure);
+      const request = makeRequest({
+        id: "cmd_20260702000000000_001_truth",
+        idempotency_key: `truth-${scenario.expected.outcome}-${scenario.expected.zero_write}`,
+      });
+      const first = bridge.dispatch(request);
+      assert.ok(first.budget.response_bytes > 600, scenario.name);
+
+      const replay = (maxResponseBytes, sequence) => bridge.dispatch({
+        ...request,
+        id: `cmd_20260702000000000_${String(sequence).padStart(3, "0")}_truth`,
+        created_at: `2026-07-02T00:00:${String(sequence).padStart(2, "0")}.000Z`,
+        budget: { ...request.budget, max_response_bytes: maxResponseBytes },
+      });
+
+      const at600 = replay(600, 2);
+      assert.equal(at600.error.code, "RESPONSE_TOO_LARGE", scenario.name);
+      assert.equal(at600.error.recoverable, scenario.expected.recoverable, scenario.name);
+      assert.equal(at600.error.details?.outcome, scenario.expected.outcome, scenario.name);
+      assert.equal(at600.error.details?.zero_write, scenario.expected.zero_write, scenario.name);
+      assert.equal(at600.error.details?.redispatched, false, scenario.name);
+      assert.deepEqual(
+        Object.keys(at600.error.details).sort(),
+        ["outcome", "redispatched", "zero_write"],
+        scenario.name,
+      );
+      assert.equal(at600.queue.state, "replayed", scenario.name);
+      assert.equal(at600.idempotency.replayed, true, scenario.name);
+      assert.equal(at600.idempotency.key, request.idempotency_key, scenario.name);
+      assert.equal(at600.undo.mode, "required", scenario.name);
+      assert.equal(at600.verification.mode, "required", scenario.name);
+      assert.equal(at600.verification.status, scenario.failure.verificationStatus, scenario.name);
+      assert.equal(at600.budget.max_response_bytes, 600, scenario.name);
+      assert.equal(at600.budget.response_bytes, Buffer.byteLength(JSON.stringify(at600), "utf8"), scenario.name);
+      assert.ok(at600.budget.response_bytes <= at600.budget.max_response_bytes, scenario.name);
+      validateFoundationBridgeResult(at600);
+
+      let boundary;
+      for (let budget = 600; budget <= 1_024; budget += 1) {
+        const candidate = replay(budget, 3);
+        if (candidate.error.code === scenario.failure.code) {
+          boundary = budget;
+          break;
+        }
+      }
+      assert.ok(Number.isInteger(boundary), `${scenario.name}: replay boundary not found`);
+      const belowBoundary = replay(boundary - 1, 4);
+      assert.equal(belowBoundary.error.code, "RESPONSE_TOO_LARGE", scenario.name);
+      const atBoundary = replay(boundary, 5);
+      assert.equal(atBoundary.error.code, scenario.failure.code, scenario.name);
+
+      for (const [sequence, budget] of [[6, 1_024], [7, 2_048]]) {
+        const roomy = replay(budget, sequence);
+        assert.equal(roomy.error.code, scenario.failure.code, `${scenario.name} at ${budget}`);
+        assert.equal(roomy.error.recoverable, scenario.failure.recoverable, scenario.name);
+        assert.equal(roomy.queue.state, "replayed", scenario.name);
+        assert.equal(roomy.budget.response_bytes, Buffer.byteLength(JSON.stringify(roomy), "utf8"), scenario.name);
+        assert.ok(roomy.budget.response_bytes <= budget, scenario.name);
+      }
+      if (scenario.expected.outcome === "unknown") {
+        const belowRepresentableMinimum = replay(1, 8);
+        assert.equal(belowRepresentableMinimum.error.code, "RESPONSE_TOO_LARGE");
+        assert.equal(belowRepresentableMinimum.error.recoverable, false);
+        assert.equal(belowRepresentableMinimum.error.details?.outcome, "unknown");
+        assert.equal(belowRepresentableMinimum.error.details?.zero_write, false);
+        assert.equal(belowRepresentableMinimum.error.details?.redispatched, false);
+        assert.equal(
+          belowRepresentableMinimum.error.details?.minimum_response_bytes,
+          belowRepresentableMinimum.budget.response_bytes,
+        );
+        assert.equal(belowRepresentableMinimum.budget.max_response_bytes, 1);
+        assert.ok(belowRepresentableMinimum.budget.response_bytes > 1);
+        assert.equal(
+          belowRepresentableMinimum.budget.response_bytes,
+          Buffer.byteLength(JSON.stringify(belowRepresentableMinimum), "utf8"),
+        );
+      }
+      assert.equal(bridge.seen.length, 1, scenario.name);
+    }
   });
 
   it("enforces queue and timeout semantics without requiring REAPER", () => {

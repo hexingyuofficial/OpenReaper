@@ -360,7 +360,7 @@ export class FakeFoundationBridge {
           owner: this.owner,
           generation: this.generation,
           completedAt: this.now().toISOString(),
-        });
+        }, (replayed) => this.finalizeBudget(request, replayed));
       }
     }
 
@@ -564,7 +564,7 @@ export class FakeFoundationBridge {
       },
       idempotency: {
         key: normalizedRequest.idempotency_key ?? null,
-        replayed: false,
+        replayed: options.idempotencyReplayed === true,
       },
     };
 
@@ -572,12 +572,71 @@ export class FakeFoundationBridge {
   }
 
   finalizeBudget(request, envelope) {
-    envelope.budget.response_bytes = encodedBytes(envelope);
+    setEncodedResponseBytes(envelope);
     if (envelope.budget.response_bytes > request.budget.max_response_bytes && envelope.error?.code !== "RESPONSE_TOO_LARGE") {
+      if (envelope.idempotency?.replayed === true) {
+        const cachedTruth = cachedReplayMutationTruth(envelope, request);
+        return this.errorEnvelope(request, "RESPONSE_TOO_LARGE", "Cached idempotent result exceeds the retry response budget.", {
+          recoverable: cachedTruth.recoverable,
+          startedAt: envelope.queue.started_at,
+          queueState: "replayed",
+          idempotencyReplayed: true,
+          verificationStatus: envelope.verification?.status,
+          details: {
+            outcome: cachedTruth.outcome,
+            zero_write: cachedTruth.zero_write,
+            mutations_may_have_happened: cachedTruth.mutations_may_have_happened,
+            redispatched: false,
+            response_bytes: envelope.budget.response_bytes,
+            max_response_bytes: request.budget.max_response_bytes,
+            next_action: cachedTruth.outcome === "unknown"
+              ? "Inspect live project state before deciding whether any mutation should be retried."
+              : "Retry the same idempotency key with a sufficient max_response_bytes budget.",
+          },
+        });
+      }
+      const writeLike = envelope.ok === true && requestMayMutate(request);
+      if (writeLike) {
+        return this.errorEnvelope(request, "RESPONSE_TOO_LARGE", "Bridge write response exceeded max_response_bytes after handler success.", {
+          recoverable: false,
+          startedAt: envelope.queue.started_at,
+          details: {
+            outcome: "unknown",
+            response_bytes: envelope.budget.response_bytes,
+            max_response_bytes: request.budget.max_response_bytes,
+            next_action: "Inspect live project state before deciding whether any mutation should be retried.",
+            zero_write: false,
+            mutations_may_have_happened: true,
+          },
+        });
+      }
+      if (envelope.ok === false) {
+        const failureTruth = cachedReplayMutationTruth(envelope, request);
+        return this.errorEnvelope(request, "RESPONSE_TOO_LARGE", "Bridge error response exceeded max_response_bytes.", {
+          recoverable: failureTruth.recoverable,
+          startedAt: envelope.queue.started_at,
+          verificationStatus: envelope.verification?.status,
+          details: {
+            outcome: failureTruth.outcome,
+            zero_write: failureTruth.zero_write,
+            mutations_may_have_happened: failureTruth.mutations_may_have_happened,
+            response_bytes: envelope.budget.response_bytes,
+            max_response_bytes: request.budget.max_response_bytes,
+          },
+        });
+      }
       return this.errorEnvelope(request, "RESPONSE_TOO_LARGE", "Bridge response exceeded max_response_bytes.", {
         recoverable: true,
         startedAt: envelope.queue.started_at,
       });
+    }
+    // Error envelopes themselves must stay within budget with honest response_bytes.
+    if (envelope.budget.response_bytes > request.budget.max_response_bytes && envelope.error?.code === "RESPONSE_TOO_LARGE") {
+      compactResponseBudgetEnvelope(envelope, request.budget.max_response_bytes);
+    }
+    setEncodedResponseBytes(envelope);
+    if (envelope.budget.response_bytes > request.budget.max_response_bytes) {
+      markUnrepresentableResponseBudget(envelope);
     }
     validateFoundationBridgeResult(envelope);
     return deepFreeze(envelope);
@@ -1002,7 +1061,7 @@ function boundedLastResult(refs, maxItems) {
   };
 }
 
-function replayEnvelope(envelope, request, bridge) {
+function replayEnvelope(envelope, request, bridge, finalizeBudget) {
   const replayed = structuredClone(envelope);
   replayed.id = request.id;
   replayed.completed_at = bridge.completedAt;
@@ -1019,9 +1078,8 @@ function replayEnvelope(envelope, request, bridge) {
     key: request.idempotency_key,
     replayed: true,
   };
-  replayed.budget.response_bytes = encodedBytes(replayed);
-  validateFoundationBridgeResult(replayed);
-  return deepFreeze(replayed);
+  replayed.budget.max_response_bytes = request.budget.max_response_bytes;
+  return finalizeBudget(replayed);
 }
 
 function isTerminalReplayable(envelope) {
@@ -1053,6 +1111,117 @@ function minimalRequest(input) {
 
 function encodedBytes(value) {
   return Buffer.byteLength(JSON.stringify(value), "utf8");
+}
+
+function setEncodedResponseBytes(envelope) {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const measured = encodedBytes(envelope);
+    if (envelope.budget.response_bytes === measured) return measured;
+    envelope.budget.response_bytes = measured;
+  }
+  const measured = encodedBytes(envelope);
+  envelope.budget.response_bytes = measured;
+  return measured;
+}
+
+function cachedReplayMutationTruth(envelope, request) {
+  if (envelope.ok === true) {
+    return {
+      outcome: "completed",
+      recoverable: true,
+      zero_write: true,
+      mutations_may_have_happened: requestMayMutate(request),
+    };
+  }
+
+  const details = envelope.error?.details && typeof envelope.error.details === "object"
+    ? envelope.error.details
+    : {};
+  const requestMutates = requestMayMutate(request);
+  const explicitZeroWrite = details.zero_write === true;
+  const mutationsMayHaveHappened = typeof details.mutations_may_have_happened === "boolean"
+    ? details.mutations_may_have_happened
+    : details.outcome === "unknown"
+      || details.zero_write === false
+      || (requestMutates && ["VERIFY_FAILED", "INTERNAL_ERROR"].includes(envelope.error?.code));
+  const outcome = typeof details.outcome === "string"
+    ? details.outcome
+    : mutationsMayHaveHappened ? "unknown" : "failed";
+  const zeroWrite = (explicitZeroWrite || !requestMutates) && mutationsMayHaveHappened !== true;
+  const recoverable = envelope.error?.recoverable === true
+    && zeroWrite
+    && outcome !== "unknown";
+  return {
+    outcome,
+    recoverable,
+    zero_write: zeroWrite,
+    mutations_may_have_happened: mutationsMayHaveHappened,
+  };
+}
+
+function requestMayMutate(request) {
+  const risk = request?.pack?.risk;
+  return risk === "write"
+    || risk === "safe"
+    || risk === "destructive"
+    || request?.undo?.mode === "required";
+}
+
+function compactResponseBudgetTruth(details) {
+  const source = details && typeof details === "object" ? details : {};
+  return {
+    ...(typeof source.outcome === "string" ? { outcome: source.outcome } : {}),
+    ...(typeof source.zero_write === "boolean" ? { zero_write: source.zero_write } : {}),
+    ...(typeof source.mutations_may_have_happened === "boolean"
+      ? { mutations_may_have_happened: source.mutations_may_have_happened }
+      : {}),
+    ...(typeof source.redispatched === "boolean" ? { redispatched: source.redispatched } : {}),
+  };
+}
+
+function compactResponseBudgetEnvelope(envelope, requestedMaxResponseBytes) {
+  envelope.error.message = "budget";
+  envelope.error.details = compactResponseBudgetTruth(envelope.error.details);
+  setEncodedResponseBytes(envelope);
+  if (envelope.budget.response_bytes <= requestedMaxResponseBytes) return;
+
+  delete envelope.queue.started_at;
+  delete envelope.queue.completed_at;
+  envelope.completed_at = compactIsoTimestamp(envelope.completed_at);
+  if (envelope.undo) delete envelope.undo.label;
+  if (envelope.verification) delete envelope.verification.checks;
+  setEncodedResponseBytes(envelope);
+  if (envelope.budget.response_bytes <= requestedMaxResponseBytes) return;
+
+  delete envelope.error.details.mutations_may_have_happened;
+  setEncodedResponseBytes(envelope);
+  if (envelope.budget.response_bytes <= requestedMaxResponseBytes) return;
+
+  if (envelope.verification) delete envelope.verification.mode;
+  setEncodedResponseBytes(envelope);
+  if (envelope.budget.response_bytes <= requestedMaxResponseBytes) return;
+
+  if (envelope.undo) delete envelope.undo.mode;
+  setEncodedResponseBytes(envelope);
+}
+
+function compactIsoTimestamp(value) {
+  return typeof value === "string" ? value.replace(/\.000Z$/, "Z") : value;
+}
+
+function markUnrepresentableResponseBudget(envelope) {
+  envelope.error.details = {
+    ...compactResponseBudgetTruth(envelope.error?.details),
+    minimum_response_bytes: 0,
+  };
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    setEncodedResponseBytes(envelope);
+    if (envelope.error.details.minimum_response_bytes === envelope.budget.response_bytes) return;
+    envelope.error.details.minimum_response_bytes = envelope.budget.response_bytes;
+  }
+  setEncodedResponseBytes(envelope);
+  envelope.error.details.minimum_response_bytes = envelope.budget.response_bytes;
+  setEncodedResponseBytes(envelope);
 }
 
 function stableStringify(value) {

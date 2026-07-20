@@ -1468,6 +1468,7 @@ local ALLOWED_OPERATIONS = {
 }
 
 local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"
+local D30_DISPATCH_WRITE_RESPONSE_MIN_BYTES = 65536
 
 local function is_bridge_internal_continuation(value)
   return type(value) == "table"
@@ -1493,6 +1494,7 @@ local function unknown_outcome_details(mutated, extra)
   local details = extra or {}
   if mutated then
     details.outcome = "unknown"
+    details.zero_write = false
     details.next_action = "Inspect live project state before deciding whether any mutation should be retried."
   end
   return details
@@ -1587,17 +1589,43 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   end
 
   local capability = is_object(request.pack) and request.pack.capability or nil
+  local d30_write_capability = capability == "project.create_project_tab"
+    or capability == "project.open_project_in_tab"
+    or capability == "project.activate_project_tab"
+    or capability == "project.create_subproject"
+    or capability == "project.insert_subproject_item"
+    or capability == "project.render_or_update_subproject"
+  local request_budget = is_object(request.budget) and request.budget or {}
+  local max_response_bytes = math.floor(tonumber(request_budget.max_response_bytes) or 0)
+  if d30_write_capability
+      and max_response_bytes > 0
+      and max_response_bytes < D30_DISPATCH_WRITE_RESPONSE_MIN_BYTES then
+    local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
+    return bridge_error_envelope(request, "RESPONSE_TOO_LARGE", "D30 write success envelope cannot fit the request response budget before dispatch mutation.", {
+      recoverable = not mutated,
+      started_at = started_at,
+      details = unknown_outcome_details(mutated, {
+        zero_write = not mutated,
+        required_response_bytes = D30_DISPATCH_WRITE_RESPONSE_MIN_BYTES,
+        max_response_bytes = max_response_bytes,
+        next_action = mutated
+          and "Inspect live project state before deciding whether any mutation should be retried."
+          or "Use the internal atomic child budget (65536) before retrying the write.",
+      }),
+    })
+  end
   local project_switch_capability = capability == "project.create_project_tab"
     or capability == "project.open_project_in_tab"
     or capability == "project.activate_project_tab"
     or capability == "project.create_subproject"
+    or capability == "project.insert_subproject_item"
     or capability == "project.render_or_update_subproject"
   local phase_may_mutate = true
   if resume_continuation then
     phase_may_mutate = resume_continuation.next_phase_may_mutate == true
   end
-  -- Project-switch first tick is always preflight/zero-write; mutation phases
-  -- are entered only through continuation with next_phase_may_mutate=true.
+  -- D30 project-switch and subproject-item first ticks are preflight/zero-write;
+  -- mutation phases are entered only through an exact-project continuation.
   if project_switch_capability and not resume_continuation then
     phase_may_mutate = false
   end
@@ -1624,13 +1652,34 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       },
     })
   end
+  -- InsertTrackAtIndex targets the active project rather than an explicit
+  -- project pointer. Revalidate the retained parent before opening Undo so a
+  -- cross-tick tab change cannot write to a foreign project or dirty the
+  -- intended parent through an otherwise empty Undo pair.
+  local insert_state = resume_continuation and resume_continuation.state or nil
+  if capability == "project.insert_subproject_item"
+      and phase_may_mutate
+      and is_object(insert_state)
+      and insert_state.create_default_track == true then
+    local ok_active, active_project = call_reaper("EnumProjects", -1, "")
+    if not ok_active or not active_project or active_project ~= exact_undo_project then
+      return bridge_error_envelope(request, "VERIFY_FAILED", "Active project changed before the default target Track could be created.", {
+        recoverable = false,
+        started_at = started_at,
+        details = {
+          blocker = "active_parent_changed_before_default_track_create",
+          zero_write = true,
+        },
+      })
+    end
+  end
   request.__openreaper_undo_phase = {
     skip_undo = (not phase_may_mutate) or selection_only_no_content_undo,
-    require_project_identity = project_switch_capability and phase_may_mutate and not selection_only_no_content_undo,
+    require_project_identity = d30_write_capability and phase_may_mutate and not selection_only_no_content_undo,
     exact_project = selection_only_no_content_undo and nil or exact_undo_project,
   }
   open_required_undo_block(request, key)
-  if phase_may_mutate and project_switch_capability and not selection_only_no_content_undo and request.__openreaper_undo_block_open ~= true then
+  if phase_may_mutate and d30_write_capability and not selection_only_no_content_undo and request.__openreaper_undo_block_open ~= true then
     request.__openreaper_undo_phase = nil
     return bridge_error_envelope(request, "COMMAND_FAILED", "Required project-targeted Undo block could not be opened before mutation.", {
       recoverable = true,
@@ -1644,7 +1693,7 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
   local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request, resume_continuation)
   close_required_undo_block(request, key)
   if not ok then
-    local mutated = (resume_continuation and resume_continuation.mutations_may_have_happened == true) or (phase_may_mutate and project_switch_capability) or request.__openreaper_undo_required_any == true
+    local mutated = (resume_continuation and resume_continuation.mutations_may_have_happened == true) or (phase_may_mutate and d30_write_capability) or request.__openreaper_undo_required_any == true
     return bridge_error_envelope(request, "INTERNAL_ERROR", "Scoped live bridge handler failed.", {
       recoverable = false,
       started_at = started_at,
@@ -1674,20 +1723,29 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
     end
     if handler_failure then
       local mutated = summary.mutations_may_have_happened == true
+        or (resume_continuation and resume_continuation.mutations_may_have_happened == true)
       return bridge_error_envelope(request, "INTERNAL_ERROR", "Bridge continuation cannot carry a handler failure.", {
         recoverable = false,
         started_at = started_at,
         details = unknown_outcome_details(mutated, { reason = "malformed_internal_continuation" }),
       })
     end
+    summary.mutations_may_have_happened = summary.mutations_may_have_happened == true
+      or (resume_continuation ~= nil and resume_continuation.mutations_may_have_happened == true)
     summary.started_at = started_at
     return summary
   end
   if handler_failure then
-    local mutated = resume_continuation and resume_continuation.mutations_may_have_happened == true
+    local mutated =
+      (resume_continuation and resume_continuation.mutations_may_have_happened == true)
+      or (phase_may_mutate and d30_write_capability)
+      or request.__openreaper_undo_required_any == true
     local details = handler_failure.details or {}
-    if mutated and details.outcome == nil then
-      details = unknown_outcome_details(true, details)
+    if mutated then
+      details.zero_write = false
+      if details.outcome == nil then
+        details = unknown_outcome_details(true, details)
+      end
     end
     return bridge_error_envelope(request, handler_failure.code or "INTERNAL_ERROR", handler_failure.message or "Scoped live bridge handler failed.", {
       recoverable = mutated and false or (handler_failure.recoverable ~= false),

@@ -170,12 +170,28 @@ local function bridge_error_envelope(request, code, message, options)
     },
     idempotency = idempotency_result(request),
   }
-  return finalize_json_with_budget(envelope)
+  local encoded = finalize_json_with_budget(envelope)
+  -- Error envelopes themselves must fit and report honest response_bytes.
+  if #encoded > budget.max_response_bytes then
+    envelope.error.message = "budget"
+    envelope.error.details = {
+      outcome = is_object(details) and details.outcome or nil,
+      recoverable = options.recoverable ~= false,
+      max_response_bytes = budget.max_response_bytes,
+    }
+    encoded = finalize_json_with_budget(envelope)
+  end
+  if #encoded > budget.max_response_bytes then
+    envelope.error.details = { max_response_bytes = budget.max_response_bytes }
+    encoded = finalize_json_with_budget(envelope)
+  end
+  return encoded
 end
 
 local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs, refs)
   local completed_at = now_iso()
   local budget = safe_budget(request)
+  local summary_table = is_object(summary) and summary or {}
   local envelope = {
     contract = CONTRACT,
     id = request.id,
@@ -191,7 +207,7 @@ local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs,
       completed_at = completed_at,
     },
     result = {
-      summary = summary or {},
+      summary = summary_table,
       refs = refs or json_array({}),
       artifacts = artifacts or json_array({}),
       jobs = jobs or json_array({}),
@@ -212,6 +228,25 @@ local function bridge_ok_envelope(request, started_at, summary, artifacts, jobs,
   }
   local encoded = finalize_json_with_budget(envelope)
   if #encoded > budget.max_response_bytes then
+    -- Write/success path already ran the handler. Over-budget after success is
+    -- unknown outcome: not recoverable, inspect before any retry (no auto-replay).
+    local risk = is_object(request.pack) and request.pack.risk or nil
+    local write_like = risk == "write" or risk == "safe" or risk == "destructive"
+      or (is_object(request.undo) and request.undo.mode == "required")
+      or request.__openreaper_undo_required_any == true
+    if write_like then
+      return bridge_error_envelope(request, "RESPONSE_TOO_LARGE", "Bridge write response exceeded request budget after handler success.", {
+        recoverable = false,
+        started_at = started_at,
+        details = {
+          outcome = "unknown",
+          response_bytes = #encoded,
+          max_response_bytes = budget.max_response_bytes,
+          next_action = "Inspect live project state before deciding whether any mutation should be retried.",
+          zero_write = false,
+        },
+      })
+    end
     return bridge_error_envelope(request, "RESPONSE_TOO_LARGE", "Bridge response exceeded request budget.", {
       recoverable = true,
       started_at = started_at,

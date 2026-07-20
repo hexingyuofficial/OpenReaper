@@ -5,9 +5,11 @@ import {
   ALPHA3_2C3D_PROJECT_FILE_MACRO_VERSION,
   createAlpha3_2C3DProjectFileMacroDiscoveryItems,
   executeAlpha3_2_5CProjectFileMacro,
+  getAlpha3ProjectFileInternalAtomicChildBudget,
   planAlpha3_2C3DProjectFileMacro,
 } from "../../packages/mcp-server/src/alpha3-2c3d-project-file-macro-v1.mjs";
 import { CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 
 const SIX_OPS = [
   "save_current",
@@ -197,12 +199,12 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     } else {
       assert.equal(envelope.error.code, "RESPONSE_TOO_LARGE");
       assert.equal(envelope.error.details?.zero_write, true);
-      assert.ok(envelope.error.details?.request_patch?.budget?.max_response_bytes > 2048
-        || envelope.error.details?.request_patch?.input?.limit < 12);
+      assert.equal(envelope.error.details?.request_patch?.budget, undefined);
+      assert.ok(envelope.error.details?.request_patch?.input?.limit < 12);
     }
   });
 
-  it("returns typed RESPONSE_TOO_LARGE before mutation for oversized identity and supports larger budget recovery", async () => {
+  it("returns typed RESPONSE_TOO_LARGE before mutation for oversized identity and keeps public envelope at 2048", async () => {
     const longPath = `/session/${"x".repeat(1800)}.RPP`;
     const pathA = "/session/Parent.RPP";
     const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
@@ -226,10 +228,12 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
     assert.equal(blocked.error.code, "RESPONSE_TOO_LARGE");
     assert.equal(blocked.error.details?.zero_write, true);
     assert.equal(openCalls, 0);
-    assert.ok(blocked.error.details?.request_patch?.budget?.max_response_bytes >= 4096);
+    assert.ok(blocked.error.details?.request_patch?.input?.note || blocked.error.details?.zero_write === true);
+    assert.ok(blocked.budget.actual_bytes <= 2048);
 
+    // Raising caller budget cannot bypass the product public 2048 Macro ceiling for long identity.
     openCalls = 0;
-    const recovered = await executeAlpha3_2_5CProjectFileMacro({
+    const stillBlocked = await executeAlpha3_2_5CProjectFileMacro({
       request: {
         input: { operation: "open_project_in_tab", target_path: longPath },
         request_id: "long2",
@@ -240,26 +244,15 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
         "template.project.list_open_projects": () => makeInventory([row(pathA, { active: true })]),
         "template.project.open_project_in_tab": () => {
           openCalls += 1;
-          return {
-            ok: true,
-            result: {
-              summary: {
-                opened: true,
-                project_ref: `project:path:${longPath}`,
-                path: longPath,
-                active: true,
-                prior_project_remains_open: true,
-                prior_dirty_unchanged: true,
-                live_materialization: "native_open_in_tab_verified",
-              },
-            },
-          };
+          return { ok: true, result: { summary: {} } };
         },
       }),
     });
-    assert.equal(recovered.ok, true, JSON.stringify(recovered.error));
-    assert.equal(openCalls, 1);
-    assert.ok(recovered.budget.actual_bytes <= 8192);
+    assert.equal(stillBlocked.ok, false);
+    assert.equal(stillBlocked.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(stillBlocked.error.details?.zero_write, true);
+    assert.equal(openCalls, 0);
+    assert.ok(stillBlocked.budget.actual_bytes <= 2048);
   });
 
   it("hydrates multi-page inventory and finds a target only on the last page", async () => {
@@ -620,7 +613,7 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
         request: {
           input: { operation: fixture.operation, ...fixture.input },
           request_id: `timeout-${fixture.operation}`,
-          budget: { max_response_bytes: 4096 },
+          budget: { max_response_bytes: 2048 },
         },
         executeAtomic: makeExecutor({
           "template.project.list_open_projects": () => makeInventory(fixture.rows),
@@ -697,58 +690,62 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
       "blank_tab_may_remain",
     );
 
-    const indexFail = await executeAlpha3_2_5CProjectFileMacro({
-      request: {
-        input: {
-          operation: "create_project_tab",
-          name: "sound design",
-          target_path: pathNew,
-          overwrite: true,
-          copy_active_project_settings: false,
-        },
-        request_id: "create-index-fail",
-        budget: { max_response_bytes: 4096 },
-      },
-      projectIndexRuntime: {
-        ...index,
-        rebindProjectIdentity: async (args) => {
-          if (args.project_path === pathNew) {
-            return { ok: false, blockers: [{ code: "INDEX_FAIL", message: "index fail" }], scopes: [] };
-          }
-          return index.rebindProjectIdentity(args);
-        },
-      },
-      executeAtomic: makeExecutor({
-        "template.project.list_open_projects": () => makeInventory([row(pathA, { active: true })]),
-        "template.project.create_project_tab": () => ({
-          ok: true,
-          result: {
-            summary: {
-              created: true,
-              active: true,
-              prior_dirty_unchanged: true,
-              project_ref: "project:tab:t1",
-              live_materialization: "native_project_tab_verified",
-            },
+    for (const requestId of ["", 42]) {
+      const indexFail = await executeAlpha3_2_5CProjectFileMacro({
+        request: {
+          input: {
+            operation: "create_project_tab",
+            name: "sound design",
+            target_path: pathNew,
+            overwrite: true,
+            copy_active_project_settings: false,
           },
+          request_id: requestId,
+          budget: { max_response_bytes: 4096 },
+        },
+        projectIndexRuntime: {
+          ...index,
+          rebindProjectIdentity: async (args) => {
+            if (args.project_path === pathNew) {
+              return { ok: false, blockers: [{ code: "INDEX_FAIL", message: "index fail" }], scopes: [] };
+            }
+            return index.rebindProjectIdentity(args);
+          },
+        },
+        executeAtomic: makeExecutor({
+          "template.project.list_open_projects": () => makeInventory([row(pathA, { active: true })]),
+          "template.project.create_project_tab": () => ({
+            ok: true,
+            result: {
+              summary: {
+                created: true,
+                active: true,
+                prior_dirty_unchanged: true,
+                project_ref: "project:tab:t1",
+                live_materialization: "native_project_tab_verified",
+              },
+            },
+          }),
+          "template.project.save_project_as": () => ({ ok: true, result: { summary: { path_matches_target: true } } }),
+          "template.project.read_current_project_path": () => ({
+            ok: true,
+            result: { summary: { path: pathNew, has_project_path: true, path_state: "saved_project" } },
+          }),
+          "template.project.read_dirty_state": () => ({
+            ok: true,
+            result: { summary: { dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
+          }),
         }),
-        "template.project.save_project_as": () => ({ ok: true, result: { summary: { path_matches_target: true } } }),
-        "template.project.read_current_project_path": () => ({
-          ok: true,
-          result: { summary: { path: pathNew, has_project_path: true, path_state: "saved_project" } },
-        }),
-        "template.project.read_dirty_state": () => ({
-          ok: true,
-          result: { summary: { dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
-        }),
-      }),
-    });
-    assert.equal(indexFail.ok, false);
-    assert.equal(indexFail.execution.status, "partial_failure");
-    assert.equal(indexFail.result.changes[0].status, "applied");
-    assert.equal(indexFail.result.changes[0].live_readback.status, "passed");
-    assert.equal(indexFail.result.changes[0].index_maintenance.status, "failed");
-    assert.equal(indexFail.sqlite.used, true);
+      });
+      assert.equal(indexFail.ok, false);
+      assert.equal(indexFail.execution.status, "partial_failure");
+      assert.equal(indexFail.result.changes[0].status, "applied");
+      assert.equal(indexFail.result.changes[0].live_readback.status, "passed");
+      assert.equal(indexFail.result.changes[0].index_maintenance.status, "failed");
+      assert.equal(indexFail.sqlite.used, true);
+      assert.equal(indexFail.request.request_id, "macro.project.file");
+      assert.deepEqual(validateMacroExecutionEnvelope(indexFail), { valid: true, errors: [] });
+    }
   });
 
   it("rejects wrong native readback without applying and rejects dry_run for switch ops", async () => {
@@ -816,5 +813,272 @@ describe("Alpha3.4-D3 upper macro.project.file highway", () => {
       assert.equal(plan.ok, true, operation);
       assert.equal(plan.operation, operation);
     }
+  });
+
+  it("separates public 2048 Macro envelope from internal atomic child budgets for mutations and saves", async () => {
+    const internal = getAlpha3ProjectFileInternalAtomicChildBudget();
+    assert.equal(internal.max_response_bytes, 65_536);
+    assert.ok(internal.max_inline_value_bytes >= 4_096);
+    assert.equal(internal.max_items, 100);
+
+    const pathA = "/session/Parent.RPP";
+    const pathNew = "/session/Created.RPP";
+    const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
+    const childBudgets = [];
+    const envelope = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: {
+          operation: "create_project_tab",
+          name: "budget-proof",
+          target_path: pathNew,
+          overwrite: true,
+          copy_active_project_settings: false,
+        },
+        request_id: "internal-budget",
+        budget: { max_response_bytes: 2048, max_items: 25, max_inline_value_bytes: 256 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: async (call) => {
+        childBudgets.push(call.budget);
+        if (call.id === "template.project.list_open_projects") {
+          return makeInventory([row(pathA, { active: true })]);
+        }
+        if (call.id === "template.project.create_project_tab") {
+          return {
+            ok: true,
+            result: {
+              summary: {
+                created: true,
+                active: true,
+                prior_dirty_unchanged: true,
+                project_ref: "project:tab:t1",
+                live_materialization: "native_project_tab_verified",
+              },
+            },
+          };
+        }
+        if (call.id === "template.project.save_project_as") {
+          return { ok: true, result: { summary: { path_matches_target: true } } };
+        }
+        if (call.id === "template.project.read_current_project_path") {
+          return {
+            ok: true,
+            result: { summary: { path: pathNew, has_project_path: true, path_state: "saved_project" } },
+          };
+        }
+        if (call.id === "template.project.read_dirty_state") {
+          return {
+            ok: true,
+            result: { summary: { dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
+          };
+        }
+        return { ok: false, error: { code: "UNEXPECTED", message: call.id } };
+      },
+    });
+    assert.equal(envelope.ok, true, JSON.stringify(envelope.error));
+    assert.equal(envelope.budget.max_bytes, 2048);
+    assert.equal(envelope.budget.actual_bytes, Buffer.byteLength(JSON.stringify(envelope)));
+    assert.ok(envelope.budget.actual_bytes <= 2048, `public envelope ${envelope.budget.actual_bytes}`);
+    assert.ok(childBudgets.length >= 2);
+    for (const budget of childBudgets) {
+      assert.equal(budget.max_response_bytes, 65_536, JSON.stringify(budget));
+      assert.ok(budget.max_inline_value_bytes >= 4_096);
+      assert.notEqual(budget.max_response_bytes, 2048);
+    }
+
+    const saveBudgets = [];
+    const saveEnvelope = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "save_current" },
+        request_id: "save-public-budget",
+        budget: { max_response_bytes: 2048 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: async (call) => {
+        saveBudgets.push(call.budget);
+        if (call.id === "template.project.read_current_project_path") {
+          return {
+            ok: true,
+            result: { summary: { path: pathA, has_project_path: true, path_state: "saved_project" } },
+          };
+        }
+        if (call.id === "template.project.read_dirty_state") {
+          return {
+            ok: true,
+            result: { summary: { dirty: false, dirty_state: "clean", raw_dirty_state: 0 } },
+          };
+        }
+        if (call.id === "template.project.save_current_project") {
+          return { ok: true, result: { summary: { saved: true } } };
+        }
+        return { ok: false, error: { code: "UNEXPECTED", message: call.id } };
+      },
+    });
+    assert.equal(saveEnvelope.ok, true, JSON.stringify(saveEnvelope.error));
+    assert.equal(saveEnvelope.budget.max_bytes, 2048);
+    assert.equal(saveEnvelope.budget.actual_bytes, Buffer.byteLength(JSON.stringify(saveEnvelope)));
+    assert.ok(saveEnvelope.budget.actual_bytes <= 2048, `save envelope ${saveEnvelope.budget.actual_bytes}`);
+    assert.ok(saveBudgets.every((budget) => budget.max_response_bytes === 65_536));
+  });
+
+  it("returns a typed zero-write block for mutation budgets below 2048 before atomic dispatch or index access", async () => {
+    const mutationInputs = [
+      { operation: "save_current" },
+      { operation: "save_current", dry_run: true },
+      { operation: "save_as", target_path: "/session/Saved.RPP", overwrite: true },
+      { operation: "create_project_tab", name: "new", target_path: "/session/New.RPP", overwrite: true, copy_active_project_settings: false },
+      { operation: "open_project_in_tab", target_path: "/session/Open.RPP" },
+      { operation: "activate_project_tab", project_ref: "project:path:/session/Active.RPP" },
+    ];
+    for (const input of mutationInputs) {
+      for (const maxBytes of [1, 512, 900, 1024, 1200, 2047]) {
+        let atomicCalls = 0;
+        let indexCalls = 0;
+        const envelope = await executeAlpha3_2_5CProjectFileMacro({
+          request: {
+            input,
+            request_id: `budget-too-small-${input.operation}-${maxBytes}`,
+            budget: { max_response_bytes: maxBytes },
+          },
+          projectIndexRuntime: {
+            status: () => { indexCalls += 1; return {}; },
+            invalidateScopes: async () => { indexCalls += 1; return { ok: true }; },
+          },
+          executeAtomic: async () => {
+            atomicCalls += 1;
+            return { ok: true, result: { summary: {} } };
+          },
+        });
+        assert.equal(envelope.contract, "macro.execution.v1");
+        assert.equal(envelope.ok, false);
+        assert.equal(envelope.execution.status, "blocked");
+        assert.equal(envelope.request.dry_run, input.dry_run === true);
+        assert.equal(envelope.error.code, "PROJECT_FILE_RESPONSE_BUDGET_TOO_SMALL");
+        assert.equal(envelope.error.details?.operation, input.operation);
+        assert.equal(envelope.error.details?.requested_max_response_bytes, maxBytes);
+        assert.equal(envelope.error.details?.required_minimum_bytes, 2048);
+        assert.equal(envelope.error.details?.zero_write, true);
+        assert.equal(envelope.result.data.zero_write, true);
+        assert.equal(envelope.budget.max_bytes, 2048);
+        assert.equal(envelope.budget.actual_bytes, Buffer.byteLength(JSON.stringify(envelope), "utf8"));
+        assert.ok(envelope.budget.actual_bytes <= envelope.budget.max_bytes);
+        assert.deepEqual(validateMacroExecutionEnvelope(envelope), { valid: true, errors: [] });
+        assert.equal(atomicCalls, 0, `${input.operation}:${maxBytes}`);
+        assert.equal(indexCalls, 0, `${input.operation}:${maxBytes}`);
+      }
+    }
+  });
+
+  it("zero-write rejects identity that cannot fit the public 2048 envelope with honest bytes", async () => {
+    const longPath = `/session/${"y".repeat(1800)}.RPP`;
+    const pathA = "/session/Parent.RPP";
+    const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
+    for (const maxBytes of [2048]) {
+      let mutationCalls = 0;
+      const blocked = await executeAlpha3_2_5CProjectFileMacro({
+        request: {
+          input: { operation: "open_project_in_tab", target_path: longPath },
+          request_id: `public-identity-gate-${maxBytes}`,
+          budget: { max_response_bytes: maxBytes },
+        },
+        projectIndexRuntime: index,
+        executeAtomic: async ({ id }) => {
+          if (id === "template.project.list_open_projects") {
+            return makeInventory([row(pathA, { active: true })]);
+          }
+          mutationCalls += 1;
+          return { ok: true, result: { summary: {} } };
+        },
+      });
+      assert.equal(blocked.ok, false, String(maxBytes));
+      assert.equal(blocked.error.code, "RESPONSE_TOO_LARGE", String(maxBytes));
+      assert.equal(blocked.error.details?.zero_write ?? blocked.blockers?.[0]?.details?.zero_write, true, String(maxBytes));
+      assert.equal(mutationCalls, 0, String(maxBytes));
+      assert.equal(blocked.budget.max_bytes, Math.min(maxBytes, 2048), String(maxBytes));
+      assert.equal(blocked.budget.actual_bytes, Buffer.byteLength(JSON.stringify(blocked)), String(maxBytes));
+      assert.ok(blocked.budget.actual_bytes <= blocked.budget.max_bytes, String(maxBytes));
+      assert.equal(blocked.budget.truncated, false, String(maxBytes));
+      assert.equal(blocked.request.request_id, `public-identity-gate-${maxBytes}`, String(maxBytes));
+    }
+  });
+
+  it("preflights medium save/open identities or preserves their full applied truth", async () => {
+    const pathA = "/session/Parent.RPP";
+    const index = makeIndex({ project_ref: `project:path:${pathA}`, project_path: pathA });
+
+    for (const length of [50, 150]) {
+      const targetPath = `/s/${"x".repeat(length)}.RPP`;
+      let atomicCalls = 0;
+      let saveCalls = 0;
+      let indexCalls = 0;
+      const envelope = await executeAlpha3_2_5CProjectFileMacro({
+        request: {
+          input: { operation: "save_as", target_path: targetPath, overwrite: true },
+          request_id: `save-as-identity-${length}`,
+          budget: { max_response_bytes: 2048 },
+        },
+        projectIndexRuntime: {
+          ...index,
+          rebindProjectIdentity: async (args) => {
+            indexCalls += 1;
+            return index.rebindProjectIdentity(args);
+          },
+        },
+        executeAtomic: async ({ id }) => {
+          atomicCalls += 1;
+          if (id === "template.project.read_current_project_path") {
+            const path = saveCalls === 0 ? pathA : targetPath;
+            return { ok: true, result: { summary: { path, has_project_path: true, path_state: "saved_project" } } };
+          }
+          if (id === "template.project.read_dirty_state") {
+            return { ok: true, result: { summary: { dirty: false, dirty_state: "clean", raw_dirty_state: 0 } } };
+          }
+          if (id === "template.project.save_project_as") {
+            saveCalls += 1;
+            return { ok: true, result: { summary: { path_matches_target: true } } };
+          }
+          return { ok: false, error: { code: "UNEXPECTED", message: id } };
+        },
+      });
+
+      assert.equal(envelope.budget.actual_bytes, Buffer.byteLength(JSON.stringify(envelope)), String(length));
+      assert.ok(envelope.budget.actual_bytes <= 2048, String(length));
+      if (envelope.ok) {
+        assert.equal(saveCalls, 1, String(length));
+        assert.equal(indexCalls, 1, String(length));
+        assert.equal(envelope.result.changes.length, 1, String(length));
+        assert.equal(envelope.result.changes[0].status, "applied", String(length));
+        assert.equal(envelope.result.changes[0].path, targetPath, String(length));
+        assert.equal(envelope.result.data.path_after, targetPath, String(length));
+      } else {
+        assert.equal(envelope.error.code, "RESPONSE_TOO_LARGE", String(length));
+        assert.equal(envelope.error.details?.zero_write ?? envelope.blockers[0]?.details?.zero_write, true, String(length));
+        assert.equal(atomicCalls, 0, String(length));
+        assert.equal(saveCalls, 0, String(length));
+        assert.equal(indexCalls, 0, String(length));
+      }
+    }
+
+    const openPath = `/s/${"z".repeat(200)}.RPP`;
+    let openAtomicCalls = 0;
+    const openBlocked = await executeAlpha3_2_5CProjectFileMacro({
+      request: {
+        input: { operation: "open_project_in_tab", target_path: openPath },
+        request_id: "open-medium-identity",
+        budget: { max_response_bytes: 2048 },
+      },
+      projectIndexRuntime: index,
+      executeAtomic: async () => {
+        openAtomicCalls += 1;
+        return { ok: true, result: { summary: {} } };
+      },
+    });
+    assert.equal(openBlocked.ok, false);
+    assert.equal(openBlocked.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(openBlocked.error.details?.zero_write ?? openBlocked.blockers[0]?.details?.zero_write, true);
+    assert.equal(openAtomicCalls, 0);
+    assert.equal(openBlocked.request.request_id, "open-medium-identity");
+    assert.equal(openBlocked.budget.actual_bytes, Buffer.byteLength(JSON.stringify(openBlocked)));
+    assert.ok(openBlocked.budget.actual_bytes <= 2048);
   });
 });

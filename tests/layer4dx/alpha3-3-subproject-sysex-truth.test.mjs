@@ -50,15 +50,16 @@ describe("Alpha3.3 native Subproject and SysEx truth", () => {
 install_subproject_fake({ copy_import_media = true })
 local create_request = project_request("project.create_subproject", { name = "Dialog Edit", activate = true, inherit_time_selection = true }, {})
 create_request.id = "req_create"
-local created, failure, output_refs, _, refs = run_with_continuation(create_subproject, create_request)
+local created, failure, artifacts, jobs, refs = run_with_continuation(create_subproject, create_request)
 assert(failure == nil and created.created == true and created.parent_restored == true)
 assert(created.child_project_path == "/session/Dialog_Edit__subproject_req_create.RPP")
 assert(created.proxy_path == created.child_project_path .. "-PROX")
 assert(files[created.child_project_path] == true and files[created.proxy_path] == true)
 assert(created.subproject_project_ref == "project:path:" .. created.child_project_path)
 assert(created.inherited_time_selection == true and created.inherited_time_selection_start_seconds == 3 and created.inherited_time_selection_end_seconds == 7)
-assert(output_refs[1].identity.scheme == "path" and output_refs[1].identity.value == created.child_project_path)
-assert(output_refs[2].identity.scheme == "path" and output_refs[2].identity.value == "/session/Parent.RPP")
+assert(is_json_array(artifacts) and #artifacts == 0)
+assert(refs[1].identity.scheme == "path" and refs[1].identity.value == created.child_project_path)
+assert(refs[2].identity.scheme == "path" and refs[2].identity.value == "/session/Parent.RPP")
 assert(current_project == parent_project and calls.actions[41929] == 1 and calls.actions[42332] == 1)
 assert(child_project.time_start == 3 and child_project.time_end == 7)
 
@@ -67,7 +68,12 @@ local insert_request = project_request("project.insert_subproject_item", { posit
   { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
 })
 insert_request.id = "req_insert"
-local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
+local insert_preflight, insert_preflight_failure = insert_subproject_item(insert_request)
+assert(insert_preflight_failure == nil and insert_preflight.phase == "insert_subproject_item.mutate_insert")
+assert(insert_preflight.mutations_may_have_happened == false and insert_preflight.next_phase_may_mutate == true)
+assert(insert_preflight.state.undo_project == parent_project)
+assert(calls.create_source == 0 and calls.add_item == 0 and calls.add_take == 0)
+local inserted, insert_failure, insert_artifacts, insert_jobs, insert_refs = insert_subproject_item(insert_request, insert_preflight)
 assert(insert_failure == nil and inserted.inserted == true, insert_failure and (insert_failure.code .. ":" .. tostring(insert_failure.details.blocker)) or "insert missing")
 assert(inserted.position_seconds == 12.5 and inserted.source_path == created.child_project_path)
 assert(inserted.source_proxy_path == created.proxy_path and inserted.requested_proxy_path == created.proxy_path)
@@ -80,12 +86,13 @@ assert(parent_project.items[2].take.source.path == created.child_project_path)
 assert(parent_project.items[2].take.source.subproject == child_project)
 assert(other_track.selected == true and target_track.selected == false)
 assert(parent_project.items[1].selected == true and parent_project.items[2].selected == false)
-assert(cursor == 9 and inserted_refs[1].ref == "item:guid:{ITEM-NEW}")
-assert(inserted_refs[1].identity.scheme == "guid" and inserted_refs[1].identity.value == "{ITEM-NEW}")
+assert(is_json_array(insert_artifacts) and #insert_artifacts == 0)
+assert(cursor == 9 and insert_refs[1].ref == "item:guid:{ITEM-NEW}")
+assert(insert_refs[1].identity.scheme == "guid" and insert_refs[1].identity.value == "{ITEM-NEW}")
 assert(calls.insert_media == 0 and calls.create_source == 1 and calls.add_item == 1 and calls.add_take == 1)
 
 local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
-  refs[1], inserted_refs[1],
+  refs[1], insert_refs[1],
 })
 update_request.id = "req_update"
 local updated, update_failure, _, jobs = run_with_continuation(render_or_update_subproject, update_request)
@@ -185,7 +192,7 @@ local function insert_with(config)
     child_ref,
     { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
   })
-  return insert_subproject_item(request)
+  return run_with_continuation(insert_subproject_item, request)
 end
 
 local summary, failure = insert_with({})
@@ -229,7 +236,7 @@ local function insert_with(config)
     child_ref,
     { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
   })
-  return insert_subproject_item(request)
+  return run_with_continuation(insert_subproject_item, request)
 end
 
 local summary, failure = insert_with({ add_item_failure = true })
@@ -274,6 +281,13 @@ assert(summary == nil and failure.details.blocker == "subproject_item_name_readb
 assert(#parent_project.items == 1 and calls.destroy_source == 0 and calls.delete_item == 1)
 assert(other_track.selected == true and target_track.selected == false and cursor == 9)
 assert(calls.insert_media == 0)
+
+summary, failure = insert_with({ native_guid_failure = true, sws_guid_failure = true })
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_item_guid_readback_failed")
+assert(#parent_project.items == 1 and calls.delete_item == 1)
+assert(calls.native_guid == 1 and calls.sws_guid == 0)
+assert(other_track.selected == true and target_track.selected == false and cursor == 9)
 `);
   });
 
@@ -291,10 +305,72 @@ local request = project_request("project.insert_subproject_item", { position_sec
   child_ref,
   { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
 })
-local summary, failure = insert_subproject_item(request)
+local summary, failure = run_with_continuation(insert_subproject_item, request)
 assert(summary == nil and failure.code == "RESTORE_FAILED")
 assert(failure.details.original_blocker == "subproject_item_update_failed")
 assert(failure.details.item_deleted == false and #parent_project.items == 2)
+`);
+  });
+
+  it("creates an empty-parent default Track only in the mutation tick and rolls it back exactly", () => {
+    runLua(SUBPROJECT_SOURCE, String.raw`
+local function default_track_request()
+  return project_request("project.insert_subproject_item", { position_seconds = 4 }, {
+    { kind = "project", ref = "project:path:/session/Child.RPP", identity = { scheme = "path", value = "/session/Child.RPP" } },
+  })
+end
+
+install_subproject_fake({ open_child_path = "/session/Child.RPP", empty_parent = true })
+files["/session/Child.RPP-PROX"] = true
+local request = default_track_request()
+local continuation, failure = insert_subproject_item(request)
+assert(failure == nil and continuation.phase == "insert_subproject_item.mutate_insert")
+assert(continuation.mutations_may_have_happened == false and continuation.next_phase_may_mutate == true)
+assert(continuation.state.undo_project == parent_project and continuation.state.create_default_track == true)
+assert(calls.insert_track == 0 and calls.create_source == 0 and #parent_project.tracks == 0)
+local summary
+summary, failure = insert_subproject_item(request, continuation)
+assert(failure == nil and summary.inserted == true)
+assert(calls.insert_track == 1 and calls.delete_track == 0 and #parent_project.tracks == 1)
+
+local before_replay = {
+  insert_track = calls.insert_track,
+  create_source = calls.create_source,
+  add_item = calls.add_item,
+  add_take = calls.add_take,
+}
+summary, failure = insert_subproject_item(request, continuation)
+assert(summary == nil and failure.code == "INTERNAL_ERROR")
+assert(failure.details.blocker == "mutation_phase_already_started")
+assert(calls.insert_track == before_replay.insert_track and calls.create_source == before_replay.create_source)
+assert(calls.add_item == before_replay.add_item and calls.add_take == before_replay.add_take)
+
+install_subproject_fake({ open_child_path = "/session/Child.RPP", empty_parent = true, source_create_failure = true })
+files["/session/Child.RPP-PROX"] = true
+summary, failure = run_with_continuation(insert_subproject_item, default_track_request())
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "subproject_source_create_failed")
+assert(calls.insert_track == 1 and calls.delete_track == 1 and #parent_project.tracks == 0)
+
+install_subproject_fake({ open_child_path = "/session/Child.RPP", empty_parent = true, source_create_failure = true, delete_track_failure = true })
+files["/session/Child.RPP-PROX"] = true
+summary, failure = run_with_continuation(insert_subproject_item, default_track_request())
+assert(summary == nil and failure.code == "RESTORE_FAILED")
+assert(failure.details.original_blocker == "subproject_source_create_failed")
+assert(failure.details.target_track_deleted == false)
+assert(calls.insert_track == 1 and calls.delete_track == 1 and #parent_project.tracks == 1)
+
+install_subproject_fake({ open_child_path = "/session/Child.RPP", empty_parent = true })
+files["/session/Child.RPP-PROX"] = true
+request = default_track_request()
+continuation, failure = insert_subproject_item(request)
+assert(failure == nil and continuation.phase == "insert_subproject_item.mutate_insert")
+current_project = child_project
+summary, failure = insert_subproject_item(request, continuation)
+assert(summary == nil and failure.code == "VERIFY_FAILED")
+assert(failure.details.blocker == "active_parent_changed_before_default_track_create")
+assert(calls.insert_track == 0 and calls.delete_track == 0 and calls.create_source == 0)
+assert(calls.add_item == 0 and calls.add_take == 0 and #parent_project.tracks == 0)
 `);
   });
 
@@ -362,8 +438,9 @@ local insert_request = project_request("project.insert_subproject_item", { posit
   child_ref,
   { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } },
 })
-local inserted, insert_failure, inserted_refs = insert_subproject_item(insert_request)
+local inserted, insert_failure, insert_artifacts, insert_jobs, insert_refs = run_with_continuation(insert_subproject_item, insert_request)
 assert(insert_failure == nil and inserted.inserted == true)
+assert(is_json_array(insert_artifacts) and #insert_artifacts == 0)
 local inserted_source = parent_project.items[2].take.source
 assert(inserted_source.path == "/session/Child.RPP")
 assert(inserted_source.subproject == nil and inserted_source.parent.subproject == child_project)
@@ -372,7 +449,7 @@ assert(inserted.source_proxy_path == "/session/Child.RPP-PROX")
 assert(inserted.source_path_mode == "exact_requested_child_project")
 
 local update_request = project_request("project.render_or_update_subproject", { mode = "render_or_update" }, {
-  child_ref, inserted_refs[1],
+  child_ref, insert_refs[1],
 })
 local updated, update_failure = run_with_continuation(render_or_update_subproject, update_request)
 assert(update_failure == nil and updated.completed == true and updated.linked_item_verified == true)
@@ -465,6 +542,7 @@ function project_request(capability, params, refs)
     params = params or {},
     refs = refs or {},
     pack = { id = "project", capability = capability, risk = "write" },
+    budget = { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 },
   }
 end
 
@@ -477,9 +555,9 @@ function install_subproject_fake(config)
   files = { [parent_project.path] = true }
   target_track = { guid = "{TARGET}", name = "Target", selected = false }
   other_track = { guid = "{OTHER}", name = "Other", selected = true }
-  parent_project.tracks = { target_track, other_track }
+  parent_project.tracks = config.empty_parent and {} or { target_track, other_track }
   existing_item = { guid = "{ITEM-OLD}", track = other_track, position = 1, selected = true }
-  parent_project.items[1] = existing_item
+  if not config.empty_parent then parent_project.items[1] = existing_item end
   cursor = 9
   calls = {
     actions = {},
@@ -492,6 +570,10 @@ function install_subproject_fake(config)
     set_take_source = 0,
     delete_item = 0,
     update_item = 0,
+    native_guid = 0,
+    sws_guid = 0,
+    insert_track = 0,
+    delete_track = 0,
   }
   local expected_child = "/session/Dialog_Edit__subproject_req_create.RPP"
   if config.existing_child then files[expected_child] = true end
@@ -623,8 +705,21 @@ function install_subproject_fake(config)
     return selected[index + 1]
   end
   reaper.InsertTrackAtIndex = function(index)
+    calls.insert_track = calls.insert_track + 1
+    if config.insert_track_failure then return false end
     local track = { guid = "{CREATED}", name = "Created", selected = false }
     table.insert(current_project.tracks, index + 1, track)
+  end
+  reaper.DeleteTrack = function(track)
+    calls.delete_track = calls.delete_track + 1
+    if config.delete_track_failure then return false end
+    for index, candidate in ipairs(parent_project.tracks) do
+      if candidate == track then
+        table.remove(parent_project.tracks, index)
+        return true
+      end
+    end
+    return false
   end
   reaper.IsTrackSelected = function(track) return track.selected == true end
   reaper.SetTrackSelected = function(track, selected) track.selected = selected == true end
@@ -728,7 +823,17 @@ function install_subproject_fake(config)
     end
     return false
   end
-  reaper.BR_GetMediaItemGUID = function(item) return item.guid end
+  reaper.GetSetMediaItemInfo_String = function(item, key, value, set_new)
+    assert(key == "GUID" and value == "" and set_new == false)
+    calls.native_guid = calls.native_guid + 1
+    if config.native_guid_failure then return false, "" end
+    return true, item.guid
+  end
+  reaper.BR_GetMediaItemGUID = function(item)
+    calls.sws_guid = calls.sws_guid + 1
+    if config.sws_guid_failure then return nil end
+    return item.guid
+  end
   reaper.GetMediaItem_Track = function(item) return item.track end
   reaper.GetActiveTake = function(item) return item.take end
   reaper.GetMediaItemTake_Source = function(take)
