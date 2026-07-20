@@ -837,6 +837,21 @@ describe("Layer 4D.R bridge handler registry", () => {
     assert.match(source, /local READ_B_MEDIA = __openreaper_shared_table\("READ_B_MEDIA"\)/);
   });
 
+  it("injects only route-referenced shared handler tables into the generated route scope", () => {
+    const source = buildLiveBridgeBundle({ cwd: ROOT.pathname });
+    const routeStart = source.indexOf("local dispatch_request = (function()");
+    const finalHandlerMarker = source.lastIndexOf("-- OpenReaper bridge handler module:");
+    const handlerModulesEnd = source.indexOf("\nend)\n\n", finalHandlerMarker);
+    const routeSourceStart = source.indexOf("\nlocal function current_project()", handlerModulesEnd);
+    assert.ok(routeSourceStart > handlerModulesEnd, "generated route source must remain inside the wrapper");
+    assert.ok(handlerModulesEnd > routeStart, "handler modules must end before route source");
+    const routePreamble = source.slice(handlerModulesEnd + "\nend)\n\n".length, routeSourceStart);
+    assert.match(routePreamble, /local READ_B_MEDIA = __openreaper_shared_table\("READ_B_MEDIA"\)/);
+    assert.doesNotMatch(routePreamble, /local READ_B_ACTIONS = __openreaper_shared_table\("READ_B_ACTIONS"\)/);
+    assert.doesNotMatch(routePreamble, /local READ_B_MIDI = __openreaper_shared_table\("READ_B_MIDI"\)/);
+    assert.doesNotMatch(routePreamble, /\nREAD_B_MEDIA\s*=/);
+  });
+
   it("maps handler-local mismatch codes to the frozen foundation error set", () => {
     assert.match(BRIDGE_SOURCE, /local function normalize_bridge_error_code\(code\)/);
     assert.match(BRIDGE_SOURCE, /if code == "READBACK_MISMATCH" then\s+return "VERIFY_FAILED", code/);

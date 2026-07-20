@@ -484,6 +484,7 @@ function wrapSourceModule(file, source, handlerModules) {
   if (file !== "40-route-pack-handlers.lua") return source;
   const handlerExportNames = [...new Set(handlerModules.flatMap((module) => module.exports))].sort();
   const routedSource = bindRouteSourceToHandlerExports(source, handlerExportNames);
+  const routeSharedPreamble = sharedHandlerProxyPreamble(source);
   return [
     "-- OpenReaper bridge handler module wrapper: keeps handler locals out of the main Lua chunk and out of one giant function.",
     "local dispatch_request = (function()",
@@ -517,6 +518,7 @@ function wrapSourceModule(file, source, handlerModules) {
     "  end",
     "end",
     ...handlerModules.map((module) => wrapHandlerModule(module, handlerExportNames)),
+    ...routeSharedPreamble,
     routedSource,
     "return dispatch_request",
     "end)()",
@@ -525,9 +527,7 @@ function wrapSourceModule(file, source, handlerModules) {
 }
 
 function wrapHandlerModule({ file, exports, source }, handlerExportNames) {
-  const sharedPreamble = sharedHandlerNames
-    .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+${name}\\s*=`).test(source))
-    .map((name) => `local ${name} = __openreaper_shared_table(${JSON.stringify(name)})`);
+  const sharedPreamble = sharedHandlerProxyPreamble(source);
   const exportedDependencyPreamble = handlerExportNames
     .filter((name) => !exports.includes(name))
     .filter((name) => source.includes(name) && !new RegExp(`\\blocal\\s+function\\s+${escapeRegExp(name)}\\s*\\(`).test(source))
@@ -559,6 +559,13 @@ const sharedHandlerNames = Object.freeze([
   "READ_B_MEDIA",
   "READ_B_MIDI",
 ]);
+
+function sharedHandlerProxyPreamble(source) {
+  return sharedHandlerNames
+    .filter((name) => new RegExp(`\\b${escapeRegExp(name)}\\b`).test(source))
+    .filter((name) => !new RegExp(`\\blocal\\s+${escapeRegExp(name)}\\s*=`).test(source))
+    .map((name) => `local ${name} = __openreaper_shared_table(${JSON.stringify(name)})`);
+}
 
 function bindRouteSourceToHandlerExports(source, handlerExportNames) {
   let routedSource = source;

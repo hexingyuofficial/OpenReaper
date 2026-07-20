@@ -2961,7 +2961,154 @@ end
   return sources;
 }
 
+function runGeneratedBridgeE3PreflightLua(body) {
+  const wrapperStart = BRIDGE_SOURCE.indexOf("local dispatch_request = (function()");
+  const wrapperEnd = BRIDGE_SOURCE.indexOf("\nend)()\n", wrapperStart);
+  assert.ok(wrapperStart > 0, "generated bridge must contain the dispatch wrapper");
+  assert.ok(wrapperEnd > wrapperStart, "generated bridge must close the dispatch wrapper");
+  const generatedWrapper = BRIDGE_SOURCE.slice(wrapperStart, wrapperEnd + "\nend)()\n".length);
+  assert.match(generatedWrapper, /local READ_B_MEDIA = __openreaper_shared_table\("READ_B_MEDIA"\)/);
+  assert.match(generatedWrapper, /READ_B_MEDIA\.preflight_mutation_write\(request\)/);
+
+  const env = `
+os.getenv = function() return nil end
+existing_files = {}
+undo_begins = 0
+undo_ends = 0
+enum_projects = 0
+native_calls = {}
+media_project = { path = "/generated-e3.RPP", tracks = { { guid = "{TRACK-GENERATED-E3}" } }, items = {} }
+local function native_call(name)
+  native_calls[name] = (native_calls[name] or 0) + 1
+end
+reaper = {}
+reaper.EnumProjects = function(index)
+  enum_projects = enum_projects + 1
+  if index == -1 then return media_project, media_project.path end
+  return nil, ""
+end
+reaper.Undo_BeginBlock2 = function() undo_begins = undo_begins + 1 end
+reaper.Undo_EndBlock2 = function() undo_ends = undo_ends + 1 end
+reaper.GetTrack = function(_, index) return media_project.tracks[index + 1] end
+reaper.GetTrackGUID = function(track) return track and track.guid or nil end
+reaper.GetMediaTrackInfo_Value = function(track, key)
+  if key == "IP_TRACKNUMBER" then return track and 1 or 0 end
+  return 0
+end
+reaper.CountTracks = function() return #media_project.tracks end
+reaper.CountMediaItems = function() return #media_project.items end
+reaper.GetMediaItem = function(_, index) return media_project.items[index + 1] end
+reaper.CountTakes = function(item) return item and #item.takes or 0 end
+reaper.GetTake = function(item, index) return item and item.takes[index + 1] or nil end
+reaper.BR_GetMediaItemGUID = function(item) return item and item.guid or nil end
+reaper.GetSetMediaItemInfo_String = function(item, key)
+  if key == "GUID" then return true, true, item and item.guid or "" end
+  return false
+end
+reaper.PCM_Source_CreateFromFile = function(path)
+  native_call("PCM_Source_CreateFromFile")
+  if existing_files[path] ~= true then return nil end
+  return { path = path, source_type = "WAVE", length = 1.0, channels = 2 }
+end
+reaper.PCM_Source_CreateFromFileEx = function() native_call("PCM_Source_CreateFromFileEx") end
+reaper.PCM_Source_Destroy = function() native_call("PCM_Source_Destroy") end
+reaper.GetMediaSourceType = function(source) return source.source_type end
+reaper.GetMediaSourceLength = function(source) return source.length, false end
+reaper.GetMediaSourceNumChannels = function(source) return source.channels end
+reaper.AddMediaItemToTrack = function(track)
+  native_call("AddMediaItemToTrack")
+  local item = { guid = "{ITEM-GENERATED-E3-" .. tostring(#media_project.items + 1) .. "}", takes = {}, track = track }
+  media_project.items[#media_project.items + 1] = item
+  return item
+end
+reaper.SetMediaItemInfo_Value = function() native_call("SetMediaItemInfo_Value") end
+reaper.SetMediaItemSelected = function() native_call("SetMediaItemSelected") end
+reaper.AddTakeToMediaItem = function(item)
+  native_call("AddTakeToMediaItem")
+  local take = { guid = "{TAKE-GENERATED-E3-" .. tostring(#item.takes + 1) .. "}" }
+  item.takes[#item.takes + 1] = take
+  return take
+end
+reaper.SetMediaItemTake_Source = function(take, source)
+  native_call("SetMediaItemTake_Source")
+  take.source = source
+end
+reaper.SetMediaItemTakeInfo_Value = function() native_call("SetMediaItemTakeInfo_Value") end
+reaper.UpdateItemInProject = function() native_call("UpdateItemInProject") end
+reaper.UpdateArrange = function() native_call("UpdateArrange") end
+`;
+  const full = `${env}\n${BRIDGE_SOURCE.slice(0, wrapperStart)}\n${generatedWrapper}\n${body}\nreturn true`;
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(full));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`Generated E3 wrapper Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`Generated E3 wrapper Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+}
+
 describe("Alpha3.4-C3A actual product E3 media composition proof", () => {
+  it("runs E3 preflight through the generated wrapper before Undo or native writes", () => {
+    runGeneratedBridgeE3PreflightLua(`
+file_exists = function(path) return existing_files[path] == true end
+local function make_request(id, path, response_bytes)
+  return {
+    contract = "foundation.bridge.v1",
+    id = id,
+    created_at = "2026-07-21T00:00:00.000Z",
+    timeout_ms = 5000,
+    client = { id = "generated-wrapper-e3", session_id = "generated-wrapper-e3" },
+    bridge = { expected_owner = "openreaper-live-smoke", expected_generation = 1 },
+    operation = { family = "run_command", name = "template.execute" },
+    pack = { id = "media", capability = "media.import_file_to_track", risk = "write" },
+    params = { position_seconds = 0 },
+    refs = json_array({
+      { kind = "track", ref = "track:index:0", identity = { scheme = "index", value = "0" } },
+      { kind = "file", ref = "file:path:" .. path, identity = { scheme = "path", value = path } },
+    }),
+    undo = { mode = "required", label = "Generated E3 preflight" },
+    verification = { mode = "none", checks = json_array({}) },
+    artifacts = { allow = false },
+    budget = { max_response_bytes = response_bytes, max_items = 100, max_inline_value_bytes = 4096 },
+  }
+end
+local function assert_zero_write(label)
+  assert(undo_begins == 0 and undo_ends == 0, label .. " Undo")
+  assert(enum_projects == 0, label .. " EnumProjects")
+  assert(next(native_calls) == nil, label .. " native calls")
+end
+
+local relative = make_request("cmd_generated_e3_relative", "relative/clip.wav", 65536)
+local relative_terminal = dispatch_request(relative, relative.id, nil, { started_at = "2026-07-21T00:00:00.000Z" })
+assert(string.find(relative_terminal, "PARAMS_INVALID", 1, true) ~= nil, relative_terminal)
+assert_zero_write("relative")
+
+local long_path = ${JSON.stringify(E3_LONG_PATH)}
+existing_files[long_path] = true
+local low_budget = make_request("cmd_generated_e3_low_budget", long_path, 1000)
+local low_terminal = dispatch_request(low_budget, low_budget.id, nil, { started_at = "2026-07-21T00:00:00.000Z" })
+assert(string.find(low_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, low_terminal)
+assert_zero_write("low budget")
+
+local accepted_path = "/tmp/openreaper-generated-e3.wav"
+existing_files[accepted_path] = true
+local accepted = make_request("cmd_generated_e3_accepted", accepted_path, 65536)
+local accepted_terminal = dispatch_request(accepted, accepted.id, nil, { started_at = "2026-07-21T00:00:00.000Z" })
+assert(string.find(accepted_terminal, '"ok":true', 1, true) ~= nil, accepted_terminal)
+assert(undo_begins == 1 and undo_ends == 1, "accepted request must have one Undo pair")
+assert(native_calls.PCM_Source_CreateFromFile == 1, "accepted request must enter E3 handler once")
+assert(native_calls.SetMediaItemTake_Source == 1, "accepted request must set source once")
+assert(native_calls.UpdateItemInProject == 1, "accepted request must update item once")
+assert(native_calls.SetMediaItemSelected == 1, "accepted request must select imported item once")
+assert(native_calls.UpdateArrange == 1, "accepted request must refresh arrange once")
+`);
+  });
+
   it("loads product route policy, dispatch, E3 handlers, validate_request, and envelope serialization markers", () => {
     const sources = loadActualProductE3MediaCompositionSources();
     assert.match(sources.routeSource, /READ_B_MEDIA\.preflight_mutation_write/);

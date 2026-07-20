@@ -32827,6 +32827,7 @@ return {
 }
 end)
 
+local READ_B_MEDIA = __openreaper_shared_table("READ_B_MEDIA")
 local function current_project()
   local ok, project, project_path = call_reaper("EnumProjects", -1, "")
   if ok then
