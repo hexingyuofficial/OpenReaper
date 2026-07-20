@@ -64,9 +64,15 @@ const CREATE_REGION_ID = "template.project.create_region";
 const READ_RESOURCE_PATHS_ID = "template.system.read_resource_paths";
 const MAX_ASSETS = 8;
 const MAX_TRACK_ITEMS = 128;
-const MAX_PATH_BYTES = 1_024;
+const MAX_PATH_BYTES = 4_096;
+const MEDIA_FILE_REF_PREFIX = "file:path:";
+const MEDIA_FILE_REF_PREFIX_BYTES = Buffer.byteLength(MEDIA_FILE_REF_PREFIX, "utf8");
 const MAX_NAME_BYTES = 160;
 const MAX_ID_BYTES = 96;
+const MAX_SQLITE_IDENTIFIER_BYTES = 160;
+const MAX_FAILURE_CODE_BYTES = 96;
+const MAX_FAILURE_MESSAGE_BYTES = 512;
+const MAX_INDEX_FAILURE_MESSAGE_BYTES = 256;
 const MIN_RESPONSE_BUDGET = 2_048;
 const EPSILON = 1e-7;
 const INDEX_SCOPES = deepFreeze(["tracks", "items", "takes", "markers", "media"]);
@@ -328,6 +334,25 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
   if (!validation.valid) return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "MEDIA_REQUEST_INVALID", message: validation.errors.join("; "), blockers: validation.errors.map((message) => blocker("MEDIA_REQUEST_INVALID", message)) });
   if (typeof executeAtomic !== "function") return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "MEDIA_LIVE_EXECUTOR_REQUIRED", message: "macro.media.place_assets requires the managed OpenReaper live executor." });
 
+  if (input.mode !== "search_library") {
+    const inlineBudgetFailure = inlineIdentityBudgetBlocker({ input, request });
+    if (inlineBudgetFailure) {
+      return failureEnvelope({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages,
+        state,
+        activeBudget,
+        code: inlineBudgetFailure.code,
+        message: inlineBudgetFailure.message,
+        blockers: [inlineBudgetFailure],
+        data: inlineBudgetFailure.data,
+      });
+    }
+  }
+
   try {
     if (input.mode === "search_library") {
       return await executeLibrarySearch({ entry, request, input, executeAtomic, startedAt, now, stages, state, activeBudget });
@@ -380,18 +405,24 @@ export async function executeAlpha3_3MediaPlaceAssetsMacro({ request = {}, execu
         const sourceRead = await child({ request, executeAtomic, state, id: READ_TAKE_SOURCE_ID, input: { include_metadata_keys: false, include_parent_source: false }, refs: { take_ref: takeObject } });
         ensureChangeReadOk(sourceRead, READ_TAKE_SOURCE_ID, change);
         const source = readback(sourceRead.execution);
-        const passed = item.item_ref === operation.item_ref && item.track_ref === target.track_ref && close(item.position_seconds, operation.position_seconds) && close(item.length_seconds, operation.import_length_seconds) && source.take_ref === takeRef && source.file_ref === operation.file_ref;
-        change.live_readback = { status: passed ? "passed" : "failed", source: "independent_item_and_take_source_readback", item_ref: item.item_ref ?? null, take_ref: takeRef, track_ref: item.track_ref ?? null, position_seconds: item.position_seconds ?? null, length_seconds: item.length_seconds ?? null, source_file_ref: source.file_ref ?? null };
-        state.canonicalRefs.push(operation.item_ref, takeRef);
+        const identityOk = exactSourceIdentity(source, sourceRead.execution, operation);
+        const passed = item.item_ref === operation.item_ref && item.track_ref === target.track_ref && close(item.position_seconds, operation.position_seconds) && close(item.length_seconds, operation.import_length_seconds) && source.take_ref === takeRef && identityOk;
+        change.live_readback = passed
+          ? { status: "passed", source: "independent_item_and_take_source_readback", item_ref: item.item_ref, take_ref: takeRef, track_ref: item.track_ref, position_seconds: item.position_seconds, length_seconds: item.length_seconds, source_file_ref: source.file_ref }
+          : { status: "failed", source: "independent_item_and_take_source_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
         if (!passed) throw coded("MEDIA_LIVE_READBACK_MISMATCH", `${operation.id} independent Item/source readback did not match the planned import.`);
+        state.canonicalRefs.push(operation.item_ref, takeRef);
         change.status = "applied";
         if (operation.region) await createAndVerifyRegion({ request, operation, executeAtomic, state });
       } else {
         const sourceRead = await child({ request, executeAtomic, state, id: READ_TAKE_SOURCE_ID, input: { include_metadata_keys: false, include_parent_source: false }, refs: { take_ref: operation.take_object } });
         ensureChangeReadOk(sourceRead, READ_TAKE_SOURCE_ID, change);
         const source = readback(sourceRead.execution);
-        const passed = source.take_ref === operation.take_ref && source.file_ref === operation.file_ref;
-        change.live_readback = { status: passed ? "passed" : "failed", source: "independent_take_source_readback", take_ref: source.take_ref ?? null, source_file_ref: source.file_ref ?? null };
+        const identityOk = exactSourceIdentity(source, sourceRead.execution, operation);
+        const passed = source.take_ref === operation.take_ref && identityOk;
+        change.live_readback = passed
+          ? { status: "passed", source: "independent_take_source_readback", take_ref: source.take_ref, source_file_ref: source.file_ref }
+          : { status: "failed", source: "independent_take_source_readback", blocker_code: "MEDIA_LIVE_READBACK_MISMATCH" };
         if (!passed) throw coded("MEDIA_LIVE_READBACK_MISMATCH", `${operation.id} independent Take source readback did not match the exact replacement.`);
         change.status = "applied";
       }
@@ -447,12 +478,83 @@ async function executeLibrarySearch({ entry, request, input, executeAtomic, star
   pushStage(stages, "media-library-search", "runtime_execute", "completed", `Searched ${search.databases.length} registered Media Explorer database(s) and counted ${search.total} exact match(es).`);
   pushStage(stages, "media-library-result", "result_project", "completed", "Projected one stable, compact Media Explorer search page.");
 
+  const maxInline = inlineValueBudget(request);
   for (let count = search.results.length; count >= 0; count -= 1) {
     const page = projectMediaExplorerSearchPage(search, count);
-    const envelope = buildSearchSuccessEnvelope({ entry, request, startedAt, now, state, activeBudget, page });
-    if (Buffer.byteLength(JSON.stringify(envelope), "utf8") + 16 <= activeBudget) return finalizeEnvelope(envelope);
+    if (count > 0 && page.results.some((row) => fileRefByteLength(row.file_ref) > maxInline)) {
+      if (count === 1) {
+        const first = search.results[0];
+        const refBytes = fileRefByteLength(first.file_ref);
+        return failureEnvelope({
+          entry,
+          request,
+          startedAt,
+          now,
+          stages: [],
+          state: createState(),
+          activeBudget,
+          code: "RESPONSE_TOO_LARGE",
+          message: "The next complete Media Explorer file_ref exceeds the request inline-value budget; raise max_inline_value_bytes and retry the same cursor.",
+          data: {
+            ...emptySearchData(input),
+            page: {
+              offset: search.offset,
+              returned: 0,
+              requested_page_size: search.requested_page_size,
+              total: search.total,
+              has_more: search.total > search.offset,
+              next_cursor: null,
+            },
+            blocker: "exact_file_ref_exceeds_inline_budget",
+            file_ref_bytes: refBytes,
+            max_inline_value_bytes: maxInline,
+          },
+        });
+      }
+      continue;
+    }
+    const required = measureSearchEnvelopeBytes({ entry, request, startedAt, now, state, activeBudget, page });
+    if (required <= activeBudget) {
+      return finalizeEnvelope(buildSearchSuccessEnvelope({ entry, request, startedAt, now, state, activeBudget, page }));
+    }
+    if (count === 1) {
+      return failureEnvelope({
+        entry,
+        request,
+        startedAt,
+        now,
+        stages: [],
+        state: createState(),
+        activeBudget,
+        code: "RESPONSE_TOO_LARGE",
+        message: "One complete Media Explorer identity row exceeds the public response budget; raise max_response_bytes and retry the same cursor.",
+        data: {
+          ...emptySearchData(input),
+          page: {
+            offset: search.offset,
+            returned: 0,
+            requested_page_size: search.requested_page_size,
+            total: search.total,
+            has_more: search.total > search.offset,
+            next_cursor: null,
+          },
+          blocker: "single_identity_row_exceeds_budget",
+          required_response_bytes: required,
+          max_response_bytes: activeBudget,
+        },
+      });
+    }
   }
 
+  const emptyRequired = measureSearchEnvelopeBytes({
+    entry,
+    request,
+    startedAt,
+    now,
+    state,
+    activeBudget,
+    page: projectMediaExplorerSearchPage(search, 0),
+  });
   return failureEnvelope({
     entry,
     request,
@@ -463,8 +565,26 @@ async function executeLibrarySearch({ entry, request, input, executeAtomic, star
     activeBudget,
     code: "MEDIA_LIBRARY_RESPONSE_BUDGET_EXCEEDED",
     message: `Even an empty Media Explorer page does not fit the ${activeBudget}-byte public response budget; raise max_response_bytes and retry the same query.`,
-    data: emptySearchData(input),
+    data: { ...emptySearchData(input), blocker: "success_envelope_budget_insufficient", required_response_bytes: emptyRequired, max_response_bytes: activeBudget },
   });
+}
+
+function measureSearchEnvelopeBytes({ entry, request, startedAt, now, state, activeBudget, page }) {
+  const envelope = buildSearchSuccessEnvelope({
+    entry,
+    request,
+    startedAt,
+    now,
+    state,
+    activeBudget,
+    page,
+  });
+  let required = 0;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    envelope.budget.actual_bytes = required;
+    required = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return required;
 }
 
 function buildSearchSuccessEnvelope({ entry, request, startedAt, now, state, activeBudget, page }) {
@@ -500,9 +620,11 @@ async function prepareOperations({ request, input, executeAtomic, state }) {
     const probe = await child({ request, executeAtomic, state, id: PROBE_FILE_ID, input: { path: asset.path, include_metadata_keys: false }, refs: {} });
     ensureReadOk(probe, PROBE_FILE_ID);
     const facts = readback(probe.execution);
-    if (facts.decodable !== true || !isFileRef(facts.file_ref) || !finitePositive(facts.length_seconds) || facts.length_is_quarter_notes === true) throw coded("MEDIA_SOURCE_PROBE_INVALID", `${asset.id} is not a decodable finite-duration media source.`);
-    const fileObject = executionObjectRefs(probe.execution).find((ref) => ref.kind === "file" && ref.ref === facts.file_ref) ?? fileObjectFromPath(facts.file_ref, asset.path);
-    if (!fileObject) throw coded("MEDIA_SOURCE_FILE_REF_REQUIRED", `${asset.id} probe did not return a reusable exact file ref.`);
+    if (facts.decodable !== true || !isFilePathRef(facts.file_ref) || !finitePositive(facts.length_seconds) || facts.length_is_quarter_notes === true) throw coded("MEDIA_SOURCE_PROBE_INVALID", `${asset.id} is not a decodable finite-duration media source.`);
+    const expectedRef = fileRefForPath(asset.path);
+    if (facts.file_ref !== expectedRef) throw coded("MEDIA_SOURCE_IDENTITY_MISMATCH", `${asset.id} probe file_ref did not exactly match the requested absolute path identity.`);
+    const fileObject = resolveExactFileObject(probe.execution, facts.file_ref, asset.path);
+    if (!fileObject) throw coded("MEDIA_SOURCE_IDENTITY_MISMATCH", `${asset.id} probe returned contradictory file ref, object ref, or identity scheme/value.`);
     operations.push({ ...asset, file_ref: facts.file_ref, file_object: fileObject, source_length_seconds: facts.length_seconds, import_length_seconds: asset.start_percent === null ? facts.length_seconds : facts.length_seconds * (asset.end_percent - asset.start_percent) });
   }
 
@@ -685,11 +807,21 @@ async function child({ request, executeAtomic, state, id, input, refs, mutation 
   try {
     execution = await executeAtomic({ id, input, refs, context: request.context, budget: INTERNAL_BUDGET, observeProjectIndex: false });
   } catch (error) {
-    return { ok: false, execution: null, verificationPassed: false, code: mutation ? "MEDIA_MUTATION_DISPATCH_THROWN" : "MEDIA_READ_DISPATCH_THROWN", message: error?.message ?? `${id} threw.`, blockers: [blocker(mutation ? "MEDIA_MUTATION_DISPATCH_THROWN" : "MEDIA_READ_DISPATCH_THROWN", error?.message ?? `${id} threw.`)] };
+    const failure = boundedFailureDetails({
+      code: mutation ? "MEDIA_MUTATION_DISPATCH_THROWN" : "MEDIA_READ_DISPATCH_THROWN",
+      message: error?.message,
+      blockers: error?.blockers,
+    }, mutation ? "MEDIA_MUTATION_DISPATCH_THROWN" : "MEDIA_READ_DISPATCH_THROWN", `${id} threw.`);
+    return { ok: false, execution: null, verificationPassed: false, ...failure };
   }
   collectEvidence(state, execution);
   const verification = execution?.verification ?? execution?.result?.verification;
-  return { ok: execution?.ok === true, execution, verificationPassed: verification?.status === "passed", code: execution?.error?.code ?? (mutation ? "MEDIA_MUTATION_FAILED" : "MEDIA_READ_FAILED"), message: execution?.error?.message ?? `${id} failed.`, blockers: execution?.error?.details?.blockers };
+  const failure = boundedFailureDetails({
+    code: execution?.error?.code,
+    message: execution?.error?.message,
+    blockers: execution?.error?.details?.blockers,
+  }, mutation ? "MEDIA_MUTATION_FAILED" : "MEDIA_READ_FAILED", `${id} failed.`);
+  return { ok: execution?.ok === true, execution, verificationPassed: verification?.status === "passed", ...failure };
 }
 
 function ensureReadOk(result, id) { if (!result.ok) throw coded(result.code, result.message ?? `${id} failed.`, result.blockers); }
@@ -854,11 +986,17 @@ function maintainIndex(runtime, state, now) {
   try {
     const result = runtime.invalidateScopes({ scopes, observed_at: safeNowIso(now) });
     state.sqlite = sqliteEvidence(runtime, true);
-    if (result?.ok === false) { const first = result.blockers?.[0] ?? blocker("MEDIA_INDEX_MAINTENANCE_FAILED", "Media index invalidation failed."); return { ok: false, status: "failed", code: first.code, message: first.message, blockers: [first], scopes }; }
+    if (result?.ok === false) {
+      const first = result.blockers?.[0] ?? blocker("MEDIA_INDEX_MAINTENANCE_FAILED", "Media index invalidation failed.");
+      const code = boundedFailureCode(first.code, "MEDIA_INDEX_MAINTENANCE_FAILED");
+      const message = boundedUtf8(first.message ?? "Media index invalidation failed.", MAX_INDEX_FAILURE_MESSAGE_BYTES);
+      return { ok: false, status: "failed", code, message, blockers: [blocker(code, message, first.recoverable !== false)], scopes };
+    }
     return { ok: true, status: "completed", message: `Invalidated affected ${scopes.join("/")} index scopes.`, scopes };
   } catch (error) {
     state.sqlite = sqliteEvidence(runtime, true);
-    return { ok: false, status: "failed", code: "MEDIA_INDEX_MAINTENANCE_FAILED", message: error?.message ?? "Media index invalidation failed.", blockers: [blocker("MEDIA_INDEX_MAINTENANCE_FAILED", error?.message ?? "Media index invalidation failed.")], scopes };
+    const message = boundedUtf8(error?.message ?? "Media index invalidation failed.", MAX_INDEX_FAILURE_MESSAGE_BYTES);
+    return { ok: false, status: "failed", code: "MEDIA_INDEX_MAINTENANCE_FAILED", message, blockers: [blocker("MEDIA_INDEX_MAINTENANCE_FAILED", message)], scopes };
   }
 }
 
@@ -870,9 +1008,64 @@ function previewChange(operation) { return { ...pendingChange(operation), status
 function appendNotRunChanges(state) { const seen = new Set(state.changes.map((change) => change.asset_id)); for (const operation of state.operations) if (!seen.has(operation.id)) state.changes.push({ ...pendingChange(operation), status: "not_run", mutation: { status: "not_run" }, live_readback: { status: "not_run" }, index_maintenance: { status: "skipped", scopes: [] } }); }
 function setupChanges(state) { return state.changes.filter((change) => change.mode === "setup"); }
 
+function inlineIdentityBudgetBlocker({ input, request }) {
+  const maxInline = inlineValueBudget(request);
+  let worst = null;
+  for (const asset of input.assets) {
+    const pathBytes = Buffer.byteLength(asset.path, "utf8");
+    const refBytes = fileRefBytes(asset.path);
+    if (refBytes > maxInline) {
+      if (!worst || refBytes > worst.data.file_ref_bytes) {
+        worst = {
+          code: "RESPONSE_TOO_LARGE",
+          message: `Exact media file_ref for ${asset.id} needs ${refBytes} inline bytes but only ${maxInline} are available; raise max_inline_value_bytes before retrying.`,
+          recoverable: true,
+          data: {
+            blocker: "exact_file_ref_exceeds_inline_budget",
+            asset_id: asset.id,
+            path_bytes: pathBytes,
+            file_ref_bytes: refBytes,
+            max_inline_value_bytes: maxInline,
+            file_ref_prefix_bytes: MEDIA_FILE_REF_PREFIX_BYTES,
+            available_bytes: maxInline,
+          },
+        };
+      }
+    }
+  }
+  return worst;
+}
+
 function responseBudgetBlocker({ entry, request, input, stages, state, activeBudget }) {
   const projectedState = {
     ...state,
+    sqlite: input.dry_run ? sqliteEvidence() : projectedSqliteEvidence(),
+    evidenceRefs: uniqueStrings([
+      ...state.evidenceRefs,
+      ...state.operations.flatMap((operation) => [
+        PROBE_FILE_ID,
+        operation.file_ref,
+        operation.take_ref ?? null,
+        operation.item_ref ?? null,
+        operation.target_track_ref ?? null,
+        READ_TAKE_SOURCE_ID,
+        READ_ITEM_ID,
+        RESOLVE_TRACK_ID,
+        CREATE_TRACK_ID,
+        CREATE_REGION_ID,
+        operation.import_template_id ?? IMPORT_FILE_ID,
+      ].filter(Boolean)),
+    ]),
+    canonicalRefs: uniqueStrings([
+      ...state.canonicalRefs,
+      ...state.operations.flatMap((operation) => [
+        operation.file_ref,
+        operation.take_ref ?? null,
+        operation.target_track_ref ?? null,
+        `item:guid:{PROJECTED-${operation.id}}`,
+        `take:guid:{PROJECTED-${operation.id}}`,
+      ].filter(Boolean)),
+    ]),
     changes: [
       ...projectedTrackSetupChanges(input, state.operations),
       ...state.operations.flatMap((operation) => [
@@ -883,30 +1076,92 @@ function responseBudgetBlocker({ entry, request, input, stages, state, activeBud
   };
   const projectedStages = [
     ...stages,
-    { id: "media-place-assets-mutate", kind: "template_execute", status: input.dry_run ? "skipped" : "completed", summary: "Projected bounded mutation rows.", evidence_refs: [] },
-    { id: "media-place-assets-readback", kind: "verify", status: input.dry_run ? "skipped" : "completed", summary: "Projected independent live readback rows.", evidence_refs: [] },
-    { id: "media-place-assets-index", kind: "index_update", status: input.dry_run ? "skipped" : "completed", summary: "Projected affected-scope invalidation.", evidence_refs: [] },
-    { id: "media-place-assets-result", kind: "result_project", status: "completed", summary: "Projected bounded media result.", evidence_refs: [] },
+    { id: "media-place-assets-mutate", kind: "template_execute", status: input.dry_run ? "skipped" : "completed", summary: input.dry_run ? "Media mutation skipped during dry_run." : `Dispatched ${projectedState.changes.length} bounded mutation row(s), including explicit Track/Region setup rows.`, evidence_refs: uniqueStrings(projectedState.evidenceRefs) },
+    { id: "media-place-assets-readback", kind: "verify", status: input.dry_run ? "skipped" : "completed", summary: input.dry_run ? "Post-write live readback was not required during dry_run." : "Every applied media asset passed independent native-backed live readback.", evidence_refs: uniqueStrings(projectedState.evidenceRefs) },
+    { id: "media-place-assets-index", kind: "index_update", status: input.dry_run ? "skipped" : "completed", summary: input.dry_run ? "No Project Index scope changed during dry_run." : `Invalidated affected ${INDEX_SCOPES.join("/")} index scopes.`, evidence_refs: [] },
+    { id: "media-place-assets-result", kind: "result_project", status: "completed", summary: input.dry_run ? "Validated the complete bounded media plan without mutation." : `Applied and verified ${state.operations.length} media asset operation(s) and ${setupChanges(projectedState).length} setup mutation(s).`, evidence_refs: [] },
   ];
-  const envelope = buildSuccessEnvelope({
+  const successEnvelope = buildSuccessEnvelope({
     entry,
     request,
     startedAt: "2026-01-01T00:00:00.000Z",
     completedAt: "2026-01-01T00:00:00.000Z",
     stages: projectedStages,
     state: projectedState,
-    activeBudget: MACRO_CONTRACT_CEILINGS.envelope_max_bytes,
+    activeBudget,
     status: input.dry_run ? "dry_run_completed" : "completed",
-    summary: `Projected ${state.operations.length} media asset operation(s).`,
+    summary: input.dry_run
+      ? `Validated ${state.operations.length} media asset operation(s) without mutation.`
+      : `Applied and verified ${state.operations.length} media asset operation(s) and ${setupChanges(projectedState).length} setup mutation(s).`,
     data: resultData(input, projectedState),
   });
-  const required = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  let required = measureEnvelopeBudgetThreshold(successEnvelope);
+  if (!input.dry_run) {
+    const failureCode = "X".repeat(MAX_FAILURE_CODE_BYTES);
+    const failureMessage = "x".repeat(MAX_FAILURE_MESSAGE_BYTES);
+    const failureState = {
+      ...projectedState,
+      changes: projectedState.changes.map((change) => ({
+        ...change,
+        index_maintenance: { status: "failed", scopes: INDEX_SCOPES, blocker_code: failureCode },
+      })),
+    };
+    const failureStages = projectedStages.map((stage) => stage.id === "media-place-assets-index"
+      ? { ...stage, status: "failed", summary: "x".repeat(MAX_INDEX_FAILURE_MESSAGE_BYTES) }
+      : stage);
+    const partialFailureEnvelope = buildFailureEnvelope({
+      entry,
+      request,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      stages: failureStages,
+      state: failureState,
+      activeBudget,
+      status: "partial_failure",
+      code: failureCode,
+      message: failureMessage,
+      blockers: [blocker(failureCode, failureMessage)],
+      data: resultData(input, failureState),
+    });
+    required = Math.max(required, measureEnvelopeBudgetThreshold(partialFailureEnvelope));
+  }
   if (required <= activeBudget) return null;
   return {
     code: "MEDIA_RESPONSE_BUDGET_EXCEEDED",
     message: `The compact ${state.operations.length}-asset result needs about ${required} bytes but only ${activeBudget} response bytes are available; split the asset batch or raise the public response budget before mutation.`,
     recoverable: true,
     required_bytes: required,
+  };
+}
+
+function measureEnvelopeBytes(envelope) {
+  let required = 0;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    envelope.budget.actual_bytes = required;
+    required = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return required;
+}
+
+function measureEnvelopeBudgetThreshold(envelope) {
+  let threshold = MIN_RESPONSE_BUDGET;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    envelope.budget.max_bytes = threshold;
+    const measured = measureEnvelopeBytes(envelope);
+    if (measured === threshold) return measured;
+    threshold = measured;
+  }
+  return threshold;
+}
+
+function projectedSqliteEvidence() {
+  return {
+    used: true,
+    source: "warm_index",
+    freshness: "stale",
+    snapshot_ref: "s".repeat(MAX_SQLITE_IDENTIFIER_BYTES),
+    revision: "r".repeat(MAX_SQLITE_IDENTIFIER_BYTES),
+    refreshed: false,
   };
 }
 
@@ -977,7 +1232,49 @@ function createState() { return { operations: [], changes: [], canonicalRefs: []
 
 function successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "completed", summary, data }) { return finalizeEnvelope(buildSuccessEnvelope({ entry, request, startedAt, completedAt: safeNowIso(now), stages, state, activeBudget, status, summary, data })); }
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) { return { contract: MACRO_EXECUTION_CONTRACT, ok: true, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs) }, data }, blockers: [], error: null, recovery: null, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } }; }
-function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) { const mutated = state.changes.filter((change) => ["completed", "unknown_or_partial"].includes(change.mutation?.status)); const verified = mutated.length > 0 && mutated.every((change) => change.live_readback?.status === "passed"); return finalizeEnvelope({ contract: MACRO_EXECUTION_CONTRACT, ok: false, macro: macroIdentity(entry), request: requestSummary(request, true), execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary: message, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : [] }, data }, blockers: (blockers?.length ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count), error: { code, message, recoverable: true }, recovery: { undo_policy: entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep rows proved by live readback and inspect unverified assets before retrying." : "Fix the typed source/target/coverage blocker and retry once." }, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } }); }
+function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
+  const failure = boundedFailureDetails(
+    { code, message, blockers },
+    "MEDIA_EXECUTION_FAILED",
+    "The registered media placement program failed.",
+  );
+  return finalizeFailureEnvelope(buildFailureEnvelope({
+    entry,
+    request,
+    startedAt,
+    completedAt: safeNowIso(now),
+    stages,
+    state,
+    activeBudget,
+    status,
+    code: failure.code,
+    message: failure.message,
+    blockers: failure.blockers,
+    data,
+  }));
+}
+function buildFailureEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
+  const mutated = state.changes.filter((change) => ["completed", "unknown_or_partial"].includes(change.mutation?.status));
+  const verified = mutated.length > 0 && mutated.every((change) => change.live_readback?.status === "passed");
+  return { contract: MACRO_EXECUTION_CONTRACT, ok: false, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite, result: { summary: message, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : [] }, data }, blockers: (blockers?.length ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count), error: { code, message, recoverable: true }, recovery: { undo_policy: entry.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep rows proved by live readback and inspect unverified assets before retrying." : "Fix the typed source/target/coverage blocker and retry once." }, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } };
+}
+function finalizeFailureEnvelope(envelope) {
+  const originalSummary = envelope.result.summary;
+  const originalErrorMessage = envelope.error.message;
+  const originalBlockerMessages = envelope.blockers.map((entry) => entry.message);
+  for (const messageBytes of [MAX_FAILURE_MESSAGE_BYTES, 384, 256, 192, 160, 128, 96, 64, 32]) {
+    const candidate = structuredClone(envelope);
+    candidate.result.summary = boundedUtf8(originalSummary, messageBytes);
+    candidate.error.message = boundedUtf8(originalErrorMessage, messageBytes);
+    candidate.blockers = candidate.blockers.map((entry, index) => ({
+      ...entry,
+      message: boundedUtf8(originalBlockerMessages[index] ?? originalErrorMessage, messageBytes),
+    }));
+    for (let attempt = 0; attempt < 3; attempt += 1) candidate.budget.actual_bytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+    if (candidate.budget.actual_bytes <= candidate.budget.max_bytes) return finalizeEnvelope(candidate);
+  }
+  return finalizeEnvelope(envelope);
+}
 function finalizeEnvelope(envelope) { const result = structuredClone(envelope); for (let attempt = 0; attempt < 3; attempt += 1) result.budget.actual_bytes = Buffer.byteLength(JSON.stringify(result), "utf8"); const validation = validateMacroExecutionEnvelope(result); if (!validation.valid) throw new TypeError(`Invalid Alpha3.3 media Macro envelope: ${validation.errors.join("; ")}`); return deepFreeze(result); }
 
 function legacyBlockedPlan(blockers) { return deepFreeze({ contract: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_CONTRACT, version: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_VERSION, id: ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID, ok: false, mode: "blocked", dry_run: true, preview: { contract: "alpha3.3.media_place_assets.preview.v1", target_counts: { assets: 0 }, rows: [] }, preflight_requests: [], mutation_requests: [], readback_requests: [], child_requests: [], blockers, typed_blockers: blockers, safety: safetyPosture(), no_executor_safety_posture: safetyPosture() }); }
@@ -986,26 +1283,114 @@ function collectEvidence(state, execution) { state.evidenceRefs.push(...uniqueSt
 function executionObjectRefs(execution) { const refs = []; const visit = (value) => { if (Array.isArray(value)) value.forEach(visit); else if (isObject(value)) { if (typeof value.kind === "string" && typeof value.ref === "string" && isObject(value.identity)) refs.push(value); else Object.values(value).forEach(visit); } }; visit(execution?.result?.refs); visit(execution?.result?.canonical_refs); return refs; }
 function canonicalRefs(execution) { const refs = []; const visit = (value) => { if (typeof value === "string" && /^(track|item|take|file|region):/u.test(value)) refs.push(value); else if (Array.isArray(value)) value.forEach(visit); else if (isObject(value)) Object.values(value).forEach(visit); }; visit(execution?.result?.refs); visit(execution?.result?.canonical_refs); visit(execution?.result?.readback); visit(execution?.result?.summary); return uniqueStrings(refs); }
 function readback(execution) { return isObject(execution?.result?.readback) ? execution.result.readback : isObject(execution?.result?.summary) ? execution.result.summary : isObject(execution?.result?.data) ? execution.result.data : {}; }
-function pushStage(stages, id, kind, status, summary, evidenceRefs = []) { const row = { id, kind, status, summary, evidence_refs: uniqueStrings(evidenceRefs) }; const index = stages.findIndex((stage) => stage.id === id); if (index >= 0) stages[index] = row; else stages.push(row); }
-function sqliteEvidence(runtime, used = false) { let status = {}; try { status = runtime?.status?.() ?? {}; } catch {} return { used, source: used ? "warm_index" : "not_used", freshness: used ? "stale" : "not_applicable", snapshot_ref: used ? status.snapshot_id ?? null : null, revision: used ? String(status.revision ?? status.project_revision ?? "") || null : null, refreshed: false }; }
-function requestSummary(request, forceNonDry = false) { return { request_id: request?.context?.request_id ?? `${ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID}:${request?.context?.created_at ?? "request"}`, dry_run: forceNonDry ? false : request?.input?.dry_run !== false }; }
+function pushStage(stages, id, kind, status, summary, evidenceRefs = []) { const row = { id, kind, status, summary: boundedUtf8(summary, MAX_FAILURE_MESSAGE_BYTES), evidence_refs: uniqueStrings(evidenceRefs) }; const index = stages.findIndex((stage) => stage.id === id); if (index >= 0) stages[index] = row; else stages.push(row); }
+function sqliteEvidence(runtime, used = false) {
+  let status = {};
+  try { status = runtime?.status?.() ?? {}; } catch {}
+  const snapshot = typeof status.snapshot_id === "string" ? boundedUtf8(status.snapshot_id, MAX_SQLITE_IDENTIFIER_BYTES) : null;
+  const revisionValue = status.revision ?? status.project_revision;
+  const revision = revisionValue === null || revisionValue === undefined ? null : boundedUtf8(String(revisionValue), MAX_SQLITE_IDENTIFIER_BYTES);
+  return { used, source: used ? "warm_index" : "not_used", freshness: used ? "stale" : "not_applicable", snapshot_ref: used ? snapshot : null, revision: used ? revision : null, refreshed: false };
+}
+function requestSummary(request) {
+  const mode = request?.input?.mode;
+  const dryRun = mode === "search_library" ? true : request?.input?.dry_run !== false;
+  return {
+    request_id: request?.context?.request_id ?? `${ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID}:${request?.context?.created_at ?? "request"}`,
+    dry_run: dryRun,
+  };
+}
 function responseBudget(request) { const requested = request?.budget?.max_response_bytes ?? request?.response_budget ?? MACRO_CONTRACT_CEILINGS.envelope_max_bytes; return Number.isInteger(requested) && requested >= MIN_RESPONSE_BUDGET && requested <= MACRO_CONTRACT_CEILINGS.envelope_max_bytes ? requested : MACRO_CONTRACT_CEILINGS.envelope_max_bytes; }
 function macroIdentity(entry) { return { id: entry.macro_id, program_id: entry.program_id, program_version: entry.program_version, risk: entry.risk }; }
 function blocker(code, message, recoverable = true) { return { code, message, recoverable }; }
+function boundedFailureCode(value, fallback) {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > MAX_FAILURE_CODE_BYTES) return fallback;
+  return value;
+}
+function boundedFailureDetails(source, fallbackCode, fallbackMessage) {
+  const code = boundedFailureCode(source?.code, fallbackCode);
+  const message = boundedUtf8(source?.message ?? fallbackMessage, MAX_FAILURE_MESSAGE_BYTES);
+  const sourceBlockers = Array.isArray(source?.blockers) && source.blockers.length
+    ? source.blockers
+    : [blocker(code, message)];
+  const blockers = sourceBlockers.slice(0, 1).map((entry) => blocker(
+    boundedFailureCode(entry?.code, code),
+    boundedUtf8(entry?.message ?? message, MAX_FAILURE_MESSAGE_BYTES),
+    entry?.recoverable !== false,
+  ));
+  return { code, message, blockers };
+}
+function boundedUtf8(value, maxBytes) {
+  const text = String(value ?? "");
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  const suffix = "...";
+  const contentBudget = Math.max(0, maxBytes - Buffer.byteLength(suffix, "utf8"));
+  let output = "";
+  let used = 0;
+  for (const character of text) {
+    const bytes = Buffer.byteLength(character, "utf8");
+    if (used + bytes > contentBudget) break;
+    output += character;
+    used += bytes;
+  }
+  return `${output}${suffix}`;
+}
 function failed(code, message, blockers = [blocker(code, message)]) { return { ok: false, code, message, blockers }; }
 function coded(code, message, blockers = [blocker(code, message)]) { const error = new Error(message); error.code = code; error.blockers = blockers; return error; }
 function exactGuidObjectRef(kind, ref) { if (typeof ref !== "string" || !ref.startsWith(`${kind}:guid:`)) return null; return { kind, ref, identity: { scheme: "guid", value: ref.slice(`${kind}:guid:`.length) } }; }
-function fileObjectFromPath(ref, path) { return isFileRef(ref) ? { kind: "file", ref, identity: { scheme: "path", value: path } } : null; }
+function fileRefForPath(pathValue) { return `${MEDIA_FILE_REF_PREFIX}${pathValue}`; }
+function fileRefBytes(pathValue) { return MEDIA_FILE_REF_PREFIX_BYTES + Buffer.byteLength(pathValue, "utf8"); }
+function fileObjectFromPath(ref, pathValue) {
+  if (!isFilePathRef(ref) || !isSafeAbsoluteFilePath(pathValue)) return null;
+  if (ref !== fileRefForPath(pathValue)) return null;
+  return { kind: "file", ref, identity: { scheme: "path", value: pathValue } };
+}
+function resolveExactFileObject(execution, fileRef, pathValue) {
+  const expected = fileObjectFromPath(fileRef, pathValue);
+  if (!expected) return null;
+  const observed = executionObjectRefs(execution).filter((ref) => ref.kind === "file");
+  if (observed.length === 0) return null;
+  if (observed.some((ref) => ref.ref !== fileRef || !isObject(ref.identity) || ref.identity.scheme !== "path" || ref.identity.value !== pathValue)) return null;
+  return observed[0];
+}
+function exactSourceIdentity(source, execution, operation) {
+  if (source.file_ref !== operation.file_ref) return false;
+  if (source.filename !== operation.path) return false;
+  const object = resolveExactFileObject(execution, source.file_ref, operation.path);
+  return object !== null;
+}
 function isExactTrackRef(value) { return typeof value === "string" && /^track:guid:\{[^{}\r\n]{1,128}\}$/u.test(value); }
 function isExactTakeRef(value) { return typeof value === "string" && /^take:guid:\{[^{}\r\n]{1,128}\}$/u.test(value); }
 function isRegionRef(value) { return typeof value === "string" && /^region:index:\d+$/u.test(value); }
 function isTrackRef(value) { return typeof value === "string" && /^track:(guid|index):/u.test(value); }
 function isItemRef(value) { return typeof value === "string" && /^item:(guid|index):/u.test(value); }
 function isTakeRef(value) { return typeof value === "string" && /^take:(guid|index):/u.test(value); }
-function isFileRef(value) { return typeof value === "string" && value.startsWith("file:"); }
-function isSafeAbsoluteFilePath(value) { return typeof value === "string" && value.startsWith("/") && Buffer.byteLength(value) <= MAX_PATH_BYTES && !hasControls(value) && !/^\/(dev|Volumes\/Hardware|System\/Volumes\/Data\/dev)(\/|$)/u.test(value) && !/^[a-z][a-z0-9+.-]*:/iu.test(value); }
+function isFilePathRef(value) { return typeof value === "string" && value.startsWith(MEDIA_FILE_REF_PREFIX); }
+function isAbsoluteMediaPath(value) {
+  if (typeof value !== "string" || value === "") return false;
+  if (value.includes("\0")) return false;
+  if (value.startsWith("/")) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(value)) return true;
+  if (/^\\\\[^\\/]+[\\/][^\\/]+/.test(value)) return true;
+  return false;
+}
+function isSafeAbsoluteFilePath(value) {
+  if (typeof value !== "string") return false;
+  if (Buffer.byteLength(value, "utf8") > MAX_PATH_BYTES) return false;
+  if (!isAbsoluteMediaPath(value)) return false;
+  if (/^[\\/]{2}[?.][\\/]/u.test(value)) return false;
+  if (value.startsWith("/") && /^\/(dev|Volumes\/Hardware|System\/Volumes\/Data\/dev)(\/|$)/u.test(value)) return false;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value) && !/^[a-zA-Z]:[\\/]/.test(value)) return false;
+  return true;
+}
 function isSafeName(value) { return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= MAX_NAME_BYTES && !hasControls(value); }
 function hasControls(value) { return /[\u0000-\u001f\u007f]/u.test(value); }
+function inlineValueBudget(request) {
+  const requested = request?.budget?.max_inline_value_bytes;
+  if (Number.isInteger(requested) && requested > 0) return Math.min(requested, MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes);
+  return MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes;
+}
+function fileRefByteLength(value) { return typeof value === "string" ? Buffer.byteLength(value, "utf8") : Number.POSITIVE_INFINITY; }
 function isPercent(value) { return Number.isFinite(value) && value >= 0 && value <= 1; }
 function finitePositive(value) { return Number.isFinite(value) && value > 0; }
 function finiteNonNegative(value) { return Number.isFinite(value) && value >= 0; }

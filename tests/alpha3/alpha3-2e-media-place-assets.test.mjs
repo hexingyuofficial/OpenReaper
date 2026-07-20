@@ -529,7 +529,8 @@ function mediaFixture(seed = {}, { mismatchFirstReadback = false, failTrackCreat
       }
       if (call.id === "template.media.read_take_source") {
         const ref = call.refs.take_ref.ref;
-        return ok(call.id, { take_ref: ref, file_ref: takes[ref], source_type: "audio" }, [objectRef("take", ref), fileRef(takes[ref].slice("file:path:".length))]);
+        const filename = takes[ref].slice("file:path:".length);
+        return ok(call.id, { take_ref: ref, file_ref: takes[ref], filename, source_type: "audio" }, [objectRef("take", ref), fileRef(filename)]);
       }
       if (call.id === "template.media.relink_take_source") {
         const takeRef = call.refs.take_ref.ref;

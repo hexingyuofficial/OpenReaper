@@ -6,6 +6,7 @@ export const MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY = "media_explorer_databas
 
 const DATABASE_SUFFIX = ".ReaperFileList";
 const CURSOR_VERSION = 1;
+const MEDIA_FILE_REF_PREFIX = "file:path:";
 
 export async function searchMediaExplorerDatabases({
   resourcePath,
@@ -142,7 +143,7 @@ function parseFileLine(line) {
   const fields = line.slice(quoted.end).trim().split(/\s+/u);
   return {
     path: quoted.value,
-    filename: path.basename(quoted.value),
+    filename: mediaPathBasename(quoted.value),
     size_bytes: integerOrNull(fields[0]),
     duration_seconds: null,
     sample_rate_hz: null,
@@ -150,6 +151,10 @@ function parseFileLine(line) {
     bit_depth: null,
     metadata: "",
   };
+}
+
+function fileRefForPath(pathValue) {
+  return `${MEDIA_FILE_REF_PREFIX}${pathValue}`;
 }
 
 function applyDataFacts(row, data) {
@@ -168,7 +173,7 @@ function applyDataFacts(row, data) {
 function projectRow(row) {
   return {
     path: row.path,
-    file_ref: `file:path:${row.path}`,
+    file_ref: fileRefForPath(row.path),
     filename: row.filename,
     duration_seconds: row.duration_seconds,
     sample_rate_hz: row.sample_rate_hz,
@@ -247,6 +252,29 @@ function digest(value) { return createHash("sha256").update(value).digest("hex")
 async function pathAvailable(value) { try { await access(value); return true; } catch { return false; } }
 function integerOrNull(value) { const number = Number(value); return Number.isSafeInteger(number) && number >= 0 ? number : null; }
 function uniqueStrings(values) { return [...new Set(values)]; }
-function safeAbsolutePath(value) { return typeof value === "string" && path.isAbsolute(value) && !/[\u0000-\u001f\u007f]/u.test(value); }
+function isAbsoluteMediaPath(value) {
+  if (typeof value !== "string" || value === "") return false;
+  if (value.includes("\0")) return false;
+  if (value.startsWith("/")) return true;
+  if (/^[a-zA-Z]:[\\/]/.test(value)) return true;
+  if (/^\\\\[^\\/]+[\\/][^\\/]+/.test(value)) return true;
+  return false;
+}
+function safeAbsolutePath(value) {
+  if (typeof value !== "string") return false;
+  if (!isAbsoluteMediaPath(value)) return false;
+  if (/^[\\/]{2}[?.][\\/]/u.test(value)) return false;
+  if (value.startsWith("/") && /^\/(dev|Volumes\/Hardware|System\/Volumes\/Data\/dev)(\/|$)/u.test(value)) return false;
+  if (/^[a-z][a-z0-9+.-]*:/iu.test(value) && !/^[a-zA-Z]:[\\/]/u.test(value)) return false;
+  return true;
+}
+function mediaPathBasename(value) {
+  const posixStyle = value.startsWith("/");
+  const normalized = posixStyle ? value.replace(/\/+$/u, "") : value.replace(/[\\/]+$/u, "");
+  const separator = posixStyle
+    ? normalized.lastIndexOf("/")
+    : Math.max(normalized.lastIndexOf("/"), normalized.lastIndexOf("\\"));
+  return normalized.slice(separator + 1);
+}
 function escapeRegExp(value) { return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"); }
 function failed(code, message) { return { ok: false, code, message, blockers: [{ code, message, recoverable: true }] }; }
