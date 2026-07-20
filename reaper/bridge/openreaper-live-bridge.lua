@@ -21644,9 +21644,30 @@ end)
 
 -- OpenReaper bridge handler module: reaper/bridge/src/handlers/media/probe_file.lua
 __openreaper_register_handler_module("media/probe_file.lua", function()
+local function import_file_section_to_track(...)
+  return OPENREAPER_HANDLER_EXPORTS.import_file_section_to_track(...)
+end
+local function import_file_to_track(...)
+  return OPENREAPER_HANDLER_EXPORTS.import_file_to_track(...)
+end
+local function relink_take_source(...)
+  return OPENREAPER_HANDLER_EXPORTS.relink_take_source(...)
+end
 -- Extracted read-only handler: template.media.probe_file.
 
 local READ_B_MEDIA = {}
+
+local MEDIA_FILE_PATH_MAX_BYTES = 4096
+local MEDIA_DISPLAY_PATH_MAX_BYTES = 240
+local MEDIA_FILE_REF_PREFIX = "file:path:"
+local MEDIA_FILE_REF_PREFIX_BYTES = #MEDIA_FILE_REF_PREFIX
+local MEDIA_IDENTITY_JSON_ESCAPE_FACTOR = 6
+local MEDIA_IDENTITY_JSON_FIELD_OVERHEAD_BYTES = 96
+-- Fixed shell of foundation.bridge.v1 success envelope without request-echoed or summary fields.
+local MEDIA_SUCCESS_ENVELOPE_SHELL_MAX_BYTES = 1200
+local MEDIA_MUTATION_PATH_OCCURRENCES = 3
+local MEDIA_READ_SUCCESS_ENVELOPE_FIXED_MAX_BYTES = 8192
+local MEDIA_MUTATION_SUMMARY_FIXED_MAX_BYTES = 2048
 
 function READ_B_MEDIA.handler_error(code, message, details, recoverable)
   return nil, {
@@ -21670,6 +21691,312 @@ function READ_B_MEDIA.bounded_limit(request, requested, default_limit, hard_limi
   return limit
 end
 
+function READ_B_MEDIA.display_path(path_value, max_bytes)
+  local text = type(path_value) == "string" and path_value or tostring(path_value or "")
+  local limit = math.max(4, math.floor(tonumber(max_bytes) or MEDIA_DISPLAY_PATH_MAX_BYTES))
+  if #text <= limit then
+    return text
+  end
+  local cut = limit - 3
+  while cut > 0 do
+    local next_byte = string.byte(text, cut + 1)
+    if next_byte == nil or next_byte < 128 or next_byte >= 192 then
+      break
+    end
+    cut = cut - 1
+  end
+  return text:sub(1, cut) .. "..."
+end
+
+function READ_B_MEDIA.is_absolute_path(path_value)
+  if type(path_value) ~= "string" or path_value == "" then
+    return false
+  end
+  if path_value:sub(1, 1) == "/" then
+    return true
+  end
+  if path_value:match("^%a:[/\\]") then
+    return true
+  end
+  if path_value:match("^\\\\[^\\/]+[\\/][^\\/]+") or path_value:match("^//[^/]+/[^/]+") then
+    return true
+  end
+  return false
+end
+
+function READ_B_MEDIA.canonical_path(path_value)
+  if type(path_value) ~= "string" or path_value == "" then
+    return nil, "empty_path"
+  end
+  -- Canonical absolute identity rejects only embedded NUL unless a frozen ABI
+  -- rule requires more. JSON-expressible characters (tab/newline) are preserved.
+  if path_value:find("\0", 1, true) then
+    return nil, "nul_char"
+  end
+  if not READ_B_MEDIA.is_absolute_path(path_value) then
+    return nil, "relative_path"
+  end
+  return path_value
+end
+
+function READ_B_MEDIA.path_join(folder_path, filename)
+  if type(folder_path) ~= "string" or type(filename) ~= "string" then
+    return nil
+  end
+  -- POSIX absolute paths treat only '/' as separator; a legal backslash character
+  -- in the folder path must not be promoted into a path separator.
+  if folder_path:sub(1, 1) == "/" then
+    if folder_path:sub(-1) == "/" then
+      return folder_path .. filename
+    end
+    return folder_path .. "/" .. filename
+  end
+  if folder_path:match("^%a:[/\\]") or folder_path:match("^\\\\") or folder_path:match("^//") then
+    local sep = "\\"
+    if folder_path:find("/", 1, true) and not folder_path:find("\\", 1, true) then
+      sep = "/"
+    end
+    if folder_path:sub(-1) == "/" or folder_path:sub(-1) == "\\" then
+      return folder_path .. filename
+    end
+    return folder_path .. sep .. filename
+  end
+  return nil
+end
+
+function READ_B_MEDIA.folder_ref_for_path(folder_path)
+  local path = READ_B_MEDIA.canonical_path(folder_path)
+  if not path then
+    return nil
+  end
+  return "folder:path:" .. path
+end
+
+function READ_B_MEDIA.folder_ref_bytes(folder_path)
+  if type(folder_path) ~= "string" then
+    return -1
+  end
+  return #"folder:path:" + #folder_path
+end
+
+function READ_B_MEDIA.ensure_folder_ref_inline_budget(request, folder_path)
+  local path, reason = READ_B_MEDIA.canonical_path(folder_path)
+  if not path then
+    return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Media folder path is invalid for canonical absolute folder identity.", {
+      blocker = reason or "invalid_path",
+      path = READ_B_MEDIA.display_path(folder_path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      path_bytes = type(folder_path) == "string" and #folder_path or -1,
+    })
+  end
+  local budget = safe_budget(request)
+  local max_inline = math.floor(tonumber(budget.max_inline_value_bytes) or 0)
+  local ref_bytes = READ_B_MEDIA.folder_ref_bytes(path)
+  if max_inline < 1 or ref_bytes < 1 or ref_bytes > max_inline then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Exact media folder_ref exceeds the request inline-value budget.", {
+      blocker = "exact_folder_ref_exceeds_inline_budget",
+      path_bytes = #path,
+      folder_ref_bytes = ref_bytes,
+      max_inline_value_bytes = max_inline,
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+    })
+  end
+  return path
+end
+
+function READ_B_MEDIA.encoded_bytes(value)
+  if type(json) == "table" and type(json.encode) == "function" then
+    return #json.encode(value)
+  end
+  -- Conservative fallback when json is not bound (unit harness without kernel).
+  if type(value) == "string" then
+    -- Worst-case JSON escaping for control/quote/backslash characters.
+    return (#value * MEDIA_IDENTITY_JSON_ESCAPE_FACTOR) + 2
+  end
+  if type(value) == "number" or type(value) == "boolean" then
+    return #tostring(value)
+  end
+  if type(value) ~= "table" then
+    return 4
+  end
+  local total = 2
+  if is_json_array(value) then
+    for index = 1, #value do
+      if index > 1 then
+        total = total + 1
+      end
+      total = total + READ_B_MEDIA.encoded_bytes(value[index])
+    end
+    return total
+  end
+  local first = true
+  for key, nested in pairs(value) do
+    if type(key) == "string" and nested ~= nil then
+      if not first then
+        total = total + 1
+      end
+      first = false
+      total = total + #key + 3 + READ_B_MEDIA.encoded_bytes(nested)
+    end
+  end
+  return total
+end
+
+-- Mirror product bridge_ok_envelope request-echoed fields so preflight/list paging
+-- prove the complete serialized success envelope, not summary-only bytes.
+function READ_B_MEDIA.success_envelope_prototype(request, summary, refs, options)
+  options = options or {}
+  local budget = safe_budget(request)
+  local undo = is_object(request and request.undo) and request.undo or {}
+  local verification = is_object(request and request.verification) and request.verification or {}
+  local opened = options.undo_opened == true
+  local closed = options.undo_closed == true
+  if options.undo_opened == nil and is_object(request.pack) and request.pack.risk == "write" then
+    opened = true
+    closed = true
+  end
+  local completed_at = "2026-07-20T00:00:00.000Z"
+  local started_at = options.started_at or completed_at
+  return {
+    contract = (type(CONTRACT) == "string" and CONTRACT) or "foundation.bridge.v1",
+    id = request and request.id or "cmd_invalid",
+    ok = true,
+    completed_at = completed_at,
+    bridge = {
+      owner = (type(ACTIVE_OWNER) == "string" and ACTIVE_OWNER) or "openreaper-live-smoke",
+      generation = (type(ACTIVE_GENERATION) == "number" and ACTIVE_GENERATION) or 1,
+    },
+    queue = {
+      state = "done",
+      started_at = started_at,
+      completed_at = completed_at,
+    },
+    result = {
+      summary = is_object(summary) and summary or {},
+      refs = refs or json_array({}),
+      artifacts = json_array({}),
+      jobs = json_array({}),
+      last_result = {
+        updated = false,
+        refs = json_array({}),
+        truncated = false,
+      },
+    },
+    undo = {
+      mode = is_string(undo.mode) and undo.mode or "none",
+      opened = opened,
+      closed = closed,
+      label = is_string(undo.label) and undo.label or JSON_NULL,
+    },
+    verification = {
+      mode = is_string(verification.mode) and verification.mode or "none",
+      status = options.verification_status or "passed",
+      checks = is_json_array(verification.checks) and verification.checks or json_array({}),
+    },
+    budget = {
+      max_response_bytes = budget.max_response_bytes,
+      response_bytes = 0,
+      truncated = false,
+    },
+    idempotency = {
+      key = is_string(request and request.idempotency_key) and request.idempotency_key or JSON_NULL,
+      replayed = false,
+    },
+  }
+end
+
+function READ_B_MEDIA.success_envelope_bytes(request, summary, refs, options)
+  local envelope = READ_B_MEDIA.success_envelope_prototype(request, summary, refs, options)
+  if type(json) == "table" and type(json.encode) == "function" then
+    local last_length = -1
+    local encoded = nil
+    for _ = 1, 8 do
+      envelope.budget.response_bytes = math.max(last_length, 0)
+      encoded = json.encode(envelope)
+      local length = #encoded
+      if length == last_length then
+        return length, encoded
+      end
+      last_length = length
+    end
+    envelope.budget.response_bytes = #json.encode(envelope)
+    encoded = json.encode(envelope)
+    return #encoded, encoded
+  end
+  local summary_bytes = READ_B_MEDIA.encoded_bytes(summary or {})
+  local refs_bytes = READ_B_MEDIA.encoded_bytes(refs or json_array({}))
+  local echo_bytes = 0
+  local undo = is_object(request and request.undo) and request.undo or {}
+  if is_string(undo.label) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(undo.label) + 24
+  end
+  if is_string(undo.mode) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(undo.mode) + 16
+  end
+  local verification = is_object(request and request.verification) and request.verification or {}
+  if is_string(verification.mode) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(verification.mode) + 16
+  end
+  if is_json_array(verification.checks) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(verification.checks) + 24
+  end
+  if is_string(request and request.idempotency_key) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(request.idempotency_key) + 24
+  end
+  if is_string(request and request.id) then
+    echo_bytes = echo_bytes + READ_B_MEDIA.encoded_bytes(request.id) + 12
+  end
+  return MEDIA_SUCCESS_ENVELOPE_SHELL_MAX_BYTES + summary_bytes + refs_bytes + echo_bytes, nil
+end
+
+function READ_B_MEDIA.complete_success_envelope_fits(request, summary, refs, options)
+  local budget = safe_budget(request)
+  local required_bytes = READ_B_MEDIA.success_envelope_bytes(request, summary, refs, options)
+  if required_bytes > budget.max_response_bytes then
+    return false, required_bytes, budget
+  end
+  return true, required_bytes, budget
+end
+
+function READ_B_MEDIA.file_ref_bytes(path_value)
+  if type(path_value) ~= "string" then
+    return -1
+  end
+  return MEDIA_FILE_REF_PREFIX_BYTES + #path_value
+end
+
+function READ_B_MEDIA.inline_budget_allows_file_ref(request, path_value)
+  local budget = safe_budget(request)
+  local max_inline = math.floor(tonumber(budget.max_inline_value_bytes) or 0)
+  local ref_bytes = READ_B_MEDIA.file_ref_bytes(path_value)
+  if max_inline < 1 or ref_bytes < 1 or ref_bytes > max_inline then
+    return false, ref_bytes, max_inline
+  end
+  return true, ref_bytes, max_inline
+end
+
+function READ_B_MEDIA.ensure_identity_inline_budget(request, path_value)
+  local path, reason = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Media path is invalid for canonical absolute file identity.", {
+      blocker = reason or "invalid_path",
+      path = READ_B_MEDIA.display_path(path_value, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      path_bytes = type(path_value) == "string" and #path_value or -1,
+    })
+  end
+  local ok_inline, ref_bytes, max_inline = READ_B_MEDIA.inline_budget_allows_file_ref(request, path)
+  if not ok_inline then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Exact media file_ref exceeds the request inline-value budget.", {
+      blocker = "exact_file_ref_exceeds_inline_budget",
+      path_bytes = #path,
+      file_ref_bytes = ref_bytes,
+      max_inline_value_bytes = max_inline,
+      file_ref_prefix_bytes = MEDIA_FILE_REF_PREFIX_BYTES,
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+    })
+  end
+  return path
+end
+
 function READ_B_MEDIA.source_type(source)
   local ok, source_type_value = call_reaper("GetMediaSourceType", source, "")
   return bounded_string(ok and first_string(source_type_value) or "", 80)
@@ -21687,7 +22014,7 @@ end
 
 function READ_B_MEDIA.source_filename(source)
   local ok, filename = call_reaper("GetMediaSourceFileName", source, "")
-  return bounded_string(ok and first_string(filename) or "", 240)
+  return ok and first_string(filename) or ""
 end
 
 function READ_B_MEDIA.source_filename_raw(source)
@@ -21710,7 +22037,398 @@ function READ_B_MEDIA.metadata_keys_for_source(source, include_metadata_keys)
 end
 
 function READ_B_MEDIA.file_ref_for_path(path_value)
-  return "file:path:" .. bounded_string(path_value, 220)
+  local path = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return nil
+  end
+  return MEDIA_FILE_REF_PREFIX .. path
+end
+
+function READ_B_MEDIA.file_object_ref(path_value)
+  local path = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return nil
+  end
+  return {
+    kind = "file",
+    ref = MEDIA_FILE_REF_PREFIX .. path,
+    identity = {
+      scheme = "path",
+      value = path,
+    },
+  }
+end
+
+function READ_B_MEDIA.ensure_read_identity_budget(request, path_value, path_field_count)
+  local path, budget_error = READ_B_MEDIA.ensure_identity_inline_budget(request, path_value)
+  if not path then
+    return nil, budget_error
+  end
+  local occurrences = math.max(1, math.floor(tonumber(path_field_count) or 1))
+  local budget = safe_budget(request)
+  local required_response_bytes = MEDIA_READ_SUCCESS_ENVELOPE_FIXED_MAX_BYTES
+    + occurrences * ((READ_B_MEDIA.file_ref_bytes(path) * MEDIA_IDENTITY_JSON_ESCAPE_FACTOR) + MEDIA_IDENTITY_JSON_FIELD_OVERHEAD_BYTES)
+  if budget.max_response_bytes < required_response_bytes then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Conservative complete success-envelope budget proof failed for media identity read.", {
+      blocker = "success_envelope_budget_insufficient",
+      required_response_bytes = required_response_bytes,
+      max_response_bytes = budget.max_response_bytes,
+      fixed_max_overhead_bytes = MEDIA_READ_SUCCESS_ENVELOPE_FIXED_MAX_BYTES,
+      json_escape_factor = MEDIA_IDENTITY_JSON_ESCAPE_FACTOR,
+      path_field_count = occurrences,
+      file_ref_bytes = READ_B_MEDIA.file_ref_bytes(path),
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+    })
+  end
+  return path
+end
+
+-- Proven upper bound for native item/take/track GUID identity values echoed on
+-- mutation success: max JSON string *content* bytes after escaping (not raw).
+-- Plain "G" needs no escape, so max-G prototype content length equals this bound.
+-- Public refs use native GUID only when escaped content fits; otherwise truthful
+-- enumerated index (never fabricate GUID or index 0 without enumeration proof).
+local MEDIA_MUTATION_GUID_MAX_BYTES = 240
+-- e3_media_kind_for_path returns only audio|midi|video|unknown; use longest.
+local MEDIA_MUTATION_SOURCE_TYPE_MAX = "unknown"
+local MEDIA_MUTATION_SOURCE_TYPE_MAX_BYTES = #MEDIA_MUTATION_SOURCE_TYPE_MAX
+
+function READ_B_MEDIA.mutation_guid_max_bytes()
+  return MEDIA_MUTATION_GUID_MAX_BYTES
+end
+
+function READ_B_MEDIA.mutation_max_guid_value()
+  return string.rep("G", MEDIA_MUTATION_GUID_MAX_BYTES)
+end
+
+function READ_B_MEDIA.json_string_content_bytes(value)
+  if type(value) ~= "string" then
+    return -1
+  end
+  if type(json) == "table" and type(json.encode) == "function" then
+    local encoded = json.encode(value)
+    if type(encoded) == "string" and #encoded >= 2 and encoded:sub(1, 1) == '"' and encoded:sub(-1) == '"' then
+      return #encoded - 2
+    end
+    return #encoded
+  end
+  -- Product-faithful JSON string content cost without a bound kernel json table.
+  local total = 0
+  for index = 1, #value do
+    local byte = string.byte(value, index)
+    if byte == 34 or byte == 92 then
+      total = total + 2
+    elseif byte < 32 then
+      if byte == 8 or byte == 9 or byte == 10 or byte == 12 or byte == 13 then
+        total = total + 2
+      else
+        total = total + 6
+      end
+    else
+      total = total + 1
+    end
+  end
+  return total
+end
+
+function READ_B_MEDIA.mutation_success_summary_prototype(request, path_value, options)
+  options = options or {}
+  local capability = is_object(request.pack) and request.pack.capability or "media.import_file_to_track"
+  local file_ref = MEDIA_FILE_REF_PREFIX .. path_value
+  local max_guid = options.guid_value
+  if type(max_guid) ~= "string" or max_guid == "" then
+    max_guid = READ_B_MEDIA.mutation_max_guid_value()
+  end
+  if #max_guid > MEDIA_MUTATION_GUID_MAX_BYTES then
+    max_guid = max_guid:sub(1, MEDIA_MUTATION_GUID_MAX_BYTES)
+  end
+  local source_type = options.source_type
+  if type(source_type) ~= "string" or source_type == "" then
+    source_type = MEDIA_MUTATION_SOURCE_TYPE_MAX
+  end
+  if #source_type > MEDIA_MUTATION_SOURCE_TYPE_MAX_BYTES then
+    source_type = source_type:sub(1, MEDIA_MUTATION_SOURCE_TYPE_MAX_BYTES)
+  end
+  -- Prefer the longer of provided vs proven max so the prototype remains an upper bound.
+  if #source_type < MEDIA_MUTATION_SOURCE_TYPE_MAX_BYTES then
+    source_type = MEDIA_MUTATION_SOURCE_TYPE_MAX
+  end
+  local summary = {
+    capability = capability,
+    pack = is_object(request.pack) and request.pack.id or "media",
+    risk = is_object(request.pack) and request.pack.risk or "write",
+    readback_status = "passed",
+    undo_evidence = "required",
+    artifacts_allowed = false,
+    truncated = false,
+  }
+  if capability == "media.relink_take_source" then
+    summary.take_ref = "take:guid:" .. max_guid
+    summary.source_file_ref = file_ref
+    summary.source_type = source_type
+    summary.relinked = true
+  else
+    summary.imported_item_refs = json_array({ "item:guid:" .. max_guid })
+    summary.item_count = 1
+    summary.source_file_ref = file_ref
+    summary.track_ref = "track:guid:" .. max_guid
+    summary.position_seconds = type(request.params and request.params.position_seconds) == "number" and request.params.position_seconds or 0
+    summary.selection_restored = request.params and request.params.preserve_selection == true
+    if capability == "media.import_file_section_to_track" then
+      summary.start_percent = type(request.params and request.params.start_percent) == "number" and request.params.start_percent or 0
+      summary.end_percent = type(request.params and request.params.end_percent) == "number" and request.params.end_percent or 1
+    end
+  end
+  local refs = json_array({
+    {
+      kind = capability == "media.relink_take_source" and "take" or "item",
+      ref = capability == "media.relink_take_source" and summary.take_ref or summary.imported_item_refs[1],
+      identity = {
+        scheme = "guid",
+        value = max_guid,
+      },
+    },
+    {
+      kind = "file",
+      ref = file_ref,
+      identity = {
+        scheme = "path",
+        value = path_value,
+      },
+    },
+  })
+  return summary, refs
+end
+
+function READ_B_MEDIA.identity_value_within_mutation_bound(value)
+  if type(value) ~= "string" or value == "" then
+    return false, "empty_identity"
+  end
+  local escaped_bytes = READ_B_MEDIA.json_string_content_bytes(value)
+  if escaped_bytes < 0 or escaped_bytes > MEDIA_MUTATION_GUID_MAX_BYTES then
+    return false, "identity_exceeds_mutation_bound"
+  end
+  return true
+end
+
+function READ_B_MEDIA.ensure_mutation_path_budget(request, path_value)
+  local path, budget_error = READ_B_MEDIA.ensure_identity_inline_budget(request, path_value)
+  if not path then
+    return nil, budget_error
+  end
+  if #path > MEDIA_FILE_PATH_MAX_BYTES then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Exact media path exceeds the supported mutation path ceiling; mutation was not attempted.", {
+      blocker = "path_exceeds_mutation_ceiling",
+      path_bytes = #path,
+      max_path_bytes = MEDIA_FILE_PATH_MAX_BYTES,
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+    })
+  end
+  -- Upper-bound prototype: max GUID identity lengths + longest source_type ("unknown").
+  local summary, refs = READ_B_MEDIA.mutation_success_summary_prototype(request, path, {
+    guid_value = READ_B_MEDIA.mutation_max_guid_value(),
+    source_type = MEDIA_MUTATION_SOURCE_TYPE_MAX,
+  })
+  local fits, required_response_bytes, budget = READ_B_MEDIA.complete_success_envelope_fits(request, summary, refs, {
+    undo_opened = true,
+    undo_closed = true,
+    verification_status = "passed",
+  })
+  if not fits then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Complete success-envelope budget proof failed; mutation was not attempted.", {
+      blocker = "success_envelope_budget_insufficient",
+      required_response_bytes = required_response_bytes,
+      max_response_bytes = budget.max_response_bytes,
+      path_field_count = MEDIA_MUTATION_PATH_OCCURRENCES,
+      file_ref_bytes = READ_B_MEDIA.file_ref_bytes(path),
+      path_bytes = #path,
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      proof = "complete_success_envelope_upper_bound",
+      guid_max_bytes = MEDIA_MUTATION_GUID_MAX_BYTES,
+      source_type_max = MEDIA_MUTATION_SOURCE_TYPE_MAX,
+    })
+  end
+  return path
+end
+
+-- Pure preflight for write media routes. Must run before open_required_undo_block.
+-- Uses no EnumProjects / Undo_* / mutation REAPER APIs; only request truth + budgets.
+function READ_B_MEDIA.file_path_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "file" then
+    return nil, nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  local path_from_identity = nil
+  if identity.scheme == "path" and type(identity.value) == "string" then
+    path_from_identity = identity.value
+  end
+  local path_from_ref = nil
+  if is_string(ref.ref) then
+    path_from_ref = ref.ref:match("^file:path:(.+)$")
+  end
+  if path_from_identity and path_from_ref and path_from_identity ~= path_from_ref then
+    return nil, "contradictory_file_ref"
+  end
+  local path_value = path_from_identity or path_from_ref
+  if not path_value then
+    return nil, "invalid_file_ref"
+  end
+  local path, reason = READ_B_MEDIA.canonical_path(path_value)
+  if not path then
+    return nil, reason or "invalid_file_ref"
+  end
+  if path_from_identity and path_from_identity ~= path then
+    return nil, "contradictory_file_ref"
+  end
+  if path_from_ref and path_from_ref ~= path then
+    return nil, "contradictory_file_ref"
+  end
+  return path
+end
+
+function READ_B_MEDIA.file_path_from_request_refs_strict(request)
+  if not is_json_array(request.refs) then
+    return nil, "missing_file_ref"
+  end
+  local found = nil
+  local saw_file = false
+  for index = 1, #request.refs do
+    local ref = request.refs[index]
+    if is_object(ref) and ref.kind == "file" then
+      saw_file = true
+      local path_value, reason = READ_B_MEDIA.file_path_from_ref_object(ref)
+      if reason or not path_value then
+        return nil, reason or "invalid_file_ref"
+      end
+      if found and found ~= path_value then
+        return nil, "contradictory_file_ref"
+      end
+      found = path_value
+    end
+  end
+  if not saw_file or not found then
+    return nil, "missing_file_ref"
+  end
+  return found
+end
+
+function READ_B_MEDIA.preflight_mutation_write(request)
+  local capability = is_object(request.pack) and request.pack.capability or nil
+  if capability ~= "media.import_file_to_track"
+      and capability ~= "media.import_file_section_to_track"
+      and capability ~= "media.relink_take_source" then
+    return true
+  end
+  local path_value, path_reason = READ_B_MEDIA.file_path_from_request_refs_strict(request)
+  if not path_value then
+    local code = "FILE_NOT_FOUND"
+    local message = "E3 media write requires a resolvable absolute source file ref."
+    if path_reason == "contradictory_file_ref" then
+      code = "PARAMS_INVALID"
+      message = "E3 media write rejected contradictory file ref identity."
+    elseif path_reason == "relative_path" or path_reason == "empty_path" or path_reason == "nul_char" then
+      code = "PARAMS_INVALID"
+      message = "E3 media write requires a valid absolute source file path."
+    end
+    return false, {
+      code = code,
+      message = message,
+      recoverable = true,
+      details = {
+        blocker = path_reason or "invalid_file_ref",
+        zero_write = true,
+      },
+    }
+  end
+  if capability == "media.import_file_section_to_track" then
+    local start_value = request.params and request.params.start_percent
+    local end_value = request.params and request.params.end_percent
+    if type(start_value) == "number" or type(end_value) == "number" then
+      local start_number = type(start_value) == "number" and start_value or 0
+      local end_number = type(end_value) == "number" and end_value or 1
+      if start_number < 0 or end_number > 1 or end_number <= start_number then
+        return false, {
+          code = "PARAMS_INVALID",
+          message = "E3 media section import requires 0 <= start_percent < end_percent <= 1.",
+          recoverable = true,
+          details = {
+            start_percent = start_value,
+            end_percent = end_value,
+            zero_write = true,
+          },
+        }
+      end
+    end
+  end
+  -- Oversized native GUIDs fall back to truthful index refs in success identity;
+  -- preflight proves max-GUID upper bound which dominates index refs.
+  local path, budget_error = READ_B_MEDIA.ensure_mutation_path_budget(request, path_value)
+  if not path then
+    if is_object(budget_error) then
+      budget_error.details = budget_error.details or {}
+      budget_error.details.zero_write = true
+    end
+    return false, budget_error
+  end
+
+  -- Clear any prior target proof; only a full successful preflight may open Undo.
+  request.__openreaper_media_target = nil
+
+  if capability == "media.import_file_to_track" or capability == "media.import_file_section_to_track" then
+    local track = READ_B_MEDIA.resolve_track_for_request(request)
+    if not track then
+      return false, {
+        code = "TRACK_NOT_FOUND",
+        message = "E3 media import requires a resolvable target track ref.",
+        recoverable = true,
+        details = { blocker = "track_not_found", zero_write = true },
+      }
+    end
+    local track_ref = READ_B_MEDIA.track_ref_string(track)
+    if not track_ref then
+      return false, {
+        code = "TRACK_NOT_FOUND",
+        message = "E3 media import could not prove a truthful track identity before mutation.",
+        recoverable = true,
+        details = { blocker = "track_identity_unavailable", zero_write = true },
+      }
+    end
+    request.__openreaper_media_target = {
+      capability = capability,
+      path = path,
+      track = track,
+      track_ref = track_ref,
+    }
+  elseif capability == "media.relink_take_source" then
+    local take = READ_B_MEDIA.resolve_take_for_request(request)
+    if not take then
+      return false, {
+        code = "TAKE_NOT_FOUND",
+        message = "E3 media relink requires a resolvable take ref.",
+        recoverable = true,
+        details = { blocker = "take_not_found", zero_write = true },
+      }
+    end
+    local take_ref = READ_B_MEDIA.take_ref_string(take)
+    if not take_ref then
+      return false, {
+        code = "TAKE_NOT_FOUND",
+        message = "E3 media relink could not prove a truthful take identity before mutation.",
+        recoverable = true,
+        details = {
+          blocker = "take_identity_unavailable",
+          zero_write = true,
+        },
+      }
+    end
+    request.__openreaper_media_target = {
+      capability = capability,
+      path = path,
+      take = take,
+      take_ref = take_ref,
+    }
+  end
+  return true, path
 end
 
 function READ_B_MEDIA.item_guid(item)
@@ -21751,11 +22469,14 @@ end
 
 function READ_B_MEDIA.take_ref_string(take)
   local guid = READ_B_MEDIA.take_guid(take)
-  if guid then
+  if type(guid) == "string" and guid ~= "" and READ_B_MEDIA.identity_value_within_mutation_bound(guid) then
     return "take:guid:" .. guid
   end
   local ok_count, item_count = call_reaper("CountMediaItems", 0)
-  local total_items = ok_count and first_number(item_count) or 0
+  if not ok_count then
+    return nil
+  end
+  local total_items = first_number(item_count) or 0
   local take_index = 0
   for item_index = 0, total_items - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, item_index)
@@ -21770,7 +22491,103 @@ function READ_B_MEDIA.take_ref_string(take)
       end
     end
   end
-  return "take:unknown"
+  return nil
+end
+
+function READ_B_MEDIA.track_guid(track)
+  local ok, guid = call_reaper("GetTrackGUID", track)
+  return ok and first_string(guid) or nil
+end
+
+function READ_B_MEDIA.track_index(track)
+  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
+  if ok_number and type(number) == "number" and number > 0 then
+    return math.floor(number - 1)
+  end
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then
+    return nil
+  end
+  local total = first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, candidate = call_reaper("GetTrack", 0, index)
+    if ok_track and candidate == track then
+      return index
+    end
+  end
+  return nil
+end
+
+function READ_B_MEDIA.track_ref_string(track)
+  local guid = READ_B_MEDIA.track_guid(track)
+  if type(guid) == "string" and guid ~= "" and READ_B_MEDIA.identity_value_within_mutation_bound(guid) then
+    return "track:guid:" .. guid
+  end
+  local index = READ_B_MEDIA.track_index(track)
+  if index == nil then
+    return nil
+  end
+  return "track:index:" .. tostring(index)
+end
+
+function READ_B_MEDIA.find_track_by_guid(guid)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and first_number(count) or 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and READ_B_MEDIA.track_guid(track) == guid then
+      return track
+    end
+  end
+  return nil
+end
+
+function READ_B_MEDIA.resolve_track_token(token)
+  if not is_string(token) then
+    return nil
+  end
+  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
+  if selected_index then
+    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
+    return ok and track or nil
+  end
+  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
+  if index then
+    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
+    return ok and track or nil
+  end
+  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
+  if guid then
+    return READ_B_MEDIA.find_track_by_guid(guid)
+  end
+  return nil
+end
+
+function READ_B_MEDIA.resolve_track_from_ref_object(ref)
+  if not is_object(ref) or ref.kind ~= "track" then
+    return nil
+  end
+  local identity = is_object(ref.identity) and ref.identity or {}
+  if identity.scheme == "selected" then
+    return READ_B_MEDIA.resolve_track_token("selected:" .. tostring(identity.value))
+  elseif identity.scheme == "index" then
+    return READ_B_MEDIA.resolve_track_token("index:" .. tostring(identity.value))
+  elseif identity.scheme == "guid" then
+    return READ_B_MEDIA.resolve_track_token("guid:" .. tostring(identity.value))
+  end
+  return READ_B_MEDIA.resolve_track_token(ref.ref)
+end
+
+function READ_B_MEDIA.resolve_track_for_request(request)
+  if is_json_array(request.refs) then
+    for index = 1, #request.refs do
+      local track = READ_B_MEDIA.resolve_track_from_ref_object(request.refs[index])
+      if track then
+        return track
+      end
+    end
+  end
+  return nil
 end
 
 function READ_B_MEDIA.find_take_by_index(target_index)
@@ -21891,20 +22708,26 @@ local function probe_media_file(request)
       field = "path",
     })
   end
-  if not file_exists(path_value) then
+  local path, budget_error = READ_B_MEDIA.ensure_read_identity_budget(request, path_value, 1)
+  if not path then
+    return nil, budget_error
+  end
+  if not file_exists(path) then
     return READ_B_MEDIA.handler_error("FILE_NOT_FOUND", "Media probe file does not exist.", {
-      path = bounded_string(path_value, 240),
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      file_ref = READ_B_MEDIA.file_ref_for_path(path),
     })
   end
-  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", path_value)
+  local ok_source, source = call_reaper("PCM_Source_CreateFromFile", path)
   if not ok_source or not source then
     return READ_B_MEDIA.handler_error("FILE_NOT_FOUND", "Media probe file could not be decoded as a REAPER source.", {
-      path = bounded_string(path_value, 240),
+      path = READ_B_MEDIA.display_path(path, MEDIA_DISPLAY_PATH_MAX_BYTES),
+      file_ref = READ_B_MEDIA.file_ref_for_path(path),
     })
   end
   local length, length_is_quarter_notes = READ_B_MEDIA.source_length(source)
   local summary = {
-    file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
+    file_ref = READ_B_MEDIA.file_ref_for_path(path),
     source_type = READ_B_MEDIA.source_type(source),
     length_seconds = length,
     length_is_quarter_notes = length_is_quarter_notes,
@@ -21937,11 +22760,27 @@ local function read_take_source(request)
       take_ref = READ_B_MEDIA.take_ref_string(take),
     })
   end
-  local filename = READ_B_MEDIA.source_filename(source)
+  local filename = READ_B_MEDIA.source_filename_raw(source)
+  local file_ref = nil
+  if filename ~= "" then
+    local path, budget_error = READ_B_MEDIA.ensure_read_identity_budget(request, filename, 2)
+    if not path then
+      return nil, budget_error
+    end
+    file_ref = READ_B_MEDIA.file_ref_for_path(path)
+    if not file_ref then
+      return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Take source filename is invalid for canonical absolute file identity.", {
+        take_ref = READ_B_MEDIA.take_ref_string(take),
+        path = READ_B_MEDIA.display_path(filename, 240),
+        path_bytes = #filename,
+      })
+    end
+    filename = path
+  end
   local length, _ = READ_B_MEDIA.source_length(source)
   local summary = {
     take_ref = READ_B_MEDIA.take_ref_string(take),
-    file_ref = filename ~= "" and READ_B_MEDIA.file_ref_for_path(filename) or JSON_NULL,
+    file_ref = file_ref or JSON_NULL,
     source_type = READ_B_MEDIA.source_type(source),
     filename = filename,
     length_seconds = length,
@@ -21970,10 +22809,8 @@ local function read_project_media_files(request)
   local max_sources = READ_B_MEDIA.bounded_limit(request, request.params.max_sources, 25, 100)
   local include_offline = request.params.include_offline == true
   local seen = {}
-  local file_refs = json_array({})
   local offline_count = 0
-  local source_count = 0
-  local truncated = false
+  local candidates = json_array({})
   local ok_count, item_count = call_reaper("CountMediaItems", 0)
   local total_items = ok_count and first_number(item_count) or 0
 
@@ -21987,18 +22824,36 @@ local function read_project_media_files(request)
           local ok_source, source = call_reaper("GetMediaItemTake_Source", take)
           if ok_source and source then
             local filename = READ_B_MEDIA.source_filename_raw(source)
-            if filename ~= "" and not seen[filename] then
-              seen[filename] = true
-              local offline = not file_exists(filename)
-              if offline then
-                offline_count = offline_count + 1
+            if filename ~= "" then
+              -- Absolute identity validation before seen/offline/include filtering.
+              local path, path_reason = READ_B_MEDIA.canonical_path(filename)
+              if not path then
+                return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Project media source path is invalid for canonical absolute file identity.", {
+                  blocker = path_reason or "invalid_path",
+                  path = READ_B_MEDIA.display_path(filename, 240),
+                  path_bytes = #filename,
+                })
               end
-              if include_offline or not offline then
-                source_count = source_count + 1
-                if #file_refs < max_sources then
-                  file_refs[#file_refs + 1] = READ_B_MEDIA.file_ref_for_path(filename)
-                else
-                  truncated = true
+              if not seen[path] then
+                seen[path] = true
+                local offline = not file_exists(path)
+                if offline then
+                  offline_count = offline_count + 1
+                end
+                if include_offline or not offline then
+                  -- Inline budget only when a file_ref row will actually be included.
+                  local budget_path, path_error = READ_B_MEDIA.ensure_identity_inline_budget(request, path)
+                  if not budget_path then
+                    return nil, path_error
+                  end
+                  local file_ref = READ_B_MEDIA.file_ref_for_path(budget_path)
+                  if not file_ref then
+                    return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Project media source path is invalid for canonical absolute file identity.", {
+                      path = READ_B_MEDIA.display_path(path, 240),
+                      path_bytes = #path,
+                    })
+                  end
+                  candidates[#candidates + 1] = file_ref
                 end
               end
             end
@@ -22008,12 +22863,85 @@ local function read_project_media_files(request)
     end
   end
 
-  return {
-    source_count = source_count,
-    file_refs = file_refs,
-    offline_count = offline_count,
-    truncated = truncated,
-  }
+  local source_count = #candidates
+  local budget = safe_budget(request)
+
+  local function build_summary(file_refs, truncated)
+    return {
+      source_count = source_count,
+      file_refs = file_refs,
+      offline_count = offline_count,
+      truncated = truncated,
+    }
+  end
+
+  local function page_fits(file_refs, truncated)
+    local summary = build_summary(file_refs, truncated)
+    local fits, required_bytes = READ_B_MEDIA.complete_success_envelope_fits(request, summary, json_array({}), {
+      undo_opened = false,
+      undo_closed = false,
+      verification_status = "passed",
+    })
+    return fits, required_bytes, summary
+  end
+
+  if source_count == 0 then
+    local empty = json_array({})
+    local fits, encoded_bytes, summary = page_fits(empty, false)
+    if not fits then
+      return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Project media empty page cannot fit within the complete success envelope budget.", {
+        blocker = "empty_page_exceeds_budget",
+        required_response_bytes = encoded_bytes,
+        max_response_bytes = budget.max_response_bytes,
+        max_inline_value_bytes = budget.max_inline_value_bytes,
+        proof = "complete_success_envelope",
+      })
+    end
+    return summary
+  end
+
+  local file_refs = json_array({})
+  local limit = math.min(max_sources, source_count)
+  for index = 1, limit do
+    file_refs[#file_refs + 1] = candidates[index]
+  end
+
+  while #file_refs > 0 do
+    local truncated = #file_refs < source_count
+    local fits = page_fits(file_refs, truncated)
+    if fits then
+      break
+    end
+    table.remove(file_refs)
+  end
+
+  if #file_refs == 0 then
+    local single = json_array({ candidates[1] })
+    local fits, encoded_bytes = page_fits(single, source_count > 1)
+    if not fits then
+      return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "One project media identity row cannot fit within the complete success envelope budget.", {
+        blocker = "single_identity_row_exceeds_budget",
+        required_response_bytes = encoded_bytes,
+        max_response_bytes = budget.max_response_bytes,
+        max_inline_value_bytes = budget.max_inline_value_bytes,
+        file_ref = candidates[1],
+        proof = "complete_success_envelope",
+      })
+    end
+    file_refs = single
+  end
+
+  local truncated = #file_refs < source_count
+  local fits, encoded_bytes, summary = page_fits(file_refs, truncated)
+  if not fits then
+    return READ_B_MEDIA.handler_error("RESPONSE_TOO_LARGE", "Project media empty page cannot fit within the complete success envelope budget.", {
+      blocker = "empty_page_exceeds_budget",
+      required_response_bytes = encoded_bytes,
+      max_response_bytes = budget.max_response_bytes,
+      proof = "complete_success_envelope",
+    })
+  end
+  return summary
 end
 return {
   exports = { read_project_media_files = read_project_media_files },
@@ -22066,92 +22994,19 @@ local function e3_media_finite_number(value, fallback)
 end
 
 local function e3_media_track_guid(track)
-  local ok, guid = call_reaper("GetTrackGUID", track)
-  return ok and first_string(guid) or nil
+  return READ_B_MEDIA.track_guid(track)
 end
 
 local function e3_media_track_index(track)
-  local ok_number, number = call_reaper("GetMediaTrackInfo_Value", track, "IP_TRACKNUMBER")
-  if ok_number and type(number) == "number" and number > 0 then
-    return math.floor(number - 1)
-  end
-  local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and first_number(count) or 0
-  for index = 0, total - 1 do
-    local ok_track, candidate = call_reaper("GetTrack", 0, index)
-    if ok_track and candidate == track then
-      return index
-    end
-  end
-  return 0
+  return READ_B_MEDIA.track_index(track)
 end
 
 local function e3_media_track_ref_string(track)
-  local guid = e3_media_track_guid(track)
-  if guid then
-    return "track:guid:" .. guid
-  end
-  return "track:index:" .. tostring(e3_media_track_index(track))
-end
-
-local function e3_media_find_track_by_guid(guid)
-  local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and first_number(count) or 0
-  for index = 0, total - 1 do
-    local ok_track, track = call_reaper("GetTrack", 0, index)
-    if ok_track and track and e3_media_track_guid(track) == guid then
-      return track
-    end
-  end
-  return nil
-end
-
-local function e3_media_resolve_track_token(token)
-  if not is_string(token) then
-    return nil
-  end
-  local selected_index = token:match("^selected:(%d+)$") or token:match("^track:selected:(%d+)$")
-  if selected_index then
-    local ok, track = call_reaper("GetSelectedTrack", 0, tonumber(selected_index))
-    return ok and track or nil
-  end
-  local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
-  if index then
-    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
-    return ok and track or nil
-  end
-  local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
-  if guid then
-    return e3_media_find_track_by_guid(guid)
-  end
-  return nil
-end
-
-local function e3_media_resolve_track_from_ref_object(ref)
-  if not is_object(ref) or ref.kind ~= "track" then
-    return nil
-  end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "selected" then
-    return e3_media_resolve_track_token("selected:" .. tostring(identity.value))
-  elseif identity.scheme == "index" then
-    return e3_media_resolve_track_token("index:" .. tostring(identity.value))
-  elseif identity.scheme == "guid" then
-    return e3_media_resolve_track_token("guid:" .. tostring(identity.value))
-  end
-  return e3_media_resolve_track_token(ref.ref)
+  return READ_B_MEDIA.track_ref_string(track)
 end
 
 local function e3_media_track_from_request_refs(request)
-  if is_json_array(request.refs) then
-    for index = 1, #request.refs do
-      local track = e3_media_resolve_track_from_ref_object(request.refs[index])
-      if track then
-        return track
-      end
-    end
-  end
-  return nil
+  return READ_B_MEDIA.resolve_track_for_request(request)
 end
 
 local function e3_media_item_guid(item)
@@ -22168,22 +23023,28 @@ end
 
 local function e3_media_item_ref_string(item)
   local guid = e3_media_item_guid(item)
-  if guid then
+  if type(guid) == "string" and guid ~= "" and READ_B_MEDIA.identity_value_within_mutation_bound(guid) then
     return "item:guid:" .. guid
   end
   local ok_count, count = call_reaper("CountMediaItems", 0)
-  local total = ok_count and first_number(count) or 0
+  if not ok_count then
+    return nil
+  end
+  local total = first_number(count) or 0
   for index = 0, total - 1 do
     local ok_item, candidate = call_reaper("GetMediaItem", 0, index)
     if ok_item and candidate == item then
       return "item:index:" .. tostring(index)
     end
   end
-  return "item:unknown"
+  return nil
 end
 
 local function e3_media_item_object_ref(item)
   local ref = e3_media_item_ref_string(item)
+  if not ref then
+    return nil
+  end
   local scheme, value = ref:match("^item:([^:]+):(.+)$")
   return {
     kind = "item",
@@ -22244,29 +23105,38 @@ local function e3_media_restore_selected_items(selected)
 end
 
 local function e3_media_file_path_from_ref(ref)
-  if not is_object(ref) or ref.kind ~= "file" then
-    return nil
+  local path_value, reason = READ_B_MEDIA.file_path_from_ref_object(ref)
+  if reason then
+    return nil, reason
   end
-  local identity = is_object(ref.identity) and ref.identity or {}
-  if identity.scheme == "path" and is_string(identity.value) then
-    return identity.value
-  end
-  if is_string(ref.ref) then
-    return ref.ref:match("^file:path:(.+)$")
-  end
-  return nil
+  return path_value
 end
 
 local function e3_media_file_path_from_request_refs(request)
-  if is_json_array(request.refs) then
-    for index = 1, #request.refs do
-      local path_value = e3_media_file_path_from_ref(request.refs[index])
-      if path_value then
-        return path_value
-      end
-    end
+  local path_value, reason = READ_B_MEDIA.file_path_from_request_refs_strict(request)
+  if not path_value then
+    return nil, reason
   end
-  return nil
+  return path_value
+end
+
+local function e3_media_file_ref_failure(reason)
+  if reason == "contradictory_file_ref" then
+    return e3_media_handler_error("PARAMS_INVALID", "E3 media write rejected contradictory file ref identity.", {
+      blocker = reason,
+      zero_write = true,
+    })
+  end
+  if reason == "relative_path" or reason == "empty_path" or reason == "nul_char" then
+    return e3_media_handler_error("PARAMS_INVALID", "E3 media write requires a valid absolute source file path.", {
+      blocker = reason,
+      zero_write = true,
+    })
+  end
+  return e3_media_handler_error("FILE_NOT_FOUND", "E3 media write requires a resolvable absolute source file ref.", {
+    blocker = reason or "missing_file_ref",
+    zero_write = true,
+  })
 end
 
 local function e3_media_kind_for_path(path_value)
@@ -22314,18 +23184,29 @@ local function list_folder_media_files(request)
   local folder_path = e3_media_folder_path(request.params.folder_ref)
   if not folder_path then
     return e3_media_handler_error("PARAMS_INVALID", "E3 folder media list requires folder:path:<absolute-path>.", {
-      folder_ref = bounded_string(request.params.folder_ref, 240),
+      folder_ref = READ_B_MEDIA.display_path(request.params.folder_ref, 240),
+    })
+  end
+  local absolute_folder, folder_error = READ_B_MEDIA.ensure_folder_ref_inline_budget(request, folder_path)
+  if not absolute_folder then
+    return nil, folder_error
+  end
+  folder_path = absolute_folder
+  local folder_ref = READ_B_MEDIA.folder_ref_for_path(folder_path)
+  if not folder_ref then
+    return e3_media_handler_error("PARAMS_INVALID", "E3 folder media list requires a valid absolute folder path.", {
+      folder_ref = READ_B_MEDIA.display_path(request.params.folder_ref, 240),
+      blocker = "invalid_path",
     })
   end
   if not reaper or type(reaper.EnumerateFiles) ~= "function" then
     return e3_media_handler_error("API_UNAVAILABLE", "REAPER EnumerateFiles API is required for folder media listing.", {})
   end
+  local budget = safe_budget(request)
   local limit = READ_B_MEDIA.bounded_limit(request, request.params.limit, 20, 100)
   local offset = math.max(0, math.floor(e3_media_finite_number(request.params.offset, 0)))
   local media_type = is_string(request.params.media_type) and request.params.media_type or "any"
-  local rows = json_array({})
-  local file_refs = json_array({})
-  local matched = 0
+  local matched_paths = json_array({})
   local index = 0
   while true do
     local filename = reaper.EnumerateFiles(folder_path, index)
@@ -22333,29 +23214,131 @@ local function list_folder_media_files(request)
       break
     end
     if e3_media_extension_allowed(filename, media_type, request.params.extension_filter) then
-      if matched >= offset and #rows < limit then
-        local path_value = folder_path .. "/" .. filename
-        rows[#rows + 1] = {
-          name = bounded_string(filename, 160),
-          file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
-          media_type = e3_media_kind_for_path(filename),
-        }
-        file_refs[#file_refs + 1] = READ_B_MEDIA.file_ref_for_path(path_value)
+      local path_value = READ_B_MEDIA.path_join(folder_path, filename)
+      if not path_value then
+        return e3_media_handler_error("PARAMS_INVALID", "Folder media entry path is invalid for canonical absolute file identity.", {
+          path = READ_B_MEDIA.display_path(filename, 240),
+        })
       end
-      matched = matched + 1
+      local path, path_error = READ_B_MEDIA.ensure_identity_inline_budget(request, path_value)
+      if not path then
+        return nil, path_error
+      end
+      local file_ref = READ_B_MEDIA.file_ref_for_path(path)
+      if not file_ref then
+        return e3_media_handler_error("PARAMS_INVALID", "Folder media entry path is invalid for canonical absolute file identity.", {
+          path = READ_B_MEDIA.display_path(path_value, 240),
+        })
+      end
+      matched_paths[#matched_paths + 1] = {
+        name = filename,
+        path = path,
+        file_ref = file_ref,
+        media_type = e3_media_kind_for_path(filename),
+      }
     end
     index = index + 1
   end
-  return e3_media_summary(request, {
-    folder_ref = request.params.folder_ref,
-    rows = rows,
-    file_refs = file_refs,
-    row_count = #rows,
-    limit = limit,
-    offset = offset,
-    total_matching_count = matched,
-    truncated = matched > offset + #rows,
-  })
+  local matched = #matched_paths
+  local function build_summary(page_rows, page_refs, truncated)
+    return e3_media_summary(request, {
+      folder_ref = folder_ref,
+      rows = page_rows,
+      file_refs = page_refs,
+      row_count = #page_rows,
+      limit = limit,
+      offset = offset,
+      total_matching_count = matched,
+      truncated = truncated,
+    })
+  end
+  local function page_fits(candidate_rows, candidate_refs, truncated)
+    local summary = build_summary(candidate_rows, candidate_refs, truncated)
+    local fits, required_bytes = READ_B_MEDIA.complete_success_envelope_fits(request, summary, json_array({}), {
+      undo_opened = false,
+      undo_closed = false,
+      verification_status = "passed",
+    })
+    return fits, required_bytes, summary
+  end
+
+  -- Empty / no-match still validates returned folder_ref and empty-page complete envelope.
+  if matched == 0 or offset >= matched then
+    local empty_rows = json_array({})
+    local empty_refs = json_array({})
+    local fits, encoded_bytes, summary = page_fits(empty_rows, empty_refs, false)
+    if not fits then
+      return e3_media_handler_error("RESPONSE_TOO_LARGE", "Folder media empty page cannot fit within the complete success envelope budget.", {
+        blocker = "empty_page_exceeds_budget",
+        required_response_bytes = encoded_bytes,
+        max_response_bytes = budget.max_response_bytes,
+        max_inline_value_bytes = budget.max_inline_value_bytes,
+        folder_ref = folder_ref,
+        proof = "complete_success_envelope",
+      })
+    end
+    return summary
+  end
+
+  local rows = json_array({})
+  local file_refs = json_array({})
+  local end_index = math.min(matched, offset + limit)
+  for entry_index = offset + 1, end_index do
+    local entry = matched_paths[entry_index]
+    rows[#rows + 1] = {
+      name = READ_B_MEDIA.display_path(entry.name, 160),
+      file_ref = entry.file_ref,
+      media_type = entry.media_type,
+    }
+    file_refs[#file_refs + 1] = entry.file_ref
+  end
+
+  while #rows > 0 do
+    local truncated = offset + #rows < matched
+    local fits = page_fits(rows, file_refs, truncated)
+    if fits then
+      break
+    end
+    table.remove(rows)
+    table.remove(file_refs)
+  end
+
+  if #rows == 0 then
+    local entry = matched_paths[offset + 1]
+    local single_rows = json_array({
+      {
+        name = READ_B_MEDIA.display_path(entry.name, 160),
+        file_ref = entry.file_ref,
+        media_type = entry.media_type,
+      },
+    })
+    local single_refs = json_array({ entry.file_ref })
+    local fits, encoded_bytes = page_fits(single_rows, single_refs, offset + 1 < matched)
+    if not fits then
+      return e3_media_handler_error("RESPONSE_TOO_LARGE", "One folder media identity row cannot fit within the complete success envelope budget.", {
+        blocker = "single_identity_row_exceeds_budget",
+        required_response_bytes = encoded_bytes,
+        max_response_bytes = budget.max_response_bytes,
+        max_inline_value_bytes = budget.max_inline_value_bytes,
+        file_ref = entry.file_ref,
+        proof = "complete_success_envelope",
+      })
+    end
+    rows = single_rows
+    file_refs = single_refs
+  end
+
+  local truncated = offset + #rows < matched
+  local fits, encoded_bytes, summary = page_fits(rows, file_refs, truncated)
+  if not fits then
+    return e3_media_handler_error("RESPONSE_TOO_LARGE", "Folder media empty page cannot fit within the complete success envelope budget.", {
+      blocker = "empty_page_exceeds_budget",
+      required_response_bytes = encoded_bytes,
+      max_response_bytes = budget.max_response_bytes,
+      proof = "complete_success_envelope",
+    })
+  end
+  return summary
 end
 
 local function e3_media_create_source(path_value)
@@ -22372,13 +23355,17 @@ end
 local function e3_media_set_item_source(track, path_value, position, start_percent, end_percent)
   local source, code, message = e3_media_create_source(path_value)
   if not source then
-    return nil, e3_media_handler_error(code, message, { path = bounded_string(path_value, 240) })
+    return nil, e3_media_handler_error(code, message, {
+      path = READ_B_MEDIA.display_path(path_value, 240),
+      file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
+    })
   end
   local length, is_quarter_notes = READ_B_MEDIA.source_length(source)
   if is_quarter_notes or length <= 0 then
     call_reaper("PCM_Source_Destroy", source)
     return nil, e3_media_handler_error("SOURCE_LENGTH_UNREADABLE", "E3 media source length could not be measured.", {
-      path = bounded_string(path_value, 240),
+      path = READ_B_MEDIA.display_path(path_value, 240),
+      file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
       source_type = e3_media_kind_for_path(path_value),
     })
   end
@@ -22420,19 +23407,36 @@ local function e3_media_set_item_source(track, path_value, position, start_perce
 end
 
 local function e3_media_import_to_track(request, section)
-  local track = e3_media_track_from_request_refs(request)
+  local target = is_object(request.__openreaper_media_target) and request.__openreaper_media_target or nil
+  local track = target and target.track or e3_media_track_from_request_refs(request)
   if not track then
     return e3_media_handler_error("TRACK_NOT_FOUND", "E3 media import requires a resolvable target track ref.", {})
   end
-  local path_value = e3_media_file_path_from_request_refs(request)
-  if not path_value then
-    return e3_media_handler_error("FILE_NOT_FOUND", "E3 media import requires a source file ref.", {})
+  local track_ref = target and target.track_ref or e3_media_track_ref_string(track)
+  if not track_ref then
+    return e3_media_handler_error("TRACK_NOT_FOUND", "E3 media import could not prove a truthful track identity before mutation.", {
+      blocker = "track_identity_unavailable",
+      zero_write = true,
+    })
   end
+  local path = target and target.path or nil
+  if not path then
+    local path_value, path_reason = e3_media_file_path_from_request_refs(request)
+    if not path_value then
+      return e3_media_file_ref_failure(path_reason)
+    end
+    local budget_path, budget_error = READ_B_MEDIA.ensure_mutation_path_budget(request, path_value)
+    if not budget_path then
+      return nil, budget_error
+    end
+    path = budget_path
+  end
+  local file_object_ref = READ_B_MEDIA.file_object_ref(path)
   local preserve_selection = request.params.preserve_selection == true
   local previous_selection = preserve_selection and e3_media_selected_items() or nil
   local item, failure = e3_media_set_item_source(
     track,
-    path_value,
+    path,
     request.params.position_seconds,
     section and request.params.start_percent or nil,
     section and request.params.end_percent or nil
@@ -22445,12 +23449,22 @@ local function e3_media_import_to_track(request, section)
   else
     e3_media_select_only_item(item)
   end
+  -- Public refs use native GUID only when JSON-escaped content fits the bound;
+  -- otherwise truthful enumerated index (never fabricate GUID or index 0).
   local item_ref = e3_media_item_object_ref(item)
+  if not item_ref then
+    return e3_media_handler_error("COMMAND_FAILED", "E3 media import could not prove a truthful item identity after mutation.", {
+      blocker = "item_identity_unavailable",
+      zero_write = false,
+      track_ref = track_ref,
+    }, false)
+  end
+  local source_file_ref = file_object_ref.ref
   local readback = {
     imported_item_refs = json_array({ item_ref.ref }),
     item_count = 1,
-    source_file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
-    track_ref = e3_media_track_ref_string(track),
+    source_file_ref = source_file_ref,
+    track_ref = track_ref,
     position_seconds = e3_media_finite_number(request.params.position_seconds, 0),
     selection_restored = preserve_selection,
   }
@@ -22458,11 +23472,7 @@ local function e3_media_import_to_track(request, section)
     readback.start_percent = e3_media_finite_number(request.params.start_percent, 0)
     readback.end_percent = e3_media_finite_number(request.params.end_percent, 1)
   end
-  return e3_media_summary(request, readback), nil, nil, nil, e3_media_refs(item_ref, {
-    kind = "file",
-    ref = READ_B_MEDIA.file_ref_for_path(path_value),
-    identity = { scheme = "path", value = path_value },
-  })
+  return e3_media_summary(request, readback), nil, nil, nil, e3_media_refs(item_ref, file_object_ref)
 end
 
 local function import_file_to_track(request)
@@ -22474,17 +23484,37 @@ local function import_file_section_to_track(request)
 end
 
 local function relink_take_source(request)
-  local take = READ_B_MEDIA.resolve_take_for_request(request)
+  local target = is_object(request.__openreaper_media_target) and request.__openreaper_media_target or nil
+  local take = target and target.take or READ_B_MEDIA.resolve_take_for_request(request)
   if not take then
     return e3_media_handler_error("TAKE_NOT_FOUND", "E3 media relink requires a resolvable take ref.", {})
   end
-  local path_value = e3_media_file_path_from_request_refs(request)
-  if not path_value then
-    return e3_media_handler_error("FILE_NOT_FOUND", "E3 media relink requires a source file ref.", {})
+  local take_ref = target and target.take_ref or READ_B_MEDIA.take_ref_string(take)
+  if not take_ref then
+    return e3_media_handler_error("TAKE_NOT_FOUND", "E3 media relink could not prove a truthful take identity before mutation.", {
+      blocker = "take_identity_unavailable",
+      zero_write = true,
+    })
   end
-  local source, code, message = e3_media_create_source(path_value)
+  local path = target and target.path or nil
+  if not path then
+    local path_value, path_reason = e3_media_file_path_from_request_refs(request)
+    if not path_value then
+      return e3_media_file_ref_failure(path_reason)
+    end
+    local budget_path, budget_error = READ_B_MEDIA.ensure_mutation_path_budget(request, path_value)
+    if not budget_path then
+      return nil, budget_error
+    end
+    path = budget_path
+  end
+  local file_object_ref = READ_B_MEDIA.file_object_ref(path)
+  local source, code, message = e3_media_create_source(path)
   if not source then
-    return e3_media_handler_error(code, message, { path = bounded_string(path_value, 240) })
+    return e3_media_handler_error(code, message, {
+      path = READ_B_MEDIA.display_path(path, 240),
+      file_ref = file_object_ref.ref,
+    })
   end
   if request.params.verify_source_type == true then
     local ok_old_source, old_source = call_reaper("GetMediaItemTake_Source", take)
@@ -22503,11 +23533,10 @@ local function relink_take_source(request)
   if item then
     call_reaper("UpdateItemInProject", item)
   end
-  local take_ref = READ_B_MEDIA.take_ref_string(take)
   return e3_media_summary(request, {
     take_ref = take_ref,
-    source_file_ref = READ_B_MEDIA.file_ref_for_path(path_value),
-    source_type = e3_media_kind_for_path(path_value),
+    source_file_ref = file_object_ref.ref,
+    source_type = e3_media_kind_for_path(path),
     relinked = true,
   }), nil, nil, nil, e3_media_refs({
     kind = "take",
@@ -22516,11 +23545,7 @@ local function relink_take_source(request)
       scheme = take_ref:match("^take:([^:]+):") or "index",
       value = take_ref:match("^take:[^:]+:(.+)$") or "0",
     },
-  }, {
-    kind = "file",
-    ref = READ_B_MEDIA.file_ref_for_path(path_value),
-    identity = { scheme = "path", value = path_value },
-  })
+  }, file_object_ref)
 end
 return {
   exports = { list_folder_media_files = list_folder_media_files, import_file_to_track = import_file_to_track, import_file_section_to_track = import_file_section_to_track, relink_take_source = relink_take_source },
@@ -33477,6 +34502,27 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       })
     end
   end
+  -- E3 media write path/budget preflight must terminate before any Undo open
+  -- or REAPER mutation. Pure validation only (no EnumProjects / Undo_*).
+  local e3_media_write_capability = capability == "media.import_file_to_track"
+    or capability == "media.import_file_section_to_track"
+    or capability == "media.relink_take_source"
+  if e3_media_write_capability and phase_may_mutate then
+    local preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    if preflight_ok ~= true then
+      local failure = preflight_result or {
+        code = "PARAMS_INVALID",
+        message = "E3 media write preflight failed.",
+        recoverable = true,
+        details = { zero_write = true },
+      }
+      return bridge_error_envelope(request, failure.code or "PARAMS_INVALID", failure.message or "E3 media write preflight failed.", {
+        recoverable = failure.recoverable ~= false,
+        started_at = started_at,
+        details = failure.details or { zero_write = true },
+      })
+    end
+  end
   request.__openreaper_undo_phase = {
     skip_undo = (not phase_may_mutate) or selection_only_no_content_undo,
     require_project_identity = d30_write_capability and phase_may_mutate and not selection_only_no_content_undo,
@@ -33490,6 +34536,19 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       started_at = started_at,
       details = {
         blocker = "required_undo_project_identity_unavailable",
+        zero_write = true,
+      },
+    })
+  end
+  -- E3 required-Undo writes must not enter the handler when both Undo_BeginBlock2
+  -- and fallback Undo_BeginBlock failed (zero-write fail-closed before mutation).
+  if e3_media_write_capability and phase_may_mutate and request.__openreaper_undo_block_open ~= true then
+    request.__openreaper_undo_phase = nil
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before E3 media mutation.", {
+      recoverable = true,
+      started_at = started_at,
+      details = {
+        blocker = "required_undo_begin_failed",
         zero_write = true,
       },
     })

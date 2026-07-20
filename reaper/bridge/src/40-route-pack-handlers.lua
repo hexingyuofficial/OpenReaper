@@ -1673,6 +1673,27 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       })
     end
   end
+  -- E3 media write path/budget preflight must terminate before any Undo open
+  -- or REAPER mutation. Pure validation only (no EnumProjects / Undo_*).
+  local e3_media_write_capability = capability == "media.import_file_to_track"
+    or capability == "media.import_file_section_to_track"
+    or capability == "media.relink_take_source"
+  if e3_media_write_capability and phase_may_mutate then
+    local preflight_ok, preflight_result = READ_B_MEDIA.preflight_mutation_write(request)
+    if preflight_ok ~= true then
+      local failure = preflight_result or {
+        code = "PARAMS_INVALID",
+        message = "E3 media write preflight failed.",
+        recoverable = true,
+        details = { zero_write = true },
+      }
+      return bridge_error_envelope(request, failure.code or "PARAMS_INVALID", failure.message or "E3 media write preflight failed.", {
+        recoverable = failure.recoverable ~= false,
+        started_at = started_at,
+        details = failure.details or { zero_write = true },
+      })
+    end
+  end
   request.__openreaper_undo_phase = {
     skip_undo = (not phase_may_mutate) or selection_only_no_content_undo,
     require_project_identity = d30_write_capability and phase_may_mutate and not selection_only_no_content_undo,
@@ -1686,6 +1707,19 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
       started_at = started_at,
       details = {
         blocker = "required_undo_project_identity_unavailable",
+        zero_write = true,
+      },
+    })
+  end
+  -- E3 required-Undo writes must not enter the handler when both Undo_BeginBlock2
+  -- and fallback Undo_BeginBlock failed (zero-write fail-closed before mutation).
+  if e3_media_write_capability and phase_may_mutate and request.__openreaper_undo_block_open ~= true then
+    request.__openreaper_undo_phase = nil
+    return bridge_error_envelope(request, "COMMAND_FAILED", "Required Undo block could not be opened before E3 media mutation.", {
+      recoverable = true,
+      started_at = started_at,
+      details = {
+        blocker = "required_undo_begin_failed",
         zero_write = true,
       },
     })

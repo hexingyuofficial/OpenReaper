@@ -57,6 +57,14 @@ export const WAVE2A_MEDIA_TEMPLATES = deepFreeze([
           include_metadata_keys: true,
         },
       },
+      {
+        name: "probe_long_unicode_path",
+        summary: "Probe a long multi-segment path with spaces and Chinese characters as full identity.",
+        input: {
+          path: "/Users/Shared/OpenReaper/library session 演示资料/nested folder 层级/deep/more nested 路径段/path segment with spaces and 中文音频素材_abcdefghijklmnopqrstuvwxyz_0123456789_padding_segment_for_identity_roundtrip_extra_bytes/path segment with spaces and 中文音频素材_abcdefghijklmnopqrstuvwxyz_0123456789_padding_segment_for_identity_roundtrip_extra_bytes/clip 源文件 final.wav",
+          include_metadata_keys: false,
+        },
+      },
     ],
   }),
   readDescriptor({

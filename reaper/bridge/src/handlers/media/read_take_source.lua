@@ -11,11 +11,27 @@ local function read_take_source(request)
       take_ref = READ_B_MEDIA.take_ref_string(take),
     })
   end
-  local filename = READ_B_MEDIA.source_filename(source)
+  local filename = READ_B_MEDIA.source_filename_raw(source)
+  local file_ref = nil
+  if filename ~= "" then
+    local path, budget_error = READ_B_MEDIA.ensure_read_identity_budget(request, filename, 2)
+    if not path then
+      return nil, budget_error
+    end
+    file_ref = READ_B_MEDIA.file_ref_for_path(path)
+    if not file_ref then
+      return READ_B_MEDIA.handler_error("PARAMS_INVALID", "Take source filename is invalid for canonical absolute file identity.", {
+        take_ref = READ_B_MEDIA.take_ref_string(take),
+        path = READ_B_MEDIA.display_path(filename, 240),
+        path_bytes = #filename,
+      })
+    end
+    filename = path
+  end
   local length, _ = READ_B_MEDIA.source_length(source)
   local summary = {
     take_ref = READ_B_MEDIA.take_ref_string(take),
-    file_ref = filename ~= "" and READ_B_MEDIA.file_ref_for_path(filename) or JSON_NULL,
+    file_ref = file_ref or JSON_NULL,
     source_type = READ_B_MEDIA.source_type(source),
     filename = filename,
     length_seconds = length,

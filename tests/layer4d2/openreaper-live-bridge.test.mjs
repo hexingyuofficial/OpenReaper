@@ -2414,3 +2414,1388 @@ assert(calls.actions[41929] == 1)
 `);
   });
 });
+
+const E3_LONG_PATH = [
+  "/Users/Shared/OpenReaper",
+  "library session 演示资料",
+  "nested folder 层级",
+  "deep",
+  "more nested 路径段",
+  "path segment with spaces and 中文音频素材_abcdefghijklmnopqrstuvwxyz_0123456789_padding_segment_for_identity_roundtrip_extra_bytes",
+  "path segment with spaces and 中文音频素材_abcdefghijklmnopqrstuvwxyz_0123456789_padding_segment_for_identity_roundtrip_extra_bytes",
+  "clip 源文件 final.wav",
+].join("/");
+
+function loadActualProductE3MediaCompositionSources() {
+  const kernelSource = readFileSync(new URL("../../reaper/bridge/src/00-bridge-kernel.lua", import.meta.url), "utf8");
+  const envelopeSource = readFileSync(new URL("../../reaper/bridge/src/20-bridge-envelope-kernel.lua", import.meta.url), "utf8");
+  const policySource = readFileSync(new URL("../../reaper/bridge/src/35-route-policy.lua", import.meta.url), "utf8");
+  const routeSource = readFileSync(new URL("../../reaper/bridge/src/40-route-pack-handlers.lua", import.meta.url), "utf8");
+  const probeSource = readFileSync(new URL("../../reaper/bridge/src/handlers/media/probe_file.lua", import.meta.url), "utf8");
+  const takeSource = readFileSync(new URL("../../reaper/bridge/src/handlers/media/read_take_source.lua", import.meta.url), "utf8");
+  const projectSource = readFileSync(new URL("../../reaper/bridge/src/handlers/media/read_project_media_files.lua", import.meta.url), "utf8");
+  const e3Source = readFileSync(new URL("../../reaper/bridge/src/handlers/media/e3_media_route.lua", import.meta.url), "utf8");
+
+  // Product JSON encode (ESCAPES through json.encode) and decode (parse_error through json.decode).
+  const jsonEncodeKernel = extractProductLua(kernelSource, "local ESCAPES = {", "\nlocal function now_iso");
+  const jsonDecodeKernel = extractProductLua(kernelSource, "local function parse_error(message, position)", "\nlocal ESCAPES = {");
+  const jsonKernel = `${jsonDecodeKernel}\n${jsonEncodeKernel}`;
+  const envelopeKernel = extractProductLua(
+    envelopeSource,
+    "local function safe_budget(request)",
+    "\nlocal FIXED_FAMILIES = {",
+  );
+  const fixedFamiliesPacks = extractProductLua(
+    envelopeSource,
+    "local FIXED_FAMILIES = {",
+    "\nlocal WORKFLOW_SHAPED_IDS = {",
+  );
+  const e3Caps = extractProductLua(
+    policySource,
+    "local E3_MEDIA_ROUTE_CAPABILITIES = {",
+    "\nlocal E4_ITEM_ROUTE_CAPABILITIES = {",
+  );
+  const e3CapFn = extractProductLua(
+    policySource,
+    "local function e3_media_route_capability(request, operation_key)",
+    "\nlocal function e4_item_route_capability(request, operation_key)",
+  );
+  const templateWrite = extractProductLua(
+    policySource,
+    "local function template_execute_write_capability(request, operation_key)",
+    "\nlocal function required_undo_capability(request, operation_key)",
+  );
+  const requiredUndoFn = extractProductLua(
+    policySource,
+    "local function required_undo_capability(request, operation_key)",
+    "\nlocal function clear_required_undo_project_handle(request)",
+  );
+  const undoOpenClose = extractProductLua(
+    policySource,
+    "local function clear_required_undo_project_handle(request)",
+    "\nlocal function validate_request(request)",
+  );
+  const validateRequestFn = extractProductLua(
+    policySource,
+    "local function validate_request(request)",
+    null,
+  );
+  const e3HandlersTable = extractProductLua(
+    routeSource,
+    "local E3_MEDIA_ROUTE_HANDLERS = {",
+    "\nlocal E4_ITEM_ROUTE_HANDLERS = {",
+  );
+  const dispatchTemplate = extractProductLua(
+    routeSource,
+    "local function dispatch_template_execute(request, resume_continuation)",
+    "\nlocal ALLOWED_OPERATIONS = {",
+  );
+  const allowedOps = extractProductLua(
+    routeSource,
+    "local ALLOWED_OPERATIONS = {",
+    "\nlocal BRIDGE_INTERNAL_CONTINUATION_CONTRACT = ",
+  );
+  const dispatchRequest = extractProductLua(
+    routeSource,
+    'local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"',
+    null,
+  );
+
+  assert.match(requiredUndoFn, /template_execute_write_capability/);
+  assert.match(templateWrite, /e3_media_route_capability/);
+  assert.match(dispatchTemplate, /E3_MEDIA_ROUTE_HANDLERS/);
+  assert.match(e3HandlersTable, /import_file_to_track/);
+  assert.match(routeSource, /READ_B_MEDIA\.preflight_mutation_write/);
+  assert.match(routeSource, /required_undo_begin_failed/);
+  assert.match(probeSource, /function READ_B_MEDIA\.preflight_mutation_write/);
+  assert.match(probeSource, /complete_success_envelope_fits|success_envelope_bytes/);
+  assert.match(dispatchRequest, /function dispatch_request/);
+  assert.match(validateRequestFn, /Bridge request contract must be foundation\.bridge\.v1/);
+  assert.match(validateRequestFn, /E3 media route write requests must use undo\.mode required/);
+
+  const nilCapHelpers = `
+ARTIFACT_PRODUCING_OPERATIONS = {}
+local function safe_write_a_capability() return nil end
+local function e4_item_route_capability() return nil end
+local function e5_routing_write_capability() return nil end
+local function e5_automation_write_capability() return nil end
+local function e2_fx_b1_write_capability() return nil end
+local function d6_project_tempo_write_capability() return nil end
+local function d9_tracks_mixer_write_capability() return nil end
+local function d11_project_marker_region_capability() return nil end
+local function d12_transport_safe_capability() return nil end
+local function d13_items_core_write_capability() return nil end
+local function d14_items_delete_capability() return nil end
+local function d15_items_source_phase_capability() return nil end
+local function d16_tracks_org_capability() return nil end
+local function d17_midi_edit_capability() return nil end
+local function d22_render_settings_write_capability() return nil end
+local function d28_small_write_capability() return nil end
+local function d29_render_settings_write_capability() return nil end
+local function d29_render_output_metadata_operation() return nil end
+local function d29_render_job_operation() return nil end
+local function d30_project_container_capability() return nil end
+local function alpha3_2c3bc_project_file_save_capability() return nil end
+`;
+  const emptyHandlerTables = `
+local SAFE_WRITE_A_HANDLERS = {}
+local E4_ITEM_ROUTE_HANDLERS = {}
+local E5_ROUTING_WRITE_HANDLERS = {}
+local E5_AUTOMATION_WRITE_HANDLERS = {}
+local E2_FX_B1_WRITE_HANDLERS = {}
+local D6_PROJECT_TEMPO_WRITE_HANDLERS = {}
+local D9_TRACKS_MIXER_WRITE_HANDLERS = {}
+local D11_PROJECT_MARKER_REGION_HANDLERS = {}
+local D12_TRANSPORT_SAFE_HANDLERS = {}
+local D13_ITEMS_CORE_WRITE_HANDLERS = {}
+local D14_ITEMS_DELETE_HANDLERS = {}
+local D15_ITEMS_SOURCE_PHASE_HANDLERS = {}
+local D16_TRACKS_ORG_HANDLERS = {}
+local D17_MIDI_EDIT_HANDLERS = {}
+local D22_RENDER_SETTINGS_WRITE_HANDLERS = {}
+local D28_SMALL_WRITE_HANDLERS = {}
+local D29_RENDER_SETTINGS_WRITE_HANDLERS = {}
+local D30_PROJECT_CONTAINER_HANDLERS = {}
+local ALPHA3_2C3BC_PROJECT_FILE_SAVE_HANDLERS = {}
+local function handler_error(code, message, details)
+  return nil, { code = code, message = message, details = details or {}, recoverable = true }
+end
+local function set_render_sample_rate() error("unexpected non-E3 handler") end
+local function set_render_format() error("unexpected non-E3 handler") end
+local function d31_render_targets() error("unexpected non-E3 handler") end
+local function create_delivery_report() error("unexpected non-E3 handler") end
+local function create_layer_report() error("unexpected non-E3 handler") end
+`;
+
+  let productLua = [
+    jsonKernel,
+    envelopeKernel,
+    fixedFamiliesPacks,
+    e3Caps,
+    e3CapFn,
+    nilCapHelpers,
+    templateWrite,
+    requiredUndoFn,
+    undoOpenClose,
+    validateRequestFn,
+    probeSource,
+    takeSource,
+    projectSource,
+    e3Source,
+    emptyHandlerTables,
+    e3HandlersTable,
+    dispatchTemplate,
+    allowedOps,
+    dispatchRequest,
+  ].join("\n");
+
+  for (const name of [
+    "required_undo_capability",
+    "open_required_undo_block",
+    "close_required_undo_block",
+    "dispatch_template_execute",
+    "dispatch_request",
+    "e3_media_route_capability",
+    "validate_request",
+  ]) {
+    productLua = productLua.replaceAll(`local function ${name}`, `function ${name}`);
+  }
+  productLua = productLua.replace("local ALLOWED_OPERATIONS = {", "ALLOWED_OPERATIONS = {");
+  productLua = productLua.replace("local E3_MEDIA_ROUTE_HANDLERS = {", "E3_MEDIA_ROUTE_HANDLERS = {");
+  productLua = productLua.replace("local FIXED_FAMILIES = {", "FIXED_FAMILIES = {");
+  productLua = productLua.replace("local FIXED_PACKS = {", "FIXED_PACKS = {");
+  productLua = productLua.replace(
+    'local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"',
+    'BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"',
+  );
+  productLua = "json = {}\n" + productLua;
+  productLua = productLua.replace("local ESCAPES = {", "ESCAPES = {");
+  // Hoist product decode helpers so json.decode can call them across the extracted chunk.
+  for (const name of [
+    "parse_error",
+    "skip_ws",
+    "parse_string",
+    "parse_number",
+    "parse_array",
+    "parse_object",
+    "parse_value",
+  ]) {
+    productLua = productLua.replaceAll(`local function ${name}`, `function ${name}`);
+  }
+  productLua = productLua.replace(
+    "function json.encode(value)\n  return encode_value(value)\nend",
+    "function json.encode(value)\n  return encode_value(value)\nend\n_G.json = json",
+  );
+
+  const loopSource = readFileSync(new URL("../../reaper/bridge/src/90-file-transport-loop.lua", import.meta.url), "utf8");
+  return { productLua, policySource, routeSource, probeSource, e3Source, validateRequestFn, loopSource };
+}
+
+function runActualProductE3MediaCompositionLua(body, { withTransport = false } = {}) {
+  const sources = loadActualProductE3MediaCompositionSources();
+  const env = `
+ACTIVE_OWNER = "test-owner"
+ACTIVE_GENERATION = 1
+CONTRACT = "foundation.bridge.v1"
+DEFAULT_BUDGET = { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 }
+JSON_NULL = {}
+JSON_ARRAY_MT = { __openreaper_json_array = true }
+function json_array(values) return setmetatable(values or {}, JSON_ARRAY_MT) end
+function is_json_array(value) return type(value) == "table" and getmetatable(value) == JSON_ARRAY_MT end
+function is_object(value) return type(value) == "table" and value ~= JSON_NULL and not is_json_array(value) end
+function is_string(value) return type(value) == "string" and value:match("%S") ~= nil end
+function is_non_negative_integer(value) return type(value) == "number" and value >= 0 and value == math.floor(value) end
+function is_request_id(value) return type(value) == "string" and value:match("^cmd_[A-Za-z0-9_]+$") ~= nil end
+json = json or {}
+function bounded_string(value, max_length)
+  local text = tostring(value or "")
+  local limit = max_length or 240
+  if #text <= limit then return text end
+  return text:sub(1, limit - 3) .. "..."
+end
+function first_number(...) for i=1,select("#",...) do local v=select(i,...); if type(v)=="number" then return v end end end
+function first_string(...) for i=1,select("#",...) do local v=select(i,...); if type(v)=="string" then return v end end end
+function now_iso() return "2026-07-20T00:00:00.000Z" end
+function path_join(base, child) return base .. "/" .. child end
+function result_id_from_filename(filename) return string.gsub(filename, "%.json$", "") end
+function ensure_directory() return true end
+function write_bridge_heartbeat() return true end
+function log(message) logs[#logs + 1] = tostring(message) end
+logs = {}
+TRANSPORT_DIR = "/transport"
+REQUESTS_DIR = "/requests"
+RESULTS_DIR = "/results"
+CLAIMS_DIR = "/claims"
+POLL_INTERVAL_SECONDS = 0.10
+HEARTBEAT_INTERVAL_SECONDS = 0.50
+files = {}
+requests = {}
+results = {}
+writes = {}
+write_failures = {}
+file_exists_calls = {}
+read_calls = {}
+request_objects = {}
+decoded_request_order = {}
+decoded_request_tables = {}
+decoded_request_cache_at_decode = {}
+files_list = {}
+now = 0
+deferred_callback = nil
+force_undo_begin_fail = false
+undo_begins = {}
+undo_ends = {}
+open_undo_handle = nil
+mutation_calls = {}
+enum_project_calls = 0
+existing_files = {}
+folder_files = {}
+media_project = { path = "/session/Media.RPP", tracks = { { guid = "{TRACK-E3}" } }, items = {} }
+current_project = media_project
+function record_mutation(name)
+  mutation_calls[#mutation_calls + 1] = name
+end
+function call_reaper(name, ...)
+  if not reaper or type(reaper[name]) ~= "function" then return false end
+  return pcall(reaper[name], ...)
+end
+function file_exists(path_value)
+  file_exists_calls[path_value] = (file_exists_calls[path_value] or 0) + 1
+  return existing_files[path_value] == true or results[path_value] == true or requests[path_value] ~= nil or files[path_value] == true
+end
+function read_file(path)
+  read_calls[path] = (read_calls[path] or 0) + 1
+  if requests[path] == nil then return nil, "open_failed" end
+  return requests[path]
+end
+function write_file_atomic(path, content)
+  if (write_failures[path] or 0) > 0 then
+    write_failures[path] = write_failures[path] - 1
+    return false, "fixture_write_failed"
+  end
+  writes[path] = content
+  if string.match(path, "^/claims/") then
+    requests[path] = content
+  else
+    results[path] = true
+  end
+  return true
+end
+reaper = {}
+reaper.EnumProjects = function(index)
+  enum_project_calls = enum_project_calls + 1
+  if index == -1 then return current_project, current_project.path or "" end
+  return nil, ""
+end
+reaper.Undo_BeginBlock2 = function(project)
+  -- Product call_reaper wraps with pcall: only a hard failure yields open false.
+  if force_undo_begin_fail then error("forced Undo_BeginBlock2 failure") end
+  open_undo_handle = project
+  undo_begins[#undo_begins + 1] = { api = "Undo_BeginBlock2", project = project }
+end
+reaper.Undo_EndBlock2 = function(project, label, flags)
+  undo_ends[#undo_ends + 1] = { api = "Undo_EndBlock2", project = project, label = label, flags = flags }
+  open_undo_handle = nil
+end
+reaper.Undo_BeginBlock = function()
+  if force_undo_begin_fail then error("forced Undo_BeginBlock failure") end
+  open_undo_handle = current_project
+  undo_begins[#undo_begins + 1] = { api = "Undo_BeginBlock", project = current_project }
+end
+reaper.Undo_EndBlock = function(label, flags)
+  undo_ends[#undo_ends + 1] = { api = "Undo_EndBlock", project = current_project, label = label, flags = flags }
+  open_undo_handle = nil
+end
+reaper.GetTrack = function(proj, index)
+  return media_project.tracks[index + 1]
+end
+reaper.GetTrackGUID = function(track) return track and track.guid or nil end
+reaper.GetMediaTrackInfo_Value = function(track, key)
+  if key == "IP_TRACKNUMBER" then
+    for i, candidate in ipairs(media_project.tracks or {}) do
+      if candidate == track then return i end
+    end
+    return 1
+  end
+  return 0
+end
+reaper.CountTracks = function() return #media_project.tracks end
+reaper.CountMediaItems = function() return #(media_project.items or {}) end
+reaper.GetMediaItem = function(_, index) return (media_project.items or {})[index + 1] end
+reaper.CountTakes = function(item) return item and #(item.takes or {}) or 0 end
+reaper.GetTake = function(item, index) return item and (item.takes or {})[index + 1] end
+reaper.GetActiveTake = function(item) return item and item.takes and item.takes[1] or nil end
+reaper.CountSelectedMediaItems = function() return 0 end
+reaper.GetSelectedMediaItem = function() return nil end
+reaper.SetMediaItemSelected = function() end
+reaper.UpdateArrange = function() end
+reaper.UpdateItemInProject = function() end
+reaper.BR_GetMediaItemGUID = function(item) return item and item.guid or nil end
+reaper.GetSetMediaItemInfo_String = function(item, key, value, setNewValue)
+  if key == "GUID" then return true, true, item and item.guid or "" end
+  return false
+end
+reaper.BR_GetMediaItemTakeGUID = function(take) return take and take.guid or nil end
+reaper.GetSetMediaItemTakeInfo_String = function(take, key, value, setNewValue)
+  if key == "GUID" then return true, true, take and take.guid or "" end
+  return false
+end
+reaper.GetMediaItemTake_Source = function(take)
+  return take and take.source or nil
+end
+reaper.GetMediaSourceFileName = function(source)
+  return source and source.path or ""
+end
+reaper.GetMediaSourceType = function(source) return source and source.source_type or "WAVE" end
+reaper.GetMediaSourceLength = function(source) return source and source.length or 1.0, false end
+reaper.GetMediaSourceNumChannels = function(source) return source and source.channels or 2 end
+reaper.PCM_Source_CreateFromFile = function(path_value)
+  record_mutation("PCM_Source_CreateFromFile")
+  if existing_files[path_value] ~= true then return nil end
+  return { path = path_value, source_type = "WAVE", length = 2.0, channels = 2 }
+end
+reaper.PCM_Source_Destroy = function() end
+reaper.AddMediaItemToTrack = function(track)
+  record_mutation("AddMediaItemToTrack")
+  local item = { guid = "{ITEM-E3-" .. tostring(#(media_project.items or {}) + 1) .. "}", takes = {}, track = track }
+  media_project.items = media_project.items or {}
+  media_project.items[#media_project.items + 1] = item
+  return item
+end
+reaper.AddTakeToMediaItem = function(item)
+  record_mutation("AddTakeToMediaItem")
+  local take = { guid = "{TAKE-E3-" .. tostring(#(item.takes or {}) + 1) .. "}", source = nil }
+  item.takes = item.takes or {}
+  item.takes[#item.takes + 1] = take
+  return take
+end
+reaper.SetMediaItemTake_Source = function(take, source)
+  record_mutation("SetMediaItemTake_Source")
+  take.source = source
+end
+reaper.SetMediaItemInfo_Value = function()
+  record_mutation("SetMediaItemInfo_Value")
+end
+reaper.SetMediaItemTakeInfo_Value = function()
+  record_mutation("SetMediaItemTakeInfo_Value")
+end
+reaper.GetMediaItemTake_Item = function(take)
+  for _, item in ipairs(media_project.items or {}) do
+    for _, candidate in ipairs(item.takes or {}) do
+      if candidate == take then return item end
+    end
+  end
+  return nil
+end
+reaper.EnumerateFiles = function(directory, index)
+  if directory == REQUESTS_DIR then
+    return files_list and files_list[index + 1] or nil
+  end
+  if directory == CLAIMS_DIR then
+    local names = {}
+    for path in pairs(requests) do
+      local name = string.match(path, "^/claims/(.+)$")
+      if name then names[#names + 1] = name end
+    end
+    table.sort(names)
+    return names[index + 1]
+  end
+  local files = folder_files[directory]
+  if not files then return nil end
+  return files[index + 1]
+end
+reaper.time_precise = function() return now end
+reaper.defer = function(callback) deferred_callback = callback end
+os.remove = function(path) requests[path] = nil return true end
+function run_poll(at)
+  now = at
+  assert(type(deferred_callback) == "function")
+  local callback = deferred_callback
+  deferred_callback = nil
+  callback()
+end
+function abi_base(id, family, name, pack_id, capability, risk)
+  local req = {
+    contract = CONTRACT,
+    id = id,
+    created_at = "2026-07-20T00:00:00.000Z",
+    timeout_ms = 5000,
+    client = { id = "openreaper-e3-composition", session_id = "session-e3-c3a" },
+    bridge = { expected_owner = ACTIVE_OWNER, expected_generation = ACTIVE_GENERATION },
+    operation = { family = family, name = name },
+    pack = { id = pack_id, capability = capability, risk = risk },
+    params = {},
+    refs = json_array({}),
+    verification = { mode = "none", checks = json_array({}) },
+    artifacts = { allow = false },
+    budget = { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 },
+  }
+  request_objects[id] = req
+  return req
+end
+function make_e3_write_request(id, capability, path_value, extra_params, extra_refs)
+  local refs = json_array({
+    { kind = "track", ref = "track:index:0", identity = { scheme = "index", value = "0" } },
+    { kind = "file", ref = "file:path:" .. path_value, identity = { scheme = "path", value = path_value } },
+  })
+  if capability == "media.relink_take_source" then
+    refs = json_array({
+      { kind = "take", ref = "take:index:0", identity = { scheme = "index", value = "0" } },
+      { kind = "file", ref = "file:path:" .. path_value, identity = { scheme = "path", value = path_value } },
+    })
+  end
+  if extra_refs then
+    for i = 1, #extra_refs do refs[#refs + 1] = extra_refs[i] end
+  end
+  local req = abi_base(id, "run_command", "template.execute", "media", capability, "write")
+  req.params = extra_params or { position_seconds = 0 }
+  req.refs = refs
+  req.undo = { mode = "required", label = "OpenReaper E3 media composition" }
+  return req
+end
+function make_e3_read_request(id, family_name, params, budget)
+  local req = abi_base(id, "query_state", family_name, "media", family_name, "read")
+  req.params = params or {}
+  req.undo = { mode = "none" }
+  if budget then req.budget = budget end
+  return req
+end
+`;
+  const transportBind = withTransport
+    ? `
+-- Real product json.decode (from 00-bridge-kernel) produces fresh tables from serialized request files.
+-- Wrap only to record decode order/identity; never return request_objects stubs.
+local _product_decode = json.decode
+json.decode = function(value)
+  local decoded = _product_decode(value)
+  if is_object(decoded) and type(decoded.id) == "string" and decoded.id:match("^cmd_") then
+    decoded_request_order[#decoded_request_order + 1] = decoded.id
+    decoded_request_tables[#decoded_request_tables + 1] = decoded
+    decoded_request_cache_at_decode[decoded.id] = decoded.__openreaper_media_target ~= nil
+  end
+  return decoded
+end
+`
+    : "";
+  // Product loop auto-starts on load when TRANSPORT_DIR is set; for tests we only want
+  // explicit run_poll, so strip the auto-start tail and expose poll_once/bridge_loop.
+  let loopSource = "";
+  if (withTransport) {
+    loopSource = sources.loopSource
+      .replace(/local function poll_once/, "function poll_once")
+      .replace(/local function bridge_loop/, "function bridge_loop")
+      .replace(
+        /math\.randomseed\(os\.time\(\)\)[\s\S]*$/,
+        `
+math.randomseed(os.time())
+function start_e3_transport_loop_for_test()
+  snapshot_startup_orphan_claims()
+  next_heartbeat_at = monotonic_time() + HEARTBEAT_INTERVAL_SECONDS
+  bridge_loop()
+end
+`,
+      );
+  }
+  const full =
+    env +
+    "\n" +
+    sources.productLua +
+    "\n" +
+    transportBind +
+    "\n" +
+    (withTransport ? loopSource + "\n" : "") +
+    body +
+    "\nreturn true";
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const loadStatus = lauxlib.luaL_loadstring(state, to_luastring(full));
+  if (loadStatus !== lua.LUA_OK) {
+    throw new Error(`E3 composition Lua load failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  const callStatus = lua.lua_pcall(state, 0, 1, 0);
+  if (callStatus !== lua.LUA_OK) {
+    throw new Error(`E3 composition Lua execution failed: ${to_jsstring(lua.lua_tostring(state, -1))}`);
+  }
+  assert.equal(lua.lua_toboolean(state, -1), true);
+  lua.lua_close(state);
+  return sources;
+}
+
+describe("Alpha3.4-C3A actual product E3 media composition proof", () => {
+  it("loads product route policy, dispatch, E3 handlers, validate_request, and envelope serialization markers", () => {
+    const sources = loadActualProductE3MediaCompositionSources();
+    assert.match(sources.routeSource, /READ_B_MEDIA\.preflight_mutation_write/);
+    assert.match(sources.routeSource, /open_required_undo_block\(request, key\)/);
+    assert.match(sources.policySource, /function open_required_undo_block/);
+    assert.match(sources.probeSource, /function READ_B_MEDIA\.preflight_mutation_write/);
+    assert.match(sources.probeSource, /complete_success_envelope_fits|success_envelope_bytes/);
+    assert.match(sources.e3Source, /function list_folder_media_files/);
+    assert.match(sources.productLua, /function dispatch_request/);
+    assert.match(sources.productLua, /E3_MEDIA_ROUTE_HANDLERS/);
+    assert.match(sources.productLua, /function bridge_ok_envelope|bridge_ok_envelope/);
+    assert.match(sources.productLua, /function validate_request/);
+    assert.match(sources.validateRequestFn, /Bridge request contract must be foundation\.bridge\.v1/);
+  });
+
+  it("executes product validate_request for ABI-complete E3 requests and rejects incomplete ones", () => {
+    runActualProductE3MediaCompositionLua(`
+local short_path = "/tmp/openreaper-e3-valid.wav"
+existing_files[short_path] = true
+local ok_req = make_e3_write_request("cmd_e3_valid", "media.import_file_to_track", short_path)
+local valid, reason = validate_request(ok_req)
+assert(valid == true, "product validate_request must accept complete E3 request: " .. tostring(reason))
+local terminal = dispatch_request(ok_req, ok_req.id, nil, { started_at = now_iso() })
+assert(string.find(terminal, '"ok":true', 1, true) ~= nil, terminal)
+
+local bad = make_e3_write_request("cmd_e3_bad_contract", "media.import_file_to_track", short_path)
+bad.contract = "wrong.contract"
+local bad_terminal = dispatch_request(bad, bad.id, nil, { started_at = now_iso() })
+assert(string.find(bad_terminal, "REQUEST_INVALID", 1, true) ~= nil, bad_terminal)
+assert(string.find(bad_terminal, "foundation.bridge.v1", 1, true) ~= nil or string.find(bad_terminal, "contract", 1, true) ~= nil, bad_terminal)
+
+local bad_undo = make_e3_write_request("cmd_e3_bad_undo", "media.import_file_to_track", short_path)
+bad_undo.undo.mode = "none"
+local bad_undo_terminal = dispatch_request(bad_undo, bad_undo.id, nil, { started_at = now_iso() })
+assert(string.find(bad_undo_terminal, "REQUEST_INVALID", 1, true) ~= nil, bad_undo_terminal)
+`);
+  });
+
+  it("preflight failures open zero EnumProjects/Undo/mutation; success keeps required Undo", () => {
+    runActualProductE3MediaCompositionLua(`
+local long_path = ${JSON.stringify(E3_LONG_PATH)}
+local short_path = "/tmp/openreaper-e3-short.wav"
+existing_files[long_path] = true
+existing_files[short_path] = true
+
+-- Relative path fails before Undo.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+local rel_req = make_e3_write_request("cmd_e3_rel", "media.import_file_to_track", "relative/clip.wav")
+local rel_terminal = dispatch_request(rel_req, rel_req.id, nil, { started_at = now_iso() })
+assert(type(rel_terminal) == "string", rel_terminal)
+assert(string.find(rel_terminal, '"ok":false', 1, true) ~= nil, rel_terminal)
+assert(string.find(rel_terminal, "PARAMS_INVALID", 1, true) ~= nil or string.find(rel_terminal, "relative_path", 1, true) ~= nil, rel_terminal)
+assert(#undo_begins == 0 and #undo_ends == 0, "relative must not open Undo")
+assert(#mutation_calls == 0, "relative must not mutate")
+assert(enum_project_calls == 0, "relative preflight must not EnumProjects")
+
+-- Low response budget fails before Undo.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+local low_req = make_e3_write_request("cmd_e3_low", "media.import_file_to_track", long_path)
+low_req.budget.max_response_bytes = 1000
+local low_terminal = dispatch_request(low_req, low_req.id, nil, { started_at = now_iso() })
+assert(type(low_terminal) == "string", low_terminal)
+assert(string.find(low_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, low_terminal)
+assert(#undo_begins == 0 and #undo_ends == 0)
+assert(#mutation_calls == 0)
+assert(enum_project_calls == 0)
+
+-- Large request-echoed fields (undo label / verification checks / idempotency) fail pre-Undo.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+local echo_req = make_e3_write_request("cmd_e3_echo", "media.import_file_to_track", short_path)
+echo_req.undo.label = string.rep("L", 8000)
+echo_req.verification.checks = json_array({ string.rep("C", 4000), string.rep("D", 4000) })
+echo_req.idempotency_key = string.rep("K", 4000)
+echo_req.budget.max_response_bytes = 12000
+local echo_ok, echo_fail = READ_B_MEDIA.preflight_mutation_write(echo_req)
+assert(echo_ok == false, "preflight must reject oversized echoed fields")
+assert(echo_fail.code == "RESPONSE_TOO_LARGE", echo_fail and echo_fail.code or "nil")
+assert(echo_fail.details and echo_fail.details.blocker == "success_envelope_budget_insufficient", echo_fail and echo_fail.details and echo_fail.details.blocker or "nil")
+assert(echo_fail.details.zero_write == true)
+local echo_terminal = dispatch_request(echo_req, echo_req.id, nil, { started_at = now_iso() })
+assert(string.find(echo_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, echo_terminal)
+assert(#undo_begins == 0 and #mutation_calls == 0 and enum_project_calls == 0)
+
+-- Contradictory bad ref followed by valid ref fails closed.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+local bad_then_good = make_e3_write_request("cmd_e3_contra", "media.import_file_to_track", short_path)
+bad_then_good.refs = json_array({
+  { kind = "track", ref = "track:index:0", identity = { scheme = "index", value = "0" } },
+  { kind = "file", ref = "file:path:relative/bad.wav", identity = { scheme = "path", value = "relative/bad.wav" } },
+  { kind = "file", ref = "file:path:" .. short_path, identity = { scheme = "path", value = short_path } },
+})
+local contra_terminal = dispatch_request(bad_then_good, bad_then_good.id, nil, { started_at = now_iso() })
+assert(string.find(contra_terminal, '"ok":false', 1, true) ~= nil, contra_terminal)
+assert(#undo_begins == 0 and #mutation_calls == 0 and enum_project_calls == 0)
+
+-- Success path opens required Undo and mutates once.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+local ok_req = make_e3_write_request("cmd_e3_ok", "media.import_file_to_track", short_path)
+local ok_terminal = dispatch_request(ok_req, ok_req.id, nil, { started_at = now_iso() })
+assert(type(ok_terminal) == "string", ok_terminal)
+assert(string.find(ok_terminal, '"ok":true', 1, true) ~= nil, ok_terminal)
+assert(string.find(ok_terminal, short_path, 1, true) ~= nil, ok_terminal)
+assert(#undo_begins == 1 and #undo_ends == 1, "success must open/close required Undo")
+assert(#mutation_calls > 0)
+assert(enum_project_calls >= 1)
+`);
+  });
+
+  it("long-path import/section/relink succeed through real product composition", () => {
+    runActualProductE3MediaCompositionLua(`
+local long_path = ${JSON.stringify(E3_LONG_PATH)}
+existing_files[long_path] = true
+assert(#long_path > 240)
+
+-- Seed one take for relink.
+media_project.items = {
+  {
+    guid = "{ITEM-SEED}",
+    takes = { { guid = "{TAKE-SEED}", source = { path = "/tmp/old.wav", source_type = "WAVE", length = 1.0, channels = 2 } } },
+  },
+}
+existing_files["/tmp/old.wav"] = true
+
+local cases = {
+  { id = "cmd_e3_long_import", capability = "media.import_file_to_track", params = { position_seconds = 0 } },
+  { id = "cmd_e3_long_section", capability = "media.import_file_section_to_track", params = { position_seconds = 0, start_percent = 0.1, end_percent = 0.9 } },
+  { id = "cmd_e3_long_relink", capability = "media.relink_take_source", params = {} },
+}
+for _, case in ipairs(cases) do
+  undo_begins, undo_ends, mutation_calls = {}, {}, {}
+  local req = make_e3_write_request(case.id, case.capability, long_path, case.params)
+  req.budget.max_inline_value_bytes = 4096
+  local terminal = dispatch_request(req, req.id, nil, { started_at = now_iso() })
+  assert(type(terminal) == "string", case.capability .. " " .. tostring(terminal))
+  assert(string.find(terminal, '"ok":true', 1, true) ~= nil, case.capability .. " " .. terminal)
+  assert(string.find(terminal, long_path, 1, true) ~= nil, case.capability .. " missing full path")
+  assert(#undo_begins == 1 and #undo_ends == 1, case.capability .. " undo")
+  assert(#mutation_calls > 0, case.capability .. " mutations")
+end
+`);
+  });
+
+  it("low-budget take/project/folder/section fail closed without oversized success envelopes", () => {
+    runActualProductE3MediaCompositionLua(`
+local long_path = ${JSON.stringify(E3_LONG_PATH)}
+existing_files[long_path] = true
+media_project.items = {
+  {
+    guid = "{ITEM-LOW}",
+    takes = { { guid = "{TAKE-LOW}", source = { path = long_path, source_type = "WAVE", length = 1.5, channels = 2 } } },
+  },
+}
+folder_files["/Users/Shared/OpenReaper/library session 演示资料"] = { "clip 源文件 final.wav" }
+
+-- take source low inline
+local take_req = make_e3_read_request("cmd_e3_take_low", "media.take_source.read", { include_metadata_keys = false }, {
+  max_response_bytes = 65536, max_items = 50, max_inline_value_bytes = 64,
+})
+take_req.refs = json_array({ { kind = "take", ref = "take:index:0", identity = { scheme = "index", value = "0" } } })
+local take_terminal = dispatch_request(take_req, take_req.id, nil, { started_at = now_iso() })
+assert(string.find(take_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, take_terminal)
+
+-- project list single long identity cannot fit tiny response budget
+local proj_req = make_e3_read_request("cmd_e3_proj_low", "media.project_files.read", { include_offline = true, max_sources = 10 }, {
+  max_response_bytes = 80, max_items = 50, max_inline_value_bytes = 4096,
+})
+local proj_terminal = dispatch_request(proj_req, proj_req.id, nil, { started_at = now_iso() })
+assert(string.find(proj_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, proj_terminal)
+
+-- folder empty still validates folder_ref budget
+local empty_folder = "/Users/Shared/OpenReaper/empty media 文件夹"
+folder_files[empty_folder] = {}
+local folder_req = make_e3_read_request("cmd_e3_folder_low", "media.folder_media.list", {
+  folder_ref = "folder:path:" .. empty_folder, media_type = "any", limit = 10, offset = 0,
+}, { max_response_bytes = 65536, max_items = 50, max_inline_value_bytes = 20 })
+local folder_terminal = dispatch_request(folder_req, folder_req.id, nil, { started_at = now_iso() })
+assert(string.find(folder_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, folder_terminal)
+
+-- section import low response budget pre-undo
+undo_begins, mutation_calls = {}, {}
+local section_req = make_e3_write_request("cmd_e3_section_low", "media.import_file_section_to_track", long_path, {
+  position_seconds = 0, start_percent = 0.1, end_percent = 0.9,
+})
+section_req.budget.max_response_bytes = 1000
+local section_terminal = dispatch_request(section_req, section_req.id, nil, { started_at = now_iso() })
+assert(string.find(section_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, section_terminal)
+assert(#undo_begins == 0 and #mutation_calls == 0)
+`);
+  });
+
+  it("proves worst-case upper-bound exact terminal equality and long-GUID import/section success", () => {
+    runActualProductE3MediaCompositionLua(`
+local unknown_path = "/tmp/openreaper-e3-fit.unknownext"
+existing_files[unknown_path] = true
+local max_guid = READ_B_MEDIA.mutation_max_guid_value()
+if #max_guid ~= READ_B_MEDIA.mutation_guid_max_bytes() then error("LEN") end
+if READ_B_MEDIA.json_string_content_bytes(max_guid) ~= READ_B_MEDIA.mutation_guid_max_bytes() then
+  error("JSON_BYTES " .. tostring(READ_B_MEDIA.json_string_content_bytes(max_guid)))
+end
+if READ_B_MEDIA.identity_value_within_mutation_bound(max_guid) ~= true then error("MAX_GUID_BOUND") end
+-- Escaped-content bound: quote/backslash inflate JSON content beyond 240 raw-G budget.
+local quote_guid = string.rep('"', 130)
+if not (READ_B_MEDIA.json_string_content_bytes(quote_guid) > READ_B_MEDIA.mutation_guid_max_bytes()) then
+  error("QUOTE_BYTES " .. tostring(READ_B_MEDIA.json_string_content_bytes(quote_guid)))
+end
+if READ_B_MEDIA.identity_value_within_mutation_bound(quote_guid) ~= false then error("QUOTE_BOUND") end
+
+-- Worst-case real product success: max accepted GUID lengths + source_type unknown.
+media_project.tracks = { { guid = max_guid } }
+reaper.AddMediaItemToTrack = function(track)
+  record_mutation("AddMediaItemToTrack")
+  local item = { guid = max_guid, takes = {} }
+  media_project.items = media_project.items or {}
+  media_project.items[#media_project.items + 1] = item
+  return item
+end
+reaper.AddTakeToMediaItem = function(item)
+  record_mutation("AddTakeToMediaItem")
+  local take = { guid = max_guid, source = nil }
+  item.takes = item.takes or {}
+  item.takes[#item.takes + 1] = take
+  return take
+end
+
+local function make_worst(budget_bytes)
+  local r = make_e3_write_request("cmd_e3_worst", "media.import_file_to_track", unknown_path)
+  r.budget.max_response_bytes = budget_bytes
+  return r
+end
+
+-- Converge, then always re-dispatch at the converged bound (no early exit without execution).
+local bound = 1200
+for _ = 1, 16 do
+  media_project.items = {}
+  undo_begins, undo_ends, mutation_calls = {}, {}, {}
+  local req = make_worst(bound)
+  local probe = dispatch_request(req, req.id, nil, { started_at = now_iso() })
+  if type(probe) ~= "string" then error("PROBE_TYPE " .. type(probe)) end
+  if string.find(probe, '"ok":true', 1, true) then
+    if #probe == bound then
+      break
+    end
+    bound = #probe
+  else
+    local needed = tonumber(string.match(probe, '"required_response_bytes":(%d+)'))
+    if needed == nil then error("NEEDED_DIAG " .. probe:sub(1, 400)) end
+    bound = needed
+  end
+end
+media_project.items = {}
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+local terminal = dispatch_request(make_worst(bound), "cmd_e3_worst", nil, { started_at = now_iso() })
+if not (type(terminal) == "string" and string.find(terminal, '"ok":true', 1, true)) then
+  error("FINAL_OK_DIAG bound=" .. tostring(bound) .. " " .. tostring(terminal))
+end
+if not string.find(terminal, '"max_response_bytes":' .. tostring(bound), 1, true) then
+  error("MAX_BYTES_DIAG bound=" .. tostring(bound) .. " actual_len=" .. tostring(#terminal) .. " " .. tostring(terminal):sub(1, 400))
+end
+if #terminal ~= bound then
+  error("EQ_DIAG actual=" .. tostring(#terminal) .. " bound=" .. tostring(bound))
+end
+if not string.find(terminal, '"source_file_ref":"file:path:' .. unknown_path .. '"', 1, true) then
+  error("SOURCE_REF_DIAG " .. tostring(terminal):sub(1, 500))
+end
+if not string.find(terminal, max_guid, 1, true) then
+  error("GUID_DIAG missing max guid")
+end
+if not (#undo_begins == 1 and #mutation_calls > 0) then
+  error("UNDO_MUT_DIAG undo=" .. tostring(#undo_begins) .. " mut=" .. tostring(#mutation_calls) .. " term_len=" .. tostring(#terminal))
+end
+
+-- bound-1 rejects before Undo/write.
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+enum_project_calls = 0
+media_project.items = {}
+local reject_terminal = dispatch_request(make_worst(bound - 1), "cmd_e3_worst", nil, { started_at = now_iso() })
+if not (type(reject_terminal) == "string" and string.find(reject_terminal, "RESPONSE_TOO_LARGE", 1, true)) then
+  error("REJECT_DIAG " .. tostring(reject_terminal) .. " undo=" .. tostring(#undo_begins) .. " mut=" .. tostring(#mutation_calls))
+end
+if not (#undo_begins == 0 and #mutation_calls == 0 and enum_project_calls == 0) then
+  error("REJECT_COUNTS undo=" .. tostring(#undo_begins) .. " mut=" .. tostring(#mutation_calls) .. " enum=" .. tostring(enum_project_calls))
+end
+
+-- Quote/backslash/control GUID: escaped content exceeds bound → index fallback; stay under envelope.
+local bs = string.char(92)
+local special_guids = {
+  string.rep('"', 130),
+  string.rep(bs, 130),
+  string.rep(string.char(9), 130),
+  string.rep("Z", READ_B_MEDIA.mutation_guid_max_bytes() + 80),
+}
+local roomy = math.max(bound + 512, 4096)
+for si, special in ipairs(special_guids) do
+  if READ_B_MEDIA.identity_value_within_mutation_bound(special) ~= false then
+    error("SPECIAL_BOUND_DIAG idx=" .. tostring(si) .. " esc=" .. tostring(READ_B_MEDIA.json_string_content_bytes(special)))
+  end
+  media_project.tracks = { { guid = special } }
+  reaper.AddMediaItemToTrack = function(track)
+    record_mutation("AddMediaItemToTrack")
+    local item = { guid = special, takes = {} }
+    media_project.items = media_project.items or {}
+    media_project.items[#media_project.items + 1] = item
+    return item
+  end
+  reaper.AddTakeToMediaItem = function(item)
+    record_mutation("AddTakeToMediaItem")
+    local take = { guid = special, source = nil }
+    item.takes = item.takes or {}
+    item.takes[#item.takes + 1] = take
+    return take
+  end
+  for _, case in ipairs({
+    { id = "cmd_e3_sp_import", capability = "media.import_file_to_track", params = { position_seconds = 0 } },
+    { id = "cmd_e3_sp_section", capability = "media.import_file_section_to_track", params = { position_seconds = 0, start_percent = 0.1, end_percent = 0.9 } },
+  }) do
+    media_project.items = {}
+    undo_begins, mutation_calls = {}, {}
+    local req = make_e3_write_request(case.id, case.capability, unknown_path, case.params)
+    req.budget.max_response_bytes = roomy
+    local term = dispatch_request(req, req.id, nil, { started_at = now_iso() })
+    if not (type(term) == "string" and string.find(term, '"ok":true', 1, true)) then
+      error("IMPORT_DIAG " .. case.capability .. " " .. tostring(term))
+    end
+    if #term > roomy then error("IMPORT_SIZE " .. case.capability .. " " .. tostring(#term) .. ">" .. tostring(roomy)) end
+    if not string.find(term, '"track_ref":"track:index:0"', 1, true) then error("IMPORT_TRACK_IDX " .. case.capability .. " " .. term:sub(1, 300)) end
+    if not string.find(term, '"imported_item_refs":["item:index:0"]', 1, true) then error("IMPORT_ITEM_IDX " .. case.capability .. " " .. term:sub(1, 300)) end
+    if string.find(term, special, 1, true) then error("IMPORT_ECHO_SPECIAL " .. case.capability) end
+    if not (#undo_begins == 1 and #mutation_calls > 0) then error("IMPORT_UNDO " .. case.capability) end
+  end
+  media_project.items = {
+    {
+      guid = special,
+      takes = { { guid = special, source = { path = "/tmp/old.wav", source_type = "WAVE", length = 1.0, channels = 2 } } },
+    },
+  }
+  existing_files["/tmp/old.wav"] = true
+  undo_begins, mutation_calls = {}, {}
+  local relink = make_e3_write_request("cmd_e3_sp_relink", "media.relink_take_source", unknown_path, {})
+  relink.budget.max_response_bytes = roomy
+  local relink_term = dispatch_request(relink, relink.id, nil, { started_at = now_iso() })
+  if not (type(relink_term) == "string" and string.find(relink_term, '"ok":true', 1, true)) then
+    error("RELINK_DIAG " .. tostring(relink_term))
+  end
+  if #relink_term > roomy then error("RELINK_SIZE " .. tostring(#relink_term)) end
+  if not string.find(relink_term, '"take_ref":"take:index:0"', 1, true) then error("RELINK_TAKE_IDX " .. relink_term:sub(1, 300)) end
+  if not string.find(relink_term, '"source_type":"unknown"', 1, true) then error("RELINK_STYPE " .. relink_term:sub(1, 300)) end
+  if string.find(relink_term, special, 1, true) then error("RELINK_ECHO_SPECIAL") end
+  if not (#undo_begins == 1 and #mutation_calls > 0) then error("RELINK_UNDO") end
+end
+
+-- Tiny budget still rejects before Undo/write.
+undo_begins, mutation_calls = {}, {}
+enum_project_calls = 0
+media_project.items = {}
+media_project.tracks = { { guid = max_guid } }
+local tiny = make_e3_write_request("cmd_e3_long_tiny", "media.import_file_to_track", unknown_path, { position_seconds = 0 })
+tiny.budget.max_response_bytes = 900
+local tiny_term = dispatch_request(tiny, tiny.id, nil, { started_at = now_iso() })
+if not (type(tiny_term) == "string" and string.find(tiny_term, "RESPONSE_TOO_LARGE", 1, true)) then
+  error("TINY_DIAG " .. tostring(tiny_term))
+end
+if not (#undo_begins == 0 and #mutation_calls == 0 and enum_project_calls == 0) then
+  error("TINY_COUNTS")
+end
+
+-- Track identity unavailable before mutation (GUID over bound + enumeration fails): zero-write.
+media_project.tracks = { { guid = quote_guid } }
+reaper.GetMediaTrackInfo_Value = function() return 0 end
+reaper.CountTracks = function() return false end
+undo_begins, mutation_calls = {}, {}
+enum_project_calls = 0
+media_project.items = {}
+local enum_fail = make_e3_write_request("cmd_e3_enum_fail", "media.import_file_to_track", unknown_path, { position_seconds = 0 })
+enum_fail.budget.max_response_bytes = roomy
+local enum_term = dispatch_request(enum_fail, enum_fail.id, nil, { started_at = now_iso() })
+if not (type(enum_term) == "string" and string.find(enum_term, "track_identity_unavailable", 1, true)) then
+  error("ENUM_FAIL_DIAG " .. tostring(enum_term) .. " undo=" .. tostring(#undo_begins) .. " mut=" .. tostring(#mutation_calls))
+end
+if string.find(enum_term, "track:index:0", 1, true) then error("ENUM_IDX0 " .. enum_term:sub(1, 300)) end
+if string.find(enum_term, '"ok":true', 1, true) then error("ENUM_OK") end
+-- Pre-Undo fail-closed: zero Undo open and zero media mutation.
+if #undo_begins ~= 0 then error("ENUM_UNDO " .. tostring(#undo_begins)) end
+if #mutation_calls ~= 0 then error("ENUM_MUT " .. tostring(#mutation_calls)) end
+
+-- Restore track enumeration; item identity unavailable after mutation (GUID over bound + item enum fails).
+reaper.GetMediaTrackInfo_Value = function(track, key)
+  if key == "IP_TRACKNUMBER" then return 1 end
+  return 0
+end
+reaper.CountTracks = function() return #media_project.tracks end
+media_project.tracks = { { guid = max_guid } }
+reaper.AddMediaItemToTrack = function(track)
+  record_mutation("AddMediaItemToTrack")
+  local item = { guid = quote_guid, takes = {} }
+  media_project.items = media_project.items or {}
+  media_project.items[#media_project.items + 1] = item
+  return item
+end
+reaper.AddTakeToMediaItem = function(item)
+  record_mutation("AddTakeToMediaItem")
+  local take = { guid = max_guid, source = nil }
+  item.takes = item.takes or {}
+  item.takes[#item.takes + 1] = take
+  return take
+end
+reaper.CountMediaItems = function() return false end
+undo_begins, undo_ends, mutation_calls = {}, {}, {}
+open_undo_handle = nil
+media_project.items = {}
+local item_id_fail = make_e3_write_request("cmd_e3_item_id_fail", "media.import_file_to_track", unknown_path, { position_seconds = 0 })
+item_id_fail.budget.max_response_bytes = roomy
+local item_fail_term = dispatch_request(item_id_fail, item_id_fail.id, nil, { started_at = now_iso() })
+if not (type(item_fail_term) == "string" and string.find(item_fail_term, "item_identity_unavailable", 1, true)) then
+  error("ITEM_FAIL_DIAG " .. tostring(item_fail_term) .. " mutations=" .. tostring(#mutation_calls))
+end
+if string.find(item_fail_term, "item:index:0", 1, true) then error("ITEM_IDX0") end
+if not string.find(item_fail_term, '"zero_write":false', 1, true) then error("ITEM_ZW " .. item_fail_term:sub(1, 400)) end
+if not string.find(item_fail_term, '"recoverable":false', 1, true) then error("ITEM_REC " .. item_fail_term:sub(1, 400)) end
+if not string.find(item_fail_term, '"outcome":"unknown"', 1, true) then error("ITEM_OUTCOME " .. item_fail_term:sub(1, 400)) end
+if not (#mutation_calls > 0) then error("ITEM_MUT0") end
+if #undo_begins ~= 1 then error("ITEM_UNDO_BEGIN_COUNT " .. tostring(#undo_begins)) end
+if #undo_ends ~= 1 then error("ITEM_UNDO_END_COUNT " .. tostring(#undo_ends)) end
+if undo_begins[1].project ~= current_project and undo_begins[1].project ~= media_project then
+  error("ITEM_UNDO_BEGIN_PROJECT")
+end
+if undo_ends[1].project ~= undo_begins[1].project then error("ITEM_UNDO_PROJECT_MISMATCH") end
+if undo_begins[1].api ~= "Undo_BeginBlock2" and undo_begins[1].api ~= "Undo_BeginBlock" then
+  error("ITEM_UNDO_BEGIN_API " .. tostring(undo_begins[1].api))
+end
+if undo_ends[1].api ~= "Undo_EndBlock2" and undo_ends[1].api ~= "Undo_EndBlock" then
+  error("ITEM_UNDO_END_API " .. tostring(undo_ends[1].api))
+end
+-- Paired project-API or non-project-API close.
+if undo_begins[1].api == "Undo_BeginBlock2" and undo_ends[1].api ~= "Undo_EndBlock2" then
+  error("ITEM_UNDO_API_PAIR")
+end
+if undo_begins[1].api == "Undo_BeginBlock" and undo_ends[1].api ~= "Undo_EndBlock" then
+  error("ITEM_UNDO_API_PAIR_FALLBACK")
+end
+if open_undo_handle ~= nil then error("ITEM_UNDO_STILL_OPEN") end
+
+-- Take identity unavailable before relink: resolve via selected item succeeds, but
+-- over-bound GUID + CountMediaItems failure prevents take_ref_string (no fabricated index 0).
+local selected_take = { guid = quote_guid, source = { path = "/tmp/old.wav", source_type = "WAVE", length = 1.0, channels = 2 } }
+local selected_item = { guid = quote_guid, takes = { selected_take } }
+media_project.items = { selected_item }
+existing_files["/tmp/old.wav"] = true
+reaper.CountSelectedMediaItems = function() return 1 end
+reaper.GetSelectedMediaItem = function(_, index)
+  if index == 0 then return selected_item end
+  return nil
+end
+reaper.GetActiveTake = function(item)
+  if item == selected_item then return selected_take end
+  return nil
+end
+reaper.CountMediaItems = function() return false end
+undo_begins, mutation_calls = {}, {}
+enum_project_calls = 0
+local take_fail = make_e3_write_request("cmd_e3_take_id_fail", "media.relink_take_source", unknown_path, {})
+take_fail.refs = json_array({
+  { kind = "take", ref = "take:selected:0", identity = { scheme = "selected", value = "0" } },
+  { kind = "file", ref = "file:path:" .. unknown_path, identity = { scheme = "path", value = unknown_path } },
+})
+take_fail.budget.max_response_bytes = roomy
+local take_fail_term = dispatch_request(take_fail, take_fail.id, nil, { started_at = now_iso() })
+if not (type(take_fail_term) == "string" and string.find(take_fail_term, "take_identity_unavailable", 1, true)) then
+  error("TAKE_FAIL_DIAG " .. tostring(take_fail_term) .. " mutations=" .. tostring(#mutation_calls) .. " undo=" .. tostring(#undo_begins))
+end
+if string.find(take_fail_term, "take:index:0", 1, true) then error("TAKE_IDX0") end
+if string.find(take_fail_term, '"ok":true', 1, true) then error("TAKE_OK") end
+if #undo_begins ~= 0 then error("TAKE_UNDO " .. tostring(#undo_begins)) end
+if #mutation_calls ~= 0 then error("TAKE_MUT " .. tostring(#mutation_calls)) end
+`);
+  });
+  it("project/folder multi-row pages shrink at complete item boundaries with exact row membership", () => {
+    runActualProductE3MediaCompositionLua(`
+local paths = {
+  "/tmp/a-short.wav",
+  "/tmp/b-short.wav",
+  "/tmp/c-short.wav",
+  "/tmp/d-short.wav",
+}
+for _, path in ipairs(paths) do existing_files[path] = true end
+media_project.items = {}
+for index, path in ipairs(paths) do
+  media_project.items[#media_project.items + 1] = {
+    guid = "{ITEM-P" .. tostring(index) .. "}",
+    takes = { { guid = "{TAKE-P" .. tostring(index) .. "}", source = { path = path, source_type = "WAVE", length = 1.0, channels = 2 } } },
+  }
+end
+
+local roomy = make_e3_read_request("cmd_e3_page_roomy", "media.project_files.read", {
+  include_offline = true, max_sources = 10,
+}, { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 })
+local roomy_terminal = dispatch_request(roomy, roomy.id, nil, { started_at = now_iso() })
+assert(string.find(roomy_terminal, '"ok":true', 1, true) ~= nil, roomy_terminal)
+assert(string.find(roomy_terminal, '"source_count":4', 1, true) ~= nil, roomy_terminal)
+for _, path in ipairs(paths) do
+  assert(string.find(roomy_terminal, "file:path:" .. path, 1, true) ~= nil, "missing " .. path)
+end
+local roomy_bytes = #roomy_terminal
+
+-- Find a mid budget that returns fewer than 4 complete identity rows and sets truncated=true.
+local mid_budget = nil
+local mid_terminal = nil
+local mid_count = nil
+for budget = roomy_bytes - 1, 700, -5 do
+  local mid = make_e3_read_request("cmd_e3_page_mid", "media.project_files.read", {
+    include_offline = true, max_sources = 10,
+  }, { max_response_bytes = budget, max_items = 100, max_inline_value_bytes = 4096 })
+  local terminal = dispatch_request(mid, mid.id, nil, { started_at = now_iso() })
+  if type(terminal) == "string" and string.find(terminal, '"ok":true', 1, true)
+      and string.find(terminal, '"truncated":true', 1, true) then
+    local count = 0
+    for _, path in ipairs(paths) do
+      if string.find(terminal, "file:path:" .. path, 1, true) then
+        count = count + 1
+      end
+    end
+    if count >= 1 and count < 4 then
+      mid_budget = budget
+      mid_terminal = terminal
+      mid_count = count
+      break
+    end
+  end
+end
+assert(mid_terminal ~= nil and mid_count ~= nil, "must find a truncated multi-row page")
+assert(#mid_terminal <= mid_budget)
+assert(string.find(mid_terminal, '"truncated":true', 1, true) ~= nil)
+assert(string.find(mid_terminal, '"source_count":4', 1, true) ~= nil)
+-- Exact membership: first mid_count paths included; remaining excluded (handler order is discovery order).
+for index, path in ipairs(paths) do
+  local present = string.find(mid_terminal, "file:path:" .. path, 1, true) ~= nil
+  if index <= mid_count then
+    assert(present == true, "expected included row " .. path)
+  else
+    assert(present == false, "expected excluded row " .. path)
+  end
+end
+
+-- Folder multi-row paging with exact membership.
+local folder = "/tmp/openreaper-folder-page"
+folder_files[folder] = { "a-short.wav", "b-short.wav", "c-short.wav", "d-short.wav" }
+local folder_paths = {
+  folder .. "/a-short.wav",
+  folder .. "/b-short.wav",
+  folder .. "/c-short.wav",
+  folder .. "/d-short.wav",
+}
+for _, path in ipairs(folder_paths) do existing_files[path] = true end
+local folder_roomy = make_e3_read_request("cmd_e3_folder_roomy", "media.folder_media.list", {
+  folder_ref = "folder:path:" .. folder, media_type = "any", limit = 10, offset = 0,
+}, { max_response_bytes = 65536, max_items = 100, max_inline_value_bytes = 4096 })
+local folder_roomy_terminal = dispatch_request(folder_roomy, folder_roomy.id, nil, { started_at = now_iso() })
+assert(string.find(folder_roomy_terminal, '"ok":true', 1, true) ~= nil, folder_roomy_terminal)
+assert(string.find(folder_roomy_terminal, '"total_matching_count":4', 1, true) ~= nil, folder_roomy_terminal)
+assert(string.find(folder_roomy_terminal, '"row_count":4', 1, true) ~= nil, folder_roomy_terminal)
+local folder_roomy_bytes = #folder_roomy_terminal
+local folder_mid_terminal = nil
+local folder_mid_count = nil
+local folder_mid_budget = nil
+for budget = folder_roomy_bytes - 1, 900, -5 do
+  local mid = make_e3_read_request("cmd_e3_folder_mid", "media.folder_media.list", {
+    folder_ref = "folder:path:" .. folder, media_type = "any", limit = 10, offset = 0,
+  }, { max_response_bytes = budget, max_items = 100, max_inline_value_bytes = 4096 })
+  local terminal = dispatch_request(mid, mid.id, nil, { started_at = now_iso() })
+  if type(terminal) == "string" and string.find(terminal, '"ok":true', 1, true)
+      and string.find(terminal, '"truncated":true', 1, true) then
+    local count = 0
+    for _, path in ipairs(folder_paths) do
+      if string.find(terminal, "file:path:" .. path, 1, true) then
+        count = count + 1
+      end
+    end
+    if count >= 1 and count < 4 then
+      folder_mid_budget = budget
+      folder_mid_terminal = terminal
+      folder_mid_count = count
+      break
+    end
+  end
+end
+assert(folder_mid_terminal ~= nil, "must find truncated folder page")
+assert(#folder_mid_terminal <= folder_mid_budget)
+assert(string.find(folder_mid_terminal, '"row_count":' .. tostring(folder_mid_count), 1, true) ~= nil, folder_mid_terminal)
+assert(string.find(folder_mid_terminal, '"total_matching_count":4', 1, true) ~= nil, folder_mid_terminal)
+for index, path in ipairs(folder_paths) do
+  local present = string.find(folder_mid_terminal, "file:path:" .. path, 1, true) ~= nil
+  if index <= folder_mid_count then
+    assert(present == true, "folder expected included " .. path)
+  else
+    assert(present == false, "folder expected excluded " .. path)
+  end
+end
+
+-- Single oversized identity under tiny complete envelope fails typed.
+local long_path = ${JSON.stringify(E3_LONG_PATH)}
+existing_files[long_path] = true
+media_project.items = {
+  {
+    guid = "{ITEM-LONG}",
+    takes = { { guid = "{TAKE-LONG}", source = { path = long_path, source_type = "WAVE", length = 1.0, channels = 2 } } },
+  },
+}
+local single = make_e3_read_request("cmd_e3_page_single", "media.project_files.read", {
+  include_offline = true, max_sources = 10,
+}, { max_response_bytes = 400, max_items = 100, max_inline_value_bytes = 4096 })
+local single_terminal = dispatch_request(single, single.id, nil, { started_at = now_iso() })
+assert(string.find(single_terminal, "RESPONSE_TOO_LARGE", 1, true) ~= nil, single_terminal)
+assert(string.find(single_terminal, '"ok":true', 1, true) == nil, single_terminal)
+`);
+  });
+
+  it("empty folder and POSIX backslash join through product folder list dispatch", () => {
+    runActualProductE3MediaCompositionLua(`
+local empty_folder = "/Users/Shared/OpenReaper/empty media folder"
+folder_files[empty_folder] = {}
+local empty_req = make_e3_read_request("cmd_e3_empty", "media.folder_media.list", {
+  folder_ref = "folder:path:" .. empty_folder, media_type = "any", limit = 10, offset = 0,
+})
+local empty_terminal = dispatch_request(empty_req, empty_req.id, nil, { started_at = now_iso() })
+assert(string.find(empty_terminal, '"ok":true', 1, true) ~= nil, empty_terminal)
+assert(string.find(empty_terminal, empty_folder, 1, true) ~= nil, empty_terminal)
+assert(string.find(empty_terminal, '"row_count":0', 1, true) ~= nil, empty_terminal)
+assert(string.find(empty_terminal, '"total_matching_count":0', 1, true) ~= nil, empty_terminal)
+
+local bs = string.char(92)
+local posix_folder = "/tmp/openreaper" .. bs .. "legal-backslash-name"
+folder_files[posix_folder] = { "clip.wav" }
+local posix_req = make_e3_read_request("cmd_e3_posix_bs", "media.folder_media.list", {
+  folder_ref = "folder:path:" .. posix_folder, media_type = "any", limit = 10, offset = 0,
+})
+local posix_terminal = dispatch_request(posix_req, posix_req.id, nil, { started_at = now_iso() })
+assert(string.find(posix_terminal, '"ok":true', 1, true) ~= nil, posix_terminal)
+local json_path = "/tmp/openreaper" .. bs .. bs .. "legal-backslash-name/clip.wav"
+assert(string.find(posix_terminal, json_path, 1, true) ~= nil, posix_terminal)
+assert(string.find(posix_terminal, "file:path:/tmp/openreaper", 1, true) ~= nil, posix_terminal)
+assert(string.find(posix_terminal, "legal-backslash-name/clip.wav", 1, true) ~= nil, posix_terminal)
+`);
+  });
+
+  it("fails E3 required Undo begin closed before mutation when both begin APIs fail", () => {
+    runActualProductE3MediaCompositionLua(`
+local path = "/tmp/openreaper-e3-undo-fail.wav"
+existing_files[path] = true
+force_undo_begin_fail = true
+for _, capability in ipairs({
+  "media.import_file_to_track",
+  "media.import_file_section_to_track",
+  "media.relink_take_source",
+}) do
+  media_project.items = {
+    {
+      guid = "{ITEM-UNDO-SEED}",
+      takes = { { guid = "{TAKE-UNDO-SEED}", source = { path = path, source_type = "WAVE", length = 1.0, channels = 2 } } },
+    },
+  }
+  undo_begins, undo_ends, mutation_calls = {}, {}, {}
+  enum_project_calls = 0
+  local params = capability == "media.import_file_section_to_track"
+    and { position_seconds = 0, start_percent = 0.1, end_percent = 0.9 }
+    or { position_seconds = 0 }
+  local req = make_e3_write_request("cmd_e3_undo_" .. capability:gsub("%.", "_"), capability, path, params)
+  local terminal = dispatch_request(req, req.id, nil, { started_at = now_iso() })
+  assert(type(terminal) == "string", capability .. " " .. tostring(terminal))
+  assert(string.find(terminal, '"ok":true', 1, true) == nil, capability .. " " .. terminal)
+  assert(string.find(terminal, "COMMAND_FAILED", 1, true) ~= nil, capability .. " " .. terminal)
+  assert(string.find(terminal, "required_undo_begin_failed", 1, true) ~= nil, capability .. " " .. terminal)
+  assert(string.find(terminal, '"zero_write":true', 1, true) ~= nil, capability .. " " .. terminal)
+  assert(string.find(terminal, '"recoverable":true', 1, true) ~= nil, capability .. " " .. terminal)
+  assert(#mutation_calls == 0, capability .. " mutations=" .. tostring(#mutation_calls))
+  assert(open_undo_handle == nil, capability)
+end
+force_undo_begin_fail = false
+`);
+  });
+
+  it("proves FIFO product file-transport isolation for consecutive E3 writes without target inheritance", () => {
+    runActualProductE3MediaCompositionLua(
+      `
+local path_a = "/tmp/openreaper-e3-cache-a.wav"
+local path_b = "/tmp/openreaper-e3-cache-b.wav"
+existing_files[path_a] = true
+existing_files[path_b] = true
+
+local track_a = { guid = "{TRACK-CACHE-A}" }
+local track_b = { guid = "{TRACK-CACHE-B}" }
+media_project.tracks = { track_a, track_b }
+media_project.items = {}
+
+reaper.GetTrack = function(_, index)
+  return media_project.tracks[index + 1]
+end
+reaper.GetTrackGUID = function(track)
+  return track and track.guid or nil
+end
+reaper.GetMediaTrackInfo_Value = function(track, key)
+  if key == "IP_TRACKNUMBER" then
+    if track == track_a then return 1 end
+    if track == track_b then return 2 end
+  end
+  return 0
+end
+reaper.CountTracks = function() return #media_project.tracks end
+reaper.AddMediaItemToTrack = function(track)
+  record_mutation("AddMediaItemToTrack")
+  local item = {
+    guid = track == track_a and "{ITEM-CACHE-A}" or "{ITEM-CACHE-B}",
+    track = track,
+    takes = {},
+  }
+  media_project.items[#media_project.items + 1] = item
+  return item
+end
+reaper.AddTakeToMediaItem = function(item)
+  record_mutation("AddTakeToMediaItem")
+  local take = {
+    guid = item.guid == "{ITEM-CACHE-A}" and "{TAKE-CACHE-A}" or "{TAKE-CACHE-B}",
+    source = nil,
+  }
+  item.takes[#item.takes + 1] = take
+  return take
+end
+
+local function forbid_internal_leak(terminal, label)
+  assert(type(terminal) == "string", label .. " terminal type")
+  assert(string.find(terminal, "__openreaper_media_target", 1, true) == nil, label .. " leaked cache key: " .. terminal)
+  assert(string.find(terminal, "__openreaper_", 1, true) == nil, label .. " leaked internal field: " .. terminal)
+  assert(string.find(terminal, "table: 0x", 1, true) == nil, label .. " leaked table pointer: " .. terminal)
+  assert(string.find(terminal, '"track":{', 1, true) == nil, label .. " leaked raw track object: " .. terminal)
+  assert(string.find(terminal, '"take":{', 1, true) == nil, label .. " leaked raw take object: " .. terminal)
+end
+
+local req1 = make_e3_write_request("cmd_e3_cache_1", "media.import_file_to_track", path_a, { position_seconds = 0 })
+req1.refs = json_array({
+  { kind = "track", ref = "track:index:0", identity = { scheme = "index", value = "0" } },
+  { kind = "file", ref = "file:path:" .. path_a, identity = { scheme = "path", value = path_a } },
+})
+local req2 = make_e3_write_request("cmd_e3_cache_2", "media.import_file_to_track", path_b, { position_seconds = 1 })
+req2.refs = json_array({
+  { kind = "track", ref = "track:index:1", identity = { scheme = "index", value = "1" } },
+  { kind = "file", ref = "file:path:" .. path_b, identity = { scheme = "path", value = path_b } },
+})
+assert(req1 ~= req2)
+assert(req1.__openreaper_media_target == nil)
+assert(req2.__openreaper_media_target == nil)
+
+-- Deliberately reversed enumeration proves the product loop's sorted FIFO order.
+files_list = { "cmd_e3_cache_2.json", "cmd_e3_cache_1.json" }
+local raw1 = json.encode(req1)
+local raw2 = json.encode(req2)
+requests["/requests/cmd_e3_cache_1.json"] = raw1
+requests["/requests/cmd_e3_cache_2.json"] = raw2
+undo_begins, mutation_calls = {}, {}
+decoded_request_order, decoded_request_tables, decoded_request_cache_at_decode = {}, {}, {}
+
+start_e3_transport_loop_for_test()
+-- Drive one poll that processes FIFO filenames via product 90-file-transport-loop.
+run_poll(0.11)
+
+if #decoded_request_tables ~= 2 then
+  error("DECODE_COUNT " .. tostring(#decoded_request_tables) .. " r1=" .. tostring(results["/results/cmd_e3_cache_1.json"]) .. " body1=" .. tostring(writes["/results/cmd_e3_cache_1.json"] and writes["/results/cmd_e3_cache_1.json"]:sub(1, 280)))
+end
+if decoded_request_order[1] ~= "cmd_e3_cache_1" or decoded_request_order[2] ~= "cmd_e3_cache_2" then
+  error("DECODE_ORDER " .. tostring(decoded_request_order[1]) .. "," .. tostring(decoded_request_order[2]))
+end
+local decoded1 = decoded_request_tables[1]
+local decoded2 = decoded_request_tables[2]
+if decoded1 == req1 then error("DECODED1_SAME_AS_REQ1") end
+if decoded2 == req2 then error("DECODED2_SAME_AS_REQ2") end
+if decoded1 == decoded2 then error("DECODED_SAME") end
+-- Snapshot at product json.decode time: no internal cache may exist yet.
+if decoded_request_cache_at_decode["cmd_e3_cache_1"] ~= false then error("CACHE_AT_DECODE_1") end
+if decoded_request_cache_at_decode["cmd_e3_cache_2"] ~= false then error("CACHE_AT_DECODE_2") end
+if results["/results/cmd_e3_cache_1.json"] ~= true then error("NO_RESULT_1 " .. tostring(writes["/results/cmd_e3_cache_1.json"])) end
+if results["/results/cmd_e3_cache_2.json"] ~= true then error("NO_RESULT_2 " .. tostring(writes["/results/cmd_e3_cache_2.json"])) end
+local term1 = string.gsub(writes["/results/cmd_e3_cache_1.json"], "\\n$", "")
+local term2 = string.gsub(writes["/results/cmd_e3_cache_2.json"], "\\n$", "")
+if not string.find(term1, '"ok":true', 1, true) then error("TERM1 " .. term1:sub(1, 400)) end
+if not string.find(term2, '"ok":true', 1, true) then error("TERM2 " .. term2:sub(1, 400)) end
+if not string.find(term1, "track:guid:{TRACK-CACHE-A}", 1, true) then error("TERM1_TRACK " .. term1:sub(1, 300)) end
+if string.find(term1, "track:guid:{TRACK-CACHE-B}", 1, true) then error("TERM1_LEAK_B") end
+if not string.find(term1, path_a, 1, true) then error("TERM1_PATH_A") end
+if string.find(term1, path_b, 1, true) then error("TERM1_PATH_B") end
+if not string.find(term2, "track:guid:{TRACK-CACHE-B}", 1, true) then error("TERM2_TRACK " .. term2:sub(1, 300)) end
+if string.find(term2, "track:guid:{TRACK-CACHE-A}", 1, true) then error("TERM2_LEAK_A") end
+if not string.find(term2, path_b, 1, true) then error("TERM2_PATH_B") end
+if string.find(term2, path_a, 1, true) then error("TERM2_PATH_A") end
+forbid_internal_leak(term1, "transport_req1")
+forbid_internal_leak(term2, "transport_req2")
+-- Each decoded request resolves and caches its own exact target with no inheritance.
+if not is_object(decoded1.__openreaper_media_target) then error("NO_CACHE_1 after dispatch") end
+if not is_object(decoded2.__openreaper_media_target) then error("NO_CACHE_2 after dispatch") end
+if decoded1.__openreaper_media_target.track ~= track_a then error("CACHE1_TRACK") end
+if decoded2.__openreaper_media_target.track ~= track_b then error("CACHE2_TRACK") end
+if decoded1.__openreaper_media_target.track_ref ~= "track:guid:{TRACK-CACHE-A}" then error("CACHE1_REF " .. tostring(decoded1.__openreaper_media_target.track_ref)) end
+if decoded2.__openreaper_media_target.track_ref ~= "track:guid:{TRACK-CACHE-B}" then error("CACHE2_REF " .. tostring(decoded2.__openreaper_media_target.track_ref)) end
+if decoded1.__openreaper_media_target == decoded2.__openreaper_media_target then error("SHARED_CACHE") end
+if req1.__openreaper_media_target ~= nil then error("REQ1_GOT_CACHE") end
+if req2.__openreaper_media_target ~= nil then error("REQ2_GOT_CACHE") end
+
+-- Relink over transport: exact take GUID identity (no soft take:index OR).
+local take_old = { guid = "{TAKE-RELINK-OLD}", source = { path = path_a, source_type = "WAVE", length = 1.0, channels = 2 } }
+local item_relink = { guid = "{ITEM-RELINK}", takes = { take_old } }
+media_project.items = { item_relink }
+local req3 = make_e3_write_request("cmd_e3_cache_3", "media.relink_take_source", path_b, {})
+req3.refs = json_array({
+  { kind = "take", ref = "take:index:0", identity = { scheme = "index", value = "0" } },
+  { kind = "file", ref = "file:path:" .. path_b, identity = { scheme = "path", value = path_b } },
+})
+files_list = { "cmd_e3_cache_3.json" }
+requests["/requests/cmd_e3_cache_3.json"] = json.encode(req3)
+local decode_count_before = #decoded_request_tables
+run_poll(0.22)
+assert(results["/results/cmd_e3_cache_3.json"] == true, writes["/results/cmd_e3_cache_3.json"])
+local term3 = string.gsub(writes["/results/cmd_e3_cache_3.json"], "\\n$", "")
+assert(string.find(term3, '"ok":true', 1, true) ~= nil, term3)
+assert(string.find(term3, '"take_ref":"take:guid:{TAKE-RELINK-OLD}"', 1, true) ~= nil, term3)
+assert(string.find(term3, path_b, 1, true) ~= nil, term3)
+forbid_internal_leak(term3, "transport_req3")
+assert(#decoded_request_tables == decode_count_before + 1)
+local decoded3 = decoded_request_tables[#decoded_request_tables]
+assert(decoded3 ~= req3)
+assert(decoded3.__openreaper_media_target.take == take_old)
+assert(decoded2.__openreaper_media_target.track == track_b)
+`,
+      { withTransport: true },
+    );
+  });
+});
