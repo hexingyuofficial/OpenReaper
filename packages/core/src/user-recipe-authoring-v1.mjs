@@ -1,4 +1,11 @@
-import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import {
+  lstatSync,
+  opendirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
 import {
   FOUNDATION_BRIDGE_REF_KINDS,
@@ -31,6 +38,7 @@ import { TEMPLATE_DESCRIPTOR_TAG_PATTERN } from "./template-descriptor-v1.mjs";
 
 export const USER_RECIPE_AUTHORING_CONTRACT = "user_recipe_authoring.v1";
 export const USER_EXECUTABLE_RECIPE_REVISION_SUFFIX = ".executable-revision.json";
+export const USER_EXECUTABLE_RECIPE_STORE_CONTRACT = "recipe.executable.store.v1";
 
 export const USER_RECIPE_SOURCE_TYPES = Object.freeze([
   "official",
@@ -96,10 +104,12 @@ const ACCEPTED_TEMPLATE_BY_ID = new Map(
 );
 
 export class UserRecipeAuthoringError extends Error {
-  constructor(message, errors = [message]) {
+  constructor(message, errors = [message], details = {}) {
     super(message);
     this.name = "UserRecipeAuthoringError";
     this.errors = errors;
+    this.details = details;
+    if (details?.code) this.code = details.code;
   }
 }
 
@@ -245,10 +255,12 @@ export function discoverRecipeSourceFiles(roots) {
   return deepFreeze(files.sort((left, right) => left.path.localeCompare(right.path)));
 }
 
-export function discoverExecutableRevisionFiles(roots) {
+export function discoverExecutableRevisionFiles(roots, options = {}) {
   const sourceRoots = normalizeSourceRoots(roots);
   const files = [];
   const errors = [];
+  // Optional store budgets. Absent options preserve historical unbounded behavior.
+  const scanBudget = normalizeOptionalScanBudget(options.scan_budget ?? options.scanBudget);
 
   for (const sourceRoot of sourceRoots) {
     if (!sourceRoot.exists) continue;
@@ -260,6 +272,7 @@ export function discoverExecutableRevisionFiles(roots) {
       errors,
       visitedDirectories: new Set([sourceRoot.real_root]),
       mode: "executable_revision",
+      scanBudget,
     });
   }
 
@@ -271,6 +284,27 @@ export function discoverExecutableRevisionFiles(roots) {
   }
 
   return deepFreeze(files.sort((left, right) => left.path.localeCompare(right.path)));
+}
+
+function normalizeOptionalScanBudget(input) {
+  if (input === undefined || input === null) return null;
+  if (!input || typeof input !== "object") {
+    throw new UserRecipeAuthoringError("scan_budget must be an object when provided.");
+  }
+  const maxFiles = input.max_files ?? input.maxFiles;
+  const maxBytes = input.max_bytes ?? input.maxBytes;
+  if (maxFiles !== undefined && (!Number.isInteger(maxFiles) || maxFiles < 1)) {
+    throw new UserRecipeAuthoringError("scan_budget.max_files must be a positive integer.");
+  }
+  if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 1)) {
+    throw new UserRecipeAuthoringError("scan_budget.max_bytes must be a positive integer.");
+  }
+  return {
+    max_files: maxFiles,
+    max_bytes: maxBytes,
+    scanned_bytes: 0,
+    visited_entries: 0,
+  };
 }
 
 export function parseRecipeSourceFile(file) {
@@ -389,11 +423,33 @@ function walkRecipeSourceRoot({
   errors,
   visitedDirectories,
   mode = "recipe",
+  scanBudget = null,
 }) {
-  const entries = readdirSync(currentPath, { withFileTypes: true });
-  for (const entry of entries) {
+  // Bounded mode uses incremental opendirSync and counts every visited entry
+  // (dirs, ignored files, symlinks, revisions) against max_files before lstat.
+  // Unbounded legacy callers keep readdirSync materialization.
+  forEachDirectoryEntry(currentPath, scanBudget, (entry) => {
     const entryRelativePath = relativePath ? path.posix.join(relativePath, entry.name) : entry.name;
     const fullPath = path.join(currentPath, entry.name);
+
+    if (scanBudget?.max_files !== undefined) {
+      scanBudget.visited_entries += 1;
+      if (scanBudget.visited_entries > scanBudget.max_files) {
+        throw new UserRecipeAuthoringError(
+          `Executable revision discovery exceeds max_files budget (${scanBudget.max_files}).`,
+          [`max_files budget ${scanBudget.max_files} exceeded`],
+          {
+            code: "STORE_BUDGET_EXCEEDED",
+            budget: "max_scan_files",
+            limit: scanBudget.max_files,
+            observed: scanBudget.visited_entries,
+            path: fullPath,
+            relative_path: entryRelativePath,
+          },
+        );
+      }
+    }
+
     let stats = lstatSync(fullPath);
     let realPath = fullPath;
 
@@ -401,21 +457,21 @@ function walkRecipeSourceRoot({
       realPath = realpathSync(fullPath);
       if (!isInsideRoot(sourceRoot.real_root, realPath)) {
         errors.push(`${entryRelativePath}: symlink target escapes approved recipe root.`);
-        continue;
+        return;
       }
       stats = statSync(realPath);
     } else {
       realPath = realpathSync(fullPath);
       if (!isInsideRoot(sourceRoot.real_root, realPath)) {
         errors.push(`${entryRelativePath}: path escapes approved recipe root.`);
-        continue;
+        return;
       }
     }
 
     if (stats.isDirectory()) {
       if (visitedDirectories.has(realPath)) {
         errors.push(`${entryRelativePath}: directory cycle in recipe source root.`);
-        continue;
+        return;
       }
       visitedDirectories.add(realPath);
       walkRecipeSourceRoot({
@@ -426,28 +482,71 @@ function walkRecipeSourceRoot({
         errors,
         visitedDirectories,
         mode,
+        scanBudget,
       });
-      continue;
+      return;
     }
 
     if (!stats.isFile()) {
       errors.push(`${entryRelativePath}: recipe source entry must be a file or directory.`);
-      continue;
+      return;
     }
 
-    if (IGNORED_RECIPE_ROOT_FILES.has(entry.name)) continue;
+    if (IGNORED_RECIPE_ROOT_FILES.has(entry.name)) return;
     validateRecipeSourceFilename(entryRelativePath, errors, mode);
     const acceptedSuffix = mode === "executable_revision"
       ? USER_EXECUTABLE_RECIPE_REVISION_SUFFIX
       : USER_RECIPE_FILE_SUFFIX;
-    if (!entryRelativePath.endsWith(acceptedSuffix)) continue;
+    if (!entryRelativePath.endsWith(acceptedSuffix)) return;
+
+    if (scanBudget?.max_bytes !== undefined) {
+      const nextBytes = scanBudget.scanned_bytes + stats.size;
+      if (nextBytes > scanBudget.max_bytes) {
+        throw new UserRecipeAuthoringError(
+          `Executable revision discovery exceeds max_bytes budget (${scanBudget.max_bytes}).`,
+          [`max_bytes budget ${scanBudget.max_bytes} exceeded`],
+          {
+            code: "STORE_BUDGET_EXCEEDED",
+            budget: "max_scan_bytes",
+            limit: scanBudget.max_bytes,
+            observed: nextBytes,
+            path: realPath,
+            relative_path: entryRelativePath,
+            size: stats.size,
+          },
+        );
+      }
+      scanBudget.scanned_bytes = nextBytes;
+    }
 
     files.push({
       source: classifyRecipeSource(sourceRoot.source, entryRelativePath),
       root: sourceRoot.root,
       path: realPath,
       relative_path: entryRelativePath,
+      size: stats.size,
     });
+  });
+}
+
+function forEachDirectoryEntry(currentPath, scanBudget, onEntry) {
+  if (!scanBudget) {
+    for (const entry of readdirSync(currentPath, { withFileTypes: true })) {
+      onEntry(entry);
+    }
+    return;
+  }
+
+  // Genuinely incremental synchronous directory API for bounded store discovery.
+  const dir = opendirSync(currentPath, { bufferSize: 1 });
+  try {
+    let entry = dir.readSync();
+    while (entry !== null) {
+      onEntry(entry);
+      entry = dir.readSync();
+    }
+  } finally {
+    dir.closeSync();
   }
 }
 
