@@ -129,7 +129,8 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       target_track_ref: { type: "string" },
       position_seconds: { type: "number" },
       copy_depth: { const: "active_take_footprint" },
-    }, ["new_item_ref", "target_track_ref", "position_seconds", "copy_depth"]),
+      source_footprint: { type: "object" },
+    }, ["new_item_ref", "target_track_ref", "position_seconds", "copy_depth", "source_footprint"]),
     refs: refs({
       input: [
         ref("source_item_ref", "item", true, "Single source item ref to copy."),
@@ -138,7 +139,7 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       output: [ref("new_item_ref", "item", true, "New copied item ref on the target track.")],
     }),
     expectedDelta: mutationDelta({
-      summary: "Creates one new item on the target track from a narrow source-item footprint.",
+      summary: "Creates one new item on the target track from the verified active-take source footprint.",
       entities: [
         {
           entity_kind: "item",
@@ -162,6 +163,7 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       check("new_item_created", "state_delta", "A new item ref exists after the copy."),
       check("target_track_matches", "state_delta", "The new item is on the supplied target track."),
       check("position_matches", "state_delta", "The new item starts at input.position_seconds."),
+      check("source_footprint_matches", "state_delta", "The target active take matches the verified source footprint and leaves the source unchanged."),
     ]),
     examples: [
       {

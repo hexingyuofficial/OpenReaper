@@ -150,6 +150,7 @@ describe("P1 template fill descriptors", () => {
       ["new_item_ref", "item"],
     ]);
     assert.equal(copy.outputSchema.properties.copy_depth.const, "active_take_footprint");
+    assert.equal(copy.outputSchema.properties.source_footprint.type, "object");
     assert.equal(copy.expectedDelta.kind, "mutation");
     assert.equal(copy.expectedDelta.idempotent, false);
     assert.deepEqual(copy.expectedDelta.entities.map((entry) => `${entry.entity_kind}:${entry.action}`), [
@@ -162,6 +163,7 @@ describe("P1 template fill descriptors", () => {
       "new_item_created",
       "target_track_matches",
       "position_matches",
+      "source_footprint_matches",
     ]);
   });
 

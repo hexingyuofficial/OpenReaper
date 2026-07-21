@@ -177,6 +177,8 @@ describe("E4 item live handler expansion", () => {
     assert.match(BRIDGE_SOURCE, /SetMediaItemTakeInfo_Value/);
     assert.match(BRIDGE_SOURCE, /SetActiveTake/);
     assert.match(BRIDGE_SOURCE, /active_take_available/);
+    assert.match(BRIDGE_SOURCE, /source_footprint/);
+    assert.match(BRIDGE_SOURCE, /partial_target_cleanup_failed/);
     assert.match(BRIDGE_SOURCE, /readback_playrate/);
     assert.match(BRIDGE_SOURCE, /VERIFY_FAILED/);
     assert.match(BRIDGE_SOURCE, /loop_source_status = "held"/);
