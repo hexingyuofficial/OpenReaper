@@ -254,6 +254,20 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
       /recipe output track_ref is not produced/,
     );
 
+    const reverseStageOrder = makeDraft();
+    reverseStageOrder.stages.reverse();
+    const reverseValidation = validateExecutableRecipeDraft(reverseStageOrder, { catalog });
+    assert.equal(reverseValidation.ok, false);
+    assert.match(
+      reverseValidation.errors.join("\n"),
+      /stage producer run_macro must be declared before consumer readback/,
+    );
+    assert.throws(
+      () => normalizeExecutableRecipeDraft(reverseStageOrder, { catalog }),
+      (error) => error instanceof ExecutableRecipeContractError
+        && error.errors.some((entry) => /stage producer run_macro must be declared before consumer readback/.test(entry)),
+    );
+
     const stageDependencyMismatch = makeDraft();
     stageDependencyMismatch.stages[0].dependency.version = "1.0.1";
     assert.match(

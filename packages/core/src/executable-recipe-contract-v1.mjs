@@ -505,6 +505,7 @@ export function preserveAgentSteppedRecipeContract(input) {
 
 function validateStages(stages, catalog, errors) {
   const stageIds = new Set();
+  const stagePositions = new Map();
   const stageOutputs = new Map();
   const stageInputs = new Map();
   const stageCheckpoints = new Map();
@@ -512,7 +513,7 @@ function validateStages(stages, catalog, errors) {
 
   if (!Array.isArray(stages)) {
     errors.push("draft.stages must be an array.");
-    return { stageIds, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk: "read" };
+    return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk: "read" };
   }
   if (stages.length === 0) errors.push("draft.stages must contain at least one stage.");
   if (stages.length > EXECUTABLE_RECIPE_BUDGETS.stage_max_count) {
@@ -536,6 +537,7 @@ function validateStages(stages, catalog, errors) {
     validateIdentifier(stage.id, `${field}.id`, errors);
     if (typeof stage.id === "string") {
       if (stageIds.has(stage.id)) errors.push(`Duplicate stage id: ${stage.id}.`);
+      else stagePositions.set(stage.id, index);
       stageIds.add(stage.id);
     }
     if (!STAGE_KIND_SET.has(stage.kind)) {
@@ -588,7 +590,7 @@ function validateStages(stages, catalog, errors) {
     errors.push("draft.stages must include at least one macro or template stage.");
   }
 
-  return { stageIds, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk };
+  return { stageIds, stagePositions, stageOutputs, stageInputs, stageCheckpoints, dependencyRefs, maxRisk };
 }
 
 function validateStageDependency(dependency, stageKind, catalog, field, errors) {
@@ -809,6 +811,19 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
     }
 
     if (isPlainObject(binding.from) && isPlainObject(binding.to)) {
+      if (binding.from.scope === "stage" && binding.to.scope === "stage") {
+        const producerPosition = stageIndex.stagePositions.get(binding.from.id);
+        const consumerPosition = stageIndex.stagePositions.get(binding.to.id);
+        if (
+          Number.isInteger(producerPosition)
+          && Number.isInteger(consumerPosition)
+          && producerPosition >= consumerPosition
+        ) {
+          errors.push(
+            `${field} stage producer ${binding.from.id} must be declared before consumer ${binding.to.id}.`,
+          );
+        }
+      }
       const fromNode = endpointNode(binding.from);
       const toNode = endpointNode(binding.to);
       if (fromNode && toNode) {

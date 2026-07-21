@@ -891,6 +891,7 @@ function failPartial({
     completedStageIds: completedIds,
     notStartedStageIds: notStarted,
     provenPartialChanges,
+    counts,
     latestCheckpoint,
     recovery: {
       strategy: resumeSafe ? "resume_from_checkpoint" : "inspect_and_repair",
@@ -1571,6 +1572,11 @@ function requiredRunMutationResponseBytes(revision, operation) {
       completed: stageIds,
       not_started: stageIds,
     },
+    counts: {
+      processed: Number.MAX_SAFE_INTEGER,
+      applied: Number.MAX_SAFE_INTEGER,
+      skipped: Number.MAX_SAFE_INTEGER,
+    },
     proven_partial_changes: Array.from({ length: COMPACT_FAILURE_PARTIAL_CHANGE_MAX_COUNT }, () => ({
       stage_id: longestStageId,
       kind: "template",
@@ -1721,6 +1727,7 @@ function compactCallRecipeResponse(response, operation) {
       code: response.error?.code ?? "RESPONSE_TOO_LARGE",
       message: boundedText(response.error?.message ?? "call_recipe failed.", 240),
     },
+    counts: response.counts,
     stages: response.stages,
     proven_partial_changes: Array.isArray(response.proven_partial_changes)
       ? response.proven_partial_changes.slice(0, COMPACT_FAILURE_PARTIAL_CHANGE_MAX_COUNT)

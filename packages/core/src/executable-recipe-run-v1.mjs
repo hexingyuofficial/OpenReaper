@@ -456,6 +456,7 @@ export function projectRunFailureEnvelope({
   completedStageIds = [],
   notStartedStageIds = [],
   provenPartialChanges = [],
+  counts = null,
   latestCheckpoint = null,
   recovery = null,
   undo = null,
@@ -487,6 +488,13 @@ export function projectRunFailureEnvelope({
       completed: completedStageIds,
       not_started: notStartedStageIds,
     },
+    counts: isPlainObject(counts)
+      ? {
+          processed: Number.isSafeInteger(counts.processed) && counts.processed >= 0 ? counts.processed : 0,
+          applied: Number.isSafeInteger(counts.applied) && counts.applied >= 0 ? counts.applied : 0,
+          skipped: Number.isSafeInteger(counts.skipped) && counts.skipped >= 0 ? counts.skipped : 0,
+        }
+      : undefined,
     proven_partial_changes: Array.isArray(provenPartialChanges)
       ? provenPartialChanges
         .slice(0, EXECUTABLE_RECIPE_RUN_BUDGETS.partial_change_max_count)

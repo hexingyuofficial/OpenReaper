@@ -503,7 +503,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         macro: async ({ inputs }) => macroEnvelope({ project_summary: { name: inputs.track_name } }),
         template: async () => {
           templateCalls += 1;
-          if (templateCalls === 1) {
+          if (templateCalls <= 2) {
             return templateFailureEnvelope({ zeroWrite: true });
           }
           return templateEnvelope({ track_ref: "track:index:0" });
@@ -534,8 +534,10 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(partial.status, "partial");
     assert.equal(partial.error.code, "TEMPLATE_BLOCKED");
     assert.equal(partial.resume_safe, true);
+    assert.deepEqual(partial.counts, { processed: 2, applied: 1, skipped: 0 });
     assert.deepEqual(partial.stages.completed, ["run_macro"]);
     assert.deepEqual(partial.stages.failed, ["readback"]);
+    assert.deepEqual(partial.stages.not_started, []);
     assert.equal(partial.next_call.arguments.operation, "resume");
     assert.equal(partial.undo.claimed, false);
 
@@ -569,18 +571,53 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(drift.error.code, "RESUME_IDENTITY_INVALID");
     assert.equal(templateCalls, 1);
 
-    const resumed = await runtime.call_recipe({
+    const resumedPartial = await runtime.call_recipe({
       operation: "resume",
       run_id: partial.run_id,
       checkpoint_id: partial.latest_checkpoint.checkpoint_id,
       ...identity,
     });
+    assert.equal(resumedPartial.ok, false);
+    assert.equal(resumedPartial.operation, "resume");
+    assert.equal(resumedPartial.status, "partial");
+    assert.equal(resumedPartial.run_id, partial.run_id);
+    assert.deepEqual(resumedPartial.counts, { processed: 4, applied: 1, skipped: 1 });
+    assert.deepEqual(resumedPartial.stages.completed, ["run_macro"]);
+    assert.deepEqual(resumedPartial.stages.failed, ["readback"]);
+    assert.deepEqual(resumedPartial.stages.not_started, []);
+
+    const resumed = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: resumedPartial.latest_checkpoint.checkpoint_id,
+      ...identity,
+    });
     assert.equal(resumed.ok, true);
     assert.equal(resumed.operation, "resume");
     assert.equal(resumed.status, "succeeded");
-    assert.equal(resumed.counts.applied >= 1, true);
-    assert.equal(templateCalls, 2);
-    assert.equal(factsCalls, 2);
+    assert.equal(resumed.run_id, partial.run_id);
+    assert.deepEqual(resumed.counts, { processed: 6, applied: 2, skipped: 2 });
+    assert.equal(
+      resumed.counts.processed - resumed.counts.applied - resumed.counts.skipped,
+      2,
+    );
+    assert.equal(resumed.evidence_ref, partial.evidence_ref);
+    const evidence = await runtime.call_recipe({
+      operation: "get",
+      evidence_ref: resumed.evidence_ref,
+      limit: 8,
+    });
+    assert.deepEqual(
+      evidence.items.map((item) => [item.stage_id, item.status]),
+      [
+        ["run_macro", "applied"],
+        ["readback", "failed"],
+        ["readback", "failed"],
+        ["readback", "applied"],
+      ],
+    );
+    assert.equal(templateCalls, 3);
+    assert.equal(factsCalls, 3);
   });
 
   it("preserves retained progress when fresh resume trust blocks before dispatch", async () => {
@@ -1051,7 +1088,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(dispatcherCalls, 1);
   });
 
-  it("rejects a short graph before dispatch when four bounded partial changes exceed the floor", async () => {
+  it("compacts more than four partial changes at the exact floor without losing cumulative counts", async () => {
     let dispatcherCalls = 0;
     const { runtime } = makeRuntime({
       dispatchers: {
@@ -1083,6 +1120,12 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
     assert.equal(failure.ok, false);
     assert.equal(failure.error.code, "MACRO_PARTIAL_FAILURE");
+    assert.equal(failure.response_compacted, true, JSON.stringify({
+      required: blocked.error.details.required,
+      bytes: Buffer.byteLength(JSON.stringify(failure), "utf8"),
+      partial_changes: failure.proven_partial_changes.length,
+    }));
+    assert.deepEqual(failure.counts, { processed: 1, applied: 0, skipped: 0 });
     assert.equal(failure.proven_partial_changes.length, 4);
     assert.equal(failure.stages.failed.length, 1);
     assert.ok(failure.recovery);
@@ -1882,11 +1925,11 @@ function macroEnvelopeWithChange(data = {}) {
 
 function macroLargePartialFailureEnvelope() {
   const envelope = macroPartialFailureEnvelope();
-  envelope.result.changes = Array.from({ length: 4 }, (_, index) => ({
+  envelope.result.changes = Array.from({ length: 8 }, (_, index) => ({
     kind: "project.index.refresh",
     status: "applied",
     live_readback: { status: "passed" },
-    details: `${index}:${"x".repeat(760)}`,
+    details: `${index}:${"x".repeat(700)}`,
   }));
   for (let i = 0; i < 4; i += 1) {
     envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");

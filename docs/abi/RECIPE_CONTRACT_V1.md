@@ -751,9 +751,9 @@ Rules:
 - stage success requires stage-specific runtime/native readback;
 - success returns compact identity, counts, verified outputs, timing, and one
   pageable `evidence_ref`;
-- failure/partial returns failed/completed/not-started stage ids, proven partial
-  changes, latest checkpoint, recovery/undo posture, `resume_safe`, and one exact
-  `next_call`;
+- failure/partial returns cumulative processed/applied/skipped counts,
+  failed/completed/not-started stage ids, proven partial changes, latest
+  checkpoint, recovery/undo posture, `resume_safe`, and one exact `next_call`;
 - evidence paging uses `get` with `evidence_ref`, is identity-bound, and must not
   dump full child envelopes;
 - list, get, validate, save, delete, run, resume, and evidence pages enforce
