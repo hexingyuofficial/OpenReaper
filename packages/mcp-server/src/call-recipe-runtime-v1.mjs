@@ -726,7 +726,9 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: latestCheckpoint != null && normalized.zero_write === true,
-        details: normalized.error?.details,
+        details: normalized.zero_write === true
+          ? { ...(isPlainObject(normalized.error?.details) ? normalized.error.details : {}), zero_write: true }
+          : normalized.error?.details,
       });
     }
 
@@ -1175,7 +1177,7 @@ function provenMacroChanges(stage, changes) {
       change.live_readback?.status === "passed"
       || change.mutation?.verification_status === "passed"
       || change.verification?.status === "passed"
-    ))
+    ) && change.mutation?.status !== "not_run")
     .slice(0, EXECUTABLE_RECIPE_RUN_BUDGETS.partial_change_max_count)
     .map((change) => ({
       stage_id: stage.id,

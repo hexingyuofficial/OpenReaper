@@ -620,6 +620,49 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(factsCalls, 3);
   });
 
+  it("treats verified idempotent Macro readback as zero-write and resume-safe", async () => {
+    let macroCalls = 0;
+    const draft = makeTwoMacroDraft();
+    const { runtime } = makeRuntime({
+      facts: (revision) => completeFacts(revision, draft),
+      dispatchers: {
+        macro: async ({ stage }) => {
+          macroCalls += 1;
+          if (stage.id === "resume_activate" && macroCalls === 2) {
+            return macroZeroWriteFailureWithIdempotentReadback();
+          }
+          return macroEnvelope(stage.id === "inventory_checkpoint"
+            ? { returned_count: 2 }
+            : { project_ref: "project:path:/tmp/active.RPP" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    const identity = exactIdentity(saved);
+    const partial = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { operation: "activate_project_tab" },
+    });
+
+    assert.equal(partial.ok, false);
+    assert.equal(partial.status, "partial", JSON.stringify(partial));
+    assert.equal(partial.resume_safe, true);
+    assert.equal(partial.error.details.zero_write, true);
+    assert.deepEqual(partial.counts, { processed: 2, applied: 1, skipped: 0 });
+    assert.deepEqual(partial.proven_partial_changes, []);
+
+    const resumed = await runtime.call_recipe({
+      operation: "resume",
+      ...identity,
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+    });
+    assert.equal(resumed.ok, true);
+    assert.deepEqual(resumed.counts, { processed: 4, applied: 2, skipped: 1 });
+  });
+
   it("preserves retained progress when fresh resume trust blocks before dispatch", async () => {
     let factsCalls = 0;
     let templateCalls = 0;
@@ -1636,6 +1679,68 @@ function makeProductDraft() {
   return draft;
 }
 
+function makeTwoMacroDraft() {
+  const draft = structuredClone(makeDraft());
+  draft.id = "recipe.project.idempotent_resume_truth";
+  draft.title = "Idempotent project activation resume truth";
+  draft.summary = "Proves a zero-write idempotent Macro failure can resume from a prior checkpoint.";
+  draft.risk = "read";
+  draft.inputs = [{ id: "operation", type: "string", required: true }];
+  draft.outputs = [{ id: "project_ref", type: "string", required: true }];
+  draft.stages = [
+    {
+      ...draft.stages[0],
+      id: "inventory_checkpoint",
+      inputs: ["operation"],
+      outputs: ["returned_count"],
+      checkpoint: "checkpoint_inventory",
+    },
+    {
+      ...draft.stages[0],
+      id: "resume_activate",
+      inputs: ["operation"],
+      outputs: ["project_ref"],
+      checkpoint: "checkpoint_activate",
+    },
+  ];
+  draft.bindings = [
+    {
+      from: { scope: "recipe_input", id: null, port: "operation" },
+      to: { scope: "stage", id: "inventory_checkpoint", port: "operation" },
+    },
+    {
+      from: { scope: "recipe_input", id: null, port: "operation" },
+      to: { scope: "stage", id: "resume_activate", port: "operation" },
+    },
+    {
+      from: { scope: "stage", id: "resume_activate", port: "project_ref" },
+      to: { scope: "recipe_output", id: null, port: "project_ref" },
+    },
+  ];
+  draft.dependencies = [draft.dependencies[0]];
+  draft.required_capabilities = ["project.index"];
+  draft.risk_grants = ["read"];
+  draft.checkpoints = [
+    {
+      id: "checkpoint_inventory",
+      after_stage: "inventory_checkpoint",
+      evidence_id: "evidence_inventory",
+      resume_identity: "resume.inventory",
+      summary: "Inventory checkpoint accepted.",
+    },
+    {
+      id: "checkpoint_activate",
+      after_stage: "resume_activate",
+      evidence_id: "evidence_activate",
+      resume_identity: "resume.activate",
+      summary: "Activation checkpoint accepted.",
+    },
+  ];
+  draft.preflight.stage_count = 2;
+  draft.preflight.dependency_count = 1;
+  return draft;
+}
+
 function makeMaxStageDraft() {
   const draft = structuredClone(makeDraft());
   for (let index = 2; index < 48; index += 1) {
@@ -1917,6 +2022,37 @@ function macroEnvelopeWithChange(data = {}) {
     status: "applied",
     live_readback: { status: "passed" },
   }];
+  for (let i = 0; i < 4; i += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function macroZeroWriteFailureWithIdempotentReadback() {
+  const envelope = macroEnvelope({ zero_write: true });
+  envelope.ok = false;
+  envelope.execution.status = "failed";
+  envelope.result.summary = "Project Index rebind failed before any project mutation.";
+  envelope.result.changes = [{
+    kind: "project_switch",
+    status: "applied",
+    mutation: { status: "not_run" },
+    live_readback: { status: "passed" },
+  }];
+  envelope.result.verification = { status: "not_required", evidence_refs: [] };
+  envelope.blockers = [{
+    code: "PROJECT_IDENTITY_REBIND_FAILED",
+    message: "Repair Project Index state and retry.",
+    recoverable: true,
+    details: { zero_write: true },
+  }];
+  envelope.error = {
+    code: "PROJECT_IDENTITY_REBIND_FAILED",
+    message: "Repair Project Index state and retry.",
+    recoverable: true,
+    details: { zero_write: true },
+  };
+  envelope.recovery = { action: "Repair blocker and retry.", sqlite_rows_authorize_writes: false };
   for (let i = 0; i < 4; i += 1) {
     envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
   }
