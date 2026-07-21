@@ -62,6 +62,41 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.doesNotMatch(result.stdout, /ready_for_render/i);
   });
 
+  it("keeps executable recipe revisions in sibling data across upgrade and uninstall", async () => {
+    const fixture = await makeInstallerFixture();
+    const recipeRoot = path.join(fixture.home, ".openreaper", "data", "executable-recipes");
+    const fresh = await runInstaller(fixture);
+    assert.equal(fresh.code, 0, fresh.stderr || fresh.stdout);
+    assert.equal(parseInstallerReport(fresh.stdout).executable_recipe_root.path, recipeRoot);
+    await writeFile(path.join(recipeRoot, "revision.json"), "immutable-revision\n", "utf8");
+
+    const upgrade = await runInstaller(fixture);
+    assert.equal(upgrade.code, 0, upgrade.stderr || upgrade.stdout);
+    assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
+
+    const uninstall = await runUninstaller(fixture);
+    assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
+    assert.equal(JSON.parse(uninstall.stdout).executable_recipe_root.preserved, true);
+    assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
+  });
+
+  it("rejects an executable recipe root symlink before replacing an existing install", async () => {
+    const fixture = await makeInstallerFixture();
+    await mkdir(fixture.installRoot, { recursive: true });
+    const marker = path.join(fixture.installRoot, "marker.txt");
+    const target = path.join(fixture.root, "recipe-target");
+    const recipeRoot = path.join(fixture.home, ".openreaper", "data", "executable-recipes");
+    await writeFile(marker, "still-here\n", "utf8");
+    await mkdir(target, { recursive: true });
+    await mkdir(path.dirname(recipeRoot), { recursive: true });
+    await symlink(target, recipeRoot);
+
+    const result = await runInstaller(fixture);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /Executable recipe root must not be a symlink/);
+    assert.equal(await readFile(marker, "utf8"), "still-here\n");
+  });
+
   it("preserves existing default-root outputs across upgrade through an atomic backup container", async () => {
     const fixture = await makeInstallerFixture();
     assert.equal((await runInstaller(fixture)).code, 0);

@@ -36,10 +36,10 @@ import {
   OPENREAPER_PUBLIC_TOOL_IDS,
 } from "./openreaper-agent-start-here-v1.mjs";
 import {
-  createExecutableDependencyCatalog,
   executableRevisionDiscoveryProjection,
   hashExecutableRecipeContent,
 } from "../../core/src/executable-recipe-contract-v1.mjs";
+import { createExecutableRecipeProductCatalog } from "./executable-recipe-product-catalog-v1.mjs";
 import {
   CALL_RECIPE_CHECKPOINT_PROOF_CONTRACT,
   createAuthoritativeRuntimeFactsProvider,
@@ -471,11 +471,9 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
     ? env.OPENREAPER_EXECUTABLE_RECIPE_ROOT.trim()
     : "";
   if (!root) return null;
-  const catalogJson = env.OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON;
-  if (typeof catalogJson !== "string" || catalogJson.trim() === "") return null;
   let catalog;
   try {
-    catalog = createExecutableDependencyCatalog(JSON.parse(catalogJson));
+    catalog = createExecutableRecipeProductCatalog();
   } catch {
     return null;
   }

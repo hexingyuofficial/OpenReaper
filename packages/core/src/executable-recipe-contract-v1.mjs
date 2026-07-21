@@ -150,7 +150,7 @@ export function createExecutableDependencyCatalog(input = {}) {
   const templates = normalizeCatalogEntries(input.templates, "template");
   const capabilities = uniqueStrings(input.capabilities, "capabilities");
   for (const capability of capabilities) {
-    if (!CAPABILITY_PATTERN.test(capability) || looksLikeForbiddenIdentity(capability)) {
+    if (!CAPABILITY_PATTERN.test(capability) || looksLikeForbiddenCatalogIdentity(capability)) {
       throw new ExecutableRecipeContractError(`dependency catalog capability is forbidden: ${capability}.`);
     }
   }
@@ -695,7 +695,8 @@ function validateDependencies(dependencies, catalog, stageIndex, errors) {
         errors.push(`${field}.fallback_reason must be null for macro dependencies.`);
       }
     } else {
-      if (typeof dependency.id !== "string" || !TEMPLATE_ID_PATTERN.test(dependency.id) || looksLikeRawExecutionId(dependency.id)) {
+      if (typeof dependency.id !== "string" || !TEMPLATE_ID_PATTERN.test(dependency.id)
+        || looksLikeRawExecutionId(dependency.id) || isCatalogOnlyHardwareMutationIdentity(dependency.id)) {
         errors.push(`${field}.id must be an accepted template id.`);
       } else if (!catalog?.getTemplate(dependency.id)) {
         errors.push(`${field}.id references unknown template: ${dependency.id}.`);
@@ -1380,7 +1381,7 @@ function normalizeCatalogEntries(entries, kind) {
     if (kind === "macro" && (typeof id !== "string" || !MACRO_ID_PATTERN.test(id) || looksLikeForbiddenIdentity(id))) {
       throw new ExecutableRecipeContractError(`dependency catalog macros[${index}].id is invalid.`);
     }
-    if (kind === "template" && (typeof id !== "string" || !TEMPLATE_ID_PATTERN.test(id) || looksLikeForbiddenIdentity(id))) {
+    if (kind === "template" && (typeof id !== "string" || !TEMPLATE_ID_PATTERN.test(id) || looksLikeForbiddenCatalogIdentity(id))) {
       throw new ExecutableRecipeContractError(`dependency catalog templates[${index}].id is invalid.`);
     }
     if (typeof version !== "string" || !VERSION_PATTERN.test(version) || version.length > EXECUTABLE_RECIPE_BUDGETS.version_max_chars) {
@@ -1402,7 +1403,7 @@ function normalizeCatalogEntries(entries, kind) {
     }
     const capabilities = uniqueStrings(entry.capabilities, `${kind}s[${index}].capabilities`);
     for (const capability of capabilities) {
-      if (!CAPABILITY_PATTERN.test(capability) || looksLikeForbiddenIdentity(capability)) {
+      if (!CAPABILITY_PATTERN.test(capability) || looksLikeForbiddenCatalogIdentity(capability)) {
         throw new ExecutableRecipeContractError(`dependency catalog ${kind}s[${index}].capabilities contains forbidden identity: ${capability}.`);
       }
     }
@@ -1534,8 +1535,29 @@ function looksLikeRawExecutionId(id) {
 
 function looksLikeForbiddenIdentity(value) {
   if (typeof value !== "string") return false;
+  if (value === "template.routing.list_track_hardware_outputs"
+    || value === "routing.track_hardware_outputs.list") return false;
   if (looksLikeRawExecutionId(value)) return true;
   return /(?:^|[._-])(?:hardware|device_io|hardware_io|hardware_device|ui_action|shell|lua|bridge)(?:[._-]|$)/i.test(value);
+}
+
+function looksLikeForbiddenCatalogIdentity(value) {
+  if (isCatalogOnlyHardwareOutputIdentity(value)) return false;
+  return looksLikeForbiddenIdentity(value);
+}
+
+function isCatalogOnlyHardwareOutputIdentity(value) {
+  return value === "template.routing.list_track_hardware_outputs"
+    || value === "routing.track_hardware_outputs.list"
+    || value === "template.routing.set_track_hardware_output"
+    || value === "routing.track_hardware_output.set"
+    || value === "template.routing.remove_track_hardware_output"
+    || value === "routing.track_hardware_output.remove";
+}
+
+function isCatalogOnlyHardwareMutationIdentity(value) {
+  return value === "template.routing.set_track_hardware_output"
+    || value === "template.routing.remove_track_hardware_output";
 }
 
 function riskRank(risk) {

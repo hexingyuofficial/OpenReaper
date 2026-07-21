@@ -21,9 +21,11 @@ const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
 const defaultRenderRoot = path.join(installRoot, "session", "renders");
 const managedRenderRootRecord = path.join(installRoot, "session", "managed-render-root.path");
+const executableRecipeRoot = path.join(path.dirname(installRoot), "data", "executable-recipes");
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
 const managedRenderRootRecordResult = await readManagedRenderRootRecord();
+const executableRecipeRootResult = await inspectExecutableRecipeRoot();
 const report = {
   product: "OpenReaper alpha",
   install_root: installRoot,
@@ -36,6 +38,11 @@ const report = {
     preserved_default_at: null,
     preservation_container: null,
     symlink_followed: false,
+  },
+  executable_recipe_root: {
+    path: executableRecipeRoot,
+    status: executableRecipeRootResult.status,
+    preserved: executableRecipeRootResult.status === "ready",
   },
   changed: [],
   skipped: [],
@@ -92,6 +99,26 @@ async function preserveDefaultRenderOutputs() {
   report.render_root.preserved_default_at = preservationRoot;
   report.render_root.preservation_container = container;
   report.changed.push(`preserved non-empty default render root at ${preservationRoot}`);
+}
+
+async function inspectExecutableRecipeRoot() {
+  const dataRoot = path.dirname(executableRecipeRoot);
+  const dataStatus = await safeLstat(dataRoot);
+  if (dataStatus?.isSymbolicLink()) {
+    throw new Error(`Executable recipe data root must not be a symlink: ${dataRoot}`);
+  }
+  if (dataStatus && !dataStatus.isDirectory()) {
+    throw new Error(`Executable recipe data root must be a directory: ${dataRoot}`);
+  }
+  const status = await safeLstat(executableRecipeRoot);
+  if (!status) return { status: "missing" };
+  if (status.isSymbolicLink()) {
+    throw new Error(`Executable recipe root must not be a symlink: ${executableRecipeRoot}`);
+  }
+  if (!status.isDirectory()) {
+    throw new Error(`Executable recipe root must be a directory: ${executableRecipeRoot}`);
+  }
+  return { status: "ready" };
 }
 
 async function readManagedRenderRootRecord() {

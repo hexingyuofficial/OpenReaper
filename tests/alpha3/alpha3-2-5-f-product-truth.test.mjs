@@ -98,10 +98,15 @@ describe("Alpha3.2.5-F product truth", () => {
     ));
     const facts = createOpenReaperAlphaPackageCatalogFacts(handlerRegistry);
     assert.deepEqual(facts, {
+      exact_tool_count: 6,
+      exact_tools: ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"],
+      executable_recipe_catalog_contract: "recipe.executable.dependency_catalog.v1",
+      executable_recipe_catalog_hash: facts.executable_recipe_catalog_hash,
       accepted_macro_count: 15,
       accepted_template_count: 235,
       bridge_handler_count: 91,
     });
+    assert.match(facts.executable_recipe_catalog_hash, /^[a-f0-9]{64}$/u);
     assert.equal(handlerRegistry.entries.length, 235);
     assert.equal(new Set(handlerRegistry.entries.map((entry) => entry.handler_file)).size, 91);
   });
@@ -305,6 +310,8 @@ sleep 0.1
     assert.match(source, /openreaper_git_commit/);
     assert.equal(source.match(/openreaper_git_commit:/gu)?.length, 2);
     assert.match(source, /accepted_template_count/);
+    assert.match(source, /exact_tool_count/);
+    assert.match(source, /"call_recipe"/);
     assert.match(source, /bridge_handler_count/);
     const productVersion = source.match(/OPENREAPER_PRODUCT_VERSION = "([^"]+)"/u)?.[1];
     assert.equal(productVersion, "3.3.0-alpha.0");

@@ -33,6 +33,7 @@ import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v
 import { OPENREAPER_PUBLIC_TOOL_IDS } from "../../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
 import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import { CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
 
 const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 
@@ -1233,7 +1234,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       env: {
         OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
         OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
-        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify(makeCatalogDefinition()),
+        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify({ macros: [], templates: [], capabilities: [] }),
         OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
       },
       callTemplateRuntime,
@@ -1249,7 +1250,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       },
     });
     assert.ok(binding);
-    const saved = await saveFixture(binding.runtime);
+    const saved = await saveFixture(binding.runtime, makeProductDraft());
     const run = await binding.runtime.call_recipe({
       operation: "run",
       ...exactIdentity(saved),
@@ -1280,7 +1281,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         HOME: process.env.HOME ?? "",
         OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
         OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
-        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify(makeCatalogDefinition()),
+        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify({ macros: [], templates: [], capabilities: [] }),
         OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
       },
       stderr: "pipe",
@@ -1299,7 +1300,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         name: "call_recipe",
         arguments: {
           operation: "save",
-          draft: makeDraft(),
+          draft: makeProductDraft(),
           version: "1.0.0",
           revision_number: 1,
           saved_at: "1970-01-01T00:00:00.000Z",
@@ -1381,6 +1382,37 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
     assert.equal(listed.ok, true);
     assert.equal(listed.count, 1);
+  });
+
+  it("catalogs hardware output mutations but rejects their validate/save path before dispatch", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e3-hardware-catalog-"));
+    const catalog = createExecutableRecipeProductCatalog();
+    const store = createExecutableRecipeRevisionStore({ root, source: "user", catalog });
+    let dispatcherCalls = 0;
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      dispatchers: {
+        macro: async () => { dispatcherCalls += 1; return macroEnvelope({}); },
+        template: async () => { dispatcherCalls += 1; return templateEnvelope({}); },
+      },
+    });
+    try {
+      for (const id of ["template.routing.set_track_hardware_output", "template.routing.remove_track_hardware_output"]) {
+        const draft = makeProductDraft();
+        const entry = catalog.getTemplate(id);
+        draft.stages[1].dependency = { kind: "template", id, version: entry.version, fallback_reason: "official_template_atom_required" };
+        draft.dependencies[1] = { kind: "template", id, version: entry.version, risk: entry.risk, fallback_reason: "official_template_atom_required", descriptor_hash: entry.descriptor_hash };
+        const validated = await runtime.call_recipe({ operation: "validate", draft });
+        const saved = await runtime.call_recipe({ operation: "save", draft, version: "1.0.0", revision_number: 1 });
+        assert.equal(validated.ok, false);
+        assert.equal(saved.ok, false);
+        assert.equal((await runtime.call_recipe({ operation: "list" })).count, 0);
+      }
+      assert.equal(dispatcherCalls, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1536,6 +1568,29 @@ function makeDraft() {
       platform: "darwin",
     },
   };
+}
+
+function makeProductDraft() {
+  const catalog = createExecutableRecipeProductCatalog();
+  const draft = structuredClone(makeDraft());
+  draft.dependencies = draft.dependencies.map((dependency) => {
+    const entry = dependency.kind === "macro"
+      ? catalog.getMacro(dependency.id)
+      : catalog.getTemplate(dependency.id);
+    return { ...dependency, version: entry.version, risk: entry.risk, descriptor_hash: entry.descriptor_hash };
+  });
+  for (const stage of draft.stages) {
+    const entry = stage.dependency.kind === "macro"
+      ? catalog.getMacro(stage.dependency.id)
+      : catalog.getTemplate(stage.dependency.id);
+    stage.dependency.version = entry.version;
+  }
+  draft.required_capabilities = [...new Set(draft.dependencies.flatMap((dependency) => (
+    dependency.kind === "macro"
+      ? catalog.getMacro(dependency.id).capabilities
+      : catalog.getTemplate(dependency.id).capabilities
+  )))].sort();
+  return draft;
 }
 
 function makeMaxStageDraft() {
@@ -1720,10 +1775,10 @@ function exactIdentity(saved) {
   };
 }
 
-async function saveFixture(runtime) {
+async function saveFixture(runtime, draft = makeDraft()) {
   return runtime.call_recipe({
     operation: "save",
-    draft: makeDraft(),
+    draft,
     version: "1.0.0",
     revision_number: 1,
     saved_at: "1970-01-01T00:00:00.000Z",

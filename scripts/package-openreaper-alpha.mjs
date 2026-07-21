@@ -15,6 +15,10 @@ import {
   ALPHA3_3_B1_DEPRECATED_ALIASES,
   ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
 } from "../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
+import {
+  EXECUTABLE_RECIPE_PRODUCT_CATALOG_CONTRACT,
+  hashExecutableRecipeProductCatalog,
+} from "../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
 import { FakeFoundationBridge } from "../packages/core/src/foundation-bridge-v1.mjs";
 import {
   createArtifactStateStoreEnvelope,
@@ -41,6 +45,7 @@ const packageRoot = path.join(outDir, "OpenReaper-alpha");
 const OPENREAPER_PRODUCT_VERSION = "3.3.0-alpha.0";
 const PACKAGE_PROVENANCE_CONTRACT = "openreaper.package.provenance.v1";
 const ALPHA3_3_PACKAGE_CATALOG_COUNTS = Object.freeze({
+  exact_tool_count: 6,
   accepted_macro_count: 15,
   accepted_template_count: 235,
   bridge_handler_count: 91,
@@ -49,6 +54,7 @@ const skipZip = options.skip_zip === true;
 const skipSmoke = options.skip_smoke === true;
 const projectIndexSmokeOnly = options.project_index_smoke_only === true;
 const EXACT_MCP_TOOLS = Object.freeze([
+  "call_recipe",
   "call_template",
   "get_state",
   "list_recipes",
@@ -209,12 +215,19 @@ export function createOpenReaperAlphaPackageCatalogFacts(handlerRegistry) {
     throw new Error("Package provenance bridge handler registry has an invalid handler_file entry.");
   }
   const facts = {
+    exact_tool_count: EXACT_MCP_TOOLS.length,
+    exact_tools: [...EXACT_MCP_TOOLS],
+    executable_recipe_catalog_contract: EXECUTABLE_RECIPE_PRODUCT_CATALOG_CONTRACT,
+    executable_recipe_catalog_hash: hashExecutableRecipeProductCatalog(),
     accepted_macro_count: new Set(REQUIRED_MACRO_IDS).size,
     accepted_template_count: createAcceptedOfficialTemplateCatalogTemplates().length,
     bridge_handler_count: new Set(handlerFiles).size,
   };
   if (
-    facts.accepted_macro_count !== REQUIRED_MACRO_IDS.length
+    facts.exact_tool_count !== EXACT_MCP_TOOLS.length
+    || JSON.stringify(facts.exact_tools) !== JSON.stringify(EXACT_MCP_TOOLS)
+    || !/^[a-f0-9]{64}$/u.test(facts.executable_recipe_catalog_hash)
+    || facts.accepted_macro_count !== REQUIRED_MACRO_IDS.length
     || handlerRegistry.entries.length !== facts.accepted_template_count
     || Object.entries(ALPHA3_3_PACKAGE_CATALOG_COUNTS).some(([key, value]) => facts[key] !== value)
   ) {
@@ -255,6 +268,8 @@ async function smokePackagedProvenanceManifest(expected) {
     accepted_macro_count: expected.accepted_macro_count,
     accepted_template_count: expected.accepted_template_count,
     bridge_handler_count: expected.bridge_handler_count,
+    exact_tool_count: expected.exact_tool_count,
+    executable_recipe_catalog_hash: expected.executable_recipe_catalog_hash,
     read_only: true,
   };
 }

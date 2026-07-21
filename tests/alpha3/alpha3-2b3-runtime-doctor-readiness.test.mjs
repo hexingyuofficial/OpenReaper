@@ -820,6 +820,7 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.match(packageCommandSmoke, /try \{[\s\S]*command: mcpCommand,[\s\S]*env: validationRuntime\.env,[\s\S]*assertExactArray\(toolNames, exactTools/);
     assert.doesNotMatch(packageCommandSmoke, /path\.join\(installRoot, "session", "renders"\)/);
     assert.match(packageCommandSmoke, /validation_scope: "isolated_package_runtime"/);
+    assert.match(packageCommandSmoke, /OPENREAPER_EXECUTABLE_RECIPE_ROOT: recipeRoot/);
     assert.match(packageCommandSmoke, /await lifecycle\?\.close\("normal_finish"\);\s+\} finally \{\s+await validationRuntime\.cleanup\(\)/);
     assert.match(packageCommandSmoke, /mkdtemp\(path\.join\(os\.tmpdir\(\), "openreaper-doctor-package-"\)\)/);
     for (const variable of [

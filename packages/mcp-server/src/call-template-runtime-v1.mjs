@@ -989,6 +989,36 @@ const IN_PROCESS_MACRO_RUNTIME_CAPABILITIES = Object.freeze([
   MEDIA_EXPLORER_DATABASE_SEARCH_CAPABILITY,
 ]);
 
+// This is the single product-owned projection for executable Recipe dependency
+// catalogs. Keep the registered program records authoritative here rather than
+// duplicating the registry imports in a second runtime module.
+export function createAcceptedOfficialMacroDependencyFacts() {
+  const facts = ALPHA3_3_B1_FINAL_TARGET_IDS.map((id) => {
+    const sourceId = alpha3_3B1ExecutorSourceId(id);
+    const entry = PUBLIC_MACRO_PROGRAM_REGISTRIES
+      .map((registry) => registry.get(sourceId))
+      .find(Boolean);
+    if (!entry || typeof entry.program_id !== "string" || typeof entry.program_version !== "string"
+      || typeof entry.risk !== "string" || !entry.dependencies) {
+      throw new CallTemplateRuntimeError("CALL_TEMPLATE_RUNTIME_INVALID", `Missing registered Macro dependency facts for ${id}.`);
+    }
+    const capabilities = [...new Set(entry.dependencies.runtime_capabilities ?? [])].sort();
+    return Object.freeze({
+      id,
+      program_id: entry.program_id,
+      version: entry.program_version,
+      risk: entry.risk,
+      fixed_template_ids: [...(entry.dependencies.template_ids ?? [])].sort(),
+      runtime_capabilities: [...(entry.dependencies.runtime_capabilities ?? [])].sort(),
+      capabilities,
+    });
+  });
+  if (facts.length !== 15 || new Set(facts.map((entry) => entry.id)).size !== 15) {
+    throw new CallTemplateRuntimeError("CALL_TEMPLATE_RUNTIME_INVALID", "Accepted Macro dependency facts must contain exactly 15 unique public Macros.");
+  }
+  return Object.freeze(facts);
+}
+
 export class CallTemplateRuntimeError extends Error {
   constructor(code, message, options = {}) {
     super(message);

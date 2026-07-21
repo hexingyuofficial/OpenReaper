@@ -471,6 +471,85 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
       }),
       /forbidden identity|capability is forbidden/,
     );
+    const acceptedHardwareRead = createExecutableDependencyCatalog({
+      macros: [makeCatalog().getMacro("macro.project.inspect")],
+      templates: [{
+        id: "template.routing.list_track_hardware_outputs",
+        version: "1.0.0",
+        risk: "read",
+        descriptor_hash: sha("routing-hardware-output-read"),
+        capabilities: ["routing.track_hardware_outputs.list"],
+      }],
+      capabilities: ["project.index", "routing.track_hardware_outputs.list"],
+    });
+    assert.equal(acceptedHardwareRead.templates.length, 1);
+    const readDraft = makeDraft();
+    const readEntry = acceptedHardwareRead.getTemplate("template.routing.list_track_hardware_outputs");
+    readDraft.risk = "read";
+    readDraft.risk_grants = ["read"];
+    readDraft.stages[1].risk = "read";
+    readDraft.stages[1].dependency = {
+      kind: "template", id: readEntry.id, version: readEntry.version,
+      fallback_reason: "official_template_atom_required",
+    };
+    readDraft.dependencies[1] = {
+      kind: "template", id: readEntry.id, version: readEntry.version, risk: readEntry.risk,
+      fallback_reason: "official_template_atom_required", descriptor_hash: readEntry.descriptor_hash,
+    };
+    readDraft.required_capabilities = ["project.index", "routing.track_hardware_outputs.list"];
+    assert.equal(validateExecutableRecipeDraft(readDraft, { catalog: acceptedHardwareRead }).ok, true);
+    assert.doesNotThrow(() => sealExecutableRecipeRevision(readDraft, { catalog: acceptedHardwareRead }));
+    const catalogOnlyHardwareMutation = createExecutableDependencyCatalog({
+      macros: [],
+      templates: [
+        {
+          id: "template.routing.set_track_hardware_output",
+          version: "1.0.0",
+          risk: "write",
+          descriptor_hash: sha("routing-hardware-output-set"),
+          capabilities: ["routing.track_hardware_output.set"],
+        },
+        {
+          id: "template.routing.remove_track_hardware_output",
+          version: "1.0.0",
+          risk: "write",
+          descriptor_hash: sha("routing-hardware-output-remove"),
+          capabilities: ["routing.track_hardware_output.remove"],
+        },
+      ],
+      capabilities: ["routing.track_hardware_output.set", "routing.track_hardware_output.remove"],
+    });
+    for (const templateId of ["template.routing.set_track_hardware_output", "template.routing.remove_track_hardware_output"]) {
+      const draft = makeDraft();
+      const entry = catalogOnlyHardwareMutation.getTemplate(templateId);
+      draft.stages[1].dependency = {
+        kind: "template", id: templateId, version: entry.version,
+        fallback_reason: "official_template_atom_required",
+      };
+      draft.dependencies[1] = {
+        kind: "template", id: templateId, version: entry.version, risk: entry.risk,
+        fallback_reason: "official_template_atom_required", descriptor_hash: entry.descriptor_hash,
+      };
+      const validation = validateExecutableRecipeDraft(draft, { catalog: catalogOnlyHardwareMutation });
+      assert.equal(validation.ok, false);
+      assert.match(validation.errors.join("\n"), /accepted template id/);
+      assert.throws(() => sealExecutableRecipeRevision(draft, { catalog: catalogOnlyHardwareMutation }));
+    }
+    for (const forbidden of ["macro.hardware.route", "hardware.device_io", "hardware_io", "hardware_device", "device_io", "raw-action:1", "lua:evil", "shell:evil", "bridge:evil", "ui_action"]) {
+      assert.throws(
+        () => createExecutableDependencyCatalog({
+          macros: [],
+          templates: [{
+            id: forbidden.startsWith("template.") ? forbidden : "template.routing.list_track_hardware_outputs",
+            version: "1.0.0",
+            risk: "read",
+            descriptor_hash: sha(forbidden),
+            capabilities: [forbidden],
+          }],
+          capabilities: [forbidden],
+        }),
+      );
+    }
 
     const maxMacros = Array.from({ length: EXECUTABLE_RECIPE_BUDGETS.catalog_macro_max_count }, (_, index) => ({
       id: `macro.project.m${index}`,

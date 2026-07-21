@@ -65,6 +65,7 @@ const transportDir = path.join(sessionRoot, "transport");
 const artifactRoot = path.join(sessionRoot, "artifacts");
 const defaultRenderRoot = path.join(sessionRoot, "renders");
 const managedRenderRootRecord = path.join(sessionRoot, MANAGED_RENDER_ROOT_RECORD);
+const executableRecipeRoot = path.join(path.dirname(installRoot), "data", "executable-recipes");
 const installRootExisted = existsSync(installRoot);
 const priorPersistedRenderRoot = await readManagedRenderRootRecord(managedRenderRootRecord);
 const renderRootSelection = selectInstallerRenderRoot({
@@ -96,6 +97,12 @@ const report = {
   },
   transport_dir: transportDir,
   artifact_root: artifactRoot,
+  executable_recipe_root: {
+    path: executableRecipeRoot,
+    created: false,
+    writable: false,
+    preserved_across_upgrade: true,
+  },
   render_root: {
     path: renderRoot,
     source: renderRootSelection.source,
@@ -127,6 +134,7 @@ async function runInstall() {
   try {
     await requireNode20();
     await prepareManagedRenderRoot(renderRoot, { mutate: false });
+    await prepareExecutableRecipeRoot({ mutate: false });
     if (!dryRun && !installRootExisted) {
       await mkdir(path.dirname(installRoot), { recursive: true });
       try {
@@ -143,6 +151,9 @@ async function runInstall() {
     const preparedRenderRoot = await prepareManagedRenderRoot(renderRoot, { mutate: !dryRun });
     report.render_root.created = preparedRenderRoot.created;
     report.render_root.writable = preparedRenderRoot.writable;
+    const preparedRecipeRoot = await prepareExecutableRecipeRoot({ mutate: !dryRun });
+    report.executable_recipe_root.created = preparedRecipeRoot.created;
+    report.executable_recipe_root.writable = preparedRecipeRoot.writable;
     const previousDefaultState = await inspectPreviousDefaultRenderRoot();
     report.render_root.previous_default_nonempty = previousDefaultState.nonempty;
 
@@ -911,6 +922,33 @@ async function prepareManagedRenderRoot(candidate, { mutate }) {
   await assertManagedRenderRootDoesNotOverlapReservedPaths(absolute);
   await boundedWriteProbe(absolute);
   return { path: absolute, created, writable: true };
+}
+
+async function prepareExecutableRecipeRoot({ mutate }) {
+  const dataRoot = path.dirname(executableRecipeRoot);
+  const dataStatus = await safeLstat(dataRoot);
+  if (dataStatus?.isSymbolicLink()) {
+    throw new Error(`Executable recipe data root must not be a symlink: ${dataRoot}`);
+  }
+  if (dataStatus && !dataStatus.isDirectory()) {
+    throw new Error(`Executable recipe data root must be a directory: ${dataRoot}`);
+  }
+  const statusBefore = await safeLstat(executableRecipeRoot);
+  if (statusBefore?.isSymbolicLink()) {
+    throw new Error(`Executable recipe root must not be a symlink: ${executableRecipeRoot}`);
+  }
+  if (statusBefore && !statusBefore.isDirectory()) {
+    throw new Error(`Executable recipe root must be a directory: ${executableRecipeRoot}`);
+  }
+  if (!mutate) return { created: false, writable: null };
+  if (!dataStatus) await mkdir(dataRoot, { recursive: true, mode: 0o700 });
+  if (!statusBefore) await mkdir(executableRecipeRoot, { recursive: true, mode: 0o700 });
+  const statusAfter = await safeLstat(executableRecipeRoot);
+  if (!statusAfter || statusAfter.isSymbolicLink() || !statusAfter.isDirectory()) {
+    throw new Error(`Executable recipe root could not be safely prepared: ${executableRecipeRoot}`);
+  }
+  await boundedWriteProbe(executableRecipeRoot);
+  return { created: !statusBefore, writable: true };
 }
 
 function validateRenderRootText(candidate) {

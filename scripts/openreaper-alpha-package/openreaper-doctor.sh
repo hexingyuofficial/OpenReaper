@@ -15,6 +15,7 @@ for optional_openreaper_env in \
   OPENREAPER_LIVE_BRIDGE_SESSION_ID \
   OPENREAPER_PROJECT_INDEX_STATE_ROOT \
   OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY \
+  OPENREAPER_EXECUTABLE_RECIPE_ROOT \
   OPENREAPER_CURRENT_PROJECT_PATH \
   OPENREAPER_CURRENT_PROJECT_REF \
   OPENREAPER_MCP_PACKAGE_ROOT \
@@ -31,11 +32,13 @@ INSTALL_ROOT="${SCRIPT_DIR:h}"
 SESSION_ROOT="${OPENREAPER_SESSION_ROOT:-${INSTALL_ROOT}/session}"
 TRANSPORT_DIR="${OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR:-${SESSION_ROOT}/transport}"
 ARTIFACT_ROOT="${OPENREAPER_ARTIFACT_ROOT:-${OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT:-${SESSION_ROOT}/artifacts}}"
+EXECUTABLE_RECIPE_ROOT="${OPENREAPER_EXECUTABLE_RECIPE_ROOT:-${INSTALL_ROOT:h}/data/executable-recipes}"
 
 export OPENREAPER_DOCTOR_INSTALL_ROOT="${INSTALL_ROOT}"
 export OPENREAPER_DOCTOR_SESSION_ROOT="${SESSION_ROOT}"
 export OPENREAPER_DOCTOR_TRANSPORT_DIR="${TRANSPORT_DIR}"
 export OPENREAPER_DOCTOR_ARTIFACT_ROOT="${ARTIFACT_ROOT}"
+export OPENREAPER_DOCTOR_EXECUTABLE_RECIPE_ROOT="${EXECUTABLE_RECIPE_ROOT}"
 
 exec node --input-type=module - "$@" <<'NODE'
 import { spawn } from "node:child_process";
@@ -53,6 +56,7 @@ const installRoot = process.env.OPENREAPER_DOCTOR_INSTALL_ROOT;
 const sessionRoot = process.env.OPENREAPER_DOCTOR_SESSION_ROOT;
 const transportDir = process.env.OPENREAPER_DOCTOR_TRANSPORT_DIR;
 const artifactRoot = process.env.OPENREAPER_DOCTOR_ARTIFACT_ROOT;
+const executableRecipeRoot = process.env.OPENREAPER_DOCTOR_EXECUTABLE_RECIPE_ROOT;
 const mcpCommand = path.join(installRoot, "bin", "openreaper-mcp");
 const vitalAgentMcpCommand = path.join(installRoot, "bin", "vital-agent-mcp");
 const mcpCommandAliases = pathAliases(mcpCommand);
@@ -69,7 +73,7 @@ const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reap
 const bridgeActionName = "OpenReaper: Start MCP bridge";
 const bridgeActionScript = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "OpenReaper", "openreaper-start-mcp-bridge.lua");
 const reaperKbPath = path.join(home, "Library", "Application Support", "REAPER", "reaper-kb.ini");
-const exactTools = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const exactTools = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const vitalAgentRequiredTools = ["create_openreaper_handoff_plan", "run_doctor"];
 const requiredMacros = ["macro.project.inspect", "macro.project.query"];
 const requiredFxTemplates = [
@@ -131,6 +135,7 @@ const mcpEnv = {
   OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
   OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: bridgeScript,
   OPENREAPER_ARTIFACT_ROOT: artifactRoot,
+  OPENREAPER_EXECUTABLE_RECIPE_ROOT: executableRecipeRoot,
   OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
   OPENREAPER_LIVE_SMOKE_RENDER_ROOT: effectiveRenderRoot,
   OPENREAPER_LIVE_BRIDGE_OWNER: expectedOwner,
@@ -362,6 +367,11 @@ async function readProvenanceManifest() {
       value.source_tree_clean !== true ||
       !["accepted_macro_count", "accepted_template_count", "bridge_handler_count"].every((key) =>
         Number.isSafeInteger(value[key]) && value[key] > 0)
+      || value.exact_tool_count !== exactTools.length
+      || JSON.stringify(value.exact_tools) !== JSON.stringify(exactTools)
+      || value.executable_recipe_catalog_contract !== "recipe.executable.dependency_catalog.v1"
+      || typeof value.executable_recipe_catalog_hash !== "string"
+      || !/^[a-f0-9]{64}$/u.test(value.executable_recipe_catalog_hash)
     ) return { status: "invalid" };
     return {
       status: "ready",
@@ -372,6 +382,8 @@ async function readProvenanceManifest() {
       accepted_macro_count: value.accepted_macro_count,
       accepted_template_count: value.accepted_template_count,
       bridge_handler_count: value.bridge_handler_count,
+      exact_tool_count: value.exact_tool_count,
+      executable_recipe_catalog_hash: value.executable_recipe_catalog_hash,
     };
   } catch {
     return { status: "unavailable" };
@@ -585,7 +597,8 @@ async function createPackageCommandValidationRuntime() {
     const transportRoot = path.join(root, "transport");
     const artifactRoot = path.join(root, "artifacts");
     const projectIndexRoot = path.join(root, "project-index");
-    const directories = [renderRoot, transportRoot, artifactRoot, projectIndexRoot];
+    const recipeRoot = path.join(root, "executable-recipes");
+    const directories = [renderRoot, transportRoot, artifactRoot, projectIndexRoot, recipeRoot];
     await Promise.all(directories.map((directory) => mkdir(directory, { mode: 0o700 })));
     await Promise.all(directories.map((directory) => chmod(directory, 0o700)));
     const env = {
@@ -595,6 +608,7 @@ async function createPackageCommandValidationRuntime() {
       OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT: artifactRoot,
       OPENREAPER_LIVE_SMOKE_RENDER_ROOT: renderRoot,
       OPENREAPER_PROJECT_INDEX_STATE_ROOT: projectIndexRoot,
+      OPENREAPER_EXECUTABLE_RECIPE_ROOT: recipeRoot,
       OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: `doctor-package:${path.basename(root)}`,
       OPENREAPER_CURRENT_PROJECT_REF: "project:doctor-package-validation",
     };
