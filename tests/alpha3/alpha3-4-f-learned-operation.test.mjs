@@ -233,6 +233,66 @@ describe("Alpha3.4-F bounded learned-operation experiment", () => {
     assert.equal(bridge.calls.filter((call) => call.id === "macro.items.apply").length, 1);
   });
 
+  it("rejects macro batch truth when mutation.status is not_run", async () => {
+    const bridge = new LearnedOperationBridge({ mutationStatus: "not_run" });
+    const experiment = createAlpha3_4FLearnedOperationExperiment({ callTemplate: bridge.callTemplate });
+    const captured = await captureFixture(experiment);
+    assert.equal(captured.ok, true);
+    bridge.calls.length = 0;
+
+    const replayed = await experiment.replayItemCopy({ record_id: captured.record.record_id });
+    assert.equal(replayed.ok, false);
+    assert.equal(replayed.error.code, "LEARNED_CONTROL_READBACK_MISMATCH");
+    assert.match(replayed.error.message, /mutation\.status=not_run/);
+    assert.equal(replayed.applied.filter((item) => item.kind === "copy").length, 10);
+    assert.equal(replayed.applied.some((item) => item.kind === "macro_batch"), false);
+    assert.equal(bridge.calls.filter((call) => call.id === "macro.items.apply").length, 1);
+  });
+
+  it("binds every proven changed row to the exact requested batch id/item_ref without extra missing or duplicate rows", async () => {
+    for (const identityFault of ["omit_row", "extra_row", "duplicate_id", "swap_item_ref"]) {
+      const bridge = new LearnedOperationBridge({ identityFault });
+      const experiment = createAlpha3_4FLearnedOperationExperiment({ callTemplate: bridge.callTemplate });
+      const captured = await captureFixture(experiment, `identity_${identityFault}`);
+      assert.equal(captured.ok, true);
+      bridge.calls.length = 0;
+      const replayed = await experiment.replayItemCopy({ record_id: captured.record.record_id });
+      assert.equal(replayed.ok, false, identityFault);
+      assert.equal(replayed.error.code, "LEARNED_CONTROL_READBACK_MISMATCH", identityFault);
+      assert.equal(replayed.applied.filter((item) => item.kind === "copy").length, 10, identityFault);
+      assert.equal(replayed.applied.some((item) => item.kind === "macro_batch"), false, identityFault);
+    }
+  });
+
+  it("re-reads native item control truth after each successful macro batch and fails closed on mismatch", async () => {
+    const bridge = new LearnedOperationBridge();
+    const experiment = createAlpha3_4FLearnedOperationExperiment({ callTemplate: bridge.callTemplate });
+    const captured = await captureFixture(experiment);
+    assert.equal(captured.ok, true);
+    bridge.calls.length = 0;
+
+    const completed = await experiment.replayItemCopy({ record_id: captured.record.record_id });
+    assert.equal(completed.ok, true, JSON.stringify(completed));
+    const postBatchReads = bridge.calls.filter((call) => (
+      call.id === "template.items.read_item_summary"
+      && refValue(call.refs.item_ref)?.startsWith("item:guid:{COPY-")
+    ));
+    assert.equal(postBatchReads.length, 20);
+    assert.equal(bridge.calls.filter((call) => call.id === "macro.items.apply").length, 2);
+
+    const mismatchBridge = new LearnedOperationBridge({ corruptPostBatchControls: true });
+    const mismatchExperiment = createAlpha3_4FLearnedOperationExperiment({ callTemplate: mismatchBridge.callTemplate });
+    const mismatchCapture = await captureFixture(mismatchExperiment, "post_batch_mismatch");
+    assert.equal(mismatchCapture.ok, true);
+    mismatchBridge.calls.length = 0;
+    const failed = await mismatchExperiment.replayItemCopy({ record_id: mismatchCapture.record.record_id });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "LEARNED_CONTROL_READBACK_MISMATCH");
+    assert.equal(failed.applied.filter((item) => item.kind === "copy").length, 10);
+    assert.equal(failed.applied.filter((item) => item.kind === "macro_batch").length, 0);
+    assert.equal(mismatchBridge.calls.filter((call) => call.id === "macro.items.apply").length, 1);
+  });
+
   it("builds a <=48-stage draft without introducing a second persistence or execution surface", () => {
     const record = {
       record_id: "fixture",
@@ -334,16 +394,54 @@ class LearnedOperationBridge {
       if (this.options.failMacroBatch === this.macroSequence) {
         return { ok: false, error: { code: "MACRO_FAILED", message: "macro failed" } };
       }
+      for (const row of request.input.changes) {
+        const item = this.items.get(row.item_ref);
+        if (!item) return templateFailure("ITEM_NOT_FOUND", row.item_ref);
+        if (row.item) Object.assign(item, row.item);
+        if (row.take) {
+          if (row.take.volume_db !== undefined) item.take_volume_db = row.take.volume_db;
+          if (row.take.pan !== undefined) item.take_pan = row.take.pan;
+          if (row.take.pitch_semitones !== undefined) item.take_pitch_semitones = row.take.pitch_semitones;
+          if (row.take.playrate !== undefined) item.playrate = row.take.playrate;
+          if (row.take.preserve_pitch !== undefined) item.preserve_pitch = row.take.preserve_pitch;
+          if (row.take_ref) item.active_take_ref = row.take_ref;
+        }
+        if (this.options.corruptPostBatchControls === true && this.macroSequence === 1 && row.id === request.input.changes[0].id) {
+          item.take_pitch_semitones = (row.take?.pitch_semitones ?? 0) + 99;
+        }
+      }
+      let changes = request.input.changes.map((row) => ({
+        id: row.id,
+        item_ref: row.item_ref,
+        take_ref: row.take_ref,
+        status: "applied",
+        mutation: { status: this.options.mutationStatus ?? "completed" },
+        live_readback: { status: "passed" },
+      }));
+      if (this.options.identityFault === "omit_row") {
+        changes = changes.slice(1);
+      } else if (this.options.identityFault === "extra_row") {
+        changes = [
+          ...changes,
+          {
+            id: "extra_01",
+            item_ref: "item:guid:{EXTRA}",
+            status: "applied",
+            mutation: { status: "completed" },
+            live_readback: { status: "passed" },
+          },
+        ];
+      } else if (this.options.identityFault === "duplicate_id") {
+        changes = [...changes, { ...changes[0] }];
+      } else if (this.options.identityFault === "swap_item_ref" && changes.length >= 2) {
+        changes = changes.map((row, index, all) => (
+          index === 0 ? { ...row, item_ref: all[1].item_ref } : row
+        ));
+      }
       return {
         contract: "macro.execution.v1",
         ok: true,
-        result: {
-          changes: request.input.changes.map((row) => ({
-            id: row.id,
-            status: "applied",
-            live_readback: { status: "passed" },
-          })),
-        },
+        result: { changes },
       };
     }
     return templateFailure("UNEXPECTED_CALL", request.id);

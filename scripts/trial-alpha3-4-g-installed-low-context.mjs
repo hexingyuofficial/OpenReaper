@@ -51,6 +51,7 @@ export async function runInstalledLowContextTrial({
   evidenceRoot,
   profiles = ALPHA34_G_PROFILES,
   connectFactory = connectInstalledLowContextClient,
+  macroInputFactory = null,
 } = {}) {
   assertAbsolute(installedWrapper, "installedWrapper");
   assertAbsolute(evidenceRoot, "evidenceRoot");
@@ -116,7 +117,9 @@ export async function runInstalledLowContextTrial({
       const exactItem = exact.items?.find((item) => item.id === profile.expected_macro_id);
       assert(exactItem?.inputSchema?.type === "object", `${profile.id} exact expansion lacks input schema`);
 
-      const macroInput = { include: ["project_path", "dirty_state", "selected_context"], refresh_policy: "if_stale", limit: 25 };
+      const macroInput = typeof macroInputFactory === "function"
+        ? macroInputFactory(profile, exactItem.inputSchema)
+        : { include: ["project_path", "dirty_state", "selected_context"], refresh_policy: "if_stale", limit: 25 };
       assertInputMatchesExpandedSchema(report, macroInput, exactItem.inputSchema, profile.id);
       const macro = await callJson(client, report, profile.id, "call_template", {
         id: profile.expected_macro_id,
@@ -221,18 +224,168 @@ function auditPublicRequest(report, tool, args) {
   report.audit_checks.requests_validated += 1;
 }
 
-function assertInputMatchesExpandedSchema(report, input, schema, profileId) {
-  const properties = schema?.properties;
-  if (!properties || typeof properties !== "object" || Array.isArray(properties)) {
-    report.prohibited_paths.guessed_schema_fields = true;
-    throw Object.assign(new Error(`${profileId} expanded Macro schema lacks properties`), { code: "ALPHA34_G_ASSERTION_FAILED" });
+export function validateExpandedInputSchema(input, schema, path = "$") {
+  if (!isPlainObject(schema)) {
+    return { ok: false, errors: [`${path}: expanded Macro schema must be an object`] };
   }
-  const unknown = Object.keys(input).filter((field) => !Object.hasOwn(properties, field));
-  if (unknown.length > 0) {
+  const errors = [];
+  validateSchemaNode(input, schema, path, errors, { rootSchema: schema, refStack: new Set() });
+  return errors.length === 0 ? { ok: true, errors: [] } : { ok: false, errors };
+}
+
+function assertInputMatchesExpandedSchema(report, input, schema, profileId) {
+  const result = validateExpandedInputSchema(input, schema);
+  if (!result.ok) {
     report.prohibited_paths.guessed_schema_fields = true;
-    throw Object.assign(new Error(`${profileId} Macro input guessed fields: ${unknown.join(",")}`), { code: "ALPHA34_G_ASSERTION_FAILED" });
+    throw Object.assign(
+      new Error(`${profileId} Macro input failed expanded schema audit: ${result.errors.join("; ")}`),
+      { code: "ALPHA34_G_ASSERTION_FAILED" },
+    );
   }
   report.audit_checks.macro_inputs_validated_against_expanded_schema += 1;
+}
+
+function validateSchemaNode(value, schema, path, errors, context) {
+  if (!isPlainObject(schema)) {
+    errors.push(`${path}: schema node must be an object`);
+    return;
+  }
+
+  if (schema.$ref !== undefined) {
+    const resolved = resolveLocalSchemaRef(schema.$ref, context.rootSchema);
+    if (!resolved.ok) {
+      errors.push(`${path}: ${resolved.error}`);
+    } else {
+      const refKey = `${schema.$ref}\0${path}`;
+      if (context.refStack.has(refKey)) {
+        errors.push(`${path}: cyclic schema ref ${schema.$ref}`);
+      } else {
+        context.refStack.add(refKey);
+        validateSchemaNode(value, resolved.schema, path, errors, context);
+        context.refStack.delete(refKey);
+      }
+    }
+  }
+
+  validateSchemaCompositions(value, schema, path, errors, context);
+
+  if (schema.type !== undefined) {
+    const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+    if (!types.some((type) => matchesJsonType(value, type))) {
+      errors.push(`${path}: expected type ${types.join("|")}`);
+      return;
+    }
+  }
+
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
+    errors.push(`${path}: value is outside enum`);
+  }
+  if (Object.hasOwn(schema, "const") && schema.const !== value) {
+    errors.push(`${path}: const mismatch`);
+  }
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (typeof schema.minimum === "number" && value < schema.minimum) errors.push(`${path}: below minimum`);
+    if (typeof schema.maximum === "number" && value > schema.maximum) errors.push(`${path}: above maximum`);
+    if (typeof schema.exclusiveMinimum === "number" && value <= schema.exclusiveMinimum) errors.push(`${path}: not above exclusiveMinimum`);
+    if (typeof schema.exclusiveMaximum === "number" && value >= schema.exclusiveMaximum) errors.push(`${path}: not below exclusiveMaximum`);
+  }
+  if (typeof value === "string") {
+    if (typeof schema.minLength === "number" && value.length < schema.minLength) errors.push(`${path}: shorter than minLength`);
+    if (typeof schema.maxLength === "number" && value.length > schema.maxLength) errors.push(`${path}: longer than maxLength`);
+  }
+
+  if (Array.isArray(value)) {
+    if (typeof schema.minItems === "number" && value.length < schema.minItems) errors.push(`${path}: fewer than minItems`);
+    if (typeof schema.maxItems === "number" && value.length > schema.maxItems) errors.push(`${path}: more than maxItems`);
+    if (schema.items !== undefined) {
+      for (let index = 0; index < value.length; index += 1) {
+        validateSchemaNode(value[index], schema.items, `${path}[${index}]`, errors, context);
+      }
+    }
+  }
+
+  if (isPlainObject(value)) {
+    const properties = isPlainObject(schema.properties) ? schema.properties : {};
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    for (const key of required) {
+      if (!Object.hasOwn(value, key)) errors.push(`${path}: missing required ${key}`);
+    }
+    if (typeof schema.minProperties === "number" && Object.keys(value).length < schema.minProperties) {
+      errors.push(`${path}: fewer than minProperties`);
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (Object.hasOwn(properties, key)) {
+        validateSchemaNode(child, properties[key], `${path}.${key}`, errors, context);
+      } else if (schema.additionalProperties === false) {
+        errors.push(`${path}: additional property ${key}`);
+      } else if (isPlainObject(schema.additionalProperties)) {
+        validateSchemaNode(child, schema.additionalProperties, `${path}.${key}`, errors, context);
+      }
+    }
+  }
+}
+
+function validateSchemaCompositions(value, schema, path, errors, context) {
+  if (schema.allOf !== undefined) {
+    if (!Array.isArray(schema.allOf) || schema.allOf.length === 0) {
+      errors.push(`${path}: allOf must be a non-empty array`);
+    } else {
+      for (const branch of schema.allOf) validateSchemaNode(value, branch, path, errors, context);
+    }
+  }
+
+  for (const keyword of ["anyOf", "oneOf"]) {
+    if (schema[keyword] === undefined) continue;
+    const branches = schema[keyword];
+    if (!Array.isArray(branches) || branches.length === 0) {
+      errors.push(`${path}: ${keyword} must be a non-empty array`);
+      continue;
+    }
+    let matches = 0;
+    for (const branch of branches) {
+      const branchErrors = [];
+      validateSchemaNode(value, branch, path, branchErrors, {
+        rootSchema: context.rootSchema,
+        refStack: new Set(context.refStack),
+      });
+      if (branchErrors.length === 0) matches += 1;
+    }
+    if (keyword === "anyOf" && matches === 0) errors.push(`${path}: anyOf matched no schema`);
+    if (keyword === "oneOf" && matches !== 1) errors.push(`${path}: oneOf matched ${matches} schemas`);
+  }
+}
+
+function resolveLocalSchemaRef(ref, rootSchema) {
+  if (typeof ref !== "string" || !ref.startsWith("#/")) {
+    return { ok: false, error: "only local JSON Pointer schema refs are supported" };
+  }
+  let cursor = rootSchema;
+  for (const rawSegment of ref.slice(2).split("/")) {
+    const segment = rawSegment.replace(/~1/gu, "/").replace(/~0/gu, "~");
+    if (!isPlainObject(cursor) || !Object.hasOwn(cursor, segment)) {
+      return { ok: false, error: `unresolved schema ref ${ref}` };
+    }
+    cursor = cursor[segment];
+  }
+  return isPlainObject(cursor)
+    ? { ok: true, schema: cursor }
+    : { ok: false, error: `schema ref ${ref} does not resolve to an object` };
+}
+
+function matchesJsonType(value, type) {
+  if (type === "object") return isPlainObject(value);
+  if (type === "array") return Array.isArray(value);
+  if (type === "string") return typeof value === "string";
+  if (type === "boolean") return typeof value === "boolean";
+  if (type === "integer") return Number.isInteger(value);
+  if (type === "number") return typeof value === "number" && Number.isFinite(value);
+  if (type === "null") return value === null;
+  return false;
+}
+
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function validateProfile(profile) {

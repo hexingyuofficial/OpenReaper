@@ -185,6 +185,7 @@ export function createAlpha3_4FLearnedOperationExperiment(options = {}) {
           refs: {},
         }, "LEARNED_CONTROL_BATCH_FAILED");
         assertMacroBatchTruth(execution, batch);
+        await proveBatchControlTruth(callTemplate, batch);
         applied.push({ kind: "macro_batch", batch: index + 1, count: batch.length, verified: true });
       }
 
@@ -497,12 +498,137 @@ async function invoke(dispatch, request, code) {
 
 function assertMacroBatchTruth(execution, batch) {
   const changes = execution?.result?.changes;
-  if (!Array.isArray(changes) || changes.length !== batch.length) {
+  if (!Array.isArray(changes)) {
     throw new Alpha3_4FLearnedOperationError("Macro batch omitted complete change truth.", "LEARNED_CONTROL_READBACK_MISMATCH");
   }
-  if (changes.some((change) => change.status !== "applied" || change.live_readback?.status !== "passed")) {
-    throw new Alpha3_4FLearnedOperationError("Macro batch lacked applied native readback.", "LEARNED_CONTROL_READBACK_MISMATCH");
+  if (changes.length !== batch.length) {
+    throw new Alpha3_4FLearnedOperationError(
+      "Macro batch change count did not match requested batch identity.",
+      "LEARNED_CONTROL_READBACK_MISMATCH",
+      { expected: batch.length, actual: changes.length },
+    );
   }
+
+  const requestedIds = new Set();
+  const requestedItemRefs = new Set();
+  for (const row of batch) {
+    if (requestedIds.has(row.id) || requestedItemRefs.has(row.item_ref)) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Requested batch identity contains duplicate id or item_ref.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+      );
+    }
+    requestedIds.add(row.id);
+    requestedItemRefs.add(row.item_ref);
+  }
+
+  const seenIds = new Set();
+  const seenItemRefs = new Set();
+  for (const change of changes) {
+    if (typeof change?.id !== "string" || typeof change?.item_ref !== "string") {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch change omitted exact id/item_ref identity.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+      );
+    }
+    if (seenIds.has(change.id) || seenItemRefs.has(change.item_ref)) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch returned duplicate change identities.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: change.id, item_ref: change.item_ref },
+      );
+    }
+    seenIds.add(change.id);
+    seenItemRefs.add(change.item_ref);
+    if (!requestedIds.has(change.id) || !requestedItemRefs.has(change.item_ref)) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch returned an unbound change identity.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: change.id, item_ref: change.item_ref },
+      );
+    }
+    const requested = batch.find((row) => row.id === change.id);
+    if (!requested || requested.item_ref !== change.item_ref) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch identity binding mismatched requested id/item_ref.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: change.id, expected_item_ref: requested?.item_ref, actual_item_ref: change.item_ref },
+      );
+    }
+    if (change.mutation?.status === "not_run") {
+      throw new Alpha3_4FLearnedOperationError(
+        `Macro batch reported mutation.status=not_run for id=${change.id}.`,
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: change.id, mutation: change.mutation },
+      );
+    }
+    if (
+      change.status !== "applied"
+      || change.mutation?.status !== "completed"
+      || change.live_readback?.status !== "passed"
+    ) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch lacked applied native readback.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        {
+          id: change.id,
+          status: change.status,
+          mutation: change.mutation,
+          live_readback: change.live_readback,
+        },
+      );
+    }
+  }
+
+  for (const row of batch) {
+    if (!seenIds.has(row.id) || !seenItemRefs.has(row.item_ref)) {
+      throw new Alpha3_4FLearnedOperationError(
+        "Macro batch omitted a requested change identity.",
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: row.id, item_ref: row.item_ref },
+      );
+    }
+  }
+}
+
+async function proveBatchControlTruth(callTemplate, batch) {
+  for (const row of batch) {
+    const summary = await readExactItem(callTemplate, row.item_ref, row.item_ref);
+    const mismatches = controlRowMismatches(row, summary);
+    if (mismatches.length > 0) {
+      throw new Alpha3_4FLearnedOperationError(
+        `Post-batch native control proof failed for ${row.id}.`,
+        "LEARNED_CONTROL_READBACK_MISMATCH",
+        { id: row.id, item_ref: row.item_ref, fields: mismatches },
+      );
+    }
+  }
+}
+
+function controlRowMismatches(row, summary) {
+  const mismatched = [];
+  if (summary.item_ref !== row.item_ref) mismatched.push("item_ref");
+  if (row.take_ref !== undefined && summary.active_take_ref !== row.take_ref) mismatched.push("active_take_ref");
+  if (isPlainObject(row.item)) {
+    for (const [field, expected] of Object.entries(row.item)) {
+      if (!same(summary[field], expected)) mismatched.push(field);
+    }
+  }
+  if (isPlainObject(row.take)) {
+    const mapping = {
+      volume_db: "take_volume_db",
+      pan: "take_pan",
+      pitch_semitones: "take_pitch_semitones",
+      playrate: "playrate",
+      preserve_pitch: "preserve_pitch",
+    };
+    for (const [control, summaryField] of Object.entries(mapping)) {
+      if (row.take[control] !== undefined && !same(summary[summaryField], row.take[control])) {
+        mismatched.push(summaryField);
+      }
+    }
+  }
+  return mismatched;
 }
 
 function executionSummary(execution) {
