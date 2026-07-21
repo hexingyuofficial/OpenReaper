@@ -9,9 +9,9 @@ hand-written startup brief.
 <!-- OPENREAPER_AGENT_START_HERE_COMPACT_BEGIN -->
 # OpenReaper Agent Start Here (compact)
 
-Product: OpenReaper MCP. Server name: `openreaper`. Exactly five tools:
-`ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`.
-No `call_recipe`, no sixth tool, no raw executor.
+Product: OpenReaper MCP. Server name: `openreaper`. Exactly six tools:
+`ping`, `get_state`, `list_templates`, `list_recipes`, `call_template`,
+`call_recipe`. No seventh tool, no raw executor.
 
 ## First-round flow
 
@@ -22,6 +22,14 @@ Flow: `ping -> list_templates with the user's original words as query -> exact-i
 3. Exact-id expansion: `list_templates` with `ids:[...]` and needed `fields` (for example `id`, `inputSchema`) to open the full Macro manual.
 4. `call_template` with the exact Macro id and schema-valid `input`.
 5. Live REAPER readback is truth. SQLite / Project Index is navigation only.
+
+Saved executable Recipes use `call_recipe` with exactly seven operations:
+`validate`, `save`, `list`, `get`, `delete`, `run`, `resume`. Discover a saved
+revision through `list_recipes`, expand its exact id, and reuse the complete
+`recipe_id` / `version` / numeric `revision` / `content_hash` /
+`validation_result_id` identity unchanged. Never run by fuzzy recipe id alone
+and never send runtime trust facts. Page retained evidence with operation `get`
+plus `evidence_ref`.
 
 Macro-first: prefer one of the 15 Macros. Use a direct Template only after
 recording one typed fallback reason
@@ -80,6 +88,8 @@ Public responses may truncate. Truncation is not internal knowledge loss.
 - Shrink `limit` / fields / include when a budget error is returned.
 - Recover full payloads with `get_state` (`scope=artifact`, `artifact_ref`) when
   an artifact ref is returned.
+- Recover retained Recipe evidence with `call_recipe` operation `get` and the
+  returned `evidence_ref`.
 - Retry once after readiness/budget repair; re-resolve refs after project generation changes.
 - Live REAPER readback remains authority for writes; SQLite never authorizes a mutation.
 

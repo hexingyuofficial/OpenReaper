@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
@@ -33,11 +35,29 @@ import {
   OPENREAPER_AGENT_START_HERE_DOCUMENT,
   OPENREAPER_PUBLIC_TOOL_IDS,
 } from "./openreaper-agent-start-here-v1.mjs";
+import {
+  createExecutableDependencyCatalog,
+  executableRevisionDiscoveryProjection,
+  hashExecutableRecipeContent,
+} from "../../core/src/executable-recipe-contract-v1.mjs";
+import {
+  CALL_RECIPE_CHECKPOINT_PROOF_CONTRACT,
+  createAuthoritativeRuntimeFactsProvider,
+  createCallRecipeRuntime,
+} from "./call-recipe-runtime-v1.mjs";
+import {
+  createExecutableRecipeRevisionStore,
+} from "../../core/src/executable-recipe-revision-store-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
 const TOOL_SURFACE = OPENREAPER_PUBLIC_TOOL_IDS;
 const AGENT_START_HERE_HINT = `Follow ${OPENREAPER_AGENT_START_HERE_DOCUMENT} (MCP initialization instructions): ${OPENREAPER_AGENT_FIRST_ROUND_FLOW}. Macro-first; full manuals only on exact ids.`;
+export const CALL_RECIPE_STAGE_BUDGET = Object.freeze({
+  max_response_bytes: 65_536,
+  max_inline_value_bytes: 8_192,
+  max_items: 100,
+});
 
 async function main() {
   const callContext = createAlpha3_2C1CallContextManager({ env: process.env });
@@ -70,7 +90,15 @@ async function main() {
         }
       : { opted_in: false },
   });
-  const recipeDiscovery = createDiscoveryCatalog({ recipes: [] });
+  // call_recipe is always registered; bound store/catalog come from env when configured.
+  const callRecipeBinding = createStdioCallRecipeRuntime({
+    env: process.env,
+    callTemplateRuntime: runtime,
+    artifactRuntime,
+    callContext,
+    liveBridge,
+  });
+  const boundCallRecipeRuntime = callRecipeBinding?.runtime ?? null;
   const initializationInstructions = createOpenReaperMcpInitializationInstructions({
     package_root: process.env.OPENREAPER_MCP_PACKAGE_ROOT,
   });
@@ -150,7 +178,7 @@ async function main() {
 
   server.tool(
     "list_recipes",
-    `List OpenReaper recipe contracts. Recipes are agent-readable plans, not server-executed tools. ${AGENT_START_HERE_HINT}`,
+    `List OpenReaper recipe contracts and compact saved executable revision facts. Historical recipes are agent-stepped; saved validated revisions run through call_recipe. ${AGENT_START_HERE_HINT}`,
     {
       ids: z.array(z.string()).optional(),
       fields: z.array(z.string()).optional(),
@@ -162,9 +190,25 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
     },
-    async (request) => jsonToolResult(attachAlpha3_3B1AgentContextProductMetadata(
-      recipeDiscovery.list_recipes(request ?? {}),
-    )),
+    async (request) => {
+      try {
+        const recipes = loadStdioExecutableRecipeDiscovery(callRecipeBinding);
+        const recipeDiscovery = createDiscoveryCatalog({ recipes });
+        return jsonToolResult(attachAlpha3_3B1AgentContextProductMetadata(
+          recipeDiscovery.list_recipes(request ?? {}),
+        ));
+      } catch (error) {
+        return jsonToolResult({
+          ok: false,
+          contract: "discovery.menu.v1",
+          error: {
+            code: "RECIPE_DISCOVERY_UNAVAILABLE",
+            message: error?.message ?? "Saved executable recipe discovery failed.",
+            recoverable: true,
+          },
+        }, true);
+      }
+    },
   );
 
   server.tool(
@@ -226,6 +270,62 @@ async function main() {
         },
         user_reminder: "Use call_template with macro.project.inspect or macro.project.query for live project state; use get_state with scope=artifact only for artifact refs. Truncation is not knowledge loss: follow cursor/budget/artifact recovery in docs/AGENT_START_HERE.md.",
       }, true);
+    },
+  );
+
+  server.tool(
+    "call_recipe",
+    `Validate, save, list, get, delete, run, or resume a saved executable recipe revision. Use get with evidence_ref for bounded evidence pages. Run accepts only complete stored identity; no inline graphs. ${AGENT_START_HERE_HINT}`,
+    {
+      operation: z.enum([
+        "validate",
+        "save",
+        "list",
+        "get",
+        "delete",
+        "run",
+        "resume",
+      ]),
+      draft: z.record(z.unknown()).optional(),
+      revision: z.union([
+        z.number().int().positive(),
+        z.record(z.unknown()),
+      ]).optional(),
+      input: z.record(z.unknown()).optional(),
+      inputs: z.record(z.unknown()).optional(),
+      filter: z.record(z.unknown()).optional(),
+      recipe_id: z.string().optional(),
+      version: z.string().optional(),
+      revision_number: z.number().int().positive().optional(),
+      content_hash: z.string().optional(),
+      validation_result_id: z.string().optional(),
+      identity: z.record(z.unknown()).optional(),
+      confirm: z.boolean().optional(),
+      confirmation: z.boolean().optional(),
+      run_id: z.string().optional(),
+      checkpoint_id: z.string().optional(),
+      evidence_ref: z.string().optional(),
+      limit: z.number().int().positive().optional(),
+      cursor: z.string().optional().nullable(),
+      budget: z.record(z.unknown()).optional(),
+      relative_path: z.string().optional(),
+      saved_at: z.string().optional(),
+    },
+    async (request) => {
+      if (!boundCallRecipeRuntime) {
+        return jsonToolResult({
+          ok: false,
+          contract: "call_recipe.runtime.v1",
+          operation: request?.operation ?? null,
+          error: {
+            code: "STORE_ERROR",
+            message: "call_recipe requires a bound executable recipe store (OPENREAPER_EXECUTABLE_RECIPE_ROOT + catalog).",
+            recoverable: true,
+          },
+        }, true);
+      }
+      const result = await boundCallRecipeRuntime.call_recipe(request ?? {});
+      return jsonToolResult(result, result?.ok === false);
     },
   );
 
@@ -366,7 +466,284 @@ function isHardToolError(result) {
   return code === "CALL_TEMPLATE_RAW_EXECUTION_REJECTED";
 }
 
-main().catch((error) => {
-  process.stderr.write(`[openreaper-mcp] fatal: ${error?.stack ?? error}\n`);
-  process.exit(1);
-});
+export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifactRuntime, callContext, liveBridge }) {
+  const root = typeof env.OPENREAPER_EXECUTABLE_RECIPE_ROOT === "string"
+    ? env.OPENREAPER_EXECUTABLE_RECIPE_ROOT.trim()
+    : "";
+  if (!root) return null;
+  const catalogJson = env.OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON;
+  if (typeof catalogJson !== "string" || catalogJson.trim() === "") return null;
+  let catalog;
+  try {
+    catalog = createExecutableDependencyCatalog(JSON.parse(catalogJson));
+  } catch {
+    return null;
+  }
+  try {
+    const source = env.OPENREAPER_EXECUTABLE_RECIPE_SOURCE || "user";
+    const store = createExecutableRecipeRevisionStore({
+      root,
+      source,
+      catalog,
+    });
+    const dispatchers = createStdioRecipeDispatchers({
+      callTemplateRuntime,
+      artifactRuntime,
+      callContext,
+    });
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      dispatchers,
+      runtimeFactsProvider: createAuthoritativeRuntimeFactsProvider({
+        catalog,
+        projectInventoryProvider: () => readFreshOpenProjectInventory({
+          callTemplateRuntime,
+          callContext,
+        }),
+        bridgeLivenessProvider: async () => {
+          if (typeof liveBridge?.executor?.probeLiveness !== "function") {
+            throw new Error("Live Bridge liveness probe is not configured.");
+          }
+          return liveBridge.executor.probeLiveness();
+        },
+        riskGrantProvider: createConfiguredRiskGrantProvider(env),
+        checkpointEvidenceProvider: createStoredCheckpointEvidenceProvider({ store, catalog }),
+      }),
+    });
+    return Object.freeze({ runtime, catalog });
+  } catch {
+    return null;
+  }
+}
+
+function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {
+  const callTemplateStage = async ({ stage, inputs }) => {
+    if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
+      throw new Error("Recipe Macro/Template stage runtime is not configured.");
+    }
+    return callTemplateRuntime.call_template({
+      id: stage.dependency?.id,
+      input: inputs,
+      context: callContext.allocate(),
+      budget: CALL_RECIPE_STAGE_BUDGET,
+    });
+  };
+  return {
+    macro: callTemplateStage,
+    template: callTemplateStage,
+    get_state: typeof artifactRuntime?.get_state === "function"
+      ? async ({ inputs }) => artifactRuntime.get_state({
+          ...inputs,
+          budget: { max_response_bytes: CALL_RECIPE_STAGE_BUDGET.max_response_bytes },
+        })
+      : null,
+    checkpoint: async ({ stage, revision }) => {
+      const declaration = revision.draft?.checkpoints?.find((item) => (
+        item.id === stage.checkpoint && item.after_stage === stage.id
+      ));
+      if (!declaration) throw new Error("Recipe checkpoint declaration is unavailable.");
+      return {
+        contract: CALL_RECIPE_CHECKPOINT_PROOF_CONTRACT,
+        ok: true,
+        verified: true,
+        checkpoint_id: declaration.id,
+        stage_id: stage.id,
+        evidence_id: declaration.evidence_id,
+        resume_identity: declaration.resume_identity,
+        recipe_id: revision.recipe_id,
+        version: revision.version,
+        revision: revision.revision,
+        content_hash: revision.content_hash,
+        summary: "Server-owned executable recipe checkpoint proof.",
+        outputs: {},
+      };
+    },
+  };
+}
+
+function createConfiguredRiskGrantProvider(env) {
+  let policy = null;
+  try {
+    policy = JSON.parse(env.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON ?? "null");
+  } catch {}
+  return async ({ identity }) => {
+    let grants = Array.isArray(policy) ? policy : null;
+    if (policy && !Array.isArray(policy) && typeof policy === "object") {
+      const exactKey = `${identity.recipe_id}@${identity.version}#${identity.revision}:${identity.content_hash}`;
+      grants = policy[exactKey]
+        ?? policy[identity.content_hash]
+        ?? policy[identity.recipe_id]
+        ?? policy.default
+        ?? null;
+    }
+    if (
+      !Array.isArray(grants)
+      || grants.length === 0
+      || grants.some((item) => typeof item !== "string" || item.length === 0)
+    ) {
+      throw new Error("Server-owned executable recipe risk grants are not configured for this revision.");
+    }
+    return [...new Set(grants)];
+  };
+}
+
+function createStoredCheckpointEvidenceProvider({ store, catalog }) {
+  return async ({ identity }) => {
+    const loaded = store.get({
+      recipe_id: identity.recipe_id,
+      version: identity.version,
+      revision: identity.revision,
+      content_hash: identity.content_hash,
+    });
+    const revision = loaded.payload ?? loaded;
+    const contentHash = hashExecutableRecipeContent(revision.draft, { catalog });
+    return (revision.draft?.checkpoints ?? []).map((checkpoint) => ({
+      checkpoint_id: checkpoint.id,
+      evidence_id: checkpoint.evidence_id,
+      resume_identity: checkpoint.resume_identity,
+      recipe_id: revision.recipe_id,
+      version: revision.version,
+      revision: revision.revision,
+      content_hash: contentHash,
+    }));
+  };
+}
+
+export async function readFreshOpenProjectInventory({ callTemplateRuntime, callContext }) {
+  if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
+    throw new Error("Native project inventory runtime is not configured.");
+  }
+  const projects = [];
+  const projectRefs = new Set();
+  let cursor = "0";
+  let declaredTotal = null;
+  for (let pageIndex = 0; pageIndex < 64; pageIndex += 1) {
+    const execution = await callTemplateRuntime.call_template({
+      id: "template.project.list_open_projects",
+      input: { cursor, limit: 100 },
+      context: callContext.allocate(),
+      budget: {
+        max_response_bytes: 65_536,
+        max_inline_value_bytes: 8_192,
+        max_items: 100,
+      },
+    });
+    if (execution?.ok !== true) {
+      throw new Error(`Native open-project inventory failed: ${execution?.error?.code ?? "unknown"}.`);
+    }
+    if (
+      execution.contract !== "template.execution.v1"
+      || execution.template?.id !== "template.project.list_open_projects"
+      || execution.verification?.status !== "passed"
+    ) {
+      throw new Error("Native open-project inventory lacked the exact verified Template execution identity.");
+    }
+    const page = execution.result?.summary;
+    if (!page || typeof page !== "object" || !Array.isArray(page.projects)) {
+      throw new Error("Native open-project inventory returned no canonical project rows.");
+    }
+    if (
+      page.readback_status !== "passed"
+      || page.live_materialization !== "native_enum_projects_verified"
+    ) {
+      throw new Error("Native open-project inventory lacked native EnumProjects readback proof.");
+    }
+    if (
+      !Number.isInteger(page.total_count)
+      || page.total_count < 1
+      || !Number.isInteger(page.returned_count)
+      || page.returned_count !== page.projects.length
+      || page.returned_count > page.total_count
+      || String(page.cursor) !== cursor
+      || (declaredTotal !== null && page.total_count !== declaredTotal)
+    ) {
+      throw new Error("Native open-project inventory page counts or cursor are contradictory.");
+    }
+    for (const project of page.projects) {
+      const projectRef = project?.project_ref;
+      if (!isCanonicalProjectRef(projectRef) || projectRefs.has(projectRef)) {
+        throw new Error("Native open-project inventory contains an invalid or duplicate project ref.");
+      }
+      projectRefs.add(projectRef);
+    }
+    declaredTotal = page.total_count;
+    projects.push(...page.projects);
+    if (page.coverage_status === "complete") {
+      if (projects.length !== declaredTotal || page.next_cursor != null) {
+        throw new Error("Native open-project terminal page is incomplete.");
+      }
+      if (projects.filter((project) => project?.active === true).length !== 1) {
+        throw new Error("Native open-project inventory must contain exactly one active project.");
+      }
+      return {
+        projects,
+        total_count: declaredTotal,
+        returned_count: projects.length,
+        coverage_status: "complete",
+      };
+    }
+    if (
+      page.coverage_status !== "paged"
+      || typeof page.next_cursor !== "string"
+      || !/^\d+$/u.test(page.next_cursor)
+      || Number(page.next_cursor) !== projects.length
+      || page.next_cursor === cursor
+    ) {
+      throw new Error("Native open-project inventory pagination did not advance exactly.");
+    }
+    cursor = page.next_cursor;
+  }
+  throw new Error("Native open-project inventory exceeded the bounded 64-page hydration limit.");
+}
+
+function isCanonicalProjectRef(value) {
+  if (typeof value !== "string" || /[\u0000-\u001f\u007f]/u.test(value)) return false;
+  return ["project:path:", "project:tab:"].some((prefix) => (
+    value.startsWith(prefix) && value.length > prefix.length
+  ));
+}
+
+function loadStdioExecutableRecipeDiscovery(binding) {
+  if (!binding?.runtime?.store) return [];
+  const listed = binding.runtime.store.list();
+  const latestByRecipeId = new Map();
+  for (const item of listed.items ?? []) {
+    const revision = item.payload ?? item;
+    const previous = latestByRecipeId.get(revision.recipe_id);
+    const executableIdentity = {
+      recipe_id: revision.recipe_id,
+      version: revision.version,
+      revision: revision.revision,
+      content_hash: revision.content_hash,
+      validation_result_id: revision.validation_result_id,
+    };
+    if (
+      previous
+      && compareExecutableRecipeDiscoveryIdentity(previous.executable_identity, executableIdentity) >= 0
+    ) continue;
+    latestByRecipeId.set(revision.recipe_id, {
+      ...executableRevisionDiscoveryProjection(revision, { catalog: binding.catalog }),
+      kind: "recipe",
+      executable: true,
+      executable_identity: executableIdentity,
+    });
+  }
+  return [...latestByRecipeId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function compareExecutableRecipeDiscoveryIdentity(left, right) {
+  if (left.revision !== right.revision) return left.revision < right.revision ? -1 : 1;
+  for (const field of ["version", "content_hash", "validation_result_id"]) {
+    if (left[field] === right[field]) continue;
+    return left[field] < right[field] ? -1 : 1;
+  }
+  return 0;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))) {
+  main().catch((error) => {
+    process.stderr.write(`[openreaper-mcp] fatal: ${error?.stack ?? error}\n`);
+    process.exit(1);
+  });
+}

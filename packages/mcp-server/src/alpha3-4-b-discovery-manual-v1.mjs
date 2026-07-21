@@ -231,7 +231,7 @@ export function createAlpha34BDiscoveryManualProjection({
     task_text_persisted: false,
     search_phrases_are_metadata_only: true,
     hidden_ids_executable: false,
-    call_recipe_exposed: false,
+    call_recipe_exposed: true,
   });
 }
 

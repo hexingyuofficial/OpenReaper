@@ -15,10 +15,11 @@ const expectedTools = [
   "list_templates",
   "list_recipes",
   "call_template",
+  "call_recipe",
 ];
 
 if (JSON.stringify([...TOOL_ABI_V1_TOOL_NAMES].sort()) !== JSON.stringify([...expectedTools].sort())) {
-  console.error("Layer 6 must not add or remove MCP tools.");
+  console.error("Layer 6 sources must not drift the public six-tool ABI.");
   process.exit(1);
 }
 

@@ -53,6 +53,7 @@ assertStrictToolSet(TOOL_ABI_V1_TOOL_NAMES, [
   "list_templates",
   "list_recipes",
   "call_template",
+  "call_recipe",
 ]);
 
 execFileSync(process.execPath, ["--test", "tests/layer2/foundation-bridge.test.mjs"], {

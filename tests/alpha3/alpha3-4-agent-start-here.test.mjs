@@ -163,7 +163,8 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /first_try_execution_guide/u);
   assert.match(instructions, /next_call/u);
   assert.doesNotMatch(instructions, /\{TRACK\}|\{TAKE\}|\{ITEM\}/u);
-  assert.match(instructions, /No `call_recipe`/u);
+  assert.match(instructions, /call_recipe/u);
+  assert.match(instructions, /Exactly six tools/u);
   assert.match(instructions, /Raw Lua/u);
 });
 
@@ -282,7 +283,7 @@ test("approved eight examples validate against current public schemas", () => {
   }
 });
 
-test("stdio wires exactly five tools and SDK instructions from the unique document", async () => {
+test("stdio wires exactly six tools and SDK instructions from the unique document", async () => {
   const stdio = await readFile(STDIO_PATH, "utf8");
   assert.match(stdio, /new McpServer\(\{\s*name: "openreaper",\s*version: VERSION,\s*\}, \{\s*instructions: initializationInstructions,\s*\}\)/su);
   assert.match(stdio, /createOpenReaperMcpInitializationInstructions/u);
@@ -290,8 +291,8 @@ test("stdio wires exactly five tools and SDK instructions from the unique docume
   for (const tool of OPENREAPER_PUBLIC_TOOL_IDS) {
     assert.match(stdio, new RegExp(`"${tool}"`));
   }
-  assert.equal((stdio.match(/server\.tool\(/gu) ?? []).length, 5);
-  assert.doesNotMatch(stdio, /call_recipe/u);
+  assert.equal((stdio.match(/server\.tool\(/gu) ?? []).length, 6);
+  assert.match(stdio, /call_recipe/u);
 
   const instructions = createOpenReaperMcpInitializationInstructions({ document_path: DOC_PATH });
   const server = new McpServer({ name: "openreaper", version: "0.3.0-alpha" }, { instructions });

@@ -40,11 +40,14 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
 Executable Macros are discovered through the existing action discovery surface
-and invoked through `call_template`. This contract adds no `call_macro`,
-`call_recipe`, raw SQL, raw Lua, raw action, shell, UI, or arbitrary graph tool.
+and invoked through `call_template`. Macro paths add no `call_macro` or hidden
+Recipe executor; public `call_recipe` is the separate saved-revision Recipe
+tool. This contract adds no raw SQL, raw Lua, raw action, shell, UI, or
+arbitrary graph tool.
 
 The `macro.*` id namespace does not make a Macro a Template. `call_template` is
 the frozen transport/tool name shared by accepted atomic Templates and
@@ -393,7 +396,7 @@ executable public Macro.
 
 The Macro layer is accepted only when:
 
-- the five-tool ABI is unchanged;
+- the six-tool ABI remains exact, including public `call_recipe`;
 - every public completed Macro is executable and registered;
 - no completed public status contains `plan_only`;
 - requests cannot inject stages, dependencies, Template ids, or execution

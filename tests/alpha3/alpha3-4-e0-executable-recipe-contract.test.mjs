@@ -815,8 +815,9 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
 
     assert.equal(validateRecipeContract(agentRecipe).ok, true);
     assert.equal(normalizeRecipeContract(agentRecipe).contract, RECIPE_CONTRACT);
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), false);
+    // Alpha3.4-E2 supersedes the global five-tool assertion; E0 core remains non-executing.
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), true);
 
     const coreSource = readFileSync(
       new URL("../../packages/core/src/executable-recipe-contract-v1.mjs", import.meta.url),
@@ -824,7 +825,7 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
     );
     assert.doesNotMatch(coreSource, /packages\/mcp-server/);
     assert.doesNotMatch(coreSource, /writeFileSync|mkdirSync|rmSync|spawn\(|execFile/);
-    assert.doesNotMatch(coreSource, /function\s+(?:executeRecipe|runRecipe)|call_recipe\s*\(/);
+    assert.doesNotMatch(coreSource, /function\s+(?:executeRecipe|runRecipe)\b/);
 
     normalizeExecutableRecipeDraft(makeDraft(), { catalog: makeCatalog() });
     normalizeExecutableRecipeRevision(

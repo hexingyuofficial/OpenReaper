@@ -244,9 +244,10 @@ describe("Alpha3.2-C3D macro.project.file plan-only runtime", () => {
     assert.equal(Buffer.byteLength(JSON.stringify(defaultMenu)) <= 98_304, true);
   });
 
-  it("keeps the frozen five-tool surface with no call_recipe or hidden executor", () => {
-    assert.deepEqual(TOOL_ABI_V1_TOOL_NAMES, ["ping", "get_state", "list_templates", "list_recipes", "call_template"]);
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), false);
+  it("keeps project-file Macro off hidden Recipe execution while public ABI includes call_recipe", () => {
+    // Per-Macro safety: this Macro path is not a hidden Recipe executor.
+    assert.deepEqual(TOOL_ABI_V1_TOOL_NAMES, ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"]);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), true);
     const plan = planAlpha3_2C3DProjectFileMacro({ operation: "save_current" });
     assert.equal(plan.safety.added_tools, 0);
     assert.equal(plan.safety.public_call_recipe, false);

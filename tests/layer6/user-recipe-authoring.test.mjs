@@ -679,15 +679,16 @@ describe("Layer 6 Narrow User Recipe Authoring v1", () => {
     );
   });
 
-  it("does not add MCP tools or recipe executor surface", () => {
+  it("does not add MCP tools beyond call_recipe or a layer-6 recipe executor surface", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
 
     const fixture = createFixture();
     writeRecipe(fixture, "user", "tracks/prepare.recipe.json", makeRecipe());

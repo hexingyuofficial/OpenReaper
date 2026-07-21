@@ -120,13 +120,18 @@ if (!authoringSource.includes("USER_EXECUTABLE_RECIPE_STORE_CONTRACT") && !autho
   process.exit(1);
 }
 
-const expectedTools = ["ping", "get_state", "list_templates", "list_recipes", "call_template"];
+const expectedTools = ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"];
 if (JSON.stringify([...TOOL_ABI_V1_TOOL_NAMES].sort()) !== JSON.stringify([...expectedTools].sort())) {
-  console.error("Public MCP tool surface must remain exactly five tools.");
+  console.error("Public MCP tool surface must remain exactly six tools including call_recipe.");
   process.exit(1);
 }
-if (TOOL_ABI_V1_TOOL_NAMES.length !== 5) {
+if (TOOL_ABI_V1_TOOL_NAMES.length !== 6) {
   console.error("Public MCP tool count drifted.");
+  process.exit(1);
+}
+// E1 store itself must remain non-executing.
+if (storeSource.includes("function run(") || /\bstore\.run\b/.test(storeSource)) {
+  console.error("E1 store must not gain run execution.");
   process.exit(1);
 }
 if (ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length !== 15) {

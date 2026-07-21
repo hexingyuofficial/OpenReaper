@@ -15,6 +15,7 @@ const expectedToolNames = [
   "list_templates",
   "list_recipes",
   "call_template",
+  "call_recipe",
 ];
 
 let failed = false;
@@ -216,6 +217,16 @@ assertStrictToolSet(
   "docs/abi/TOOL_ABI_V1.md tool role headings",
   [...toolAbiDoc.matchAll(/^### `([^`]+)`\s*$/gm)].map((match) => match[1]),
 );
+
+const callRecipeSection = toolAbiDoc.split("### `call_recipe`")[1]?.split("\n## ")[0] ?? "";
+for (const operation of ["validate", "save", "list", "get", "delete", "run", "resume"]) {
+  if (!new RegExp(`^${operation}$`, "mu").test(callRecipeSection)) {
+    fail(`docs/abi/TOOL_ABI_V1.md call_recipe section is missing ${operation}.`);
+  }
+}
+if (/^evidence_page$/mu.test(callRecipeSection)) {
+  fail("docs/abi/TOOL_ABI_V1.md must use get(evidence_ref), not an eighth evidence_page operation.");
+}
 
 if (failed) process.exit(1);
 

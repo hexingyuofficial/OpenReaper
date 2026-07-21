@@ -19,6 +19,7 @@ export const OPENREAPER_PUBLIC_TOOL_IDS = Object.freeze([
   "list_templates",
   "list_recipes",
   "call_template",
+  "call_recipe",
 ]);
 
 export const OPENREAPER_FLAT_FIFTEEN_MACRO_IDS = Object.freeze([
@@ -165,7 +166,11 @@ export function assertCompactContainsRequiredTruth(compactText) {
     "Raw Lua",
     '"mode":"create_clips"',
     '"plugin":"reacomp"',
-    "No `call_recipe`",
+    "call_recipe",
+    "Exactly six tools",
+    "exactly seven operations",
+    "evidence_ref",
+    "Never run by fuzzy recipe id alone",
   ]) {
     if (!compactText.includes(required)) {
       throw startHereError("AGENT_START_HERE_REQUIRED_PHRASE_MISSING", `AGENT_START_HERE compact section is missing required phrase: ${required}.`, {

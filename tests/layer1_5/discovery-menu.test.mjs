@@ -329,6 +329,83 @@ describe("Layer 1.5 discovery/menu contract", () => {
     assert.equal(secondPage.page.has_more, true);
   });
 
+  it("emits a complete exact call_recipe run example only for saved executable identity", () => {
+    const identity = {
+      recipe_id: "recipe.project.saved_flow",
+      version: "1.2.3",
+      revision: 4,
+      content_hash: "b".repeat(64),
+      validation_result_id: "validation:saved-flow",
+    };
+    const response = listRecipes({
+      ids: [identity.recipe_id],
+      fields: ["capability_truth"],
+    }, [recipe({
+      id: identity.recipe_id,
+      lifecycle: "validated",
+      tags: ["executable", "revision"],
+      executable: true,
+      executable_identity: identity,
+    })]);
+
+    assert.deepEqual(
+      response.items[0].capability_truth.example_call_shape,
+      {
+        tool: "call_recipe",
+        request: {
+          operation: "run",
+          ...identity,
+          inputs: {},
+        },
+        identity_policy: "exact_saved_validated_revision_only",
+      },
+    );
+    assert.equal(response.items[0].capability_truth.known_blocker, null);
+  });
+
+  it("keeps executable-tagged draft recipes agent-stepped", () => {
+    const response = listRecipes({
+      ids: ["recipe.project.draft_flow"],
+      fields: ["capability_truth"],
+    }, [recipe({
+      id: "recipe.project.draft_flow",
+      lifecycle: "draft",
+      tags: ["executable"],
+    })]);
+    const truth = response.items[0].capability_truth;
+
+    assert.notEqual(truth.known_blocker, null);
+    assert.equal(truth.example_call_shape.tool, undefined);
+    assert.equal(
+      truth.example_call_shape.executor,
+      "agent_runs_declared_procedure_with_call_template_and_get_state",
+    );
+  });
+
+  it("keeps validated recipes without complete executable identity agent-stepped", () => {
+    const response = listRecipes({
+      ids: ["recipe.project.incomplete_flow"],
+      fields: ["capability_truth"],
+    }, [recipe({
+      id: "recipe.project.incomplete_flow",
+      lifecycle: "validated",
+      tags: ["executable"],
+      executable: true,
+      executable_identity: {
+        recipe_id: "recipe.project.incomplete_flow",
+        version: "1.0.0",
+      },
+    })]);
+    const truth = response.items[0].capability_truth;
+
+    assert.notEqual(truth.known_blocker, null);
+    assert.equal(truth.example_call_shape.tool, undefined);
+    assert.equal(
+      truth.example_call_shape.executor,
+      "agent_runs_declared_procedure_with_call_template_and_get_state",
+    );
+  });
+
   it("rejects broad detail-field dumps without exact ids", () => {
     assert.throws(
       () => listTemplates({ fields: ["inputSchema"] }, makeTemplates(2)),

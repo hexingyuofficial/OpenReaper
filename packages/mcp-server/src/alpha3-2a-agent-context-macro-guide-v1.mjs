@@ -665,7 +665,7 @@ const PRIMARY_DEFINITIONS = deepFreeze([
       success_criteria: [
         "Dry-run returns the effective managed-root preview; non-dry-run executes one D31 mutation bracketed by exact dirty-state reads.",
         "The registered render dependency verifies every non-empty managed WAV/OGG/MP3 output and returns requested/actual format, bitrate, extension, absolute path, size, target identity, and compact manifest/evidence refs.",
-        "No arbitrary path, overwrite, external encoder, hidden executor, public call_recipe, raw action/Lua, shell, or UI bypass is exposed.",
+        "No arbitrary path, overwrite, external encoder, hidden Recipe executor, raw action/Lua, shell, or UI bypass is exposed; public call_recipe remains a separate saved-revision workflow.",
       ],
       common_blockers: [
         blocker("RENDER_ROOT_NOT_READY", "The managed render root is absent, unwritable, or outside policy."),
@@ -960,14 +960,14 @@ const COMPACT_GUIDE = deepFreeze({
   status: "runtime_aligned",
   review_status: "truthful_12_macro_surface",
   tool_surface: {
-    count: 5,
-    tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
+    count: 6,
+    tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"],
     list_macros: false,
   },
   mental_model: {
     template: "One audited call_template operation.",
     macro: "Registered bounded task program through call_template. Published Macros execute fixed code-owned stages; project reads prefer SQLite and every write re-resolves live refs before mutation.",
-    recipe: "Reusable/editable longer workflow; no public call_recipe or generic server-side Recipe executor.",
+    recipe: "Reusable/editable longer workflow. Save an exact revision before running or resuming it through call_recipe; unsaved drafts remain non-executable.",
   },
   ranked_executable_macro_menu: {
     macro_ids: ALPHA3_2_5_0_EXECUTABLE_TARGET_IDS,
@@ -999,7 +999,7 @@ const COMPACT_GUIDE = deepFreeze({
     discovery_tool: "list_templates",
     request_shape: { surface: "catalog", query: "one bounded capability phrase", limit: 25 },
     typed_gap_reasons: ALPHA3_2_5_E_FALLBACK_GAP_REASONS,
-    routing: "Use exact or filtered Template discovery only after recording one typed fallback-gap reason; do not add a new tool, raw SQL, or call_recipe.",
+    routing: "Use exact or filtered Template discovery only after recording one typed fallback-gap reason. Do not add a new tool for this atomic fallback: it does not execute a Recipe; use the public call_recipe tool separately for saved Recipe lifecycle operations. Do not use raw SQL.",
   },
   control_consolidation: ALPHA3_2A_CONTROL_CONSOLIDATION_DEFER,
   common_task_routing: [
@@ -1043,12 +1043,12 @@ const COMPACT_GUIDE = deepFreeze({
   recipe_guidance: {
     empty_catalog: "If empty, use one audited template atomically; for multi-step work state ad-hoc composition and use bounded readback.",
     draft_only_catalog: "Expand drafts, follow checkpoints/risk/evidence, and do not claim official/live-smoked.",
-    public_call_recipe: false,
+    public_call_recipe: true,
     hidden_recipe_executor: false,
-    execution: "agent_orchestrated_call_template_and_get_state_only",
+    execution: "saved_exact_revision_through_call_recipe_or_agent_orchestrated_call_template_and_get_state",
   },
   safety_boundary: {
-    public_call_recipe: false,
+    public_call_recipe: true,
     hidden_executor: false,
     direct_bridge_protocol: false,
     raw_lua: false,

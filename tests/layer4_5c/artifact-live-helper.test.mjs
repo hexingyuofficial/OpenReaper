@@ -219,13 +219,14 @@ describe("Layer 4.5C Lua artifact helper and live artifact smoke gate", () => {
 
   it("does not add MCP tools, call_template live ids, recipe paths, or raw execution bypasses", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
 
     const smokeSource = readFileSync(new URL(`../../${SMOKE_SCRIPT}`, import.meta.url), "utf8");
     assert.doesNotMatch(smokeSource, /createCallTemplateRuntime|CALL_TEMPLATE_RUNTIME|list_templates|list_recipes/);

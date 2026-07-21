@@ -91,6 +91,7 @@ assertStrictToolSet(TOOL_ABI_V1_TOOL_NAMES, [
   "list_templates",
   "list_recipes",
   "call_template",
+  "call_recipe",
 ]);
 
 execFileSync(process.execPath, ["--test", "tests/layer4_5a/artifact-state-store.test.mjs"], {

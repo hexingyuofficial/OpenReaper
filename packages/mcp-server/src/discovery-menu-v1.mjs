@@ -504,7 +504,12 @@ function evidenceLevel(item, lifecycle) {
 function knownBlocker(item, support, liveRunnableNow) {
   if (typeof item.known_blocker === "string") return item.known_blocker;
   if (support === "blocked") return "not_supported";
-  if (capabilityKind(item) === "recipe") return "no_public_call_recipe_executor";
+  if (capabilityKind(item) === "recipe") {
+    if (hasExactExecutableRecipeIdentity(item)) {
+      return null;
+    }
+    return "agent_stepped_recipe_use_call_recipe_for_saved_executable_revisions";
+  }
   if (item.action_kind === "macro" && ["plan_only_runtime_bound", "supported_runtime_bound"].includes(item.support_status)) return null;
   if (!liveRunnableNow) return "live_executor_not_configured_or_not_in_allowed_group";
   return null;
@@ -513,9 +518,25 @@ function knownBlocker(item, support, liveRunnableNow) {
 function exampleCallShape(item, kind) {
   if (isPlainObject(item.example_call_shape)) return item.example_call_shape;
   if (kind === "recipe") {
+    if (hasExactExecutableRecipeIdentity(item)) {
+      const identity = item.executable_identity;
+      return {
+        tool: "call_recipe",
+        request: {
+          operation: "run",
+          recipe_id: identity.recipe_id,
+          version: identity.version,
+          revision: identity.revision,
+          content_hash: identity.content_hash,
+          validation_result_id: identity.validation_result_id,
+          inputs: {},
+        },
+        identity_policy: "exact_saved_validated_revision_only",
+      };
+    }
     return {
       executor: "agent_runs_declared_procedure_with_call_template_and_get_state",
-      call_recipe: "not_available",
+      call_recipe: "available_for_saved_executable_revisions",
     };
   }
 
@@ -539,6 +560,21 @@ function exampleCallShape(item, kind) {
       installed_identity_conflicts: "rejected",
     },
   });
+}
+
+function hasExactExecutableRecipeIdentity(item) {
+  if (item.lifecycle !== "validated" || item.executable !== true) return false;
+  if (!isPlainObject(item.executable_identity)) return false;
+
+  const identity = item.executable_identity;
+  return nonEmptyString(item.id)
+    && identity.recipe_id === item.id
+    && nonEmptyString(identity.version)
+    && Number.isInteger(identity.revision)
+    && identity.revision > 0
+    && typeof identity.content_hash === "string"
+    && /^[0-9a-f]{64}$/.test(identity.content_hash)
+    && nonEmptyString(identity.validation_result_id);
 }
 
 function outputSummaryShape(item, kind) {
@@ -609,6 +645,10 @@ function outputArtifactDeclarations(item) {
 
 function stringValue(value) {
   return typeof value === "string" ? value : "";
+}
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 function unique(values) {

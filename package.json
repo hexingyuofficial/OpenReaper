@@ -22,6 +22,7 @@
     "check:template-runtime": "node scripts/check-template-runtime.mjs",
     "check:artifact-state-store": "node scripts/check-artifact-state-store.mjs",
     "check:recipe-contract": "node scripts/check-recipe-contract.mjs",
+    "check:call-recipe-runtime": "node scripts/check-call-recipe-runtime.mjs",
     "check:user-recipe-authoring": "node scripts/check-user-recipe-authoring.mjs && node --test tests/layer6/user-recipe-authoring.test.mjs",
     "check:official-recipes": "node scripts/check-official-recipes.mjs",
     "check:alpha3-d1": "node --test tests/alpha3/d1-startup-health.test.mjs",

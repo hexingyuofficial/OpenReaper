@@ -21,6 +21,16 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
     });
 
     assert.equal(guide.contract, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT);
+    assert.equal(guide.tool_surface.count, 6);
+    assert.deepEqual(guide.tool_surface.tools, [
+      "ping",
+      "get_state",
+      "list_templates",
+      "list_recipes",
+      "call_template",
+      "call_recipe",
+    ]);
+    assert.equal(guide.tool_surface.adds_public_tool, true);
     assert.deepEqual(guide.macro_menu.macro_ids, ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS);
     assert.equal(guide.macro_menu.visible_executable_count, 15);
     assert.equal(guide.macro_menu.final_target_count, 15);
@@ -111,6 +121,8 @@ describe("Alpha3.3-B1 agent context Macro guide", () => {
       "macro_domain_not_accepted",
       "macro_budget_prefers_atomic_template",
     ]);
+    assert.match(guide.direct_template_fallback.routing, /does not execute a Recipe/u);
+    assert.match(guide.direct_template_fallback.routing, /public call_recipe tool/u);
   });
 
   it("expands the current executable Media manual instead of the historical plan-only guide", () => {

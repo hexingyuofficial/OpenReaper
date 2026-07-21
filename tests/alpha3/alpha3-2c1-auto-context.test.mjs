@@ -19,7 +19,7 @@ import {
 } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 
 const STDIO_SERVER = "packages/mcp-server/src/openreaper-mcp-stdio.mjs";
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 function deterministicManager(options = {}) {
   return createAlpha3_2C1CallContextManager({
@@ -153,7 +153,7 @@ describe("Alpha3.2-C1 server-managed call context", () => {
     );
   });
 
-  it("supports omitted context through the actual stdio server and preserves exactly five tools", async () => {
+  it("supports omitted context through the actual stdio server and preserves exactly six tools", async () => {
     const fixtureRoot = await mkdtemp(path.join(tmpdir(), "openreaper-alpha32c1-stdio-"));
     const transportDir = path.join(fixtureRoot, "transport");
     await mkdir(path.join(transportDir, "requests"), { recursive: true });

@@ -895,14 +895,16 @@ describe("Layer 4D call_template runtime binding", () => {
     assert.equal(tempoExact.items[0].capability_truth.known_blocker, null);
     assert.equal(tempoExact.items[0].current_status, "needs_confirmation");
 
+    // call_template remains non-Recipe-executor; public call_recipe is a separate tool.
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
   });
 
   it("exposes the E2 FX-B1 route as an explicit fake/static route without broadening default live ids", async () => {

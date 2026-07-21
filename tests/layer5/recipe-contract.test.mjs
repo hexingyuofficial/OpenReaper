@@ -260,15 +260,16 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.match(validateRecipeContract(rawDescriptor).errors.join("\n"), /forbidden raw execution or bypass field/);
   });
 
-  it("does not add MCP tools, live REAPER smoke, runtime Lua, or a hidden recipe executor", () => {
+  it("does not add MCP tools beyond call_recipe, live REAPER smoke, runtime Lua, or a hidden recipe executor", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
 
     const source = readFileSync(
       new URL("../../packages/core/src/recipe-contract-v1.mjs", import.meta.url),
@@ -279,7 +280,7 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.doesNotMatch(source, /streetlight-reaper-mcp/);
   });
 
-  it("preserves agent-stepped recipes after the Alpha3.4-E0 executable extension", () => {
+  it("preserves agent-stepped recipes after the Alpha3.4-E0/E2 executable extension", () => {
     const recipe = makeRecipe();
     assert.equal(validateRecipeContract(recipe).ok, true);
     assert.equal(normalizeRecipeContract(recipe).contract, RECIPE_CONTRACT);
@@ -290,7 +291,8 @@ describe("Layer 5 Recipe Contract v1", () => {
     );
     assert.match(abi, /Alpha3\.4-E0 Executable Recipe Revision Extension/);
     assert.match(abi, /historical agent-stepped Recipe Contract v1 remains valid/);
-    assert.match(abi, /does not register `call_recipe`/);
+    assert.match(abi, /Alpha3\.4-E2 Public `call_recipe` Runtime/);
+    assert.match(abi, /adds exactly one sixth tool named `call_recipe`/);
     assert.match(abi, /recipe\.executable\.draft\.v1/);
     assert.match(abi, /recipe\.executable\.revision\.v1/);
   });

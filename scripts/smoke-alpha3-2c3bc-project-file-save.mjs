@@ -14,7 +14,7 @@ const IDS = {
   saveCurrent: "template.project.save_current_project",
   saveAs: "template.project.save_project_as",
 };
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const LATE_SETTLE_ATTEMPTS = 8;
 const LATE_SETTLE_MS = 250;
 const MCP_CLOSE_DELAYED_AUDIT_MS = 1000;

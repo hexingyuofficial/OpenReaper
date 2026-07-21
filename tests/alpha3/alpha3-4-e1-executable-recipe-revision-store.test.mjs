@@ -1594,8 +1594,11 @@ describe("Alpha3.4-E1 executable recipe revision store", () => {
     assert.match(source, /"wx"/);
     assert.match(source, /sealExecutableRecipeRevision/);
 
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), false);
+    // Alpha3.4-E2 adds public call_recipe; E1 store itself stays non-executing.
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), true);
+    assert.equal(typeof store.run, "undefined");
+    assert.equal(typeof store.resume, "undefined");
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
 

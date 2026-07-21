@@ -65,6 +65,7 @@ describe("Alpha3 D2 real workflow entrypoints", () => {
     assert.equal(saved.safety.live_reaper, false);
     assert.equal(saved.safety.safe_write, false);
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",

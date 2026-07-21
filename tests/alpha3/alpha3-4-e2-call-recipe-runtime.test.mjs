@@ -1,0 +1,1919 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, it } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  createExecutableDependencyCatalog,
+  sealExecutableRecipeRevision,
+} from "../../packages/core/src/executable-recipe-contract-v1.mjs";
+import {
+  createExecutableRecipeRevisionStore,
+} from "../../packages/core/src/executable-recipe-revision-store-v1.mjs";
+import {
+  EXECUTABLE_RECIPE_RUN_CONTRACT,
+  buildExactRunRevisionIdentity,
+  rejectInlineExecutionPayload,
+} from "../../packages/core/src/executable-recipe-run-v1.mjs";
+import {
+  CALL_RECIPE_OPERATIONS,
+  CALL_RECIPE_RUNTIME_CONTRACT,
+  CALL_RECIPE_TOOL_NAME,
+  createAuthoritativeRuntimeFactsProvider,
+  createCallRecipeRuntime,
+} from "../../packages/mcp-server/src/call-recipe-runtime-v1.mjs";
+import {
+  CALL_RECIPE_STAGE_BUDGET,
+  createStdioCallRecipeRuntime,
+  readFreshOpenProjectInventory,
+} from "../../packages/mcp-server/src/openreaper-mcp-stdio.mjs";
+import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
+import { OPENREAPER_PUBLIC_TOOL_IDS } from "../../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
+import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
+import { CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+
+const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
+
+describe("Alpha3.4-E2 call_recipe runtime", () => {
+  it("registers exactly six public tools including call_recipe and preserves product counts", () => {
+    assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
+      "call_template",
+      "get_state",
+      "list_recipes",
+      "list_templates",
+      "ping",
+    ].sort());
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), true);
+    assert.deepEqual([...OPENREAPER_PUBLIC_TOOL_IDS].sort(), [...TOOL_ABI_V1_TOOL_NAMES].sort());
+    assert.equal(CALL_RECIPE_TOOL_NAME, "call_recipe");
+    assert.equal(CALL_RECIPE_RUNTIME_CONTRACT, "call_recipe.runtime.v1");
+    assert.deepEqual([...CALL_RECIPE_OPERATIONS], [
+      "validate", "save", "list", "get", "delete", "run", "resume",
+    ]);
+    assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
+    assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
+
+    const stdio = readFileSync(new URL("../../packages/mcp-server/src/openreaper-mcp-stdio.mjs", import.meta.url), "utf8");
+    assert.equal((stdio.match(/server\.tool\(/g) ?? []).length, 6);
+    assert.match(stdio, /"call_recipe"/);
+    assert.match(stdio, /createCallRecipeRuntime/);
+
+    const packageSource = readFileSync(new URL("../../scripts/package-openreaper-alpha.mjs", import.meta.url), "utf8");
+    assert.match(packageSource, /bridge_handler_count:\s*91/);
+
+    const store = readFileSync(new URL("../../packages/core/src/executable-recipe-revision-store-v1.mjs", import.meta.url), "utf8");
+    assert.doesNotMatch(store, /packages\/mcp-server/);
+    assert.doesNotMatch(store, /\b(?:runExecutable|resumeExecutable|dispatchExecutable)\b/);
+  });
+
+  it("covers validate/save/list/get/delete with zero-write validation and exact identity", async () => {
+    const { runtime, root, catalog } = makeRuntime();
+    const draft = makeDraft();
+    const before = listTree(root);
+
+    const invalid = await runtime.call_recipe({
+      operation: "validate",
+      draft: { ...draft, stages: [] },
+    });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.mutates_project, false);
+    assert.equal(invalid.mutates_recipe_root, false);
+    assert.deepEqual(listTree(root), before);
+
+    const validated = await runtime.call_recipe({ operation: "validate", draft });
+    assert.equal(validated.ok, true);
+    assert.equal(validated.status, "validated");
+    assert.equal(validated.mutates_recipe_root, false);
+    assert.deepEqual(listTree(root), before);
+
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    assert.equal(saved.ok, true);
+    assert.equal(saved.status, "saved");
+    assert.equal(saved.immutable, true);
+    assert.equal(typeof saved.content_hash, "string");
+    assert.equal(typeof saved.validation_result_id, "string");
+
+    const listed = await runtime.call_recipe({ operation: "list" });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.count, 1);
+    assert.equal(listed.executable_truth, "saved_validated_revisions_only");
+    assert.equal(listed.items[0].executable, true);
+
+    const got = await runtime.call_recipe({
+      operation: "get",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+    });
+    assert.equal(got.ok, true);
+    assert.equal(got.content_hash, saved.content_hash);
+
+    const deleted = await runtime.call_recipe({
+      operation: "delete",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+      confirm: true,
+    });
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.deleted, true);
+    assert.equal((await runtime.call_recipe({ operation: "list" })).count, 0);
+    assert.equal(catalog.macros.length > 0, true);
+  });
+
+  it("rejects inline draft/graph execution and incomplete identity before dispatch", async () => {
+    const { runtime } = makeRuntime();
+    const draft = makeDraft();
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+
+    assert.throws(
+      () => rejectInlineExecutionPayload({ operation: "run", draft, stages: [] }),
+      (error) => error.code === "INLINE_EXECUTION_FORBIDDEN",
+    );
+
+    const inline = await runtime.call_recipe({
+      operation: "run",
+      draft,
+      stages: draft.stages,
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(inline.ok, false);
+    assert.equal(inline.error.code, "INLINE_EXECUTION_FORBIDDEN");
+
+    const objectRevision = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      revision: { note: "object revisions are always inline payloads" },
+      revision_number: saved.revision,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(objectRevision.ok, false);
+    assert.equal(objectRevision.error.code, "INLINE_EXECUTION_FORBIDDEN");
+
+    const objectResumeRevision = await runtime.call_recipe({
+      operation: "resume",
+      ...exactIdentity(saved),
+      revision: { note: "object revisions are always inline payloads" },
+      revision_number: saved.revision,
+      run_id: "run_missing",
+      checkpoint_id: "checkpoint_missing",
+    });
+    assert.equal(objectResumeRevision.ok, false);
+    assert.equal(objectResumeRevision.error.code, "INLINE_EXECUTION_FORBIDDEN");
+
+    const incomplete = await runtime.call_recipe({
+      operation: "run",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      // missing content_hash + validation_result_id
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(incomplete.ok, false);
+    assert.ok(["REVISION_IDENTITY_INCOMPLETE", "PARAMS_INVALID"].includes(incomplete.error.code));
+
+    const fuzzy = await runtime.call_recipe({
+      operation: "run",
+      recipe_id: saved.recipe_id,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(fuzzy.ok, false);
+
+    const callerFacts = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      runtime_facts: completeFacts(saved),
+    });
+    assert.equal(callerFacts.ok, false);
+    assert.equal(callerFacts.error.code, "INLINE_EXECUTION_FORBIDDEN");
+
+    const callerRunId = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      run_id: "caller-owned-run-id",
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(callerRunId.ok, false);
+    assert.equal(callerRunId.error.code, "PARAMS_INVALID");
+    assert.equal(callerRunId.error.details.server_owned, true);
+  });
+
+  it("runs ordered stages with verified readback and compact pageable evidence", async () => {
+    const events = [];
+    const { runtime, sealed } = makeRuntime({
+      dispatchers: {
+        macro: async ({ stage, inputs }) => {
+          events.push(["macro", stage.id, inputs]);
+          return macroEnvelope({ project_summary: { ok: true, name: inputs.track_name } });
+        },
+        template: async ({ stage, inputs }) => {
+          events.push(["template", stage.id, inputs]);
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const identity = {
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+    };
+    assert.deepEqual(buildExactRunRevisionIdentity(identity).recipe_id, identity.recipe_id);
+
+    const ran = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(ran.ok, true);
+    assert.equal(ran.contract, EXECUTABLE_RECIPE_RUN_CONTRACT);
+    assert.equal(ran.status, "succeeded");
+    assert.equal(ran.counts.processed, 2);
+    assert.equal(ran.counts.applied, 2);
+    assert.equal(ran.verified_outputs.some((item) => item.id === "track_ref"), true);
+    assert.equal(typeof ran.evidence_ref, "string");
+    assert.equal(events.map((entry) => entry[0]).join(","), "macro,template");
+
+    const page = await runtime.call_recipe({
+      operation: "get",
+      evidence_ref: ran.evidence_ref,
+      limit: 1,
+    });
+    assert.equal(page.ok, true);
+    assert.equal(page.items.length, 1);
+    assert.equal(page.page.has_more, true);
+    assert.equal(typeof page.page.next_cursor, "string");
+    assert.doesNotMatch(JSON.stringify(page), /child_envelope|raw_request|full_schema/);
+    assert.equal(sealed, undefined);
+  });
+
+  it("fails the declaring stage when verified readback omits a declared output", async () => {
+    let templateCalls = 0;
+    const { runtime } = makeRuntime({
+      dispatchers: {
+        macro: async () => macroEnvelope({}),
+        template: async () => {
+          templateCalls += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "READBACK_UNVERIFIED");
+    assert.deepEqual(failed.error.details.missing_output_ports, ["project_summary"]);
+    assert.deepEqual(failed.stages.failed, ["run_macro"]);
+    assert.deepEqual(failed.stages.not_started, ["readback"]);
+    assert.equal(templateCalls, 0);
+  });
+
+  it("does not satisfy declared outputs from Macro or Template envelope metadata", async () => {
+    for (const kind of ["macro", "template"]) {
+      const draft = makeMetadataShadowDraft(kind);
+      let dispatcherCalls = 0;
+      const { runtime } = makeRuntime({
+        facts: (saved) => completeFacts(saved, draft),
+        dispatchers: {
+          [kind]: async () => {
+            dispatcherCalls += 1;
+            return kind === "macro"
+              ? macroEnvelope({})
+              : templateEnvelope({});
+          },
+        },
+      });
+      const saved = await runtime.call_recipe({
+        operation: "save",
+        draft,
+        version: "1.0.0",
+        revision_number: 1,
+        saved_at: "1970-01-01T00:00:00.000Z",
+      });
+      assert.equal(saved.ok, true, `${kind}: ${JSON.stringify(saved)}`);
+
+      const failed = await runtime.call_recipe({
+        operation: "run",
+        ...exactIdentity(saved),
+        inputs: { track_name: "Dialog" },
+      });
+      assert.equal(failed.ok, false, kind);
+      assert.equal(failed.error.code, "READBACK_UNVERIFIED", kind);
+      assert.deepEqual(failed.error.details.missing_output_ports, ["status"], kind);
+      assert.equal(failed.latest_checkpoint, null, kind);
+      assert.equal(dispatcherCalls, 1, kind);
+    }
+  });
+
+  it("composes object runtimes with raw Macro, Template, get_state, and checkpoint envelopes", async () => {
+    const events = [];
+    const draft = makeComposedDraft();
+    const productRuntime = {
+      async call_template({ id, input }) {
+        events.push([id.startsWith("macro.") ? "macro" : "template", id, input]);
+        return id.startsWith("macro.")
+          ? macroEnvelope({ project_summary: { name: input.track_name } })
+          : templateEnvelope({ track_ref: "track:index:4" });
+      },
+    };
+    const getStateRuntime = {
+      async get_state(input) {
+        events.push(["get_state", input]);
+        return {
+          contract: "get_state.runtime.v1",
+          ok: true,
+          result: { project_summary: { track_count: 5 } },
+        };
+      },
+    };
+    const { runtime } = makeRuntime({
+      facts: (saved) => completeFacts(saved, draft),
+      dispatchers: {
+        macro: productRuntime,
+        template: productRuntime,
+        get_state: getStateRuntime,
+        checkpoint: async ({ stage, revision }) => {
+          events.push(["checkpoint", stage.id]);
+          const declaration = revision.draft.checkpoints.find((item) => item.id === stage.checkpoint);
+          return {
+            contract: "call_recipe.checkpoint_proof.v1",
+            ok: true,
+            verified: true,
+            checkpoint_id: declaration.id,
+            evidence_id: declaration.evidence_id,
+            resume_identity: declaration.resume_identity,
+            recipe_id: revision.recipe_id,
+            version: revision.version,
+            revision: revision.revision,
+            content_hash: revision.content_hash,
+            summary: "Runtime-owned checkpoint proof accepted.",
+            outputs: {},
+          };
+        },
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+
+    const ran = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(ran.ok, true);
+    assert.equal(ran.counts.processed, 4);
+    assert.equal(ran.counts.applied, 4);
+    assert.deepEqual(events.map((entry) => entry[0]), ["macro", "template", "get_state", "checkpoint"]);
+    assert.equal(ran.latest_checkpoint.stage_id, "checkpoint_proof");
+    assert.equal(ran.latest_checkpoint.proof.explicit_checkpoint_proof, true);
+  });
+
+  it("retains verified Macro partial changes and does not claim a safe replay", async () => {
+    let templateCalls = 0;
+    const { runtime } = makeRuntime({
+      dispatchers: {
+        macro: async () => macroPartialFailureEnvelope(),
+        template: async () => {
+          templateCalls += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "MACRO_PARTIAL_FAILURE");
+    assert.equal(failed.resume_safe, false);
+    assert.equal(failed.proven_partial_changes.length, 1);
+    assert.equal(failed.proven_partial_changes[0].change.status, "applied");
+    assert.equal(failed.proven_partial_changes[0].change.live_readback.status, "passed");
+    assert.equal(templateCalls, 0);
+  });
+
+  it("fails closed on trust drift and zero-write preflight failures", async () => {
+    const { runtime } = makeRuntime({
+      facts: (saved) => ({ ...completeFacts(saved), project_identity: "project:other" }),
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: {} }),
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const identity = {
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+    };
+
+    const trustFail = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(trustFail.ok, false);
+    assert.equal(trustFail.status, "blocked");
+    assert.equal(trustFail.error.code, "TRUST_INVALID");
+    assert.equal(trustFail.resume_safe, false);
+    assert.equal(trustFail.next_call.tool, "call_recipe");
+
+    const { runtime: trustedRuntime } = makeRuntime({
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: {} }),
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const trustedSaved = await saveFixture(trustedRuntime);
+    const missingInput = await trustedRuntime.call_recipe({
+      operation: "run",
+      ...exactIdentity(trustedSaved),
+      inputs: {},
+    });
+    assert.equal(missingInput.ok, false);
+    assert.equal(missingInput.error.code, "PREFLIGHT_FAILED");
+    assert.equal(missingInput.details?.mutates_project ?? missingInput.error?.details?.mutates_project, false);
+  });
+
+  it("preserves partial progress and supports safe resume while rejecting unsafe resume", async () => {
+    let templateCalls = 0;
+    let factsCalls = 0;
+    const { runtime } = makeRuntime({
+      facts: (revision) => {
+        factsCalls += 1;
+        return completeFacts(revision);
+      },
+      dispatchers: {
+        macro: async ({ inputs }) => macroEnvelope({ project_summary: { name: inputs.track_name } }),
+        template: async () => {
+          templateCalls += 1;
+          if (templateCalls === 1) {
+            return templateFailureEnvelope({ zeroWrite: true });
+          }
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const identity = {
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+    };
+
+    const partial = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(partial.ok, false);
+    assert.equal(partial.status, "partial");
+    assert.equal(partial.error.code, "TEMPLATE_BLOCKED");
+    assert.equal(partial.resume_safe, true);
+    assert.deepEqual(partial.stages.completed, ["run_macro"]);
+    assert.deepEqual(partial.stages.failed, ["readback"]);
+    assert.equal(partial.next_call.arguments.operation, "resume");
+    assert.equal(partial.undo.claimed, false);
+
+    const unsafe = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: "wrong_checkpoint",
+      ...identity,
+    });
+    assert.equal(unsafe.ok, false);
+    assert.ok(["CHECKPOINT_MISMATCH", "RESUME_UNSAFE", "RESUME_IDENTITY_INVALID"].includes(unsafe.error.code));
+
+    const override = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+      ...identity,
+      inputs: { track_name: "Override forbidden" },
+    });
+    assert.equal(override.ok, false);
+    assert.equal(override.error.code, "RESUME_IDENTITY_INVALID");
+
+    const drift = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+      ...identity,
+      content_hash: "f".repeat(64),
+    });
+    assert.equal(drift.ok, false);
+    assert.equal(drift.error.code, "RESUME_IDENTITY_INVALID");
+    assert.equal(templateCalls, 1);
+
+    const resumed = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+      ...identity,
+    });
+    assert.equal(resumed.ok, true);
+    assert.equal(resumed.operation, "resume");
+    assert.equal(resumed.status, "succeeded");
+    assert.equal(resumed.counts.applied >= 1, true);
+    assert.equal(templateCalls, 2);
+    assert.equal(factsCalls, 2);
+  });
+
+  it("preserves retained progress when fresh resume trust blocks before dispatch", async () => {
+    let factsCalls = 0;
+    let templateCalls = 0;
+    const { runtime } = makeRuntime({
+      facts: (revision) => {
+        factsCalls += 1;
+        const facts = completeFacts(revision);
+        return factsCalls === 1
+          ? facts
+          : { ...facts, bridge_generation: "999" };
+      },
+      dispatchers: {
+        macro: async ({ inputs }) => macroEnvelopeWithChange({
+          project_summary: { name: inputs.track_name },
+        }),
+        template: async () => {
+          templateCalls += 1;
+          return templateFailureEnvelope({ zeroWrite: true });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const identity = exactIdentity(saved);
+    const partial = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(partial.resume_safe, true);
+    assert.equal(partial.proven_partial_changes.length, 1);
+
+    const blocked = await runtime.call_recipe({
+      operation: "resume",
+      run_id: partial.run_id,
+      checkpoint_id: partial.latest_checkpoint.checkpoint_id,
+      ...identity,
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.operation, "resume");
+    assert.equal(blocked.error.code, "TRUST_INVALID");
+    assert.deepEqual(blocked.stages.completed, ["run_macro"]);
+    assert.deepEqual(blocked.stages.not_started, ["readback"]);
+    assert.equal(blocked.proven_partial_changes.length, 1);
+    assert.deepEqual(blocked.latest_checkpoint, partial.latest_checkpoint);
+    assert.equal(blocked.evidence_ref, partial.evidence_ref);
+    assert.equal(templateCalls, 1);
+  });
+
+  it("never replays an unverified mutation and rejects resume input or identity drift", async () => {
+    let templateCalls = 0;
+    const { runtime } = makeRuntime({
+      dispatchers: {
+        macro: async ({ inputs }) => macroEnvelope({ project_summary: { name: inputs.track_name } }),
+        template: async () => {
+          templateCalls += 1;
+          return {
+            ...templateEnvelope({ track_ref: "track:index:0" }),
+            result: {
+              ...templateEnvelope({ track_ref: "track:index:0" }).result,
+              readback: null,
+            },
+          };
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const identity = exactIdentity(saved);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...identity,
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.error.code, "READBACK_UNVERIFIED");
+    assert.equal(failed.resume_safe, false);
+    assert.equal(failed.proven_partial_changes.length, 0);
+
+    const resume = await runtime.call_recipe({
+      operation: "resume",
+      ...identity,
+      run_id: failed.run_id,
+      checkpoint_id: failed.latest_checkpoint.checkpoint_id,
+    });
+    assert.equal(resume.ok, false);
+    assert.equal(resume.error.code, "RESUME_UNSAFE");
+    assert.equal(templateCalls, 1);
+  });
+
+  it("fails closed without fresh authoritative facts and before insufficient-budget mutations", async () => {
+    const catalog = makeCatalog();
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-no-facts-"));
+    const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: {} }),
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const tooSmall = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      budget: { max_response_bytes: 4095 },
+    });
+    assert.equal(tooSmall.ok, false);
+    assert.equal(tooSmall.error.code, "RESPONSE_BUDGET_INSUFFICIENT");
+    assert.equal((await runtime.call_recipe({ operation: "list" })).count, 0);
+
+    const saved = await saveFixture(runtime);
+    const noFacts = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(noFacts.ok, false);
+    assert.equal(noFacts.error.code, "RUNTIME_FACTS_UNAVAILABLE");
+  });
+
+  it("reloads native project and Bridge identity for every run and rejects later drift before dispatch", async () => {
+    const catalog = makeCatalog();
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-fresh-facts-"));
+    const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+    const draft = makeDraft();
+    draft.portability.bridge_generation = "1";
+    let projectRef = draft.portability.project_identity;
+    let bridgeGeneration = 1;
+    let inventoryReads = 0;
+    let heartbeatReads = 0;
+    let dispatchCalls = 0;
+    const runtimeFactsProvider = createAuthoritativeRuntimeFactsProvider({
+      catalog,
+      projectInventoryProvider: async () => {
+        inventoryReads += 1;
+        return {
+          projects: [{ project_ref: projectRef, active: true }],
+          total_count: 1,
+          returned_count: 1,
+          coverage_status: "complete",
+        };
+      },
+      bridgeLivenessProvider: async () => {
+        heartbeatReads += 1;
+        return {
+          ready: true,
+          heartbeat: {
+            observed: {
+              active_owner: draft.portability.bridge_owner,
+              active_generation: bridgeGeneration,
+            },
+          },
+        };
+      },
+      riskGrantProvider: async () => [...draft.risk_grants],
+      checkpointEvidenceProvider: async ({ identity, recomputed_content_hash }) => (
+        draft.checkpoints.map((checkpoint) => ({
+          checkpoint_id: checkpoint.id,
+          evidence_id: checkpoint.evidence_id,
+          resume_identity: checkpoint.resume_identity,
+          recipe_id: identity.recipe_id,
+          version: identity.version,
+          revision: identity.revision,
+          content_hash: recomputed_content_hash,
+        }))
+      ),
+    });
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      runtimeFactsProvider,
+      dispatchers: {
+        macro: async () => {
+          dispatchCalls += 1;
+          return macroEnvelope({ project_summary: {} });
+        },
+        template: async () => {
+          dispatchCalls += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const first = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(first.ok, true, JSON.stringify(first));
+    assert.equal(dispatchCalls, 2);
+
+    projectRef = "project:path:/tmp/other.RPP";
+    bridgeGeneration = 2;
+    const drifted = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(drifted.ok, false);
+    assert.equal(drifted.error.code, "TRUST_INVALID");
+    assert.deepEqual([...drifted.error.details.invalidation_reasons].sort(), [
+      "bridge_generation_mismatch",
+      "project_identity_mismatch",
+    ]);
+    assert.equal(dispatchCalls, 2);
+    assert.equal(inventoryReads, 2);
+    assert.equal(heartbeatReads, 2);
+  });
+
+  it("requires independent risk/checkpoint providers and recomputes stored content truth", async () => {
+    const catalog = makeCatalog();
+    const sealed = sealExecutableRecipeRevision(makeDraft(), {
+      catalog,
+      version: "1.0.0",
+      revision: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const baseOptions = {
+      catalog,
+      projectInventoryProvider: async () => ({
+        projects: [{ project_ref: sealed.draft.portability.project_identity, active: true }],
+        total_count: 1,
+        returned_count: 1,
+        coverage_status: "complete",
+      }),
+      bridgeLivenessProvider: async () => ({
+        ready: true,
+        heartbeat: {
+          observed: {
+            active_owner: sealed.draft.portability.bridge_owner,
+            active_generation: 1,
+          },
+        },
+      }),
+    };
+    assert.throws(
+      () => createAuthoritativeRuntimeFactsProvider(baseOptions),
+      (error) => error?.code === "RUNTIME_FACTS_UNAVAILABLE",
+    );
+
+    const provider = createAuthoritativeRuntimeFactsProvider({
+      ...baseOptions,
+      riskGrantProvider: async () => [...sealed.draft.risk_grants],
+      checkpointEvidenceProvider: async ({ identity, recomputed_content_hash }) => (
+        sealed.draft.checkpoints.map((checkpoint) => ({
+          checkpoint_id: checkpoint.id,
+          evidence_id: checkpoint.evidence_id,
+          resume_identity: checkpoint.resume_identity,
+          recipe_id: identity.recipe_id,
+          version: identity.version,
+          revision: identity.revision,
+          content_hash: recomputed_content_hash,
+        }))
+      ),
+    });
+    const drifted = structuredClone(sealed);
+    drifted.draft.title = "Changed after sealing";
+    const facts = await provider({ revision: drifted, operation: "run" });
+    assert.notEqual(facts.content_hash, sealed.content_hash);
+    assert.equal(facts.checkpoint_evidence.every((item) => item.content_hash === facts.content_hash), true);
+  });
+
+  it("blocks server-owned risk-grant drift before any stage dispatch", async () => {
+    const catalog = makeCatalog();
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-risk-drift-"));
+    const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+    let dispatchCalls = 0;
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      dispatchers: {
+        macro: async () => { dispatchCalls += 1; return macroEnvelope({ project_summary: {} }); },
+        template: async () => { dispatchCalls += 1; return templateEnvelope({ track_ref: "track:index:0" }); },
+      },
+      runtimeFactsProvider: createAuthoritativeRuntimeFactsProvider({
+        catalog,
+        projectInventoryProvider: async () => ({
+          projects: [{ project_ref: "project:tab:fixture-a", active: true }],
+          total_count: 1,
+          returned_count: 1,
+          coverage_status: "complete",
+        }),
+        bridgeLivenessProvider: async () => ({
+          ready: true,
+          heartbeat: { observed: { active_owner: "owner:fixture", active_generation: 1 } },
+        }),
+        riskGrantProvider: async () => ["read"],
+        checkpointEvidenceProvider: async ({ identity, recomputed_content_hash }) => (
+          makeDraft().checkpoints.map((checkpoint) => ({
+            checkpoint_id: checkpoint.id,
+            evidence_id: checkpoint.evidence_id,
+            resume_identity: checkpoint.resume_identity,
+            recipe_id: identity.recipe_id,
+            version: identity.version,
+            revision: identity.revision,
+            content_hash: recomputed_content_hash,
+          }))
+        ),
+      }),
+    });
+    const saved = await saveFixture(runtime);
+    const blocked = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "TRUST_INVALID");
+    assert.deepEqual(blocked.error.details.invalidation_reasons, ["risk_grant_mismatch"]);
+    assert.equal(dispatchCalls, 0);
+  });
+
+  it("pages saved revisions and keeps mutation success and failure within the calculated floor", async () => {
+    const { runtime } = makeRuntime();
+    const first = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+      budget: { max_response_bytes: 4096 },
+    });
+    const second = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 2,
+      saved_at: "1970-01-01T00:00:01.000Z",
+      budget: { max_response_bytes: 4096 },
+    });
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(Buffer.byteLength(JSON.stringify(second), "utf8") <= 4096, true);
+
+    const page1 = await runtime.call_recipe({ operation: "list", limit: 1, budget: { max_response_bytes: 2048 } });
+    assert.equal(page1.count, 1);
+    assert.equal(page1.total, 2);
+    assert.equal(page1.page.has_more, true);
+    const page2 = await runtime.call_recipe({
+      operation: "list",
+      limit: 1,
+      cursor: page1.page.next_cursor,
+      budget: { max_response_bytes: 2048 },
+    });
+    assert.equal(page2.count, 1);
+    assert.equal(page2.page.has_more, false);
+
+    const tooTightList = await runtime.call_recipe({
+      operation: "list",
+      limit: 1,
+      budget: { max_response_bytes: 512 },
+    });
+    assert.equal(tooTightList.ok, false);
+    assert.equal(tooTightList.error.code, "RESPONSE_TOO_LARGE");
+    assert.equal(Object.hasOwn(tooTightList, "response_compacted"), false);
+
+    const tooTightMutation = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(second),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: 4096 },
+    });
+    assert.equal(tooTightMutation.ok, false);
+    assert.equal(tooTightMutation.error.code, "RESPONSE_BUDGET_INSUFFICIENT");
+    assert.equal(tooTightMutation.error.details.zero_write, true);
+    const mutationBudget = tooTightMutation.error.details.required;
+
+    const success = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(second),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: mutationBudget },
+    });
+    assert.equal(success.ok, true);
+    assert.equal(Buffer.byteLength(JSON.stringify(success), "utf8") <= mutationBudget, true);
+
+    const { runtime: failingRuntime } = makeRuntime({
+      dispatchers: {
+        macro: async () => macroPartialFailureEnvelope("x".repeat(6000)),
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const failingSaved = await saveFixture(failingRuntime);
+    const failure = await failingRuntime.call_recipe({
+      operation: "run",
+      ...exactIdentity(failingSaved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: mutationBudget },
+    });
+    assert.equal(failure.ok, false);
+    assert.equal(Buffer.byteLength(JSON.stringify(failure), "utf8") <= mutationBudget, true);
+    assert.equal(failure.error.code, "MACRO_PARTIAL_FAILURE");
+    assert.equal(failure.proven_partial_changes.length, 1);
+  });
+
+  it("sizes the mutation floor from a valid 48-stage revision before any dispatcher write", async () => {
+    const catalog = makeCatalog();
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-max-graph-budget-"));
+    const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+    const draft = makeMaxStageDraft();
+    let dispatcherCalls = 0;
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      runtimeFactsProvider: ({ revision }) => completeFacts(revision, draft),
+      dispatchers: {
+        macro: async () => {
+          dispatcherCalls += 1;
+          return macroPartialFailureEnvelope("x".repeat(6000));
+        },
+        template: async () => {
+          dispatcherCalls += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+        get_state: async () => {
+          dispatcherCalls += 1;
+          return { contract: "get_state.runtime.v1", ok: true, result: {} };
+        },
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    const blocked = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: 4096 },
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "RESPONSE_BUDGET_INSUFFICIENT");
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.equal(blocked.error.details.stage_count, 48);
+    assert.ok(blocked.error.details.required > 4096);
+    assert.ok(blocked.error.details.required <= 65_536);
+    assert.equal(dispatcherCalls, 0);
+
+    const failure = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: blocked.error.details.required },
+    });
+    assert.equal(failure.ok, false);
+    assert.equal(failure.error.code, "MACRO_PARTIAL_FAILURE");
+    assert.equal(failure.stages.failed.length, 1);
+    assert.equal(failure.stages.not_started.length, 47);
+    assert.equal(failure.proven_partial_changes.length, 1);
+    assert.ok(failure.recovery);
+    assert.ok(failure.undo);
+    assert.equal(typeof failure.resume_safe, "boolean");
+    assert.ok(failure.next_call);
+    assert.ok(Buffer.byteLength(JSON.stringify(failure), "utf8") <= blocked.error.details.required);
+    assert.equal(dispatcherCalls, 1);
+  });
+
+  it("rejects a short graph before dispatch when four bounded partial changes exceed the floor", async () => {
+    let dispatcherCalls = 0;
+    const { runtime } = makeRuntime({
+      dispatchers: {
+        macro: async () => {
+          dispatcherCalls += 1;
+          return macroLargePartialFailureEnvelope();
+        },
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const blocked = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: 4096 },
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "RESPONSE_BUDGET_INSUFFICIENT");
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.ok(blocked.error.details.required > 4096);
+    assert.equal(dispatcherCalls, 0);
+
+    const failure = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: blocked.error.details.required },
+    });
+    assert.equal(failure.ok, false);
+    assert.equal(failure.error.code, "MACRO_PARTIAL_FAILURE");
+    assert.equal(failure.proven_partial_changes.length, 4);
+    assert.equal(failure.stages.failed.length, 1);
+    assert.ok(failure.recovery);
+    assert.ok(failure.undo);
+    assert.ok(Buffer.byteLength(JSON.stringify(failure), "utf8") <= blocked.error.details.required);
+    assert.equal(dispatcherCalls, 1);
+  });
+
+  it("budgets all 32 bounded verified outputs before dispatch and preserves the full success envelope", async () => {
+    const draft = makeManyOutputDraft(32);
+    const outputValues = Object.fromEntries(
+      draft.outputs.map((output, index) => [output.id, `${index}:${"x".repeat(900)}`]),
+    );
+    let dispatcherCalls = 0;
+    const { runtime } = makeRuntime({
+      facts: (revision) => completeFacts(revision, draft),
+      dispatchers: {
+        template: async () => {
+          dispatcherCalls += 1;
+          return templateEnvelope(outputValues);
+        },
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+
+    const blocked = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: 4096 },
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "RESPONSE_BUDGET_INSUFFICIENT");
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.ok(blocked.error.details.required > 4096);
+    assert.ok(blocked.error.details.required <= 65_536);
+    assert.equal(dispatcherCalls, 0);
+
+    const success = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: blocked.error.details.required },
+    });
+    assert.equal(success.ok, true, JSON.stringify(success));
+    assert.equal(success.verified_outputs.length, 32);
+    assert.equal(Object.hasOwn(success, "response_compacted"), false);
+    assert.ok(success.timing);
+    assert.ok(success.latest_checkpoint);
+    assert.ok(Buffer.byteLength(JSON.stringify(success), "utf8") <= blocked.error.details.required);
+    assert.equal(dispatcherCalls, 1);
+  });
+
+  it("accepts only exact native D30 project inventory truth", async () => {
+    const activeRow = { project_ref: "project:path:/tmp/active.RPP", active: true };
+    const success = await readFreshOpenProjectInventory({
+      callTemplateRuntime: {
+        call_template: async () => nativeProjectInventoryExecution({ projects: [activeRow] }),
+      },
+      callContext: { allocate: () => ({ request_sequence: 1 }) },
+    });
+    assert.equal(success.projects[0].project_ref, activeRow.project_ref);
+
+    const summary = nativeProjectInventorySummary({ projects: [activeRow] });
+    const failures = [
+      { name: "data-only", execution: { ...nativeProjectInventoryExecution(summary), result: { data: summary } } },
+      { name: "generic-readback", execution: { ...nativeProjectInventoryExecution(summary), result: { readback: summary } } },
+      {
+        name: "missing-native-marker",
+        execution: nativeProjectInventoryExecution({ ...summary, live_materialization: "generic_readback" }),
+      },
+      {
+        name: "verification-failed",
+        execution: { ...nativeProjectInventoryExecution(summary), verification: { status: "failed" } },
+      },
+      {
+        name: "duplicate-ref",
+        execution: nativeProjectInventoryExecution({
+          projects: [activeRow, { ...activeRow, active: false }],
+        }),
+      },
+      {
+        name: "invalid-ref",
+        execution: nativeProjectInventoryExecution({ projects: [{ project_ref: "project:fixture", active: true }] }),
+      },
+      {
+        name: "multiple-active",
+        execution: nativeProjectInventoryExecution({
+          projects: [activeRow, { project_ref: "project:tab:unsaved-2", active: true }],
+        }),
+      },
+    ];
+    for (const failure of failures) {
+      await assert.rejects(
+        () => readFreshOpenProjectInventory({
+          callTemplateRuntime: { call_template: async () => failure.execution },
+          callContext: { allocate: () => ({ request_sequence: 1 }) },
+        }),
+        undefined,
+        failure.name,
+      );
+    }
+  });
+
+  it("uses fresh server-owned context and a fixed budget for every stdio Recipe stage", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-stdio-stage-"));
+    const allocationHints = [];
+    const stageCalls = [];
+    let sequence = 0;
+    const callContext = {
+      allocate(hint) {
+        allocationHints.push(hint);
+        sequence += 1;
+        return {
+          client_id: "openreaper-mcp",
+          session_id: "server-session",
+          expected_owner: "owner:fixture",
+          expected_generation: 1,
+          created_at: `2026-07-21T00:00:0${sequence}.000Z`,
+          request_sequence: sequence,
+        };
+      },
+    };
+    const callTemplateRuntime = {
+      async call_template(request) {
+        if (request.id === "template.project.list_open_projects") {
+          return nativeProjectInventoryExecution({
+            projects: [{ project_ref: "project:tab:fixture-a", active: true }],
+          });
+        }
+        stageCalls.push(request);
+        if (request.id === "macro.project.inspect") {
+          return macroEnvelope({ project_summary: { name: request.input.track_name } });
+        }
+        if (request.id === "template.tracks.create_track") {
+          return templateEnvelope({ track_ref: "track:index:0" });
+        }
+        throw new Error(`Unexpected stage ${request.id}`);
+      },
+    };
+    const binding = createStdioCallRecipeRuntime({
+      env: {
+        OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
+        OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
+        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify(makeCatalogDefinition()),
+        OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
+      },
+      callTemplateRuntime,
+      artifactRuntime: null,
+      callContext,
+      liveBridge: {
+        executor: {
+          probeLiveness: async () => ({
+            ready: true,
+            heartbeat: { observed: { active_owner: "owner:fixture", active_generation: 1 } },
+          }),
+        },
+      },
+    });
+    assert.ok(binding);
+    const saved = await saveFixture(binding.runtime);
+    const run = await binding.runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      context: { client_id: "caller-controlled" },
+      budget: { max_response_bytes: 8_192 },
+    });
+    assert.equal(run.ok, true, JSON.stringify(run));
+    assert.equal(stageCalls.length, 2);
+    assert.equal(new Set(stageCalls.map((call) => call.context.request_sequence)).size, 2);
+    assert.equal(stageCalls.every((call) => call.context.client_id === "openreaper-mcp"), true);
+    assert.deepEqual(stageCalls.map((call) => call.budget), [
+      CALL_RECIPE_STAGE_BUDGET,
+      CALL_RECIPE_STAGE_BUDGET,
+    ]);
+    assert.equal(allocationHints.every((hint) => hint === undefined), true);
+  });
+
+  it("exposes saved exact revisions through the actual six-tool stdio MCP surface", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-stdio-"));
+    const client = new Client({ name: "alpha3-4-e2-test", version: "0.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [STDIO_SERVER],
+      cwd: path.resolve("."),
+      env: {
+        PATH: process.env.PATH ?? "",
+        HOME: process.env.HOME ?? "",
+        OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
+        OPENREAPER_EXECUTABLE_RECIPE_SOURCE: "user",
+        OPENREAPER_EXECUTABLE_RECIPE_CATALOG_JSON: JSON.stringify(makeCatalogDefinition()),
+        OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: JSON.stringify(["read", "write"]),
+      },
+      stderr: "pipe",
+    });
+
+    try {
+      await client.connect(transport);
+      const tools = await client.listTools();
+      assert.deepEqual((tools.tools ?? []).map((tool) => tool.name).sort(), [...TOOL_ABI_V1_TOOL_NAMES].sort());
+      const schema = tools.tools.find((tool) => tool.name === "call_recipe")?.inputSchema;
+      assert.deepEqual(schema.properties.operation.enum, [...CALL_RECIPE_OPERATIONS]);
+      assert.equal(Object.hasOwn(schema.properties, "runtime_facts"), false);
+      assert.equal(Object.hasOwn(schema.properties, "evidence_page"), false);
+
+      const saved = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: {
+          operation: "save",
+          draft: makeDraft(),
+          version: "1.0.0",
+          revision_number: 1,
+          saved_at: "1970-01-01T00:00:00.000Z",
+          budget: { max_response_bytes: 4096 },
+        },
+      }));
+      assert.equal(saved.ok, true);
+
+      const listed = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: { operation: "list", limit: 1 },
+      }));
+      assert.equal(listed.count, 1);
+      assert.equal(listed.items[0].revision, 1);
+
+      const loaded = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: {
+          operation: "get",
+          recipe_id: saved.recipe_id,
+          version: saved.version,
+          revision: saved.revision,
+          content_hash: saved.content_hash,
+        },
+      }));
+      assert.equal(loaded.ok, true);
+      assert.equal(loaded.revision, 1);
+
+      const discovery = parseToolJson(await client.callTool({
+        name: "list_recipes",
+        arguments: {
+          ids: [saved.recipe_id],
+          fields: ["capability_truth"],
+        },
+      }));
+      assert.equal(discovery.items.length, 1);
+      assert.deepEqual(discovery.items[0].capability_truth.example_call_shape.request, {
+        operation: "run",
+        ...exactIdentity(saved),
+        inputs: {},
+      });
+      assert.equal(Object.values(exactIdentity(saved)).every((value) => value !== null), true);
+    } finally {
+      await client.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps E1 store non-executing and bound ownership non-overridable", async () => {
+    const catalog = makeCatalog();
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-store-"));
+    const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+    assert.equal(typeof store.run, "undefined");
+    assert.equal(typeof store.resume, "undefined");
+    assert.equal(typeof store.call_recipe, "undefined");
+
+    const runtime = createCallRecipeRuntime({
+      store,
+      catalog,
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: {} }),
+        template: async () => templateEnvelope({ track_ref: "track:index:1" }),
+      },
+      runtimeFactsProvider: ({ revision }) => completeFacts(revision),
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft: makeDraft(),
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    assert.equal(saved.ok, true);
+    // Caller cannot override store root through request fields.
+    const listed = await runtime.call_recipe({
+      operation: "list",
+      root: "/tmp/should-not-override",
+      source: "official",
+    });
+    assert.equal(listed.ok, true);
+    assert.equal(listed.count, 1);
+  });
+});
+
+function makeRuntime(overrides = {}) {
+  const catalog = makeCatalog();
+  const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-runtime-"));
+  const store = createExecutableRecipeRevisionStore({ root, catalog, source: "user" });
+  const runtime = createCallRecipeRuntime({
+    store,
+    catalog,
+    dispatchers: overrides.dispatchers ?? {
+      macro: async ({ inputs }) => macroEnvelope({ project_summary: { name: inputs.track_name } }),
+      template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+    },
+    runtimeFactsProvider: async ({ revision }) => overrides.facts
+      ? overrides.facts(revision)
+      : completeFacts(revision),
+  });
+  return { runtime, root, catalog, store };
+}
+
+function makeCatalog() {
+  return createExecutableDependencyCatalog(makeCatalogDefinition());
+}
+
+function makeCatalogDefinition() {
+  return {
+    macros: [{
+      id: "macro.project.inspect",
+      version: "1.0.0",
+      risk: "read",
+      descriptor_hash: "a".repeat(64),
+      capabilities: ["project.index"],
+    }],
+    templates: [{
+      id: "template.tracks.create_track",
+      version: "1.0.0",
+      risk: "write",
+      descriptor_hash: "b".repeat(64),
+      capabilities: ["tracks.write"],
+    }],
+    capabilities: ["project.index", "tracks.write"],
+  };
+}
+
+function makeDraft() {
+  return {
+    contract: "recipe.executable.draft.v1",
+    id: "recipe.tracks.prepare_dialog_track_executable",
+    title: "Executable prepare dialog track",
+    summary: "Macro-first executable draft with typed template fallback.",
+    pack: "tracks",
+    risk: "write",
+    inputs: [{ id: "track_name", type: "string", required: true }],
+    outputs: [{ id: "track_ref", type: "ref.track", required: true }],
+    stages: [
+      {
+        id: "run_macro",
+        kind: "macro",
+        dependency: {
+          kind: "macro",
+          id: "macro.project.inspect",
+          version: "1.0.0",
+          fallback_reason: null,
+        },
+        inputs: ["track_name"],
+        outputs: ["project_summary"],
+        risk: "read",
+        checkpoint: "checkpoint_run_macro",
+      },
+      {
+        id: "readback",
+        kind: "template",
+        dependency: {
+          kind: "template",
+          id: "template.tracks.create_track",
+          version: "1.0.0",
+          fallback_reason: "official_template_atom_required",
+        },
+        inputs: ["project_summary", "track_name"],
+        outputs: ["track_ref"],
+        risk: "write",
+        checkpoint: "checkpoint_readback",
+      },
+    ],
+    bindings: [
+      {
+        from: { scope: "recipe_input", id: null, port: "track_name" },
+        to: { scope: "stage", id: "run_macro", port: "track_name" },
+      },
+      {
+        from: { scope: "stage", id: "run_macro", port: "project_summary" },
+        to: { scope: "stage", id: "readback", port: "project_summary" },
+      },
+      {
+        from: { scope: "recipe_input", id: null, port: "track_name" },
+        to: { scope: "stage", id: "readback", port: "track_name" },
+      },
+      {
+        from: { scope: "stage", id: "readback", port: "track_ref" },
+        to: { scope: "recipe_output", id: null, port: "track_ref" },
+      },
+    ],
+    dependencies: [
+      {
+        kind: "macro",
+        id: "macro.project.inspect",
+        version: "1.0.0",
+        risk: "read",
+        fallback_reason: null,
+        descriptor_hash: "a".repeat(64),
+      },
+      {
+        kind: "template",
+        id: "template.tracks.create_track",
+        version: "1.0.0",
+        risk: "write",
+        fallback_reason: "official_template_atom_required",
+        descriptor_hash: "b".repeat(64),
+      },
+    ],
+    required_capabilities: ["project.index", "tracks.write"],
+    risk_grants: ["read", "write"],
+    checkpoints: [
+      {
+        id: "checkpoint_run_macro",
+        after_stage: "run_macro",
+        evidence_id: "evidence_run_macro",
+        resume_identity: "resume.run_macro",
+        summary: "Macro stage complete.",
+      },
+      {
+        id: "checkpoint_readback",
+        after_stage: "readback",
+        evidence_id: "evidence_readback",
+        resume_identity: "resume.readback",
+        summary: "Template fallback stage complete.",
+      },
+    ],
+    preflight: {
+      contract: "recipe.executable.preflight.v1",
+      complete_graph: true,
+      stage_count: 2,
+      dependency_count: 2,
+      requires_validation_before_save: true,
+      requires_save_before_run: true,
+      forbids_inline_execution: true,
+    },
+    portability: {
+      project_identity: "project:tab:fixture-a",
+      bridge_owner: "owner:fixture",
+      bridge_generation: "1",
+      platform: "darwin",
+    },
+  };
+}
+
+function makeMaxStageDraft() {
+  const draft = structuredClone(makeDraft());
+  for (let index = 2; index < 48; index += 1) {
+    const suffix = String(index).padStart(2, "0");
+    const stageId = `read_state_${suffix}_${"x".repeat(40)}`;
+    const checkpointId = `checkpoint_state_${suffix}_${"x".repeat(32)}`;
+    draft.stages.push({
+      id: stageId,
+      kind: "get_state",
+      dependency: null,
+      inputs: [],
+      outputs: [],
+      risk: "read",
+      checkpoint: checkpointId,
+    });
+    draft.checkpoints.push({
+      id: checkpointId,
+      after_stage: stageId,
+      evidence_id: `evidence_state_${suffix}_${"x".repeat(34)}`,
+      resume_identity: `resume.state_${suffix}_${"x".repeat(34)}`,
+      summary: `Verified read-only state checkpoint ${suffix}.`,
+    });
+  }
+  draft.preflight.stage_count = draft.stages.length;
+  return draft;
+}
+
+function makeManyOutputDraft(count) {
+  const draft = structuredClone(makeDraft());
+  const outputIds = Array.from({ length: count }, (_, index) => `output_${String(index).padStart(2, "0")}`);
+  draft.id = "recipe.project.inspect_many_outputs_executable";
+  draft.title = "Executable inspect with many outputs";
+  draft.summary = "Exercises the bounded verified output response budget.";
+  draft.risk = "write";
+  draft.outputs = outputIds.map((id) => ({ id, type: "json", required: true }));
+  draft.stages = [{
+    ...draft.stages[1],
+    inputs: ["track_name"],
+    outputs: outputIds,
+  }];
+  draft.bindings = [
+    {
+      from: { scope: "recipe_input", id: null, port: "track_name" },
+      to: { scope: "stage", id: "readback", port: "track_name" },
+    },
+    ...outputIds.map((id) => ({
+      from: { scope: "stage", id: "readback", port: id },
+      to: { scope: "recipe_output", id: null, port: id },
+    })),
+  ];
+  draft.dependencies = [draft.dependencies[1]];
+  draft.required_capabilities = ["tracks.write"];
+  draft.risk_grants = ["write"];
+  draft.checkpoints = [draft.checkpoints[1]];
+  draft.preflight.stage_count = 1;
+  draft.preflight.dependency_count = 1;
+  return draft;
+}
+
+function makeMetadataShadowDraft(kind) {
+  const draft = structuredClone(makeDraft());
+  const stageIndex = kind === "macro" ? 0 : 1;
+  const stage = draft.stages[stageIndex];
+  const dependency = draft.dependencies[stageIndex];
+  const checkpoint = draft.checkpoints[stageIndex];
+  draft.id = `recipe.tracks.reject_${kind}_metadata_shadow`;
+  draft.title = `Reject ${kind} metadata shadow`;
+  draft.summary = "Requires declared outputs to come from authoritative stage readback.";
+  draft.risk = stage.risk;
+  draft.outputs = [{ id: "status", type: "json", required: true }];
+  draft.stages = [{
+    ...stage,
+    inputs: ["track_name"],
+    outputs: ["status"],
+  }];
+  draft.bindings = [
+    {
+      from: { scope: "recipe_input", id: null, port: "track_name" },
+      to: { scope: "stage", id: stage.id, port: "track_name" },
+    },
+    {
+      from: { scope: "stage", id: stage.id, port: "status" },
+      to: { scope: "recipe_output", id: null, port: "status" },
+    },
+  ];
+  draft.dependencies = [dependency];
+  draft.required_capabilities = kind === "macro" ? ["project.index"] : ["tracks.write"];
+  draft.risk_grants = [stage.risk];
+  draft.checkpoints = [checkpoint];
+  draft.preflight.stage_count = 1;
+  draft.preflight.dependency_count = 1;
+  return draft;
+}
+
+function makeComposedDraft() {
+  const draft = structuredClone(makeDraft());
+  draft.stages.push(
+    {
+      id: "read_state",
+      kind: "get_state",
+      dependency: null,
+      inputs: [],
+      outputs: [],
+      risk: "read",
+      checkpoint: "checkpoint_read_state",
+    },
+    {
+      id: "checkpoint_proof",
+      kind: "checkpoint",
+      dependency: null,
+      inputs: [],
+      outputs: [],
+      risk: "read",
+      checkpoint: "checkpoint_explicit",
+    },
+  );
+  draft.checkpoints.push(
+    {
+      id: "checkpoint_read_state",
+      after_stage: "read_state",
+      evidence_id: "evidence_read_state",
+      resume_identity: "resume.read_state",
+      summary: "Bounded get_state stage complete.",
+    },
+    {
+      id: "checkpoint_explicit",
+      after_stage: "checkpoint_proof",
+      evidence_id: "evidence_explicit",
+      resume_identity: "resume.explicit",
+      summary: "Explicit runtime checkpoint proof complete.",
+    },
+  );
+  draft.preflight.stage_count = draft.stages.length;
+  return draft;
+}
+
+function completeFacts(saved, draft = makeDraft()) {
+  const sealed = sealExecutableRecipeRevision(draft, {
+    catalog: makeCatalog(),
+    version: saved.version,
+    revision: saved.revision,
+    saved_at: "1970-01-01T00:00:00.000Z",
+  });
+  return {
+    content_hash: saved.content_hash,
+    risk_grants: sealed.draft.risk_grants,
+    project_identity: sealed.draft.portability.project_identity,
+    bridge_owner: sealed.draft.portability.bridge_owner,
+    bridge_generation: sealed.draft.portability.bridge_generation,
+    available_capabilities: sealed.draft.required_capabilities,
+    checkpoint_evidence: sealed.draft.checkpoints.map((item) => ({
+      checkpoint_id: item.id,
+      evidence_id: item.evidence_id,
+      resume_identity: item.resume_identity,
+      recipe_id: sealed.recipe_id,
+      version: sealed.version,
+      revision: sealed.revision,
+      content_hash: sealed.content_hash,
+    })),
+    dependency_versions: sealed.dependency_lock.entries.map((entry) => ({
+      kind: entry.kind,
+      id: entry.id,
+      version: entry.version,
+    })),
+    dependency_descriptors: sealed.dependency_lock.entries.map((entry) => ({
+      kind: entry.kind,
+      id: entry.id,
+      descriptor_hash: entry.descriptor_hash,
+    })),
+  };
+}
+
+function exactIdentity(saved) {
+  return {
+    recipe_id: saved.recipe_id,
+    version: saved.version,
+    revision: saved.revision,
+    content_hash: saved.content_hash,
+    validation_result_id: saved.validation_result_id,
+  };
+}
+
+async function saveFixture(runtime) {
+  return runtime.call_recipe({
+    operation: "save",
+    draft: makeDraft(),
+    version: "1.0.0",
+    revision_number: 1,
+    saved_at: "1970-01-01T00:00:00.000Z",
+  });
+}
+
+function macroEnvelope(data = {}) {
+  const envelope = {
+    contract: "macro.execution.v1",
+    ok: true,
+    macro: {
+      id: "macro.project.inspect",
+      program_id: "openreaper.macro.project.inspect",
+      program_version: "1.0.0",
+      risk: "read",
+    },
+    request: { request_id: "request-recipe-stage", dry_run: false },
+    execution: {
+      status: "completed",
+      started_at: "2026-07-21T00:00:00.000Z",
+      completed_at: "2026-07-21T00:00:01.000Z",
+      stage_count: 1,
+      stages: [{
+        id: "inspect",
+        kind: "verify",
+        status: "completed",
+        evidence_refs: ["evidence:macro:inspect"],
+      }],
+    },
+    sqlite: {
+      used: false,
+      source: "not_used",
+      freshness: "not_applicable",
+      snapshot_ref: null,
+      revision: null,
+      refreshed: false,
+    },
+    result: {
+      summary: "Macro completed with native verification.",
+      canonical_refs: [],
+      changes: [],
+      verification: { status: "passed", evidence_refs: ["evidence:macro:inspect"] },
+      artifact_refs: [],
+      data,
+    },
+    blockers: [],
+    error: null,
+    recovery: null,
+    budget: {
+      max_bytes: 65_536,
+      actual_bytes: 0,
+      truncated: false,
+      artifact_fallback: false,
+    },
+  };
+  for (let i = 0; i < 4; i += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function macroPartialFailureEnvelope(message = "Macro retained one verified partial change.") {
+  const envelope = macroEnvelope({});
+  envelope.ok = false;
+  envelope.execution.status = "partial_failure";
+  envelope.result.summary = "Macro failed after one native-verified change.";
+  envelope.result.changes = [{
+    kind: "project.index.refresh",
+    status: "applied",
+    live_readback: { status: "passed" },
+  }];
+  envelope.result.verification = {
+    status: "failed",
+    evidence_refs: ["evidence:macro:partial"],
+  };
+  envelope.blockers = [{ code: "MACRO_PARTIAL_FAILURE", message: "Inspect bounded state.", recoverable: false }];
+  envelope.error = { code: "MACRO_PARTIAL_FAILURE", message, recoverable: false };
+  envelope.recovery = {
+    partial_changes_possible: true,
+    undo_policy: "single_undo",
+    action: "Inspect bounded state before deciding recovery.",
+  };
+  for (let i = 0; i < 4; i += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function macroEnvelopeWithChange(data = {}) {
+  const envelope = macroEnvelope(data);
+  envelope.result.changes = [{
+    kind: "project.index.refresh",
+    status: "applied",
+    live_readback: { status: "passed" },
+  }];
+  for (let i = 0; i < 4; i += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function macroLargePartialFailureEnvelope() {
+  const envelope = macroPartialFailureEnvelope();
+  envelope.result.changes = Array.from({ length: 4 }, (_, index) => ({
+    kind: "project.index.refresh",
+    status: "applied",
+    live_readback: { status: "passed" },
+    details: `${index}:${"x".repeat(760)}`,
+  }));
+  for (let i = 0; i < 4; i += 1) {
+    envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+  }
+  return envelope;
+}
+
+function parseToolJson(response) {
+  const text = response.content?.find((entry) => entry.type === "text")?.text;
+  assert.equal(typeof text, "string");
+  return JSON.parse(text);
+}
+
+function nativeProjectInventorySummary(options = {}) {
+  const projects = options.projects ?? [];
+  return {
+    readback_status: "passed",
+    live_materialization: "native_enum_projects_verified",
+    projects,
+    total_count: options.total_count ?? projects.length,
+    returned_count: options.returned_count ?? projects.length,
+    cursor: options.cursor ?? 0,
+    next_cursor: options.next_cursor ?? null,
+    coverage_status: options.coverage_status ?? "complete",
+  };
+}
+
+function nativeProjectInventoryExecution(options = {}) {
+  const summary = options.readback_status === "passed" && Array.isArray(options.projects)
+    ? options
+    : nativeProjectInventorySummary(options);
+  return {
+    contract: "template.execution.v1",
+    ok: true,
+    template: { id: "template.project.list_open_projects", pack: "project", risk: "read" },
+    verification: { status: "passed" },
+    result: { summary },
+  };
+}
+
+function templateEnvelope(readback = {}) {
+  return {
+    contract: "template.execution.v1",
+    ok: true,
+    template: { id: "template.tracks.create_track", pack: "tracks", risk: "write" },
+    request: { id: "request-template-stage" },
+    completed_at: "2026-07-21T00:00:01.000Z",
+    verification: { status: "passed", evidence_refs: ["evidence:template:readback"] },
+    result: {
+      summary: { status: "applied" },
+      refs: [{ ref: readback.track_ref ?? "track:index:0" }],
+      artifacts: [],
+      jobs: [],
+      readback,
+      session_ledger: null,
+      last_result: { updated: true, refs: [], truncated: false },
+    },
+    error: null,
+  };
+}
+
+function templateFailureEnvelope({ zeroWrite }) {
+  return {
+    contract: "template.execution.v1",
+    ok: false,
+    template: { id: "template.tracks.create_track", pack: "tracks", risk: "write" },
+    request: { id: "request-template-stage" },
+    completed_at: "2026-07-21T00:00:01.000Z",
+    error: {
+      code: "TEMPLATE_BLOCKED",
+      message: "Template preflight blocked before dispatch.",
+      recoverable: true,
+      details: { zero_write: zeroWrite === true },
+    },
+  };
+}
+
+function listTree(root) {
+  // Lightweight existence probe for zero-write checks.
+  try {
+    return readFileSync(root, "utf8");
+  } catch {
+    return `dir:${root}`;
+  }
+}

@@ -1,7 +1,7 @@
 # Recipe Contract v1
 
-Status: frozen Layer 5 Recipe Contract v1, with a bounded Alpha3.4-E0 reopen for
-the executable Recipe draft/revision extension only.
+Status: frozen Layer 5 Recipe Contract v1, with bounded Alpha3.4-E0 executable
+draft/revision extension and Alpha3.4-E2 public `call_recipe` runtime reopen.
 
 ## Purpose
 
@@ -14,11 +14,13 @@ Agents discover recipes through `list_recipes`, expand only the existing Layer
 semantics, primarily `call_template` and necessary `get_state` reads.
 
 The historical agent-stepped Recipe Contract v1 remains valid. Alpha3.4-E0
-adds an additive executable draft/revision contract for later `call_recipe`
-work, but this window does not register, expose, or execute `call_recipe`.
+adds an additive executable draft/revision contract. Alpha3.4-E2 adds exactly
+one sixth tool named `call_recipe` that runs only saved validated executable
+revisions with exact identity and trust checks.
 
-Layer 5 does not add MCP tools, define templates, implement runtime Lua,
-implement live REAPER smoke, or change the Layer 4D runtime binding.
+Layer 5 does not define templates, implement runtime Lua, implement live REAPER
+smoke, or change the Layer 4D runtime binding beyond public tool registration
+for `call_recipe`.
 
 ## Contract Id
 
@@ -74,8 +76,8 @@ recovery
 Full recipe run rules are carried inside those three detail fields. Layer 5
 does not add discovery fields such as `expectedOutputs`, `templateDependencies`,
 `checkpoints`, or `riskGates`. `workflow_card` is compact A2-F0.3 procedure
-metadata for agents; it does not add a public `call_recipe` surface, hidden
-recipe executor, or sixth MCP tool.
+metadata for agents. Saved executable revisions use public `call_recipe`;
+`workflow_card` itself is not an executor.
 
 ## Recipe Metadata
 
@@ -697,8 +699,8 @@ runtime facts fail closed using the same typed mismatch reasons.
 ### Discovery And Public Surface
 
 Alpha3.4-E0 does not expand the frozen Layer 1.5 recipe discovery detail field
-set, does not register `call_recipe`, and keeps the public MCP surface at the
-existing five tools:
+set. Alpha3.4-E2 adds exactly one sixth tool named `call_recipe` while preserving
+the six-tool public surface:
 
 ```text
 ping
@@ -706,12 +708,57 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
 Internal executable revision records may retain version, revision, and content
 hash as separate fields. The discovery/projection object itself remains exactly
-the frozen nine recipe summary fields and must not embed executable revision
-metadata.
+the frozen nine recipe summary fields and must not embed full executable revision
+payloads. `list_recipes` reports executable truth only for saved validated
+revisions.
+
+### Alpha3.4-E2 Public `call_recipe` Runtime
+
+Status: bounded reopen authorized for Alpha3.4-E2 only.
+
+`call_recipe` operations:
+
+```text
+validate
+save
+list
+get
+delete
+run
+resume
+```
+
+Rules:
+
+- validate/save/list/get/delete delegate to the bound non-executing E1 store;
+- the public `revision` field is a positive integer for stored identity on
+  get/delete/run/resume and may be an object only as validate/save authoring
+  input; object-shaped revision payloads are forbidden from execution;
+- run accepts only complete stored identity:
+  `recipe_id`, `version`, `revision`, `content_hash`, `validation_result_id`;
+- fresh run ids are server-generated and cannot be caller-selected or reused;
+- resume accepts retained `run_id` plus latest verified checkpoint identity;
+- public requests cannot provide `runtime_facts`; the runtime loads fresh
+  authoritative facts for every run and resume attempt and fails closed when
+  those facts are unavailable;
+- whole-graph preflight runs once before the first mutating stage;
+- stages execute only registered macro, template, get_state, and checkpoint kinds;
+- stage success requires stage-specific runtime/native readback;
+- success returns compact identity, counts, verified outputs, timing, and one
+  pageable `evidence_ref`;
+- failure/partial returns failed/completed/not-started stage ids, proven partial
+  changes, latest checkpoint, recovery/undo posture, `resume_safe`, and one exact
+  `next_call`;
+- evidence paging uses `get` with `evidence_ref`, is identity-bound, and must not
+  dump full child envelopes;
+- list, get, validate, save, delete, run, resume, and evidence pages enforce
+  bounded final responses; mutation requests reject an insufficient success or
+  failure envelope budget before dispatch.
 
 User Recipe authoring may load and later discover saved executable revisions as
 normalized catalog facts without making source files executable, mutating
@@ -779,14 +826,15 @@ typed reason all fail closed.
 
 Layer 5 does not implement:
 
-- a server-side recipe executor;
+- a hidden non-public recipe executor outside `call_recipe`;
 - user recipe authoring UI or syntax beyond this contract;
-- new MCP tools;
-- `call_recipe` registration or execution in Alpha3.4-E0;
+- public tools other than the Alpha3.4-E2 sixth tool `call_recipe`;
+- inline draft/graph execution;
 - new templates;
 - raw Lua or runtime Lua;
 - raw REAPER actions;
 - shell commands or process spawning;
 - arbitrary bridge requests;
 - live REAPER smoke;
-- changes to the frozen Layer 1, 1.5, 2, 3, or 4 contracts.
+- changes to frozen Layer 2, 3, or 4 contracts beyond the authorized Tool ABI /
+  Discovery / Recipe reopen.

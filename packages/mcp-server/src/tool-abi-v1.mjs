@@ -13,11 +13,15 @@ export const TOOL_ABI_V1_TOOLS = Object.freeze([
   }),
   Object.freeze({
     name: "list_recipes",
-    description: "List workflow contracts agents can execute step by step.",
+    description: "List workflow contracts and saved executable recipe revisions.",
   }),
   Object.freeze({
     name: "call_template",
     description: "Run one verified template action.",
+  }),
+  Object.freeze({
+    name: "call_recipe",
+    description: "Validate, save, list, get, delete, run, or resume a saved executable recipe revision.",
   }),
 ]);
 

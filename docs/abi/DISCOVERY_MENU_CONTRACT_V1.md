@@ -4,8 +4,9 @@ Status: frozen by the Layer 1.5 Discovery / Menu Contract gate.
 
 ## Purpose
 
-Layer 1 froze the five MCP tool names. Layer 1.5 freezes how agents discover
-templates and recipes through `list_templates` and `list_recipes`.
+Layer 1 now freezes six MCP tool names after the bounded Alpha3.4-E2 reopen.
+Layer 1.5 freezes how agents discover templates and recipes through
+`list_templates` and `list_recipes`.
 
 These tools are long-term discovery/menu tools. They are menus, not full catalog
 dumps. Their default responses must stay compact as packs, templates, and
@@ -96,8 +97,9 @@ tags
 workflow_card
 ```
 
-`workflow_card` is compact A2-F0.3 procedure metadata. It is not a recipe
-executor, a public `call_recipe` surface, or a sixth MCP tool.
+`workflow_card` is compact A2-F0.3 procedure metadata. It is not itself a recipe
+executor. Alpha3.4-E2 adds exactly one sixth tool named `call_recipe` for saved
+executable revisions; `workflow_card` remains discovery metadata only.
 
 The default template menu must not include full `inputSchema`, `outputSchema`,
 `examples`, or `expectedDelta`. The default recipe menu must not include full
@@ -184,9 +186,14 @@ capability_truth
 ```
 
 These fields are derived from compact metadata only. They do not expose steps,
-assertions, recovery branches, a recipe executor, or new support claims.
-For recipes, `capability_truth` must clearly report that public `call_recipe`
-is not available unless that future decision is explicitly reopened.
+assertions, recovery branches, or new support claims.
+For historical agent-stepped recipes, `capability_truth` may still report
+agent-stepped execution. For saved validated executable revisions, discovery may
+report executable truth through public `call_recipe` without dumping full child
+envelopes into ordinary menu rows. An exact saved-revision expansion must give a
+complete executable example containing `recipe_id`, `version`, numeric
+`revision`, `content_hash`, `validation_result_id`, and `inputs`; fuzzy
+recipe-id-only run examples are forbidden.
 
 Recipe detail fields are:
 
@@ -206,8 +213,11 @@ Complex tasks must be recipe-first. If no recipe fits, the agent must explicitly
 say it is using ad-hoc primitive composition before calling multiple templates
 as a workflow.
 
-Recipes are not server-side hidden executors. Agents execute recipe steps
-through normal `call_template` and `get_state` calls.
+Historical agent-stepped recipes are not hidden executors; agents may still
+execute their declared steps through `call_template` and `get_state`. Saved
+validated executable revisions run through public `call_recipe` only. Evidence
+paging uses `call_recipe` operation `get` with an identity-bound `evidence_ref`;
+there is no separate public evidence operation.
 
 ## Tests Required
 
@@ -221,5 +231,6 @@ shape, and that detail fields are returned only for selected ids and fields.
 ## Non-Goals
 
 Layer 1.5 must not implement the bridge, migrate REAPER packs, create template
-runtime behavior, create official recipe workflows, add a sixth MCP tool, or
-change pack taxonomy.
+runtime behavior, create official recipe workflows beyond discovery, or change
+pack taxonomy. Alpha3.4-E2 separately adds exactly one sixth tool named
+`call_recipe` outside this Layer 1.5 implementation surface.

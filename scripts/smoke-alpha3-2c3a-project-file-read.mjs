@@ -22,7 +22,7 @@ const IDS = [
   "template.project.read_current_project_path",
   "template.project.read_dirty_state",
 ];
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const MAX_SNAPSHOT_ENTRIES = 2_000;
 
 let options;

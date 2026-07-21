@@ -247,7 +247,7 @@ describe("Layer 7 R1 cleanup recipe transcript driver", () => {
     assert.equal(events.at(-1).error.details.spawned_reaper, false);
   });
 
-  it("does not add REAPER spawning, live matrix mutation, or a public recipe tool surface", () => {
+  it("does not add REAPER spawning or live matrix mutation", () => {
     const source = readFileSync(DRIVER_SOURCE, "utf8");
 
     assert.doesNotMatch(source, /node:child_process|spawn\(|execFile|execSync|REAPER\.app/);
@@ -256,13 +256,14 @@ describe("Layer 7 R1 cleanup recipe transcript driver", () => {
     assert.equal(source.includes("createCallTemplateRuntime"), true);
     assert.equal(source.includes("createGetStateArtifactRuntime"), true);
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), false);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.includes("call_recipe"), true);
   });
 });
 

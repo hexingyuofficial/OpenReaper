@@ -33,7 +33,7 @@ import {
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STDIO_SERVER = path.join(REPO_ROOT, "packages/mcp-server/src/openreaper-mcp-stdio.mjs");
-const EXPECTED_TOOLS = ["ping", "get_state", "list_templates", "list_recipes", "call_template"];
+const EXPECTED_TOOLS = ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"];
 
 function runtimeEnv(transportRoot, renderRoot, overrides = {}) {
   return {
@@ -947,7 +947,7 @@ done
       await client.connect(transport);
       const tools = await client.listTools();
       assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
-      assert.equal(tools.tools.length, 5);
+      assert.equal(tools.tools.length, 6);
       const ping = parseToolJson(await client.callTool({ name: "ping", arguments: {} }));
       assert.equal(ping.ok, true);
       assert.equal(ping.runtime_readiness.contract, ALPHA3_2B3_RUNTIME_DOCTOR_READINESS_CONTRACT);

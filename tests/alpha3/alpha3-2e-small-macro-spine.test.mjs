@@ -14,7 +14,7 @@ import { ALPHA3_2A_CONTRACT_ONLY_MACRO_IDS } from "../../packages/mcp-server/src
 
 const REPO_ROOT = new URL("../..", import.meta.url).pathname;
 const STDIO_SERVER = new URL("../../packages/mcp-server/src/openreaper-mcp-stdio.mjs", import.meta.url).pathname;
-const EXPECTED_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXPECTED_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 describe("Alpha3.2-E small macro spine: project inspect", () => {
   it("publishes the complete small Macro spine as registered executable programs", () => {
@@ -144,7 +144,7 @@ describe("Alpha3.2-E small macro spine: project inspect", () => {
     assert.equal(response.error.code, "PROJECT_INSPECT_LIVE_READ_UNAVAILABLE");
   });
 
-  it("keeps actual stdio at five tools and reports executable inspect as blocked until live readiness", { timeout: 30_000 }, async () => {
+  it("keeps actual stdio at six tools and reports executable inspect as blocked until live readiness", { timeout: 30_000 }, async () => {
     const transport = new StdioClientTransport({
       command: process.execPath,
       args: [STDIO_SERVER],

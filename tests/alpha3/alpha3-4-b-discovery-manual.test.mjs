@@ -11,6 +11,7 @@ import {
 import {
   assertAlpha34BRecommendationShape,
   auditAlpha34BVisibleManuals,
+  createAlpha34BDiscoveryManualProjection,
   createAlpha34BFirstTryExecutionGuide,
   createAlpha34BMacroRecommendations,
   enrichAlpha34BRuntimeError,
@@ -40,6 +41,7 @@ test("query recommendations return 1-3 canonical visible Macro rows without pers
     assert.deepEqual(row.exact_expansion_call.arguments.ids, [row.id]);
   }
   assert.equal(JSON.stringify(projection).includes("create a MIDI clip and add a compressor"), false);
+  assert.equal(createAlpha34BDiscoveryManualProjection().call_recipe_exposed, true);
 });
 
 test("Chinese/English broad wording routes fades to items.apply and expands lexicon coverage", () => {
@@ -170,7 +172,7 @@ test("search phrases remain metadata only and never become hidden executable ids
     query: "fade",
   });
   assert.equal(guide.search_phrases_are_metadata_only, true);
-  assert.equal(guide.tool_surface.count, 5);
+  assert.equal(guide.tool_surface.count, 6);
   assert.deepEqual(guide.macro_menu.macro_ids, ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS);
   assert.equal(guide.compatibility.visible_in_menu, false);
   for (const alias of guide.compatibility.aliases) {

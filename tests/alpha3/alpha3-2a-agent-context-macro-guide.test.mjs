@@ -41,7 +41,7 @@ import { createDiscoveryCatalog } from "../../packages/mcp-server/src/discovery-
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STDIO_SERVER = path.join(REPO_ROOT, "packages/mcp-server/src/openreaper-mcp-stdio.mjs");
-const EXPECTED_TOOLS = ["ping", "get_state", "list_templates", "list_recipes", "call_template"];
+const EXPECTED_TOOLS = ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"];
 const EXPECTED_PRIMARY_IDS = [
   "macro.project.inspect",
   "macro.project.query",
@@ -477,7 +477,7 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     ]);
   });
 
-  it("retains folded secondary discovery, empty/draft recipe guidance, five tools, and no bypass", () => {
+  it("retains folded secondary discovery, empty/draft recipe guidance, six tools, and no bypass", () => {
     const guide = createAlpha3_2AAgentContextMacroGuide();
     const secondaryIds = guide.secondary_menu.rows.map((row) => row.id);
 
@@ -492,11 +492,17 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
     assert.match(guide.recipe_guidance.empty_catalog, /ad-hoc composition/);
     assert.match(guide.recipe_guidance.draft_only_catalog, /official\/live-smoked/);
     assert.deepEqual(guide.tool_surface.tools, EXPECTED_TOOLS);
-    assert.equal(guide.tool_surface.count, 5);
+    assert.equal(guide.tool_surface.count, 6);
     assert.equal(guide.tool_surface.list_macros, false);
-    assert.equal(guide.recipe_guidance.public_call_recipe, false);
+    assert.equal(guide.recipe_guidance.public_call_recipe, true);
     assert.equal(guide.recipe_guidance.hidden_recipe_executor, false);
-    assert.equal(Object.values(guide.safety_boundary).every((value) => value === false), true);
+    assert.equal(guide.safety_boundary.public_call_recipe, true);
+    assert.equal(
+      Object.entries(guide.safety_boundary)
+        .filter(([key]) => key !== "public_call_recipe")
+        .every(([, value]) => value === false),
+      true,
+    );
   });
 
   it("decorates empty recipe discovery with the same default candidate guide and manual cards", () => {
@@ -528,8 +534,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       await client.connect(transport);
       const tools = await client.listTools();
       assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
-      assert.equal(tools.tools.length, 5);
-      assert.equal(tools.tools.some((tool) => tool.name === "list_macros" || tool.name === "call_recipe"), false);
+      assert.equal(tools.tools.length, 6);
+      assert.equal(tools.tools.some((tool) => tool.name === "list_macros"), false);
 
       const pingResult = await client.callTool({ name: "ping", arguments: {} });
       const stateResult = await client.callTool({ name: "get_state", arguments: {} });

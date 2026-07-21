@@ -45,8 +45,8 @@ const REGISTRY = JSON.parse(
 );
 
 describe("Alpha3.4-C2 upper MIDI musical timing", () => {
-  it("keeps public counts at 5 tools / 15 macros / 235 templates / 91 handlers", () => {
-    assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 5);
+  it("keeps public counts at 6 tools / 15 macros / 235 templates / 91 handlers", () => {
+    assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
     assert.equal(new Set(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS).size, 15);
     assert.equal(REGISTRY.entries.length, 235);

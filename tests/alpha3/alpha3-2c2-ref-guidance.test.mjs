@@ -24,7 +24,7 @@ import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-te
 import { listTemplates } from "../../packages/mcp-server/src/discovery-menu-v1.mjs";
 
 const STDIO_SERVER = "packages/mcp-server/src/openreaper-mcp-stdio.mjs";
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 const context = () => ({
   client_id: "alpha32-c2-test",
   session_id: "alpha32-c2-session",
@@ -375,7 +375,7 @@ describe("Alpha3.2-C2 repairable refs", () => {
     assert.match(JSON.stringify([createMarker, createRegion]), /index-number/u);
   });
 
-  it("accepts keyed refs through actual stdio while preserving the exact five-tool surface", async () => {
+  it("accepts keyed refs through actual stdio while preserving the exact six-tool surface", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "openreaper-alpha32c2-stdio-"));
     const transportDir = path.join(root, "transport");
     await mkdir(path.join(transportDir, "requests"), { recursive: true });

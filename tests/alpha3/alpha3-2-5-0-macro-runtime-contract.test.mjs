@@ -25,13 +25,15 @@ const ACCEPTED_TEMPLATE_IDS = new Set(["template.tracks.set_volume"]);
 const REGISTERED_STAGE_IDS = new Set(["resolve-track", "set-volume", "verify-volume", "project-result"]);
 
 describe("Alpha3.2.5-0 Macro runtime contract", () => {
-  it("keeps the public five-tool ABI unchanged", () => {
+  it("keeps Macro paths off hidden Recipe execution while public ABI is six tools", () => {
+    // Macro runtime is not a hidden Recipe executor; public call_recipe is separate.
     assert.deepEqual(TOOL_ABI_V1_TOOL_NAMES, [
       "ping",
       "get_state",
       "list_templates",
       "list_recipes",
       "call_template",
+      "call_recipe",
     ]);
   });
 

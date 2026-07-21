@@ -56,6 +56,7 @@ describe("Alpha3 D2 extension pack portability", () => {
     assert.equal(ALPHA3_D2_EXTENSION_PACK_ENTRYPOINTS_DISCOVERY_SUMMARY.promotion_gate.global_alias_execution, false);
     assert.equal(validateAlpha3D2ExtensionPackPacket(packet).ok, true);
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",

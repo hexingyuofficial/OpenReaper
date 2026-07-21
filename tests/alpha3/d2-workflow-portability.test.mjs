@@ -55,6 +55,7 @@ describe("Alpha3 D2 workflow portability", () => {
 
     assert.equal(validateAlpha3D2WorkflowPacket(packet).ok, true);
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",

@@ -252,13 +252,14 @@ describe("Layer 4.5B get_state artifact projection runtime binding", () => {
 
   it("keeps 4.5B out of MCP tool additions, live bridge, and Lua helper work", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",
       "list_templates",
       "ping",
     ].sort());
-    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 5);
+    assert.equal(TOOL_ABI_V1_TOOL_NAMES.length, 6);
 
     const runtimeSource = readFileSync(
       new URL("../../packages/mcp-server/src/get-state-runtime-v1.mjs", import.meta.url),

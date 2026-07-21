@@ -22,7 +22,7 @@ const IDS = [
   "template.project.read_current_project_path",
   "template.project.read_dirty_state",
 ];
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 let sequence = 0;
 
 function operationAwareSummary(operationName) {
@@ -524,7 +524,7 @@ describe("Alpha3.2-C3A current project path and dirty-state reads", () => {
     }
   });
 
-  it("uses actual stdio, omitted context, a fake file bridge, and exactly five tools", async () => {
+  it("uses actual stdio, omitted context, a fake file bridge, and exactly six tools", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "openreaper-c3a-stdio-"));
     const transportDir = path.join(root, "transport");
     await mkdir(path.join(transportDir, "requests"), { recursive: true });

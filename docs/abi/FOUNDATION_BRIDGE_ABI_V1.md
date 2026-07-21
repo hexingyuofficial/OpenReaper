@@ -8,7 +8,7 @@ Layer 2 freezes the runtime contract between template execution and the
 OpenReaper bridge. It does not migrate packs, create templates, create
 recipes, or expose new MCP tools.
 
-Agents still call only the five Tool ABI v1 tools:
+Agents still call only the six Tool ABI v1 tools:
 
 ```text
 ping
@@ -16,6 +16,7 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
 The bridge ABI is below those tools. It is a fixed kernel contract, not a

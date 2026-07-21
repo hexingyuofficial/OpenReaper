@@ -32,7 +32,7 @@ const MINIMUM_PUBLIC_BUDGET = {
 };
 const LAYOUT_BATCH_SIZE = options.layout_batch_size ?? 14;
 const TRACK_NAMES = Array.from({ length: TRACK_COUNT }, (_, index) => `A33 Highway ${String(index + 1).padStart(2, "0")}`);
-const EXACT_TOOLS = ["call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
 
 await mkdir(path.dirname(COPY_PROJECT), { recursive: true });
 await mkdir(path.dirname(BACKUP_PROJECT), { recursive: true });

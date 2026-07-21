@@ -87,12 +87,20 @@ const requiredNeedles = [
   EXECUTABLE_RECIPE_PREFLIGHT_CONTRACT,
   "Macro-First Dependency Rule",
   "Trust Invalidation",
-  "does not register `call_recipe`",
+  "Alpha3.4-E2 Public `call_recipe` Runtime",
+  "adds exactly one sixth tool named `call_recipe`",
+  "public requests cannot provide `runtime_facts`",
+  "evidence paging uses `get` with `evidence_ref`",
   "Non-Goals",
   `${RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length} templates total`,
 ];
 
 assertNeedles("RECIPE_CONTRACT_V1.md", abi, requiredNeedles);
+const e2Section = abi.split("### Alpha3.4-E2 Public `call_recipe` Runtime")[1]?.split("\n### ")[0] ?? "";
+if (/^evidence_page$/mu.test(e2Section)) {
+  console.error("Recipe Contract E2 operation list must remain exactly seven operations.");
+  process.exit(1);
+}
 assertDocList("ABI fixed packs", abi, FOUNDATION_BRIDGE_PACK_IDS);
 assertDocList("ABI workflow-shaped pack guard", abi, TEMPLATE_DESCRIPTOR_WORKFLOW_SHAPED_PACK_IDS);
 assertDocList("ABI lifecycle values", abi, RECIPE_LIFECYCLES);

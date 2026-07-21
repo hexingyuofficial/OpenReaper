@@ -81,6 +81,7 @@ describe("Alpha3 E1 stock plugin fluency", () => {
     assert.equal(ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.broad_live_support, false);
     assert.equal(ALPHA3_E1_STOCK_PLUGIN_DISCOVERY_SUMMARY.live_support_status, "bounded_single_plugin_evidence_only");
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
+      "call_recipe",
       "call_template",
       "get_state",
       "list_recipes",

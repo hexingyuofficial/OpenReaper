@@ -212,9 +212,9 @@ function countLua(dir) {
 }
 
 describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
-  it("keeps public counts 5/15/235/91 and mode token", () => {
+  it("keeps public counts 6/15/235/91 and mode token", () => {
     assert.equal(ALPHA3_4_D2_FX_BATCH_MODE, "exact_assignments");
-    assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 5);
+    assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);
     assert.equal(ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS.length, 15);
     assert.equal(CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS.length, 235);
     const registry = loadBridgeHandlerRegistry({ cwd: ROOT });

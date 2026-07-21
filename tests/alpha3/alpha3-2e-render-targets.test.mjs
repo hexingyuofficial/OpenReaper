@@ -153,7 +153,7 @@ describe("Alpha3.2-E render target planner", () => {
     }
   });
 
-  it("wraps plans without an executor and keeps the five-tool guide unchanged", () => {
+  it("wraps plans without a hidden executor and keeps the six-tool guide unchanged", () => {
     const plan = planAlpha3_2ERenderTargetsMacro({ target_kind: "whole_project", format: "wav", dry_run: false });
     const envelope = createAlpha3_2ERenderTargetsMacroRuntimeEnvelope({
       request: { id: ALPHA3_2E_RENDER_TARGETS_MACRO_ID, input: { target_kind: "whole_project", format: "wav", dry_run: false } },
@@ -169,13 +169,14 @@ describe("Alpha3.2-E render target planner", () => {
     assert.equal(envelope.result.execution.hidden_executor, false);
     assert.equal(envelope.result.execution.public_call_recipe, false);
     assert.equal(envelope.result.execution.raw_action_lua_shell_ui, false);
-    assert.equal(createAlpha3_2AAgentContextMacroGuide().tool_surface.count, 5);
+    assert.equal(createAlpha3_2AAgentContextMacroGuide().tool_surface.count, 6);
     assert.deepEqual(createAlpha3_2AAgentContextMacroGuide().tool_surface.tools, [
       "ping",
       "get_state",
       "list_templates",
       "list_recipes",
       "call_template",
+      "call_recipe",
     ]);
   });
 

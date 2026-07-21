@@ -163,10 +163,10 @@ export function createAlpha3_3B1AgentContextMacroGuide({
     version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
     phase: "Alpha3.3-B1d",
     tool_surface: {
-      count: 5,
-      tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template"],
+      count: 6,
+      tools: ["ping", "get_state", "list_templates", "list_recipes", "call_template", "call_recipe"],
       macro_tool: "call_template",
-      adds_public_tool: false,
+      adds_public_tool: true,
     },
     macro_menu: {
       compact: true,
@@ -203,7 +203,7 @@ export function createAlpha3_3B1AgentContextMacroGuide({
         "macro_domain_not_accepted",
         "macro_budget_prefers_atomic_template",
       ],
-      routing: "Use exact or filtered Template discovery only after recording one typed fallback reason; do not add a new tool, raw SQL, or call_recipe.",
+      routing: "Use exact or filtered Template discovery only after recording one typed fallback reason. Do not add a new tool for this atomic fallback: it does not execute a Recipe; use the public call_recipe tool separately for saved Recipe lifecycle operations. Do not use raw SQL.",
     },
     safety_boundary: {
       hidden_recipe_executor: false,
