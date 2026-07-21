@@ -13,6 +13,10 @@ import {
   RECIPE_CONTRACT,
 } from "../../packages/core/src/recipe-contract-v1.mjs";
 import {
+  createExecutableDependencyCatalog,
+  sealExecutableRecipeRevision,
+} from "../../packages/core/src/executable-recipe-contract-v1.mjs";
+import {
   USER_RECIPE_AUTHORING_CONTRACT,
   UserRecipeAuthoringError,
   defaultUserRecipeSourceRoots,
@@ -310,6 +314,371 @@ describe("Layer 6 Narrow User Recipe Authoring v1", () => {
     );
   });
 
+  it("loads saved executable revisions without mutating discovery fields or recipe roots", () => {
+    const fixture = createFixture();
+    writeRecipe(fixture, "user", "tracks/prepare_dialog_track.recipe.json", makeRecipe({
+      lifecycle: "validated",
+    }));
+    const catalogFacts = createExecutableDependencyCatalog({
+      macros: [{
+        id: "macro.project.inspect",
+        version: "1.0.0",
+        risk: "read",
+        descriptor_hash: "a".repeat(64),
+        capabilities: ["project.index"],
+      }],
+      templates: [{
+        id: "template.tracks.create_track",
+        version: "1.0.0",
+        risk: "write",
+        descriptor_hash: "b".repeat(64),
+        capabilities: ["tracks.write"],
+      }],
+      capabilities: ["project.index", "tracks.write"],
+    });
+    const sealed = sealExecutableRecipeRevision({
+      contract: "recipe.executable.draft.v1",
+      id: "recipe.tracks.prepare_dialog_track_executable",
+      title: "Executable prepare dialog track",
+      summary: "Saved executable revision fixture.",
+      pack: "tracks",
+      risk: "write",
+      inputs: [{ id: "track_name", type: "string", required: true }],
+      outputs: [{ id: "track_ref", type: "ref.track", required: true }],
+      stages: [
+        {
+          id: "run_macro",
+          kind: "macro",
+          dependency: {
+            kind: "macro",
+            id: "macro.project.inspect",
+            version: "1.0.0",
+            fallback_reason: null,
+          },
+          inputs: ["track_name"],
+          outputs: ["project_summary"],
+          risk: "read",
+          checkpoint: "checkpoint_run_macro",
+        },
+        {
+          id: "create_track",
+          kind: "template",
+          dependency: {
+            kind: "template",
+            id: "template.tracks.create_track",
+            version: "1.0.0",
+            fallback_reason: "official_template_atom_required",
+          },
+          inputs: ["project_summary", "track_name"],
+          outputs: ["track_ref"],
+          risk: "write",
+          checkpoint: "checkpoint_create_track",
+        },
+      ],
+      bindings: [
+        {
+          from: { scope: "recipe_input", id: null, port: "track_name" },
+          to: { scope: "stage", id: "run_macro", port: "track_name" },
+        },
+        {
+          from: { scope: "stage", id: "run_macro", port: "project_summary" },
+          to: { scope: "stage", id: "create_track", port: "project_summary" },
+        },
+        {
+          from: { scope: "recipe_input", id: null, port: "track_name" },
+          to: { scope: "stage", id: "create_track", port: "track_name" },
+        },
+        {
+          from: { scope: "stage", id: "create_track", port: "track_ref" },
+          to: { scope: "recipe_output", id: null, port: "track_ref" },
+        },
+      ],
+      dependencies: [
+        {
+          kind: "macro",
+          id: "macro.project.inspect",
+          version: "1.0.0",
+          risk: "read",
+          fallback_reason: null,
+          descriptor_hash: "a".repeat(64),
+        },
+        {
+          kind: "template",
+          id: "template.tracks.create_track",
+          version: "1.0.0",
+          risk: "write",
+          fallback_reason: "official_template_atom_required",
+          descriptor_hash: "b".repeat(64),
+        },
+      ],
+      required_capabilities: ["project.index", "tracks.write"],
+      risk_grants: ["read", "write"],
+      checkpoints: [
+        {
+          id: "checkpoint_run_macro",
+          after_stage: "run_macro",
+          evidence_id: "evidence_run_macro",
+          resume_identity: "resume.run_macro",
+          summary: "Macro complete.",
+        },
+        {
+          id: "checkpoint_create_track",
+          after_stage: "create_track",
+          evidence_id: "evidence_create_track",
+          resume_identity: "resume.create_track",
+          summary: "Template complete.",
+        },
+      ],
+      preflight: {
+        contract: "recipe.executable.preflight.v1",
+        complete_graph: true,
+        stage_count: 2,
+        dependency_count: 2,
+        requires_validation_before_save: true,
+        requires_save_before_run: true,
+        forbids_inline_execution: true,
+      },
+      portability: {
+        project_identity: "project:fixture-a",
+        bridge_owner: "owner:fixture",
+        bridge_generation: "generation:1",
+        platform: "darwin",
+      },
+    }, { catalog: catalogFacts });
+
+    writeText(
+      fixture,
+      "user",
+      "tracks/prepare_dialog_track.executable-revision.json",
+      JSON.stringify(sealed, null, 2),
+    );
+
+    const authoring = loadUserRecipeAuthoringCatalog({
+      roots: fixture.roots,
+      executableDependencyCatalog: catalogFacts,
+    });
+    assert.equal(authoring.catalog.size, 1);
+    assert.equal(authoring.executable_revisions.length, 1);
+    assert.equal(authoring.executable_revisions[0].recipe_id, sealed.recipe_id);
+    assert.equal(authoring.executable_revisions[0].immutable, true);
+    assert.equal(authoring.executable_revisions[0].content_hash, sealed.content_hash);
+    assert.equal(authoring.executable_revisions[0].version, sealed.version);
+    assert.equal(authoring.executable_revisions[0].revision, sealed.revision);
+    assert.deepEqual(Object.keys(authoring.executable_revisions[0].discovery).sort(), [
+      "entity_kind",
+      "id",
+      "lifecycle",
+      "pack",
+      "risk",
+      "summary",
+      "tags",
+      "title",
+      "workflow_card",
+    ].sort());
+    assert.equal("executable_revision" in authoring.executable_revisions[0].discovery, false);
+
+    const discovery = createUserRecipeDiscovery({ catalog: authoring.catalog });
+    const menu = discovery.list_recipes();
+    assert.deepEqual(Object.keys(menu.items[0]), [
+      "id",
+      "title",
+      "summary",
+      "pack",
+      "lifecycle",
+      "risk",
+      "entity_kind",
+      "tags",
+      "workflow_card",
+    ]);
+    assert.equal("executable_revision" in menu.items[0], false);
+    assert.equal(typeof authoring.catalog.run, "undefined");
+    assert.equal(typeof authoring.catalog.execute, "undefined");
+  });
+
+  it("enforces monotonic executable revision identity and ownership", () => {
+    const catalogFacts = createExecutableDependencyCatalog({
+      macros: [{
+        id: "macro.project.inspect",
+        version: "1.0.0",
+        risk: "read",
+        descriptor_hash: "a".repeat(64),
+        capabilities: ["project.index"],
+      }],
+      templates: [{
+        id: "template.tracks.create_track",
+        version: "1.0.0",
+        risk: "write",
+        descriptor_hash: "b".repeat(64),
+        capabilities: ["tracks.write"],
+      }],
+      capabilities: ["project.index", "tracks.write"],
+    });
+
+    const increasing = createFixture();
+    const first = sealExecutableDraft(catalogFacts, { version: "1.0.0", revision: 1 });
+    const second = sealExecutableDraft(catalogFacts, {
+      version: "1.1.0",
+      revision: 2,
+      id: first.recipe_id,
+    });
+    writeText(increasing, "user", "tracks/r1.executable-revision.json", JSON.stringify(first, null, 2));
+    writeText(increasing, "user", "tracks/r2.executable-revision.json", JSON.stringify(second, null, 2));
+    const increasingCatalog = loadUserRecipeAuthoringCatalog({
+      roots: increasing.roots,
+      executableDependencyCatalog: catalogFacts,
+    });
+    assert.equal(increasingCatalog.executable_revisions.length, 2);
+
+    const sameRevisionNumber = createFixture();
+    const sameA = sealExecutableDraft(catalogFacts, { version: "1.0.0", revision: 1 });
+    const sameB = sealExecutableDraft(catalogFacts, {
+      version: "1.0.1",
+      revision: 1,
+      id: sameA.recipe_id,
+    });
+    writeText(sameRevisionNumber, "user", "tracks/a.executable-revision.json", JSON.stringify(sameA, null, 2));
+    writeText(sameRevisionNumber, "user", "tracks/b.executable-revision.json", JSON.stringify(sameB, null, 2));
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: sameRevisionNumber.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /Duplicate revision number 1 for recipe_id/,
+    );
+
+    const decreasing = createFixture();
+    const high = sealExecutableDraft(catalogFacts, { version: "2.0.0", revision: 1 });
+    const low = sealExecutableDraft(catalogFacts, {
+      version: "1.9.0",
+      revision: 2,
+      id: high.recipe_id,
+    });
+    writeText(decreasing, "user", "tracks/high.executable-revision.json", JSON.stringify(high, null, 2));
+    writeText(decreasing, "user", "tracks/low.executable-revision.json", JSON.stringify(low, null, 2));
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: decreasing.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /version for recipe_id .* decreases from 2\.0\.0 \(r1\) to 1\.9\.0 \(r2\)/,
+    );
+
+    const largeMajorDecrease = createFixture();
+    const largeHigh = sealExecutableDraft(catalogFacts, {
+      version: "10000000000.0.0",
+      revision: 1,
+    });
+    const largeLow = sealExecutableDraft(catalogFacts, {
+      version: "9999999999.0.0",
+      revision: 2,
+      id: largeHigh.recipe_id,
+    });
+    writeText(
+      largeMajorDecrease,
+      "user",
+      "tracks/large_high.executable-revision.json",
+      JSON.stringify(largeHigh, null, 2),
+    );
+    writeText(
+      largeMajorDecrease,
+      "user",
+      "tracks/large_low.executable-revision.json",
+      JSON.stringify(largeLow, null, 2),
+    );
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: largeMajorDecrease.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /version for recipe_id .* decreases from 10000000000\.0\.0 \(r1\) to 9999999999\.0\.0 \(r2\)/,
+    );
+
+    const mixedSource = createFixture();
+    const officialRev = sealExecutableDraft(catalogFacts, {
+      version: "1.0.0",
+      revision: 1,
+      id: "recipe.tracks.official_exec",
+    });
+    const userRev = sealExecutableDraft(catalogFacts, {
+      version: "1.0.1",
+      revision: 2,
+      id: "recipe.tracks.official_exec",
+    });
+    writeText(mixedSource, "official", "tracks/official.executable-revision.json", JSON.stringify(officialRev, null, 2));
+    writeText(mixedSource, "user", "tracks/user.executable-revision.json", JSON.stringify(userRev, null, 2));
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: mixedSource.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /consistent source ownership|shadows official executable recipe id/,
+    );
+
+    const reservedShadow = createFixture();
+    const reserved = sealExecutableDraft(catalogFacts, {
+      version: "1.0.0",
+      revision: 1,
+      id: "recipe.tracks.reserved_official",
+    });
+    writeText(reservedShadow, "user", "tracks/reserved.executable-revision.json", JSON.stringify(reserved, null, 2));
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: reservedShadow.roots,
+        executableDependencyCatalog: catalogFacts,
+        officialRecipeIds: ["recipe.tracks.reserved_official"],
+      }),
+      /shadows reserved official recipe id recipe\.tracks\.reserved_official/,
+    );
+
+    const officialHistoricalBlocksExecutable = createFixture();
+    writeRecipe(officialHistoricalBlocksExecutable, "official", "tracks/official_hist.recipe.json", makeRecipe({
+      id: "recipe.tracks.cross_format_hist",
+      lifecycle: "validated",
+    }));
+    const userExecAgainstHist = sealExecutableDraft(catalogFacts, {
+      version: "1.0.0",
+      revision: 1,
+      id: "recipe.tracks.cross_format_hist",
+    });
+    writeText(
+      officialHistoricalBlocksExecutable,
+      "user",
+      "tracks/cross_format_hist.executable-revision.json",
+      JSON.stringify(userExecAgainstHist, null, 2),
+    );
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: officialHistoricalBlocksExecutable.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /non-official executable revision shadows official historical recipe id recipe\.tracks\.cross_format_hist/,
+    );
+
+    const officialExecutableBlocksHistorical = createFixture();
+    const officialExec = sealExecutableDraft(catalogFacts, {
+      version: "1.0.0",
+      revision: 1,
+      id: "recipe.tracks.cross_format_exec",
+    });
+    writeText(
+      officialExecutableBlocksHistorical,
+      "official",
+      "tracks/cross_format_exec.executable-revision.json",
+      JSON.stringify(officialExec, null, 2),
+    );
+    writeRecipe(officialExecutableBlocksHistorical, "user", "tracks/cross_format_exec.recipe.json", makeRecipe({
+      id: "recipe.tracks.cross_format_exec",
+      lifecycle: "validated",
+    }));
+    assert.throws(
+      () => loadUserRecipeAuthoringCatalog({
+        roots: officialExecutableBlocksHistorical.roots,
+        executableDependencyCatalog: catalogFacts,
+      }),
+      /non-official historical recipe shadows official executable recipe id recipe\.tracks\.cross_format_exec/,
+    );
+  });
+
   it("does not add MCP tools or recipe executor surface", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_template",
@@ -348,6 +717,123 @@ function createFixture() {
       { source: "user", root: user },
     ],
   };
+}
+
+function sealExecutableDraft(catalogFacts, options = {}) {
+  return sealExecutableRecipeRevision({
+    contract: "recipe.executable.draft.v1",
+    id: options.id ?? "recipe.tracks.prepare_dialog_track_executable",
+    title: "Executable prepare dialog track",
+    summary: "Saved executable revision fixture.",
+    pack: "tracks",
+    risk: "write",
+    inputs: [{ id: "track_name", type: "string", required: true }],
+    outputs: [{ id: "track_ref", type: "ref.track", required: true }],
+    stages: [
+      {
+        id: "run_macro",
+        kind: "macro",
+        dependency: {
+          kind: "macro",
+          id: "macro.project.inspect",
+          version: "1.0.0",
+          fallback_reason: null,
+        },
+        inputs: ["track_name"],
+        outputs: ["project_summary"],
+        risk: "read",
+        checkpoint: "checkpoint_run_macro",
+      },
+      {
+        id: "create_track",
+        kind: "template",
+        dependency: {
+          kind: "template",
+          id: "template.tracks.create_track",
+          version: "1.0.0",
+          fallback_reason: "official_template_atom_required",
+        },
+        inputs: ["project_summary", "track_name"],
+        outputs: ["track_ref"],
+        risk: "write",
+        checkpoint: "checkpoint_create_track",
+      },
+    ],
+    bindings: [
+      {
+        from: { scope: "recipe_input", id: null, port: "track_name" },
+        to: { scope: "stage", id: "run_macro", port: "track_name" },
+      },
+      {
+        from: { scope: "stage", id: "run_macro", port: "project_summary" },
+        to: { scope: "stage", id: "create_track", port: "project_summary" },
+      },
+      {
+        from: { scope: "recipe_input", id: null, port: "track_name" },
+        to: { scope: "stage", id: "create_track", port: "track_name" },
+      },
+      {
+        from: { scope: "stage", id: "create_track", port: "track_ref" },
+        to: { scope: "recipe_output", id: null, port: "track_ref" },
+      },
+    ],
+    dependencies: [
+      {
+        kind: "macro",
+        id: "macro.project.inspect",
+        version: "1.0.0",
+        risk: "read",
+        fallback_reason: null,
+        descriptor_hash: "a".repeat(64),
+      },
+      {
+        kind: "template",
+        id: "template.tracks.create_track",
+        version: "1.0.0",
+        risk: "write",
+        fallback_reason: "official_template_atom_required",
+        descriptor_hash: "b".repeat(64),
+      },
+    ],
+    required_capabilities: ["project.index", "tracks.write"],
+    risk_grants: ["read", "write"],
+    checkpoints: [
+      {
+        id: "checkpoint_run_macro",
+        after_stage: "run_macro",
+        evidence_id: "evidence_run_macro",
+        resume_identity: "resume.run_macro",
+        summary: "Macro complete.",
+      },
+      {
+        id: "checkpoint_create_track",
+        after_stage: "create_track",
+        evidence_id: "evidence_create_track",
+        resume_identity: "resume.create_track",
+        summary: "Template complete.",
+      },
+    ],
+    preflight: {
+      contract: "recipe.executable.preflight.v1",
+      complete_graph: true,
+      stage_count: 2,
+      dependency_count: 2,
+      requires_validation_before_save: true,
+      requires_save_before_run: true,
+      forbids_inline_execution: true,
+    },
+    portability: {
+      project_identity: "project:fixture-a",
+      bridge_owner: "owner:fixture",
+      bridge_generation: "generation:1",
+      platform: "darwin",
+    },
+  }, {
+    catalog: catalogFacts,
+    version: options.version ?? "1.0.0",
+    revision: options.revision ?? 1,
+    saved_at: "1970-01-01T00:00:00.000Z",
+  });
 }
 
 function writeRecipe(fixture, source, relativePath, recipe) {

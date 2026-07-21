@@ -10,6 +10,12 @@ import {
   normalizeRecipeContract,
 } from "./recipe-contract-v1.mjs";
 import {
+  EXECUTABLE_RECIPE_REVISION_CONTRACT,
+  createExecutableDependencyCatalog,
+  executableRevisionDiscoveryProjection,
+  normalizeExecutableRecipeRevision,
+} from "./executable-recipe-contract-v1.mjs";
+import {
   ARTIFACT_LAST_RESULT_POLICY,
   parseArtifactRef,
 } from "./artifact-state-store-v1.mjs";
@@ -24,6 +30,7 @@ import { createTemplateCatalog } from "./template-catalog-v1.mjs";
 import { TEMPLATE_DESCRIPTOR_TAG_PATTERN } from "./template-descriptor-v1.mjs";
 
 export const USER_RECIPE_AUTHORING_CONTRACT = "user_recipe_authoring.v1";
+export const USER_EXECUTABLE_RECIPE_REVISION_SUFFIX = ".executable-revision.json";
 
 export const USER_RECIPE_SOURCE_TYPES = Object.freeze([
   "official",
@@ -111,8 +118,16 @@ export function loadUserRecipeCatalog(options = {}) {
 export function loadUserRecipeAuthoringCatalog(options = {}) {
   const roots = normalizeSourceRoots(options.roots ?? defaultUserRecipeSourceRoots(options.repoRoot));
   const files = discoverRecipeSourceFiles(roots);
+  const executableFiles = discoverExecutableRevisionFiles(roots);
   const records = [];
+  const executableRevisions = [];
   const errors = [];
+  const dependencyCatalog = options.executableDependencyCatalog
+    ?? createExecutableDependencyCatalog(options.executableDependencyFacts ?? {
+      macros: [],
+      templates: [],
+      capabilities: [],
+    });
 
   for (const file of files) {
     try {
@@ -138,7 +153,37 @@ export function loadUserRecipeAuthoringCatalog(options = {}) {
     }
   }
 
-  errors.push(...validateRecipeSourceIdentity(records, options.officialRecipeIds ?? []));
+  for (const file of executableFiles) {
+    try {
+      const parsed = parseExecutableRevisionSourceFile(file);
+      const revision = normalizeExecutableRecipeRevision(parsed, {
+        catalog: dependencyCatalog,
+      });
+      executableRevisions.push({
+        source: file.source,
+        root: file.root,
+        path: file.path,
+        relative_path: file.relative_path,
+        revision,
+        discovery: executableRevisionDiscoveryProjection(revision, {
+          catalog: dependencyCatalog,
+        }),
+      });
+    } catch (error) {
+      if (error?.errors && Array.isArray(error.errors)) {
+        for (const detail of error.errors) {
+          errors.push(`${file.relative_path}: ${detail}`);
+        }
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  const reservedOfficialIds = options.officialRecipeIds ?? [];
+  errors.push(...validateRecipeSourceIdentity(records, reservedOfficialIds));
+  errors.push(...validateExecutableRevisionIdentity(executableRevisions, reservedOfficialIds));
+  errors.push(...validateCrossFormatRecipeOwnership(records, executableRevisions, reservedOfficialIds));
 
   if (errors.length > 0) {
     throw new UserRecipeAuthoringError(
@@ -156,6 +201,17 @@ export function loadUserRecipeAuthoringCatalog(options = {}) {
       relative_path: record.relative_path,
       id: record.recipe.id,
       lifecycle: record.recipe.lifecycle,
+    })),
+    executable_revisions: executableRevisions.map((record) => ({
+      source: record.source,
+      path: record.path,
+      relative_path: record.relative_path,
+      recipe_id: record.revision.recipe_id,
+      version: record.revision.version,
+      revision: record.revision.revision,
+      content_hash: record.revision.content_hash,
+      immutable: record.revision.immutable,
+      discovery: record.discovery,
     })),
     catalog,
   });
@@ -175,12 +231,41 @@ export function discoverRecipeSourceFiles(roots) {
       files,
       errors,
       visitedDirectories: new Set([sourceRoot.real_root]),
+      mode: "recipe",
     });
   }
 
   if (errors.length > 0) {
     throw new UserRecipeAuthoringError(
       `Recipe source discovery failed: ${errors.join("; ")}`,
+      errors,
+    );
+  }
+
+  return deepFreeze(files.sort((left, right) => left.path.localeCompare(right.path)));
+}
+
+export function discoverExecutableRevisionFiles(roots) {
+  const sourceRoots = normalizeSourceRoots(roots);
+  const files = [];
+  const errors = [];
+
+  for (const sourceRoot of sourceRoots) {
+    if (!sourceRoot.exists) continue;
+    walkRecipeSourceRoot({
+      sourceRoot,
+      currentPath: sourceRoot.real_root,
+      relativePath: "",
+      files,
+      errors,
+      visitedDirectories: new Set([sourceRoot.real_root]),
+      mode: "executable_revision",
+    });
+  }
+
+  if (errors.length > 0) {
+    throw new UserRecipeAuthoringError(
+      `Executable revision discovery failed: ${errors.join("; ")}`,
       errors,
     );
   }
@@ -209,6 +294,38 @@ export function parseRecipeSourceFile(file) {
   }
   if (!isPlainObject(parsed)) {
     throw new UserRecipeAuthoringError("Recipe source must be a single JSON object.");
+  }
+  return parsed;
+}
+
+export function parseExecutableRevisionSourceFile(file) {
+  if (!isPlainObject(file) || typeof file.path !== "string") {
+    throw new UserRecipeAuthoringError("Executable revision source file metadata must include path.");
+  }
+  if (!file.path.endsWith(USER_EXECUTABLE_RECIPE_REVISION_SUFFIX)) {
+    throw new UserRecipeAuthoringError(
+      `Executable revision source files must end with ${USER_EXECUTABLE_RECIPE_REVISION_SUFFIX}.`,
+    );
+  }
+
+  const source = readFileSync(file.path, "utf8");
+  if (Buffer.byteLength(source, "utf8") > RECIPE_BUDGETS.recipe_max_bytes * 3) {
+    throw new UserRecipeAuthoringError("Executable revision source exceeds bounded payload size.");
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new UserRecipeAuthoringError(`Executable revision source must be strict JSON: ${error.message}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new UserRecipeAuthoringError("Executable revision source must be a single JSON object.");
+  }
+  if (parsed.contract !== EXECUTABLE_RECIPE_REVISION_CONTRACT) {
+    throw new UserRecipeAuthoringError(
+      `Executable revision contract must be ${EXECUTABLE_RECIPE_REVISION_CONTRACT}.`,
+    );
   }
   return parsed;
 }
@@ -264,7 +381,15 @@ function normalizeSourceRoots(roots) {
   return deepFreeze(normalized);
 }
 
-function walkRecipeSourceRoot({ sourceRoot, currentPath, relativePath, files, errors, visitedDirectories }) {
+function walkRecipeSourceRoot({
+  sourceRoot,
+  currentPath,
+  relativePath,
+  files,
+  errors,
+  visitedDirectories,
+  mode = "recipe",
+}) {
   const entries = readdirSync(currentPath, { withFileTypes: true });
   for (const entry of entries) {
     const entryRelativePath = relativePath ? path.posix.join(relativePath, entry.name) : entry.name;
@@ -300,6 +425,7 @@ function walkRecipeSourceRoot({ sourceRoot, currentPath, relativePath, files, er
         files,
         errors,
         visitedDirectories,
+        mode,
       });
       continue;
     }
@@ -310,8 +436,11 @@ function walkRecipeSourceRoot({ sourceRoot, currentPath, relativePath, files, er
     }
 
     if (IGNORED_RECIPE_ROOT_FILES.has(entry.name)) continue;
-    validateRecipeSourceFilename(entryRelativePath, errors);
-    if (!entryRelativePath.endsWith(USER_RECIPE_FILE_SUFFIX)) continue;
+    validateRecipeSourceFilename(entryRelativePath, errors, mode);
+    const acceptedSuffix = mode === "executable_revision"
+      ? USER_EXECUTABLE_RECIPE_REVISION_SUFFIX
+      : USER_RECIPE_FILE_SUFFIX;
+    if (!entryRelativePath.endsWith(acceptedSuffix)) continue;
 
     files.push({
       source: classifyRecipeSource(sourceRoot.source, entryRelativePath),
@@ -322,10 +451,11 @@ function walkRecipeSourceRoot({ sourceRoot, currentPath, relativePath, files, er
   }
 }
 
-function validateRecipeSourceFilename(relativePath, errors) {
+function validateRecipeSourceFilename(relativePath, errors, mode = "recipe") {
   const basename = path.posix.basename(relativePath);
   const extension = path.posix.extname(basename);
   if (relativePath.endsWith(USER_RECIPE_FILE_SUFFIX)) return;
+  if (relativePath.endsWith(USER_EXECUTABLE_RECIPE_REVISION_SUFFIX)) return;
 
   if (BLOCKED_RECIPE_SOURCE_EXTENSIONS.has(extension)) {
     errors.push(`${relativePath}: executable or ambiguous recipe source extension is forbidden.`);
@@ -336,6 +466,12 @@ function validateRecipeSourceFilename(relativePath, errors) {
     return;
   }
   if (extension === ".json") {
+    if (mode === "executable_revision") {
+      errors.push(
+        `${relativePath}: executable revision JSON files must use ${USER_EXECUTABLE_RECIPE_REVISION_SUFFIX}.`,
+      );
+      return;
+    }
     errors.push(`${relativePath}: recipe JSON files must use ${USER_RECIPE_FILE_SUFFIX}.`);
     return;
   }
@@ -394,6 +530,144 @@ function validateRecipeSourceIdentity(records, reservedOfficialIds) {
   }
 
   return errors;
+}
+
+function validateExecutableRevisionIdentity(records, reservedOfficialIds = []) {
+  const errors = [];
+  const byExactKey = new Map();
+  const byRecipeAndRevision = new Map();
+  const byRecipeId = new Map();
+  const officialExecutableIds = new Set(
+    records.filter((record) => record.source === "official").map((record) => record.revision.recipe_id),
+  );
+  const reservedIds = new Set(reservedOfficialIds);
+
+  for (const record of records) {
+    if (record.revision.immutable !== true) {
+      errors.push(`${record.relative_path}: saved executable revision must be immutable.`);
+    }
+
+    const recipeId = record.revision.recipe_id;
+    const version = record.revision.version;
+    const revisionNumber = record.revision.revision;
+    const exactKey = `${recipeId}@${version}#${revisionNumber}`;
+    const previousExact = byExactKey.get(exactKey);
+    if (previousExact) {
+      errors.push(
+        `Duplicate executable revision ${exactKey} in ${previousExact.relative_path} and ${record.relative_path}.`,
+      );
+    } else {
+      byExactKey.set(exactKey, record);
+    }
+
+    const revisionKey = `${recipeId}#${revisionNumber}`;
+    const previousRevision = byRecipeAndRevision.get(revisionKey);
+    if (previousRevision) {
+      errors.push(
+        `Duplicate revision number ${revisionNumber} for recipe_id ${recipeId} in ${previousRevision.relative_path} and ${record.relative_path}.`,
+      );
+    } else {
+      byRecipeAndRevision.set(revisionKey, record);
+    }
+
+    if (!byRecipeId.has(recipeId)) byRecipeId.set(recipeId, []);
+    byRecipeId.get(recipeId).push(record);
+
+    if (record.source !== "official") {
+      if (officialExecutableIds.has(recipeId)) {
+        errors.push(
+          `${record.relative_path}: non-official executable revision shadows official executable recipe id ${recipeId}.`,
+        );
+      }
+      if (reservedIds.has(recipeId)) {
+        errors.push(
+          `${record.relative_path}: non-official executable revision shadows reserved official recipe id ${recipeId}.`,
+        );
+      }
+    }
+  }
+
+  for (const [recipeId, group] of byRecipeId.entries()) {
+    const sources = new Set(group.map((record) => record.source));
+    if (sources.size > 1) {
+      errors.push(
+        `Executable revisions for recipe_id ${recipeId} must share one consistent source ownership.`,
+      );
+    }
+
+    const ordered = [...group].sort((left, right) => left.revision.revision - right.revision.revision);
+    for (let index = 1; index < ordered.length; index += 1) {
+      const previous = ordered[index - 1];
+      const current = ordered[index];
+      if (compareBoundedSemver(previous.revision.version, current.revision.version) > 0) {
+        errors.push(
+          `Executable revision version for recipe_id ${recipeId} decreases from ${previous.revision.version} (r${previous.revision.revision}) to ${current.revision.version} (r${current.revision.revision}).`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
+function validateCrossFormatRecipeOwnership(historicalRecords, executableRecords, reservedOfficialIds = []) {
+  const errors = [];
+  const officialHistoricalIds = new Set(
+    historicalRecords
+      .filter((record) => record.source === "official")
+      .map((record) => record.recipe.id),
+  );
+  const officialExecutableIds = new Set(
+    executableRecords
+      .filter((record) => record.source === "official")
+      .map((record) => record.revision.recipe_id),
+  );
+  for (const id of reservedOfficialIds) {
+    officialHistoricalIds.add(id);
+    officialExecutableIds.add(id);
+  }
+
+  for (const record of historicalRecords) {
+    if (record.source === "official") continue;
+    if (officialExecutableIds.has(record.recipe.id)) {
+      errors.push(
+        `${record.relative_path}: non-official historical recipe shadows official executable recipe id ${record.recipe.id}.`,
+      );
+    }
+  }
+
+  for (const record of executableRecords) {
+    if (record.source === "official") continue;
+    if (officialHistoricalIds.has(record.revision.recipe_id)) {
+      errors.push(
+        `${record.relative_path}: non-official executable revision shadows official historical recipe id ${record.revision.recipe_id}.`,
+      );
+    }
+  }
+
+  return [...new Set(errors)];
+}
+
+function compareBoundedSemver(left, right) {
+  const leftParts = parseBoundedSemver(left);
+  const rightParts = parseBoundedSemver(right);
+  if (!leftParts || !rightParts) return 0;
+  for (let index = 0; index < 3; index += 1) {
+    if (leftParts[index] > rightParts[index]) return 1;
+    if (leftParts[index] < rightParts[index]) return -1;
+  }
+  return 0;
+}
+
+function parseBoundedSemver(value) {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^(\d+)\.(\d+)\.(\d+)$/);
+  if (!match) return null;
+  return [
+    BigInt(match[1]),
+    BigInt(match[2]),
+    BigInt(match[3]),
+  ];
 }
 
 function validateRecipeAuthoringGraph(recipe) {

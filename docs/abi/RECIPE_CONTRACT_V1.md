@@ -1,6 +1,7 @@
 # Recipe Contract v1
 
-Status: target for the Layer 5 Recipe Contract v1 gate.
+Status: frozen Layer 5 Recipe Contract v1, with a bounded Alpha3.4-E0 reopen for
+the executable Recipe draft/revision extension only.
 
 ## Purpose
 
@@ -11,6 +12,10 @@ A recipe is a workflow contract. It is not a hidden server-side executor.
 Agents discover recipes through `list_recipes`, expand only the existing Layer
 1.5 detail fields, and then execute each step through the frozen MCP tool
 semantics, primarily `call_template` and necessary `get_state` reads.
+
+The historical agent-stepped Recipe Contract v1 remains valid. Alpha3.4-E0
+adds an additive executable draft/revision contract for later `call_recipe`
+work, but this window does not register, expose, or execute `call_recipe`.
 
 Layer 5 does not add MCP tools, define templates, implement runtime Lua,
 implement live REAPER smoke, or change the Layer 4D runtime binding.
@@ -561,6 +566,215 @@ discovery_summary_max_bytes: 4096
 recipe_max_bytes: 32768
 ```
 
+## Alpha3.4-E0 Executable Recipe Revision Extension
+
+Status: bounded lower-layer reopen authorized for Alpha3.4-E0 only.
+
+This extension preserves every historical agent-stepped Recipe Contract v1
+guarantee above. Existing `recipe.contract.v1` sources remain valid when they
+stay within the prior contract. The executable path is additive and separate.
+
+### Contract Ids
+
+```text
+recipe.executable.draft.v1
+recipe.executable.revision.v1
+recipe.executable.validation.v1
+recipe.executable.dependency_lock.v1
+recipe.executable.trust.v1
+recipe.executable.preflight.v1
+recipe.executable.dependency_catalog.v1
+```
+
+### Macro-First Dependency Rule
+
+Executable Recipe stages may depend on:
+
+```text
+macro     registered Macro dependencies by default
+template  accepted Template dependencies only with a typed long-tail fallback reason
+```
+
+Template fallback reasons:
+
+```text
+no_registered_macro_covers_task
+macro_blocked_missing_capability
+macro_risk_exceeds_grant
+official_template_atom_required
+readback_or_verification_atom
+```
+
+Core validation accepts normalized dependency facts only through an injected
+dependency catalog. Core must not import `packages/mcp-server` Macro registry
+or runtime implementation.
+
+### Draft And Immutable Saved Revision
+
+An executable draft is mutable authoring input. A saved revision is immutable
+run authority and must carry:
+
+```text
+exact recipe id
+monotonic version / revision identity
+canonical content hash
+validation result identity
+dependency lock
+immutable source payload identity
+```
+
+Rules:
+
+- validation and save are separated from run authority;
+- only a saved validated revision may later become run input;
+- an inline draft, model-supplied graph, or unsaved payload must never execute;
+- editing content creates a new revision and invalidates prior trust;
+- saved revision payloads are immutable (`immutable: true`);
+- `validation_result_id` is deterministic over recipe id, version, revision,
+  content hash, and dependency lock identity; version-only tampering fails.
+
+### Whole-Graph Preflight
+
+Before any later runtime mutation, validation must cover:
+
+```text
+declared recipe inputs and outputs
+stage input / output bindings
+exact dependency kinds and versions
+required capabilities
+risk aggregation across every stage including get_state/checkpoint stages
+risk grants covering recipe risk and maximum stage/dependency risk
+portability (project identity, bridge owner/generation, platform)
+checkpoints and resume identity
+forbidden bypass fields and forbidden identity strings
+complete-graph limits and budgets
+```
+
+Injected dependency catalog facts are fail-closed and require explicit:
+
+```text
+semver version
+risk
+64-char lowercase descriptor_hash
+bounded capabilities array
+```
+
+No defaults or synthesized catalog facts are allowed.
+
+Preflight metadata must assert:
+
+```text
+complete_graph: true
+requires_validation_before_save: true
+requires_save_before_run: true
+forbids_inline_execution: true
+```
+
+### Trust Invalidation
+
+Saved revision trust is invalidated by any of:
+
+```text
+recipe_content_hash_drift
+dependency_version_drift
+dependency_descriptor_drift
+risk_grant_mismatch
+project_identity_mismatch
+bridge_owner_mismatch
+bridge_generation_mismatch
+missing_capability
+checkpoint_evidence_mismatch
+```
+
+Checkpoint trust facts are structured and must bind each checkpoint id and
+resume identity to the exact saved recipe id, version, numeric revision, and
+content hash as a one-to-one set. Missing, duplicate, stale, or mismatched
+checkpoint evidence returns `checkpoint_evidence_mismatch`.
+
+Content or dependency drift must not retain trust. Missing or incomplete
+runtime facts fail closed using the same typed mismatch reasons.
+
+### Discovery And Public Surface
+
+Alpha3.4-E0 does not expand the frozen Layer 1.5 recipe discovery detail field
+set, does not register `call_recipe`, and keeps the public MCP surface at the
+existing five tools:
+
+```text
+ping
+get_state
+list_templates
+list_recipes
+call_template
+```
+
+Internal executable revision records may retain version, revision, and content
+hash as separate fields. The discovery/projection object itself remains exactly
+the frozen nine recipe summary fields and must not embed executable revision
+metadata.
+
+User Recipe authoring may load and later discover saved executable revisions as
+normalized catalog facts without making source files executable, mutating
+recipe roots, or changing the discovery field set in this window. Official
+historical Recipe ids and official executable recipe ids reserve each other
+against non-official shadowing across formats.
+
+### Executable Budgets
+
+```text
+id_max_chars: 96
+title_max_chars: 80
+summary_max_chars: 240
+version_max_chars: 32
+revision_max: 1000000
+input_max_count: 32
+output_max_count: 32
+stage_max_count: 48
+binding_max_count: 128
+dependency_max_count: 48
+capability_max_count: 32
+checkpoint_max_count: 48
+risk_grant_max_count: 16
+graph_max_bytes: 65536
+draft_max_bytes: 65536
+revision_payload_max_bytes: 98304
+content_hash_hex_chars: 64
+catalog_macro_max_count: 256
+catalog_template_max_count: 512
+catalog_capability_max_count: 512
+catalog_entry_capability_max_count: 32
+dependency_id_max_chars: 96
+```
+
+### Executable Forbidden Bypass Surfaces
+
+In addition to the historical Recipe forbidden fields, executable drafts and
+revisions must reject:
+
+```text
+call_recipe
+execute
+executor
+graph
+handlers
+hardware
+hardware_device
+hardware_io
+inline_graph
+model_graph
+program
+run
+stages_code
+ui
+ui_action
+device_io
+```
+
+Arbitrary inline graphs, raw Lua/Action/shell/UI/process/bridge fields,
+hardware/device I/O, unknown dependencies, mutable saved revisions, hash
+mismatch, binding cycles, excessive graph size, and Template fallback without a
+typed reason all fail closed.
+
 ## Non-Goals
 
 Layer 5 does not implement:
@@ -568,6 +782,7 @@ Layer 5 does not implement:
 - a server-side recipe executor;
 - user recipe authoring UI or syntax beyond this contract;
 - new MCP tools;
+- `call_recipe` registration or execution in Alpha3.4-E0;
 - new templates;
 - raw Lua or runtime Lua;
 - raw REAPER actions;

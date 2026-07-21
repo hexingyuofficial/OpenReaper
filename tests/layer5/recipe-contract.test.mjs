@@ -278,6 +278,22 @@ describe("Layer 5 Recipe Contract v1", () => {
     assert.doesNotMatch(source, /child_process|spawn\(|execFile|REAPER\.app|reaper\/bridge|runtime Lua/i);
     assert.doesNotMatch(source, /streetlight-reaper-mcp/);
   });
+
+  it("preserves agent-stepped recipes after the Alpha3.4-E0 executable extension", () => {
+    const recipe = makeRecipe();
+    assert.equal(validateRecipeContract(recipe).ok, true);
+    assert.equal(normalizeRecipeContract(recipe).contract, RECIPE_CONTRACT);
+
+    const abi = readFileSync(
+      new URL("../../docs/abi/RECIPE_CONTRACT_V1.md", import.meta.url),
+      "utf8",
+    );
+    assert.match(abi, /Alpha3\.4-E0 Executable Recipe Revision Extension/);
+    assert.match(abi, /historical agent-stepped Recipe Contract v1 remains valid/);
+    assert.match(abi, /does not register `call_recipe`/);
+    assert.match(abi, /recipe\.executable\.draft\.v1/);
+    assert.match(abi, /recipe\.executable\.revision\.v1/);
+  });
 });
 
 function assertRejectsTemplateId(id, pattern) {

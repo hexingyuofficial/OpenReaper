@@ -28,6 +28,19 @@ import {
   RECIPE_TEMPLATE_EVIDENCE_CONTRACT,
   RECIPE_TERMINAL_RUN_STATES,
 } from "../packages/core/src/recipe-contract-v1.mjs";
+import {
+  EXECUTABLE_RECIPE_BUDGETS,
+  EXECUTABLE_RECIPE_DEPENDENCY_KINDS,
+  EXECUTABLE_RECIPE_DEPENDENCY_LOCK_CONTRACT,
+  EXECUTABLE_RECIPE_DRAFT_CONTRACT,
+  EXECUTABLE_RECIPE_FORBIDDEN_FIELDS,
+  EXECUTABLE_RECIPE_PREFLIGHT_CONTRACT,
+  EXECUTABLE_RECIPE_REVISION_CONTRACT,
+  EXECUTABLE_RECIPE_TEMPLATE_FALLBACK_REASONS,
+  EXECUTABLE_RECIPE_TRUST_CONTRACT,
+  EXECUTABLE_RECIPE_TRUST_INVALIDATION_REASONS,
+  EXECUTABLE_RECIPE_VALIDATION_CONTRACT,
+} from "../packages/core/src/executable-recipe-contract-v1.mjs";
 import { TEMPLATE_DESCRIPTOR_WORKFLOW_SHAPED_PACK_IDS } from "../packages/core/src/template-descriptor-v1.mjs";
 import {
   CALL_TEMPLATE_RUNTIME_ACCEPTED_TEMPLATE_IDS,
@@ -65,6 +78,16 @@ const requiredNeedles = [
   "Resume Rules",
   "Recipe-Level Risk Gates",
   "Forbidden Bypass Surfaces",
+  "Alpha3.4-E0 Executable Recipe Revision Extension",
+  EXECUTABLE_RECIPE_DRAFT_CONTRACT,
+  EXECUTABLE_RECIPE_REVISION_CONTRACT,
+  EXECUTABLE_RECIPE_VALIDATION_CONTRACT,
+  EXECUTABLE_RECIPE_DEPENDENCY_LOCK_CONTRACT,
+  EXECUTABLE_RECIPE_TRUST_CONTRACT,
+  EXECUTABLE_RECIPE_PREFLIGHT_CONTRACT,
+  "Macro-First Dependency Rule",
+  "Trust Invalidation",
+  "does not register `call_recipe`",
   "Non-Goals",
   `${RECIPE_CONTRACT_ACCEPTED_TEMPLATE_IDS.length} templates total`,
 ];
@@ -89,10 +112,21 @@ assertDocList("ABI recovery branch triggers", abi, RECIPE_RECOVERY_BRANCH_TRIGGE
 assertDocList("ABI recovery strategies", abi, RECIPE_RECOVERY_STRATEGIES);
 assertDocList("ABI risk gate policies", abi, RECIPE_RISK_GATE_POLICIES);
 assertDocList("ABI forbidden raw execution fields", abi, RECIPE_FORBIDDEN_RAW_EXECUTION_FIELDS);
+assertDocList("ABI executable dependency kinds", abi, EXECUTABLE_RECIPE_DEPENDENCY_KINDS);
+assertDocList("ABI executable template fallback reasons", abi, EXECUTABLE_RECIPE_TEMPLATE_FALLBACK_REASONS);
+assertDocList("ABI executable trust invalidation reasons", abi, EXECUTABLE_RECIPE_TRUST_INVALIDATION_REASONS);
+assertDocList("ABI executable forbidden fields", abi, EXECUTABLE_RECIPE_FORBIDDEN_FIELDS);
 
 for (const [key, value] of Object.entries(RECIPE_BUDGETS)) {
   if (!abi.includes(`${key}: ${value}`)) {
     console.error(`RECIPE_CONTRACT_V1.md is missing recipe budget: ${key}: ${value}`);
+    process.exit(1);
+  }
+}
+
+for (const [key, value] of Object.entries(EXECUTABLE_RECIPE_BUDGETS)) {
+  if (!abi.includes(`${key}: ${value}`)) {
+    console.error(`RECIPE_CONTRACT_V1.md is missing executable recipe budget: ${key}: ${value}`);
     process.exit(1);
   }
 }
