@@ -642,6 +642,41 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
         },
       },
       {
+        name: "set one ordinary Audio Take FX parameter from apply_chain output",
+        prerequisite: {
+          public_sequence: [
+            {
+              tool: "call_template",
+              arguments: {
+                id: "macro.project.query",
+                input: { entity: "takes", limit: 25, refresh_policy: "if_stale" },
+              },
+              returns: "Choose one exact take:guid ref from the live result.",
+            },
+            {
+              tool: "call_template",
+              arguments: {
+                id: "macro.fx.apply_chain",
+                refs: { take_ref: "take:guid:{TAKE-GUID}" },
+                input: {
+                  owner_kind: "take",
+                  chain: [{ plugin_name: "VST: ReaEQ (Cockos)", duplicate_policy: "reuse_exact" }],
+                  dry_run: false,
+                },
+              },
+              returns: "Copy the exact fx_ref from fx_refs; do not construct it or call an internal resolver.",
+            },
+          ],
+        },
+        input: {
+          mode: "exact_assignments",
+          dry_run: false,
+          assignments: [
+            { id: "take_tone", fx_ref: "fx:take:guid:{TAKE-GUID}:0", param_index: 0, normalized_value: 0.5 },
+          ],
+        },
+      },
+      {
         name: "semantic unproven recovery path",
         input: {
           mode: "semantic",

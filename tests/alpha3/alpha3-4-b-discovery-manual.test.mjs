@@ -126,8 +126,18 @@ test("all 15 manuals audit and every executable first-try call passes the curren
     assert.equal(typeof guide.dry_run?.supported, "boolean");
     assert.ok(Array.isArray(guide.recovery?.common_blockers));
     assert.ok(Array.isArray(guide.recovery?.steps));
+    assert.ok(guide.recovery.steps.length >= 1);
+    assert.ok(Array.isArray(guide.outcome_truth?.readback_steps));
+    assert.ok(guide.outcome_truth.readback_steps.length >= 1);
+    assert.ok(Array.isArray(guide.outcome_truth?.success_criteria));
+    assert.ok(guide.outcome_truth.success_criteria.length >= 1);
     assert.ok(Array.isArray(guide.examples));
     assert.ok(guide.examples.length >= 1, `${id} requires at least one exact-manual example`);
+    for (const example of guide.examples) {
+      assert.equal(example.public_call.tool, "call_template");
+      assert.equal(example.public_call.arguments.id, id);
+      assert.equal(typeof example.public_call.arguments.input, "object");
+    }
     assert.equal(guide.next_calls[0].tool === "list_templates" || guide.next_calls[0].tool === "call_template", true);
     const exactCall = guide.next_calls.find((entry) => entry.tool === "list_templates");
     assert.equal(exactCall.executable_now, true);
@@ -135,6 +145,16 @@ test("all 15 manuals audit and every executable first-try call passes the curren
       await assertExecutableFirstTryCall(runtime, next, discoveryById);
     }
   }
+  const takeChain = createAlpha34BFirstTryExecutionGuide("macro.fx.apply_chain", discoveryById.get("macro.fx.apply_chain"));
+  const takeChainExample = takeChain.examples.find((entry) => entry.name === "preview a Take FX insertion");
+  assert.deepEqual(takeChainExample.public_call.arguments.refs, { take_ref: "take:guid:{TAKE-GUID}" });
+  assert.equal(takeChainExample.executable_now, false);
+  assert.equal(takeChainExample.prerequisite.arguments.input.entity, "takes");
+
+  const takeControls = createAlpha34BFirstTryExecutionGuide("macro.fx.set_controls", discoveryById.get("macro.fx.set_controls"));
+  const takeControlExample = takeControls.examples.find((entry) => entry.name.includes("ordinary Audio Take FX"));
+  assert.equal(takeControlExample.public_call.arguments.id, "macro.fx.set_controls");
+  assert.equal(takeControlExample.prerequisite.public_sequence[1].returns.includes("exact fx_ref"), true);
   for (const id of ["macro.project.apply_layout", "macro.render.targets"]) {
     const guide = createAlpha34BFirstTryExecutionGuide(id, discoveryById.get(id));
     const skeleton = guide.next_calls.find((entry) => entry.tool === "call_template" && entry.arguments.id === id);

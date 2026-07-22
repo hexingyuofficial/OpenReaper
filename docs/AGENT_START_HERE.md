@@ -85,7 +85,10 @@ the full user text. Search phrases are metadata only, never executable aliases.
 
 On exact-id expansion, read each item's `first_try_execution_guide` for accepted
 modes, public fields, units/bounds, selector/ref requirements, paging/budget
-recovery, and deterministic `next_calls`. It is not a `fields` value: request
+recovery, deterministic `next_calls`, and `examples[].public_call`. Every one of
+the 15 Macro manuals includes at least one complete public `call_template`
+shape, target/ref prerequisite when needed, live `outcome_truth`, and recovery.
+It is not a `fields` value: request
 supported fields such as `id` and `inputSchema`, then read the guide from
 `product_surface.agent_context_macro_guide.requested_expansions.items`. If live
 identity is unresolved, the guide marks the mutation non-executable and pairs
@@ -102,6 +105,9 @@ completion, then supply `param_index` or one unique returned name/ident (not
 fuzzy guesses). `mode=semantic` is compatibility-only and fails closed with
 `STOCK_SEMANTIC_UNIT_UNPROVEN` until native low/mid/high proof exists
 (including ReaSynth/RS5k Attack). Direct parameter Templates are debug fallback.
+For ordinary Audio Take FX, publicly query one exact `take_ref`, call
+`macro.fx.apply_chain` with that ref, copy the exact returned `fx_ref`, then call
+`macro.fx.set_controls`; never construct the FX ref or invoke an internal resolver.
 
 ## Flat 15 Macro menu
 

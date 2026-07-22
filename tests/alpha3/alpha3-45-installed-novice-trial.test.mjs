@@ -43,6 +43,7 @@ test("fake transport proves manuals, lifecycle, official recipes, authoring, rec
   assert.equal(report.ok, true, JSON.stringify(report.error));
   assert.deepEqual(report.public_tools, ALPHA345_NOVICE_EXACT_TOOLS);
   assert.deepEqual(report.discovery.macro_manual_ids, [...ALPHA345_NOVICE_MACRO_IDS]);
+  assert.deepEqual(report.discovery.macro_example_ids, [...ALPHA345_NOVICE_MACRO_IDS]);
   assert.deepEqual(report.discovery.recipe_lifecycle_ops, [...ALPHA345_NOVICE_RECIPE_OPS]);
   assert.deepEqual(report.discovery.official_recipe_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
   assert.deepEqual(report.discovery.official_manual_ids, [...ALPHA345_NOVICE_OFFICIAL_RECIPE_IDS]);
@@ -263,11 +264,7 @@ function createMockClient({
               agent_context_macro_guide: {
                 macro_menu: { macro_ids: [...ALPHA345_NOVICE_MACRO_IDS] },
                 requested_expansions: {
-                  items: args.ids.map((id) => ({
-                    id,
-                    action_manual: { id },
-                    ...(id.startsWith("macro.") ? { executable_recipe_dependency: macroDependency(id) } : {}),
-                  })),
+                  items: args.ids.map((id) => mockMacroExpansion(id)),
                 },
               },
             },
@@ -349,6 +346,23 @@ function createMockClient({
     async close() {
       this.closed = true;
     },
+  };
+}
+
+function mockMacroExpansion(id) {
+  const publicCall = { tool: "call_template", executable_now: true, arguments: { id, input: {} } };
+  return {
+    id,
+    action_manual: { id, examples: [{ name: "minimum public call", input: {} }] },
+    first_try_execution_guide: {
+      examples: [{ name: "minimum public call", input: {}, public_call: publicCall }],
+      outcome_truth: {
+        readback_steps: ["read live result"],
+        success_criteria: ["live result matches request"],
+      },
+      recovery: { steps: ["inspect blocker and retry only after repair"] },
+    },
+    ...(id.startsWith("macro.") ? { executable_recipe_dependency: macroDependency(id) } : {}),
   };
 }
 

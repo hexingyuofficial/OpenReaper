@@ -244,6 +244,10 @@ export function createAlpha34BFirstTryExecutionGuide(id, discoveryItem = null) {
       steps: Array.isArray(manual.recovery_steps) ? manual.recovery_steps : [],
       resume_or_retry_policy: manual.resume_or_retry_policy ?? null,
     },
+    outcome_truth: {
+      readback_steps: Array.isArray(manual.readback_steps) ? manual.readback_steps : [],
+      success_criteria: Array.isArray(manual.success_criteria) ? manual.success_criteria : [],
+    },
     examples: publicExamples,
     executable_now: Boolean(executableMacroCall),
     non_executable_reason: executableMacroCall
@@ -414,6 +418,15 @@ export function auditAlpha34BVisibleManuals({ discovery_items_by_id = null } = {
       findings.push(finding(id, "ITEMS_APPLY_BATCH_MODE_MISSING", "macro.items.apply must expose set_item_take_controls mode."));
     }
     const guide = createAlpha34BFirstTryExecutionGuide(id, discoveryItem);
+    if (guide.examples.length === 0) {
+      findings.push(finding(id, "EXAMPLE_MISSING", "Every visible Macro manual requires at least one public call example."));
+    }
+    if (guide.outcome_truth.readback_steps.length === 0 || guide.outcome_truth.success_criteria.length === 0) {
+      findings.push(finding(id, "OUTCOME_TRUTH_MISSING", "Every visible Macro manual requires live readback steps and explicit success criteria."));
+    }
+    if (guide.recovery.steps.length === 0) {
+      findings.push(finding(id, "RECOVERY_MISSING", "Every visible Macro manual requires at least one recovery step."));
+    }
     for (const audit of guide.example_audit) {
       if (audit.unknown_fields.length > 0) {
         findings.push(finding(id, "EXAMPLE_UNKNOWN_FIELD", `Example uses unknown fields: ${audit.unknown_fields.join(",")}.`, {
@@ -429,6 +442,11 @@ export function auditAlpha34BVisibleManuals({ discovery_items_by_id = null } = {
       }
       if (audit.has_placeholder_ref && audit.executable_now !== false) {
         findings.push(finding(id, "EXAMPLE_EXECUTABLE_PLACEHOLDER", "Example presents placeholder refs as if executable without prerequisite.", {
+          example_name: audit.name,
+        }));
+      }
+      if (audit.public_call_valid !== true) {
+        findings.push(finding(id, "EXAMPLE_PUBLIC_CALL_INVALID", "Every example must expose one complete public call_template request.", {
           example_name: audit.name,
         }));
       }
@@ -750,28 +768,44 @@ function collectPublicExamples(expansion, discoveryItem) {
     ? expansion.action_manual.examples.map((entry, index) => ({
       name: entry?.name ?? `manual_${index}`,
       input: entry?.input ?? entry,
+      ...(isPlainObject(entry?.refs) ? { refs: entry.refs } : {}),
       source: "action_manual",
       executable_now: entry?.executable_now,
       non_executable_reason: entry?.non_executable_reason,
       prerequisite: entry?.prerequisite,
+      public_call: publicMacroCall(expansion.id, entry?.input ?? entry, entry?.refs, entry?.executable_now),
     }))
     : [];
   const fromDiscovery = Array.isArray(discoveryItem?.examples)
     ? discoveryItem.examples.map((entry, index) => ({
       name: entry?.name ?? `discovery_${index}`,
       input: entry?.input ?? entry,
+      ...(isPlainObject(entry?.refs) ? { refs: entry.refs } : {}),
       source: "discovery",
       executable_now: entry?.executable_now,
       non_executable_reason: entry?.non_executable_reason,
       prerequisite: entry?.prerequisite,
+      public_call: publicMacroCall(expansion.id, entry?.input ?? entry, entry?.refs, entry?.executable_now),
     }))
     : [];
   return [...fromManual, ...fromDiscovery];
 }
 
+function publicMacroCall(id, input, refs, executableNow) {
+  return {
+    tool: "call_template",
+    executable_now: typeof executableNow === "boolean" ? executableNow : true,
+    arguments: {
+      id,
+      input: isPlainObject(input) ? input : {},
+      ...(isPlainObject(refs) && Object.keys(refs).length > 0 ? { refs } : {}),
+    },
+  };
+}
+
 function auditExampleAgainstSchema(id, example, inputSchema) {
   const input = isPlainObject(example?.input) ? example.input : (isPlainObject(example) ? example : {});
-  const text = JSON.stringify(input);
+  const text = JSON.stringify({ input, refs: isPlainObject(example?.refs) ? example.refs : {} });
   const hasPlaceholder = PLACEHOLDER_REF_RE.test(text) || GUID_PLACEHOLDER_RE.test(text);
   const schemaFields = collectSchemaFields(inputSchema);
   const unknown = schemaFields.length > 0
@@ -782,6 +816,11 @@ function auditExampleAgainstSchema(id, example, inputSchema) {
   const invalidMode = mode !== null && modes.length > 0 && !modes.includes(mode);
   const explicitlyNonExecutable = example?.executable_now === false;
   const executablePlaceholder = hasPlaceholder && !explicitlyNonExecutable;
+  const publicCall = example?.public_call;
+  const publicCallValid = publicCall?.tool === "call_template"
+    && publicCall?.arguments?.id === id
+    && isPlainObject(publicCall?.arguments?.input)
+    && (!isPlainObject(example?.refs) || Object.keys(example.refs).length === 0 || publicCall.arguments.refs === example.refs);
   return {
     name: example?.name ?? null,
     source: example?.source ?? null,
@@ -796,6 +835,7 @@ function auditExampleAgainstSchema(id, example, inputSchema) {
     invalid_mode: invalidMode,
     executable_placeholder: executablePlaceholder,
     schema_checked: schemaFields.length > 0,
+    public_call_valid: publicCallValid,
   };
 }
 
@@ -807,9 +847,10 @@ function annotateExpansionPlaceholderExamples(expansion) {
     action_manual: {
       ...expansion.action_manual,
       examples: examples.map((entry, index) => {
-        const projected = annotatePlaceholderExample(expansion.id, {
+      const projected = annotatePlaceholderExample(expansion.id, {
           name: entry?.name ?? `manual_${index}`,
           input: entry?.input ?? entry,
+          ...(isPlainObject(entry?.refs) ? { refs: entry.refs } : {}),
           source: "action_manual",
         });
         if (projected.executable_now !== false) return entry;
@@ -826,26 +867,43 @@ function annotateExpansionPlaceholderExamples(expansion) {
 
 function annotatePlaceholderExample(id, example) {
   const input = isPlainObject(example?.input) ? example.input : {};
-  const text = JSON.stringify(input);
+  const refs = isPlainObject(example?.refs) ? example.refs : {};
+  const text = JSON.stringify({ input, refs });
   const hasPlaceholder = PLACEHOLDER_REF_RE.test(text) || GUID_PLACEHOLDER_RE.test(text);
   if (!hasPlaceholder) return example;
+  const prerequisite = example?.prerequisite ?? {
+    tool: "call_template",
+    executable_now: true,
+    arguments: {
+      id: "macro.project.query",
+      input: {
+        entity: queryEntityForExample(id, text),
+        limit: 25,
+        refresh_policy: "if_stale",
+      },
+    },
+  };
   return {
     ...example,
     executable_now: false,
     non_executable_reason: "Placeholder refs are documentation only; resolve canonical live refs before calling the Macro.",
-    prerequisite: {
-      tool: "call_template",
-      executable_now: true,
-      arguments: {
-        id: "macro.project.query",
-        input: {
-          entity: defaultQueryEntityFor(id),
-          limit: 25,
-          refresh_policy: "if_stale",
-        },
-      },
+    prerequisite,
+    public_call: {
+      ...example.public_call,
+      executable_now: false,
+      complete_from: "Replace every placeholder with the exact canonical value returned by the prerequisite; keep the public call shape unchanged.",
     },
   };
+}
+
+function queryEntityForExample(id, text) {
+  if (/fx:/iu.test(text)) return "fx";
+  if (/envelope:/iu.test(text)) return "automation";
+  if (/send:/iu.test(text)) return "routing";
+  if (/take:guid/iu.test(text)) return "takes";
+  if (/item:guid/iu.test(text)) return "items";
+  if (/track:guid/iu.test(text)) return "tracks";
+  return defaultQueryEntityFor(id);
 }
 
 function isOneOfAllowed(field, inputSchema, input) {

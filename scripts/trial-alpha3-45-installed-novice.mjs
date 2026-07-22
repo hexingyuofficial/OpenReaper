@@ -98,6 +98,7 @@ export async function runInstalledNoviceTrial({
     public_tools: null,
     discovery: {
       macro_manual_ids: [],
+      macro_example_ids: [],
       recipe_lifecycle_ops: [],
       official_recipe_ids: [],
       official_manual_ids: [],
@@ -187,9 +188,25 @@ export async function runInstalledNoviceTrial({
     const guideMacroIds = guideExpansions.map((item) => item.id).filter(Boolean);
     const allMacroManualIds = unique([...expandedMacroIds, ...guideMacroIds, ...menuMacroIds]);
     assertSameSet(allMacroManualIds, ALPHA345_NOVICE_MACRO_IDS, "15 Macro manuals via public discovery");
+    const exampleReadyIds = [];
+    for (const expansion of guideExpansions) {
+      const guide = expansion?.first_try_execution_guide;
+      assert(Array.isArray(guide?.examples) && guide.examples.length > 0, `${expansion?.id} public examples missing`);
+      assert(Array.isArray(guide?.outcome_truth?.readback_steps) && guide.outcome_truth.readback_steps.length > 0, `${expansion?.id} readback truth missing`);
+      assert(Array.isArray(guide?.outcome_truth?.success_criteria) && guide.outcome_truth.success_criteria.length > 0, `${expansion?.id} success truth missing`);
+      assert(Array.isArray(guide?.recovery?.steps) && guide.recovery.steps.length > 0, `${expansion?.id} recovery missing`);
+      for (const example of guide.examples) {
+        assert(example?.public_call?.tool === "call_template", `${expansion?.id} example public tool missing`);
+        assert(example?.public_call?.arguments?.id === expansion.id, `${expansion?.id} example public id mismatch`);
+        assert(example?.public_call?.arguments?.input && typeof example.public_call.arguments.input === "object", `${expansion?.id} example public input missing`);
+      }
+      exampleReadyIds.push(expansion.id);
+    }
+    assertSameSet(exampleReadyIds, ALPHA345_NOVICE_MACRO_IDS, "15 Macro public examples");
     const inspectDependency = guideExpansions.find((entry) => entry.id === "macro.project.inspect")?.executable_recipe_dependency;
     assertExecutableDependency(inspectDependency, "macro.project.inspect");
     report.discovery.macro_manual_ids = [...ALPHA345_NOVICE_MACRO_IDS];
+    report.discovery.macro_example_ids = [...ALPHA345_NOVICE_MACRO_IDS];
     report.exact_expansions.macros_expanded = ALPHA345_NOVICE_MACRO_IDS.length;
 
     const recipes = await callJson(primary, report, "primary", "list_recipes", { limit: 25 });
