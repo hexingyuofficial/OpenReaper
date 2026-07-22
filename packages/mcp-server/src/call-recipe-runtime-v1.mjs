@@ -145,6 +145,7 @@ export function createAuthoritativeRuntimeFactsProvider(options = {}) {
       run_id: run_id ?? null,
       latest_checkpoint: latest_checkpoint ?? null,
       recomputed_content_hash: contentHash,
+      declared_risk_grants: [...revision.draft.risk_grants],
     });
     const [inventory, liveness, riskGrants, checkpointEvidence] = await Promise.all([
       projectInventoryProvider(),

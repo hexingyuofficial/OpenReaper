@@ -818,7 +818,7 @@ function createConfiguredRiskGrantProvider(env) {
   try {
     policy = JSON.parse(env.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON ?? "null");
   } catch {}
-  return async ({ identity }) => {
+  return async ({ identity, declared_risk_grants }) => {
     let grants = Array.isArray(policy) ? policy : null;
     if (policy && !Array.isArray(policy) && typeof policy === "object") {
       const exactKey = `${identity.recipe_id}@${identity.version}#${identity.revision}:${identity.content_hash}`;
@@ -835,7 +835,14 @@ function createConfiguredRiskGrantProvider(env) {
     ) {
       throw new Error("Server-owned executable recipe risk grants are not configured for this revision.");
     }
-    return [...new Set(grants)];
+    if (
+      !Array.isArray(declared_risk_grants)
+      || declared_risk_grants.length === 0
+      || declared_risk_grants.some((item) => typeof item !== "string" || !grants.includes(item))
+    ) {
+      throw new Error("Executable recipe requests risk grants outside the server-owned policy.");
+    }
+    return [...new Set(declared_risk_grants)];
   };
 }
 

@@ -1123,6 +1123,39 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(dispatchCalls, 0);
   });
 
+  it("provides the revision's exact declared risk grants to server-owned policy", async () => {
+    const catalog = makeCatalog();
+    const draft = makeDraft();
+    let providerContext = null;
+    const factsProvider = createAuthoritativeRuntimeFactsProvider({
+      catalog,
+      projectInventoryProvider: async () => ({
+        projects: [{ project_ref: "project:tab:fixture-a", active: true }],
+        total_count: 1,
+        returned_count: 1,
+        coverage_status: "complete",
+      }),
+      bridgeLivenessProvider: async () => ({
+        ready: true,
+        heartbeat: { observed: { active_owner: "owner:fixture", active_generation: 1 } },
+      }),
+      riskGrantProvider: async (context) => {
+        providerContext = context;
+        return [...context.declared_risk_grants];
+      },
+      checkpointEvidenceProvider: async () => [],
+    });
+    const sealed = sealExecutableRecipeRevision(draft, {
+      catalog,
+      version: "1.0.0",
+      revision: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const facts = await factsProvider({ revision: sealed, operation: "run" });
+    assert.deepEqual(providerContext.declared_risk_grants, ["read", "write"]);
+    assert.deepEqual(facts.risk_grants, ["read", "write"]);
+  });
+
   it("pages saved revisions and keeps mutation success and failure within the calculated floor", async () => {
     const { runtime } = makeRuntime();
     const first = await runtime.call_recipe({
@@ -1565,6 +1598,17 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       CALL_RECIPE_STAGE_BUDGET,
     ]);
     assert.equal(allocationHints.every((hint) => hint === undefined), true);
+
+    stageCalls.length = 0;
+    const readSaved = await saveFixture(binding.runtime, makeReadOnlyProductDraft());
+    const readRun = await binding.runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(readSaved),
+      inputs: { track_name: "Read only" },
+      budget: { max_response_bytes: 8_192 },
+    });
+    assert.equal(readRun.ok, true, JSON.stringify(readRun));
+    assert.deepEqual(stageCalls.map((call) => call.id), ["macro.project.inspect"]);
   });
 
   it("builds fixed internal Bridge begin/end requests with matching identity", async () => {
@@ -1986,6 +2030,30 @@ function makeProductDraft() {
       ? catalog.getMacro(dependency.id).capabilities
       : catalog.getTemplate(dependency.id).capabilities
   )))].sort();
+  return draft;
+}
+
+function makeReadOnlyProductDraft() {
+  const draft = makeProductDraft();
+  draft.id = "recipe.project.read_only_server_policy";
+  draft.title = "Read-only server policy";
+  draft.summary = "Runs one read-only Macro under a broader server-owned policy.";
+  draft.risk = "read";
+  draft.outputs = [{ id: "project_summary", type: "json", required: true }];
+  draft.stages = [draft.stages[0]];
+  draft.bindings = [
+    draft.bindings[0],
+    {
+      from: { scope: "stage", id: "run_macro", port: "project_summary" },
+      to: { scope: "recipe_output", id: null, port: "project_summary" },
+    },
+  ];
+  draft.dependencies = [draft.dependencies[0]];
+  draft.required_capabilities = createExecutableRecipeProductCatalog().getMacro("macro.project.inspect").capabilities;
+  draft.risk_grants = ["read"];
+  draft.checkpoints = [draft.checkpoints[0]];
+  draft.preflight.stage_count = 1;
+  draft.preflight.dependency_count = 1;
   return draft;
 }
 
