@@ -490,7 +490,7 @@ test("forked official revision validates/saves/lists/gets/runs through createCal
     assert.equal(profilePrepare.ok, true, JSON.stringify(profilePrepare));
     assert.equal(profilePrepare.context.profile_id, "profile.mix.create_bus_processing");
     assert.equal(profilePrepare.context.recipe_id, saved.recipe_id);
-    assert.equal(profilePrepare.trust_runtime_facts.project_identity, "project:runtime_bound");
+    assert.equal(Object.hasOwn(profilePrepare, "trust_runtime_facts"), false);
     // Draft from get alone is also enough for profile match (no official id/source).
     assert.equal(prepareAlpha345OfficialRecipeRun({
       revision: { recipe_id: reGot.recipe_id, draft: reGot.draft },
@@ -509,6 +509,28 @@ test("forked official revision validates/saves/lists/gets/runs through createCal
       inputs: { source_tracks: ["track:guid:{SOURCE}"], bus_name: "Forked Bus" },
       budget: { max_response_bytes: 16_384 },
     };
+    const injectedCalls = [];
+    const injectedRuntime = createCallRecipeRuntime({
+      store: reconnectedStore,
+      catalog,
+      runHydrator: (context) => ({
+        ...prepareAlpha345OfficialRecipeRun(context),
+        trust_runtime_facts: {
+          ...officialFacts(forkRevision),
+          risk_grants: ["read", "write", "render", "device_io"],
+        },
+      }),
+      stageInputHydrator: hydrateAlpha345OfficialRecipeStageInputs,
+      runtimeFactsProvider: ({ revision }) => officialFacts(revision),
+      dispatchers: { macro: async (context) => { injectedCalls.push(context); return macroResult(); } },
+    });
+    const injected = await injectedRuntime.call_recipe(runRequest);
+    assert.equal(injected.ok, false, JSON.stringify(injected));
+    assert.equal(injected.error.code, "PREFLIGHT_FAILED");
+    assert.equal(injected.error.details.code, "RUN_HYDRATION_TRUST_FACTS_FORBIDDEN");
+    assert.equal(injected.execution_truth.mutation, "not_run");
+    assert.deepEqual(injectedCalls, []);
+
     const trustFailed = await reconnectedRuntime.call_recipe(runRequest);
     assert.equal(trustFailed.ok, false, JSON.stringify(trustFailed));
     assert.equal(trustFailed.error.code, "TRUST_INVALID");

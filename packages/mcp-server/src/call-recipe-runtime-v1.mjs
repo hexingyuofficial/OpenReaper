@@ -56,6 +56,11 @@ export const CALL_RECIPE_CHECKPOINT_PROOF_CONTRACT = "call_recipe.checkpoint_pro
 
 const COMPACT_FAILURE_PARTIAL_CHANGE_MAX_COUNT = 4;
 const RECIPE_UNDO_SCOPE = "whole_recipe";
+const RUNTIME_BOUND_PORTABILITY = Object.freeze({
+  project_identity: "project:runtime_bound",
+  bridge_owner: "bridge:runtime_bound",
+  bridge_generation: "generation:runtime_bound",
+});
 
 export class CallRecipeRuntimeError extends Error {
   constructor(message, code = "PARAMS_INVALID", details = {}) {
@@ -624,7 +629,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
   const inputs = hydration.inputs;
-  const trustRuntimeFacts = hydration.trust_runtime_facts ?? runtimeFacts;
+  const trustRuntimeFacts = bindRuntimePortabilityFacts(revision, runtimeFacts);
 
   // Re-evaluate exact revision, dependency lock, capability, risk grant, project identity,
   // Bridge owner/generation and checkpoint evidence before dispatch.
@@ -2020,7 +2025,6 @@ async function hydrateRecipeRun(hydrator, context) {
     return {
       ok: true,
       inputs: cloneJson(context.inputs ?? {}),
-      trust_runtime_facts: null,
       context: null,
     };
   }
@@ -2048,14 +2052,30 @@ async function hydrateRecipeRun(hydrator, context) {
       details: { code: "RUN_HYDRATION_INPUTS_INVALID" },
     };
   }
+  if (Object.hasOwn(result, "trust_runtime_facts")) {
+    return {
+      ok: false,
+      message: "Recipe run hydration cannot supply or override authoritative runtime facts.",
+      details: { code: "RUN_HYDRATION_TRUST_FACTS_FORBIDDEN" },
+    };
+  }
   return {
     ok: true,
     inputs: cloneJson(result.inputs ?? context.inputs),
-    trust_runtime_facts: isPlainObject(result.trust_runtime_facts)
-      ? cloneJson(result.trust_runtime_facts)
-      : null,
     context: result.context == null ? null : cloneJson(result.context),
   };
+}
+
+function bindRuntimePortabilityFacts(revision, authoritativeFacts) {
+  const facts = cloneJson(authoritativeFacts);
+  const portability = revision?.draft?.portability;
+  if (!isPlainObject(portability)) return facts;
+  for (const [field, sentinel] of Object.entries(RUNTIME_BOUND_PORTABILITY)) {
+    if (portability[field] === sentinel && typeof facts[field] === "string" && facts[field] !== "") {
+      facts[field] = sentinel;
+    }
+  }
+  return facts;
 }
 
 async function hydrateRecipeStage(hydrator, context) {

@@ -75,10 +75,6 @@ export function prepareAlpha345OfficialRecipeRun({ revision, source = null, inpu
   return {
     ok: true,
     inputs: merged,
-    trust_runtime_facts: {
-      ...runtime_facts,
-      ...PORTABLE_SENTINELS,
-    },
     context: {
       contract: "openreaper.alpha3.45.official_recipe_run_hydration.v1",
       recipe_id: revision.recipe_id,
