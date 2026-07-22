@@ -203,6 +203,43 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
   });
 
+  it("preserves a valid bridge child error instead of reporting the bridge as unavailable", async () => {
+    const transport = await makeTransport();
+    const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+    await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+    await writeHeartbeat(transport.root, {
+      active_owner: "owner-test",
+      active_generation: 1,
+    });
+    const executor = createLiveBridgeExecutor({
+      transportDir: transport.root,
+      bridgeScriptPath,
+      timeoutMs: 250,
+      pollIntervalMs: 1,
+    });
+    const request = idempotentProjectRequest({
+      id: "cmd_valid_child_error",
+      idempotencyKey: "valid-child-error",
+      name: "Valid Child Error",
+      timeoutMs: 250,
+    });
+
+    const responsePromise = executor.dispatch(request);
+    await waitForSingleRequest(transport.root);
+    const bridge = new FakeFoundationBridge({ owner: "owner-test", generation: 1 });
+    const result = bridge.errorEnvelope(request, "FILE_NOT_FOUND", "Source media is unavailable.", {
+      recoverable: false,
+      details: { blocker: "source_file_create_failed" },
+    });
+    await writeFile(join(transport.root, "results", `${request.id}.json`), `${JSON.stringify(result)}\n`);
+
+    const response = await responsePromise;
+    assert.equal(response.ok, false);
+    assert.equal(response.error.code, "FILE_NOT_FOUND");
+    assert.equal(response.error.message, "Source media is unavailable.");
+    assert.equal(response.error.details.blocker, "source_file_create_failed");
+  });
+
   it("rejects a bridge result whose id does not match the dispatched request", async () => {
     await assertRejectsBridgeResultIdentityMismatch({
       mutateResult(result) {

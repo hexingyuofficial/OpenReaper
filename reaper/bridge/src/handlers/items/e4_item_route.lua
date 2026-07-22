@@ -345,7 +345,7 @@ local function e4_item_read_source_footprint(source_item)
   end
   local source = e4_item_read_source(source_take)
   if not source then
-    return e4_item_handler_error("SOURCE_NOT_FOUND", "E4 copy_item_to_track could not read the source take media source.", { blocker = "source_media_missing" })
+    return e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track could not read the source take media source.", { blocker = "source_media_missing" })
   end
   local ok_identity, source_identity = call_reaper("GetMediaSourceFileName", source, "")
   local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
@@ -369,13 +369,14 @@ local function e4_item_read_source_footprint(source_item)
     }, false)
   end
   if type(file_exists) ~= "function" or file_exists(canonical_path) ~= true then
-    return e4_item_handler_error("SOURCE_NOT_FOUND", "E4 copy_item_to_track requires an available canonical source file.", {
+    return e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track requires an available canonical source file.", {
       blocker = "source_file_unavailable",
     }, false)
   end
   return {
     source_take = source_take,
     source = source,
+    canonical_source_path = canonical_path,
     canonical_source_identity = "file:path:" .. canonical_path,
     source_type = first_string(source_type),
     source_length_seconds = first_number(source_length),
@@ -387,21 +388,25 @@ local function e4_item_read_source_footprint(source_item)
   }
 end
 
-local function e4_item_footprint_matches(take, footprint)
-  local source = e4_item_read_source(take)
+local function e4_item_source_matches(source, footprint)
   if not source then return false end
   local ok_identity, identity = call_reaper("GetMediaSourceFileName", source, "")
   local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
   local ok_length, source_length, quarter_notes = call_reaper("GetMediaSourceLength", source)
-  local ok_start, start_offset = call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
-  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")
-  local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PITCH")
-  local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", take, "B_PPITCH")
   local canonical_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(identity)) or nil
   return canonical_path and "file:path:" .. canonical_path == footprint.canonical_source_identity
     and ok_type and first_string(source_type) == footprint.source_type
     and ok_length and first_number(source_length) == footprint.source_length_seconds and quarter_notes ~= true
-    and ok_start and first_number(start_offset) == footprint.start_offset_seconds
+end
+
+local function e4_item_footprint_matches(take, footprint)
+  local source = e4_item_read_source(take)
+  if not e4_item_source_matches(source, footprint) then return false end
+  local ok_start, start_offset = call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
+  local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")
+  local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PITCH")
+  local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", take, "B_PPITCH")
+  return ok_start and first_number(start_offset) == footprint.start_offset_seconds
     and ok_playrate and first_number(playrate) == footprint.playrate
     and ok_pitch and first_number(pitch) == footprint.pitch
     and ok_preserve and first_number(preserve) == footprint.preserve_pitch
@@ -449,23 +454,44 @@ local function e4_item_preflight_copy_budget(request, source_snapshot, target_tr
 end
 
 local function e4_item_clone_active_take_footprint(footprint, target_item)
-  local ok_duplicate, duplicate = call_reaper("PCM_Source_Duplicate", footprint.source)
-  if not ok_duplicate or not duplicate then
-    local _, failure = e4_item_handler_error("SOURCE_NOT_FOUND", "E4 copy_item_to_track could not duplicate the verified source media footprint.", {}, false)
+  local function destroy_unowned_source(source, failure)
+    local ok_destroy = call_reaper("PCM_Source_Destroy", source)
+    if ok_destroy then return failure end
+    local _, cleanup_failure = e4_item_handler_error("RESTORE_FAILED", "E4 copy_item_to_track could not release an unowned source after failure.", {
+      original_code = failure.code,
+      blocker = "unowned_source_cleanup_failed",
+    }, false)
+    return cleanup_failure
+  end
+  local ok_created, created_source = call_reaper("PCM_Source_CreateFromFile", footprint.canonical_source_path)
+  if not ok_created or not created_source then
+    local _, failure = e4_item_handler_error("FILE_NOT_FOUND", "E4 copy_item_to_track could not create an independent source from the verified media file.", {
+      blocker = "source_file_create_failed",
+    }, false)
     return nil, false, failure
+  end
+  if not e4_item_source_matches(created_source, footprint) then
+    local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track rejected an imported source whose footprint did not match preflight.", {
+      blocker = "created_source_footprint_mismatch",
+    }, false)
+    return nil, false, destroy_unowned_source(created_source, failure)
   end
   local ok_take, target_take = call_reaper("AddTakeToMediaItem", target_item)
   if not ok_take or not target_take then
-    call_reaper("PCM_Source_Destroy", duplicate)
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not create a target take.", {}, false)
-    return nil, false, failure
+    return nil, false, destroy_unowned_source(created_source, failure)
   end
-  local ok_source_set = call_reaper("SetMediaItemTake_Source", target_take, duplicate)
-  local assigned_source = ok_source_set and e4_item_read_source(target_take) or nil
-  if not ok_source_set or assigned_source ~= duplicate then
-    call_reaper("PCM_Source_Destroy", duplicate)
+  local ok_source_set, source_set_accepted = call_reaper("SetMediaItemTake_Source", target_take, created_source)
+  local ok_assigned_source, assigned_source = call_reaper("GetMediaItemTake_Source", target_take)
+  local source_attached = ok_assigned_source and assigned_source == created_source
+  local source_may_be_attached = source_set_accepted == true or source_attached or not ok_assigned_source
+  local setter_accepted = source_set_accepted == nil or source_set_accepted == true
+  if not ok_source_set or not setter_accepted or not source_attached then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track could not verify the assigned target take source.", { blocker = "target_source_set_failed" }, false)
-    return nil, false, failure
+    if source_may_be_attached then
+      return nil, true, failure
+    end
+    return nil, true, destroy_unowned_source(created_source, failure)
   end
   local function set_take_value(key, value)
     local ok, accepted = call_reaper("SetMediaItemTakeInfo_Value", target_take, key, value)
