@@ -113,9 +113,6 @@ function makeExecutor({
           track_ref: ref,
         }, true);
       }
-      if (child.id === "template.midi.resolve_midi_take_ref") {
-        return execution(child.id, { take_ref: child.input.take_ref }, true);
-      }
       if (child.id === "template.fx.resolve_fx_ref") {
         const owner = child.refs?.track_ref?.ref ?? child.refs?.track_ref ?? child.refs?.take_ref?.ref;
         const slot = child.input.slot_index;
@@ -241,6 +238,29 @@ describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
     assert.equal(blocked.ok, false);
     assert.equal(blocked.error.code, "FX_ASSIGNMENTS_SIZE_INVALID");
     assert.equal(calls.length, 0);
+  });
+
+  it("resolves exact audio Take FX through the authoritative FX resolver", async () => {
+    const executor = makeExecutor({});
+    const takeRef = "take:guid:{AUDIO-TAKE-01}";
+    const fx = `fx:${takeRef}:0`;
+    const response = await executeAlpha3_2_5CControlMacro({
+      request: request({
+        mode: "exact_assignments",
+        dry_run: true,
+        assignments: [{ id: "take_tone_1", fx_ref: fx, param_index: 0, normalized_value: 0.5 }],
+      }),
+      executeAtomic: executor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(executor.calls.some((child) => child.id === "template.midi.resolve_midi_take_ref"), false);
+    const resolve = executor.calls.find((child) => child.id === "template.fx.resolve_fx_ref");
+    assert.deepEqual(resolve?.refs?.take_ref, {
+      kind: "take",
+      ref: takeRef,
+      identity: { scheme: "guid", value: "{AUDIO-TAKE-01}" },
+    });
   });
   it("keeps public counts 6/15/235/91 and mode token", () => {
     assert.equal(ALPHA3_4_D2_FX_BATCH_MODE, "exact_assignments");

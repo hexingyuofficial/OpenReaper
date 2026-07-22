@@ -20,7 +20,6 @@ const READ_FX_PARAMETER_ID = "template.fx.read_fx_parameter";
 const LIST_FX_PARAMETERS_ID = "template.fx.list_fx_parameters";
 const RESOLVE_FX_ID = "template.fx.resolve_fx_ref";
 const RESOLVE_TRACK_ID = "template.tracks.resolve_track_ref";
-const RESOLVE_MIDI_TAKE_ID = "template.midi.resolve_midi_take_ref";
 
 const ASSIGNMENT_ROW_FIELDS = new Set([
   "id",
@@ -618,16 +617,26 @@ async function resolveExactFxRef({ fxRef, executeAtomic, request, state }) {
     return failed("FX_ASSIGNMENTS_FX_REF_UNSUPPORTED", "The FX ref must be an owner-scoped track/take slot ref.");
   }
   try {
-    if (state.calls) state.calls.resolve += 1;
-    const ownerExecution = await runAtomic(executeAtomic, request, state, parsed.ownerKind === "track"
-      ? { id: RESOLVE_TRACK_ID, input: { track_ref: parsed.ownerRef }, refs: {} }
-      : { id: RESOLVE_MIDI_TAKE_ID, input: { take_ref: parsed.ownerRef }, refs: {} });
-    if (ownerExecution?.ok !== true) {
-      return failed(ownerExecution?.error?.code ?? "FX_ASSIGNMENTS_OWNER_RESOLVE_FAILED", ownerExecution?.error?.message ?? "Owner resolve failed.");
-    }
-    const ownerObject = executionObjectRefs(ownerExecution).find((entry) => entry.kind === parsed.ownerKind);
-    if (!ownerObject || ownerObject.ref !== parsed.ownerRef) {
-      return failed("FX_ASSIGNMENTS_OWNER_IDENTITY_MISMATCH", "Live owner resolution did not preserve exact identity.");
+    let ownerObject;
+    if (parsed.ownerKind === "track") {
+      if (state.calls) state.calls.resolve += 1;
+      const ownerExecution = await runAtomic(executeAtomic, request, state, {
+        id: RESOLVE_TRACK_ID,
+        input: { track_ref: parsed.ownerRef },
+        refs: {},
+      });
+      if (ownerExecution?.ok !== true) {
+        return failed(ownerExecution?.error?.code ?? "FX_ASSIGNMENTS_OWNER_RESOLVE_FAILED", ownerExecution?.error?.message ?? "Owner resolve failed.");
+      }
+      ownerObject = executionObjectRefs(ownerExecution).find((entry) => entry.kind === parsed.ownerKind);
+      if (!ownerObject || ownerObject.ref !== parsed.ownerRef) {
+        return failed("FX_ASSIGNMENTS_OWNER_IDENTITY_MISMATCH", "Live owner resolution did not preserve exact identity.");
+      }
+    } else {
+      ownerObject = exactTakeGuidObject(parsed.ownerRef);
+      if (!ownerObject) {
+        return failed("FX_ASSIGNMENTS_TAKE_REF_EXACT_REQUIRED", "Take FX assignments require an exact take:guid owner ref.");
+      }
     }
     if (state.calls) state.calls.resolve += 1;
     const fxExecution = await runAtomic(executeAtomic, request, state, {
@@ -651,6 +660,11 @@ async function resolveExactFxRef({ fxRef, executeAtomic, request, state }) {
   } catch (error) {
     return failed(error?.code ?? "FX_ASSIGNMENTS_FX_RESOLVE_FAILED", error?.message ?? "FX resolve failed.");
   }
+}
+
+function exactTakeGuidObject(ref) {
+  const value = typeof ref === "string" ? ref.match(/^take:guid:(.+)$/u)?.[1] : null;
+  return value ? { kind: "take", ref, identity: { scheme: "guid", value } } : null;
 }
 
 function parseFxRef(ref) {
