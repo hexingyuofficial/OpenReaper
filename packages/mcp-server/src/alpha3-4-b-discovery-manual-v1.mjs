@@ -309,6 +309,8 @@ export function createAlpha345RecipeProductizationManual({ requested_ids = [] } 
     lifecycle: createAlpha345RecipeLifecycleManual(),
     temporary_one_off: ["validate", "save exact temporary immutable revision", "run once", "delete exact revision after terminal evidence is retained"],
     persistent_reuse: ["validate", "save immutable revision", "reconnect", "list_recipes or call_recipe list", "get exact identity", "run with one public call"],
+    system_model: "Official Recipes pressure-test the same general Recipe system; they do not use a specialized execution surface.",
+    shared_lifecycle: ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"],
     official_recipe_ids: ALPHA3_45_OFFICIAL_RECIPE_IDS,
     official_menu: ALPHA3_45_OFFICIAL_RECIPE_IDS.map((id) => ({
       id,
@@ -341,6 +343,7 @@ export function createAlpha345RecipeLifecycleManual() {
     },
     run_rule: "A saved Recipe executes through one public call_recipe run. The Agent never replays stages or targets and never supplies runtime_facts or a caller-selected run_id.",
     failure_rule: "Follow the returned exact next_call. Resume only when resume_safe is true and the latest verified checkpoint identity is present; otherwise inspect evidence and report applied/not-run/unknown truth.",
+    official_and_user_rule: "Official Recipes and user-authored or forked Recipes share validate/save/list/get/run/reconnect, server-owned trust, retained evidence, and whole-Recipe Undo truth.",
   });
 }
 
@@ -365,7 +368,7 @@ export function createAlpha345OfficialRecipeManual(id) {
         inputs: manual.example_inputs,
       },
     },
-    fork: "Get the saved official revision, create a new user-owned recipe id, validate the edited draft, and save a new immutable revision; never shadow or mutate the official id.",
+    fork: "Get the saved official revision, create a new user-owned recipe id, validate the edited draft, and save a new immutable revision; never shadow or mutate the official id. The fork then uses the same list/get/run/reconnect, server-owned trust, retained evidence, and whole-Recipe Undo path as any user Recipe.",
   });
 }
 

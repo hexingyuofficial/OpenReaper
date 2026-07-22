@@ -11,7 +11,7 @@ export const OPENREAPER_AGENT_START_HERE_COMPACT_END = "<!-- OPENREAPER_AGENT_ST
 export const OPENREAPER_AGENT_START_HERE_MAX_UTF8_BYTES = 16_384;
 export const OPENREAPER_AGENT_START_HERE_DOCUMENT = "docs/AGENT_START_HERE.md";
 export const OPENREAPER_AGENT_FIRST_ROUND_FLOW =
-  "ping -> list_templates with the user's original words as query -> exact-id expansion -> call_template -> live readback";
+  "ping -> search the user's original words -> prefer one Macro or official Recipe -> exact-id expansion -> one call_template or call_recipe run -> live readback";
 
 export const OPENREAPER_PUBLIC_TOOL_IDS = Object.freeze([
   "ping",

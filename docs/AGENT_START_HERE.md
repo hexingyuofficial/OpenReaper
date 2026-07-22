@@ -15,16 +15,16 @@ Product: OpenReaper MCP. Server name: `openreaper`. Exactly six tools:
 
 ## First-round flow
 
-Flow: `ping -> list_templates with the user's original words as query -> exact-id expansion -> call_template -> live readback`.
-For reusable or multi-stage intent, search `list_recipes` in the same first round
-and execute the selected saved revision with one `call_recipe` call.
+Flow: `ping -> search the user's original words -> prefer one Macro or official Recipe -> exact-id expansion -> one call_template or call_recipe run -> live readback`.
 
 1. `ping` — confirm the server is loaded and read readiness/startup guidance.
 2. Search `list_templates` and, for reusable/multi-stage intent, `list_recipes`
    with the user's original words as `query` (small `limit`, e.g. 25). Do not
    guess casing, field names, refs, enums, or Recipe identities first.
-3. Exact-id expansion: `list_templates` with `ids:[...]` and needed `fields` (for example `id`, `inputSchema`) to open the full Macro manual.
-4. `call_template` with the exact Macro id and schema-valid `input`.
+3. Exact-id expand the selected Macro through `list_templates`, or the selected
+   official Recipe through `list_recipes`, before supplying inputs.
+4. Run it once through `call_template` or `call_recipe`; never replay Recipe
+   stages or targets in an Agent loop.
 5. Live REAPER readback is truth. SQLite / Project Index is navigation only.
 
 Answer with user-facing REAPER facts first. Hide MCP contract, SQLite, session,
@@ -54,6 +54,11 @@ official product Recipes are:
 - `recipe.midi.create_instrument_part`
 - `recipe.media.create_layered_sound_effect_variants`
 - `recipe.items.create_sound_variations`
+
+Official Recipes pressure-test the same general Recipe system; they are not a
+special execution surface. A fork becomes a user-owned revision and uses the
+same validate/save/list/get/run/reconnect, trust, evidence, and whole-Recipe
+Undo path as every user-authored Recipe.
 
 Exact Recipe manuals carry required inputs, deterministic defaults, safety,
 whole-Recipe Undo/recovery posture, fork guidance, and the complete one-call run

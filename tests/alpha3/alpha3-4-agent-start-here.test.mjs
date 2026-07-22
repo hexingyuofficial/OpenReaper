@@ -154,7 +154,7 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   for (const macroId of OPENREAPER_FLAT_FIFTEEN_MACRO_IDS) assert.match(instructions, new RegExp(macroId.replace(/\./gu, "\\.")));
   const mentionedMacros = [...new Set(instructions.match(/\bmacro\.[a-z0-9_.]+\b/gu) ?? [])].sort();
   assert.deepEqual(mentionedMacros, [...OPENREAPER_FLAT_FIFTEEN_MACRO_IDS].sort());
-  assert.match(instructions, /ping -> list_templates/u);
+  assert.match(instructions, /ping -> search the user's original words/u);
   assert.match(instructions, /Macro-first/u);
   assert.match(instructions, /cursor/u);
   assert.match(instructions, /get_state/u);
@@ -173,6 +173,8 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /one public `call_recipe` call/u);
   assert.match(instructions, /list_recipes/u);
   assert.match(instructions, /steps`, `assertions`, and `recovery/u);
+  assert.match(instructions, /same general Recipe system/u);
+  assert.match(instructions, /same validate\/save\/list\/get\/run\/reconnect, trust, evidence, and whole-Recipe/u);
   for (const id of [
     "recipe.mix.create_bus_processing",
     "recipe.midi.create_instrument_part",

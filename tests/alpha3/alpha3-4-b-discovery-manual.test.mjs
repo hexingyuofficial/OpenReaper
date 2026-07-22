@@ -159,6 +159,9 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.deepEqual(product.official_recipe_ids, ALPHA3_45_OFFICIAL_RECIPE_IDS);
   assert.deepEqual(product.temporary_one_off.map((step) => step.split(" ")[0]), ["validate", "save", "run", "delete"]);
   assert.match(product.persistent_reuse.join(" "), /reconnect/u);
+  assert.match(product.system_model, /same general Recipe system/u);
+  assert.deepEqual(product.shared_lifecycle, ["validate", "save", "list", "get", "run", "reconnect", "trust", "evidence", "whole-Recipe Undo"]);
+  assert.match(lifecycle.official_and_user_rule, /share validate\/save\/list\/get\/run\/reconnect/u);
   assert.equal(product.requested_manuals.length, 4);
   for (const id of ALPHA3_45_OFFICIAL_RECIPE_IDS) {
     const manual = createAlpha345OfficialRecipeManual(id);
@@ -172,6 +175,8 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
     assert.equal(manual.run_example.tool, "call_recipe");
     assert.equal(manual.run_example.arguments.recipe_id, id);
     assert.equal(manual.run_example.arguments.operation, "run");
+    assert.match(manual.fork, /same list\/get\/run\/reconnect/u);
+    assert.match(manual.fork, /trust, retained evidence, and whole-Recipe Undo/u);
   }
 
   const fallback = createAlpha345DirectTemplateFallbackManual();
@@ -191,7 +196,7 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
       request_sequence: 1,
     },
   });
-  assert.notEqual(result.error?.failure_layer, "server_validation", JSON.stringify(result));
+  assert.equal(result.ok, true, JSON.stringify(result));
 });
 
 test("placeholder-ref examples are explicitly non-executable in exact B projections", () => {
