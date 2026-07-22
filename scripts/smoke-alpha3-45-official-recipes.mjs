@@ -395,7 +395,11 @@ async function timedCall(invoke, args) {
 }
 
 async function callPublicRecipe(client, args) {
-  const response = await client.callTool({ name: "call_recipe", arguments: args });
+  const response = await client.callTool(
+    { name: "call_recipe", arguments: args },
+    undefined,
+    { timeout: 300_000, maxTotalTimeout: 600_000 },
+  );
   const text = response.content?.find((entry) => entry.type === "text")?.text;
   if (typeof text !== "string") throw coded("OFFICIAL_RECIPE_RESPONSE_INVALID", "call_recipe returned no JSON text.");
   return JSON.parse(text);

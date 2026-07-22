@@ -1545,6 +1545,37 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(dispatcherCalls, 1);
   });
 
+  it("uses the shared verified-output budget for a few complete Recipe outputs", async () => {
+    const draft = makeManyOutputDraft(5);
+    const outputValues = Object.fromEntries(
+      draft.outputs.map((output, index) => [output.id, `${index}:${"x".repeat(2_000)}`]),
+    );
+    const { runtime } = makeRuntime({
+      facts: (revision) => completeFacts(revision, draft),
+      dispatchers: {
+        template: async () => templateEnvelope(outputValues),
+      },
+    });
+    const saved = await runtime.call_recipe({
+      operation: "save",
+      draft,
+      version: "1.0.0",
+      revision_number: 1,
+      saved_at: "1970-01-01T00:00:00.000Z",
+    });
+    const success = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+      budget: { max_response_bytes: 65_536 },
+    });
+    assert.equal(success.ok, true, JSON.stringify(success));
+    assert.equal(success.verified_outputs.length, 5);
+    assert.equal(success.verified_outputs.every((output) => typeof output.value === "string"), true);
+    assert.equal(success.verified_outputs.every((output) => output.value.length > 2_000), true);
+    assert.ok(Buffer.byteLength(JSON.stringify(success), "utf8") <= 65_536);
+  });
+
   it("accepts only exact native D30 project inventory truth", async () => {
     const activeRow = { project_ref: "project:path:/tmp/active.RPP", active: true };
     const success = await readFreshOpenProjectInventory({

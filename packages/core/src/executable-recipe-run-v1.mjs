@@ -77,6 +77,8 @@ export const EXECUTABLE_RECIPE_RUN_BUDGETS = Object.freeze({
   next_call_max_bytes: 2_048,
   verified_output_max_count: EXECUTABLE_RECIPE_BUDGETS.output_max_count,
   verified_output_max_bytes: 1_024,
+  verified_output_expanded_max_bytes: 8_192,
+  verified_output_total_max_bytes: 32_768,
   partial_change_max_count: 16,
   run_id_hex_chars: 32,
 });
@@ -418,7 +420,15 @@ export function projectRunSuccessEnvelope({
   timing,
   evidenceRef,
   latestCheckpoint = null,
+  maxResponseBytes = EXECUTABLE_RECIPE_RUN_BUDGETS.response_max_bytes,
 }) {
+  const boundedOutputs = Array.isArray(verifiedOutputs)
+    ? verifiedOutputs.slice(0, EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_count)
+    : [];
+  const outputValueBudget = executableRecipeVerifiedOutputValueBudget(
+    boundedOutputs.length,
+    maxResponseBytes,
+  );
   return deepFreeze({
     contract: EXECUTABLE_RECIPE_RUN_CONTRACT,
     ok: true,
@@ -435,11 +445,7 @@ export function projectRunSuccessEnvelope({
       applied: applied ?? 0,
       skipped: skipped ?? 0,
     },
-    verified_outputs: Array.isArray(verifiedOutputs)
-      ? verifiedOutputs
-        .slice(0, EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_count)
-        .map((output) => boundedVerifiedOutput(output))
-      : [],
+    verified_outputs: boundedOutputs.map((output) => boundedVerifiedOutput(output, outputValueBudget)),
     timing: isPlainObject(timing) ? timing : {},
     evidence_ref: evidenceRef,
     latest_checkpoint: latestCheckpoint,
@@ -929,7 +935,31 @@ function boundedString(value, maxChars) {
   return text.slice(0, maxChars);
 }
 
-function boundedVerifiedOutput(output) {
+export function executableRecipeVerifiedOutputValueBudget(outputCount, maxResponseBytes) {
+  const count = Math.max(1, Math.min(
+    EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_count,
+    Number.isInteger(outputCount) ? outputCount : 1,
+  ));
+  const responseBytes = Number.isInteger(maxResponseBytes)
+    ? Math.max(512, Math.min(EXECUTABLE_RECIPE_RUN_BUDGETS.response_max_bytes, maxResponseBytes))
+    : EXECUTABLE_RECIPE_RUN_BUDGETS.response_default_bytes;
+  const totalBudget = Math.min(
+    EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_total_max_bytes,
+    Math.max(
+      EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_bytes * count,
+      responseBytes - EXECUTABLE_RECIPE_RUN_BUDGETS.evidence_page_max_bytes,
+    ),
+  );
+  return Math.min(
+    EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_expanded_max_bytes,
+    Math.max(
+      EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_bytes,
+      Math.floor(totalBudget / count),
+    ),
+  );
+}
+
+function boundedVerifiedOutput(output, maxBytes) {
   if (!isPlainObject(output)) return { id: null, verified: false };
   const projected = {
     id: typeof output.id === "string" ? boundedString(output.id, 96) : null,
@@ -938,7 +968,7 @@ function boundedVerifiedOutput(output) {
   if (Object.prototype.hasOwnProperty.call(output, "value")) {
     projected.value = boundedJsonProjection(
       output.value,
-      EXECUTABLE_RECIPE_RUN_BUDGETS.verified_output_max_bytes,
+      maxBytes,
     );
   }
   return projected;

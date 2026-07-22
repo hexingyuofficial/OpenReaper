@@ -1032,6 +1032,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     },
     evidenceRef,
     latestCheckpoint,
+    maxResponseBytes: budget.max_response_bytes,
   }), { startedAt, telemetry, undo, mutationTruth: successMutationTruth });
 }
 
