@@ -101,7 +101,7 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
     ].includes(key))) assert.equal(captured[key], "<unset>", key);
     assert.equal(captured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, await realpath(fixture.renderRoot));
     assert.equal(captured.OPENREAPER_CURRENT_PROJECT_REF, "project:explicit");
-    assert.equal(captured.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON, '["read","write"]');
+    assert.equal(captured.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON, '["read","write","destructive"]');
   });
 
   it("rejects a symlinked executable Recipe root before starting the installed server", async () => {
