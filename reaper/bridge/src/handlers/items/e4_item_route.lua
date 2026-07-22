@@ -284,6 +284,34 @@ local function e4_item_finite_native_number(value)
   return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
 end
 
+local function e4_item_probe_file_source_length(canonical_path, expected_type)
+  local ok_created, probe_source = call_reaper("PCM_Source_CreateFromFile", canonical_path)
+  if not ok_created or not probe_source then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not probe the canonical source file length.", {
+      blocker = "source_length_probe_create_failed",
+    }, false)
+  end
+  local ok_identity, identity = call_reaper("GetMediaSourceFileName", probe_source, "")
+  local ok_type, source_type = call_reaper("GetMediaSourceType", probe_source, "")
+  local ok_length, source_length, quarter_notes = call_reaper("GetMediaSourceLength", probe_source)
+  local probe_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(identity)) or nil
+  local length = ok_length and first_number(source_length) or nil
+  local matches = probe_path == canonical_path and ok_type and first_string(source_type) == expected_type
+    and e4_item_finite_native_number(length) and length > 0 and quarter_notes ~= true
+  local ok_destroy = call_reaper("PCM_Source_Destroy", probe_source)
+  if not ok_destroy then
+    return e4_item_handler_error("RESTORE_FAILED", "E4 copy_item_to_track could not release its source-length probe.", {
+      blocker = "source_length_probe_cleanup_failed",
+    }, false)
+  end
+  if not matches then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track canonical source probe did not match the attached source.", {
+      blocker = "source_length_probe_mismatch",
+    }, false)
+  end
+  return length
+end
+
 -- Copy responses are evidence, not best-effort display data.  These helpers
 -- deliberately refuse index fallbacks so a successful copy cannot claim an
 -- identity that was not read back from REAPER.
@@ -356,6 +384,18 @@ local function e4_item_read_source_footprint(source_item)
   local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", source_take, "D_PITCH")
   local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", source_take, "B_PPITCH")
   local canonical_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(source_identity)) or nil
+  local source_type_value = ok_type and first_string(source_type) or nil
+  local source_length_value = ok_source_length and first_number(source_length) or nil
+  if canonical_path and source_type_value and source_type_value ~= "SECTION"
+      and type(file_exists) == "function" and file_exists(canonical_path) == true
+      and ok_source_length and e4_item_finite_native_number(source_length_value)
+      and source_length_value <= 0 and length_is_quarter_notes ~= true then
+    local probed_length, probe_failure = e4_item_probe_file_source_length(canonical_path, source_type_value)
+    if probe_failure then return nil, probe_failure end
+    source_length = probed_length
+    source_length_value = probed_length
+    length_is_quarter_notes = false
+  end
   local unreadable_fields = json_array({})
   local unreadable_reasons = {}
   local function mark_unreadable(condition, field)
@@ -365,7 +405,7 @@ local function e4_item_read_source_footprint(source_item)
   mark_unreadable(ok_identity and is_string(first_string(source_identity)) and not canonical_path, "source_path")
   mark_unreadable(not ok_type or not is_string(first_string(source_type)), "source_type")
   mark_unreadable(ok_type and first_string(source_type) == "SECTION", "source_type_section")
-  mark_unreadable(not ok_source_length or not e4_item_finite_native_number(first_number(source_length)) or (first_number(source_length) or 0) <= 0, "source_length")
+  mark_unreadable(not ok_source_length or not e4_item_finite_native_number(source_length_value) or (source_length_value or 0) <= 0, "source_length")
   mark_unreadable(length_is_quarter_notes == true, "source_length_quarter_notes")
   mark_unreadable(not ok_item_length or not e4_item_finite_native_number(first_number(item_length)) or (first_number(item_length) or -1) < 0, "item_length")
   mark_unreadable(not ok_start or not e4_item_finite_native_number(first_number(start_offset)), "start_offset")
@@ -373,11 +413,11 @@ local function e4_item_read_source_footprint(source_item)
   mark_unreadable(not ok_pitch or not e4_item_finite_native_number(first_number(pitch)), "pitch")
   mark_unreadable(not ok_preserve or (first_number(preserve) ~= 0 and first_number(preserve) ~= 1), "preserve_pitch")
   if #unreadable_fields > 0 then
-    if not ok_source_length or not e4_item_finite_native_number(first_number(source_length)) or (first_number(source_length) or 0) <= 0 then
+    if not ok_source_length or not e4_item_finite_native_number(source_length_value) or (source_length_value or 0) <= 0 then
       unreadable_reasons.source_length = {
         call_ok = ok_source_length == true,
         value_type = type(source_length),
-        value = e4_item_finite_native_number(first_number(source_length)) and first_number(source_length) or JSON_NULL,
+        value = e4_item_finite_native_number(source_length_value) and source_length_value or JSON_NULL,
         error = not ok_source_length and tostring(source_length):sub(1, 160) or JSON_NULL,
         quarter_notes_type = type(length_is_quarter_notes),
         quarter_notes = type(length_is_quarter_notes) == "boolean" and length_is_quarter_notes or JSON_NULL,
@@ -399,8 +439,8 @@ local function e4_item_read_source_footprint(source_item)
     source = source,
     canonical_source_path = canonical_path,
     canonical_source_identity = "file:path:" .. canonical_path,
-    source_type = first_string(source_type),
-    source_length_seconds = first_number(source_length),
+    source_type = source_type_value,
+    source_length_seconds = source_length_value,
     item_length_seconds = first_number(item_length),
     start_offset_seconds = first_number(start_offset),
     playrate = first_number(playrate),
@@ -409,20 +449,25 @@ local function e4_item_read_source_footprint(source_item)
   }
 end
 
-local function e4_item_source_matches(source, footprint)
+local function e4_item_source_matches(source, footprint, allow_attached_zero_length)
   if not source then return false end
   local ok_identity, identity = call_reaper("GetMediaSourceFileName", source, "")
   local ok_type, source_type = call_reaper("GetMediaSourceType", source, "")
   local ok_length, source_length, quarter_notes = call_reaper("GetMediaSourceLength", source)
   local canonical_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(identity)) or nil
+  local length = ok_length and first_number(source_length) or nil
+  local length_matches = e4_item_finite_native_number(length) and length == footprint.source_length_seconds
+  if not length_matches and allow_attached_zero_length == true then
+    length_matches = source == footprint.source and length == 0 and quarter_notes ~= true
+  end
   return canonical_path and "file:path:" .. canonical_path == footprint.canonical_source_identity
     and ok_type and first_string(source_type) == footprint.source_type
-    and ok_length and first_number(source_length) == footprint.source_length_seconds and quarter_notes ~= true
+    and ok_length and length_matches and quarter_notes ~= true
 end
 
-local function e4_item_footprint_matches(take, footprint)
+local function e4_item_footprint_matches(take, footprint, allow_attached_zero_length)
   local source = e4_item_read_source(take)
-  if not e4_item_source_matches(source, footprint) then return false end
+  if not e4_item_source_matches(source, footprint, allow_attached_zero_length) then return false end
   local ok_start, start_offset = call_reaper("GetMediaItemTakeInfo_Value", take, "D_STARTOFFS")
   local ok_playrate, playrate = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PLAYRATE")
   local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", take, "D_PITCH")
@@ -592,7 +637,7 @@ local function copy_item_to_track(request)
   if not new_snapshot or new_snapshot.track ~= target_track or new_snapshot.track_ref ~= target_track_ref
       or new_snapshot.position_seconds ~= position or new_snapshot.length_seconds ~= footprint.item_length_seconds
       or new_snapshot.active_take ~= target_take or not e4_item_footprint_matches(new_snapshot.active_take, footprint)
-      or not e4_item_snapshot_matches(source_snapshot) or not e4_item_footprint_matches(source_snapshot.active_take, footprint) then
+      or not e4_item_snapshot_matches(source_snapshot) or not e4_item_footprint_matches(source_snapshot.active_take, footprint, true) then
     local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track source or target readback did not preserve the verified footprint.", { blocker = "copy_footprint_readback_failed" }, false)
     return fail_after_mutation(failure)
   end

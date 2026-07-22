@@ -183,6 +183,37 @@ assert(failure.details.original_code == "VERIFY_FAILED")
 `);
   });
 
+  it("destroys a mismatched source-length probe and reports cleanup failure exactly", () => {
+    runLua(`
+local probe = { filename = "/tmp/other.wav", source_type = "WAVE", length = 8 }
+local destroyed = 0
+call_reaper = function(name, ...)
+  local args = { ... }
+  if name == "PCM_Source_CreateFromFile" then return true, probe end
+  if name == "GetMediaSourceFileName" then return true, args[1].filename end
+  if name == "GetMediaSourceType" then return true, args[1].source_type end
+  if name == "GetMediaSourceLength" then return true, args[1].length, false end
+  if name == "PCM_Source_Destroy" then destroyed = destroyed + 1; return true end
+  return false
+end
+local length, failure = e4_item_probe_file_source_length("/tmp/source.wav", "WAVE")
+assert(length == nil and failure.code == "VERIFY_FAILED" and failure.details.blocker == "source_length_probe_mismatch")
+assert(destroyed == 1)
+
+call_reaper = function(name, ...)
+  local args = { ... }
+  if name == "PCM_Source_CreateFromFile" then return true, { filename = args[1], source_type = "WAVE", length = 8 } end
+  if name == "GetMediaSourceFileName" then return true, args[1].filename end
+  if name == "GetMediaSourceType" then return true, args[1].source_type end
+  if name == "GetMediaSourceLength" then return true, args[1].length, false end
+  if name == "PCM_Source_Destroy" then return false end
+  return false
+end
+length, failure = e4_item_probe_file_source_length("/tmp/source.wav", "WAVE")
+assert(length == nil and failure.code == "RESTORE_FAILED" and failure.details.blocker == "source_length_probe_cleanup_failed")
+`);
+  });
+
   it("never destroys a source already attached to a partial take", () => {
     runLua(`
 local footprint = {
@@ -210,15 +241,15 @@ assert(destroyed == 0)
 `);
   });
 
-  it("accepts the native void source setter only after pointer and full footprint readback", () => {
+  it("probes an attached zero-length source and accepts the native void setter only after full readback", () => {
     runLua(`
-local source = { filename = "/tmp/source.wav" }
+local source = { filename = "/tmp/source.wav", length = 0 }
 local source_take = { guid = "{SOURCE-TAKE}", source = source, start = 0.25, rate = 1.25, pitch = -2, preserve = 1 }
 local source_track = { guid = "{SOURCE-TRACK}" }
 local source_item = { guid = "{SOURCE}", active = source_take, length = 3, position = 1, track = source_track }
 local target_track = { guid = "{TARGET}" }
 local created_item, created_take, created_source
-local calls = { create = 0, source_set = 0, delete = 0, import = 0 }
+local calls = { create = 0, source_set = 0, delete = 0, import = 0, destroy = 0 }
 call_reaper = function(name, ...)
   local args = { ... }
   if name == "CountMediaItems" then return true, 1 end
@@ -233,7 +264,7 @@ call_reaper = function(name, ...)
   if name == "GetMediaItemTake_Source" then return true, args[1].source end
   if name == "GetMediaSourceFileName" then return true, args[1].filename end
   if name == "GetMediaSourceType" then return true, "WAVE" end
-  if name == "GetMediaSourceLength" then return true, 8, false end
+  if name == "GetMediaSourceLength" then return true, args[1].length, false end
   if name == "GetMediaItemInfo_Value" then
     return true, args[2] == "D_POSITION" and args[1].position or args[1].length
   end
@@ -241,7 +272,8 @@ call_reaper = function(name, ...)
     local take, key = args[1], args[2]
     return true, key == "D_STARTOFFS" and take.start or key == "D_PLAYRATE" and take.rate or key == "D_PITCH" and take.pitch or take.preserve
   end
-  if name == "PCM_Source_CreateFromFile" then calls.import = calls.import + 1; created_source = { filename = args[1] }; return true, created_source end
+  if name == "PCM_Source_CreateFromFile" then calls.import = calls.import + 1; created_source = { filename = args[1], length = 8 }; return true, created_source end
+  if name == "PCM_Source_Destroy" then calls.destroy = calls.destroy + 1; return true end
   if name == "AddMediaItemToTrack" then
     calls.create = calls.create + 1
     created_item = { guid = "{NEW}", length = 0, position = 0, track = target_track }
@@ -276,7 +308,7 @@ local summary, failure, _, _, refs = copy_item_to_track({
   refs = json_array({ { kind = "item", ref = "item:guid:{SOURCE}", identity = { scheme = "guid", value = "{SOURCE}" } }, { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } } }),
 })
 assert(failure == nil and summary ~= nil, failure and failure.code or "missing_summary")
-assert(calls.create == 1 and calls.source_set == 1 and calls.delete == 0 and calls.import == 1)
+assert(calls.create == 1 and calls.source_set == 1 and calls.delete == 0 and calls.import == 2 and calls.destroy == 1)
 assert(created_take.source == created_source and created_item.position == 4 and created_item.length == 3)
 assert(summary.new_item_ref == "item:guid:{NEW}" and summary.active_take_ref == "take:guid:{NEW-TAKE}")
 assert(summary.source_footprint.canonical_source_identity == "file:path:/tmp/source.wav")
