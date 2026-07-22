@@ -16,6 +16,8 @@ Product: OpenReaper MCP. Server name: `openreaper`. Exactly six tools:
 ## First-round flow
 
 Flow: `ping -> search the user's original words -> prefer one Macro or official Recipe -> exact-id expansion -> one call_template or call_recipe run -> live readback`.
+The Macro-first compatibility route remains `ping -> list_templates`; reusable
+or multi-stage Recipe intent may search `list_recipes` in the same first round.
 
 1. `ping` — confirm the server is loaded and read readiness/startup guidance.
 2. Search `list_templates` and, for reusable/multi-stage intent, `list_recipes`
