@@ -536,10 +536,22 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [...EXPECTED_TOOLS].sort());
       assert.equal(tools.tools.length, 6);
       assert.equal(tools.tools.some((tool) => tool.name === "list_macros"), false);
+      assert.match(tools.tools.find((tool) => tool.name === "list_templates").description, /no arguments first.*all 15 executable Macros/);
+      assert.match(tools.tools.find((tool) => tool.name === "list_templates").description, /never query by Macro id/);
+      assert.match(tools.tools.find((tool) => tool.name === "list_recipes").description, /once with no arguments.*official and user-saved Recipes/);
+      assert.match(tools.tools.find((tool) => tool.name === "list_recipes").description, /one call_recipe run/);
 
       const pingResult = await client.callTool({ name: "ping", arguments: {} });
       const stateResult = await client.callTool({ name: "get_state", arguments: {} });
       const templatesResult = await client.callTool({ name: "list_templates", arguments: {} });
+      const catalogResult = await client.callTool({
+        name: "list_templates",
+        arguments: { surface: "catalog", limit: 25 },
+      });
+      const noMatchQueryResult = await client.callTool({
+        name: "list_templates",
+        arguments: { surface: "catalog", query: "macro.project.inspect", limit: 25 },
+      });
       const recipesResult = await client.callTool({ name: "list_recipes", arguments: {} });
       const exactResult = await client.callTool({
         name: "list_templates",
@@ -564,6 +576,8 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       const ping = parseToolJson(pingResult);
       const state = parseToolJson(stateResult);
       const templates = parseToolJson(templatesResult);
+      const catalog = parseToolJson(catalogResult);
+      const noMatchQuery = parseToolJson(noMatchQueryResult);
       const recipes = parseToolJson(recipesResult);
       const exact = parseToolJson(exactResult);
       const legacy = parseToolJson(legacyResult);
@@ -581,7 +595,14 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.equal(templateGuide.version, ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION);
       assert.deepEqual(templateGuide.macro_menu.macro_ids, EXPECTED_CURRENT_PRODUCT_MACRO_IDS);
       assert.equal(Object.hasOwn(templateGuide, "primary_spine"), false);
-      assert.equal(toolTextBytes(templatesResult) <= ALPHA3_2A_DEFAULT_LIST_TEMPLATES_MAX_BYTES, true);
+      assert.equal(templates.product_surface.projection, "agent_compact_v1");
+      assert.equal(toolTextBytes(templatesResult) <= 49_152, true, `${toolTextBytes(templatesResult)}`);
+      assert.equal(toolTextBytes(catalogResult) <= 59_392, true, `${toolTextBytes(catalogResult)}`);
+      assert.equal(toolTextBytes(noMatchQueryResult) <= 20_480, true, `${toolTextBytes(noMatchQueryResult)}`);
+      assert.equal(catalog.items.length, 25);
+      assert.equal(catalog.page.has_more, true);
+      assert.deepEqual(noMatchQuery.items, []);
+      assert.equal(noMatchQuery.product_surface.agent_context_macro_guide.macro_menu.final_target_count, 15);
       assert.equal(state.ok, false);
       assert.equal(state.error.code, "SCOPE_NOT_BOUND_IN_ALPHA_STDIO");
       assert.match(state.error.message, /macro\.project\.inspect/);
@@ -592,8 +613,13 @@ describe("Alpha3.2-A agent context and macro guide fix round", () => {
       assert.deepEqual(expandedDetailFieldsPresent(templates.product_surface), []);
       assert.equal(exact.product_surface.detail_level, "expanded");
       assert.equal(exact.product_surface.expanded_via, "exact_ids");
-      assert.deepEqual(exact.product_surface.expanded_detail_fields, EXPECTED_EXPANDED_DETAIL_FIELDS);
-      assert.deepEqual(expandedDetailFieldsPresent(exact.product_surface), EXPECTED_EXPANDED_DETAIL_FIELDS);
+      assert.deepEqual(
+        exact.product_surface.expanded_detail_fields,
+        ["agent_context_macro_guide.requested_expansions"],
+      );
+      assert.deepEqual(expandedDetailFieldsPresent(exact.product_surface), []);
+      assert.equal(Object.hasOwn(exact.product_surface.agent_context_macro_guide, "macro_menu"), false);
+      assert.equal(toolTextBytes(exactResult) <= 36_864, true, `${toolTextBytes(exactResult)}`);
       assert.deepEqual(exact.items.map((item) => Object.keys(item).sort()), [
         ["capability_truth", "id"],
         ["capability_truth", "id"],

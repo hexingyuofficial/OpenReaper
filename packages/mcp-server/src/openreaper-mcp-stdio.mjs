@@ -174,7 +174,7 @@ async function main() {
 
   server.tool(
     "list_templates",
-    `List OpenReaper runtime actions plus exact-id Alpha3.3 Macro manuals. Check capability truth before call_template. ${AGENT_START_HERE_HINT}`,
+    `Call with no arguments first to list all 15 executable Macros. Expand one full Macro manual with ids:["exact.macro.id"], never query by Macro id. Use surface=catalog only for direct Template fallback. Check capability truth before call_template. ${AGENT_START_HERE_HINT}`,
     {
       surface: z.enum(["executable", "catalog"]).optional(),
       ids: z.array(z.string()).optional(),
@@ -188,16 +188,18 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
     },
-    async (request) => jsonToolResult(attachExecutableRecipeDependencyFacts(
-      runtime.list_templates(request ?? {}),
-      callRecipeBinding?.catalog,
-      request?.ids,
+    async (request) => jsonToolResult(compactPublicTemplateDiscoveryResponse(
+      attachExecutableRecipeDependencyFacts(
+        runtime.list_templates(request ?? {}),
+        callRecipeBinding?.catalog,
+        request?.ids,
+      ),
     )),
   );
 
   server.tool(
     "list_recipes",
-    `List OpenReaper recipe contracts and compact saved executable revision facts. Historical recipes are agent-stepped; saved validated revisions run through call_recipe. ${AGENT_START_HERE_HINT}`,
+    `Call once with no arguments to list official and user-saved Recipes. Expand one saved revision by exact ids; do not issue one query per official Recipe. Saved validated revisions execute automatically through one call_recipe run. ${AGENT_START_HERE_HINT}`,
     {
       ids: z.array(z.string()).optional(),
       fields: z.array(z.string()).optional(),
@@ -403,6 +405,68 @@ export function attachExecutableRecipeDependencyFacts(response, catalog, request
         },
       },
     },
+  };
+}
+
+const PUBLIC_TEMPLATE_PRODUCT_SURFACE_KEYS = Object.freeze([
+  "contract",
+  "surface",
+  "detail_level",
+  "expanded_via",
+  "agent_startup_guidance",
+  "agent_context_macro_guide",
+  "macro_first_routing",
+  "item_schema",
+  "workflow_rhythm",
+  "startup_preflight",
+  "blocker_guidance",
+]);
+
+export function compactPublicTemplateDiscoveryResponse(response) {
+  if (!response || typeof response !== "object" || Array.isArray(response)) return response;
+  const surface = response.product_surface;
+  if (!surface || typeof surface !== "object" || Array.isArray(surface)) return response;
+
+  const productSurface = {};
+  for (const key of PUBLIC_TEMPLATE_PRODUCT_SURFACE_KEYS) {
+    if (Object.hasOwn(surface, key)) productSurface[key] = surface[key];
+  }
+  productSurface.projection = "agent_compact_v1";
+  productSurface.expanded_detail_fields = response.mode === "ids"
+    ? ["agent_context_macro_guide.requested_expansions"]
+    : [];
+
+  if (response.mode === "ids") {
+    productSurface.agent_context_macro_guide = compactExactMacroGuide(
+      surface.agent_context_macro_guide,
+    );
+  }
+
+  return {
+    ...response,
+    product_surface: productSurface,
+  };
+}
+
+function compactExactMacroGuide(guide) {
+  if (!guide || typeof guide !== "object" || Array.isArray(guide)) return guide;
+  const {
+    contract,
+    version,
+    phase,
+    tool_surface,
+    requested_expansions,
+    direct_template_fallback,
+    safety_boundary,
+  } = guide;
+  return {
+    contract,
+    version,
+    phase,
+    tool_surface,
+    requested_expansions,
+    direct_template_fallback,
+    safety_boundary,
   };
 }
 
