@@ -16,6 +16,12 @@ const OFFICIAL_IDS = Object.freeze([
   "recipe.media.create_layered_sound_effect_variants",
   "recipe.items.create_sound_variations",
 ]);
+const OFFICIAL_OUTPUTS = Object.freeze({
+  "recipe.mix.create_bus_processing": Object.freeze(["layout_changes", "routing_changes", "processing_evidence"]),
+  "recipe.midi.create_instrument_part": Object.freeze(["layout_changes", "instrument_changes", "midi_evidence"]),
+  "recipe.media.create_layered_sound_effect_variants": Object.freeze(["placement_changes", "variation_changes", "control_evidence"]),
+  "recipe.items.create_sound_variations": Object.freeze(["variation_changes", "control_changes", "tone_changes", "automation_changes"]),
+});
 
 export async function connectInstalledWrapperAlpha345({ installedWrapper, liveEnvironment = {}, clientName = "official-recipes" } = {}) {
   assertAbsolute(installedWrapper, "installedWrapper");
@@ -96,10 +102,11 @@ export async function runAlpha345OfficialRecipesHarness({
       const identity = exactIdentity(byId.get(id));
       const got = await timedCall(invoke, { operation: "get", ...identity });
       if (got.value?.ok !== true || got.value?.source !== "official") throw coded("OFFICIAL_RECIPE_GET_FAILED", `${id} exact expansion failed.`);
-      const run = await timedCall(invoke, { operation: "run", ...identity, inputs: fixture.inputs[id] });
+      const run = await timedCall(invoke, { operation: "run", ...identity, inputs: fixture.inputs[id], budget: { max_response_bytes: 65_536 } });
       const row = summarizeRun(id, run, identity);
       report.official_runs.push(row);
       if (!row.ok) throw coded("OFFICIAL_RECIPE_RUN_FAILED", `${id} did not complete.`);
+      if (!hasOfficialRunTruth(row, fixture.inputs[id])) throw coded("OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", `${id} lacks declared outputs, mutation/readback proof, evidence, or closed Whole-Recipe Undo.`);
     }
 
     const recipe04Identity = exactIdentity(byId.get("recipe.items.create_sound_variations"));
@@ -108,24 +115,42 @@ export async function runAlpha345OfficialRecipesHarness({
         operation: "run",
         ...recipe04Identity,
         inputs: { ...fixture.inputs["recipe.items.create_sound_variations"], variation_count: count },
+        budget: { max_response_bytes: 65_536 },
       });
-      const capacity = summarizeCapacity(count, run);
+      const sourceCount = fixture.inputs["recipe.items.create_sound_variations"].source_items?.length ?? 0;
+      const evidence = count <= 64 && run.value?.ok === true && typeof run.value?.evidence_ref === "string"
+        ? await timedCall(invoke, { operation: "get", evidence_ref: run.value.evidence_ref, limit: 8 })
+        : null;
+      const capacity = summarizeCapacity(
+        count,
+        run,
+        count * sourceCount,
+        evidence?.value,
+        fixture.inputs["recipe.items.create_sound_variations"],
+      );
       report.capacity.push(capacity);
-      if (count <= 64 && !capacity.ok) throw coded("OFFICIAL_CAPACITY_SUCCESS_REQUIRED", `Recipe 04 count ${count} failed.`);
+      if (count <= 64 && (!capacity.ok || !capacity.batch_proven)) throw coded("OFFICIAL_CAPACITY_SUCCESS_REQUIRED", `Recipe 04 count ${count} failed or lacked full batch proof.`);
       if (count === 65 && !capacity.fail_closed) throw coded("OFFICIAL_CAPACITY_FAIL_CLOSED_REQUIRED", "Recipe 04 count 65 did not fail closed before mutation.");
     }
     const recipe04 = report.official_runs.find((row) => row.recipe_id === "recipe.items.create_sound_variations");
+    const recipe04Features = concreteRecipe04Features(recipe04, fixture.inputs["recipe.items.create_sound_variations"]);
     report.recipe04_truth = {
       one_public_call: recipe04.public_call_count === 1,
       seeded_item_take: fixture.recipe04_seed,
-      position_volume_pan_pitch_playrate: recipe04.outputs.includes("variation_changes") && recipe04.outputs.includes("control_changes"),
-      take_tone_fx: recipe04.outputs.includes("tone_changes"),
-      automation_envelope: recipe04.outputs.includes("automation_changes"),
+      position_volume_pan_pitch_playrate: recipe04Features.position_volume_pan_pitch_playrate,
+      take_tone_fx: recipe04Features.take_tone_fx,
+      automation_envelope: recipe04Features.automation_envelope,
       whole_recipe_undo: recipe04.undo,
       evidence_refs: recipe04.evidence_refs,
     };
-    if (!report.recipe04_truth.one_public_call || report.recipe04_truth.whole_recipe_undo?.claimed !== true) {
-      throw coded("OFFICIAL_RECIPE04_TRUTH_INCOMPLETE", "Recipe 04 lacks one-call or whole-Recipe Undo truth.");
+    if (
+      !report.recipe04_truth.one_public_call
+      || !report.recipe04_truth.position_volume_pan_pitch_playrate
+      || !report.recipe04_truth.take_tone_fx
+      || !report.recipe04_truth.automation_envelope
+      || report.recipe04_truth.whole_recipe_undo?.claimed !== true
+    ) {
+      throw coded("OFFICIAL_RECIPE04_TRUTH_INCOMPLETE", "Recipe 04 lacks verified feature, one-call, or whole-Recipe Undo truth.");
     }
     report.ok = true;
     report.project.final_state = "completed";
@@ -159,23 +184,175 @@ function summarizeRun(recipeId, call, identity) {
     public_call_count: 1,
     duration_ms: call.duration_ms,
     outputs: verifiedOutputs.map((output) => output.id).sort(),
+    output_counts: Object.fromEntries(verifiedOutputs.map((output) => [output.id, Array.isArray(output.value) ? output.value.length : output.value == null ? 0 : 1])),
+    output_omitted: Object.fromEntries(verifiedOutputs.map((output) => [output.id, output.value?.omitted === true])),
+    output_values: Object.fromEntries(verifiedOutputs.map((output) => [output.id, output.value])),
     changes: verifiedOutputs.flatMap((output) => collectVerifiedChanges(output.value)),
     output_files: collectAbsolutePaths(value),
     evidence_refs: unique([value.evidence_ref, ...(value.undo?.evidence_refs ?? [])].filter((entry) => typeof entry === "string")),
     undo: value.undo ?? null,
+    execution_truth: value.execution_truth ?? null,
     error: value.error ?? null,
   };
 }
 
-function summarizeCapacity(count, call) {
+function hasOfficialRunTruth(run, inputs) {
+  const expected = OFFICIAL_OUTPUTS[run.recipe_id] ?? [];
+  if (expected.length === 0 || !expected.every((id) => hasNonEmptyOutput(run, id))) return false;
+  if (run.evidence_refs.length === 0
+    || run.undo?.claimed !== true
+    || run.undo?.status !== "closed"
+    || run.undo?.proven !== true
+    || !Number.isSafeInteger(run.execution_truth?.native_mutation_count)
+    || run.execution_truth.native_mutation_count < 1
+    || !Number.isSafeInteger(run.execution_truth?.readback_count)
+    || run.execution_truth.readback_count < 1) return false;
+  const outputsProven = expected.every((id) => {
+    const value = run.output_values?.[id];
+    if (Array.isArray(value)) return value.length > 0 && value.every(provenOutputRow);
+    return typeof value === "string" && value.length > 0;
+  });
+  if (!outputsProven) return false;
+  if (run.recipe_id === "recipe.items.create_sound_variations") {
+    return concreteRecipe04Features(run, inputs).linked_output_rows > 0;
+  }
+  return true;
+}
+
+function provenOutputRow(row) {
+  return row && typeof row === "object" && (
+    (row.status === "ok" && row.mutation === "done" && row.readback === "pass")
+    || (row.status === "applied"
+      && row.live_readback?.status === "passed"
+      && (row.mutation === undefined || row.mutation?.status === "completed"))
+  );
+}
+
+function hasNonEmptyOutput(run, id) {
+  return run.outputs.includes(id)
+    && run.output_omitted?.[id] !== true
+    && Number.isInteger(run.output_counts?.[id])
+    && run.output_counts[id] > 0;
+}
+
+function concreteRecipe04Features(run, inputs) {
+  const variation = outputRows(run, "variation_changes");
+  const controls = outputRows(run, "control_changes");
+  const tone = outputRows(run, "tone_changes");
+  const automation = outputRows(run, "automation_changes");
+  const linked = linkedRecipe04Rows({ variation, controls, tone, automation }, inputs?.source_items ?? []);
+  return {
+    position_volume_pan_pitch_playrate: linked.every((row) => row.controls_proven) && linked.length > 0,
+    take_tone_fx: linked.every((row) => row.tone_proven) && linked.length > 0,
+    automation_envelope: linked.every((row) => row.automation_proven) && linked.length > 0,
+    linked_output_rows: linked.length,
+  };
+}
+
+function linkedRecipe04Rows(rows, sourceItems) {
+  const controls = new Map(rows.controls.map((row) => [`${row.item_ref}\u0000${row.take_ref}`, row]));
+  const tone = new Map(rows.tone.map((row) => [row.fx_ref, row]));
+  const automation = new Map(rows.automation.map((row) => [row.target_ref, row]));
+  const sourceItemRefs = new Set(sourceItems.map((row) => row.item_ref));
+  const sourceTakeRefs = new Set(sourceItems.map((row) => row.take_ref));
+  const seenCopies = new Set();
+  const linked = [];
+  for (const [variationIndex, variation] of rows.variation.entries()) {
+    const itemRef = variation.new_item_ref;
+    const takeRef = variation.new_take_ref;
+    const copyKey = `${itemRef}\u0000${takeRef}`;
+    const source = sourceItems[variationIndex % sourceItems.length];
+    if (!provenChange(variation)
+      || !isExactGuidRef(itemRef, "item")
+      || !isExactGuidRef(takeRef, "take")
+      || sourceItemRefs.has(itemRef)
+      || sourceTakeRefs.has(takeRef)
+      || seenCopies.has(copyKey)
+      || !Number.isFinite(variation.position_seconds)
+      || !Number.isFinite(source?.position_seconds)
+      || variation.position_seconds <= source.position_seconds) continue;
+    const control = controls.get(copyKey);
+    const fxRef = `fx:${takeRef}:0`;
+    const toneRow = tone.get(fxRef);
+    const automationRow = automation.get(fxRef);
+    const controlsProven = provenChange(control)
+      && Number.isFinite(control.item?.volume_db)
+      && Number.isFinite(control.take?.pan)
+      && Number.isFinite(control.take?.pitch_semitones)
+      && Number.isFinite(control.take?.playrate);
+    const toneProven = provenChange(toneRow)
+      && Number.isInteger(toneRow.param_index)
+      && Number.isFinite(toneRow.normalized_value);
+    const automationProven = provenChange(automationRow)
+      && automationRow.mode === "insert_fx_parameter_points"
+      && isExactGuidRef(automationRow.live_readback?.envelope_ref, "envelope")
+      && Number.isSafeInteger(automationRow.requested?.point_count)
+      && automationRow.requested.point_count > 0;
+    if (!controlsProven || !toneProven || !automationProven) continue;
+    seenCopies.add(copyKey);
+    linked.push({ controls_proven: true, tone_proven: true, automation_proven: true });
+  }
+  return linked;
+}
+
+function outputRows(run, id) {
+  if (!hasNonEmptyOutput(run, id)) return [];
+  const value = run.output_values?.[id];
+  return Array.isArray(value) ? value.filter((row) => row && typeof row === "object") : [];
+}
+
+function provenChange(row) {
+  return row != null && typeof row === "object" && ((row.status === "ok" && row.mutation === "done" && row.readback === "pass")
+    || (row.status === "applied" && row.mutation?.status === "completed" && row.live_readback?.status === "passed"));
+}
+
+function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) {
   const value = call.value ?? {};
   const ok = value.ok === true;
   const zeroWrite = value.error?.details?.zero_write === true || value.details?.zero_write === true;
+  const undoZeroWriteSafe = value.undo?.claimed !== true || (
+    value.undo?.claimed === true
+    && value.undo?.status === "closed"
+    && value.undo?.proven === true
+    && value.execution_truth?.mutation === "not_run"
+  );
+  const stageCounters = Object.fromEntries((evidence?.items ?? [])
+    .filter((item) => typeof item?.stage_id === "string")
+    .map((item) => [item.stage_id, item.counters ?? {}]));
+  const requiredStages = ["copy", "controls", "tone", "automation"];
+  const stageProof = requiredStages.every((stageId) => (
+    stageCounters[stageId]?.native_mutation_count === requiredMutationRows
+    && stageCounters[stageId]?.readback_count === requiredMutationRows
+  ));
+  const requiredTotalRows = requiredMutationRows * requiredStages.length;
+  const inlineValues = Object.fromEntries((value.verified_outputs ?? [])
+    .filter((output) => output?.verified === true && typeof output?.id === "string")
+    .map((output) => [output.id, output.value]));
+  const inlineRows = {
+    variation: Array.isArray(inlineValues.variation_changes) ? inlineValues.variation_changes : [],
+    controls: Array.isArray(inlineValues.control_changes) ? inlineValues.control_changes : [],
+    tone: Array.isArray(inlineValues.tone_changes) ? inlineValues.tone_changes : [],
+    automation: Array.isArray(inlineValues.automation_changes) ? inlineValues.automation_changes : [],
+  };
+  const inlineProof = Object.values(inlineRows).every((rows) => rows.length === requiredMutationRows && rows.every(provenOutputRow))
+    && linkedRecipe04Rows(inlineRows, inputs?.source_items ?? []).length === requiredMutationRows;
   return {
     count,
     ok,
     duration_ms: call.duration_ms,
-    fail_closed: count === 65 && !ok && zeroWrite && value.undo?.claimed !== true,
+    required_mutation_rows: requiredMutationRows,
+    native_mutation_count: value.execution_truth?.native_mutation_count ?? 0,
+    readback_count: value.execution_truth?.readback_count ?? 0,
+    stage_counters: stageCounters,
+    stage_proven: stageProof,
+    inline_rows_proven: inlineProof,
+    batch_proven: count <= 64
+      && requiredMutationRows > 0
+      && value.execution_truth?.native_mutation_count === requiredTotalRows
+      && value.execution_truth?.readback_count === requiredTotalRows
+      && stageProof
+      && (inlineProof || Object.values(inlineValues).some((output) => output?.omitted === true)),
+    fail_closed: count === 65 && !ok && zeroWrite && undoZeroWriteSafe,
     zero_write: zeroWrite,
     error_code: value.error?.code ?? value.details?.code ?? null,
   };
@@ -201,6 +378,20 @@ function validateFixture(fixture) {
   for (const key of ["item_ref", "take_ref", "track_ref", "position_seconds", "length_seconds", "take_fx_ref"]) {
     if (seed?.[key] === undefined || seed?.[key] === null) throw coded("OFFICIAL_RECIPE04_SEED_INCOMPLETE", `recipe04_seed.${key} is required.`);
   }
+  const sourceItems = fixture.inputs["recipe.items.create_sound_variations"].source_items;
+  if (!Array.isArray(sourceItems) || !sourceItems.some((row) => (
+    row.item_ref === seed.item_ref
+    && row.take_ref === seed.take_ref
+    && row.track_ref === seed.track_ref
+    && row.position_seconds === seed.position_seconds
+    && row.length_seconds === seed.length_seconds
+  ))) throw coded("OFFICIAL_RECIPE04_SEED_INPUT_MISMATCH", "recipe04_seed must exactly match one supplied source_items row.");
+  if (seed.take_fx_ref !== `fx:${seed.take_ref}:0`) throw coded("OFFICIAL_RECIPE04_SEED_FX_MISMATCH", "recipe04_seed.take_fx_ref must bind the seeded Take's first FX slot.");
+  if (!Number.isSafeInteger(fixture.inputs["recipe.items.create_sound_variations"].seed)) throw coded("OFFICIAL_RECIPE04_SEED_VALUE_INVALID", "Recipe 04 input seed must be a concrete safe integer.");
+}
+
+function isExactGuidRef(value, kind) {
+  return typeof value === "string" && new RegExp(`^${kind}:guid:\\{[^{}]+\\}$`, "u").test(value);
 }
 
 function validateLiveEnvironment(value) {

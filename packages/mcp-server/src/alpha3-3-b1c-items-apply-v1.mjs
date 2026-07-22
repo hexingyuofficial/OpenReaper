@@ -2259,6 +2259,8 @@ function batchRowChange(row, { status, mutation, readback, index, code, fields }
     fields,
     item_ref: row.item_ref,
     take_ref: row.take_ref,
+    item: row.item,
+    take: row.take,
   });
 }
 
@@ -2777,6 +2779,7 @@ function projectCompactBatchChanges(changes) {
       fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
       new_item_ref: typeof change.new_item_ref === "string" ? change.new_item_ref : undefined,
       new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
+      position_seconds: Number.isFinite(change.position_seconds) ? change.position_seconds : undefined,
       source_offset_seconds: Number.isFinite(change.source_offset_seconds) ? change.source_offset_seconds : undefined,
     });
   });

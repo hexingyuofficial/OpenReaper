@@ -178,6 +178,21 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
     assert.match(manual.fork, /same list\/get\/run\/reconnect/u);
     assert.match(manual.fork, /trust, retained evidence, and whole-Recipe Undo/u);
   }
+  const busManual = createAlpha345OfficialRecipeManual("recipe.mix.create_bus_processing");
+  assert.deepEqual(busManual.inputs, ["source_tracks", "bus_name", "fx_chain", "controls"]);
+  assert.deepEqual(busManual.example_inputs.source_tracks, ["COPY_FROM_QUERY"]);
+  assert.equal(busManual.example_inputs.source_tracks.includes("selected"), false);
+  assert.match(busManual.safety, /macro\.project\.query|query\/read/u);
+  assert.match(busManual.safety, /exact canonical track:guid refs/u);
+  assert.match(busManual.safety, /Undo truth/u);
+  const midiManual = createAlpha345OfficialRecipeManual("recipe.midi.create_instrument_part");
+  assert.deepEqual(midiManual.inputs, ["target_track", "track_name", "instrument", "bars", "meter", "notes"]);
+  const mediaManual = createAlpha345OfficialRecipeManual("recipe.media.create_layered_sound_effect_variants");
+  assert.deepEqual(mediaManual.required_inputs, ["search_terms", "seed"]);
+  const itemManual = createAlpha345OfficialRecipeManual("recipe.items.create_sound_variations");
+  assert.deepEqual(itemManual.required_inputs, ["source_items", "seed"]);
+  assert.match(itemManual.safety, /first Take FX slot/u);
+  assert.equal(itemManual.example_inputs.source_items[0].item_ref, "COPY_FROM_QUERY");
 
   const fallback = createAlpha345DirectTemplateFallbackManual();
   assert.equal(fallback.discover.tool, "list_templates");

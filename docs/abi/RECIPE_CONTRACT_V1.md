@@ -1,7 +1,8 @@
 # Recipe Contract v1
 
 Status: frozen Layer 5 Recipe Contract v1, with bounded Alpha3.4-E0 executable
-draft/revision extension and Alpha3.4-E2 public `call_recipe` runtime reopen.
+draft/revision extension, Alpha3.4-E2 public `call_recipe`, and the authorized
+Alpha3.45 declarative-binding reopen.
 
 ## Purpose
 
@@ -642,6 +643,7 @@ Before any later runtime mutation, validation must cover:
 ```text
 declared recipe inputs and outputs
 stage input / output bindings
+bounded declarative binding expressions and their indirect stage dependencies
 exact dependency kinds and versions
 required capabilities
 risk aggregation across every stage including get_state/checkpoint stages
@@ -661,7 +663,9 @@ risk
 bounded capabilities array
 ```
 
-No defaults or synthesized catalog facts are allowed.
+No defaults or synthesized dependency catalog facts are allowed. Recipe values
+may use the bounded Alpha3.45 declarative expressions below; those expressions
+are immutable recipe content and cannot create or alter catalog authority.
 
 Preflight metadata must assert:
 
@@ -695,6 +699,47 @@ checkpoint evidence returns `checkpoint_evidence_mismatch`.
 
 Content or dependency drift must not retain trust. Missing or incomplete
 runtime facts fail closed using the same typed mismatch reasons.
+
+### Alpha3.45 Declarative Bindings
+
+Every saved Recipe may use the same hash-covered declarative binding path.
+Legacy direct bindings remain `{from,to}`. A computed binding is exactly
+`{expression,to}`. `to` may name one declared stage input, one recipe output,
+or one stage `refs` object through
+`{scope:"stage_refs",id:<stage_id>,port:"refs"}`. Each target remains unique.
+
+Allowed expression operations are fixed to:
+
+```text
+literal input stage local object array get coalesce if
+map flat_map filter lookup_by range length min max
+add sub mul div mod clamp eq join concat seeded_uniform
+```
+
+Expressions are pure JSON value transforms. `input` reads only declared recipe
+inputs; `stage` reads only declared outputs from an earlier stage; `local` is
+lexically scoped to a bounded collection transform. Object keys and `get`
+paths are static. `lookup_by` requires exactly one match. Numeric operations
+require finite values, division/modulo by zero fail, and `seeded_uniform` is a
+deterministic pure transform over an integer seed and index.
+
+The validator rejects unknown operations, dynamic keys/paths, later-stage or
+cyclic references, escaped locals, excessive depth/nodes/bytes/items, and all
+existing raw execution or bypass fields. Runtime evaluation has no I/O,
+dispatcher, runtime-facts, filesystem, code, action, shell, UI, hardware, or
+device authority. A value/type/budget failure stops before that stage dispatch
+with `PREFLIGHT_FAILED`; it cannot fall back to a server-side Recipe profile.
+
+Official Recipes receive no separate evaluator, hydrator, id/source marker, or
+stage-signature privilege. Forking or renaming an otherwise identical validated
+Recipe leaves expression semantics unchanged and only creates the normal new
+content/identity hash.
+
+The otherwise forbidden field name `action` is allowed inside an expression
+only as a static literal token from `create`, `remove`, `update`, `set`, or
+`reuse`, because accepted public Macro schemas use those values as ordinary row
+data. It does not authorize numeric/raw REAPER actions, commands, or dynamic
+action values; the selected Macro/Template schema still validates the result.
 
 ### Discovery And Public Surface
 
@@ -791,7 +836,17 @@ catalog_template_max_count: 512
 catalog_capability_max_count: 512
 catalog_entry_capability_max_count: 32
 dependency_id_max_chars: 96
+expression_max_depth: 16
+expression_max_nodes: 256
+expression_max_bytes: 8192
+expression_collection_max_items: 512
+expression_collection_work_max_items: 16384
 ```
+
+The 256-node ceiling counts the static hash-covered expression graph once. A
+collection body may evaluate that same graph for multiple bounded rows; those
+evaluations consume the separate collection-work ceiling and never increase
+the accepted static graph size.
 
 ### Executable Forbidden Bypass Surfaces
 

@@ -63,11 +63,6 @@ import {
   createAlpha345CombinedExecutableRecipeStore,
   seedAlpha345OfficialExecutableRecipeRevisions,
 } from "./alpha3-45-official-executable-recipes-v1.mjs";
-import {
-  hydrateAlpha345OfficialRecipeStageInputs,
-  matchAlpha345RecipeProfile,
-  prepareAlpha345OfficialRecipeRun,
-} from "./alpha3-45-official-recipe-runtime-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
@@ -563,6 +558,7 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
       source: "official",
       catalog,
     });
+    if (userStore.root === officialStore.root) return null;
     seedAlpha345OfficialExecutableRecipeRevisions(officialStore, { catalog });
     const store = createAlpha345CombinedExecutableRecipeStore({ userStore, officialStore, catalog });
     const dispatchers = createStdioRecipeDispatchers({
@@ -571,17 +567,11 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
       callContext,
     });
     const undoController = createStdioRecipeUndoController({ liveBridge, callContext });
-    const runHydrator = createStdioOfficialRecipeRunHydrator({
-      callTemplateRuntime,
-      callContext,
-    });
     const runtime = createCallRecipeRuntime({
       store,
       catalog,
       dispatchers,
       undoController,
-      runHydrator,
-      stageInputHydrator: hydrateAlpha345OfficialRecipeStageInputs,
       runtimeFactsProvider: createAuthoritativeRuntimeFactsProvider({
         catalog,
         projectInventoryProvider: () => readFreshOpenProjectInventory({
@@ -602,85 +592,6 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
   } catch {
     return null;
   }
-}
-
-export function createStdioOfficialRecipeRunHydrator({ callTemplateRuntime, callContext }) {
-  return async (context = {}) => {
-    let inputs = context.inputs ?? {};
-    if (matchAlpha345RecipeProfile(context.revision)?.id === "profile.items.create_sound_variations"
-      && (inputs.source_items === "current_selection"
-        || !Array.isArray(inputs.source_items)
-        || inputs.source_items.length === 0)) {
-      const selected = await readSelectedRecipeSourceItems({ callTemplateRuntime, callContext });
-      if (!selected.ok) return selected;
-      inputs = { ...inputs, source_items: selected.items };
-    }
-    return prepareAlpha345OfficialRecipeRun({ ...context, inputs });
-  };
-}
-
-async function readSelectedRecipeSourceItems({ callTemplateRuntime, callContext }) {
-  if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
-    return recipeHydrationFailure("OFFICIAL_SELECTION_READER_UNAVAILABLE", "Selected Item hydration is not configured.");
-  }
-  const listed = await callTemplateRuntime.call_template({
-    id: "template.items.list_selected_items",
-    input: { limit: 64, include_track_refs: true },
-    refs: {},
-    context: callContext.allocate(),
-    budget: CALL_RECIPE_STAGE_BUDGET,
-  });
-  const listSummary = listed?.result?.summary;
-  const items = Array.isArray(listSummary?.items) ? listSummary.items : [];
-  if (listed?.ok !== true || listSummary?.truncated === true) {
-    return recipeHydrationFailure("OFFICIAL_SELECTION_READ_FAILED", "Selected Items could not be read completely before the Recipe run.");
-  }
-  if (!Number.isInteger(listSummary?.selected_count) || listSummary.selected_count < 1 || listSummary.selected_count !== items.length) {
-    return recipeHydrationFailure("OFFICIAL_SOURCE_ITEMS_REQUIRED", "Select at least one Item before running the sound-variations Recipe.");
-  }
-
-  const sourceItems = [];
-  for (const selected of items) {
-    const itemRef = selected?.item_ref;
-    if (typeof itemRef !== "string" || !itemRef.startsWith("item:guid:")) {
-      return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_IDENTITY_INVALID", "Selected Item discovery returned a non-canonical Item ref.");
-    }
-    const execution = await callTemplateRuntime.call_template({
-      id: "template.items.read_item_summary",
-      input: { include_take_summary: true },
-      refs: { item_ref: itemRef },
-      context: callContext.allocate(),
-      budget: CALL_RECIPE_STAGE_BUDGET,
-    });
-    const summary = execution?.result?.summary;
-    if (execution?.ok !== true
-      || summary?.item_ref !== itemRef
-      || typeof summary?.track_ref !== "string"
-      || !summary.track_ref.startsWith("track:guid:")
-      || typeof summary?.active_take_ref !== "string"
-      || !summary.active_take_ref.startsWith("take:guid:")
-      || !Number.isFinite(summary?.position_seconds)
-      || summary.position_seconds < 0
-      || !Number.isFinite(summary?.length_seconds)
-      || summary.length_seconds <= 0) {
-      return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_SUMMARY_INVALID", `Selected Item ${itemRef} has no exact Item/Track/Take/timeline summary.`);
-    }
-    sourceItems.push({
-      item_ref: itemRef,
-      take_ref: summary.active_take_ref,
-      track_ref: summary.track_ref,
-      position_seconds: summary.position_seconds,
-      length_seconds: summary.length_seconds,
-    });
-  }
-  if (new Set(sourceItems.map((row) => row.item_ref)).size !== sourceItems.length) {
-    return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_DUPLICATE", "Selected Item hydration returned duplicate Item refs.");
-  }
-  return { ok: true, items: sourceItems };
-}
-
-function recipeHydrationFailure(code, message) {
-  return { ok: false, message, details: { code, zero_write: true } };
 }
 
 function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {

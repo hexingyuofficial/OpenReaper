@@ -516,16 +516,43 @@ export function projectRunFailureEnvelope({
   });
 }
 
-export function resolveStageBindings(stage, bindingValues, recipeInputs) {
+export function resolveStageBindings(stage, bindingValues, recipeInputs, bindings = []) {
   const resolved = {};
   for (const port of stage.inputs ?? []) {
-    if (Object.prototype.hasOwnProperty.call(bindingValues, `${stage.id}:${port}`)) {
+    const expressionBinding = bindings.find((binding) =>
+      isPlainObject(binding?.expression)
+      && binding?.to?.scope === "stage"
+      && binding.to.id === stage.id
+      && binding.to.port === port);
+    if (expressionBinding) {
+      resolved[port] = evaluateExecutableRecipeExpression(expressionBinding.expression, {
+        inputs: recipeInputs,
+        binding_values: bindingValues,
+      });
+    } else if (Object.prototype.hasOwnProperty.call(bindingValues, `${stage.id}:${port}`)) {
       resolved[port] = bindingValues[`${stage.id}:${port}`];
     } else if (Object.prototype.hasOwnProperty.call(recipeInputs, port)) {
       resolved[port] = recipeInputs[port];
     }
   }
   return resolved;
+}
+
+export function resolveStageRefs(stage, bindingValues, recipeInputs, bindings = []) {
+  const expressionBinding = bindings.find((binding) =>
+    isPlainObject(binding?.expression)
+    && binding?.to?.scope === "stage_refs"
+    && binding.to.id === stage.id
+    && binding.to.port === "refs");
+  if (!expressionBinding) return null;
+  const refs = evaluateExecutableRecipeExpression(expressionBinding.expression, {
+    inputs: recipeInputs,
+    binding_values: bindingValues,
+  });
+  if (!isPlainObject(refs)) {
+    throw expressionError("Recipe stage_refs expression must evaluate to an object.", "EXPRESSION_TYPE_INVALID");
+  }
+  return refs;
 }
 
 export function applyBindingsAfterStage(bindings, stage, stageOutputs, bindingValues) {
@@ -556,15 +583,282 @@ export function seedBindingValuesFromInputs(bindings, inputs) {
   return values;
 }
 
-export function collectRecipeOutputs(draft, bindingValues) {
+export function collectRecipeOutputs(draft, bindingValues, recipeInputs = {}) {
   const outputs = [];
   for (const port of draft.outputs ?? []) {
     const key = `recipe_output:${port.id}`;
-    if (Object.prototype.hasOwnProperty.call(bindingValues, key)) {
-      outputs.push({ id: port.id, value: bindingValues[key], verified: true });
+    const expressionBinding = (draft.bindings ?? []).find((binding) =>
+      isPlainObject(binding?.expression)
+      && binding?.to?.scope === "recipe_output"
+      && binding.to.port === port.id);
+    const hasBoundValue = Object.prototype.hasOwnProperty.call(bindingValues, key);
+    if (expressionBinding || hasBoundValue) {
+      const value = expressionBinding
+        ? evaluateExecutableRecipeExpression(expressionBinding.expression, {
+            inputs: recipeInputs,
+            binding_values: bindingValues,
+          })
+        : bindingValues[key];
+      outputs.push({ id: port.id, value, verified: true });
     }
   }
   return outputs;
+}
+
+export function evaluateExecutableRecipeExpression(expression, context = {}) {
+  const budget = { nodes: 0, items: 0, visited_nodes: new WeakSet() };
+  const value = evaluateExpression(expression, {
+    inputs: isPlainObject(context.inputs) ? context.inputs : {},
+    binding_values: isPlainObject(context.binding_values) ? context.binding_values : {},
+    locals: isPlainObject(context.locals) ? context.locals : {},
+    budget,
+    depth: 1,
+  });
+  assertEvaluatedValueBudget(value, budget);
+  return cloneJson(value);
+}
+
+function evaluateExpression(expression, context) {
+  if (isPlainObject(expression) && !context.budget.visited_nodes.has(expression)) {
+    context.budget.visited_nodes.add(expression);
+    context.budget.nodes += 1;
+  }
+  if (context.depth > EXECUTABLE_RECIPE_BUDGETS.expression_max_depth
+    || context.budget.nodes > EXECUTABLE_RECIPE_BUDGETS.expression_max_nodes) {
+    throw expressionError("Recipe expression budget exceeded.", "EXPRESSION_BUDGET_EXCEEDED");
+  }
+  if (!isPlainObject(expression) || typeof expression.op !== "string") {
+    throw expressionError("Recipe expression is invalid.", "EXPRESSION_INVALID");
+  }
+  const child = (value, locals = context.locals) => evaluateExpression(value, {
+    ...context,
+    locals,
+    depth: context.depth + 1,
+  });
+  switch (expression.op) {
+    case "literal":
+      return cloneJson(expression.value);
+    case "input":
+      return context.inputs[expression.id];
+    case "stage": {
+      const key = `${expression.id}:${expression.port}`;
+      if (!Object.prototype.hasOwnProperty.call(context.binding_values, key)) {
+        throw expressionError(`Recipe expression stage output is unavailable: ${key}.`, "EXPRESSION_STAGE_OUTPUT_MISSING");
+      }
+      return context.binding_values[key];
+    }
+    case "local":
+      if (!Object.prototype.hasOwnProperty.call(context.locals, expression.id)) {
+        throw expressionError(`Recipe expression local is unavailable: ${expression.id}.`, "EXPRESSION_LOCAL_MISSING");
+      }
+      return context.locals[expression.id];
+    case "object": {
+      const output = {};
+      for (const [key, nested] of Object.entries(expression.fields ?? {})) {
+        const value = child(nested);
+        if (value !== undefined) output[key] = value;
+      }
+      return output;
+    }
+    case "array": {
+      const items = expression.items ?? [];
+      addExpressionItems(context.budget, items.length);
+      return items.map((item) => child(item));
+    }
+    case "get": {
+      let value = child(expression.value);
+      for (const segment of expression.path ?? []) {
+        if (value == null) return undefined;
+        value = value[segment];
+      }
+      return value;
+    }
+    case "coalesce": {
+      for (const candidate of expression.values ?? []) {
+        const value = child(candidate);
+        if (value !== undefined && value !== null) return value;
+      }
+      return null;
+    }
+    case "if":
+      return child(expression.condition) ? child(expression.then) : child(expression.else);
+    case "map":
+    case "flat_map":
+    case "filter": {
+      const items = requireExpressionArray(child(expression.items), expression.op);
+      addExpressionItems(context.budget, items.length);
+      const output = [];
+      for (const [index, item] of items.entries()) {
+        const locals = { ...context.locals, [expression.as]: item, [expression.index_as]: index };
+        const value = child(expression.body, locals);
+        if (expression.op === "flat_map") {
+          const nested = requireExpressionArray(value, "flat_map body");
+          addExpressionItems(context.budget, nested.length);
+          output.push(...nested);
+        } else if (expression.op === "filter") {
+          if (value) output.push(item);
+        } else {
+          output.push(value);
+        }
+        if (output.length > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+          throw expressionError("Recipe expression collection exceeds its item budget.", "EXPRESSION_BUDGET_EXCEEDED");
+        }
+      }
+      return output;
+    }
+    case "lookup_by": {
+      const items = requireExpressionArray(child(expression.items), "lookup_by");
+      addExpressionItems(context.budget, items.length);
+      const expected = child(expression.value);
+      const matches = items.filter((item) => isPlainObject(item)
+        && Object.hasOwn(item, expression.key)
+        && stableExpressionValue(item[expression.key]) === stableExpressionValue(expected));
+      if (matches.length !== 1) {
+        throw expressionError("Recipe expression lookup_by requires exactly one match.", "EXPRESSION_VALUE_INVALID");
+      }
+      return matches[0];
+    }
+    case "range": {
+      const start = requireSafeInteger(child(expression.start), "range.start");
+      const count = requireSafeInteger(child(expression.count), "range.count");
+      if (count < 0 || count > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+        throw expressionError("Recipe expression range count is outside its budget.", "EXPRESSION_BUDGET_EXCEEDED");
+      }
+      addExpressionItems(context.budget, count);
+      return Array.from({ length: count }, (_, index) => start + index);
+    }
+    case "length": {
+      const value = child(expression.value);
+      if (!Array.isArray(value) && typeof value !== "string") {
+        throw expressionError("Recipe expression length requires an array or string.", "EXPRESSION_TYPE_INVALID");
+      }
+      return value.length;
+    }
+    case "min":
+    case "max": {
+      const source = requireExpressionArray(child(expression.value), expression.op);
+      addExpressionItems(context.budget, source.length);
+      const values = source.map((value) => requireFiniteNumber(value, expression.op));
+      if (values.length === 0) throw expressionError(`Recipe expression ${expression.op} requires values.`, "EXPRESSION_TYPE_INVALID");
+      return expression.op === "min" ? Math.min(...values) : Math.max(...values);
+    }
+    case "add":
+      return numericValues(expression, child).reduce((sum, value) => sum + value, 0);
+    case "sub": {
+      const values = numericValues(expression, child);
+      return values.slice(1).reduce((result, value) => result - value, values[0]);
+    }
+    case "mul":
+      return numericValues(expression, child).reduce((result, value) => result * value, 1);
+    case "div": {
+      const values = numericValues(expression, child);
+      return values.slice(1).reduce((result, value) => {
+        if (value === 0) throw expressionError("Recipe expression division by zero.", "EXPRESSION_VALUE_INVALID");
+        return result / value;
+      }, values[0]);
+    }
+    case "mod": {
+      const values = numericValues(expression, child);
+      if (values[1] === 0) throw expressionError("Recipe expression modulo by zero.", "EXPRESSION_VALUE_INVALID");
+      return values.slice(1).reduce((result, value) => result % value, values[0]);
+    }
+    case "clamp": {
+      const value = requireFiniteNumber(child(expression.value), "clamp.value");
+      const min = requireFiniteNumber(child(expression.min), "clamp.min");
+      const max = requireFiniteNumber(child(expression.max), "clamp.max");
+      if (min > max) throw expressionError("Recipe expression clamp min exceeds max.", "EXPRESSION_VALUE_INVALID");
+      return Math.min(max, Math.max(min, value));
+    }
+    case "eq": {
+      const values = (expression.values ?? []).map((value) => child(value));
+      addExpressionItems(context.budget, values.length);
+      return values.every((value) => stableExpressionValue(value) === stableExpressionValue(values[0]));
+    }
+    case "join": {
+      const values = requireExpressionArray(child(expression.values), "join");
+      addExpressionItems(context.budget, values.length);
+      return values.map((value) => String(value)).join(expression.separator);
+    }
+    case "concat": {
+      const values = (expression.values ?? []).map((value) => child(value));
+      addExpressionItems(context.budget, values.length);
+      if (values.every(Array.isArray)) {
+        addExpressionItems(context.budget, values.reduce((count, value) => count + value.length, 0));
+        return values.flat();
+      }
+      return values.map((value) => String(value)).join("");
+    }
+    case "seeded_uniform": {
+      const seed = requireSafeInteger(child(expression.seed), "seeded_uniform.seed");
+      const index = requireSafeInteger(child(expression.index), "seeded_uniform.index");
+      const min = requireFiniteNumber(child(expression.min), "seeded_uniform.min");
+      const max = requireFiniteNumber(child(expression.max), "seeded_uniform.max");
+      if (min > max) throw expressionError("Recipe expression seeded_uniform min exceeds max.", "EXPRESSION_VALUE_INVALID");
+      const digest = createHash("sha256").update(`${seed}:${index}`).digest();
+      const unit = digest.readUInt32BE(0) / 0xffffffff;
+      return min + ((max - min) * unit);
+    }
+    default:
+      throw expressionError(`Recipe expression op is unsupported: ${expression.op}.`, "EXPRESSION_OP_UNSUPPORTED");
+  }
+}
+
+function numericValues(expression, child) {
+  return (expression.values ?? []).map((value) => requireFiniteNumber(child(value), expression.op));
+}
+
+function requireExpressionArray(value, field) {
+  if (!Array.isArray(value)) throw expressionError(`Recipe expression ${field} requires an array.`, "EXPRESSION_TYPE_INVALID");
+  if (value.length > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+    throw expressionError(`Recipe expression ${field} exceeds its collection budget.`, "EXPRESSION_BUDGET_EXCEEDED");
+  }
+  return value;
+}
+
+function requireFiniteNumber(value, field) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw expressionError(`Recipe expression ${field} requires a finite number.`, "EXPRESSION_TYPE_INVALID");
+  }
+  return value;
+}
+
+function requireSafeInteger(value, field) {
+  if (!Number.isSafeInteger(value)) {
+    throw expressionError(`Recipe expression ${field} requires a safe integer.`, "EXPRESSION_TYPE_INVALID");
+  }
+  return value;
+}
+
+function addExpressionItems(budget, count) {
+  budget.items += count;
+  if (budget.items > EXECUTABLE_RECIPE_BUDGETS.expression_collection_work_max_items) {
+    throw expressionError("Recipe expression total collection work exceeds its budget.", "EXPRESSION_BUDGET_EXCEEDED");
+  }
+}
+
+function assertEvaluatedValueBudget(value, budget) {
+  let encoded;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    throw expressionError("Recipe expression output is not JSON-serializable.", "EXPRESSION_VALUE_INVALID");
+  }
+  if (encoded === undefined || Buffer.byteLength(encoded, "utf8") > EXECUTABLE_RECIPE_BUDGETS.graph_max_bytes) {
+    throw expressionError("Recipe expression output exceeds its byte budget.", "EXPRESSION_BUDGET_EXCEEDED");
+  }
+  if (budget.nodes > EXECUTABLE_RECIPE_BUDGETS.expression_max_nodes) {
+    throw expressionError("Recipe expression node budget exceeded.", "EXPRESSION_BUDGET_EXCEEDED");
+  }
+}
+
+function stableExpressionValue(value) {
+  if (Array.isArray(value)) return `[${value.map(stableExpressionValue).join(",")}]`;
+  if (isPlainObject(value)) return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableExpressionValue(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
+}
+
+function expressionError(message, reason) {
+  return new ExecutableRecipeRunError(message, "PREFLIGHT_FAILED", { reason, zero_write: true });
 }
 
 function normalizeDispatchers(dispatchers = {}) {

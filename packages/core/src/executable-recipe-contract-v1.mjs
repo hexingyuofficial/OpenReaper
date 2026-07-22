@@ -68,7 +68,42 @@ export const EXECUTABLE_RECIPE_BUDGETS = Object.freeze({
   catalog_capability_max_count: 512,
   catalog_entry_capability_max_count: 32,
   dependency_id_max_chars: 96,
+  expression_max_depth: 16,
+  expression_max_nodes: 256,
+  expression_max_bytes: 8_192,
+  expression_collection_max_items: 512,
+  expression_collection_work_max_items: 16_384,
 });
+
+export const EXECUTABLE_RECIPE_EXPRESSION_OPS = Object.freeze([
+  "literal",
+  "input",
+  "stage",
+  "local",
+  "object",
+  "array",
+  "get",
+  "coalesce",
+  "if",
+  "map",
+  "flat_map",
+  "filter",
+  "lookup_by",
+  "range",
+  "length",
+  "min",
+  "max",
+  "add",
+  "sub",
+  "mul",
+  "div",
+  "mod",
+  "clamp",
+  "eq",
+  "join",
+  "concat",
+  "seeded_uniform",
+]);
 
 export const EXECUTABLE_RECIPE_FORBIDDEN_FIELDS = Object.freeze([
   ...RECIPE_FORBIDDEN_RAW_EXECUTION_FIELDS,
@@ -94,6 +129,7 @@ const DEPENDENCY_KIND_SET = new Set(EXECUTABLE_RECIPE_DEPENDENCY_KINDS);
 const FALLBACK_REASON_SET = new Set(EXECUTABLE_RECIPE_TEMPLATE_FALLBACK_REASONS);
 const STAGE_KIND_SET = new Set(EXECUTABLE_RECIPE_STAGE_KINDS);
 const TRUST_REASON_SET = new Set(EXECUTABLE_RECIPE_TRUST_INVALIDATION_REASONS);
+const EXPRESSION_OP_SET = new Set(EXECUTABLE_RECIPE_EXPRESSION_OPS);
 const RISK_SET = new Set(RECIPE_RISKS);
 const RISK_ORDER = new Map(RECIPE_RISKS.map((risk, index) => [risk, index]));
 const FORBIDDEN_FIELD_SET = new Set(EXECUTABLE_RECIPE_FORBIDDEN_FIELDS);
@@ -111,6 +147,7 @@ const RAW_EXECUTION_ID_PATTERNS = Object.freeze([
   /(?:^|[._:-])(?:raw_lua|lua|script|run_shell|shell_command|run_action|action_id|main_oncommand|execute_api|bridge_operation|hardware_io|device_io)(?:[._:-]|$)/i,
   /\b(?:reaper\.|Main_OnCommand|NamedCommandLookup|os\.execute|io\.popen)\b/i,
 ]);
+const SAFE_DECLARATIVE_ACTION_VALUES = new Set(["create", "remove", "update", "set", "reuse"]);
 
 export class ExecutableRecipeContractError extends Error {
   constructor(message, errors = [message]) {
@@ -771,6 +808,7 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
   const fullBindingKeys = new Set();
   const producedOutputs = new Set();
   const boundStageInputs = new Set();
+  let expressionNodes = 0;
 
   for (const [index, binding] of bindings.entries()) {
     const field = `draft.bindings[${index}]`;
@@ -778,15 +816,38 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
       errors.push(`${field} must be an object.`);
       continue;
     }
-    requireExactObjectFields(binding, ["from", "to"], field, errors);
-    validateBindingEndpoint(binding.from, `${field}.from`, inputIds, outputIds, stageIndex, errors, {
-      role: "source",
-    });
+    const expressionBinding = Object.hasOwn(binding, "expression");
+    requireExactObjectFields(binding, expressionBinding ? ["expression", "to"] : ["from", "to"], field, errors);
+    if (expressionBinding) {
+      assertBudget(`${field}.expression`, binding.expression, EXECUTABLE_RECIPE_BUDGETS.expression_max_bytes, errors);
+      const state = { nodes: 0, locals: new Set(), stageRefs: [] };
+      validateExpression(binding.expression, `${field}.expression`, inputIds, stageIndex, errors, state, 1);
+      expressionNodes += state.nodes;
+      if (isPlainObject(binding.to) && ["stage", "stage_refs"].includes(binding.to.scope)) {
+        const consumerPosition = stageIndex.stagePositions.get(binding.to.id);
+        for (const ref of state.stageRefs) {
+          const producerPosition = stageIndex.stagePositions.get(ref.id);
+          if (Number.isInteger(producerPosition) && Number.isInteger(consumerPosition) && producerPosition >= consumerPosition) {
+            errors.push(`${field}.expression stage producer ${ref.id} must be declared before consumer ${binding.to.id}.`);
+          }
+          if (Number.isInteger(producerPosition) && Number.isInteger(consumerPosition)) {
+            const fromNode = `stage:${ref.id}`;
+            const toNode = `stage:${binding.to.id}`;
+            if (!graph.has(fromNode)) graph.set(fromNode, new Set());
+            graph.get(fromNode).add(toNode);
+          }
+        }
+      }
+    } else {
+      validateBindingEndpoint(binding.from, `${field}.from`, inputIds, outputIds, stageIndex, errors, {
+        role: "source",
+      });
+    }
     validateBindingEndpoint(binding.to, `${field}.to`, inputIds, outputIds, stageIndex, errors, {
       role: "target",
     });
 
-    if (isPlainObject(binding.from) && isPlainObject(binding.to)) {
+    if (!expressionBinding && isPlainObject(binding.from) && isPlainObject(binding.to)) {
       const fullKey = `${endpointPortKey(binding.from) ?? "from"}->${endpointPortKey(binding.to) ?? "to"}`;
       if (fullBindingKeys.has(fullKey)) {
         errors.push(`${field} is a duplicate full binding.`);
@@ -810,7 +871,7 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
       }
     }
 
-    if (isPlainObject(binding.from) && isPlainObject(binding.to)) {
+    if (!expressionBinding && isPlainObject(binding.from) && isPlainObject(binding.to)) {
       if (binding.from.scope === "stage" && binding.to.scope === "stage") {
         const producerPosition = stageIndex.stagePositions.get(binding.from.id);
         const consumerPosition = stageIndex.stagePositions.get(binding.to.id);
@@ -833,6 +894,10 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
     }
   }
 
+  if (expressionNodes > EXECUTABLE_RECIPE_BUDGETS.expression_max_nodes) {
+    errors.push(`draft.bindings expressions may contain at most ${EXECUTABLE_RECIPE_BUDGETS.expression_max_nodes} nodes.`);
+  }
+
   for (const [stageId, inputs] of stageIndex.stageInputs.entries()) {
     for (const port of inputs) {
       const key = `${stageId}:${port}`;
@@ -853,13 +918,250 @@ function validateBindings(bindings, inputIds, outputIds, stageIndex, errors) {
   }
 }
 
+function validateExpression(expression, field, inputIds, stageIndex, errors, state, depth) {
+  state.nodes += 1;
+  if (depth > EXECUTABLE_RECIPE_BUDGETS.expression_max_depth) {
+    errors.push(`${field} exceeds expression depth ${EXECUTABLE_RECIPE_BUDGETS.expression_max_depth}.`);
+    return;
+  }
+  if (!isPlainObject(expression)) {
+    errors.push(`${field} must be an expression object.`);
+    return;
+  }
+  const op = expression.op;
+  if (!EXPRESSION_OP_SET.has(op)) {
+    errors.push(`${field}.op is unknown or forbidden: ${String(op)}.`);
+    return;
+  }
+  const child = (value, suffix, locals = state.locals) => {
+    const childState = { nodes: 0, locals, stageRefs: state.stageRefs };
+    validateExpression(
+      value,
+      `${field}.${suffix}`,
+      inputIds,
+      stageIndex,
+      errors,
+      childState,
+      depth + 1,
+    );
+    state.nodes += childState.nodes;
+  };
+  const exact = (fields) => requireExactObjectFields(expression, ["op", ...fields], field, errors);
+  switch (op) {
+    case "literal":
+      exact(["value"]);
+      validateLiteral(expression.value, `${field}.value`, errors);
+      break;
+    case "input":
+      exact(["id"]);
+      validateIdentifier(expression.id, `${field}.id`, errors);
+      if (!inputIds.has(expression.id)) errors.push(`${field}.id references unknown recipe input: ${String(expression.id)}.`);
+      break;
+    case "stage":
+      exact(["id", "port"]);
+      validateIdentifier(expression.id, `${field}.id`, errors);
+      validateIdentifier(expression.port, `${field}.port`, errors);
+      if (!stageIndex.stageIds.has(expression.id)) errors.push(`${field}.id references unknown stage: ${String(expression.id)}.`);
+      else if (!stageIndex.stageOutputs.get(expression.id)?.has(expression.port)) {
+        errors.push(`${field}.port must be a declared output of stage ${String(expression.id)}.`);
+      }
+      state.stageRefs.push({ id: expression.id, port: expression.port });
+      break;
+    case "local":
+      exact(["id"]);
+      validateIdentifier(expression.id, `${field}.id`, errors);
+      if (!state.locals.has(expression.id)) errors.push(`${field}.id references an out-of-scope local: ${String(expression.id)}.`);
+      break;
+    case "object": {
+      exact(["fields"]);
+      if (!isPlainObject(expression.fields)) {
+        errors.push(`${field}.fields must be an object.`);
+        break;
+      }
+      for (const [key, value] of Object.entries(expression.fields)) {
+        if (!IDENTIFIER_PATTERN.test(key) || ["__proto__", "constructor", "prototype"].includes(key)) {
+          errors.push(`${field}.fields has invalid static key: ${key}.`);
+        }
+        child(value, `fields.${key}`);
+      }
+      break;
+    }
+    case "array":
+      exact(["items"]);
+      if (!Array.isArray(expression.items)) errors.push(`${field}.items must be an array.`);
+      else {
+        if (expression.items.length > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+          errors.push(`${field}.items exceeds ${EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items} items.`);
+        }
+        expression.items.forEach((value, index) => child(value, `items[${index}]`));
+      }
+      break;
+    case "get":
+      exact(["value", "path"]);
+      child(expression.value, "value");
+      validateExpressionPath(expression.path, `${field}.path`, errors);
+      break;
+    case "coalesce":
+      exact(["values"]);
+      validateExpressionArray(expression.values, `${field}.values`, child, errors, 1);
+      break;
+    case "if":
+      exact(["condition", "then", "else"]);
+      child(expression.condition, "condition");
+      child(expression.then, "then");
+      child(expression.else, "else");
+      break;
+    case "map":
+    case "flat_map":
+    case "filter": {
+      exact(["items", "as", "index_as", "body"]);
+      child(expression.items, "items");
+      validateIdentifier(expression.as, `${field}.as`, errors);
+      validateIdentifier(expression.index_as, `${field}.index_as`, errors);
+      if (expression.as === expression.index_as) errors.push(`${field}.as and index_as must differ.`);
+      const locals = new Set(state.locals);
+      if (typeof expression.as === "string") locals.add(expression.as);
+      if (typeof expression.index_as === "string") locals.add(expression.index_as);
+      child(expression.body, "body", locals);
+      break;
+    }
+    case "lookup_by":
+      exact(["items", "key", "value"]);
+      child(expression.items, "items");
+      validateIdentifier(expression.key, `${field}.key`, errors);
+      if (["__proto__", "constructor", "prototype"].includes(expression.key)) {
+        errors.push(`${field}.key must be a safe own-property key.`);
+      }
+      child(expression.value, "value");
+      break;
+    case "range":
+      exact(["start", "count"]);
+      child(expression.start, "start");
+      child(expression.count, "count");
+      break;
+    case "length":
+    case "min":
+    case "max":
+      exact(["value"]);
+      child(expression.value, "value");
+      break;
+    case "add":
+    case "sub":
+    case "mul":
+    case "div":
+    case "mod":
+    case "eq":
+    case "concat":
+      exact(["values"]);
+      validateExpressionArray(expression.values, `${field}.values`, child, errors, 2);
+      break;
+    case "clamp":
+      exact(["value", "min", "max"]);
+      child(expression.value, "value");
+      child(expression.min, "min");
+      child(expression.max, "max");
+      break;
+    case "join":
+      exact(["values", "separator"]);
+      child(expression.values, "values");
+      if (typeof expression.separator !== "string" || expression.separator.length > 64) {
+        errors.push(`${field}.separator must be a string of at most 64 characters.`);
+      }
+      break;
+    case "seeded_uniform":
+      exact(["seed", "index", "min", "max"]);
+      child(expression.seed, "seed");
+      child(expression.index, "index");
+      child(expression.min, "min");
+      child(expression.max, "max");
+      break;
+  }
+}
+
+function validateExpressionArray(values, field, child, errors, minLength) {
+  if (!Array.isArray(values)) {
+    errors.push(`${field} must be an array.`);
+    return;
+  }
+  if (values.length < minLength) errors.push(`${field} must contain at least ${minLength} expressions.`);
+  if (values.length > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+    errors.push(`${field} exceeds ${EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items} items.`);
+  }
+  values.forEach((value, index) => child(value, `values[${index}]`));
+}
+
+function validateExpressionPath(path, field, errors) {
+  if (!Array.isArray(path) || path.length === 0 || path.length > 16) {
+    errors.push(`${field} must contain 1 to 16 static path segments.`);
+    return;
+  }
+  for (const segment of path) {
+    if ((typeof segment !== "string" && !Number.isSafeInteger(segment))
+      || segment === "__proto__" || segment === "constructor" || segment === "prototype") {
+      errors.push(`${field} contains an invalid or dynamic path segment.`);
+    }
+  }
+}
+
+function validateLiteral(value, field, errors) {
+  const state = { items: 0 };
+  validateLiteralValue(value, field, errors, state, 1);
+  try {
+    const encoded = JSON.stringify(value);
+    if (encoded === undefined) errors.push(`${field} must be JSON-serializable.`);
+    else if (Buffer.byteLength(encoded, "utf8") > EXECUTABLE_RECIPE_BUDGETS.expression_max_bytes) {
+      errors.push(`${field} exceeds ${EXECUTABLE_RECIPE_BUDGETS.expression_max_bytes} bytes.`);
+    }
+  } catch {
+    errors.push(`${field} must be JSON-serializable.`);
+  }
+}
+
+function validateLiteralValue(value, field, errors, state, depth) {
+  if (depth > EXECUTABLE_RECIPE_BUDGETS.expression_max_depth) {
+    errors.push(`${field} exceeds literal depth ${EXECUTABLE_RECIPE_BUDGETS.expression_max_depth}.`);
+    return;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) errors.push(`${field} must contain only finite JSON numbers.`);
+    return;
+  }
+  if (Array.isArray(value)) {
+    state.items += value.length;
+    if (state.items > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+      errors.push(`${field} exceeds ${EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items} literal collection items.`);
+      return;
+    }
+    value.forEach((entry, index) => validateLiteralValue(entry, `${field}[${index}]`, errors, state, depth + 1));
+    return;
+  }
+  if (isPlainObject(value)) {
+    const entries = Object.entries(value);
+    state.items += entries.length;
+    if (state.items > EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items) {
+      errors.push(`${field} exceeds ${EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items} literal collection items.`);
+      return;
+    }
+    for (const [key, entry] of entries) {
+      if (["__proto__", "constructor", "prototype"].includes(key)) {
+        errors.push(`${field} contains an invalid literal object key.`);
+        continue;
+      }
+      validateLiteralValue(entry, `${field}.${key}`, errors, state, depth + 1);
+    }
+    return;
+  }
+  errors.push(`${field} must contain only JSON values.`);
+}
+
 function validateBindingEndpoint(endpoint, field, inputIds, outputIds, stageIndex, errors, options = {}) {
   if (!isPlainObject(endpoint)) {
     errors.push(`${field} must be an object.`);
     return;
   }
   requireExactObjectFields(endpoint, ["scope", "id", "port"], field, errors);
-  if (!["recipe_input", "recipe_output", "stage"].includes(endpoint.scope)) {
+  if (!["recipe_input", "recipe_output", "stage", "stage_refs"].includes(endpoint.scope)) {
     errors.push(`${field}.scope is invalid: ${String(endpoint.scope)}.`);
     return;
   }
@@ -875,6 +1177,12 @@ function validateBindingEndpoint(endpoint, field, inputIds, outputIds, stageInde
     if (options.role === "source") errors.push(`${field} cannot source recipe_output.`);
     if (endpoint.id !== null) errors.push(`${field}.id must be null for recipe_output.`);
     if (!outputIds.has(endpoint.port)) errors.push(`${field}.port references unknown recipe output: ${endpoint.port}.`);
+    return;
+  }
+  if (endpoint.scope === "stage_refs") {
+    if (options.role === "source") errors.push(`${field} cannot source stage_refs.`);
+    if (!stageIndex.stageIds.has(endpoint.id)) errors.push(`${field}.id references unknown stage: ${String(endpoint.id)}.`);
+    if (endpoint.port !== "refs") errors.push(`${field}.port must be refs for stage_refs.`);
     return;
   }
 
@@ -1350,6 +1658,9 @@ function endpointPortKey(endpoint) {
   if (endpoint.scope === "stage" && typeof endpoint.id === "string") {
     return `stage:${endpoint.id}:${endpoint.port}`;
   }
+  if (endpoint.scope === "stage_refs" && typeof endpoint.id === "string") {
+    return `stage_refs:${endpoint.id}:refs`;
+  }
   if (endpoint.scope === "recipe_output") return `output:${endpoint.port}`;
   if (endpoint.scope === "recipe_input") return `input:${endpoint.port}`;
   return null;
@@ -1453,11 +1764,20 @@ function rejectForbiddenFields(value, errors, path) {
   if (!isPlainObject(value)) return;
   for (const [key, nested] of Object.entries(value)) {
     const nestedPath = `${path}.${key}`;
-    if (FORBIDDEN_FIELD_SET.has(key)) {
+    if (FORBIDDEN_FIELD_SET.has(key) && !isSafeDeclarativeActionField(path, key, nested)) {
       errors.push(`${nestedPath} is a forbidden raw execution or bypass field.`);
     }
     rejectForbiddenFields(nested, errors, nestedPath);
   }
+}
+
+function isSafeDeclarativeActionField(path, key, value) {
+  if (key !== "action" || !path.includes(".expression")) return false;
+  if (typeof value === "string") return SAFE_DECLARATIVE_ACTION_VALUES.has(value);
+  return isPlainObject(value)
+    && value.op === "literal"
+    && SAFE_DECLARATIVE_ACTION_VALUES.has(value.value)
+    && Object.keys(value).length === 2;
 }
 
 function requireExactObjectFields(object, fields, objectName, errors) {
@@ -1517,6 +1837,7 @@ function validateStringArray(values, field, errors, options = {}) {
 function endpointNode(endpoint) {
   if (!isPlainObject(endpoint)) return null;
   if (endpoint.scope === "stage") return `stage:${endpoint.id}`;
+  if (endpoint.scope === "stage_refs") return `stage:${endpoint.id}`;
   if (endpoint.scope === "recipe_input") return `input:${endpoint.port}`;
   if (endpoint.scope === "recipe_output") return `output:${endpoint.port}`;
   return null;

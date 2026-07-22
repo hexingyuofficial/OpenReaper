@@ -736,6 +736,7 @@ function batchRowChange(row, { status, mutation, readback, index, code, fields }
     fields,
     fx_ref: row.fx_ref,
     param_index: row.param_index,
+    normalized_value: row.normalized_value,
   });
 }
 

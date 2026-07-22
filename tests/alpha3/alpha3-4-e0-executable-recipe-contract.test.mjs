@@ -19,6 +19,9 @@ import {
   validateExecutableRecipeRevision,
 } from "../../packages/core/src/executable-recipe-contract-v1.mjs";
 import {
+  evaluateExecutableRecipeExpression,
+} from "../../packages/core/src/executable-recipe-run-v1.mjs";
+import {
   RECIPE_CONTRACT,
   normalizeRecipeContract,
   validateRecipeContract,
@@ -328,6 +331,133 @@ describe("Alpha3.4-E0 executable recipe revision contract", () => {
     assert.match(
       validateExecutableRecipeDraft(duplicateResume, { catalog }).errors.join("\n"),
       /Duplicate checkpoint resume_identity/,
+    );
+  });
+
+  it("validates hash-covered bounded expressions for every saved Recipe", () => {
+    const catalog = makeCatalog();
+    const draft = makeDraft();
+    draft.bindings[0] = {
+      expression: {
+        op: "coalesce",
+        values: [
+          { op: "input", id: "track_name" },
+          { op: "literal", value: "Dialog" },
+        ],
+      },
+      to: { scope: "stage", id: "run_macro", port: "track_name" },
+    };
+    assert.equal(validateExecutableRecipeDraft(draft, { catalog }).ok, true);
+    const firstHash = hashExecutableRecipeContent(draft, { catalog });
+    draft.bindings[0].expression.values[1].value = "Voice";
+    assert.notEqual(hashExecutableRecipeContent(draft, { catalog }), firstHash);
+
+    const withRefs = structuredClone(draft);
+    withRefs.bindings.push({
+      expression: { op: "object", fields: { track_ref: { op: "literal", value: "track:guid:{TRACK}" } } },
+      to: { scope: "stage_refs", id: "readback", port: "refs" },
+    });
+    assert.equal(validateExecutableRecipeDraft(withRefs, { catalog }).ok, true);
+    withRefs.bindings.push(structuredClone(withRefs.bindings.at(-1)));
+    assert.match(validateExecutableRecipeDraft(withRefs, { catalog }).errors.join("\n"), /duplicate input target/);
+
+    const safeAction = structuredClone(draft);
+    safeAction.bindings[0].expression = {
+      op: "object",
+      fields: { action: { op: "literal", value: "create" } },
+    };
+    assert.equal(validateExecutableRecipeDraft(safeAction, { catalog }).ok, true);
+    safeAction.bindings[0].expression.fields.action.value = "raw-action:40044";
+    assert.match(validateExecutableRecipeDraft(safeAction, { catalog }).errors.join("\n"), /forbidden raw execution or bypass field/);
+
+    const unknown = structuredClone(draft);
+    unknown.bindings[0].expression = { op: "execute", value: "anything" };
+    assert.match(validateExecutableRecipeDraft(unknown, { catalog }).errors.join("\n"), /unknown or forbidden/);
+
+    const dynamicPath = structuredClone(draft);
+    dynamicPath.bindings[0].expression = {
+      op: "get",
+      value: { op: "input", id: "track_name" },
+      path: [{ op: "input", id: "track_name" }],
+    };
+    assert.match(validateExecutableRecipeDraft(dynamicPath, { catalog }).errors.join("\n"), /invalid or dynamic path/);
+
+    const unsafeLookup = structuredClone(draft);
+    unsafeLookup.bindings[0].expression = {
+      op: "lookup_by",
+      items: { op: "array", items: [] },
+      key: "constructor",
+      value: { op: "literal", value: "anything" },
+    };
+    assert.match(validateExecutableRecipeDraft(unsafeLookup, { catalog }).errors.join("\n"), /safe own-property key/);
+
+    const futureStage = structuredClone(draft);
+    futureStage.bindings[0].expression = { op: "stage", id: "readback", port: "track_ref" };
+    assert.match(validateExecutableRecipeDraft(futureStage, { catalog }).errors.join("\n"), /must be declared before consumer/);
+
+    const tooDeep = structuredClone(draft);
+    let expression = { op: "literal", value: "Dialog" };
+    for (let index = 0; index < EXECUTABLE_RECIPE_BUDGETS.expression_max_depth + 1; index += 1) {
+      expression = { op: "coalesce", values: [expression] };
+    }
+    tooDeep.bindings[0].expression = expression;
+    assert.match(validateExecutableRecipeDraft(tooDeep, { catalog }).errors.join("\n"), /exceeds expression depth/);
+
+    const tooManyNodes = structuredClone(draft);
+    tooManyNodes.bindings[0].expression = {
+      op: "array",
+      items: Array.from(
+        { length: EXECUTABLE_RECIPE_BUDGETS.expression_max_nodes },
+        () => ({ op: "literal", value: 1 }),
+      ),
+    };
+    assert.match(validateExecutableRecipeDraft(tooManyNodes, { catalog }).errors.join("\n"), /at most 256 nodes/);
+
+    const literalAtLimit = structuredClone(draft);
+    literalAtLimit.bindings[0].expression = {
+      op: "literal",
+      value: Array.from({ length: EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items }, () => null),
+    };
+    assert.equal(validateExecutableRecipeDraft(literalAtLimit, { catalog }).ok, true);
+    literalAtLimit.bindings[0].expression.value.push(null);
+    assert.match(validateExecutableRecipeDraft(literalAtLimit, { catalog }).errors.join("\n"), /exceeds 512 literal collection items/);
+
+    const seeded = {
+      op: "seeded_uniform",
+      seed: { op: "literal", value: 17 },
+      index: { op: "literal", value: 2 },
+      min: { op: "literal", value: -1 },
+      max: { op: "literal", value: 1 },
+    };
+    assert.equal(evaluateExecutableRecipeExpression(seeded), evaluateExecutableRecipeExpression(seeded));
+    assert.throws(
+      () => evaluateExecutableRecipeExpression({
+        op: "range",
+        start: { op: "literal", value: 0 },
+        count: { op: "literal", value: EXECUTABLE_RECIPE_BUDGETS.expression_collection_max_items + 1 },
+      }),
+      /outside its budget/,
+    );
+
+    const aggregateWork = (innerCount) => ({
+      op: "map",
+      items: {
+        op: "range",
+        start: { op: "literal", value: 0 },
+        count: { op: "literal", value: 512 },
+      },
+      as: "row",
+      index_as: "row_index",
+      body: {
+        op: "join",
+        values: { op: "literal", value: Array.from({ length: innerCount }, () => "x") },
+        separator: "",
+      },
+    });
+    assert.equal(evaluateExecutableRecipeExpression(aggregateWork(30)).length, 512);
+    assert.throws(
+      () => evaluateExecutableRecipeExpression(aggregateWork(31)),
+      /total collection work exceeds its budget/,
     );
   });
 

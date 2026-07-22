@@ -34,6 +34,7 @@ import {
   projectRunSuccessEnvelope,
   rejectInlineExecutionPayload,
   resolveStageBindings,
+  resolveStageRefs,
   seedBindingValuesFromInputs,
 } from "../../core/src/executable-recipe-run-v1.mjs";
 import {
@@ -781,13 +782,27 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       });
     }
 
-    const resolvedStageInputs = resolveStageBindings(stage, bindingValues, inputs);
+    let resolvedStageInputs;
+    let resolvedStageRefs;
     let hydratedStage;
     try {
+      resolvedStageInputs = resolveStageBindings(
+        stage,
+        bindingValues,
+        inputs,
+        revision.draft.bindings,
+      );
+      resolvedStageRefs = resolveStageRefs(
+        stage,
+        bindingValues,
+        inputs,
+        revision.draft.bindings,
+      );
       hydratedStage = await hydrateRecipeStage(options.stageInputHydrator, {
         stage,
         revision,
         inputs: resolvedStageInputs,
+        refs: resolvedStageRefs,
         recipe_inputs: inputs,
         binding_values: bindingValues,
         runtime_facts: runtimeFacts,
@@ -965,7 +980,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
 
-  const verifiedOutputs = collectRecipeOutputs(revision.draft, bindingValues);
+  const verifiedOutputs = collectRecipeOutputs(revision.draft, bindingValues, inputs);
   const runSummary = buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth: successMutationTruth });
   const evidenceRef = createExecutableRecipeEvidenceRef(runId, 0);
   options.evidenceStore.put(evidenceRef, {
@@ -1401,11 +1416,7 @@ function findNamedValue(value, key, depth = 0) {
 function provenMacroChanges(stage, changes) {
   if (!Array.isArray(changes)) return [];
   return changes
-    .filter((change) => isPlainObject(change) && change.status === "applied" && (
-      change.live_readback?.status === "passed"
-      || change.mutation?.verification_status === "passed"
-      || change.verification?.status === "passed"
-    ) && change.mutation?.status !== "not_run")
+    .filter(isProvenMacroChange)
     .slice(0, EXECUTABLE_RECIPE_RUN_BUDGETS.partial_change_max_count)
     .map((change) => ({
       stage_id: stage.id,
@@ -1413,6 +1424,21 @@ function provenMacroChanges(stage, changes) {
       dependency_id: stage.dependency?.id ?? null,
       change: cloneJson(change),
     }));
+}
+
+function isProvenMacroChange(change) {
+  return isPlainObject(change) && (
+    (change.status === "applied" && (
+      change.live_readback?.status === "passed"
+      || change.mutation?.verification_status === "passed"
+      || change.verification?.status === "passed"
+    ) && (
+      change.mutation === undefined
+      || change.mutation?.status === undefined
+      || change.mutation.status === "completed"
+    ))
+    || (change.status === "ok" && change.mutation === "done" && change.readback === "pass")
+  );
 }
 
 function explicitMacroZeroWrite(outcome) {
@@ -1814,7 +1840,9 @@ function provenNativeMutationCount(stage, outcome, normalized) {
   if (stage.risk === "read") return 0;
   const explicit = outcome?.result?.data?.outcome?.mutation?.completed_count;
   if (Number.isSafeInteger(explicit) && explicit >= 0 && normalized.verified === true) return explicit;
-  if (stage.kind === "macro") return normalized.proven_changes.length;
+  if (stage.kind === "macro") return Array.isArray(outcome?.result?.changes)
+    ? outcome.result.changes.filter(isProvenMacroChange).length
+    : normalized.proven_changes.length;
   if (stage.kind === "template" && normalized.verified === true) return 1;
   return 0;
 }
@@ -1823,7 +1851,9 @@ function acceptedReadbackCount(stage, outcome, normalized) {
   const explicit = outcome?.result?.data?.outcome?.live_readback?.passed_count;
   if (Number.isSafeInteger(explicit) && explicit >= 0 && normalized.verified === true) return explicit;
   if (normalized.verified !== true) return 0;
-  if (stage.kind === "macro") return Math.max(1, normalized.proven_changes.length);
+  if (stage.kind === "macro") return Math.max(1, Array.isArray(outcome?.result?.changes)
+    ? outcome.result.changes.filter(isProvenMacroChange).length
+    : normalized.proven_changes.length);
   return 1;
 }
 
@@ -2112,7 +2142,7 @@ function sameRuntimeBinding(current, retained) {
 
 async function hydrateRecipeStage(hydrator, context) {
   if (typeof hydrator !== "function") {
-    return { ok: true, inputs: cloneJson(context.inputs ?? {}), refs: null };
+    return { ok: true, inputs: cloneJson(context.inputs ?? {}), refs: cloneJson(context.refs ?? null) };
   }
   const result = await hydrator(freeze(cloneJson(context)));
   if (!isPlainObject(result) || result.ok === false) {
@@ -2129,7 +2159,7 @@ async function hydrateRecipeStage(hydrator, context) {
       details: { code: "STAGE_HYDRATION_INPUTS_INVALID" },
     };
   }
-  const refs = result.refs;
+  const refs = result.refs ?? context.refs;
   if (refs != null && !isPlainObject(refs) && !Array.isArray(refs)) {
     return {
       ok: false,

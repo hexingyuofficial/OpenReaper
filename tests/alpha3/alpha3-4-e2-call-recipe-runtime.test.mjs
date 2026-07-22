@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -28,7 +28,6 @@ import {
 import {
   CALL_RECIPE_STAGE_BUDGET,
   createStdioCallRecipeRuntime,
-  createStdioOfficialRecipeRunHydrator,
   createStdioRecipeUndoController,
   readFreshOpenProjectInventory,
 } from "../../packages/mcp-server/src/openreaper-mcp-stdio.mjs";
@@ -38,11 +37,28 @@ import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/sr
 import { CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { CALL_TEMPLATE_INTERNAL_RECIPE_UNDO } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
-import { createAlpha345OfficialExecutableRecipeRevisions } from "../../packages/mcp-server/src/alpha3-45-official-executable-recipes-v1.mjs";
 
 const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 
 describe("Alpha3.4-E2 call_recipe runtime", () => {
+  it("fails closed before official seeding when user and official Recipe roots resolve identically", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-root-collision-"));
+    const sentinel = path.join(root, "user-sentinel.recipe.json");
+    writeFileSync(sentinel, "user-owned\n", "utf8");
+    try {
+      const binding = createStdioCallRecipeRuntime({
+        env: {
+          OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
+          OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT: path.join(root, "."),
+        },
+      });
+      assert.equal(binding, null);
+      assert.equal(readFileSync(sentinel, "utf8"), "user-owned\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("registers exactly six public tools including call_recipe and preserves product counts", () => {
     assert.deepEqual([...TOOL_ABI_V1_TOOL_NAMES].sort(), [
       "call_recipe",
@@ -579,6 +595,85 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(failed.proven_partial_changes[0].change.status, "applied");
     assert.equal(failed.proven_partial_changes[0].change.live_readback.status, "passed");
     assert.equal(templateCalls, 0);
+  });
+
+  it("retains compact ok/pass Macro changes as proven mutation truth", async () => {
+    const { runtime } = makeRuntime({
+      dispatchers: {
+        macro: async () => {
+          const envelope = macroPartialFailureEnvelope();
+          envelope.result.changes = [{
+            kind: "item.variation",
+            id: "variation-1",
+            status: "ok",
+            mutation: "done",
+            readback: "pass",
+          }];
+          for (let i = 0; i < 4; i += 1) {
+            envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+          }
+          return envelope;
+        },
+        template: async () => templateEnvelope({ track_ref: "track:index:0" }),
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.proven_partial_changes.length, 1, JSON.stringify(failed));
+    assert.equal(failed.proven_partial_changes[0].change.status, "ok");
+    assert.equal(failed.proven_partial_changes[0].change.readback, "pass");
+    assert.equal(failed.execution_truth.native_mutation_count, 0, "the fixture Macro stage is read-only; proven rows still remain explicit");
+
+    const skipped = macroPartialFailureEnvelope();
+    skipped.result.changes = [{
+      kind: "item.variation",
+      id: "variation-skipped",
+      status: "ok",
+      mutation: "skip",
+      readback: "pass",
+    }];
+    for (let i = 0; i < 4; i += 1) {
+      skipped.budget.actual_bytes = Buffer.byteLength(JSON.stringify(skipped), "utf8");
+    }
+    const second = makeRuntime({ dispatchers: { macro: async () => skipped } });
+    const secondSaved = await saveFixture(second.runtime);
+    const skippedFailure = await second.runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(secondSaved),
+      inputs: { track_name: "Dialog" },
+    });
+    assert.deepEqual(skippedFailure.proven_partial_changes, []);
+    assert.equal(skippedFailure.execution_truth.native_mutation_count, 0);
+  });
+
+  it("rejects full-row readback claims when mutation truth is not completed", async () => {
+    for (const status of ["failed", "unknown_or_partial", "pending", "not_run"]) {
+      const envelope = macroPartialFailureEnvelope();
+      envelope.result.changes = [{
+        kind: "project.index.refresh",
+        status: "applied",
+        mutation: { status },
+        live_readback: { status: "passed" },
+      }];
+      for (let i = 0; i < 4; i += 1) {
+        envelope.budget.actual_bytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
+      }
+      const { runtime } = makeRuntime({ dispatchers: { macro: async () => envelope } });
+      const saved = await saveFixture(runtime);
+      const failed = await runtime.call_recipe({
+        operation: "run",
+        ...exactIdentity(saved),
+        inputs: { track_name: "Dialog" },
+      });
+      assert.deepEqual(failed.proven_partial_changes, [], status);
+      assert.equal(failed.execution_truth.native_mutation_count, 0, status);
+    }
   });
 
   it("fails closed on trust drift and zero-write preflight failures", async () => {
@@ -1499,78 +1594,6 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         failure.name,
       );
     }
-  });
-
-  it("hydrates a user-owned Recipe 04 fork from exact selected Item summaries before any write", async () => {
-    const revision = createAlpha345OfficialExecutableRecipeRevisions().find((entry) => (
-      entry.recipe_id === "recipe.items.create_sound_variations"
-    ));
-    const userFork = structuredClone(revision);
-    userFork.recipe_id = "recipe.user.selected_item_variations";
-    userFork.draft.id = userFork.recipe_id;
-    const calls = [];
-    let sequence = 0;
-    const sourceRows = [
-      {
-        item_ref: "item:guid:{SELECTED-1}",
-        track_ref: "track:guid:{TRACK-1}",
-        active_take_ref: "take:guid:{TAKE-1}",
-        position_seconds: 1.25,
-        length_seconds: 0.75,
-      },
-      {
-        item_ref: "item:guid:{SELECTED-2}",
-        track_ref: "track:guid:{TRACK-2}",
-        active_take_ref: "take:guid:{TAKE-2}",
-        position_seconds: 1.5,
-        length_seconds: 1,
-      },
-    ];
-    const hydrator = createStdioOfficialRecipeRunHydrator({
-      callContext: { allocate: () => ({ request_sequence: ++sequence }) },
-      callTemplateRuntime: {
-        async call_template(request) {
-          calls.push(request);
-          if (request.id === "template.items.list_selected_items") {
-            return {
-              ok: true,
-              result: {
-                summary: {
-                  selected_count: sourceRows.length,
-                  truncated: false,
-                  items: sourceRows.map(({ item_ref, track_ref, position_seconds, length_seconds }) => ({
-                    item_ref, track_ref, position_seconds, length_seconds,
-                  })),
-                },
-              },
-            };
-          }
-          const itemRef = request.refs.item_ref;
-          return { ok: true, result: { summary: sourceRows.find((row) => row.item_ref === itemRef) } };
-        },
-      },
-    });
-    const hydrated = await hydrator({
-      revision: userFork,
-      source: "user",
-      inputs: { source_items: "current_selection", variation_count: 2 },
-      runtime_facts: { project_identity: "project:tab:fixture", bridge_owner: "owner:fixture", bridge_generation: "1" },
-    });
-    assert.equal(hydrated.ok, true, JSON.stringify(hydrated));
-    assert.deepEqual(hydrated.inputs.source_items, sourceRows.map((row) => ({
-      item_ref: row.item_ref,
-      take_ref: row.active_take_ref,
-      track_ref: row.track_ref,
-      position_seconds: row.position_seconds,
-      length_seconds: row.length_seconds,
-    })));
-    assert.deepEqual(calls.map((call) => call.id), [
-      "template.items.list_selected_items",
-      "template.items.read_item_summary",
-      "template.items.read_item_summary",
-    ]);
-    assert.equal(calls.every((call) => call.budget === CALL_RECIPE_STAGE_BUDGET), true);
-    assert.equal(new Set(calls.map((call) => call.context.request_sequence)).size, calls.length);
   });
 
   it("uses fresh server-owned context and a fixed budget for every stdio Recipe stage", async () => {

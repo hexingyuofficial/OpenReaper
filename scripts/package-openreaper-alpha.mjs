@@ -330,7 +330,8 @@ async function copyOpenReaperKernel() {
     recursive: true,
     filter: packageFilter,
   });
-  await cp(path.join(repoRoot, "recipes"), path.join(target, "recipes"), {
+  // Historical agent-stepped recipes remain source/test fixtures, not package content.
+  await cp(path.join(repoRoot, "recipes", "user"), path.join(target, "recipes", "user"), {
     recursive: true,
     filter: packageFilter,
   });

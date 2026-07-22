@@ -39,6 +39,19 @@ after(async () => {
 });
 
 describe("Alpha3.4-E3 installed recipe closure", () => {
+  it("keeps legacy official recipe sources out of the installed kernel", async () => {
+    const fixture = await makeFixture();
+    const recipeRoot = path.join(
+      fixture.currentRoot,
+      "vendor",
+      "openreaper-kernel",
+      "recipes",
+    );
+
+    assert.equal(await exists(path.join(recipeRoot, "official")), false);
+    assert.equal(await exists(path.join(recipeRoot, "user", ".gitkeep")), true);
+  });
+
   it("treats inherited empty optional identity values as absent while preserving non-empty overrides", async () => {
     const fixture = await makeFixture();
     const capturePath = path.join(fixture.root, "captured-env.json");
@@ -288,7 +301,12 @@ async function installCurrent(fixture) {
   await mkdir(path.join(sessionRoot, "transport", "requests"), { recursive: true });
   await mkdir(path.join(sessionRoot, "transport", "results"), { recursive: true });
   await mkdir(path.join(sessionRoot, "artifacts"), { recursive: true });
+  await mkdir(path.join(kernelRoot, "recipes", "user"), { recursive: true });
   await copyFile(WRAPPER_SOURCE, wrapper);
+  await copyFile(
+    path.join(REPO_ROOT, "recipes", "user", ".gitkeep"),
+    path.join(kernelRoot, "recipes", "user", ".gitkeep"),
+  );
   await chmod(wrapper, 0o755);
   await copyFile(
     path.join(serverSourceRoot, "openreaper-mcp-stdio.mjs"),
