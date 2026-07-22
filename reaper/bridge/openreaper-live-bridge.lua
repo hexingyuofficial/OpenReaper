@@ -24052,6 +24052,165 @@ local function e4_item_snapshot_matches(snapshot)
     and current.position_seconds == snapshot.position_seconds and current.length_seconds == snapshot.length_seconds
 end
 
+-- The native copy API is the only supported way to carry an arbitrary Take FX
+-- state. Snapshot the bounded observable state first so the copy is not claimed
+-- when REAPER cannot prove the source or final chain.
+local E4_ITEM_COPY_MAX_TAKE_FX = 64
+local E4_ITEM_COPY_MAX_FX_PARAMETERS = 512
+
+local function e4_item_read_take_fx_snapshot(take)
+  local ok_count, count = call_reaper("TakeFX_GetCount", take)
+  count = ok_count and first_number(count) or nil
+  if type(count) ~= "number" or count < 0 or count ~= math.floor(count) then
+    return nil, "take_fx_count_unreadable"
+  end
+  if count > E4_ITEM_COPY_MAX_TAKE_FX then
+    return nil, "take_fx_count_exceeds_limit"
+  end
+  local chain = json_array({})
+  for fx_index = 0, count - 1 do
+    local ok_name, _, name = call_reaper("TakeFX_GetFXName", take, fx_index, "")
+    local ok_enabled, enabled = call_reaper("TakeFX_GetEnabled", take, fx_index)
+    local ok_param_count, param_count = call_reaper("TakeFX_GetNumParams", take, fx_index)
+    param_count = ok_param_count and first_number(param_count) or nil
+    if not ok_name or not is_string(first_string(name)) or not ok_enabled or type(enabled) ~= "boolean"
+        or type(param_count) ~= "number" or param_count < 0 or param_count ~= math.floor(param_count)
+        or param_count > E4_ITEM_COPY_MAX_FX_PARAMETERS then
+      return nil, "take_fx_state_unreadable"
+    end
+    local parameters = json_array({})
+    for param_index = 0, param_count - 1 do
+      local ok_param_name, _, param_name = call_reaper("TakeFX_GetParamName", take, fx_index, param_index, "")
+      local ok_ident, _, ident = call_reaper("TakeFX_GetParamIdent", take, fx_index, param_index, "")
+      local ok_value, value = call_reaper("TakeFX_GetParamNormalized", take, fx_index, param_index)
+      if not ok_param_name or not is_string(first_string(param_name))
+          or not ok_ident or not is_string(first_string(ident))
+          or not ok_value or not e4_item_finite_native_number(first_number(value)) then
+        return nil, "take_fx_parameter_unreadable"
+      end
+      parameters[#parameters + 1] = {
+        name = first_string(param_name),
+        ident = first_string(ident),
+        normalized_value = first_number(value),
+      }
+    end
+    chain[#chain + 1] = {
+      name = first_string(name),
+      enabled = enabled,
+      parameters = parameters,
+    }
+  end
+  return { fx_count = count, chain = chain }
+end
+
+local function e4_item_take_fx_snapshot_matches(take, expected)
+  local actual = e4_item_read_take_fx_snapshot(take)
+  if not actual or not expected or actual.fx_count ~= expected.fx_count
+      or #actual.chain ~= #expected.chain then return false end
+  for index = 1, #expected.chain do
+    local expected_fx, actual_fx = expected.chain[index], actual.chain[index]
+    if expected_fx.name ~= actual_fx.name or expected_fx.enabled ~= actual_fx.enabled
+        or #expected_fx.parameters ~= #actual_fx.parameters then
+      return false
+    end
+    for param_index = 1, #expected_fx.parameters do
+      local expected_parameter, actual_parameter = expected_fx.parameters[param_index], actual_fx.parameters[param_index]
+      if expected_parameter.name ~= actual_parameter.name or expected_parameter.ident ~= actual_parameter.ident
+          or expected_parameter.normalized_value ~= actual_parameter.normalized_value then return false end
+    end
+  end
+  return true
+end
+
+local function e4_item_copy_take_fx_snapshot(source_take, target_take, snapshot)
+  for fx_index = 0, snapshot.fx_count - 1 do
+    local ok_copy = call_reaper("TakeFX_CopyToTake", source_take, fx_index, target_take, fx_index, false)
+    if not ok_copy then return false end
+  end
+  return e4_item_take_fx_snapshot_matches(target_take, snapshot)
+end
+
+-- Keep success evidence compact but exact about the visible ordered identity of
+-- the copied chain. Full parameter state remains in the verified snapshot.
+local function e4_item_take_fx_evidence(snapshot)
+  local ordered_chain = json_array({})
+  for index = 1, #snapshot.chain do
+    local fx = snapshot.chain[index]
+    local parameter_names, parameter_idents = json_array({}), json_array({})
+    for parameter_index = 1, #fx.parameters do
+      local parameter = fx.parameters[parameter_index]
+      parameter_names[#parameter_names + 1] = parameter.name
+      parameter_idents[#parameter_idents + 1] = parameter.ident
+    end
+    ordered_chain[#ordered_chain + 1] = {
+      name = fx.name,
+      enabled = fx.enabled,
+      parameter_count = #fx.parameters,
+      parameter_names = parameter_names,
+      parameter_idents = parameter_idents,
+    }
+  end
+  return {
+    source_fx_count = snapshot.fx_count,
+    target_fx_count = snapshot.fx_count,
+    ordered_chain = ordered_chain,
+  }
+end
+
+local function e4_item_take_fx_ref_string(take_ref, slot_index)
+  return "fx:" .. take_ref .. ":" .. tostring(slot_index)
+end
+
+local function e4_item_take_fx_object_ref(take_ref, slot_index, name)
+  local ref = e4_item_take_fx_ref_string(take_ref, slot_index)
+  return {
+    kind = "fx",
+    ref = ref,
+    identity = { scheme = "take_fx", value = take_ref .. ":" .. tostring(slot_index) },
+    display = { name = name, owner_ref = take_ref, slot_index = slot_index },
+  }
+end
+
+local function e4_item_take_fx_copy_evidence(snapshot, source_take_ref, target_take_ref)
+  local slots = json_array({})
+  for index = 1, #snapshot.chain do
+    local fx = snapshot.chain[index]
+    local slot_index = index - 1
+    local parameter_names, parameter_idents = json_array({}), json_array({})
+    for parameter_index = 1, #fx.parameters do
+      local parameter = fx.parameters[parameter_index]
+      parameter_names[#parameter_names + 1] = parameter.name
+      parameter_idents[#parameter_idents + 1] = parameter.ident
+    end
+    slots[#slots + 1] = {
+      slot_index = slot_index,
+      source_fx_ref = e4_item_take_fx_ref_string(source_take_ref, slot_index),
+      target_fx_ref = e4_item_take_fx_ref_string(target_take_ref, slot_index),
+      name = fx.name,
+      enabled = fx.enabled,
+      parameter_count = #fx.parameters,
+      parameter_names = parameter_names,
+      parameter_idents = parameter_idents,
+    }
+  end
+  return {
+    status = "passed",
+    source_take_ref = source_take_ref,
+    target_take_ref = target_take_ref,
+    source_count = snapshot.fx_count,
+    copied_count = snapshot.fx_count,
+    slots = slots,
+  }
+end
+
+local function e4_item_take_fx_refs(take_ref, snapshot)
+  local refs = json_array({})
+  for index = 1, #snapshot.chain do
+    refs[#refs + 1] = e4_item_take_fx_object_ref(take_ref, index - 1, snapshot.chain[index].name)
+  end
+  return refs
+end
+
 local function e4_item_read_source_footprint(source_item)
   local source_take = e4_item_take(source_item)
   if not source_take then
@@ -24120,6 +24279,12 @@ local function e4_item_read_source_footprint(source_item)
       blocker = "source_file_unavailable",
     }, false)
   end
+  local take_fx, take_fx_failure = e4_item_read_take_fx_snapshot(source_take)
+  if take_fx_failure then
+    return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not prove the complete active Take FX state before mutation.", {
+      blocker = take_fx_failure,
+    }, false)
+  end
   return {
     source_take = source_take,
     source = source,
@@ -24132,6 +24297,7 @@ local function e4_item_read_source_footprint(source_item)
     playrate = first_number(playrate),
     pitch = first_number(pitch),
     preserve_pitch = first_number(preserve),
+    take_fx = take_fx,
   }
 end
 
@@ -24189,12 +24355,15 @@ local function e4_item_preflight_copy_budget(request, source_snapshot, target_tr
     source_footprint = { canonical_source_identity = footprint.canonical_source_identity, source_type = footprint.source_type,
       source_length_seconds = footprint.source_length_seconds, item_length_seconds = footprint.item_length_seconds,
       start_offset_seconds = footprint.start_offset_seconds, playrate = footprint.playrate, pitch = footprint.pitch,
-      preserve_pitch = footprint.preserve_pitch == 1 },
+      preserve_pitch = footprint.preserve_pitch == 1, take_fx = e4_item_take_fx_evidence(footprint.take_fx) },
+    take_fx_copy = e4_item_take_fx_copy_evidence(footprint.take_fx, source_snapshot.active_take_ref, new_take_ref),
     source_item = { item_ref = source_snapshot.item_ref, track_ref = source_snapshot.track_ref, position_seconds = source_snapshot.position_seconds, length_seconds = source_snapshot.length_seconds, active_take_ref = source_snapshot.active_take_ref, active_take_available = true },
     new_item = { item_ref = new_item_ref, track_ref = target_track_ref, position_seconds = e4_item_finite_number(request.params.position_seconds, 0), length_seconds = footprint.item_length_seconds, active_take_ref = new_take_ref, active_take_available = true },
   })
   local refs = json_array({ e4_item_ref_object("item", source_snapshot.item_ref), e4_item_ref_object("track", target_track_ref),
     e4_item_ref_object("item", new_item_ref), e4_item_ref_object("take", new_take_ref) })
+  local target_fx_refs = e4_item_take_fx_refs(new_take_ref, footprint.take_fx)
+  for index = 1, #target_fx_refs do refs[#refs + 1] = target_fx_refs[index] end
   local fits, required_bytes, budget = READ_B_MEDIA.complete_success_envelope_fits(request, prototype, refs, { undo_opened = true, undo_closed = true, verification_status = "passed" })
   if not fits then
     local _, failure = e4_item_handler_error("RESPONSE_TOO_LARGE", "E4 copy_item_to_track complete success envelope cannot fit before mutation.", {
@@ -24254,6 +24423,12 @@ local function e4_item_clone_active_take_footprint(footprint, target_item)
       or not set_take_value("D_PITCH", footprint.pitch)
       or not set_take_value("B_PPITCH", footprint.preserve_pitch) then
     local _, failure = e4_item_handler_error("COMMAND_FAILED", "E4 copy_item_to_track REAPER rejected a target take footprint field.", { blocker = "target_take_footprint_set_failed" }, false)
+    return nil, true, failure
+  end
+  if not e4_item_copy_take_fx_snapshot(footprint.source_take, target_take, footprint.take_fx) then
+    local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not copy and read back the complete active Take FX state.", {
+      blocker = "target_take_fx_copy_or_readback_failed",
+    }, false)
     return nil, true, failure
   end
   local ok_active = call_reaper("SetActiveTake", target_take)
@@ -24323,7 +24498,9 @@ local function copy_item_to_track(request)
   if not new_snapshot or new_snapshot.track ~= target_track or new_snapshot.track_ref ~= target_track_ref
       or new_snapshot.position_seconds ~= position or new_snapshot.length_seconds ~= footprint.item_length_seconds
       or new_snapshot.active_take ~= target_take or not e4_item_footprint_matches(new_snapshot.active_take, footprint)
-      or not e4_item_snapshot_matches(source_snapshot) or not e4_item_footprint_matches(source_snapshot.active_take, footprint, true) then
+      or not e4_item_take_fx_snapshot_matches(new_snapshot.active_take, footprint.take_fx)
+      or not e4_item_snapshot_matches(source_snapshot) or not e4_item_footprint_matches(source_snapshot.active_take, footprint, true)
+      or not e4_item_take_fx_snapshot_matches(source_snapshot.active_take, footprint.take_fx) then
     local _, failure = e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track source or target readback did not preserve the verified footprint.", { blocker = "copy_footprint_readback_failed" }, false)
     return fail_after_mutation(failure)
   end
@@ -24331,6 +24508,7 @@ local function copy_item_to_track(request)
   local new_ref = e4_item_ref_object("item", new_snapshot.item_ref)
   local target_ref = e4_item_ref_object("track", target_track_ref)
   local take_ref = e4_item_ref_object("take", new_snapshot.active_take_ref)
+  local target_fx_refs = e4_item_take_fx_refs(new_snapshot.active_take_ref, footprint.take_fx)
   return e4_item_summary(request, {
     new_item_ref = new_snapshot.item_ref,
     source_item_ref = source_snapshot.item_ref,
@@ -24348,14 +24526,16 @@ local function copy_item_to_track(request)
       playrate = footprint.playrate,
       pitch = footprint.pitch,
       preserve_pitch = footprint.preserve_pitch == 1,
+      take_fx = e4_item_take_fx_evidence(footprint.take_fx),
     },
+    take_fx_copy = e4_item_take_fx_copy_evidence(footprint.take_fx, source_snapshot.active_take_ref, new_snapshot.active_take_ref),
     source_item = { item_ref = source_snapshot.item_ref, track_ref = source_snapshot.track_ref,
       position_seconds = source_snapshot.position_seconds, length_seconds = source_snapshot.length_seconds,
       active_take_ref = source_snapshot.active_take_ref, active_take_available = true },
     new_item = { item_ref = new_snapshot.item_ref, track_ref = new_snapshot.track_ref,
       position_seconds = new_snapshot.position_seconds, length_seconds = new_snapshot.length_seconds,
       active_take_ref = new_snapshot.active_take_ref, active_take_available = true },
-  }), nil, nil, nil, e4_item_refs(new_ref, source_ref, target_ref, take_ref)
+  }), nil, nil, nil, e4_item_refs(new_ref, source_ref, target_ref, take_ref, table.unpack(target_fx_refs))
 end
 
 local function split_item_at_time(request)

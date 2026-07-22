@@ -211,7 +211,8 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.deepEqual(mediaManual.required_inputs, ["search_terms", "seed"]);
   const itemManual = createAlpha345OfficialRecipeManual("recipe.items.create_sound_variations");
   assert.deepEqual(itemManual.required_inputs, ["source_items", "seed"]);
-  assert.match(itemManual.safety, /first Take FX slot/u);
+  assert.match(itemManual.safety, /return the copied first-slot fx_ref/u);
+  assert.match(itemManual.safety, /Never construct that ref/u);
   assert.equal(itemManual.example_inputs.source_items[0].item_ref, "COPY_FROM_QUERY");
 
   const fallback = createAlpha345DirectTemplateFallbackManual();

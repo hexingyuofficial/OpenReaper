@@ -95,6 +95,7 @@ call_reaper = function(name, ...)
   if name == "GetMediaItemTrack" then return true, args[1].track end
   if name == "GetActiveTake" then return true, args[1].active end
   if name == "GetMediaItemTake_Source" then if args[1] == target_take then return false end; return true, args[1].source end
+  if name == "TakeFX_GetCount" then return true, 0 end
   if name == "GetMediaSourceFileName" then return true, args[1].filename end
   if name == "GetMediaSourceType" then return true, "WAVE" end
   if name == "GetMediaSourceLength" then return true, 8, false end
@@ -137,6 +138,7 @@ call_reaper = function(name, ...)
   if name == "GetMediaItemTrack" then return true, args[1].track end
   if name == "GetActiveTake" then return true, args[1].active end
   if name == "GetMediaItemTake_Source" then return true, args[1].source end
+  if name == "TakeFX_GetCount" then return true, 0 end
   if name == "GetMediaSourceFileName" then return true, args[1].filename end
   if name == "GetMediaSourceType" then return true, args[1].source_type or "WAVE" end
   if name == "GetMediaSourceLength" then return true, args[1].length or 8, false end
@@ -232,6 +234,7 @@ call_reaper = function(name, ...)
   if name == "AddTakeToMediaItem" then return true, target_take end
   if name == "SetMediaItemTake_Source" then target_take.source = args[2]; return true, false end
   if name == "GetMediaItemTake_Source" then return true, args[1].source end
+  if name == "TakeFX_GetCount" then return true, 0 end
   if name == "PCM_Source_Destroy" then destroyed = destroyed + 1; return true end
   return false
 end
@@ -262,6 +265,7 @@ call_reaper = function(name, ...)
   if name == "GetMediaItemTrack" then return true, args[1].track end
   if name == "GetActiveTake" then return true, args[1].active end
   if name == "GetMediaItemTake_Source" then return true, args[1].source end
+  if name == "TakeFX_GetCount" then return true, 0 end
   if name == "GetMediaSourceFileName" then return true, args[1].filename end
   if name == "GetMediaSourceType" then return true, "WAVE" end
   if name == "GetMediaSourceLength" then return true, args[1].length, false end

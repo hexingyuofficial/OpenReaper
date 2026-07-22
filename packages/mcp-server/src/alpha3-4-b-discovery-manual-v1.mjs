@@ -150,7 +150,7 @@ const OFFICIAL_RECIPE_MANUALS = deepFreeze({
     required_inputs: ["source_items", "seed"],
     defaults: { variation_count: 4, source_offset_max_seconds: 0.15, volume_max_db: 2, pan_max: 0.4, pitch_max_semitones: 3, min_playrate: 0.92, max_playrate: 1.08, position_gap_seconds: 0.25, tone_param_index: 0, automation_param_index: 1 },
     inputs: ["source_items", "variation_count", "seed", "source_offset_max_seconds", "volume_max_db", "pan_max", "pitch_max_semitones", "min_playrate", "max_playrate", "position_gap_seconds", "tone_param_index", "tone_min", "tone_max", "automation_param_index", "automation_value_variation", "automation_points"],
-    safety: "Pass explicit canonical Item/Take/Track refs plus source position and length for every seeded source row. The first Take FX slot is the Tone/Automation target. Requires source_item_count * variation_count <= 64 and freezes the seed before writes.",
+    safety: "Pass explicit canonical Item/Take/Track refs plus source position and length for every seeded source row. Each source active Take needs at least one real FX; the generic Item-copy result must prove that chain and return the copied first-slot fx_ref used by Tone and Automation. Never construct that ref. Requires source_item_count * variation_count <= 64 and freezes the seed before writes.",
     undo: "The complete seeded Item/Take, position, volume, pan, Tone/FX, and Automation/Envelope variation is one Recipe Undo unit; unknown Undo closure must be reported as outcome=unknown.",
     example_inputs: { source_items: [{ item_ref: "COPY_FROM_QUERY", take_ref: "COPY_FROM_QUERY", track_ref: "COPY_FROM_QUERY", position_seconds: 0, length_seconds: 1 }], variation_count: 4, seed: 7301 },
   }),

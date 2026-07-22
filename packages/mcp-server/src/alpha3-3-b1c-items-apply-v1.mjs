@@ -397,7 +397,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use stack_on_existing_tracks with one to eight explicit item_ref/target_track_ref rows; every destination must already exist.",
         "Use apply_fades, trim_exact, set_take_playback, set_snap_offset, remove_silence, or align_onsets for bounded common edits backed by accepted native Item/Take atoms.",
         "Use set_item_take_controls for one-call multi-Item multi-field Item/Active-Take control rows with exact item_ref and take_ref when Take fields are present; Item pan remains unsupported.",
-        "Use create_variations to copy 1-64 exact source Items onto existing exact Tracks at explicit positions, with an optional active-Take source offset per new variation.",
+        "Use create_variations to copy 1-64 exact source Items onto existing exact Tracks at explicit positions, preserving and proving each active-Take FX chain and optionally setting a source offset per new variation.",
       ],
       when_not_to_use: [
         "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, arbitrary transient splitting, and crossfades remain held.",
@@ -414,7 +414,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
         target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
         changes: "For set_item_take_controls only: 1-64 rows of {id,item_ref,take_ref?,item?,take?}. id is 1-12 ASCII [A-Za-z0-9_-]. take_ref is required exactly when take fields are present. Item fields: volume_db,length_seconds,fade_in_seconds,fade_out_seconds,snap_offset_seconds. Take fields: volume_db,pan,pitch_semitones,playrate,preserve_pitch. Item pan remains unsupported.",
-        variations: "For create_variations only: 1-64 rows of {id,source_item_ref,target_track_ref,position_seconds,source_offset_seconds?}. Every ref must be an exact canonical GUID ref. All source Items and destination Tracks resolve before the first copy; each result returns the new exact Item/Take refs after final Item-summary readback.",
+        variations: "For create_variations only: 1-64 rows of {id,source_item_ref,target_track_ref,position_seconds,source_offset_seconds?}. Every ref must be an exact canonical GUID ref. All source Items and destination Tracks resolve before the first copy; each result returns the new exact Item/Take refs plus take_fx_copy.slots[].target_fx_ref after complete active-Take FX copy/readback.",
         dry_run: "Defaults to true. false is required to mutate REAPER.",
         anchor_seconds: "Non-negative project time; required by move_to_anchor and optional for other arrangement modes.",
         gap_seconds: "Non-negative gap for sequence_with_gap; defaults to 0.",
@@ -443,7 +443,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "stack_on_existing_tracks marks a row applied only when the atom returns the exact Item and target Track plus passed identity/take/Track-count readback.",
         "remove_silence marks a row applied only after the destructive atom proves kept GUIDs present, deleted GUIDs absent, duration conservation, and Track Item count; the Macro then reads every kept Item and independently checks the live Track Item count.",
         "align_onsets re-runs native transient detection after every move and marks a row applied only when position + first_transient_time matches the requested project-time anchor.",
-        "create_variations verifies each copy result, optional source-offset atom readback, then the new Item's exact Item summary for Item, Track, Take, and position identity.",
+        "create_variations verifies each copy result including the complete active-Take FX chain, optional source-offset atom readback, then the new Item's exact Item summary for Item, Track, Take, and position identity.",
         "Index invalidation is reported separately and never changes an already verified mutation into an unverified applied claim.",
       ],
       success_criteria: [
@@ -1435,8 +1435,21 @@ async function executeCreateVariationsBatch({
       failedIndex = index;
       break;
     }
+    const takeFxCopy = projectVerifiedTakeFxCopy(copySummary.take_fx_copy, {
+      sourceTakeRef: copySummary.source_item?.active_take_ref,
+      targetTakeRef: newTakeRef,
+      objectRefs: executionObjectRefs(copyExecution),
+    });
+    if (!takeFxCopy) {
+      change.mutation = { status: "completed" };
+      change.status = "readback_failed";
+      executionFailure = { ...failed("ITEM_APPLY_VARIATION_TAKE_FX_COPY_INVALID", `Copy result for ${row.id} omitted or contradicted the verified active-Take FX copy proof.`), phase: "readback" };
+      failedIndex = index;
+      break;
+    }
     change.new_item_ref = newItemRef;
     change.new_take_ref = newTakeRef;
+    change.take_fx_copy = takeFxCopy;
     state.canonicalRefs.push(newItemRef, newTakeRef);
     if (row.source_offset_seconds !== undefined) {
       let offsetExecution;
@@ -2779,6 +2792,7 @@ function projectCompactBatchChanges(changes) {
       fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
       new_item_ref: typeof change.new_item_ref === "string" ? change.new_item_ref : undefined,
       new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
+      take_fx_copy: isPlainObject(change.take_fx_copy) ? change.take_fx_copy : undefined,
       position_seconds: Number.isFinite(change.position_seconds) ? change.position_seconds : undefined,
       source_offset_seconds: Number.isFinite(change.source_offset_seconds) ? change.source_offset_seconds : undefined,
     });
@@ -3050,6 +3064,51 @@ function isExactItemToken(value) {
 
 function isExactGuidRef(value, kind) {
   return typeof value === "string" && new RegExp(`^${kind}:guid:\\{[^{}]+\\}$`, "u").test(value);
+}
+
+function projectVerifiedTakeFxCopy(value, { sourceTakeRef, targetTakeRef, objectRefs }) {
+  if (!isPlainObject(value)
+    || value.status !== "passed"
+    || !isExactGuidRef(sourceTakeRef, "take")
+    || value.source_take_ref !== sourceTakeRef
+    || value.target_take_ref !== targetTakeRef
+    || !Number.isSafeInteger(value.source_count)
+    || !Number.isSafeInteger(value.copied_count)
+    || value.source_count < 0
+    || value.source_count !== value.copied_count
+    || !Array.isArray(value.slots)
+    || value.slots.length !== value.copied_count) return null;
+  const refs = Array.isArray(objectRefs) ? objectRefs : [];
+  const slots = [];
+  for (const [slotIndex, slot] of value.slots.entries()) {
+    const sourceFxRef = `fx:${sourceTakeRef}:${slotIndex}`;
+    const targetFxRef = `fx:${targetTakeRef}:${slotIndex}`;
+    const targetObject = refs.find((entry) => entry.kind === "fx" && entry.ref === targetFxRef);
+    if (!isPlainObject(slot)
+      || slot.slot_index !== slotIndex
+      || slot.source_fx_ref !== sourceFxRef
+      || slot.target_fx_ref !== targetFxRef
+      || typeof slot.name !== "string"
+      || slot.name.length < 1
+      || typeof slot.enabled !== "boolean"
+      || !Number.isSafeInteger(slot.parameter_count)
+      || slot.parameter_count < 0
+      || !Array.isArray(slot.parameter_names)
+      || !Array.isArray(slot.parameter_idents)
+      || slot.parameter_names.length !== slot.parameter_count
+      || slot.parameter_idents.length !== slot.parameter_count
+      || slot.parameter_names.some((entry) => typeof entry !== "string" || entry.length < 1)
+      || slot.parameter_idents.some((entry) => typeof entry !== "string" || entry.length < 1)
+      || !isPlainObject(targetObject?.identity)
+      || targetObject.identity.scheme !== "take_fx"
+      || targetObject.identity.value !== `${targetTakeRef}:${slotIndex}`) return null;
+    slots.push({ slot_index: slotIndex, target_fx_ref: targetFxRef });
+  }
+  return {
+    status: "passed",
+    copied_count: value.copied_count,
+    slots,
+  };
 }
 
 function exactGuidObjectRef(kind, ref) {

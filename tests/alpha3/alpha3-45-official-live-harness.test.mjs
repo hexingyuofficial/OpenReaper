@@ -163,33 +163,37 @@ test("official live harness rejects omitted Recipe 04 feature output as unverifi
   assert.equal(report.official_runs.find((row) => row.recipe_id.endsWith("sound_variations")).output_omitted.tone_changes, true);
 });
 
-test("official live harness rejects Recipe 04 outputs that do not bind one copied Take and FX", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha345-official-mismatched-copy-"));
-  roots.push(root);
-  const wrapper = path.join(root, "openreaper-mcp.sh");
-  await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
-  const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
-    recipe_id, source: "official", version: "1.0.0", revision: 1,
-    content_hash: `sha256:${String(index + 1).repeat(64)}`,
-    validation_result_id: `validation:${index + 1}`,
-  }));
-  const report = await runAlpha345OfficialRecipesHarness({
-    installedWrapper: wrapper,
-    evidenceRoot: path.join(root, "evidence"),
-    fixture: fixture(),
-    callRecipe: async (args) => {
-      if (args.operation === "list") return { ok: true, items: identities };
-      if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
-      if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
-      const successful = fakeSuccessfulRun(args);
-      if (args.recipe_id === "recipe.items.create_sound_variations") {
-        successful.verified_outputs.find((output) => output.id === "tone_changes").value[0].fx_ref = "fx:take:guid:{OTHER}:0";
-      }
-      return successful;
-    },
-  });
-  assert.equal(report.ok, false);
-  assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", JSON.stringify(report));
+test("official live harness rejects missing and mismatched generic Take-FX copy proof", async () => {
+  for (const corruption of ["missing", "wrong_target"]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), `openreaper-alpha345-official-${corruption}-copy-proof-`));
+    roots.push(root);
+    const wrapper = path.join(root, "openreaper-mcp.sh");
+    await writeFile(wrapper, "#!/bin/sh\n", { mode: 0o700 });
+    const identities = ALPHA3_45_OFFICIAL_RECIPE_IDS.map((recipe_id, index) => ({
+      recipe_id, source: "official", version: "1.0.0", revision: 1,
+      content_hash: `sha256:${String(index + 1).repeat(64)}`,
+      validation_result_id: `validation:${index + 1}`,
+    }));
+    const report = await runAlpha345OfficialRecipesHarness({
+      installedWrapper: wrapper,
+      evidenceRoot: path.join(root, "evidence"),
+      fixture: fixture(),
+      callRecipe: async (args) => {
+        if (args.operation === "list") return { ok: true, items: identities };
+        if (args.operation === "get" && args.evidence_ref) return fakeEvidencePage(args.evidence_ref);
+        if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
+        const successful = fakeSuccessfulRun(args);
+        if (args.recipe_id === "recipe.items.create_sound_variations") {
+          const variation = successful.verified_outputs.find((output) => output.id === "variation_changes").value[0];
+          if (corruption === "missing") delete variation.take_fx_copy;
+          else variation.take_fx_copy.slots[0].target_fx_ref = "fx:take:guid:{OTHER}:0";
+        }
+        return successful;
+      },
+    });
+    assert.equal(report.ok, false, corruption);
+    assert.equal(report.error.code, "OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", JSON.stringify(report));
+  }
 });
 
 test("official live harness rejects applied rows with failed mutation truth", async () => {
@@ -430,6 +434,11 @@ function fakeVerifiedOutput(id, index = 0, source = { item_ref: "item:guid:{SEED
   if (id === "variation_changes") return {
     id: `variation-${index + 1}`, status: "ok", mutation: "done", readback: "pass",
     new_item_ref: itemRef, new_take_ref: takeRef, position_seconds: source.position_seconds + index + 1,
+    take_fx_copy: {
+      status: "passed",
+      copied_count: 1,
+      slots: [{ slot_index: 0, target_fx_ref: `fx:${takeRef}:0` }],
+    },
   };
   if (id === "control_changes") return {
     id: `controls-${index + 1}`, item_ref: itemRef, take_ref: takeRef, status: "ok", mutation: "done", readback: "pass",
@@ -465,7 +474,17 @@ function fixture() {
   };
   return {
     project_path: "/tmp/alpha345-fixture.RPP",
-    recipe04_seed: { ...item, take_fx_ref: "fx:take:guid:{SEED}:0" },
+    recipe04_seed: {
+      ...item,
+      take_fx_ref: "fx:take:guid:{SEED}:0",
+      take_fx_identity: {
+        fx_ref: "fx:take:guid:{SEED}:0",
+        slot_index: 0,
+        plugin_name: "VST: ReaEQ (Cockos)",
+        enabled: true,
+        parameter_count: 8,
+      },
+    },
     inputs: {
       "recipe.mix.create_bus_processing": { source_tracks: [item.track_ref], bus_name: "Recipe Bus" },
       "recipe.midi.create_instrument_part": { track_name: "Recipe Instrument", bars: 2, instrument: "ReaSynth" },

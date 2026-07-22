@@ -78,9 +78,13 @@ test("all official Recipes execute once through generic call_recipe expressions"
 
     const itemCalls = calls.filter((call) => call.recipe_id === "recipe.items.create_sound_variations");
     const controls = itemCalls.find((call) => call.stage === "controls").inputs.changes;
+    const tone = itemCalls.find((call) => call.stage === "tone").inputs.assignments;
     const automation = itemCalls.find((call) => call.stage === "automation").inputs.fx_targets;
     assert.equal(controls.length, 8);
+    assert.equal(tone.length, 8);
     assert.equal(automation.length, 8);
+    assert.equal(tone[0].fx_ref, `fx:take:guid:{COPY-TAKE-v1_1}:0`);
+    assert.equal(automation[0].fx_ref, tone[0].fx_ref);
     assert.deepEqual(automation[0].points.map((point) => point.time_seconds), [2.5, 3]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -351,7 +355,22 @@ function appliedPlacement(id, position_seconds) {
   return { mode: "place_assets", status: "applied", live_readback: { status: "passed", item_ref: `item:guid:{PLACED-${id}}`, take_ref: `take:guid:{PLACED-${id}}`, track_ref: `track:guid:{LAYER-${id}}`, position_seconds } };
 }
 function appliedVariation(row) {
-  return { id: row.id, status: "ok", mutation: "done", readback: "pass", index: "done", position_seconds: row.position_seconds, new_item_ref: `item:guid:{COPY-ITEM-${row.id}}`, new_take_ref: `take:guid:{COPY-TAKE-${row.id}}` };
+  const newTakeRef = `take:guid:{COPY-TAKE-${row.id}}`;
+  return {
+    id: row.id,
+    status: "ok",
+    mutation: "done",
+    readback: "pass",
+    index: "done",
+    position_seconds: row.position_seconds,
+    new_item_ref: `item:guid:{COPY-ITEM-${row.id}}`,
+    new_take_ref: newTakeRef,
+    take_fx_copy: {
+      status: "passed",
+      copied_count: 1,
+      slots: [{ target_fx_ref: `fx:${newTakeRef}:0` }],
+    },
+  };
 }
 
 function facts(revision) {

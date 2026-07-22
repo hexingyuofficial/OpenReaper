@@ -193,7 +193,32 @@ function objectRef(kind, ref) {
   return { kind, ref, identity: { scheme: "guid", value: ref.slice(`${kind}:guid:`.length) } };
 }
 
-function makeVariationExecutor({ failAt = null } = {}) {
+function takeFxObjectRef(takeRef, slotIndex) {
+  const ref = `fx:${takeRef}:${slotIndex}`;
+  return { kind: "fx", ref, identity: { scheme: "take_fx", value: `${takeRef}:${slotIndex}` } };
+}
+
+function takeFxCopyProof(sourceTakeRef, targetTakeRef, count = 1) {
+  return {
+    status: "passed",
+    source_take_ref: sourceTakeRef,
+    target_take_ref: targetTakeRef,
+    source_count: count,
+    copied_count: count,
+    slots: Array.from({ length: count }, (_, slotIndex) => ({
+      slot_index: slotIndex,
+      source_fx_ref: `fx:${sourceTakeRef}:${slotIndex}`,
+      target_fx_ref: `fx:${targetTakeRef}:${slotIndex}`,
+      name: "VST: ReaEQ (Cockos)",
+      enabled: true,
+      parameter_count: 2,
+      parameter_names: ["Frequency", "Gain"],
+      parameter_idents: [":0", ":1"],
+    })),
+  };
+}
+
+function makeVariationExecutor({ failAt = null, fxCount = 1, corruptFxProof = false } = {}) {
   const calls = [];
   const items = new Map();
   let copyCount = 0;
@@ -216,6 +241,9 @@ function makeVariationExecutor({ failAt = null } = {}) {
         if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "COPY_FAILED", message: "copy failed" }, result: { summary: {}, readback: {}, refs: [] } };
         const newItemRef = `item:guid:{NEW-${String(++copyCount).padStart(2, "0")}}`;
         const newTakeRef = `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
+        const sourceTakeRef = `take:guid:{SOURCE-TAKE-${String(copyCount).padStart(2, "0")}}`;
+        const takeFxCopy = takeFxCopyProof(sourceTakeRef, newTakeRef, fxCount);
+        if (corruptFxProof && takeFxCopy.slots[0]) takeFxCopy.slots[0].target_fx_ref = "fx:take:guid:{WRONG}:0";
         const row = {
           item_ref: newItemRef,
           active_take_ref: newTakeRef,
@@ -229,9 +257,22 @@ function makeVariationExecutor({ failAt = null } = {}) {
           request: { id: child.id },
           verification: { status: "passed" },
           result: {
-            summary: { new_item_ref: newItemRef, active_take_ref: newTakeRef, source_item_ref: child.refs.source_item_ref.ref, target_track_ref: row.track_ref, position_seconds: row.position_seconds },
+            summary: {
+              new_item_ref: newItemRef,
+              active_take_ref: newTakeRef,
+              source_item_ref: child.refs.source_item_ref.ref,
+              target_track_ref: row.track_ref,
+              position_seconds: row.position_seconds,
+              source_item: { active_take_ref: sourceTakeRef },
+              take_fx_copy: takeFxCopy,
+            },
             readback: {},
-            refs: [objectRef("item", newItemRef), objectRef("take", newTakeRef), objectRef("track", row.track_ref)],
+            refs: [
+              objectRef("item", newItemRef),
+              objectRef("take", newTakeRef),
+              objectRef("track", row.track_ref),
+              ...Array.from({ length: fxCount }, (_, slotIndex) => takeFxObjectRef(newTakeRef, slotIndex)),
+            ],
           },
         };
       }
@@ -290,6 +331,8 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       assert.equal(response.result.changes.every((row) => row.status === "ok"), true);
       assert.equal(response.result.changes.every((row) => /^item:guid:\{NEW-\d+\}$/u.test(row.new_item_ref)), true);
       assert.equal(response.result.changes.every((row) => /^take:guid:\{NEW-TAKE-\d+\}$/u.test(row.new_take_ref)), true);
+      assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.copied_count === 1), true);
+      assert.equal(response.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
       assert.equal(response.result.data.calls.resolve, count * 2);
       assert.equal(response.result.data.calls.readback, count);
     }
@@ -302,6 +345,27 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(blocked.ok, false);
     assert.equal(blocked.error.code, "ITEM_APPLY_VARIATIONS_INVALID");
     assert.equal(calls.length, 0);
+  });
+
+  it("accepts explicit zero-FX copy proof and fails closed on a mismatched copied FX ref", async () => {
+    const zeroFx = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: variationRows(1) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: makeVariationExecutor({ fxCount: 0 }).executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(zeroFx.ok, true, JSON.stringify(zeroFx));
+    assert.deepEqual(zeroFx.result.changes[0].take_fx_copy.slots, []);
+    assert.equal(zeroFx.result.changes[0].take_fx_copy.copied_count, 0);
+
+    const corruptExecutor = makeVariationExecutor({ corruptFxProof: true });
+    const corrupt = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: variationRows(1) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: corruptExecutor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(corrupt.ok, false);
+    assert.equal(corrupt.error.code, "ITEM_APPLY_VARIATION_TAKE_FX_COPY_INVALID");
+    assert.equal(corrupt.result.changes[0].status, "rbf");
   });
 
   it("uses the source-offset atom and final Item summary, then stops subsequent rows after a mid-row failure", async () => {

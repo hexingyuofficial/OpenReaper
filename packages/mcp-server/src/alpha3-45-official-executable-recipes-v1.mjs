@@ -238,14 +238,14 @@ const RECIPE_SPECS = Object.freeze([
       expressionBinding("tone", "mode", literal("exact_assignments")),
       expressionBinding("tone", "assignments", map(verifiedCopies(), "copy", "copy_index", object({
         id: concat([literal("tone_"), add([local("copy_index"), literal(1)])]),
-        fx_ref: concat([literal("fx:"), get(local("copy"), ["new_take_ref"]), literal(":0")]),
+        fx_ref: get(local("copy"), ["take_fx_copy", "slots", 0, "target_fx_ref"]),
         param_index: coalesce(input("tone_param_index"), literal(0)),
         normalized_value: seededUniform(recipeSeed(), add([local("copy_index"), literal(53)]), coalesce(input("tone_min"), literal(0.25)), coalesce(input("tone_max"), literal(0.75))),
       }))),
       expressionBinding("tone", "dry_run", literal(false)),
       expressionBinding("automation", "mode", literal("insert_fx_parameter_points")),
       expressionBinding("automation", "fx_targets", map(verifiedCopies(), "copy", "copy_index", object({
-        fx_ref: concat([literal("fx:"), get(local("copy"), ["new_take_ref"]), literal(":0")]),
+        fx_ref: get(local("copy"), ["take_fx_copy", "slots", 0, "target_fx_ref"]),
         points: map(coalesce(input("automation_points"), literal(DEFAULT_AUTOMATION_POINTS)), "point", "point_index", object({
           time_seconds: add([get(local("copy"), ["position_seconds"]), get(local("point"), ["time_seconds"])]),
           value: clamp(add([

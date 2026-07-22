@@ -294,7 +294,15 @@ function linkedRecipe04Rows(rows, sourceItems) {
       || !Number.isFinite(source?.position_seconds)
       || variation.position_seconds <= source.position_seconds) continue;
     const control = controls.get(copyKey);
-    const fxRef = `fx:${takeRef}:0`;
+    const copyProof = variation.take_fx_copy;
+    const copiedSlot = Array.isArray(copyProof?.slots) ? copyProof.slots[0] : null;
+    const fxRef = copiedSlot?.target_fx_ref;
+    if (copyProof?.status !== "passed"
+      || !Number.isSafeInteger(copyProof.copied_count)
+      || copyProof.copied_count < 1
+      || copyProof.slots.length !== copyProof.copied_count
+      || copiedSlot?.slot_index !== 0
+      || fxRef !== `fx:${takeRef}:0`) continue;
     const toneRow = tone.get(fxRef);
     const automationRow = automation.get(fxRef);
     const controlsProven = provenChange(control)
@@ -409,6 +417,17 @@ function validateFixture(fixture) {
     && row.length_seconds === seed.length_seconds
   ))) throw coded("OFFICIAL_RECIPE04_SEED_INPUT_MISMATCH", "recipe04_seed must exactly match one supplied source_items row.");
   if (seed.take_fx_ref !== `fx:${seed.take_ref}:0`) throw coded("OFFICIAL_RECIPE04_SEED_FX_MISMATCH", "recipe04_seed.take_fx_ref must bind the seeded Take's first FX slot.");
+  const fxIdentity = seed.take_fx_identity;
+  if (!fxIdentity
+    || fxIdentity.fx_ref !== seed.take_fx_ref
+    || fxIdentity.slot_index !== 0
+    || typeof fxIdentity.plugin_name !== "string"
+    || fxIdentity.plugin_name.length < 1
+    || typeof fxIdentity.enabled !== "boolean"
+    || !Number.isSafeInteger(fxIdentity.parameter_count)
+    || fxIdentity.parameter_count < 1) {
+    throw coded("OFFICIAL_RECIPE04_SEED_FX_IDENTITY_INCOMPLETE", "recipe04_seed.take_fx_identity must record the seeded slot, plugin, enabled state, and positive parameter count.");
+  }
   if (!Number.isSafeInteger(fixture.inputs["recipe.items.create_sound_variations"].seed)) throw coded("OFFICIAL_RECIPE04_SEED_VALUE_INVALID", "Recipe 04 input seed must be a concrete safe integer.");
 }
 
