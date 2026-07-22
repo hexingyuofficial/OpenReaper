@@ -114,6 +114,7 @@ describe("P1 template fill descriptors", () => {
     assert.equal(fx.bridge.operation_family, "query_state");
     assert.equal(fx.bridge.operation_name, "fx.installed.search");
     assert.equal(fx.bridge.capability, "fx.installed.search");
+    assert.equal(fx.bridge.timeout_ms, 30_000);
     assert.equal(fx.bridge.idempotency, "none");
     assert.deepEqual(Object.keys(fx.inputSchema.properties), ["query", "limit", "offset"]);
     assert.equal(Object.hasOwn(fx.outputSchema.properties, "rows"), true);

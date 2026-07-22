@@ -19,6 +19,7 @@ export const P1_TEMPLATE_FILL_TEMPLATES = deepFreeze([
       operation_name: "fx.installed.search",
       capability: "fx.installed.search",
       idempotency: "none",
+      timeout_ms: 30_000,
     }),
     inputSchema: objectSchema({
       query: { type: "string" },
