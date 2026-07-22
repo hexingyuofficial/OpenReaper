@@ -24043,6 +24043,7 @@ local function e4_item_read_source_footprint(source_item)
   local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", source_take, "B_PPITCH")
   local canonical_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(source_identity)) or nil
   local unreadable_fields = json_array({})
+  local unreadable_reasons = {}
   local function mark_unreadable(condition, field)
     if condition then unreadable_fields[#unreadable_fields + 1] = field end
   end
@@ -24058,9 +24059,20 @@ local function e4_item_read_source_footprint(source_item)
   mark_unreadable(not ok_pitch or not e4_item_finite_native_number(first_number(pitch)), "pitch")
   mark_unreadable(not ok_preserve or (first_number(preserve) ~= 0 and first_number(preserve) ~= 1), "preserve_pitch")
   if #unreadable_fields > 0 then
+    if not ok_source_length or not e4_item_finite_native_number(first_number(source_length)) or (first_number(source_length) or 0) <= 0 then
+      unreadable_reasons.source_length = {
+        call_ok = ok_source_length == true,
+        value_type = type(source_length),
+        value = e4_item_finite_native_number(first_number(source_length)) and first_number(source_length) or JSON_NULL,
+        error = not ok_source_length and tostring(source_length):sub(1, 160) or JSON_NULL,
+        quarter_notes_type = type(length_is_quarter_notes),
+        quarter_notes = type(length_is_quarter_notes) == "boolean" and length_is_quarter_notes or JSON_NULL,
+      }
+    end
     return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not prove the complete source footprint before mutation.", {
       blocker = "source_footprint_unreadable",
       unreadable_fields = unreadable_fields,
+      unreadable_reasons = unreadable_reasons,
     }, false)
   end
   if type(file_exists) ~= "function" or file_exists(canonical_path) ~= true then

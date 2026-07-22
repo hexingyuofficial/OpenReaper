@@ -67,6 +67,8 @@ local summary, failure = copy_item_to_track({
 })
 assert(summary == nil and failure ~= nil, failure and failure.code or "missing_failure")
 assert(#failure.details.unreadable_fields == 1 and failure.details.unreadable_fields[1] == "source_length")
+assert(failure.details.unreadable_reasons.source_length.call_ok == false)
+assert(failure.details.unreadable_reasons.source_length.value_type == "nil")
 assert(writes == 0, "writes=" .. tostring(writes))
 `);
   });
@@ -288,6 +290,7 @@ assert(#refs == 4)
   it("keeps the generated bridge sourced from the same source-first fail-closed route", () => {
     assert.match(SOURCE, /source_footprint_unreadable/);
     assert.match(SOURCE, /unreadable_fields = unreadable_fields/);
+    assert.match(SOURCE, /unreadable_reasons = unreadable_reasons/);
     assert.match(SOURCE, /PCM_Source_CreateFromFile/);
     assert.match(SOURCE, /created_source_footprint_mismatch/);
     assert.match(SOURCE, /SetMediaItemTake_Source[\s\S]*source_attached = ok_assigned_source and assigned_source == created_source/);
