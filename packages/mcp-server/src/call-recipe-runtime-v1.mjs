@@ -88,7 +88,7 @@ export function createCallRecipeRuntime(options = {}) {
     contract: CALL_RECIPE_RUNTIME_CONTRACT,
     tool: CALL_RECIPE_TOOL_NAME,
     store,
-    async call_recipe(request = {}) {
+    async call_recipe(request = {}, execution = {}) {
       return callRecipe(request, {
         store,
         catalog,
@@ -100,6 +100,7 @@ export function createCallRecipeRuntime(options = {}) {
         undoController,
         runHydrator,
         stageInputHydrator,
+        signal: execution?.signal,
       });
     },
   });
@@ -501,6 +502,7 @@ function opDelete(request, options) {
 }
 
 async function opRun(request, options, { startedAt, resume, budget }) {
+  assertRecipeRequestActive(options.signal);
   rejectInlineExecutionPayload(request, resume ? "resume" : "run");
   if (!resume && (request.run_id !== undefined || request.runId !== undefined)) {
     throw new CallRecipeRuntimeError(
@@ -593,6 +595,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     run_id: runId,
     latest_checkpoint: resumeState?.latest_checkpoint ?? null,
   });
+  assertRecipeRequestActive(options.signal);
   const requestedInputs = resume
     ? cloneJson(resumeState.inputs ?? {})
     : (isPlainObject(request.inputs) ? request.inputs : {});
@@ -604,6 +607,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     runtime_facts: runtimeFacts,
     retained: resumeState?.run_hydration ?? null,
   });
+  assertRecipeRequestActive(options.signal);
   if (!hydration.ok) {
     const retained = retainedFailureTruth(revision, resumeState, runId);
     return withRunExecutionTruth(projectRunFailureEnvelope({
@@ -718,6 +722,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   const provenPartialChanges = [...(resumeState?.proven_partial_changes ?? [])];
   const telemetry = createRunTelemetry(resumeState?.telemetry);
   const attempt = (resumeState?.attempt_count ?? 0) + 1;
+  assertRecipeRequestActive(options.signal);
   let undo = await beginRecipeUndo(options.undoController, {
     revision,
     runId,
@@ -752,6 +757,35 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       skipped += 1;
       processed += 1;
       continue;
+    }
+
+    if (options.signal?.aborted === true) {
+      const mutationTruth = telemetry.native_mutation_count > 0 ? "applied" : "not_run";
+      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      return failPartial({
+        operation: resume ? "resume" : "run",
+        revision,
+        runId,
+        code: "STAGE_FAILED",
+        message: "Recipe request was cancelled before the next stage.",
+        stage,
+        stages,
+        completed,
+        evidenceItems,
+        provenPartialChanges,
+        latestCheckpoint,
+        bindingValues,
+        inputs,
+        counts: { processed, applied, skipped },
+        options,
+        resumeSafe: false,
+        details: { request_cancelled: true, zero_write: mutationTruth === "not_run" },
+        startedAt,
+        telemetry,
+        undo,
+        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        failedStageAlreadyCompleted: true,
+      });
     }
 
     const dispatcher = selectDispatcher(dispatchers, stage.kind);
@@ -853,6 +887,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         refs: hydratedStage.refs,
         recipe_inputs: inputs,
         recipe_undo: dispatcherRecipeUndoContext(undo),
+        signal: options.signal,
       });
     } catch (error) {
       outcome = {
@@ -882,6 +917,33 @@ async function opRun(request, options, { startedAt, resume, budget }) {
 
     if (Array.isArray(normalized.proven_changes)) {
       provenPartialChanges.push(...normalized.proven_changes);
+    }
+    if (options.signal?.aborted === true) {
+      const mutationTruth = stageMutationTruth(stage, normalized, stageTelemetry, telemetry);
+      undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
+      return failPartial({
+        operation: resume ? "resume" : "run",
+        revision,
+        runId,
+        code: "STAGE_FAILED",
+        message: `Recipe request was cancelled during stage ${stage.id}.`,
+        stage,
+        stages,
+        completed,
+        evidenceItems,
+        provenPartialChanges,
+        latestCheckpoint,
+        bindingValues,
+        inputs,
+        counts: { processed, applied, skipped },
+        options,
+        resumeSafe: false,
+        details: { request_cancelled: true, zero_write: mutationTruth === "not_run" },
+        startedAt,
+        telemetry,
+        undo,
+        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+      });
     }
     if (!normalized.ok || normalized.verified !== true) {
       const mutationTruth = stageMutationTruth(stage, normalized, stageTelemetry, telemetry);
@@ -1792,6 +1854,15 @@ function dispatcherRecipeUndoContext(undo) {
     handle: undo?.handle ?? null,
     suppress_child_undo: undo?.status === "open",
   });
+}
+
+function assertRecipeRequestActive(signal) {
+  if (signal?.aborted !== true) return;
+  throw new CallRecipeRuntimeError(
+    "Recipe request was cancelled before execution.",
+    "STAGE_FAILED",
+    { request_cancelled: true, zero_write: true },
+  );
 }
 
 function createRunTelemetry(existing = null) {

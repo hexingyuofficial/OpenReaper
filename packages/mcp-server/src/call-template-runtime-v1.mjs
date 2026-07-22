@@ -1154,10 +1154,13 @@ export function createCallTemplateRuntime(options = {}) {
     observeProjectIndex = true,
     projectIndexObservationContext = null,
     recipe_undo = null,
+    signal = null,
   }) {
+    assertTemplateRequestActive(signal, "Template request was cancelled before preflight.");
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
     const normalizedInput = await preflightTemplateInput(id, input, budget);
+    assertTemplateRequestActive(signal, "Template request was cancelled before REAPER dispatch.");
     const execution = await executeTemplate({
       descriptor,
       input: normalizedInput,
@@ -1180,13 +1183,18 @@ export function createCallTemplateRuntime(options = {}) {
     });
   }
 
-  async function call_template(request = {}) {
+  async function call_template(request = {}, execution = {}) {
     let id = null;
     try {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
       const macroAtomic = live.enabled || options.executor
-        ? createMacroAtomicExecutor(executeAcceptedAtomic, normalized.context, normalized.recipe_undo)
+        ? createMacroAtomicExecutor(
+            executeAcceptedAtomic,
+            normalized.context,
+            normalized.recipe_undo,
+            execution?.signal,
+          )
         : null;
       if (isAlpha3_3B1DeprecatedAlias(id)) {
         const alias = alpha3_3B1DeprecatedAlias(id, normalized.input);
@@ -1514,6 +1522,7 @@ export function createCallTemplateRuntime(options = {}) {
         budget: normalized.budget,
         idempotency_key: normalized.idempotency_key,
         recipe_undo: normalized.recipe_undo,
+        signal: execution?.signal,
       });
       retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
       return observedExecution;
@@ -1540,8 +1549,8 @@ export function createCallTemplateRuntime(options = {}) {
       defaultSurface: "executable",
       productSurface: { live_gate: live.summary },
     }).list_templates,
-    async call_template(request = {}) {
-      const response = await call_template(request);
+    async call_template(request = {}, execution = {}) {
+      const response = await call_template(request, execution);
       return enforceRuntimeResponseContract(response, request, now);
     },
     evidence() {
@@ -2414,9 +2423,16 @@ function acceptedCatalogSummary(catalog) {
   });
 }
 
-function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = null) {
+function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = null, signal = null) {
   let childIndex = 0;
   return (childRequest = {}) => {
+    if (signal?.aborted === true) {
+      throw new CallTemplateRuntimeError(
+        "CALL_TEMPLATE_EXECUTION_FAILED",
+        "Macro request was cancelled before the next atomic operation.",
+        { recoverable: false, details: { request_cancelled: true } },
+      );
+    }
     childIndex += 1;
     const sourceContext = isPlainObject(childRequest.context)
       ? childRequest.context
@@ -2430,12 +2446,22 @@ function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = nu
     return executeAtomic({
       ...childRequest,
       recipe_undo: recipeUndo,
+      signal,
       context: {
         ...sourceContext,
         created_at: childCreatedAt,
       },
     });
   };
+}
+
+function assertTemplateRequestActive(signal, message) {
+  if (signal?.aborted !== true) return;
+  throw new CallTemplateRuntimeError(
+    "CALL_TEMPLATE_EXECUTION_FAILED",
+    message,
+    { recoverable: false, details: { request_cancelled: true, zero_write: true } },
+  );
 }
 
 function runtimeMacroLiveReadiness({ id, live, projectIndexRuntime }) {

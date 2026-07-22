@@ -22,6 +22,9 @@ const OFFICIAL_OUTPUTS = Object.freeze({
   "recipe.media.create_layered_sound_effect_variants": Object.freeze(["placement_changes", "variation_changes", "control_evidence"]),
   "recipe.items.create_sound_variations": Object.freeze(["variation_changes", "control_changes", "tone_changes", "automation_changes"]),
 });
+const OFFICIAL_RECIPE_SPEED_BUDGET_MS = 60_000;
+const CAPACITY_SPEED_BUDGET_MS = Object.freeze({ 1: 60_000, 8: 180_000, 64: 900_000, 65: 30_000 });
+const PUBLIC_CALL_TIMEOUT_MS = 960_000;
 
 export async function connectInstalledWrapperAlpha345({ installedWrapper, liveEnvironment = {}, clientName = "official-recipes" } = {}) {
   assertAbsolute(installedWrapper, "installedWrapper");
@@ -106,6 +109,7 @@ export async function runAlpha345OfficialRecipesHarness({
       const row = summarizeRun(id, run, identity);
       report.official_runs.push(row);
       if (!row.ok) throw coded("OFFICIAL_RECIPE_RUN_FAILED", `${id} did not complete.`);
+      if (!row.speed_ok) throw coded("OFFICIAL_RECIPE_TOO_SLOW", `${id} exceeded ${row.speed_budget_ms}ms.`);
       if (!hasOfficialRunTruth(row, fixture.inputs[id])) throw coded("OFFICIAL_RECIPE_RUN_TRUTH_INCOMPLETE", `${id} lacks declared outputs, mutation/readback proof, evidence, or closed Whole-Recipe Undo.`);
     }
 
@@ -131,6 +135,7 @@ export async function runAlpha345OfficialRecipesHarness({
       report.capacity.push(capacity);
       if (count <= 64 && (!capacity.ok || !capacity.batch_proven)) throw coded("OFFICIAL_CAPACITY_SUCCESS_REQUIRED", `Recipe 04 count ${count} failed or lacked full batch proof.`);
       if (count === 65 && !capacity.fail_closed) throw coded("OFFICIAL_CAPACITY_FAIL_CLOSED_REQUIRED", "Recipe 04 count 65 did not fail closed before mutation.");
+      if (!capacity.speed_ok) throw coded("OFFICIAL_CAPACITY_TOO_SLOW", `Recipe 04 count ${count} exceeded ${capacity.speed_budget_ms}ms.`);
     }
     const recipe04 = report.official_runs.find((row) => row.recipe_id === "recipe.items.create_sound_variations");
     const recipe04Features = concreteRecipe04Features(recipe04, fixture.inputs["recipe.items.create_sound_variations"]);
@@ -183,6 +188,8 @@ function summarizeRun(recipeId, call, identity) {
     ok: value.ok === true && ["completed", "succeeded"].includes(value.status ?? value.execution?.status ?? "completed"),
     public_call_count: 1,
     duration_ms: call.duration_ms,
+    speed_budget_ms: OFFICIAL_RECIPE_SPEED_BUDGET_MS,
+    speed_ok: call.duration_ms <= OFFICIAL_RECIPE_SPEED_BUDGET_MS,
     outputs: verifiedOutputs.map((output) => output.id).sort(),
     output_counts: Object.fromEntries(verifiedOutputs.map((output) => [output.id, Array.isArray(output.value) ? output.value.length : output.value == null ? 0 : 1])),
     output_omitted: Object.fromEntries(verifiedOutputs.map((output) => [output.id, output.value?.omitted === true])),
@@ -370,6 +377,8 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
     count,
     ok,
     duration_ms: call.duration_ms,
+    speed_budget_ms: CAPACITY_SPEED_BUDGET_MS[count],
+    speed_ok: call.duration_ms <= CAPACITY_SPEED_BUDGET_MS[count],
     required_mutation_rows: requiredMutationRows,
     native_mutation_count: value.execution_truth?.native_mutation_count ?? 0,
     readback_count: value.execution_truth?.readback_count ?? 0,
@@ -413,7 +422,7 @@ async function callPublicRecipe(client, args) {
   const response = await client.callTool(
     { name: "call_recipe", arguments: args },
     undefined,
-    { timeout: 300_000, maxTotalTimeout: 600_000 },
+    { timeout: PUBLIC_CALL_TIMEOUT_MS, maxTotalTimeout: PUBLIC_CALL_TIMEOUT_MS },
   );
   const text = response.content?.find((entry) => entry.type === "text")?.text;
   if (typeof text !== "string") throw coded("OFFICIAL_RECIPE_RESPONSE_INVALID", "call_recipe returned no JSON text.");

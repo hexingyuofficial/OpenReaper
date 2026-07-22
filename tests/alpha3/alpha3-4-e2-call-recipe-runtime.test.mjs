@@ -383,6 +383,165 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
   });
 
+  it("stops after the active stage and closes Whole-Recipe Undo when the caller cancels", async () => {
+    const controller = new AbortController();
+    const undoCalls = [];
+    let macroCalls = 0;
+    let templateCalls = 0;
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "recipe-undo-cancel", project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+          };
+        },
+      },
+      dispatchers: {
+        macro: async ({ signal }) => {
+          macroCalls += 1;
+          assert.equal(signal, controller.signal);
+          controller.abort("fixture timeout");
+          return macroEnvelope({ project_summary: { name: "Dialog" } });
+        },
+        template: async () => {
+          templateCalls += 1;
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const cancelled = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    }, { signal: controller.signal });
+
+    assert.equal(cancelled.ok, false);
+    assert.equal(cancelled.status, "failed");
+    assert.equal(cancelled.error.details.request_cancelled, true);
+    assert.deepEqual(cancelled.stages.failed, ["run_macro"]);
+    assert.deepEqual(cancelled.stages.completed, []);
+    assert.deepEqual(cancelled.stages.not_started, ["readback"]);
+    assert.equal(cancelled.execution_truth.mutation, "not_run");
+    assert.equal(cancelled.undo.status, "closed");
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+    assert.equal(undoCalls[1].mutation_truth, "not_run");
+    assert.equal(macroCalls, 1);
+    assert.equal(templateCalls, 0);
+  });
+
+  it("stops when cancelled during authoritative preflight without opening Whole-Recipe Undo", async () => {
+    const controller = new AbortController();
+    const undoCalls = [];
+    const { runtime } = makeRuntime({
+      facts(revision) {
+        controller.abort("fixture preflight timeout");
+        return completeFacts(revision);
+      },
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "must-not-open" };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return { ok: true, closed: true, verified: true, handle: request.handle };
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const cancelled = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    }, { signal: controller.signal });
+
+    assert.equal(cancelled.ok, false);
+    assert.equal(cancelled.error.code, "STAGE_FAILED");
+    assert.equal(cancelled.error.details.request_cancelled, true);
+    assert.equal(cancelled.error.details.zero_write, true);
+    assert.deepEqual(undoCalls, []);
+  });
+
+  it("retains applied mutation truth when cancellation follows a mutating atomic result", async () => {
+    const controller = new AbortController();
+    const undoCalls = [];
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return { ok: true, opened: true, handle: "recipe-undo-mutating-cancel", project_ref: request.project_ref };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return { ok: true, closed: true, verified: true, handle: request.handle, project_ref: request.project_ref };
+        },
+      },
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: { name: "Dialog" } }),
+        template: async () => {
+          controller.abort("fixture timeout after mutation");
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const cancelled = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    }, { signal: controller.signal });
+
+    assert.equal(cancelled.ok, false);
+    assert.equal(cancelled.error.details.request_cancelled, true);
+    assert.equal(cancelled.execution_truth.mutation, "applied");
+    assert.equal(cancelled.undo.status, "closed");
+    assert.equal(cancelled.proven_partial_changes.length, 1);
+    assert.equal(undoCalls[1].mutation_truth, "applied");
+  });
+
+  it("reports unknown mutation truth when cancellation cannot prove Whole-Recipe Undo close", async () => {
+    const controller = new AbortController();
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          return { ok: true, opened: true, handle: "recipe-undo-cancel-close-fail", project_ref: request.project_ref };
+        },
+        async end() {
+          throw new Error("close proof unavailable");
+        },
+      },
+      dispatchers: {
+        macro: async () => macroEnvelope({ project_summary: { name: "Dialog" } }),
+        template: async () => {
+          controller.abort("fixture timeout after mutation");
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const cancelled = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    }, { signal: controller.signal });
+
+    assert.equal(cancelled.ok, false);
+    assert.equal(cancelled.error.details.request_cancelled, true);
+    assert.equal(cancelled.execution_truth.mutation, "unknown");
+    assert.equal(cancelled.undo.status, "close_unknown");
+    assert.equal(cancelled.resume_safe, false);
+  });
+
   it("fails before stage dispatch when Whole-Recipe Undo cannot open", async () => {
     let stageCalls = 0;
     const { runtime } = makeRuntime({

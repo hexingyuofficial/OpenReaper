@@ -255,7 +255,7 @@ async function main() {
       budget: z.record(z.unknown()).optional(),
       idempotency_key: z.string().optional(),
     },
-    async (request) => {
+    async (request, extra) => {
       let normalized;
       try {
         const context = callContext.allocate(request?.context);
@@ -264,7 +264,7 @@ async function main() {
         if (!(error instanceof Alpha3_2C1CallContextError)) throw error;
         return jsonToolResult(callContextErrorResult(request, error), true);
       }
-      const called = await runtime.call_template(normalized);
+      const called = await runtime.call_template(normalized, { signal: extra?.signal });
       const result = await observeProjectIndexArtifactPayload({
         execution: called,
         artifactRuntime,
@@ -342,7 +342,7 @@ async function main() {
       relative_path: z.string().optional(),
       saved_at: z.string().optional(),
     },
-    async (request) => {
+    async (request, extra) => {
       if (!boundCallRecipeRuntime) {
         return jsonToolResult({
           ok: false,
@@ -355,7 +355,7 @@ async function main() {
           },
         }, true);
       }
-      const result = await boundCallRecipeRuntime.call_recipe(request ?? {});
+      const result = await boundCallRecipeRuntime.call_recipe(request ?? {}, { signal: extra?.signal });
       return jsonToolResult(result, result?.ok === false);
     },
   );
@@ -595,7 +595,7 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
 }
 
 function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {
-  const callTemplateStage = async ({ stage, inputs, refs, recipe_undo }) => {
+  const callTemplateStage = async ({ stage, inputs, refs, recipe_undo, signal }) => {
     if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
       throw new Error("Recipe Macro/Template stage runtime is not configured.");
     }
@@ -609,7 +609,7 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
     if (recipe_undo?.suppress_child_undo === true) {
       request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO] = recipe_undo;
     }
-    return callTemplateRuntime.call_template(request);
+    return callTemplateRuntime.call_template(request, { signal });
   };
   return {
     macro: callTemplateStage,

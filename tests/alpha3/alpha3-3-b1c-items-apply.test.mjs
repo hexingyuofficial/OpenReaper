@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
 import {
   FakeFoundationBridge as RuntimeFoundationBridge,
@@ -23,6 +28,7 @@ import {
 import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 
 const NOW = "2026-07-13T16:00:00.000Z";
+const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 const ITEM_A = itemRef("{ITEM-A}");
 const ITEM_B = itemRef("{ITEM-B}");
 const TAKE_A0 = takeRef("{TAKE-A0}");
@@ -116,6 +122,130 @@ describe("Alpha3.3-B1c executable macro.items.apply", () => {
       observed_value: 9,
     });
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("stops a Macro before its next atomic operation when the MCP caller cancels", async () => {
+    const controller = new AbortController();
+    const bridge = new ItemsApplyRuntimeBridge();
+    const dispatch = bridge.dispatch.bind(bridge);
+    bridge.dispatch = async (request) => {
+      const result = await dispatch(request);
+      controller.abort("fixture timeout");
+      return result;
+    };
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const result = await runtime.call_template({
+      id: "macro.items.apply",
+      input: {
+        mode: "move_to_anchor",
+        target_refs: [ITEM_A.ref],
+        anchor_seconds: 9,
+        dry_run: false,
+      },
+      context: {
+        request_id: "request:alpha33:b1c:cancel",
+        session_id: "session:alpha33:b1c:cancel",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: NOW,
+        request_sequence: 1,
+      },
+    }, { signal: controller.signal });
+
+    assert.equal(result.ok, false, JSON.stringify({ result, capabilities: bridge.capabilities }));
+    assert.equal(result.error.details.request_cancelled, true);
+    assert.deepEqual(bridge.capabilities, ["items.resolve_item_ref"]);
+    assert.equal(bridge.positionSeconds, 1);
+  });
+
+  it("stops a direct Template cancelled during async preflight before REAPER dispatch", async () => {
+    const controller = new AbortController();
+    const bridge = new ItemsApplyRuntimeBridge();
+    const runtime = createCallTemplateRuntime({
+      live: {
+        opted_in: true,
+        executor: bridge,
+        allowed_template_ids: CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
+      },
+    });
+    const pending = runtime.call_template({
+      id: "template.tracks.create_track",
+      input: { name: "Cancelled" },
+      context: {
+        request_id: "request:alpha33:b1c:cancel-direct",
+        session_id: "session:alpha33:b1c:cancel-direct",
+        expected_owner: "owner-test",
+        expected_generation: 1,
+        created_at: NOW,
+        request_sequence: 1,
+      },
+    }, { signal: controller.signal });
+    controller.abort("fixture timeout");
+    const result = await pending;
+
+    assert.equal(result.ok, false, JSON.stringify(result));
+    assert.equal(result.error.details.request_cancelled, true);
+    assert.equal(result.error.details.zero_write, true);
+    assert.deepEqual(bridge.capabilities, []);
+  });
+
+  it("forwards real stdio MCP cancellation and stops a Macro before its write request", { timeout: 10_000 }, async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-items-cancel-stdio-"));
+    const transportDir = path.join(root, "transport");
+    mkdirSync(path.join(transportDir, "requests"), { recursive: true });
+    mkdirSync(path.join(transportDir, "results"), { recursive: true });
+    const client = new Client({ name: "alpha33-items-cancel", version: "1.0.0" });
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [STDIO_SERVER],
+      cwd: path.resolve("."),
+      env: {
+        ...process.env,
+        OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR: transportDir,
+        OPENREAPER_LIVE_BRIDGE_OWNER: "owner-test",
+        OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
+      },
+      stderr: "pipe",
+    });
+    try {
+      await client.connect(transport);
+      const controller = new AbortController();
+      const call = client.callTool({
+        name: "call_template",
+        arguments: {
+          id: "macro.items.apply",
+          input: {
+            mode: "move_to_anchor",
+            target_refs: [ITEM_A.ref],
+            anchor_seconds: 9,
+            dry_run: false,
+          },
+        },
+      }, undefined, { signal: controller.signal, timeout: 5_000, maxTotalTimeout: 5_000 });
+      const settledCall = call.then(
+        () => ({ error: null }),
+        (error) => ({ error }),
+      );
+      const first = await waitForBridgeRequest(transportDir);
+      assert.equal(first.request.pack.capability, "items.resolve_item_ref");
+      controller.abort("fixture timeout");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const response = new ItemsApplyRuntimeBridge().dispatch(first.request);
+      writeFileSync(path.join(transportDir, "results", first.file), `${JSON.stringify(response)}\n`, "utf8");
+      const { error } = await settledCall;
+      assert.match(error?.message ?? "", /timeout|abort|cancel/iu);
+      const laterCapabilities = await collectLaterBridgeCapabilities(transportDir, first.file, 500);
+      assert.deepEqual(laterCapabilities, []);
+    } finally {
+      await client.close().catch(() => {});
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("executes set_active_take through the public runtime facade and forwards the paired exact refs", async () => {
@@ -943,6 +1073,30 @@ class ItemsApplyRuntimeBridge extends RuntimeFoundationBridge {
     );
     return super.dispatch(request);
   }
+}
+
+async function waitForBridgeRequest(transportDir) {
+  const requestsDir = path.join(transportDir, "requests");
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    const file = readdirSync(requestsDir).find((entry) => entry.endsWith(".json"));
+    if (file) return { file, request: JSON.parse(readFileSync(path.join(requestsDir, file), "utf8")) };
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for stdio cancellation fixture request.");
+}
+
+async function collectLaterBridgeCapabilities(transportDir, firstFile, durationMs) {
+  const requestsDir = path.join(transportDir, "requests");
+  const capabilities = new Set();
+  const deadline = Date.now() + durationMs;
+  while (Date.now() < deadline) {
+    for (const file of readdirSync(requestsDir).filter((entry) => entry.endsWith(".json") && entry !== firstFile)) {
+      const request = JSON.parse(readFileSync(path.join(requestsDir, file), "utf8"));
+      capabilities.add(request.pack?.capability);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return [...capabilities];
 }
 
 class FakeFoundationBridge {
