@@ -9,7 +9,10 @@ import {
   ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY,
   executeAlpha3_3B1cItemsApplyMacro,
 } from "../../packages/mcp-server/src/alpha3-3-b1c-items-apply-v1.mjs";
-import { validateMacroExecutionEnvelope } from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
+import {
+  MACRO_CONTRACT_CEILINGS,
+  validateMacroExecutionEnvelope,
+} from "../../packages/mcp-server/src/macro-runtime-contract-v1.mjs";
 import { createCallTemplateRuntime } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import { OPENREAPER_PUBLIC_TOOL_IDS } from "../../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
@@ -369,7 +372,11 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.deepEqual(zeroFx.result.changes[0].take_fx_copy.slots, []);
     assert.equal(zeroFx.result.changes[0].take_fx_copy.status, "passed");
 
-    const rows = variationRows(64).map((row, index) => ({ ...row, source_offset_seconds: index / 100 }));
+    const rows = variationRows(64).map((row, index) => ({
+      ...row,
+      position_seconds: (index + 1) * (2.5416666666667 + 0.25),
+      source_offset_seconds: ((index * 0.6180339887498949) % 1) * 0.15,
+    }));
     const realistic = await executeAlpha3_3B1cItemsApplyMacro({
       request: request({ mode: "create_variations", dry_run: false, variations: rows }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
       executeAtomic: makeVariationExecutor({ realisticRefs: true }).executeAtomic,
@@ -378,7 +385,17 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(realistic.ok, true, JSON.stringify(realistic));
     assert.equal(realistic.result.changes.length, 64);
     assert.equal(realistic.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
+    assert.equal(realistic.result.changes.every((row) => !Object.hasOwn(row, "source_offset_seconds")), true);
     assert.deepEqual(validateMacroExecutionEnvelope(realistic), { valid: true, errors: [] });
+    assert.equal(realistic.budget.actual_bytes <= 65_536, true);
+    assert.equal(Buffer.byteLength(JSON.stringify({
+      stages: realistic.execution.stages,
+      changes: realistic.result.changes,
+      data: realistic.result.data,
+      blockers: realistic.blockers,
+      error: realistic.error,
+      recovery: realistic.recovery,
+    }), "utf8") <= MACRO_CONTRACT_CEILINGS.inline_detail_max_bytes, true);
 
     const corruptExecutor = makeVariationExecutor({ corruptFxProof: true });
     const corrupt = await executeAlpha3_3B1cItemsApplyMacro({
@@ -400,7 +417,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     });
     assert.equal(offsetResponse.ok, true, JSON.stringify(offsetResponse));
     const offsetChange = offsetResponse.result.changes[0];
-    assert.equal(offsetChange.source_offset_seconds, 0.125);
+    assert.equal(Object.hasOwn(offsetChange, "source_offset_seconds"), false);
     assert.equal(offsetChange.readback, "pass");
     const offsetCall = offsetExecutor.calls.find((child) => child.id === "template.items.set_take_start_in_source");
     assert.equal(offsetCall.input.start_offset_seconds, 0.125);

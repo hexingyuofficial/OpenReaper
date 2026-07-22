@@ -2794,7 +2794,6 @@ function projectCompactBatchChanges(changes) {
       new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
       take_fx_copy: compactVariationTakeFxCopy(change.take_fx_copy),
       position_seconds: Number.isFinite(change.position_seconds) ? change.position_seconds : undefined,
-      source_offset_seconds: Number.isFinite(change.source_offset_seconds) ? change.source_offset_seconds : undefined,
     });
   });
 }
