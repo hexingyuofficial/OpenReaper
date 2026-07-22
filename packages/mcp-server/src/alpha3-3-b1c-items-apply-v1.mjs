@@ -1327,7 +1327,19 @@ async function executeCreateVariationsBatch({
   const dryRun = normalized.input?.dry_run ?? request.input?.dry_run !== false;
   const data = () => variationBatchData(state, { dry_run: dryRun });
   if (!normalized.ok) {
-    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers, data: data() });
+    return failureEnvelope({
+      entry,
+      request,
+      startedAt,
+      now,
+      stages,
+      state,
+      activeBudget,
+      code: normalized.code,
+      message: normalized.message,
+      blockers: normalized.blockers,
+      data: { ...data(), zero_write: true },
+    });
   }
   const programRequest = {
     macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
@@ -2706,6 +2718,7 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {}, compact = false }) {
   const useCompact = compact === true || state.batchMode === true;
+  const zeroWrite = data?.zero_write === true;
   const verified = state.changes.length > 0
     && state.changes
       .filter((change) => change.mutation?.status === "completed" || change.status === "applied")
@@ -2738,12 +2751,18 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
     blockers: (blockers.length > 0 ? blockers : [blocker(code, message)])
       .slice(0, useCompact ? 1 : MACRO_CONTRACT_CEILINGS.blocker_max_count)
       .map((entry) => useCompact
-        ? { code: entry.code, message: String(entry.message ?? "").slice(0, 64), recoverable: entry.recoverable !== false }
+        ? {
+            code: entry.code,
+            message: String(entry.message ?? "").slice(0, 64),
+            recoverable: entry.recoverable !== false,
+            ...(zeroWrite ? { details: { zero_write: true } } : {}),
+          }
         : entry),
     error: {
       code,
       message: useCompact ? String(message ?? "").slice(0, 64) : message,
       recoverable: true,
+      ...(zeroWrite ? { details: { zero_write: true } } : {}),
     },
     recovery: useCompact
       ? null
@@ -2817,6 +2836,7 @@ function projectCompactBatchData(data) {
   const value = isPlainObject(data) ? data : {};
   return {
     mode: typeof value.mode === "string" ? value.mode : "set_item_take_controls",
+    ...(value.zero_write === true ? { zero_write: true } : {}),
     timings: {
       target_resolution_ms: Math.round(Number(value.timings?.target_resolution_ms) || 0),
       preflight_ms: Math.round(Number(value.timings?.preflight_ms) || 0),
@@ -2889,6 +2909,7 @@ function finalizeEnvelope(envelope) {
           code: entry.code,
           message: String(entry.message ?? "").slice(0, 24),
           recoverable: entry.recoverable !== false,
+          ...(entry.details?.zero_write === true ? { details: { zero_write: true } } : {}),
         }));
       }
       if (Array.isArray(result.result?.changes)) {

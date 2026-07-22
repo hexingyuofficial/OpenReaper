@@ -374,6 +374,9 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     });
     assert.equal(blocked.ok, false);
     assert.equal(blocked.error.code, "ITEM_APPLY_VARIATIONS_INVALID");
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.equal(blocked.result.data.zero_write, true);
+    assert.equal(blocked.blockers[0].details.zero_write, true);
     assert.equal(calls.length, 0);
   });
 
