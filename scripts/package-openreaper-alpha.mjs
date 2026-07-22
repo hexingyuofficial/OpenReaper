@@ -633,19 +633,35 @@ async function smokePackagedOpenReaperMcp() {
     });
     const macroResponse = await client.callTool({
       name: "list_templates",
-      arguments: {
-        ids: [...REQUIRED_MACRO_IDS],
-      },
+      arguments: {},
     });
     const macros = parseJsonToolResult(macroResponse);
     assertDiscoveredIds(macros, REQUIRED_MACRO_IDS, "Packaged MCP macro smoke");
     assertNotDiscoveredIds(macros, FORMER_PUBLIC_MACRO_IDS, "Packaged MCP former public macro smoke");
-    assertAgentStartupGuidance(macros.product_surface?.agent_startup_guidance_snapshot, {
-      label: "Packaged MCP list_templates startup guidance",
-      expectedPackageRoot: null,
+    assertCompactAgentStartupGuidance(macros.product_surface?.agent_startup_guidance, {
+      label: "Packaged MCP compact list_templates startup guidance",
     });
-    assertProjectIndexUserFlow(macros.product_surface?.project_index_user_flow_snapshot);
-    assertMacroExecutionConvenience(macros.product_surface?.macro_execution_convenience_snapshot);
+    if (macros.product_surface?.projection !== "agent_compact_v1") {
+      throw new Error("Packaged MCP list_templates did not use the compact public projection");
+    }
+    for (const legacyField of [
+      "agent_startup_guidance_snapshot",
+      "project_index_user_flow_snapshot",
+      "macro_execution_convenience_snapshot",
+    ]) {
+      if (Object.hasOwn(macros.product_surface ?? {}, legacyField)) {
+        throw new Error(`Packaged MCP compact list_templates leaked ${legacyField}`);
+      }
+    }
+    const manualResponse = parseJsonToolResult(await client.callTool({
+      name: "list_templates",
+      arguments: { ids: ["macro.fx.set_controls"], fields: ["id"] },
+    }));
+    const manualItems = manualResponse.product_surface?.agent_context_macro_guide
+      ?.requested_expansions?.items;
+    if (!Array.isArray(manualItems) || manualItems.length !== 1 || manualItems[0]?.id !== "macro.fx.set_controls") {
+      throw new Error("Packaged MCP exact-id Macro manual projection is incomplete");
+    }
     const fxTemplateResponse = await client.callTool({
       name: "list_templates",
       arguments: {
@@ -934,23 +950,16 @@ async function smokePackagedOpenReaperMcp() {
           does_not_dismiss: ping.agent_startup_guidance.startup_dialog_assist.does_not_dismiss,
         },
       },
-      project_index_user_flow: {
-        contract: macros.product_surface.project_index_user_flow_snapshot.contract,
-        primary_macro_ids: macros.product_surface.project_index_user_flow_snapshot.primary_macro_ids,
-        hidden_executor: macros.product_surface.project_index_user_flow_snapshot.safety.hidden_executor,
-        raw_sql_exposed: macros.product_surface.project_index_user_flow_snapshot.safety.raw_sql_exposed,
-      },
-      macro_execution_convenience: {
-        contract: macros.product_surface.macro_execution_convenience_snapshot.contract,
-        fixed_registered_programs:
-          macros.product_surface.macro_execution_convenience_snapshot.safety.fixed_registered_programs,
-        model_supplied_execution_graph:
-          macros.product_surface.macro_execution_convenience_snapshot.safety.model_supplied_execution_graph,
-        hidden_executor: macros.product_surface.macro_execution_convenience_snapshot.safety.hidden_executor,
-        live_write_refs_reresolved:
-          macros.product_surface.macro_execution_convenience_snapshot.safety.live_write_refs_reresolved,
-        success_wording_requires_readback:
-          macros.product_surface.macro_execution_convenience_snapshot.safety.success_wording_requires_readback,
+      public_discovery: {
+        projection: macros.product_surface.projection,
+        macro_count: macros.items.length,
+        exact_manual_id: manualItems[0].id,
+        exact_manual_contract: manualItems[0].contract,
+        legacy_snapshots_omitted: [
+          "agent_startup_guidance_snapshot",
+          "project_index_user_flow_snapshot",
+          "macro_execution_convenience_snapshot",
+        ].every((field) => !Object.hasOwn(macros.product_surface, field)),
       },
       executable_allowlist: executableAllowlistSmoke,
       project_index_lifecycle: projectIndexLifecycle,
@@ -3795,6 +3804,27 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   }
   if (guidance.safety?.added_tools !== 0 || guidance.safety?.hidden_executor !== false) {
     throw new Error(`${label} expanded the tool surface or hid an executor`);
+  }
+}
+
+function assertCompactAgentStartupGuidance(guidance, { label }) {
+  if (!guidance || guidance.contract !== "openreaper.alpha3_1.agent_startup_guidance.v1") {
+    throw new Error(`${label} missing OpenReaper agent startup guidance`);
+  }
+  if (guidance.tool_surface?.mcp_server_name !== "openreaper" || guidance.tool_surface?.added_tools !== 0) {
+    throw new Error(`${label} changed the public MCP tool surface`);
+  }
+  if (guidance.installed_commands?.start_reaper_for_mcp !== REQUIRED_INSTALLED_START_COMMAND) {
+    throw new Error(`${label} installed start command mismatch`);
+  }
+  if (guidance.installed_commands?.start_project_for_mcp !== REQUIRED_INSTALLED_PROJECT_START_COMMAND) {
+    throw new Error(`${label} installed project start command mismatch`);
+  }
+  if (guidance.caveats?.normal_reaper_launch_supported !== false) {
+    throw new Error(`${label} must say normal REAPER launch is not an OpenReaper MCP session`);
+  }
+  if (guidance.caveats?.only_openreaper_startup_supported !== true) {
+    throw new Error(`${label} must require the OpenReaper startup helper`);
   }
 }
 
