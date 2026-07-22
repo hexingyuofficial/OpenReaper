@@ -42,7 +42,7 @@ export OPENREAPER_DOCTOR_EXECUTABLE_RECIPE_ROOT="${EXECUTABLE_RECIPE_ROOT}"
 
 exec node --input-type=module - "$@" <<'NODE'
 import { spawn } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { access, chmod, lstat, mkdir, mkdtemp, open, readFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -69,6 +69,7 @@ const serverScript = path.join(installRoot, "vendor", "openreaper-kernel", "pack
 const readinessModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2b3-runtime-doctor-readiness-v1.mjs");
 const projectUnderstandingModulePath = path.join(installRoot, "vendor", "openreaper-kernel", "packages", "mcp-server", "src", "alpha3-2-5-b-project-understanding-v1.mjs");
 const vitalAgentServerScript = path.join(installRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
+const vitalAgentIncluded = existsSync(vitalAgentMcpCommand) && existsSync(vitalAgentServerScript);
 const bridgeScript = path.join(installRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
 const bridgeActionName = "OpenReaper: Start MCP bridge";
 const bridgeActionScript = path.join(home, "Library", "Application Support", "REAPER", "Scripts", "OpenReaper", "openreaper-start-mcp-bridge.lua");
@@ -159,11 +160,17 @@ const report = {
   contract: "openreaper.alpha.doctor_report.v1",
   runtime_contract: readinessModule.ALPHA3_2B3_RUNTIME_DOCTOR_READINESS_CONTRACT,
   install_root: installRoot,
-  mcp_server_names: ["openreaper", "vital-agent-mcp"],
+  mcp_server_names: ["openreaper", ...(vitalAgentIncluded ? ["vital-agent-mcp"] : [])],
   commands: {
     mcp: mcpCommand,
-    vital_agent_mcp: vitalAgentMcpCommand,
+    ...(vitalAgentIncluded ? { vital_agent_mcp: vitalAgentMcpCommand } : {}),
     start_reaper_for_mcp: startCommand,
+  },
+  optional_companions: {
+    vital_agent_mcp: {
+      included: vitalAgentIncluded,
+      mode: "optional_companion",
+    },
   },
   bridge_action: {
     name: bridgeActionName,
@@ -220,11 +227,13 @@ report.checks.node = {
   ok: Number(process.versions.node.split(".")[0]) >= 20,
 };
 report.checks.mcp_command = await pathCheck(mcpCommand);
-report.checks.vital_agent_mcp_command = await pathCheck(vitalAgentMcpCommand);
 report.checks.server_script = await pathCheck(serverScript);
 report.checks.readiness_module = await pathCheck(readinessModulePath);
 report.checks.project_understanding_module = await pathCheck(projectUnderstandingModulePath);
-report.checks.vital_agent_server_script = await pathCheck(vitalAgentServerScript);
+if (vitalAgentIncluded) {
+  report.checks.vital_agent_mcp_command = await pathCheck(vitalAgentMcpCommand);
+  report.checks.vital_agent_server_script = await pathCheck(vitalAgentServerScript);
+}
 report.checks.bridge_script = await pathCheck(bridgeScript);
 report.checks.bridge_action_script = await pathCheck(bridgeActionScript);
 report.checks.bridge_action_registration = await bridgeActionRegistrationCheck();
@@ -276,9 +285,9 @@ console.log("");
 console.log("OpenReaper doctor agent report");
 console.log(`status=${report.status}`);
 console.log(`package_status=${report.package_status}`);
-console.log("mcp_server_names=openreaper,vital-agent-mcp");
+console.log(`mcp_server_names=${report.mcp_server_names.join(",")}`);
 console.log(`mcp_command=${mcpCommand}`);
-console.log(`vital_agent_mcp_command=${vitalAgentMcpCommand}`);
+if (vitalAgentIncluded) console.log(`vital_agent_mcp_command=${vitalAgentMcpCommand}`);
 console.log(`start_reaper_for_mcp=${startCommand}`);
 console.log(`bridge_action=${bridgeActionName}`);
 console.log(`bridge_action_script=${bridgeActionScript}`);
@@ -304,7 +313,7 @@ if (report.smoke?.ok) {
   console.log(`tools=${report.smoke.openreaper.tool_surface.join(",")}`);
   console.log(`macros=${report.smoke.openreaper.required_macros.join(",")}`);
   console.log(`fx_templates=${report.smoke.openreaper.required_fx_templates.join(",")}`);
-  console.log(`vital_agent_tools=${report.smoke.vital_agent_mcp.required_tools.join(",")}`);
+  if (vitalAgentIncluded) console.log(`vital_agent_tools=${report.smoke.vital_agent_mcp.required_tools.join(",")}`);
 }
 if (report.task) {
   console.log(`task_mode=${report.task.mode}`);
@@ -535,9 +544,11 @@ async function smokeMcp() {
 async function smokeMcpInner() {
   const openreaper = await smokeOpenReaperMcpInner();
   const packageMcpCommand = await smokeOpenReaperMcpCommandInner();
-  const vitalAgent = await smokeVitalAgentMcpInner();
+  const vitalAgent = vitalAgentIncluded
+    ? await smokeVitalAgentMcpInner()
+    : { skipped: true, reason: "optional_companion_not_installed" };
   return {
-    ok: packageMcpCommand.ok === true,
+    ok: packageMcpCommand.ok === true && (!vitalAgentIncluded || vitalAgent.ok === true),
     openreaper,
     package_mcp_command: packageMcpCommand,
     vital_agent_mcp: vitalAgent,
@@ -780,6 +791,7 @@ async function smokeVitalAgentMcpInner() {
       throw new Error("vital-agent-mcp run_doctor did not report ok=true");
     }
     return {
+      ok: true,
       required_tools: vitalAgentRequiredTools,
       doctor_schema: doctor.schema,
     };
@@ -808,7 +820,9 @@ function migrationActions() {
 function needsClientConfigRefresh() {
   return report.client_configs.some((config) =>
     (config.exists && config.has_openreaper && !config.references_current_mcp) ||
-    (config.exists && config.has_vital_agent_mcp && !config.references_current_vital_agent_mcp));
+    (vitalAgentIncluded
+      ? (config.exists && config.has_vital_agent_mcp && !config.references_current_vital_agent_mcp)
+      : (config.exists && config.has_vital_agent_mcp)));
 }
 
 function computePackageStatus() {

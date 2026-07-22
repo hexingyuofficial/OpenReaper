@@ -3,14 +3,14 @@
 OpenReaper is an evidence-bound MCP bridge and task runtime for REAPER. It lets
 an MCP-capable agent inspect a project, execute reviewed task Macros and atomic
 Templates, verify changes from live REAPER readback, and retain bounded
-artifacts through five fixed tools.
+artifacts through six fixed tools.
 
-The current Alpha3.3 product is a local macOS alpha with an installable startup
+The current Alpha3.45 product is a local macOS alpha with an installable startup
 helper. It does not expose raw Lua, arbitrary REAPER Actions, shell execution,
 hardware/device I/O, or SQLite write authority, and it does not claim arbitrary
 plugin, operating-system, or REAPER-version support.
 
-## Current Alpha3.3 Status
+## Current Alpha3.45 Status
 
 Default discovery presents fifteen flat, visible, executable Macros and ranks
 one to three recommendations for the current intent. Full manuals expand only
@@ -30,8 +30,8 @@ macro.controls.set           macro.automation.apply
 macro.render.targets
 ```
 
-The current accepted atomic catalog contains 227 Templates with registered
-bridge handlers across 87 handler modules. Direct Templates remain available
+The current accepted atomic catalog contains 235 Templates with registered
+bridge handlers across 91 handler modules. Direct Templates remain available
 as typed, reason-recorded fallback for long-tail work. SQLite is a navigation
 and engineering-cognition layer only: every write target is live-resolved and
 every successful change is accepted only from REAPER readback.
@@ -99,6 +99,16 @@ safety_note
 example_input
 ```
 
+Four product-owned Recipes are discoverable, forkable, and executable through
+one public `call_recipe` run:
+
+```text
+recipe.mix.create_bus_processing
+recipe.midi.create_instrument_part
+recipe.media.create_layered_sound_effect_variants
+recipe.items.create_sound_variations
+```
+
 For a first real-user pass, run the recipe card
 `recipe.project.inspect_current_fixture_readiness` as a step-by-step workflow:
 it reads a compact project snapshot, selected items, track refs, and mixer
@@ -139,7 +149,7 @@ node scripts/preview-alpha2-product-surface.mjs --limit=25
 
 ## Tool Surface
 
-OpenReaper exposes exactly five agent-facing MCP tools:
+OpenReaper exposes exactly six agent-facing MCP tools:
 
 ```text
 ping
@@ -147,13 +157,31 @@ get_state
 list_templates
 list_recipes
 call_template
+call_recipe
 ```
 
 Agents discover recipes and templates through compact menus. Full template
-schemas and recipe steps are expanded only by exact id. Complex workflows are
-recipe-first: agents read recipe contracts and execute the steps through
-`call_template` and `get_state`. V1 does not expose a public `call_recipe`
-tool.
+schemas and recipe steps are expanded only by exact id. Saved validated Recipes
+execute through one `call_recipe` call; direct `call_template` and `get_state`
+remain the typed fallback and readback path.
+
+## Packaging
+
+The default release package is OpenReaper core only. It does not read, bundle,
+register, start, smoke, or gate on `vital-agent-mcp`:
+
+```bash
+npm run package:openreaper-alpha
+```
+
+Vital support remains available as an explicit optional companion mode:
+
+```bash
+npm run package:openreaper-alpha -- --with-vital
+```
+
+Only that mode includes Vital companion provenance and runs its capability
+smoke. Both modes preserve the six-tool OpenReaper surface.
 
 ## Product Model
 
@@ -162,7 +190,7 @@ Pack      = fixed REAPER capability domain
 Template  = reviewed concrete capability
 Recipe    = workflow contract over known templates
 Add-on    = extension bundle for users/developers
-Agent     = discovers recipes/templates and calls the five MCP tools
+Agent     = discovers recipes/templates and calls the six MCP tools
 User      = primarily creates or edits recipes, not raw templates
 ```
 

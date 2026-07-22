@@ -54,6 +54,8 @@ const installRoot = path.resolve(options.install_root ?? path.join(home, ".openr
 const dryRun = options.dry_run === true;
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
+const vitalAgentIncluded = existsSync(path.join(packageRoot, "bin", "vital-agent-mcp"))
+  && existsSync(path.join(packageRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js"));
 
 const installedBin = path.join(installRoot, "bin");
 const mcpCommand = path.join(installedBin, "openreaper-mcp");
@@ -84,7 +86,13 @@ const report = {
   package_root: packageRoot,
   install_root: installRoot,
   mcp_command: mcpCommand,
-  vital_agent_mcp_command: vitalAgentMcpCommand,
+  optional_companions: {
+    vital_agent_mcp: {
+      included: vitalAgentIncluded,
+      mode: "optional_companion",
+      ...(vitalAgentIncluded ? { command: vitalAgentMcpCommand } : {}),
+    },
+  },
   start_command: startCommand,
   bridge_action: {
     title: BRIDGE_ACTION_TITLE,
@@ -177,7 +185,7 @@ async function runInstall() {
         await chmod(path.join(installRoot, "install.command"), 0o755).catch(() => {});
         await chmod(path.join(installRoot, "uninstall.command"), 0o755).catch(() => {});
         await chmod(mcpCommand, 0o755);
-        await chmod(vitalAgentMcpCommand, 0o755);
+        if (vitalAgentIncluded) await chmod(vitalAgentMcpCommand, 0o755);
         await chmod(startCommand, 0o755);
         await chmod(doctorCommand, 0o755);
         await mkdir(path.join(transportDir, "requests"), { recursive: true });
@@ -449,16 +457,17 @@ command = ${tomlString(vitalAgentMcpCommand)}
 args = []
 `;
   if (dryRun) {
-    report.skipped.push(`dry run: would upsert Codex MCP config for openreaper and vital-agent-mcp at ${configPath}`);
+    report.skipped.push(`dry run: would upsert Codex MCP config for openreaper${vitalAgentIncluded ? " and optional vital-agent-mcp" : " core only"} at ${configPath}`);
     return;
   }
   await mkdir(path.dirname(configPath), { recursive: true });
   const existing = await readTextIfExists(configPath);
   let next = removeLegacyOpenReaperTomlSections(existing);
   next = upsertTomlSectionTree(next, "mcp_servers.openreaper", openReaperSection);
-  next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
+  next = removeTomlSectionTree(next, "mcp_servers.vital-agent-mcp");
+  if (vitalAgentIncluded) next = upsertTomlSection(next, "mcp_servers.vital-agent-mcp", vitalAgentSection);
   await writeFile(configPath, next, "utf8");
-  report.changed.push(`registered Codex MCP servers openreaper and vital-agent-mcp at ${configPath}`);
+  report.changed.push(`registered Codex MCP server openreaper${vitalAgentIncluded ? " and optional vital-agent-mcp" : " only"} at ${configPath}`);
 }
 
 async function configureCursor() {
@@ -507,12 +516,15 @@ async function upsertJsonMcpServer(configPath, label) {
       OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
     },
   };
-  parsed.mcpServers["vital-agent-mcp"] = {
-    command: vitalAgentMcpCommand,
-    args: [],
-  };
+  delete parsed.mcpServers["vital-agent-mcp"];
+  if (vitalAgentIncluded) {
+    parsed.mcpServers["vital-agent-mcp"] = {
+      command: vitalAgentMcpCommand,
+      args: [],
+    };
+  }
   await writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  report.changed.push(`registered ${label} MCP servers openreaper and vital-agent-mcp at ${configPath}`);
+  report.changed.push(`registered ${label} MCP server openreaper${vitalAgentIncluded ? " and optional vital-agent-mcp" : " only"} at ${configPath}`);
 }
 
 async function writeClientSnippets() {
@@ -537,10 +549,12 @@ async function writeClientSnippets() {
           OPENREAPER_LIVE_BRIDGE_GENERATION: "1",
         },
       },
-      "vital-agent-mcp": {
-        command: vitalAgentMcpCommand,
-        args: [],
-      },
+      ...(vitalAgentIncluded ? {
+        "vital-agent-mcp": {
+          command: vitalAgentMcpCommand,
+          args: [],
+        },
+      } : {}),
     },
   };
   await writeFile(path.join(snippetDir, "mcp.json"), `${JSON.stringify(jsonSnippet, null, 2)}\n`, "utf8");
@@ -556,11 +570,11 @@ OPENREAPER_LIVE_SMOKE_ARTIFACT_ROOT = ${tomlString(artifactRoot)}
 OPENREAPER_LIVE_SMOKE_RENDER_ROOT = ${tomlString(renderRoot)}
 OPENREAPER_LIVE_BRIDGE_OWNER = "openreaper-alpha"
 OPENREAPER_LIVE_BRIDGE_GENERATION = "1"
-
+${vitalAgentIncluded ? `
 [mcp_servers.vital-agent-mcp]
 command = ${tomlString(vitalAgentMcpCommand)}
 args = []
-`, "utf8");
+` : ""}`, "utf8");
   await writeFile(path.join(snippetDir, "trae-mcp.json"), `${JSON.stringify(jsonSnippet, null, 2)}\n`, "utf8");
   report.changed.push(`wrote MCP config snippets at ${snippetDir}`);
 }
@@ -724,6 +738,12 @@ function upsertTomlSectionTree(existing, sectionName, sectionText) {
 
   const nextLines = nextSections.flatMap((section) => section.lines);
   return `${nextLines.join("\n").trimEnd()}\n`;
+}
+
+function removeTomlSectionTree(existing, sectionName) {
+  const sections = splitTomlSections(existing).filter((section) =>
+    section.name !== sectionName && !section.name?.startsWith(`${sectionName}.`));
+  return `${sections.flatMap((section) => section.lines).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd()}\n`;
 }
 
 function splitTomlSections(existing) {

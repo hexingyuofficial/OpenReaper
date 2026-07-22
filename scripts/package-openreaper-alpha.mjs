@@ -38,7 +38,25 @@ try {
   process.stderr.write(`[OpenReaper] ${String(error?.message ?? "invalid option").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320)}\n`);
   process.exit(2);
 }
-const vitalAgentRoot = path.resolve(options.vital_agent_root ?? path.join(repoRoot, "..", "vital-agent-mcp"));
+if (options.help === true) {
+  process.stdout.write(`usage: npm run package:openreaper-alpha -- [options]\n\n`);
+  process.stdout.write(`Default: build and smoke the OpenReaper core package only.\n`);
+  process.stdout.write(`  --with-vital             bundle and smoke vital-agent-mcp as an optional companion\n`);
+  process.stdout.write(`  --vital-agent-root PATH  override the companion source root (requires --with-vital)\n`);
+  process.stdout.write(`  --version VALUE          package build id\n`);
+  process.stdout.write(`  --out-dir PATH           output directory\n`);
+  process.stdout.write(`  --skip-zip               leave the package directory unzipped\n`);
+  process.stdout.write(`  --skip-smoke             skip package smoke checks\n`);
+  process.exit(0);
+}
+if (options.vital_agent_root !== undefined && options.with_vital !== true) {
+  process.stderr.write("[OpenReaper] --vital-agent-root requires --with-vital.\n");
+  process.exit(2);
+}
+const withVital = options.with_vital === true;
+const vitalAgentRoot = withVital
+  ? path.resolve(options.vital_agent_root ?? path.join(repoRoot, "..", "vital-agent-mcp"))
+  : null;
 const version = safeToken(options.version, `alpha-${compactTimestamp(new Date())}`);
 const outDir = path.resolve(options.out_dir ?? path.join(repoRoot, "dist", `openreaper-${version}`));
 const packageRoot = path.join(outDir, "OpenReaper-alpha");
@@ -103,8 +121,10 @@ if (invokedAsPackageBuilder) await buildPackage();
 async function buildPackage() {
   await assertReadable(path.join(repoRoot, "packages", "mcp-server", "src", "openreaper-mcp-stdio.mjs"));
   await assertReadable(path.join(repoRoot, "reaper", "bridge", "openreaper-live-bridge.lua"));
-  await assertReadable(path.join(vitalAgentRoot, "package.json"));
-  await assertReadable(path.join(vitalAgentRoot, "src", "mcpServer.ts"));
+  if (withVital) {
+    await assertReadable(path.join(vitalAgentRoot, "package.json"));
+    await assertReadable(path.join(vitalAgentRoot, "src", "mcpServer.ts"));
+  }
 
   await replaceOutputDir(outDir);
   await mkdir(packageRoot, { recursive: true });
@@ -114,9 +134,9 @@ async function buildPackage() {
 
   await copyInstallerTemplates();
   await copyOpenReaperKernel();
-  await copyVitalAgentCompanion();
+  if (withVital) await copyVitalAgentCompanion();
   await installPackageDependencies();
-  await installVitalAgentCompanion();
+  if (withVital) await installVitalAgentCompanion();
   await writePackageEntrypoints();
   await writeReadme();
   const provenance = await writePackageProvenanceManifest();
@@ -133,7 +153,7 @@ async function buildPackage() {
         portable_paths: await smokePackagedPortablePaths(),
         openreaper: await smokePackagedOpenReaperMcp(),
         runtime_doctor_readiness: await smokePackagedRuntimeDoctorReadiness(),
-        vital_agent_mcp: await smokePackagedVitalAgentMcp(),
+        ...(withVital ? { vital_agent_mcp: await smokePackagedVitalAgentMcp() } : {}),
       };
   const packageCleanliness = await scrubPackagedRuntimeState(packageRoot);
 
@@ -154,10 +174,18 @@ async function buildPackage() {
     bundled_runtime: {
       mcp_server: "vendor/openreaper-kernel/packages/mcp-server/src/openreaper-mcp-stdio.mjs",
       bridge: "vendor/openreaper-kernel/reaper/bridge/openreaper-live-bridge.lua",
-      companion_mcp: "vendor/vital-agent-mcp/dist/src/mcpServer.js",
-      entrypoints: ["bin/openreaper-mcp", "bin/vital-agent-mcp", "bin/openreaper-start", "bin/openreaper-doctor"],
+      ...(withVital ? { companion_mcp: "vendor/vital-agent-mcp/dist/src/mcpServer.js" } : {}),
+      entrypoints: [
+        "bin/openreaper-mcp",
+        ...(withVital ? ["bin/vital-agent-mcp"] : []),
+        "bin/openreaper-start",
+        "bin/openreaper-doctor",
+      ],
       dependency_source: "package_root_npm_install",
     },
+    optional_companions: withVital
+      ? { vital_agent_mcp: { included: true, mode: "optional_companion" } }
+      : {},
     provenance,
     smoke,
     package_cleanliness: packageCleanliness,
@@ -199,6 +227,15 @@ async function writePackageProvenanceManifest() {
     build_time_utc: new Date().toISOString(),
     source_tree_clean: true,
     ...catalogFacts,
+    ...(withVital ? {
+      optional_companions: {
+        vital_agent_mcp: {
+          included: true,
+          mode: "optional_companion",
+          source_git_commit: readGitCommit(vitalAgentRoot),
+        },
+      },
+    } : {}),
   };
   const manifestPath = path.join(packageRoot, "provenance.json");
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: "utf8", mode: 0o444 });
@@ -384,10 +421,12 @@ exec node "\${COMPANION_ROOT}/dist/src/mcpServer.js" "$@"
 `;
   await writeFile(path.join(packageRoot, "install.command"), installCommand, "utf8");
   await writeFile(path.join(packageRoot, "uninstall.command"), uninstallCommand, "utf8");
-  await writeFile(path.join(packageRoot, "bin", "vital-agent-mcp"), vitalAgentMcp, "utf8");
   await chmod(path.join(packageRoot, "install.command"), 0o755);
   await chmod(path.join(packageRoot, "uninstall.command"), 0o755);
-  await chmod(path.join(packageRoot, "bin", "vital-agent-mcp"), 0o755);
+  if (withVital) {
+    await writeFile(path.join(packageRoot, "bin", "vital-agent-mcp"), vitalAgentMcp, "utf8");
+    await chmod(path.join(packageRoot, "bin", "vital-agent-mcp"), 0o755);
+  }
 }
 
 async function writeReadme() {
@@ -401,7 +440,9 @@ What this package does:
 - registers a REAPER action named "OpenReaper: Start MCP bridge"
 - creates the managed render root ~/.openreaper/current/session/renders and reuses it for MCP/start sessions
 - provides ~/.openreaper/current/bin/openreaper-start for REAPER sessions that MCP can connect to
-- provides companion MCP server "vital-agent-mcp" for Vital planning and OpenReaper handoff plans
+${withVital
+    ? '- includes optional companion MCP server "vital-agent-mcp" because this package was built with --with-vital'
+    : '- contains only the OpenReaper core product; Vital companion is not bundled or registered'}
 
 Agent entry (unique):
   docs/AGENT_START_HERE.md
@@ -476,7 +517,9 @@ reports that path.
 
 Alpha caveat:
 The external product name and MCP server name are OpenReaper. This package uses the OpenReaper alpha stdio MCP kernel from vendor/openreaper-kernel. Some live REAPER execution paths remain evidence-gated; registered executable Macros and verified Templates are discovered through list_templates and invoked through call_template.
-The companion vital-agent-mcp server is plan-only and does not execute REAPER or Vital writes.
+${withVital
+    ? 'The optional companion vital-agent-mcp server is plan-only and does not execute REAPER or Vital writes.'
+    : 'Vital companion support remains available only in packages explicitly built with --with-vital.'}
 `;
   await writeFile(path.join(packageRoot, "README.txt"), readme, "utf8");
 }
@@ -1842,7 +1885,6 @@ async function smokePackagedDoctorNeverSettlingPing({
     "bridge",
     "openreaper-live-bridge.lua",
   );
-  const candidateVitalServer = path.join(candidateRoot, "vendor", "vital-agent-mcp", "dist", "src", "mcpServer.js");
   const sessionRoot = path.join(candidateRoot, "session-fixture");
   const transportDir = path.join(sessionRoot, "transport");
   const artifactRoot = path.join(sessionRoot, "artifacts");
@@ -1851,7 +1893,6 @@ async function smokePackagedDoctorNeverSettlingPing({
   await mkdir(path.dirname(candidateDoctor), { recursive: true });
   await mkdir(path.dirname(candidateServer), { recursive: true });
   await mkdir(path.dirname(candidateBridge), { recursive: true });
-  await mkdir(path.dirname(candidateVitalServer), { recursive: true });
   await mkdir(path.join(transportDir, "requests"), { recursive: true });
   await mkdir(path.join(transportDir, "results"), { recursive: true });
   await mkdir(artifactRoot, { recursive: true });
@@ -1901,8 +1942,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 await server.connect(new StdioServerTransport());
 `;
   await writeFile(candidateServer, fakeServerSource, "utf8");
-  await writeFile(candidateVitalServer, "export {};\n", "utf8");
-  for (const name of ["openreaper-mcp", "vital-agent-mcp", "openreaper-start"]) {
+  for (const name of ["openreaper-mcp", "openreaper-start"]) {
     const commandPath = path.join(candidateRoot, "bin", name);
     const command = name === "openreaper-mcp"
       ? `#!/bin/zsh\nexec ${shellQuote(process.execPath)} ${shellQuote(candidateServer)}\n`
@@ -4466,6 +4506,14 @@ function parseArgs(args) {
     }
   }
   return parsed;
+}
+
+function readGitCommit(root) {
+  try {
+    const value = execFileSync("git", ["-C", root, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+    if (/^[0-9a-f]{40}$/u.test(value)) return value;
+  } catch {}
+  throw new Error("Optional Vital companion provenance requires its exact git commit.");
 }
 
 function parseArgValue(value) {
