@@ -65,6 +65,7 @@ import {
 } from "./alpha3-45-official-executable-recipes-v1.mjs";
 import {
   hydrateAlpha345OfficialRecipeStageInputs,
+  matchAlpha345RecipeProfile,
   prepareAlpha345OfficialRecipeRun,
 } from "./alpha3-45-official-recipe-runtime-v1.mjs";
 
@@ -606,7 +607,7 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
 export function createStdioOfficialRecipeRunHydrator({ callTemplateRuntime, callContext }) {
   return async (context = {}) => {
     let inputs = context.inputs ?? {};
-    if (context.revision?.recipe_id === "recipe.items.create_sound_variations"
+    if (matchAlpha345RecipeProfile(context.revision)?.id === "profile.items.create_sound_variations"
       && (inputs.source_items === "current_selection"
         || !Array.isArray(inputs.source_items)
         || inputs.source_items.length === 0)) {

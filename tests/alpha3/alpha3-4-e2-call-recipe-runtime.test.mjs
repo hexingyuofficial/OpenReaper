@@ -1421,10 +1421,13 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     }
   });
 
-  it("hydrates Recipe 04 from exact selected Item summaries before any write", async () => {
+  it("hydrates a user-owned Recipe 04 fork from exact selected Item summaries before any write", async () => {
     const revision = createAlpha345OfficialExecutableRecipeRevisions().find((entry) => (
       entry.recipe_id === "recipe.items.create_sound_variations"
     ));
+    const userFork = structuredClone(revision);
+    userFork.recipe_id = "recipe.user.selected_item_variations";
+    userFork.draft.id = userFork.recipe_id;
     const calls = [];
     let sequence = 0;
     const sourceRows = [
@@ -1468,8 +1471,8 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       },
     });
     const hydrated = await hydrator({
-      revision,
-      source: "official",
+      revision: userFork,
+      source: "user",
       inputs: { source_items: "current_selection", variation_count: 2 },
       runtime_facts: { project_identity: "project:tab:fixture", bridge_owner: "owner:fixture", bridge_generation: "1" },
     });

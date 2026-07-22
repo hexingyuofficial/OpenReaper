@@ -180,12 +180,20 @@ test("all four official Recipe stage hydrators produce bounded Macro inputs", ()
   const revisions = new Map(createAlpha345OfficialExecutableRecipeRevisions().map((revision) => [revision.recipe_id, revision]));
   const bus = prepare(revisions.get("recipe.mix.create_bus_processing"), { source_tracks: ["track:guid:{A}"] });
   assert.equal(bus.ok, true);
-  assert.equal(prepareAlpha345OfficialRecipeRun({
-    revision: revisions.get("recipe.mix.create_bus_processing"),
+  // Execution hydration matches declarative stage/dependency/input profile only;
+  // source=user and a non-catalog recipe_id must not block the same recipe shape.
+  const userFork = structuredClone(revisions.get("recipe.mix.create_bus_processing"));
+  userFork.recipe_id = "recipe.user.forked_bus_processing";
+  userFork.draft.id = "recipe.user.forked_bus_processing";
+  const userHydrated = prepareAlpha345OfficialRecipeRun({
+    revision: userFork,
     source: "user",
     inputs: { source_tracks: ["track:guid:{A}"] },
-    runtime_facts: officialFacts(revisions.get("recipe.mix.create_bus_processing")),
-  }).details.code, "OFFICIAL_RECIPE_SOURCE_INVALID");
+    runtime_facts: officialFacts(userFork),
+  });
+  assert.equal(userHydrated.ok, true, JSON.stringify(userHydrated));
+  assert.equal(userHydrated.context.profile_id, "profile.mix.create_bus_processing");
+  assert.equal(userHydrated.context.recipe_id, "recipe.user.forked_bus_processing");
   assert.equal(stage(revisions, bus, "recipe.mix.create_bus_processing", "layout").inputs.dry_run, false);
 
   const midiRevision = revisions.get("recipe.midi.create_instrument_part");
@@ -334,6 +342,193 @@ test("Recipe 03 copies only applied placement rows with exact live readback", ()
   const setupOnly = stage(revisions, prepared, recipeId, "copy", { placement_changes: placementChanges.slice(0, 1) });
   assert.equal(setupOnly.ok, false);
   assert.equal(setupOnly.details.code, "OFFICIAL_PLACEMENT_OUTPUT_INVALID");
+});
+
+test("forked official revision validates/saves/lists/gets/runs through createCallRecipeRuntime with same trust dispatch evidence Undo after reconnect", async () => {
+  const userRoot = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha345-fork-user-"));
+  const officialRoot = mkdtempSync(path.join(os.tmpdir(), "openreaper-alpha345-fork-official-"));
+  try {
+    const catalog = createExecutableRecipeProductCatalog();
+    const openCombined = () => {
+      const userStore = createExecutableRecipeRevisionStore({
+        root: userRoot,
+        source: "user",
+        catalog,
+        officialRecipeIds: ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS,
+      });
+      const officialStore = createExecutableRecipeRevisionStore({ root: officialRoot, source: "official", catalog });
+      seedAlpha345OfficialExecutableRecipeRevisions(officialStore, { catalog });
+      return createAlpha345CombinedExecutableRecipeStore({ userStore, officialStore, catalog });
+    };
+
+    const firstStore = openCombined();
+    const officialListed = firstStore.list().items.find((item) => item.recipe_id === "recipe.mix.create_bus_processing");
+    assert.ok(officialListed);
+    const officialLoaded = firstStore.get(officialListed);
+    assert.equal(officialLoaded.source, "official");
+
+    const forkDraft = structuredClone(officialLoaded.payload.draft);
+    forkDraft.id = "recipe.user.forked_bus_pressure_test";
+    forkDraft.title = "Forked bus pressure test";
+    assert.notEqual(forkDraft.id, officialListed.recipe_id);
+
+    const firstRuntime = createCallRecipeRuntime({
+      store: firstStore,
+      catalog,
+      runHydrator: prepareAlpha345OfficialRecipeRun,
+      stageInputHydrator: hydrateAlpha345OfficialRecipeStageInputs,
+      runtimeFactsProvider: ({ revision }) => officialFacts(revision),
+      undoController: {
+        begin: async ({ project_ref }) => ({ ok: true, opened: true, handle: "undo:fork", project_ref }),
+        end: async ({ project_ref }) => ({ ok: true, closed: true, verified: true, handle: "undo:fork", project_ref }),
+      },
+      dispatchers: {
+        macro: async ({ stage, inputs, refs }) => {
+          if (stage.id === "layout") return macroResult({ changes: [{ target_ref: "track:guid:{BUS}", status: "applied", live_readback: { status: "passed" } }] });
+          if (stage.id === "routing") return macroResult({ changes: [{ target_ref: "send:track:guid:{SOURCE}:0", status: "applied", live_readback: { status: "passed" } }] });
+          return macroResult({ changes: [{ target_ref: refs?.track_ref ?? "track:guid:{BUS}", status: "applied", live_readback: { status: "passed" } }] });
+        },
+      },
+    });
+
+    const validated = await firstRuntime.call_recipe({ operation: "validate", draft: forkDraft });
+    assert.equal(validated.ok, true, JSON.stringify(validated));
+
+    const saved = await firstRuntime.call_recipe({
+      operation: "save",
+      draft: forkDraft,
+      version: "1.0.0",
+      revision: 1,
+      saved_at: "2026-07-22T00:00:02.000Z",
+    });
+    assert.equal(saved.ok, true, JSON.stringify(saved));
+    assert.equal(saved.recipe_id, "recipe.user.forked_bus_pressure_test");
+    assert.notEqual(saved.recipe_id, officialListed.recipe_id);
+
+    const listed = await firstRuntime.call_recipe({ operation: "list", budget: { max_response_bytes: 65_536 } });
+    assert.equal(listed.ok, true, JSON.stringify(listed));
+    const listedFork = listed.items.find((item) => item.recipe_id === saved.recipe_id);
+    assert.ok(listedFork);
+    assert.equal(listedFork.source, "user");
+
+    const got = await firstRuntime.call_recipe({
+      operation: "get",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+      budget: { max_response_bytes: 65_536 },
+    });
+    assert.equal(got.ok, true, JSON.stringify(got));
+    assert.equal(got.source, "user");
+    assert.equal(got.recipe_id, saved.recipe_id);
+
+    // Reconnect: new store + runtime, no retained official recipe_id for the fork identity.
+    const reconnectedStore = openCombined();
+    const undoProjects = [];
+    const calls = [];
+    let omitCapabilities = true;
+    const reconnectedRuntime = createCallRecipeRuntime({
+      store: reconnectedStore,
+      catalog,
+      runHydrator: prepareAlpha345OfficialRecipeRun,
+      stageInputHydrator: hydrateAlpha345OfficialRecipeStageInputs,
+      runtimeFactsProvider: ({ revision }) => {
+        const facts = officialFacts(revision);
+        return omitCapabilities ? { ...facts, available_capabilities: [] } : facts;
+      },
+      undoController: {
+        begin: async ({ project_ref }) => {
+          undoProjects.push(project_ref);
+          return { ok: true, opened: true, handle: "undo:fork-reconnect", project_ref };
+        },
+        end: async ({ project_ref }) => ({ ok: true, closed: true, verified: true, handle: "undo:fork-reconnect", project_ref }),
+      },
+      dispatchers: {
+        macro: async ({ stage, inputs, refs }) => {
+          calls.push({ stage: stage.id, inputs: structuredClone(inputs), refs: structuredClone(refs ?? null) });
+          if (stage.id === "layout") return macroResult({ changes: [{ target_ref: "track:guid:{BUS}", status: "applied", live_readback: { status: "passed" } }] });
+          if (stage.id === "routing") return macroResult({ changes: [{ target_ref: "send:track:guid:{SOURCE}:0", status: "applied", live_readback: { status: "passed" } }] });
+          return macroResult({ changes: [{ target_ref: refs?.track_ref ?? "track:guid:{BUS}", status: "applied", live_readback: { status: "passed" } }] });
+        },
+      },
+    });
+
+    const reListed = await reconnectedRuntime.call_recipe({ operation: "list", budget: { max_response_bytes: 65_536 } });
+    assert.equal(reListed.items.some((item) => item.recipe_id === saved.recipe_id && item.source === "user"), true);
+    assert.equal(reListed.items.some((item) => item.recipe_id === officialListed.recipe_id && item.source === "official"), true);
+
+    const reGot = await reconnectedRuntime.call_recipe({
+      operation: "get",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+      budget: { max_response_bytes: 65_536 },
+    });
+    assert.equal(reGot.ok, true, JSON.stringify(reGot));
+    assert.equal(reGot.source, "user");
+    assert.notEqual(reGot.recipe_id, officialListed.recipe_id);
+
+    // Profile match must succeed without original official recipe_id or source=official.
+    const forkRevision = reconnectedStore.get({
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+    }).payload;
+    assert.equal(forkRevision.recipe_id, saved.recipe_id);
+    assert.notEqual(forkRevision.recipe_id, officialListed.recipe_id);
+    const profilePrepare = prepareAlpha345OfficialRecipeRun({
+      revision: forkRevision,
+      source: "user",
+      inputs: { source_tracks: ["track:guid:{SOURCE}"], bus_name: "Forked Bus" },
+      runtime_facts: officialFacts(forkRevision),
+    });
+    assert.equal(profilePrepare.ok, true, JSON.stringify(profilePrepare));
+    assert.equal(profilePrepare.context.profile_id, "profile.mix.create_bus_processing");
+    assert.equal(profilePrepare.context.recipe_id, saved.recipe_id);
+    assert.equal(profilePrepare.trust_runtime_facts.project_identity, "project:runtime_bound");
+    // Draft from get alone is also enough for profile match (no official id/source).
+    assert.equal(prepareAlpha345OfficialRecipeRun({
+      revision: { recipe_id: reGot.recipe_id, draft: reGot.draft },
+      source: "user",
+      inputs: { source_tracks: ["track:guid:{SOURCE}"] },
+      runtime_facts: officialFacts(forkRevision),
+    }).context.profile_id, "profile.mix.create_bus_processing");
+
+    const runRequest = {
+      operation: "run",
+      recipe_id: saved.recipe_id,
+      version: saved.version,
+      revision: saved.revision,
+      content_hash: saved.content_hash,
+      validation_result_id: saved.validation_result_id,
+      inputs: { source_tracks: ["track:guid:{SOURCE}"], bus_name: "Forked Bus" },
+      budget: { max_response_bytes: 16_384 },
+    };
+    const trustFailed = await reconnectedRuntime.call_recipe(runRequest);
+    assert.equal(trustFailed.ok, false, JSON.stringify(trustFailed));
+    assert.equal(trustFailed.error.code, "TRUST_INVALID");
+    assert.equal(trustFailed.execution_truth.mutation, "not_run");
+    assert.deepEqual(calls, []);
+    assert.deepEqual(undoProjects, []);
+
+    omitCapabilities = false;
+    const ran = await reconnectedRuntime.call_recipe(runRequest);
+    assert.equal(ran.ok, true, JSON.stringify(ran));
+    assert.deepEqual(calls.map((call) => call.stage), ["layout", "routing", "processing"]);
+    assert.equal(calls[0].inputs.layout[0].name, "Forked Bus");
+    assert.equal(calls[1].inputs.routes[0].destination_track_ref, "track:guid:{BUS}");
+    assert.deepEqual(calls[2].refs, { track_ref: "track:guid:{BUS}" });
+    assert.deepEqual(undoProjects, ["project:tab:real-fixture"]);
+    assert.ok(ran.evidence_ref || ran.run_id);
+  } finally {
+    rmSync(userRoot, { recursive: true, force: true });
+    rmSync(officialRoot, { recursive: true, force: true });
+  }
 });
 
 test("Recipe 04 emits seeded per-copy Automation points at copied Item project positions", () => {

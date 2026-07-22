@@ -1,10 +1,5 @@
 import { createHash } from "node:crypto";
 
-import {
-  ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS,
-} from "./alpha3-45-official-executable-recipes-v1.mjs";
-
-const OFFICIAL_IDS = new Set(ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS);
 const PORTABLE_SENTINELS = Object.freeze({
   project_identity: "project:runtime_bound",
   bridge_owner: "bridge:runtime_bound",
@@ -12,18 +7,70 @@ const PORTABLE_SENTINELS = Object.freeze({
 });
 const MAX_VARIATION_ROWS = 64;
 
+// Bounded recipe profiles are declarative shape matches (stages + dependency ids +
+// input ids). Official catalog ids may seed defaults/catalog ownership elsewhere,
+// but execution hydration never privileges source=official or a fixed recipe_id.
+const RECIPE_PROFILES = Object.freeze([
+  Object.freeze({
+    id: "profile.mix.create_bus_processing",
+    inputs: Object.freeze(["source_tracks", "bus_name", "processing_profile", "fx_chain", "controls"]),
+    stages: Object.freeze([
+      Object.freeze({ id: "layout", dependency: "macro.project.apply_layout" }),
+      Object.freeze({ id: "routing", dependency: "macro.routing.apply" }),
+      Object.freeze({ id: "processing", dependency: "macro.fx.apply_chain" }),
+    ]),
+  }),
+  Object.freeze({
+    id: "profile.midi.create_instrument_part",
+    inputs: Object.freeze([
+      "target_track", "track_name", "instrument", "bars", "meter", "tempo", "key", "scale",
+      "density", "register", "pattern", "seed", "humanize",
+    ]),
+    stages: Object.freeze([
+      Object.freeze({ id: "layout", dependency: "macro.project.apply_layout" }),
+      Object.freeze({ id: "instrument", dependency: "macro.fx.apply_chain" }),
+      Object.freeze({ id: "midi", dependency: "macro.midi.apply" }),
+    ]),
+  }),
+  Object.freeze({
+    id: "profile.media.create_layered_sound_effect_variants",
+    inputs: Object.freeze([
+      "search_terms", "variant_count", "seed", "style", "track_prefix", "trim", "fades", "balance",
+    ]),
+    stages: Object.freeze([
+      Object.freeze({ id: "search", dependency: "macro.media.place_assets" }),
+      Object.freeze({ id: "place", dependency: "macro.media.place_assets" }),
+      Object.freeze({ id: "copy", dependency: "macro.items.apply" }),
+      Object.freeze({ id: "controls", dependency: "macro.items.apply" }),
+    ]),
+  }),
+  Object.freeze({
+    id: "profile.items.create_sound_variations",
+    inputs: Object.freeze([
+      "source_items", "variation_count", "seed", "take_mode", "source_offset", "pitch", "volume",
+      "pan", "position", "track_shuffle", "mute_probability", "automation", "tone", "crossfade",
+      "item_overrides",
+    ]),
+    stages: Object.freeze([
+      Object.freeze({ id: "copy", dependency: "macro.items.apply" }),
+      Object.freeze({ id: "controls", dependency: "macro.items.apply" }),
+      Object.freeze({ id: "tone", dependency: "macro.fx.set_controls" }),
+      Object.freeze({ id: "automation", dependency: "macro.automation.apply" }),
+    ]),
+  }),
+]);
+
 export function prepareAlpha345OfficialRecipeRun({ revision, source = null, inputs = {}, runtime_facts = {}, retained = null } = {}) {
-  if (!OFFICIAL_IDS.has(revision?.recipe_id)) {
+  void source;
+  const profile = matchRecipeProfile(revision);
+  if (!profile) {
     return { ok: true, inputs, context: null };
-  }
-  if (source !== "official") {
-    return failed("OFFICIAL_RECIPE_SOURCE_INVALID", "Runtime-bound official portability requires a revision loaded from the official store.");
   }
   if (!hasOfficialPortableSentinels(revision)) {
     return failed("OFFICIAL_RECIPE_PORTABILITY_INVALID", "Official Recipe portability sentinels are invalid.");
   }
-  const merged = mergeDefaults(revision.recipe_id, inputs, retained);
-  const validation = validateOfficialInputs(revision.recipe_id, merged);
+  const merged = mergeDefaults(profile.id, inputs, retained);
+  const validation = validateOfficialInputs(profile.id, merged);
   if (!validation.ok) return validation;
   return {
     ok: true,
@@ -35,6 +82,7 @@ export function prepareAlpha345OfficialRecipeRun({ revision, source = null, inpu
     context: {
       contract: "openreaper.alpha3.45.official_recipe_run_hydration.v1",
       recipe_id: revision.recipe_id,
+      profile_id: profile.id,
       seed: merged.seed,
       observed_project_identity: runtime_facts.project_identity ?? null,
       observed_bridge_owner: runtime_facts.bridge_owner ?? null,
@@ -44,34 +92,59 @@ export function prepareAlpha345OfficialRecipeRun({ revision, source = null, inpu
 }
 
 export function hydrateAlpha345OfficialRecipeStageInputs(context = {}) {
-  const recipeId = context.revision?.recipe_id;
-  if (!OFFICIAL_IDS.has(recipeId)) {
+  const profile = matchRecipeProfile(context.revision);
+  if (!profile) {
     return { ok: true, inputs: context.inputs ?? {}, refs: null };
   }
   try {
-    return hydrateOfficialStage(recipeId, context);
+    return hydrateOfficialStage(profile.id, context);
   } catch (error) {
     return failed(error.code ?? "OFFICIAL_RECIPE_STAGE_HYDRATION_FAILED", error.message);
   }
 }
 
-function hydrateOfficialStage(recipeId, context) {
+export function matchAlpha345RecipeProfile(revision) {
+  return matchRecipeProfile(revision);
+}
+
+function matchRecipeProfile(revision) {
+  const draft = revision?.draft;
+  if (!draft || !Array.isArray(draft.stages) || !Array.isArray(draft.inputs)) return null;
+  const stageSignature = draft.stages.map((stage) => stageSignatureKey(stage));
+  const inputSignature = draft.inputs.map((entry) => entry?.id).filter((id) => typeof id === "string").sort().join("\0");
+  for (const profile of RECIPE_PROFILES) {
+    if (profile.stages.length !== stageSignature.length) continue;
+    if (!profile.stages.every((stage, index) => stageSignatureKey(stage) === stageSignature[index])) continue;
+    const profileInputs = [...profile.inputs].sort().join("\0");
+    if (profileInputs !== inputSignature) continue;
+    return profile;
+  }
+  return null;
+}
+
+function stageSignatureKey(stage) {
+  const id = stage?.id ?? "";
+  const dependency = stage?.dependency?.id ?? stage?.dependency ?? "";
+  return `${id}\0${dependency}`;
+}
+
+function hydrateOfficialStage(profileId, context) {
   const stageId = context.stage?.id;
   const recipeInputs = context.recipe_inputs ?? {};
   const boundInputs = context.inputs ?? {};
-  if (recipeId === "recipe.mix.create_bus_processing") {
+  if (profileId === "profile.mix.create_bus_processing") {
     return hydrateBusProcessing(stageId, recipeInputs, boundInputs);
   }
-  if (recipeId === "recipe.midi.create_instrument_part") {
+  if (profileId === "profile.midi.create_instrument_part") {
     return hydrateInstrumentPart(stageId, recipeInputs, boundInputs);
   }
-  if (recipeId === "recipe.media.create_layered_sound_effect_variants") {
+  if (profileId === "profile.media.create_layered_sound_effect_variants") {
     return hydrateLayeredVariants(stageId, recipeInputs, boundInputs);
   }
-  if (recipeId === "recipe.items.create_sound_variations") {
+  if (profileId === "profile.items.create_sound_variations") {
     return hydrateItemVariations(stageId, recipeInputs, boundInputs);
   }
-  throw coded("OFFICIAL_RECIPE_ID_UNSUPPORTED", `Unsupported official Recipe ${recipeId}.`);
+  throw coded("OFFICIAL_RECIPE_ID_UNSUPPORTED", `Unsupported recipe profile ${profileId}.`);
 }
 
 function hydrateBusProcessing(stageId, input, bound) {
@@ -284,24 +357,24 @@ function hydrateItemVariations(stageId, input, bound) {
   throw coded("OFFICIAL_RECIPE_STAGE_UNKNOWN", `Unknown Item variation stage ${stageId}.`);
 }
 
-function mergeDefaults(recipeId, inputs, retained) {
+function mergeDefaults(profileId, inputs, retained) {
   const seed = Number.isSafeInteger(inputs.seed)
     ? inputs.seed
     : Number.isSafeInteger(retained?.seed)
       ? retained.seed
-      : deterministicSeed(recipeId, inputs);
-  const defaults = recipeDefaults(recipeId, seed);
+      : deterministicSeed(profileId, inputs);
+  const defaults = recipeDefaults(profileId, seed);
   return deepMerge(defaults, inputs, { seed });
 }
 
-function recipeDefaults(recipeId, seed) {
-  if (recipeId === "recipe.mix.create_bus_processing") {
+function recipeDefaults(profileId, seed) {
+  if (profileId === "profile.mix.create_bus_processing") {
     return { source_tracks: [], bus_name: "OpenReaper Bus", processing_profile: "balanced", fx_chain: null, controls: { threshold_db: -18, ratio: 3 } };
   }
-  if (recipeId === "recipe.midi.create_instrument_part") {
+  if (profileId === "profile.midi.create_instrument_part") {
     return { target_track: null, track_name: "OpenReaper Instrument", instrument: "ReaSynth", bars: 4, meter: { numerator: 4, denominator: 4 }, tempo: null, key: "C", scale: "major", density: 0.5, register: 4, pattern: "pulse", seed, humanize: 0 };
   }
-  if (recipeId === "recipe.media.create_layered_sound_effect_variants") {
+  if (profileId === "profile.media.create_layered_sound_effect_variants") {
     return { search_terms: [], variant_count: 4, seed, style: null, track_prefix: "SFX Layer", trim: null, fades: null, balance: null, variant_spacing_seconds: 2 };
   }
   return {
@@ -313,13 +386,13 @@ function recipeDefaults(recipeId, seed) {
   };
 }
 
-function validateOfficialInputs(recipeId, input) {
-  if (recipeId === "recipe.mix.create_bus_processing") {
+function validateOfficialInputs(profileId, input) {
+  if (profileId === "profile.mix.create_bus_processing") {
     if (!Array.isArray(input.source_tracks) || input.source_tracks.length < 1 || input.source_tracks.some((ref) => !isRef(ref, "track"))) return failed("OFFICIAL_SOURCE_TRACKS_REQUIRED", "source_tracks must contain exact Track refs.");
-  } else if (recipeId === "recipe.midi.create_instrument_part") {
+  } else if (profileId === "profile.midi.create_instrument_part") {
     if (!Number.isInteger(input.bars) || input.bars < 1 || input.bars > 32) return failed("OFFICIAL_MIDI_BARS_INVALID", "bars must be an integer from 1 to 32.");
     if (!input.meter || !Number.isInteger(input.meter.numerator) || input.meter.numerator < 1 || input.meter.numerator > 12) return failed("OFFICIAL_MIDI_METER_INVALID", "meter.numerator must be 1-12.");
-  } else if (recipeId === "recipe.media.create_layered_sound_effect_variants") {
+  } else if (profileId === "profile.media.create_layered_sound_effect_variants") {
     if (!Array.isArray(input.search_terms) || input.search_terms.length < 2 || input.search_terms.some((term) => typeof term !== "string" || term.trim() === "")) return failed("OFFICIAL_MEDIA_TERMS_REQUIRED", "search_terms must contain at least two non-empty terms.");
     if (!integerRange(input.variant_count, 1, 64)) return failed("OFFICIAL_VARIATION_COUNT_INVALID", "variant_count must be 1-64.");
   } else {
@@ -450,10 +523,6 @@ function collectRefs(value, kind) {
   return [...new Set(refs)];
 }
 
-function findRef(value, kind) {
-  return collectRefs(value, kind)[0] ?? null;
-}
-
 function takeFxRef(takeRef, index) {
   return `fx:${canonicalRef(takeRef, "take")}:${index}`;
 }
@@ -472,8 +541,8 @@ function seededRange(seed, index, min, max) {
   return min + ((max - min) * unit);
 }
 
-function deterministicSeed(recipeId, inputs) {
-  return createHash("sha256").update(`${recipeId}:${stableStringify(inputs)}`).digest().readUInt32BE(0);
+function deterministicSeed(profileId, inputs) {
+  return createHash("sha256").update(`${profileId}:${stableStringify(inputs)}`).digest().readUInt32BE(0);
 }
 
 function stableStringify(value) {
@@ -502,8 +571,4 @@ function integerRange(value, min, max) {
 
 function finite(value) {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function firstFinite(...values) {
-  return values.find(finite) ?? 0;
 }
