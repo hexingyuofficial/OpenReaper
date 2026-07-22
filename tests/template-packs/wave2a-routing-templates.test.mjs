@@ -305,7 +305,7 @@ function executionScenarios() {
     },
     {
       id: "template.routing.create_track_send",
-      input: { duplicate_policy: "reject_existing" },
+      input: { duplicate_policy: "reuse_existing" },
       refs: { source_track_ref: sourceTrack, destination_track_ref: destinationTrack },
       emittedRefs: [send],
     },

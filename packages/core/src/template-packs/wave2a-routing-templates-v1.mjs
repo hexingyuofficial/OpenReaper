@@ -145,7 +145,7 @@ export const WAVE2A_ROUTING_TEMPLATES = deepFreeze([
       idempotency: "supported",
     }),
     inputSchema: objectSchema({
-      duplicate_policy: { enum: ["allow", "reject_existing"] },
+      duplicate_policy: { enum: ["allow", "reject_existing", "reuse_existing"] },
     }, []),
     outputSchema: objectSchema({
       send_ref: { type: "string" },
