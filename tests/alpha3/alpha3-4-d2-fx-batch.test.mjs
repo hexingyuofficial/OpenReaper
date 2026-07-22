@@ -229,6 +229,8 @@ describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
       assert.equal(response.ok, true, `${count}:${JSON.stringify(response)}`);
       assert.equal(response.result.changes.length, count);
       assert.equal(response.result.data.calls.readback, count);
+      assert.equal(response.budget.actual_bytes <= response.budget.max_bytes, true);
+      if (count === 64) assert.equal(response.result.verification.evidence_refs.length, 1);
     }
     const calls = [];
     const blocked = await executeAlpha3_2_5CControlMacro({

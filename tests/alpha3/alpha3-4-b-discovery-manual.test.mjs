@@ -7,6 +7,7 @@ import {
 } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import {
   createAlpha3_3B1AgentContextMacroGuide,
+  createAlpha3_3B1ExactMacroExpansion,
   rankAlpha3_3B1MacroIntents,
 } from "../../packages/mcp-server/src/alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import {
@@ -155,6 +156,9 @@ test("all 15 manuals audit and every executable first-try call passes the curren
   const takeControlExample = takeControls.examples.find((entry) => entry.name.includes("ordinary Audio Take FX"));
   assert.equal(takeControlExample.public_call.arguments.id, "macro.fx.set_controls");
   assert.equal(takeControlExample.prerequisite.public_sequence[1].returns.includes("exact fx_ref"), true);
+  const takeControlManual = createAlpha3_3B1ExactMacroExpansion("macro.fx.set_controls");
+  assert.match(takeControlManual.action_manual.when_to_use.join(" "), /exact_assignments for 1-64 parameters/u);
+  assert.match(takeControlManual.action_manual.input_shape.exact_assignments, /assignments\[\] 1-64 rows/u);
   for (const id of ["macro.project.apply_layout", "macro.render.targets"]) {
     const guide = createAlpha34BFirstTryExecutionGuide(id, discoveryById.get(id));
     const skeleton = guide.next_calls.find((entry) => entry.tool === "call_template" && entry.arguments.id === id);

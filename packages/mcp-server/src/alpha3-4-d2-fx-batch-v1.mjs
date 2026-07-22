@@ -808,7 +808,8 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, active
 }
 
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data, compact = false }) {
-  const useCompact = compact === true || (state.batchMode === true && activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET);
+  const useCompact = compact === true || (state.batchMode === true
+    && (activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET || state.changes.length > 8));
   return {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: true,
@@ -826,7 +827,9 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: "passed",
-        evidence_refs: useCompact ? [] : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
+        evidence_refs: useCompact
+          ? (activeBudget > ALPHA3_4_D2_MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
+          : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
       },
       data: useCompact ? projectCompactBatchData(data) : data,
     },
@@ -840,7 +843,8 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
 }
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {}, compact = false }) {
-  const useCompact = compact === true || (state.batchMode === true && activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET);
+  const useCompact = compact === true || (state.batchMode === true
+    && (activeBudget <= ALPHA3_4_D2_MIN_RESPONSE_BUDGET || state.changes.length > 8));
   const verified = state.changes.length > 0
     && state.changes
       .filter((change) => change.mutation?.status === "completed" || change.status === "applied")
@@ -862,7 +866,9 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
-        evidence_refs: useCompact ? [] : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
+        evidence_refs: useCompact
+          ? (activeBudget > ALPHA3_4_D2_MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
+          : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
       },
       data: useCompact ? projectCompactBatchData(data) : data,
     },
