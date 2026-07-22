@@ -630,11 +630,13 @@ async function opRun(request, options, { startedAt, resume, budget }) {
   }
   const inputs = hydration.inputs;
   const trustRuntimeFacts = bindRuntimePortabilityFacts(revision, runtimeFacts);
+  const runtimeBinding = snapshotRuntimeBinding(runtimeFacts);
 
   // Re-evaluate exact revision, dependency lock, capability, risk grant, project identity,
   // Bridge owner/generation and checkpoint evidence before dispatch.
   const trust = evaluateRunTrust(revision, trustRuntimeFacts, { catalog });
-  if (!trust.trusted) {
+  const resumeBindingMatches = !resume || sameRuntimeBinding(runtimeBinding, resumeState?.runtime_binding);
+  if (!trust.trusted || !resumeBindingMatches) {
     const retained = retainedFailureTruth(revision, resumeState, runId);
     return withRunExecutionTruth(projectRunFailureEnvelope({
       operation: resume ? "resume" : "run",
@@ -657,7 +659,11 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         validation_result_id: revision.validation_result_id,
       }),
       evidenceRef: retained.evidenceRef,
-      details: { invalidation_reasons: trust.invalidation_reasons },
+      details: {
+        invalidation_reasons: resumeBindingMatches
+          ? trust.invalidation_reasons
+          : [...trust.invalidation_reasons, "runtime_binding_mismatch"],
+      },
     }), {
       startedAt,
       telemetry: retained.telemetry,
@@ -926,6 +932,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       undo,
       attempt_count: attempt,
       run_hydration: hydration.context,
+      runtime_binding: runtimeBinding,
     });
   }
 
@@ -992,6 +999,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     undo,
     run_summary: runSummary,
     attempt_count: attempt,
+    runtime_binding: runtimeBinding,
   });
 
   return withRunExecutionTruth(projectRunSuccessEnvelope({
@@ -1075,6 +1083,8 @@ function failPartial({
     undo,
     run_summary: runSummary,
     attempt_count: Math.max(1, options.runStore.get(runId)?.attempt_count ?? 1),
+    run_hydration: options.runStore.get(runId)?.run_hydration ?? null,
+    runtime_binding: options.runStore.get(runId)?.runtime_binding ?? null,
   });
 
   const nextCall = resumeSafe && latestCheckpoint
@@ -2076,6 +2086,28 @@ function bindRuntimePortabilityFacts(revision, authoritativeFacts) {
     }
   }
   return facts;
+}
+
+function snapshotRuntimeBinding(authoritativeFacts) {
+  return freeze({
+    project_identity: typeof authoritativeFacts?.project_identity === "string"
+      ? authoritativeFacts.project_identity
+      : null,
+    bridge_owner: typeof authoritativeFacts?.bridge_owner === "string"
+      ? authoritativeFacts.bridge_owner
+      : null,
+    bridge_generation: typeof authoritativeFacts?.bridge_generation === "string"
+      ? authoritativeFacts.bridge_generation
+      : null,
+  });
+}
+
+function sameRuntimeBinding(current, retained) {
+  return isPlainObject(current)
+    && isPlainObject(retained)
+    && current.project_identity === retained.project_identity
+    && current.bridge_owner === retained.bridge_owner
+    && current.bridge_generation === retained.bridge_generation;
 }
 
 async function hydrateRecipeStage(hydrator, context) {

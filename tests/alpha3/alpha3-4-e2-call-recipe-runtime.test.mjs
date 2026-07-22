@@ -804,35 +804,79 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.deepEqual(resumed.counts, { processed: 4, applied: 2, skipped: 1 });
   });
 
-  it("preserves retained progress when fresh resume trust blocks before dispatch", async () => {
+  it("preserves retained progress when a runtime-bound resume drifts before dispatch", async () => {
     let factsCalls = 0;
+    let macroCalls = 0;
     let templateCalls = 0;
+    const undoCalls = [];
+    const draft = structuredClone(makeDraft());
+    draft.portability = {
+      ...draft.portability,
+      project_identity: "project:runtime_bound",
+      bridge_owner: "bridge:runtime_bound",
+      bridge_generation: "generation:runtime_bound",
+    };
     const { runtime } = makeRuntime({
       facts: (revision) => {
         factsCalls += 1;
-        const facts = completeFacts(revision);
+        const facts = completeFacts(revision, draft);
         return factsCalls === 1
-          ? facts
-          : { ...facts, bridge_generation: "999" };
+          ? {
+              ...facts,
+              project_identity: "project:tab:fixture-a",
+              bridge_owner: "owner:fixture-a",
+              bridge_generation: "1",
+            }
+          : {
+              ...facts,
+              project_identity: "project:tab:fixture-b",
+              bridge_owner: "owner:fixture-b",
+              bridge_generation: "2",
+            };
+      },
+      undoController: {
+        async begin(request) {
+          undoCalls.push(request);
+          return {
+            ok: true,
+            opened: true,
+            handle: "recipe-undo-runtime-binding",
+            project_ref: request.project_ref,
+          };
+        },
+        async end(request) {
+          undoCalls.push(request);
+          return {
+            ok: true,
+            closed: true,
+            verified: true,
+            handle: request.handle,
+            project_ref: request.project_ref,
+          };
+        },
       },
       dispatchers: {
-        macro: async ({ inputs }) => macroEnvelopeWithChange({
-          project_summary: { name: inputs.track_name },
-        }),
+        macro: async ({ inputs }) => {
+          macroCalls += 1;
+          return macroEnvelopeWithChange({
+            project_summary: { name: inputs.track_name },
+          });
+        },
         template: async () => {
           templateCalls += 1;
           return templateFailureEnvelope({ zeroWrite: true });
         },
       },
     });
-    const saved = await saveFixture(runtime);
+    const saved = await saveFixture(runtime, draft);
+    assert.equal(saved.ok, true, JSON.stringify(saved));
     const identity = exactIdentity(saved);
     const partial = await runtime.call_recipe({
       operation: "run",
       ...identity,
       inputs: { track_name: "Dialog" },
     });
-    assert.equal(partial.resume_safe, true);
+    assert.equal(partial.resume_safe, true, JSON.stringify(partial));
     assert.equal(partial.proven_partial_changes.length, 1);
 
     const blocked = await runtime.call_recipe({
@@ -844,12 +888,15 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(blocked.ok, false);
     assert.equal(blocked.operation, "resume");
     assert.equal(blocked.error.code, "TRUST_INVALID");
+    assert.equal(blocked.error.details.invalidation_reasons.includes("runtime_binding_mismatch"), true);
     assert.deepEqual(blocked.stages.completed, ["run_macro"]);
     assert.deepEqual(blocked.stages.not_started, ["readback"]);
     assert.equal(blocked.proven_partial_changes.length, 1);
     assert.deepEqual(blocked.latest_checkpoint, partial.latest_checkpoint);
     assert.equal(blocked.evidence_ref, partial.evidence_ref);
+    assert.equal(macroCalls, 1);
     assert.equal(templateCalls, 1);
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
   });
 
   it("never replays an unverified mutation and rejects resume input or identity drift", async () => {
