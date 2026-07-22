@@ -548,6 +548,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       }, expected, `dry-run row ${index + 1} lost truth`);
     }
     assert.equal(dryRun.result.data.calls.mutation, 0);
+    assert.equal(dryRun.result.verification.evidence_refs.length, 1);
     assert.equal(inlineDetailBytes(dryRun) <= 24_576, true, `dry-run inline bytes=${inlineDetailBytes(dryRun)}`);
     assert.deepEqual(validateMacroExecutionEnvelope(dryRun), { valid: true, errors: [] });
 
@@ -575,6 +576,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       }, expected, `success row ${index + 1} lost truth`);
     }
     assert.equal(success.result.data.calls.readback, 64);
+    assert.equal(success.result.verification.evidence_refs.length, 1);
     assert.equal(inlineDetailBytes(success) <= 24_576, true, `success inline bytes=${inlineDetailBytes(success)}`);
     assert.deepEqual(validateMacroExecutionEnvelope(success), { valid: true, errors: [] });
   });

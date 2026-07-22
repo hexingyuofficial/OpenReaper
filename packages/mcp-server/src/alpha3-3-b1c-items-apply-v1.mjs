@@ -2689,7 +2689,9 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: "passed",
-        evidence_refs: useCompact ? [] : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
+        evidence_refs: useCompact
+          ? (activeBudget > MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
+          : uniqueStrings(state.evidenceRefs).slice(0, MACRO_CONTRACT_CEILINGS.evidence_ref_max_count),
       },
       data: useCompact ? projectCompactBatchData(data) : data,
     },
@@ -2727,7 +2729,9 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
-        evidence_refs: useCompact ? [] : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
+        evidence_refs: useCompact
+          ? (activeBudget > MIN_RESPONSE_BUDGET ? uniqueStrings(state.evidenceRefs).slice(0, 1) : [])
+          : (status === "partial_failure" ? uniqueStrings(state.evidenceRefs) : []),
       },
       data: useCompact ? projectCompactBatchData(data) : data,
     },
