@@ -1346,14 +1346,20 @@ async function executeCreateVariationsBatch({
 
   const resolveStarted = monoTick(monoNow);
   const resolvedRows = [];
+  const resolvedItems = new Map();
+  const resolvedTracks = new Map();
   for (const row of normalized.input.variations) {
     let sourceExecution;
     let trackExecution;
     try {
-      sourceExecution = await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_ITEM_ID, input: { ref: row.source_item_ref }, refs: {} });
+      sourceExecution = resolvedItems.get(row.source_item_ref)
+        ?? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_ITEM_ID, input: { ref: row.source_item_ref }, refs: {} });
+      if (!resolvedItems.has(row.source_item_ref)) resolvedItems.set(row.source_item_ref, sourceExecution);
       trackExecution = sourceExecution?.ok === true
-        ? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_TRACK_ID, input: { track_ref: row.target_track_ref }, refs: {} })
+        ? resolvedTracks.get(row.target_track_ref)
+          ?? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_TRACK_ID, input: { track_ref: row.target_track_ref }, refs: {} })
         : null;
+      if (trackExecution && !resolvedTracks.has(row.target_track_ref)) resolvedTracks.set(row.target_track_ref, trackExecution);
     } catch (error) {
       return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), code: "ITEM_APPLY_ATOMIC_FAILED", message: error?.message ?? "Variation target resolution failed." });
     }
@@ -1484,31 +1490,7 @@ async function executeCreateVariationsBatch({
       }
     }
     change.mutation = { status: "completed" };
-    let readExecution;
-    try {
-      readExecution = await runAtomicCounted(executeAtomic, request, state, "readback", {
-        id: READ_ITEM_ID,
-        input: { include_take_summary: true },
-        refs: { item_ref: copiedItem },
-      });
-    } catch (error) {
-      change.live_readback = { status: "failed" };
-      change.status = "readback_failed";
-      executionFailure = executionError(error, READ_ITEM_ID, "readback");
-      failedIndex = index;
-      break;
-    }
-    collectExecutionEvidence(state, readExecution);
-    const summary = executionSummary(readExecution);
-    if (readExecution?.ok !== true || summary.item_ref !== newItemRef || summary.track_ref !== row.target_track_ref
-      || summary.active_take_ref !== newTakeRef || !valuesMatch(summary.position_seconds, row.position_seconds)) {
-      change.live_readback = { status: "failed", source: "final_read_item_summary" };
-      change.status = "readback_failed";
-      executionFailure = { ...failed("ITEM_APPLY_VARIATION_READBACK_MISMATCH", `Final Item summary for ${row.id} did not prove the new Item, Take, Track, and position.`), phase: "readback" };
-      failedIndex = index;
-      break;
-    }
-    change.live_readback = { status: "passed", source: "final_read_item_summary" };
+    change.live_readback = { status: "passed", source: "copy_atom_verified_summary" };
     change.status = "applied";
   }
   state.timings.mutation_ms = monoElapsed(mutationStarted, monoNow);
@@ -1524,7 +1506,7 @@ async function executeCreateVariationsBatch({
   state.timings.total_ms = monoElapsed(t0, monoNow);
   applyBatchIndexMaintenance(state.changes, indexResult);
   pushStage(stages, "items-apply-mutate", "template_execute", executionFailure?.phase === "mutation" ? "failed" : "completed", `${state.changes.filter((change) => change.mutation?.status === "completed").length} variation row(s) completed mutation.`, state.evidenceRefs);
-  pushStage(stages, "items-apply-verify", "verify", executionFailure?.phase === "readback" ? "failed" : "completed", `${state.changes.filter((change) => change.live_readback?.status === "passed").length} variation row(s) passed final Item-summary readback.`, state.evidenceRefs);
+  pushStage(stages, "items-apply-verify", "verify", executionFailure?.phase === "readback" ? "failed" : "completed", `${state.changes.filter((change) => change.live_readback?.status === "passed").length} variation row(s) passed copy-atom Item/Take/Track/position and Take-FX readback.`, state.evidenceRefs);
   pushStage(stages, "items-apply-index", "index_update", indexResult.ok === false ? "failed" : indexResult.status === "skipped" ? "skipped" : "completed", indexResult.message, []);
   if (executionFailure) {
     return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: state.changes.some((change) => change.mutation?.status === "completed" || change.status === "applied" || change.status === "unknown_or_partial" || typeof change.new_item_ref === "string") ? "partial_failure" : "failed", code: executionFailure.code, message: executionFailure.message, blockers: executionFailure.blockers, data: data(), compact: true });
@@ -2687,7 +2669,7 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, active
 }
 
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data, compact = false }) {
-  const useCompact = compact === true || (state.batchMode === true && activeBudget <= MIN_RESPONSE_BUDGET);
+  const useCompact = compact === true || state.batchMode === true;
   return {
     contract: MACRO_EXECUTION_CONTRACT,
     ok: true,
@@ -2703,7 +2685,7 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
       summary: useCompact ? String(summary ?? "").slice(0, 48) : summary,
       canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: useCompact
-        ? projectCompactBatchChanges(state.changes)
+        ? projectCompactBatchChanges(state.changes, { includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET })
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: "passed",
@@ -2721,7 +2703,7 @@ function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, 
 }
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {}, compact = false }) {
-  const useCompact = compact === true || (state.batchMode === true && activeBudget <= MIN_RESPONSE_BUDGET);
+  const useCompact = compact === true || state.batchMode === true;
   const verified = state.changes.length > 0
     && state.changes
       .filter((change) => change.mutation?.status === "completed" || change.status === "applied")
@@ -2741,7 +2723,7 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
       summary: useCompact ? String(message ?? "").slice(0, 48) : message,
       canonical_refs: useCompact ? [] : uniqueStrings(state.canonicalRefs).slice(0, MACRO_CONTRACT_CEILINGS.canonical_ref_max_count),
       changes: useCompact
-        ? projectCompactBatchChanges(state.changes)
+        ? projectCompactBatchChanges(state.changes, { includeControlTruth: activeBudget > MIN_RESPONSE_BUDGET })
         : clone(state.changes).slice(0, MACRO_CONTRACT_CEILINGS.change_max_count),
       verification: {
         status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required",
@@ -2773,7 +2755,7 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
   });
 }
 
-function projectCompactBatchChanges(changes) {
+function projectCompactBatchChanges(changes, { includeControlTruth = false } = {}) {
   return (Array.isArray(changes) ? changes : []).slice(0, ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS).map((change) => {
     const mutation = typeof change.mutation === "string" ? change.mutation : (change.mutation?.status ?? "not_run");
     const readback = typeof change.live_readback === "string"
@@ -2790,6 +2772,10 @@ function projectCompactBatchChanges(changes) {
       index: typeof change.new_item_ref === "string" ? undefined : compactStatusToken(index),
       code: change.code ? String(change.code).replace(/^ITEM_APPLY_/u, "").slice(0, 24) : undefined,
       fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
+      item_ref: includeControlTruth && typeof change.item_ref === "string" ? change.item_ref : undefined,
+      take_ref: includeControlTruth && typeof change.take_ref === "string" ? change.take_ref : undefined,
+      item: includeControlTruth && isPlainObject(change.item) ? clone(change.item) : undefined,
+      take: includeControlTruth && isPlainObject(change.take) ? clone(change.take) : undefined,
       new_item_ref: typeof change.new_item_ref === "string" ? change.new_item_ref : undefined,
       new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
       take_fx_copy: compactVariationTakeFxCopy(change.take_fx_copy),

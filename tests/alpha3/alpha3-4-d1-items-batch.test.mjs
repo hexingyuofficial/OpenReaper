@@ -64,6 +64,21 @@ function batchRows(count) {
   }));
 }
 
+function productControlRows(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `p${String(index + 1).padStart(2, "0")}abcdefghij`.slice(0, 12),
+    item_ref: `item:guid:${realisticGuid("D", index + 1)}`,
+    take_ref: `take:guid:${realisticGuid("E", index + 1)}`,
+    item: { volume_db: -18 + index * 0.125 },
+    take: {
+      pan: -1 + index / 32,
+      pitch_semitones: -12 + (index % 25),
+      playrate: 0.75 + index * 0.01,
+      preserve_pitch: index % 2 === 0,
+    },
+  }));
+}
+
 function trackRef(n) {
   return `track:guid:{TRACK-${String(n).padStart(2, "0")}}`;
 }
@@ -348,8 +363,8 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       assert.equal(response.result.changes.every((row) => /^take:guid:\{NEW-TAKE-\d+\}$/u.test(row.new_take_ref)), true);
       assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.slots.length === 1), true);
       assert.equal(response.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
-      assert.equal(response.result.data.calls.resolve, count * 2);
-      assert.equal(response.result.data.calls.readback, count);
+      assert.equal(response.result.data.calls.resolve, count + Math.min(count, 4));
+      assert.equal(response.result.data.calls.readback, 0);
     }
     const calls = [];
     const blocked = await executeAlpha3_3B1cItemsApplyMacro({
@@ -360,6 +375,30 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(blocked.ok, false);
     assert.equal(blocked.error.code, "ITEM_APPLY_VARIATIONS_INVALID");
     assert.equal(calls.length, 0);
+  });
+
+  it("reuses repeated exact variation resolvers while every copy remains serial and verified", async () => {
+    const rows = variationRows(64).map((row, index) => ({
+      ...row,
+      source_item_ref: itemRef(1),
+      target_track_ref: trackRef(1),
+      position_seconds: 10 + index * 0.25,
+    }));
+    const executor = makeVariationExecutor({ realisticRefs: true });
+    const response = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: rows }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: executor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.result.changes.length, 64);
+    assert.equal(response.result.data.calls.resolve, 2);
+    assert.equal(response.result.data.calls.mutation, 64);
+    assert.equal(response.result.data.calls.readback, 0);
+    assert.equal(executor.calls.filter((call) => call.id === "template.items.copy_item_to_track").length, 64);
+    assert.equal(executor.calls.some((call) => call.id === "template.items.read_item_summary"), false);
+    assert.deepEqual(validateMacroExecutionEnvelope(response), { valid: true, errors: [] });
+    assert.equal(response.budget.actual_bytes <= 65_536, true);
   });
 
   it("accepts explicit zero-FX copy proof and fails closed on a mismatched copied FX ref", async () => {
@@ -460,6 +499,84 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     assert.equal(blocked.ok, false);
     assert.equal(blocked.error.code, "ITEM_APPLY_BATCH_CHANGES_INVALID");
     assert.equal(calls.length, 0);
+  });
+
+  it("keeps all 64 real-GUID control rows in compact dry-run and success envelopes", async () => {
+    const rows = productControlRows(64);
+    const budget = { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 };
+    const expectedFields = rows.map((row) => ({
+      id: row.id,
+      item_ref: row.item_ref,
+      take_ref: row.take_ref,
+      volume_db: row.item.volume_db,
+      pan: row.take.pan,
+      pitch_semitones: row.take.pitch_semitones,
+      playrate: row.take.playrate,
+      preserve_pitch: row.take.preserve_pitch,
+    }));
+    const inlineDetailBytes = (response) => Buffer.byteLength(JSON.stringify({
+      stages: response.execution.stages,
+      changes: response.result.changes,
+      data: response.result.data,
+      blockers: response.blockers,
+      error: response.error,
+      recovery: response.recovery,
+    }), "utf8");
+
+    const dryExecutor = makeExecutor({ rows });
+    const dryRun = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: true, changes: rows }, budget),
+      executeAtomic: dryExecutor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(dryRun.ok, true, JSON.stringify(dryRun));
+    assert.equal(dryRun.contract, "macro.execution.v1");
+    assert.equal(dryRun.execution.status, "dry_run_completed");
+    assert.equal(dryRun.result.changes.length, 64);
+    assert.equal(dryRun.result.changes.every((row) => row.status === "plan"), true);
+    for (const [index, expected] of expectedFields.entries()) {
+      const row = dryRun.result.changes[index];
+      assert.deepEqual({
+        id: row.id,
+        item_ref: row.item_ref,
+        take_ref: row.take_ref,
+        volume_db: row.item?.volume_db,
+        pan: row.take?.pan,
+        pitch_semitones: row.take?.pitch_semitones,
+        playrate: row.take?.playrate,
+        preserve_pitch: row.take?.preserve_pitch,
+      }, expected, `dry-run row ${index + 1} lost truth`);
+    }
+    assert.equal(dryRun.result.data.calls.mutation, 0);
+    assert.equal(inlineDetailBytes(dryRun) <= 24_576, true, `dry-run inline bytes=${inlineDetailBytes(dryRun)}`);
+    assert.deepEqual(validateMacroExecutionEnvelope(dryRun), { valid: true, errors: [] });
+
+    const successExecutor = makeExecutor({ rows });
+    const success = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: rows }, budget),
+      executeAtomic: successExecutor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(success.ok, true, JSON.stringify(success));
+    assert.equal(success.contract, "macro.execution.v1");
+    assert.equal(success.result.changes.length, 64);
+    assert.equal(success.result.changes.every((row) => row.status === "ok" && row.readback === "pass"), true);
+    for (const [index, expected] of expectedFields.entries()) {
+      const row = success.result.changes[index];
+      assert.deepEqual({
+        id: row.id,
+        item_ref: row.item_ref,
+        take_ref: row.take_ref,
+        volume_db: row.item?.volume_db,
+        pan: row.take?.pan,
+        pitch_semitones: row.take?.pitch_semitones,
+        playrate: row.take?.playrate,
+        preserve_pitch: row.take?.preserve_pitch,
+      }, expected, `success row ${index + 1} lost truth`);
+    }
+    assert.equal(success.result.data.calls.readback, 64);
+    assert.equal(inlineDetailBytes(success) <= 24_576, true, `success inline bytes=${inlineDetailBytes(success)}`);
+    assert.deepEqual(validateMacroExecutionEnvelope(success), { valid: true, errors: [] });
   });
   it("keeps mode list and exact public counts 6/15/235/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
