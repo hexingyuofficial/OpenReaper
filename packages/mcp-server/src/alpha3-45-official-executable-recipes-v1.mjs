@@ -70,7 +70,7 @@ const RECIPE_SPECS = Object.freeze([
         id: concat([literal("route_"), add([local("source_index"), literal(1)])]),
         action: literal("create"), source_track_ref: local("source"),
         destination_track_ref: get(stage("layout", "changes"), [0, "target_ref"]),
-        duplicate_policy: literal("reject_existing"), volume: literal(1), pan: literal(0), muted: literal(false),
+        duplicate_policy: literal("reuse_existing"), volume: literal(1), pan: literal(0), muted: literal(false),
       }))),
       expressionBinding("routing", "master_parent", array()),
       expressionBinding("routing", "channel_counts", array()),

@@ -212,7 +212,7 @@ function normalizeRoutes(value) {
     if (action === "delete" && [row.source_track_ref, row.destination_track_ref, row.duplicate_policy, row.volume, row.pan, row.muted].some((entry) => entry !== undefined)) {
       blockers.push(blocker("ROUTING_DELETE_FIELDS_UNSUPPORTED", "Delete route rows accept only id, action, and exact send_ref so removal cannot be retargeted implicitly.", { id: id.value }));
     }
-    if (row.duplicate_policy !== undefined && !["reject_existing", "allow_duplicate"].includes(row.duplicate_policy)) blockers.push(blocker("ROUTING_DUPLICATE_POLICY_INVALID", "duplicate_policy must be reject_existing or allow_duplicate.", { id: id.value }));
+    if (row.duplicate_policy !== undefined && !["reject_existing", "reuse_existing", "allow_duplicate"].includes(row.duplicate_policy)) blockers.push(blocker("ROUTING_DUPLICATE_POLICY_INVALID", "duplicate_policy must be reject_existing, reuse_existing, or allow_duplicate.", { id: id.value }));
     if (row.volume !== undefined && !isNumberInRange(row.volume, 0, 4)) blockers.push(blocker("ROUTING_SEND_VOLUME_INVALID", "volume must be a finite scalar from 0 through 4.", { id: id.value }));
     if (row.pan !== undefined && !isNumberInRange(row.pan, -1, 1)) blockers.push(blocker("ROUTING_SEND_PAN_INVALID", "pan must be a finite value from -1 through 1.", { id: id.value }));
     if (row.muted !== undefined && typeof row.muted !== "boolean") blockers.push(blocker("ROUTING_SEND_MUTE_INVALID", "muted must be boolean when supplied.", { id: id.value }));

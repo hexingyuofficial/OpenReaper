@@ -192,6 +192,15 @@ describe("Alpha3.2-E routing apply planner", () => {
     assert.equal(plan.mutation_requests.filter((request) => request.id === "template.routing.create_track_send").length, 2);
   });
 
+  it("accepts reuse_existing as an idempotent live duplicate policy", () => {
+    const plan = planAlpha3_2ERoutingApplyMacro({
+      routes: [{ id: "ab", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}", duplicate_policy: "reuse_existing", volume: 1 }],
+      dry_run: false,
+    });
+    assert.equal(plan.ok, true, JSON.stringify(plan.blockers));
+    assert.equal(plan.preview.routes[0].duplicate_policy, "reuse_existing");
+  });
+
   it("rejects operation ids reused across routing operation kinds", () => {
     const plan = planAlpha3_2ERoutingApplyMacro({
       routes: [{ id: "shared", action: "create", source_track_ref: "track:guid:{A}", destination_track_ref: "track:guid:{B}" }],

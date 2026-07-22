@@ -253,6 +253,71 @@ describe("Alpha3.2.5-C executable project-write Macros", () => {
     assert.equal(result.result.changes[0].target_ref, "send:guid:{CREATED}");
   });
 
+  it("reuses one canonical live duplicate and applies controls without creating another Send", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", duplicate_policy: "reuse_existing", volume: 0.5, pan: 0, muted: false }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, {
+        routingGraphEdges: [{ send_ref: "send:track:guid:{SRC}:0", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" }],
+        existingRoutingUpdates: true,
+        routingReadbackVolume: 0.5,
+      }),
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.some((call) => call.id === "template.routing.create_track_send"), false);
+    assert.equal(calls.filter((call) => call.id.startsWith("template.routing.set_send_")).every((call) => call.refs.send_ref.ref === "send:track:guid:{SRC}:0"), true);
+    assert.equal(result.result.changes[0].target_ref, "send:track:guid:{SRC}:0");
+    assert.deepEqual(result.result.changes[0].mutation, { status: "completed" });
+    assert.equal(result.result.changes[0].live_readback.status, "passed");
+  });
+
+  it("reuses one canonical live duplicate without dispatching a write when no controls change", async () => {
+    const calls = [];
+    const edge = { send_ref: "send:track:guid:{SRC}:0", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" };
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: edge.source_track_ref, destination_track_ref: edge.destination_track_ref, duplicate_policy: "reuse_existing" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, { routingGraphEdges: [edge], existingRoutingUpdates: true }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(calls.some((call) => isWrite(call.id)), false);
+    assert.equal(result.result.changes[0].status, "matched_existing");
+    assert.deepEqual(result.result.changes[0].mutation, { status: "not_run" });
+    assert.equal(result.result.changes[0].live_readback.status, "passed");
+  });
+
+  it("fails closed when reuse_existing matches more than one live Send", async () => {
+    const calls = [];
+    const result = await executeAlpha3_2_5CProjectWriteMacro({
+      request: {
+        id: "macro.routing.apply",
+        input: confirmedRoutingInput({
+          routes: [{ id: "send_a", action: "create", source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}", duplicate_policy: "reuse_existing" }],
+        }),
+      },
+      executeAtomic: fakeAtomic(calls, {
+        routingGraphEdges: [0, 1].map((index) => ({ send_ref: `send:track:guid:{SRC}:${index}`, source_track_ref: "track:guid:{SRC}", destination_track_ref: "track:guid:{DST}" })),
+      }),
+      now: () => new Date(NOW),
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.error.code, "ROUTING_LIVE_DUPLICATE_EDGE_AMBIGUOUS");
+    assert.equal(calls.some((call) => isWrite(call.id)), false);
+  });
+
   it("reports one logical routing change with separate mutation, live readback, and index truth", async () => {
     const calls = [];
     const result = await executeAlpha3_2_5CProjectWriteMacro({
@@ -1256,7 +1321,7 @@ function fakeAtomic(calls, options = {}) {
           .filter((edge) => edge.source_track_ref === ref)
           .map((edge) => ({
             ...edge,
-            volume: calls.some((call) => call.id === "template.routing.set_send_volume" && firstRef(call.refs) === edge.send_ref) ? 1 : 0.5,
+            volume: options.routingReadbackVolume ?? (calls.some((call) => call.id === "template.routing.set_send_volume" && firstRef(call.refs) === edge.send_ref) ? 1 : 0.5),
             pan: 0,
             muted: false,
           }));

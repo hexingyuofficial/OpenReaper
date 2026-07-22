@@ -142,6 +142,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     markerRegionReadbackRows: new Map(),
     routingReadbackRows: new Map(),
     routingResolvedSends: new Map(),
+    routingReusedRows: new Set(),
     routingResolverCache: request?.id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID ? new Set() : null,
     readbackEvidenceRefs: [],
     layoutPreflightTracks: null,
@@ -233,7 +234,7 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     if ((plan.mutation_requests ?? []).length > MAX_MUTATIONS) throw coded("PROJECT_WRITE_MUTATION_LIMIT", "The registered Macro exceeded its bounded mutation ceiling.");
     prepareLayoutMutationExecution(program, plan, state);
     for (const mutation of plan.mutation_requests ?? []) {
-      const effectiveMutation = effectiveLayoutMutation(program, mutation, state);
+      const effectiveMutation = effectiveRoutingMutation(program, effectiveLayoutMutation(program, mutation, state), state);
       if (!effectiveMutation) continue;
       if (!program.templateIds.includes(effectiveMutation.id) || effectiveMutation.id.startsWith("macro.")) throw coded("PROJECT_WRITE_DEPENDENCY_REJECTED", `Rejected non-atomic dependency ${String(effectiveMutation.id)}.`);
       const resolvedRefs = await liveResolveRefs({ program, request, executeAtomic, stages, state, refs: effectiveMutation.refs ?? {}, now });
@@ -702,16 +703,35 @@ function validateRoutingPreflight(program, plan, child, execution, state) {
     || graph.total_edge_count !== graph.edges.length) {
     throw coded("ROUTING_GRAPH_EDGE_COUNT_MISMATCH", "Routing graph edge_count did not match the live edges[] rows.");
   }
-  validateRoutingGraphTopology(plan, graph);
+  validateRoutingGraphTopology(plan, graph, state);
   state.routingPreflight = structuredClone(graph);
 }
 
-function validateRoutingGraphTopology(plan, graph) {
+function validateRoutingGraphTopology(plan, graph, state) {
   const createRows = (plan.preview?.routes ?? []).filter((row) => row.action === "create");
   const liveEdges = graph.edges.filter((edge) => typeof edge?.source_track_ref === "string" && typeof edge?.destination_track_ref === "string");
   for (const row of createRows) {
-    const duplicateCount = liveEdges.filter((edge) => edge.source_track_ref === row.source_track_ref && edge.destination_track_ref === row.destination_track_ref).length;
-    if (duplicateCount > 0 && row.duplicate_policy !== "allow_duplicate") {
+    const duplicates = liveEdges.filter((edge) => edge.source_track_ref === row.source_track_ref && edge.destination_track_ref === row.destination_track_ref);
+    if (duplicates.length > 0 && row.duplicate_policy === "reuse_existing") {
+      if (duplicates.length !== 1 || typeof duplicates[0].send_ref !== "string") {
+        throw coded("ROUTING_LIVE_DUPLICATE_EDGE_AMBIGUOUS", `Live routing contains ${duplicates.length} matching sends for ${row.source_track_ref} -> ${row.destination_track_ref}; reuse_existing requires exactly one canonical send.`);
+      }
+      const sendRef = duplicates[0].send_ref;
+      state.localRefs.set(`send:planned:${row.id}`, sendRef);
+      state.routingResolvedSends.set(row.id, sendRef);
+      state.routingReusedRows.add(row.id);
+      const change = state.routingOperations?.changesById.get(row.id);
+      if (change) {
+        change.target_ref = sendRef;
+        change.mutation.total_count = Math.max(0, change.mutation.total_count - 1);
+        if (change.mutation.total_count === 0) {
+          change.mutation.status = "completed";
+          change.status = "matched_existing";
+        }
+      }
+      continue;
+    }
+    if (duplicates.length > 0 && row.duplicate_policy !== "allow_duplicate") {
       throw coded("ROUTING_LIVE_DUPLICATE_EDGE", `Live routing already contains ${row.source_track_ref} -> ${row.destination_track_ref}; no write was dispatched.`);
     }
   }
@@ -722,6 +742,14 @@ function validateRoutingGraphTopology(plan, graph) {
   if (directedEdgesHaveCycle(combinedEdges)) {
     throw coded("ROUTING_LIVE_CYCLE", "The complete live graph plus requested creates contains a directed routing cycle; no write was dispatched.");
   }
+}
+
+function effectiveRoutingMutation(program, mutation, state) {
+  if (!mutation || program.entry.macro_id !== ALPHA3_2E_ROUTING_APPLY_MACRO_ID) return mutation;
+  return mutation.id === "template.routing.create_track_send"
+    && state.routingReusedRows.has(mutation.operation_id)
+    ? null
+    : mutation;
 }
 
 function directedEdgesHaveCycle(edges) {
@@ -1411,7 +1439,9 @@ function applyRoutingReadbackToChanges(state, plan) {
       failures.push({ code: verification.code, message: verification.message, recoverable: true });
       continue;
     }
-    change.status = "applied";
+    change.status = state.routingReusedRows.has(change.operation_id) && change.mutation.total_count === 0
+      ? "matched_existing"
+      : "applied";
     change.live_readback = {
       status: "passed",
       source: "live_track_routing_readback",

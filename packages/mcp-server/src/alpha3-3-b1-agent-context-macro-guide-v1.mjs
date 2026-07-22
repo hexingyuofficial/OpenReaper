@@ -439,7 +439,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
       "Execution requires a complete, untruncated live graph preflight covering up to 128 Tracks and 256 internal sends before the first write.",
     ];
     canonical.action_manual.input_shape = {
-      routes: "0-64 rows of {id,action=create|update|delete}. create requires source_track_ref and destination_track_ref; update requires send_ref; delete accepts only id, action, and exact send_ref. create/update optionally accept volume 0..4, pan -1..1, and muted boolean. duplicate_policy=reject_existing blocks a live duplicate; allow_duplicate creates a new Send even when the same edge already exists.",
+      routes: "0-64 rows of {id,action=create|update|delete}. create requires source_track_ref and destination_track_ref; update requires send_ref; delete accepts only id, action, and exact send_ref. create/update optionally accept volume 0..4, pan -1..1, and muted boolean. duplicate_policy=reject_existing blocks a live duplicate; reuse_existing binds exactly one matching canonical Send and applies requested controls; allow_duplicate creates another Send.",
       master_parent: "0-64 rows of {id,track_ref,enabled}; id may be omitted only when track_ref is a suitable bounded id source.",
       channel_counts: "0-64 rows of {id,track_ref,channel_count}. Use even counts from 2 through 64 for currently verified live behavior; the Macro schema accepts through 128, but values above 64 require lower-layer truth alignment before success may be claimed.",
       dry_run: "Defaults true. A preview emits no mutations; set only this field to false on the same operation input to execute.",
@@ -447,7 +447,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     };
     canonical.action_manual.preflight_steps = [
       "Validate all rows, exact refs, unique operation ids, self-send/duplicate-edge posture, and request-local cycles before planning any write.",
-      "Read the complete live project routing graph; fail before the first write on truncation, incomplete enumeration, malformed counts, a reject_existing live duplicate edge, or a live-plus-request cycle.",
+      "Read the complete live project routing graph; fail before the first write on truncation, incomplete enumeration, malformed counts, a reject_existing duplicate, an ambiguous reuse_existing match, or a live-plus-request cycle.",
     ];
     canonical.action_manual.underlying_actions = [
       "template.routing.read_project_routing_graph",
@@ -474,6 +474,7 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
       { code: "ROUTING_GRAPH_COVERAGE_INCOMPLETE", summary: "REAPER could not enumerate the complete live internal-routing graph, so no write started." },
       { code: "ROUTING_GRAPH_TRUNCATED", summary: "The project exceeded the bounded complete-graph preflight; no write started." },
       { code: "ROUTING_LIVE_DUPLICATE_EDGE", summary: "A reject_existing source-to-destination edge already exists live, so no write started; use allow_duplicate only when another Send is intentional." },
+      { code: "ROUTING_LIVE_DUPLICATE_EDGE_AMBIGUOUS", summary: "reuse_existing found multiple matches or a match without a canonical send_ref, so no write started." },
       { code: "ROUTING_LIVE_CYCLE", summary: "The complete live graph plus requested creates forms a directed cycle; no write started." },
       { code: "ROUTING_SEND_READBACK_MISMATCH", summary: "The exact live Send row did not match every requested field after mutation." },
     ];

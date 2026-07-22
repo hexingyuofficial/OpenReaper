@@ -35,7 +35,13 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
     if (args.operation === "run" && args.inputs.variation_count === 65) {
       return { ok: false, status: "failed", error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false, status: "not_opened" } };
     }
-    return fakeSuccessfulRun(args);
+    const successful = fakeSuccessfulRun(args);
+    if (args.recipe_id === "recipe.media.create_layered_sound_effect_variants") {
+      successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "placement_changes"
+        ? { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } }
+        : output);
+    }
+    return successful;
   };
   const report = await runAlpha345OfficialRecipesHarness({
     installedWrapper: wrapper,

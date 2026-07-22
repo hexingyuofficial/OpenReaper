@@ -198,7 +198,10 @@ function summarizeRun(recipeId, call, identity) {
 
 function hasOfficialRunTruth(run, inputs) {
   const expected = OFFICIAL_OUTPUTS[run.recipe_id] ?? [];
-  if (expected.length === 0 || !expected.every((id) => hasNonEmptyOutput(run, id))) return false;
+  if (expected.length === 0 || !expected.every((id) => (
+    hasNonEmptyOutput(run, id)
+    || hasEvidenceBackedOmission(run, id)
+  ))) return false;
   if (run.evidence_refs.length === 0
     || run.undo?.claimed !== true
     || run.undo?.status !== "closed"
@@ -210,7 +213,8 @@ function hasOfficialRunTruth(run, inputs) {
   const outputsProven = expected.every((id) => {
     const value = run.output_values?.[id];
     if (Array.isArray(value)) return value.length > 0 && value.every(provenOutputRow);
-    return typeof value === "string" && value.length > 0;
+    return (typeof value === "string" && value.length > 0)
+      || hasEvidenceBackedOmission(run, id);
   });
   if (!outputsProven) return false;
   if (run.recipe_id === "recipe.items.create_sound_variations") {
@@ -233,6 +237,16 @@ function hasNonEmptyOutput(run, id) {
     && run.output_omitted?.[id] !== true
     && Number.isInteger(run.output_counts?.[id])
     && run.output_counts[id] > 0;
+}
+
+function hasEvidenceBackedOmission(run, id) {
+  const value = run.output_values?.[id];
+  return run.recipe_id !== "recipe.items.create_sound_variations"
+    && run.outputs.includes(id)
+    && run.output_omitted?.[id] === true
+    && value?.omitted === true
+    && value?.reason === "inline_value_exceeds_call_recipe_budget"
+    && run.evidence_refs.length > 0;
 }
 
 function concreteRecipe04Features(run, inputs) {
