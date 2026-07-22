@@ -130,6 +130,15 @@ describe("Alpha3.2.5-D native FX Macro", () => {
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.deepEqual(bridge.writes.map((call) => call.id), ["template.fx.add_take_fx"]);
     assert.equal(bridge.calls.some((call) => call.id.includes("selected")), false);
+    const takeCalls = bridge.calls.filter((call) => call.refs?.take_ref !== undefined);
+    assert.equal(takeCalls.length > 0, true);
+    assert.equal(takeCalls.every((call) => {
+      const takeRef = call.refs?.take_ref;
+      return takeRef?.kind === "take"
+        && takeRef.ref === TAKE_REF
+        && takeRef.identity?.scheme === "guid"
+        && takeRef.identity.value === TAKE_REF.slice("take:guid:".length);
+    }), true);
     assert.equal(result.result.data.owner_ref, TAKE_REF);
     assert.equal(result.result.data.final_chain.fx[0].fx_ref, `fx:${TAKE_REF}:0`);
   });

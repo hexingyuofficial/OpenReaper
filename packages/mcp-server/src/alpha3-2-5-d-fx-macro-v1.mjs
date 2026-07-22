@@ -988,10 +988,14 @@ async function resolveFxChainOwner({ request, input, executeAtomic, projectIndex
   if (typeof refs.take_ref !== "string" || !refs.take_ref.startsWith("take:guid:")) {
     return blocked("FX_CHAIN_TAKE_REF_REQUIRED", "owner_kind=take requires one exact canonical take:guid ref.");
   }
+  const takeObject = exactGuidObjectRef("take", refs.take_ref);
+  if (takeObject === null) {
+    return blocked("FX_CHAIN_TAKE_REF_REQUIRED", "owner_kind=take requires one exact canonical take:guid ref.");
+  }
   const probe = await executeFxAtomic({
     id: LIST_TAKE_FX_CHAIN_ID,
     input: { include_preset: true },
-    refs: { take_ref: refs.take_ref },
+    refs: { take_ref: takeObject },
     request,
     executeAtomic,
     state,
@@ -1006,7 +1010,7 @@ async function resolveFxChainOwner({ request, input, executeAtomic, projectIndex
     ok: true,
     ownerKind,
     ownerRef: refs.take_ref,
-    refs: { take_ref: refs.take_ref },
+    refs: { take_ref: takeObject },
     listTemplateId: LIST_TAKE_FX_CHAIN_ID,
     addTemplateId: ADD_TAKE_FX_ID,
   };
@@ -1631,6 +1635,13 @@ function normalizeNamedRefs(value) {
     if (typeof ref === "string" && ref.startsWith(prefix)) result[field] = ref;
   }
   return result;
+}
+
+function exactGuidObjectRef(kind, ref) {
+  if (typeof ref !== "string" || !ref.startsWith(`${kind}:guid:`)) return null;
+  const value = ref.slice(`${kind}:guid:`.length);
+  if (value.length === 0) return null;
+  return { kind, ref, identity: { scheme: "guid", value } };
 }
 
 function invalidateFxScope(runtime, now) {
