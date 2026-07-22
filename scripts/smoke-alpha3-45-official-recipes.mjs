@@ -167,7 +167,7 @@ export async function runAlpha345OfficialRecipesHarness({
     report.timings.maximum_ms = Math.max(0, ...report.timings.successful_run_ms);
     report.project.changes = report.official_runs.flatMap((row) => row.changes);
     report.project.output_files = unique(report.official_runs.flatMap((row) => row.output_files));
-    await writeBoundedReport(path.join(evidenceRoot, REPORT_NAME), report);
+    await writeBoundedReport(path.join(evidenceRoot, REPORT_NAME), persistedTruthSummary(report));
   }
   return report;
 }
@@ -295,13 +295,13 @@ function linkedRecipe04Rows(rows, sourceItems) {
       || variation.position_seconds <= source.position_seconds) continue;
     const control = controls.get(copyKey);
     const copyProof = variation.take_fx_copy;
-    const copiedSlot = Array.isArray(copyProof?.slots) ? copyProof.slots[0] : null;
+    const copiedSlots = Array.isArray(copyProof?.slots) ? copyProof.slots : [];
+    const copiedSlot = copiedSlots[0];
     const fxRef = copiedSlot?.target_fx_ref;
     if (copyProof?.status !== "passed"
-      || !Number.isSafeInteger(copyProof.copied_count)
-      || copyProof.copied_count < 1
-      || copyProof.slots.length !== copyProof.copied_count
-      || copiedSlot?.slot_index !== 0
+      || copiedSlots.length < 1
+      || (copyProof.copied_count !== undefined && copyProof.copied_count !== copiedSlots.length)
+      || (copiedSlot?.slot_index !== undefined && copiedSlot.slot_index !== 0)
       || fxRef !== `fx:${takeRef}:0`) continue;
     const toneRow = tone.get(fxRef);
     const automationRow = automation.get(fxRef);
@@ -385,7 +385,22 @@ function summarizeCapacity(count, call, requiredMutationRows, evidence, inputs) 
     fail_closed: count === 65 && !ok && zeroWrite && undoZeroWriteSafe,
     zero_write: zeroWrite,
     error_code: value.error?.code ?? value.details?.code ?? null,
+    error_message: boundedText(value.error?.message ?? value.details?.message, 512),
+    error_details_json: boundedJson(value.error?.details ?? value.details, 4_096),
   };
+}
+
+function boundedText(value, maxLength) {
+  return typeof value === "string" && value.length > 0 ? value.slice(0, maxLength) : null;
+}
+
+function boundedJson(value, maxLength) {
+  if (value == null) return null;
+  try {
+    return JSON.stringify(value).slice(0, maxLength);
+  } catch {
+    return "[unserializable]";
+  }
 }
 
 async function timedCall(invoke, args) {
@@ -484,6 +499,29 @@ async function writeBoundedReport(target, report) {
   const body = `${JSON.stringify(report, null, 2)}\n`;
   if (Buffer.byteLength(body, "utf8") > MAX_REPORT_BYTES) throw coded("OFFICIAL_REPORT_TOO_LARGE", `Report exceeds ${MAX_REPORT_BYTES} bytes.`);
   await writeFile(target, body, { encoding: "utf8", flag: "wx", mode: 0o600 });
+}
+
+function persistedTruthSummary(report) {
+  return {
+    ...report,
+    report_storage: {
+      mode: "bounded_truth_summary",
+      full_evidence: "follow official_runs[].evidence_refs and recipe04_truth.evidence_refs",
+    },
+    project: {
+      ...report.project,
+      change_count: report.project.changes.length,
+      changes: report.official_runs.map((row) => ({
+        recipe_id: row.recipe_id,
+        verified_change_count: row.changes.length,
+        evidence_refs: row.evidence_refs,
+      })),
+    },
+    official_runs: report.official_runs.map(({ output_values: _outputValues, changes, ...row }) => ({
+      ...row,
+      verified_change_count: changes.length,
+    })),
+  };
 }
 
 async function sha256File(file) {

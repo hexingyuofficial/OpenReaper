@@ -2787,16 +2787,24 @@ function projectCompactBatchChanges(changes) {
       status: compactStatusToken(change.status),
       mutation: compactStatusToken(mutation),
       readback: compactStatusToken(readback),
-      index: compactStatusToken(index),
+      index: typeof change.new_item_ref === "string" ? undefined : compactStatusToken(index),
       code: change.code ? String(change.code).replace(/^ITEM_APPLY_/u, "").slice(0, 24) : undefined,
       fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
       new_item_ref: typeof change.new_item_ref === "string" ? change.new_item_ref : undefined,
       new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
-      take_fx_copy: isPlainObject(change.take_fx_copy) ? change.take_fx_copy : undefined,
+      take_fx_copy: compactVariationTakeFxCopy(change.take_fx_copy),
       position_seconds: Number.isFinite(change.position_seconds) ? change.position_seconds : undefined,
       source_offset_seconds: Number.isFinite(change.source_offset_seconds) ? change.source_offset_seconds : undefined,
     });
   });
+}
+
+function compactVariationTakeFxCopy(value) {
+  if (!isPlainObject(value) || !Array.isArray(value.slots)) return undefined;
+  return {
+    status: value.status,
+    slots: value.slots.map((slot) => ({ target_fx_ref: slot.target_fx_ref })),
+  };
 }
 
 function compactStatusToken(value) {

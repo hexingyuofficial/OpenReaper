@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -93,6 +93,15 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
     "recipe.items.create_sound_variations",
     "recipe.items.create_sound_variations",
     "recipe.items.create_sound_variations",
+  ]);
+  const persisted = JSON.parse(await readFile(path.join(evidenceRoot, "alpha3-45-official-recipes.json"), "utf8"));
+  assert.equal(persisted.ok, true);
+  assert.equal(persisted.report_storage.mode, "bounded_truth_summary");
+  assert.equal(Buffer.byteLength(JSON.stringify(persisted), "utf8") <= 64 * 1024, true);
+  assert.equal(persisted.official_runs.some((row) => Object.hasOwn(row, "output_values")), false);
+  assert.equal(persisted.recipe04_truth.automation_envelope, true);
+  assert.deepEqual(persisted.capacity.map((row) => [row.count, row.batch_proven, row.fail_closed]), [
+    [1, true, false], [8, true, false], [64, true, false], [65, false, true],
   ]);
 });
 
@@ -335,6 +344,16 @@ test("official live harness rejects inflated capacity counters", async () => {
         return evidence;
       }
       if (args.operation === "get") return { ok: true, source: "official", ...identities.find((row) => row.recipe_id === args.recipe_id) };
+      if (args.inputs.variation_count === 64) {
+        return {
+          ok: false,
+          error: {
+            code: "STAGE_FAILED",
+            message: "copy stage failed",
+            details: { stage_id: "copy", nested: { code: "BRIDGE_TIMEOUT" } },
+          },
+        };
+      }
       if (args.inputs.variation_count === 65) return { ok: false, error: { code: "ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false } };
       return fakeSuccessfulRun(args);
     },
@@ -343,6 +362,8 @@ test("official live harness rejects inflated capacity counters", async () => {
   assert.equal(report.error.code, "OFFICIAL_CAPACITY_SUCCESS_REQUIRED");
   assert.equal(report.capacity.at(-1).count, 64);
   assert.equal(report.capacity.at(-1).batch_proven, false);
+  assert.equal(report.capacity.at(-1).error_message, "copy stage failed");
+  assert.match(report.capacity.at(-1).error_details_json, /BRIDGE_TIMEOUT/);
 });
 
 test("official live harness rejects count 64 success with underreported batch proof", async () => {

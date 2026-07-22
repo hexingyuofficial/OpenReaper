@@ -218,7 +218,12 @@ function takeFxCopyProof(sourceTakeRef, targetTakeRef, count = 1) {
   };
 }
 
-function makeVariationExecutor({ failAt = null, fxCount = 1, corruptFxProof = false } = {}) {
+function realisticGuid(prefix, index) {
+  const tail = String(index).padStart(12, "0");
+  return `{${prefix.repeat(8).slice(0, 8)}-${prefix.repeat(4).slice(0, 4)}-${prefix.repeat(4).slice(0, 4)}-${prefix.repeat(4).slice(0, 4)}-${tail}}`;
+}
+
+function makeVariationExecutor({ failAt = null, fxCount = 1, corruptFxProof = false, realisticRefs = false } = {}) {
   const calls = [];
   const items = new Map();
   let copyCount = 0;
@@ -239,9 +244,16 @@ function makeVariationExecutor({ failAt = null, fxCount = 1, corruptFxProof = fa
       if (child.id === "template.items.copy_item_to_track") {
         mutationCount += 1;
         if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "COPY_FAILED", message: "copy failed" }, result: { summary: {}, readback: {}, refs: [] } };
-        const newItemRef = `item:guid:{NEW-${String(++copyCount).padStart(2, "0")}}`;
-        const newTakeRef = `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
-        const sourceTakeRef = `take:guid:{SOURCE-TAKE-${String(copyCount).padStart(2, "0")}}`;
+        copyCount += 1;
+        const newItemRef = realisticRefs
+          ? `item:guid:${realisticGuid("A", copyCount)}`
+          : `item:guid:{NEW-${String(copyCount).padStart(2, "0")}}`;
+        const newTakeRef = realisticRefs
+          ? `take:guid:${realisticGuid("B", copyCount)}`
+          : `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
+        const sourceTakeRef = realisticRefs
+          ? `take:guid:${realisticGuid("C", copyCount)}`
+          : `take:guid:{SOURCE-TAKE-${String(copyCount).padStart(2, "0")}}`;
         const takeFxCopy = takeFxCopyProof(sourceTakeRef, newTakeRef, fxCount);
         if (corruptFxProof && takeFxCopy.slots[0]) takeFxCopy.slots[0].target_fx_ref = "fx:take:guid:{WRONG}:0";
         const row = {
@@ -331,7 +343,7 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
       assert.equal(response.result.changes.every((row) => row.status === "ok"), true);
       assert.equal(response.result.changes.every((row) => /^item:guid:\{NEW-\d+\}$/u.test(row.new_item_ref)), true);
       assert.equal(response.result.changes.every((row) => /^take:guid:\{NEW-TAKE-\d+\}$/u.test(row.new_take_ref)), true);
-      assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.copied_count === 1), true);
+      assert.equal(response.result.changes.every((row) => row.take_fx_copy?.status === "passed" && row.take_fx_copy.slots.length === 1), true);
       assert.equal(response.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
       assert.equal(response.result.data.calls.resolve, count * 2);
       assert.equal(response.result.data.calls.readback, count);
@@ -355,7 +367,18 @@ describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
     });
     assert.equal(zeroFx.ok, true, JSON.stringify(zeroFx));
     assert.deepEqual(zeroFx.result.changes[0].take_fx_copy.slots, []);
-    assert.equal(zeroFx.result.changes[0].take_fx_copy.copied_count, 0);
+    assert.equal(zeroFx.result.changes[0].take_fx_copy.status, "passed");
+
+    const rows = variationRows(64).map((row, index) => ({ ...row, source_offset_seconds: index / 100 }));
+    const realistic = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: rows }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: makeVariationExecutor({ realisticRefs: true }).executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(realistic.ok, true, JSON.stringify(realistic));
+    assert.equal(realistic.result.changes.length, 64);
+    assert.equal(realistic.result.changes.every((row) => row.take_fx_copy.slots[0].target_fx_ref === `fx:${row.new_take_ref}:0`), true);
+    assert.deepEqual(validateMacroExecutionEnvelope(realistic), { valid: true, errors: [] });
 
     const corruptExecutor = makeVariationExecutor({ corruptFxProof: true });
     const corrupt = await executeAlpha3_3B1cItemsApplyMacro({
