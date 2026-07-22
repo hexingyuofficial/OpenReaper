@@ -220,6 +220,8 @@ test("statically verifies installed-wrapper-only public-tool truth and no REAPER
   });
   assert.equal(draft.contract, "recipe.executable.draft.v1");
   assert.equal(draft.stages[0].dependency.id, "macro.project.inspect");
+  assert.deepEqual(draft.stages[0].outputs, ["evidence_ref"]);
+  assert.deepEqual(draft.outputs, [{ id: "evidence_ref", type: "string", required: true }]);
   assert.equal(draft.preflight.forbids_inline_execution, true);
 });
 

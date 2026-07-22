@@ -172,6 +172,11 @@ test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reus
   assert.deepEqual(lifecycle.operations, ["validate", "save", "list", "get", "delete", "run", "resume"]);
   assert.match(lifecycle.run_rule, /one public call_recipe run/u);
   assert.match(lifecycle.authoring_rule, /macro-first/u);
+  assert.match(lifecycle.stage_output_rule, /Never invent a Macro output port/u);
+  assert.equal(lifecycle.minimal_draft_template.contract, "recipe.executable.draft.v1");
+  assert.deepEqual(lifecycle.minimal_draft_template.stages[0].outputs, ["evidence_ref"]);
+  assert.deepEqual(lifecycle.minimal_draft_template.outputs, [{ id: "evidence_ref", type: "string", required: true }]);
+  assert.equal(lifecycle.minimal_draft_template.preflight.forbids_inline_execution, true);
   assert.match(lifecycle.failure_rule, /resume_safe/u);
   for (const operation of lifecycle.operations) {
     assert.equal(lifecycle.request_examples[operation].arguments.operation, operation);

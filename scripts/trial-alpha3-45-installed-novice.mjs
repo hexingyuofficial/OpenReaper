@@ -416,7 +416,7 @@ export function createNoviceUserRecipeDraft({
     pack: "project",
     risk: "read",
     inputs: [],
-    outputs: [{ id: "project_summary", type: "json", required: true }],
+    outputs: [{ id: "evidence_ref", type: "string", required: true }],
     stages: [
       {
         id: "inspect",
@@ -428,15 +428,15 @@ export function createNoviceUserRecipeDraft({
           fallback_reason: null,
         },
         inputs: [],
-        outputs: ["project_summary"],
+        outputs: ["evidence_ref"],
         risk: dependency.risk,
         checkpoint: "checkpoint_inspect",
       },
     ],
     bindings: [
       {
-        from: { scope: "stage", id: "inspect", port: "project_summary" },
-        to: { scope: "recipe_output", id: null, port: "project_summary" },
+        from: { scope: "stage", id: "inspect", port: "evidence_ref" },
+        to: { scope: "recipe_output", id: null, port: "evidence_ref" },
       },
     ],
     dependencies: [
