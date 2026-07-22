@@ -229,6 +229,14 @@ function provenOutputRow(row) {
     || (row.status === "applied"
       && row.live_readback?.status === "passed"
       && (row.mutation === undefined || row.mutation?.status === "completed"))
+    || (row.status === "matched_existing"
+      && row.match?.status === "matched_existing"
+      && row.live_readback?.status === "passed"
+      && row.mutation?.status === "completed"
+      && row.mutation?.completed_count === 0)
+    || (row.status === "unchanged"
+      && row.mutation?.status === "not_run"
+      && row.live_readback?.status === "passed")
   );
 }
 

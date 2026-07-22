@@ -36,6 +36,27 @@ test("official live harness discovers and one-calls all four Recipes with Recipe
       return { ok: false, status: "failed", error: { code: "OFFICIAL_VARIATION_ROW_LIMIT", details: { zero_write: true } }, undo: { claimed: false, status: "not_opened" } };
     }
     const successful = fakeSuccessfulRun(args);
+    if (args.recipe_id === "recipe.mix.create_bus_processing") {
+      successful.verified_outputs.find((output) => output.id === "layout_changes").value[0] = {
+        operation_id: "bus",
+        target_ref: "track:guid:{EXISTING-BUS}",
+        status: "matched_existing",
+        mutation: { status: "completed", completed_count: 0, total_count: 0 },
+        live_readback: { status: "passed" },
+        match: { status: "matched_existing", policy: "update_declared_fields" },
+      };
+    }
+    if (args.recipe_id === "recipe.midi.create_instrument_part") {
+      successful.verified_outputs.find((output) => output.id === "instrument_changes").value[0] = {
+        operation_id: "instrument",
+        target_ref: "track:guid:{EXISTING-INSTRUMENT}",
+        related_ref: "fx:track:guid:{EXISTING-INSTRUMENT}:0",
+        duplicate_policy: "reuse_exact",
+        status: "unchanged",
+        mutation: { status: "not_run", actions: [] },
+        live_readback: { status: "passed", observed_ref: "fx:track:guid:{EXISTING-INSTRUMENT}:0" },
+      };
+    }
     if (args.recipe_id === "recipe.media.create_layered_sound_effect_variants") {
       successful.verified_outputs = successful.verified_outputs.map((output) => output.id === "placement_changes"
         ? { ...output, value: { omitted: true, reason: "inline_value_exceeds_call_recipe_budget" } }
