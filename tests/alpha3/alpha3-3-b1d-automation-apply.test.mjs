@@ -42,7 +42,7 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.deepEqual(discovery.held_modes, ALPHA3_3_B1D_AUTOMATION_APPLY_HELD_MODES);
     assert.equal(discovery.supported_modes.includes("set_lane_state"), false);
     assert.equal(ALPHA3_3_B1D_AUTOMATION_APPLY_TEMPLATE_IDS.includes("template.automation.set_envelope_lane_state"), false);
-    assert.deepEqual(discovery.limits, { envelope_targets: 8, track_targets: 8, fx_targets: 8, total_inserted_points: 64 });
+    assert.deepEqual(discovery.limits, { envelope_targets: 64, track_targets: 64, fx_targets: 64, total_inserted_points: 512 });
     const manual = createAlpha3_3B1dAutomationApplyExactManual().action_manual;
     assert.match(manual.when_to_use.join(" "), /Automation Item deletion/u);
     assert.match(manual.when_to_use.join(" "), /Take-FX/u);
@@ -90,6 +90,47 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
     assert.equal(bridge.calls.some((call) => isMutation(call.id)), false);
     assert.deepEqual(bridge.envelopes.get(ENV_A).points, []);
     assert.deepEqual(validateMacroExecutionEnvelope(result), { valid: true, errors: [] });
+  });
+
+  it("accepts 1, 8, and 64 exact targets with 512 total point-work and rejects 65 targets and 513 point-work before dispatch", async () => {
+    const bridge = new FakeAutomationBridge();
+    const refs = Array.from({ length: 64 }, (_, index) => `envelope:guid:{CAPACITY-${index + 1}}`);
+    for (const ref of refs) bridge.envelopes.set(ref, envelope(ref, "volume", []));
+    const points = Array.from({ length: 8 }, (_, index) => point(index + 1, 0.5));
+    for (const count of [1, 8, 64]) {
+      const result = await executeAlpha3_3B1dAutomationApplyMacro({
+        request: request({ mode: "insert_points", envelope_refs: refs.slice(0, count), points }),
+        executeAtomic: bridge.executeAtomic,
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, true, `${count}:${JSON.stringify(result)}`);
+      assert.equal(result.result.changes.length, count);
+      assert.equal(result.result.data.outcome.mutation.total_count, count);
+      assert.equal(result.budget.actual_bytes <= result.budget.max_bytes, true);
+    }
+    const overTargetCalls = [];
+    const overTargets = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({
+        mode: "insert_points",
+        envelope_refs: Array.from({ length: 65 }, (_, index) => `envelope:guid:{OVER-${index + 1}}`),
+        points: [point(1, 0.5)],
+        dry_run: false,
+      }),
+      executeAtomic: async (child) => { overTargetCalls.push(child); return execution(child.id, {}); },
+      now: () => new Date(NOW),
+    });
+    assert.equal(overTargets.ok, false);
+    assert.equal(overTargets.error.code, "AUTOMATION_REQUEST_INVALID");
+    assert.equal(overTargetCalls.length, 0);
+    const overPointCalls = [];
+    const blocked = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({ mode: "insert_points", envelope_refs: refs.slice(0, 57), points: Array.from({ length: 9 }, (_, index) => point(index + 1, 0.5)), dry_run: false }),
+      executeAtomic: async (child) => { overPointCalls.push(child); return execution(child.id, {}); },
+      now: () => new Date(NOW),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "AUTOMATION_POINT_LIMIT_EXCEEDED");
+    assert.equal(overPointCalls.length, 0);
   });
 
   it("inserts a bounded point batch and derives applied only from complete pre/post live points", async () => {
@@ -289,6 +330,44 @@ describe("Alpha3.3-B1d executable macro.automation.apply", () => {
       "template.fx.parameter_to_envelope_mapping",
       "template.automation.read_envelope_points",
     ]);
+  });
+
+  it("accepts per-FX point rows so one Macro call can preserve target-specific project times", async () => {
+    const bridge = new FakeAutomationBridge();
+    const result = await executeAlpha3_3B1dAutomationApplyMacro({
+      request: request({
+        mode: "insert_fx_parameter_points",
+        fx_targets: [
+          { fx_ref: FX_TRACK, points: [point(2, 0.35)] },
+          { fx_ref: FX_TAKE, points: [point(7.5, 0.65)] },
+        ],
+        fx_parameter: { param_index: 0 },
+        dry_run: false,
+      }),
+      executeAtomic: bridge.executeAtomic,
+      now: () => new Date(NOW),
+    });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(result.result.changes.length, 2);
+    assert.deepEqual(bridge.envelopes.get(ENV_FX_TRACK).points.map((row) => row.time_seconds), [2]);
+    assert.deepEqual(bridge.envelopes.get(ENV_FX_TAKE).points.map((row) => row.time_seconds), [7.5]);
+  });
+
+  it("rejects 65 per-FX rows and over-512 per-target point work before dispatch", async () => {
+    for (const [fx_targets, code] of [
+      [Array.from({ length: 65 }, (_, index) => ({ fx_ref: `fx:take:guid:{TAKE-${index}}:0`, points: [point(index, 0.5)] })), "AUTOMATION_FX_TARGETS_INVALID"],
+      [Array.from({ length: 64 }, (_, index) => ({ fx_ref: `fx:take:guid:{TAKE-${index}}:0`, points: Array.from({ length: index === 63 ? 9 : 8 }, (__, pointIndex) => point(pointIndex, 0.5)) })), "AUTOMATION_POINT_LIMIT_EXCEEDED"],
+    ]) {
+      const calls = [];
+      const result = await executeAlpha3_3B1dAutomationApplyMacro({
+        request: request({ mode: "insert_fx_parameter_points", fx_targets, fx_parameter: { param_index: 0 }, dry_run: false }),
+        executeAtomic: async (child) => { calls.push(child); return execution(child.id, {}); },
+        now: () => new Date(NOW),
+      });
+      assert.equal(result.ok, false);
+      assert.equal(result.error.code, code);
+      assert.equal(calls.length, 0);
+    }
   });
 
   it("creates a missing Take-FX parameter Envelope natively, then writes and independently proves its GUID points", async () => {

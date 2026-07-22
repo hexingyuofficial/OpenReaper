@@ -7,10 +7,12 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   readdir,
   rename,
   rm,
   symlink,
+  writeFile,
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,6 +26,12 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const WRAPPER_SOURCE = path.join(REPO_ROOT, "scripts", "openreaper-alpha-package", "openreaper-mcp.sh");
 const SMOKE_SCRIPT = path.join(REPO_ROOT, "scripts", "smoke-alpha3-4-e3-installed-recipe.mjs");
 const EXACT_TOOLS = ["call_recipe", "call_template", "get_state", "list_recipes", "list_templates", "ping"];
+const OFFICIAL_RECIPE_IDS = [
+  "recipe.mix.create_bus_processing",
+  "recipe.midi.create_instrument_part",
+  "recipe.media.create_layered_sound_effect_variants",
+  "recipe.items.create_sound_variations",
+];
 const roots = [];
 
 after(async () => {
@@ -31,6 +39,58 @@ after(async () => {
 });
 
 describe("Alpha3.4-E3 installed recipe closure", () => {
+  it("treats inherited empty optional identity values as absent while preserving non-empty overrides", async () => {
+    const fixture = await makeFixture();
+    const capturePath = path.join(fixture.root, "captured-env.json");
+    const serverPath = path.join(
+      fixture.currentRoot,
+      "vendor",
+      "openreaper-kernel",
+      "packages",
+      "mcp-server",
+      "src",
+      "openreaper-mcp-stdio.mjs",
+    );
+    const keys = [
+      "OPENREAPER_SESSION_ROOT",
+      "OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH",
+      "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+      "OPENREAPER_LIVE_BRIDGE_OWNER",
+      "OPENREAPER_LIVE_BRIDGE_GENERATION",
+      "OPENREAPER_LIVE_BRIDGE_SESSION_ID",
+      "OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY",
+      "OPENREAPER_CURRENT_PROJECT_PATH",
+      "OPENREAPER_CURRENT_PROJECT_REF",
+      "OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON",
+    ];
+    await writeFile(serverPath, `import { writeFileSync } from "node:fs";\nconst keys = ${JSON.stringify(keys)};\nwriteFileSync(process.env.OPENREAPER_TEST_CAPTURE, JSON.stringify(Object.fromEntries(keys.map((key) => [key, Object.hasOwn(process.env, key) ? process.env[key] : "<unset>"]))));\n`, "utf8");
+
+    const result = await run(fixture.wrapper, [], {
+      ...wrapperEnv(fixture),
+      OPENREAPER_TEST_CAPTURE: capturePath,
+      OPENREAPER_SESSION_ROOT: "",
+      OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH: "",
+      OPENREAPER_LIVE_SMOKE_RENDER_ROOT: "",
+      OPENREAPER_LIVE_BRIDGE_OWNER: "",
+      OPENREAPER_LIVE_BRIDGE_GENERATION: "",
+      OPENREAPER_LIVE_BRIDGE_SESSION_ID: "",
+      OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY: "",
+      OPENREAPER_CURRENT_PROJECT_PATH: "",
+      OPENREAPER_CURRENT_PROJECT_REF: "project:explicit",
+      OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON: "",
+    });
+    assert.equal(result.code, 0, result.stderr);
+    const captured = JSON.parse(await readFile(capturePath, "utf8"));
+    for (const key of keys.filter((key) => ![
+      "OPENREAPER_LIVE_SMOKE_RENDER_ROOT",
+      "OPENREAPER_CURRENT_PROJECT_REF",
+      "OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON",
+    ].includes(key))) assert.equal(captured[key], "<unset>", key);
+    assert.equal(captured.OPENREAPER_LIVE_SMOKE_RENDER_ROOT, await realpath(fixture.renderRoot));
+    assert.equal(captured.OPENREAPER_CURRENT_PROJECT_REF, "project:explicit");
+    assert.equal(captured.OPENREAPER_EXECUTABLE_RECIPE_RISK_GRANTS_JSON, '["read","write"]');
+  });
+
   it("rejects a symlinked executable Recipe root before starting the installed server", async () => {
     const fixture = await makeFixture();
     const target = path.join(fixture.root, "outside");
@@ -79,7 +139,49 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
 
       const listedBefore = await callRecipe(firstClient, { operation: "list", root: callerRoot });
       assert.equal(listedBefore.ok, true);
-      assert.equal(listedBefore.count, 1);
+      assert.equal(listedBefore.count, 5);
+      assert.equal(listedBefore.items.filter((item) => item.source === "official").length, 4);
+      assert.equal(listedBefore.items.filter((item) => item.source === "user").length, 1);
+      const discovered = await callJson(firstClient, "list_recipes", { limit: 25 });
+      assert.deepEqual(
+        discovered.items.filter((item) => OFFICIAL_RECIPE_IDS.includes(item.id)).map((item) => item.id).sort(),
+        [...OFFICIAL_RECIPE_IDS].sort(),
+      );
+      assert.deepEqual(
+        discovered.product_surface.recipe_productization.official_recipe_ids,
+        OFFICIAL_RECIPE_IDS,
+      );
+      assert.deepEqual(
+        discovered.product_surface.recipe_productization.lifecycle.operations,
+        ["validate", "save", "list", "get", "delete", "run", "resume"],
+      );
+      assert.equal(discovered.product_surface.direct_template_fallback.discover.tool, "list_templates");
+      const exactMacro = await callJson(firstClient, "list_templates", {
+        ids: ["macro.project.inspect"],
+        fields: ["id", "inputSchema", "examples"],
+      });
+      const publicDependency = exactMacro.product_surface.agent_context_macro_guide
+        .requested_expansions.items[0].executable_recipe_dependency;
+      const catalogMacro = createExecutableRecipeProductCatalog().getMacro("macro.project.inspect");
+      assert.deepEqual(publicDependency, {
+        kind: "macro",
+        id: catalogMacro.id,
+        version: catalogMacro.version,
+        risk: catalogMacro.risk,
+        descriptor_hash: catalogMacro.descriptor_hash,
+        capabilities: [...catalogMacro.capabilities],
+      });
+      const exactOfficial = await callJson(firstClient, "list_recipes", {
+        ids: ["recipe.items.create_sound_variations"],
+        fields: ["steps", "assertions", "recovery"],
+      });
+      assert.equal(exactOfficial.items[0].steps.length, 4);
+      assert.match(exactOfficial.items[0].assertions.undo, /Recipe Undo/u);
+      assert.match(exactOfficial.items[0].recovery, /preflight/u);
+      assert.equal(
+        exactOfficial.product_surface.recipe_productization.requested_manuals[0].id,
+        "recipe.items.create_sound_variations",
+      );
       const identity = exactIdentity(saved);
       const bytesBefore = await snapshotFiles(fixture.recipeRoot);
       assert.equal(bytesBefore.length > 0, true);
@@ -99,7 +201,9 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
         catalog: { macros: [], templates: [], capabilities: [] },
       });
       assert.equal(listedAfter.ok, true);
-      assert.equal(listedAfter.count, 1);
+      assert.equal(listedAfter.count, 5);
+      assert.equal(listedAfter.items.filter((item) => item.source === "official").length, 4);
+      assert.equal(listedAfter.items.filter((item) => item.source === "user").length, 1);
 
       const got = await callRecipe(secondClient, {
         operation: "get",
@@ -119,7 +223,10 @@ describe("Alpha3.4-E3 installed recipe closure", () => {
       });
       assert.equal(deleted.ok, true, JSON.stringify(deleted));
       assert.equal(deleted.deleted, true);
-      assert.equal((await callRecipe(secondClient, { operation: "list" })).count, 0);
+      const listedAfterDelete = await callRecipe(secondClient, { operation: "list" });
+      assert.equal(listedAfterDelete.count, 4);
+      assert.equal(listedAfterDelete.items.every((item) => item.source === "official"), true);
+      assert.equal(listedAfterDelete.items.some((item) => item.recipe_id === identity.recipe_id), false);
       assert.equal(await exists(callerRoot), false);
     } finally {
       await firstClient?.close().catch(() => {});
@@ -234,6 +341,13 @@ async function assertSixTools(client) {
 
 async function callRecipe(client, args) {
   const response = await client.callTool({ name: "call_recipe", arguments: args });
+  const text = response.content?.find((entry) => entry.type === "text")?.text;
+  assert.equal(typeof text, "string");
+  return JSON.parse(text);
+}
+
+async function callJson(client, name, args) {
+  const response = await client.callTool({ name, arguments: args });
   const text = response.content?.find((entry) => entry.type === "text")?.text;
   assert.equal(typeof text, "string");
   return JSON.parse(text);

@@ -38,6 +38,15 @@ function eightAssignments({ uniqueFx = 3, paramCount = 16 } = {}) {
   });
 }
 
+function batchAssignments(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `r${String(index + 1).padStart(2, "0")}abcdefghij`.slice(0, 12),
+    fx_ref: fxRef(index + 1, 0),
+    param_index: 0,
+    normalized_value: 0.5,
+  }));
+}
+
 function inventoryRows(count) {
   return Array.from({ length: count }, (_, index) => ({
     param_index: index,
@@ -212,6 +221,27 @@ function countLua(dir) {
 }
 
 describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
+  it("accepts 1, 8, and 64 exact assignments without truncation and rejects 65 before dispatch", async () => {
+    for (const count of [1, 8, 64]) {
+      const response = await executeAlpha3_2_5CControlMacro({
+        request: request({ mode: "exact_assignments", dry_run: false, assignments: batchAssignments(count) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+        executeAtomic: makeExecutor({}).executeAtomic,
+        projectIndexRuntime: fakeIndex(),
+      });
+      assert.equal(response.ok, true, `${count}:${JSON.stringify(response)}`);
+      assert.equal(response.result.changes.length, count);
+      assert.equal(response.result.data.calls.readback, count);
+    }
+    const calls = [];
+    const blocked = await executeAlpha3_2_5CControlMacro({
+      request: request({ mode: "exact_assignments", dry_run: false, assignments: batchAssignments(65) }),
+      executeAtomic: async (child) => { calls.push(child); return execution(child.id, {}); },
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "FX_ASSIGNMENTS_SIZE_INVALID");
+    assert.equal(calls.length, 0);
+  });
   it("keeps public counts 6/15/235/91 and mode token", () => {
     assert.equal(ALPHA3_4_D2_FX_BATCH_MODE, "exact_assignments");
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);

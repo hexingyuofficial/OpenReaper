@@ -458,6 +458,37 @@ local function required_undo_capability(request, operation_key)
   return operation_key == "run_job:render.targets" or template_execute_write_capability(request, operation_key)
 end
 
+local ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+
+local function is_recipe_undo_transaction_operation(operation_key)
+  return operation_key == "run_command:recipe.undo.transaction"
+end
+
+local function recipe_undo_transaction_flag(request)
+  local flags = is_object(request) and is_object(request.undo) and request.undo.flags or nil
+  if not is_json_array(flags) then
+    return nil
+  end
+  for index = 1, #flags do
+    local flag = flags[index]
+    if is_string(flag) then
+      local transaction_id = flag:match("^recipe_transaction:(.+)$")
+      if is_string(transaction_id) then
+        return transaction_id
+      end
+    end
+  end
+  return nil
+end
+
+local function active_recipe_undo_project_matches()
+  if not ACTIVE_RECIPE_UNDO_TRANSACTION then
+    return true
+  end
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  return ok == true and project ~= nil and project == ACTIVE_RECIPE_UNDO_TRANSACTION.project
+end
+
 local function clear_required_undo_project_handle(request)
   if not is_object(request) then
     return
@@ -465,6 +496,7 @@ local function clear_required_undo_project_handle(request)
   request.__openreaper_undo_project = nil
   request.__openreaper_undo_used_project_api = nil
   request.__openreaper_undo_block_open = nil
+  request.__openreaper_undo_borrowed = nil
 end
 
 -- Phase-local required Undo. Begin/End must use the same exact project handle.
@@ -477,6 +509,19 @@ local function open_required_undo_block(request, operation_key)
   local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
   clear_required_undo_project_handle(request)
   if options.skip_undo == true then
+    return true
+  end
+  if not is_recipe_undo_transaction_operation(operation_key) and ACTIVE_RECIPE_UNDO_TRANSACTION then
+    local transaction_id = recipe_undo_transaction_flag(request)
+    if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id or not active_recipe_undo_project_matches() then
+      request.__openreaper_undo_block_open = false
+      return false
+    end
+    request.__openreaper_undo_block_open = true
+    request.__openreaper_undo_borrowed = true
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = true
+    request.__openreaper_undo_required_any = true
     return true
   end
   if not required_undo_capability(request, operation_key) then
@@ -525,6 +570,13 @@ end
 
 local function close_required_undo_block(request, operation_key)
   local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
+  if is_object(request) and request.__openreaper_undo_borrowed == true then
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = true
+    clear_required_undo_project_handle(request)
+    request.__openreaper_undo_phase = nil
+    return true
+  end
   if options.skip_undo == true then
     clear_required_undo_project_handle(request)
     if is_object(request) then
@@ -607,6 +659,7 @@ local function validate_request(request)
     return false, "operation.family is outside foundation.bridge.v1."
   end
   local operation_key = request.operation.family .. ":" .. request.operation.name
+  local recipe_undo_transaction_operation = is_recipe_undo_transaction_operation(operation_key)
   local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
   local a2_render_operation = operation_key == "run_job:render.region_wav"
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
@@ -634,7 +687,22 @@ local function validate_request(request)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
-  if a2_render_operation then
+  if ACTIVE_RECIPE_UNDO_TRANSACTION and not recipe_undo_transaction_operation
+      and request.operation.family ~= "query_state" and request.operation.family ~= "artifact_metadata"
+      and request.pack.risk ~= "read" then
+    local transaction_id = recipe_undo_transaction_flag(request)
+    if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id then
+      return false, "An active Recipe Undo transaction rejects unrelated or mismatched project writes."
+    end
+    if not active_recipe_undo_project_matches() then
+      return false, "The active project changed during the Recipe Undo transaction."
+    end
+  end
+  if recipe_undo_transaction_operation then
+    if request.pack.id ~= "core" or request.pack.capability ~= "recipe.undo.transaction" or request.pack.risk ~= "write" then
+      return false, "Recipe Undo transaction must use the fixed core write route."
+    end
+  elseif a2_render_operation then
     if request.pack.id ~= "render" or request.pack.risk ~= "write" then
       return false, "A2 render_region_wav must be the render-owned write-risk route."
     end
@@ -738,7 +806,11 @@ local function validate_request(request)
   if not is_object(request.undo) then
     return false, "undo policy is required."
   end
-  if a2_render_operation then
+  if recipe_undo_transaction_operation then
+    if request.undo.mode ~= "required" then
+      return false, "Recipe Undo transaction must use undo.mode required."
+    end
+  elseif a2_render_operation then
     if request.undo.mode ~= "required" then
       return false, "A2 render_region_wav must use undo.mode required."
     end
@@ -838,7 +910,11 @@ local function validate_request(request)
   if not is_object(request.artifacts) or type(request.artifacts.allow) ~= "boolean" then
     return false, "artifacts.allow must be a boolean."
   end
-  if artifacts_allowed_for_operation then
+  if recipe_undo_transaction_operation then
+    if request.artifacts.allow ~= false then
+      return false, "Recipe Undo transaction must not write artifacts."
+    end
+  elseif artifacts_allowed_for_operation then
     if request.artifacts.allow ~= true then
       return false, "Scoped First-Real-Fixture-A artifact handlers require artifacts.allow true."
     end
@@ -939,7 +1015,11 @@ local function validate_request(request)
   if not (is_non_negative_integer(request.timeout_ms) and request.timeout_ms > 0) then
     return false, "timeout_ms must be a positive integer."
   end
-  if a2_render_operation then
+  if recipe_undo_transaction_operation then
+    if not is_string(request.idempotency_key) then
+      return false, "Recipe Undo transaction requires an idempotency_key."
+    end
+  elseif a2_render_operation then
     if not is_string(request.idempotency_key) then
       return false, "A2 render_region_wav requires an idempotency_key."
     end

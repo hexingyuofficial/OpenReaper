@@ -486,7 +486,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     }
   });
 
-  it("keeps MCP explicit process env > persisted > default and rejects invalid explicit roots", async () => {
+  it("keeps MCP non-empty process env > persisted > default, treats empty as absent, and rejects invalid explicit roots", async () => {
     const fixture = await makeMcpFixture("precedence");
     const persistedRoot = path.join(fixture.root, `persisted 'quoted'`);
     const explicitRoot = path.join(fixture.root, `explicit "quoted"`);
@@ -497,7 +497,9 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal((await runMcpResult({ fixture, label: "explicit", explicit: explicitRoot })).captured, explicitRoot);
     assert.equal((await runMcpResult({ fixture, label: "persisted" })).captured, persistedRoot);
     await rm(fixture.recordPath);
-    assert.equal((await runMcpResult({ fixture, label: "default" })).captured, path.join(await realpath(fixture.installRoot), "session", "renders"));
+    const canonicalDefaultRoot = path.join(await realpath(fixture.installRoot), "session", "renders");
+    assert.equal((await runMcpResult({ fixture, label: "default" })).captured, canonicalDefaultRoot);
+    assert.equal((await runMcpResult({ fixture, label: "empty", explicit: "", explicitPresent: true })).captured, canonicalDefaultRoot);
 
     const regularFile = path.join(fixture.root, "mcp-regular-file");
     const symlinkTarget = path.join(fixture.root, "mcp-symlink-target");
@@ -506,7 +508,6 @@ describe("Alpha3.2-B2 managed render root", () => {
     await mkdir(symlinkTarget, { recursive: true });
     await symlink(symlinkTarget, finalSymlink);
     const invalid = [
-      ["empty", ""],
       ["relative", "relative/renders"],
       ["file-uri", "file:///tmp/renders"],
       ["root", "/"],

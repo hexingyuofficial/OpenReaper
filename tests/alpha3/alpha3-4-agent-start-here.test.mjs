@@ -161,9 +161,27 @@ test("canonical AGENT_START_HERE markers project under 16 KiB with exact 15 Macr
   assert.match(instructions, /openreaper-start/u);
   assert.match(instructions, /macro_recommendations/u);
   assert.match(instructions, /first_try_execution_guide/u);
+  assert.match(instructions, /not a `fields` value/u);
+  assert.match(instructions, /product_surface\.agent_context_macro_guide\.requested_expansions\.items/u);
+  assert.match(instructions, /user-facing REAPER facts first/u);
   assert.match(instructions, /next_call/u);
   assert.doesNotMatch(instructions, /\{TRACK\}|\{TAKE\}|\{ITEM\}/u);
   assert.match(instructions, /call_recipe/u);
+  assert.match(instructions, /validate -> save/u);
+  assert.match(instructions, /temporary one-off/u);
+  assert.match(instructions, /rediscovered after reconnect/u);
+  assert.match(instructions, /one public `call_recipe` call/u);
+  assert.match(instructions, /list_recipes/u);
+  assert.match(instructions, /steps`, `assertions`, and `recovery/u);
+  for (const id of [
+    "recipe.mix.create_bus_processing",
+    "recipe.midi.create_instrument_part",
+    "recipe.media.create_layered_sound_effect_variants",
+    "recipe.items.create_sound_variations",
+  ]) assert.match(instructions, new RegExp(id.replaceAll(".", "\\.")));
+  assert.match(instructions, /direct Template/u);
+  assert.match(instructions, /inputSchema/u);
+  assert.match(instructions, /expectedDelta/u);
   assert.match(instructions, /Exactly six tools/u);
   assert.match(instructions, /Raw Lua/u);
 });

@@ -51,6 +51,30 @@ function eightRows() {
   }));
 }
 
+function batchRows(count) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `r${String(index + 1).padStart(2, "0")}abcdefghij`.slice(0, 12),
+    item_ref: itemRef(index + 1),
+    take_ref: takeRef(index + 1),
+    item: { volume_db: -3 },
+    take: { volume_db: -6 },
+  }));
+}
+
+function trackRef(n) {
+  return `track:guid:{TRACK-${String(n).padStart(2, "0")}}`;
+}
+
+function variationRows(count, { offset = false } = {}) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `v${String(index + 1).padStart(2, "0")}abcdefghij`.slice(0, 12),
+    source_item_ref: itemRef(index + 1),
+    target_track_ref: trackRef((index % 4) + 1),
+    position_seconds: 10 + index * 0.25,
+    ...(offset && index === 0 ? { source_offset_seconds: 0.125 } : {}),
+  }));
+}
+
 function summaryFor(row, overrides = {}) {
   return {
     item_ref: row.item_ref,
@@ -165,6 +189,68 @@ function makeExecutor({
   };
 }
 
+function objectRef(kind, ref) {
+  return { kind, ref, identity: { scheme: "guid", value: ref.slice(`${kind}:guid:`.length) } };
+}
+
+function makeVariationExecutor({ failAt = null } = {}) {
+  const calls = [];
+  const items = new Map();
+  let copyCount = 0;
+  let mutationCount = 0;
+  return {
+    calls,
+    items,
+    executeAtomic: async (child) => {
+      calls.push(child);
+      if (child.id === "template.items.resolve_item_ref") {
+        const ref = child.input.ref;
+        return { ok: true, request: { id: child.id }, verification: { status: "passed" }, result: { summary: { item_ref: ref }, readback: { item_ref: ref }, refs: [objectRef("item", ref)] } };
+      }
+      if (child.id === "template.tracks.resolve_track_ref") {
+        const ref = child.input.track_ref;
+        return { ok: true, request: { id: child.id }, verification: { status: "passed" }, result: { summary: { track_ref: ref }, readback: { track_ref: ref }, refs: [objectRef("track", ref)] } };
+      }
+      if (child.id === "template.items.copy_item_to_track") {
+        mutationCount += 1;
+        if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "COPY_FAILED", message: "copy failed" }, result: { summary: {}, readback: {}, refs: [] } };
+        const newItemRef = `item:guid:{NEW-${String(++copyCount).padStart(2, "0")}}`;
+        const newTakeRef = `take:guid:{NEW-TAKE-${String(copyCount).padStart(2, "0")}}`;
+        const row = {
+          item_ref: newItemRef,
+          active_take_ref: newTakeRef,
+          track_ref: child.refs.target_track_ref.ref,
+          position_seconds: child.input.position_seconds,
+          start_offset_seconds: 0,
+        };
+        items.set(newItemRef, row);
+        return {
+          ok: true,
+          request: { id: child.id },
+          verification: { status: "passed" },
+          result: {
+            summary: { new_item_ref: newItemRef, active_take_ref: newTakeRef, source_item_ref: child.refs.source_item_ref.ref, target_track_ref: row.track_ref, position_seconds: row.position_seconds },
+            readback: {},
+            refs: [objectRef("item", newItemRef), objectRef("take", newTakeRef), objectRef("track", row.track_ref)],
+          },
+        };
+      }
+      if (child.id === "template.items.set_take_start_in_source") {
+        mutationCount += 1;
+        if (failAt !== null && mutationCount === failAt) return { ok: false, request: { id: child.id }, error: { code: "OFFSET_FAILED", message: "offset failed" }, result: { summary: {}, readback: {}, refs: [] } };
+        const row = items.get(child.refs.item_ref.ref);
+        row.start_offset_seconds = child.input.start_offset_seconds;
+        return { ok: true, request: { id: child.id }, verification: { status: "passed" }, result: { summary: { item_ref: row.item_ref, start_offset_seconds: row.start_offset_seconds }, readback: {}, refs: [objectRef("item", row.item_ref)] } };
+      }
+      if (child.id === "template.items.read_item_summary") {
+        const row = items.get(child.refs.item_ref.ref);
+        return { ok: true, request: { id: child.id }, verification: { status: "passed" }, result: { summary: row, readback: {}, refs: [objectRef("item", row.item_ref), objectRef("take", row.active_take_ref), objectRef("track", row.track_ref)] } };
+      }
+      throw new Error(`unexpected child ${child.id}`);
+    },
+  };
+}
+
 function request(input, budget = BUDGET) {
   return {
     id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
@@ -191,6 +277,86 @@ function countLua(dir) {
 }
 
 describe("Alpha3.4-D1 upper items batch set_item_take_controls", () => {
+  it("creates 1, 8, and 64 exact Item variations and rejects 65 before dispatch", async () => {
+    for (const count of [1, 8, 64]) {
+      const executor = makeVariationExecutor();
+      const response = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode: "create_variations", dry_run: false, variations: variationRows(count) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+        executeAtomic: executor.executeAtomic,
+        projectIndexRuntime: fakeIndex(),
+      });
+      assert.equal(response.ok, true, `${count}:${JSON.stringify(response)}`);
+      assert.equal(response.result.changes.length, count);
+      assert.equal(response.result.changes.every((row) => row.status === "ok"), true);
+      assert.equal(response.result.changes.every((row) => /^item:guid:\{NEW-\d+\}$/u.test(row.new_item_ref)), true);
+      assert.equal(response.result.changes.every((row) => /^take:guid:\{NEW-TAKE-\d+\}$/u.test(row.new_take_ref)), true);
+      assert.equal(response.result.data.calls.resolve, count * 2);
+      assert.equal(response.result.data.calls.readback, count);
+    }
+    const calls = [];
+    const blocked = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: variationRows(65) }),
+      executeAtomic: async (child) => { calls.push(child); return execution(child.id, {}); },
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "ITEM_APPLY_VARIATIONS_INVALID");
+    assert.equal(calls.length, 0);
+  });
+
+  it("uses the source-offset atom and final Item summary, then stops subsequent rows after a mid-row failure", async () => {
+    const offsetExecutor = makeVariationExecutor();
+    const offsetResponse = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: variationRows(1, { offset: true }) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: offsetExecutor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(offsetResponse.ok, true, JSON.stringify(offsetResponse));
+    const offsetChange = offsetResponse.result.changes[0];
+    assert.equal(offsetChange.source_offset_seconds, 0.125);
+    assert.equal(offsetChange.readback, "pass");
+    const offsetCall = offsetExecutor.calls.find((child) => child.id === "template.items.set_take_start_in_source");
+    assert.equal(offsetCall.input.start_offset_seconds, 0.125);
+    assert.equal(offsetCall.refs.item_ref.ref, offsetChange.new_item_ref);
+
+    const failingExecutor = makeVariationExecutor({ failAt: 2 });
+    const failed = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "create_variations", dry_run: false, variations: variationRows(3, { offset: true }) }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+      executeAtomic: failingExecutor.executeAtomic,
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(failed.ok, false);
+    assert.equal(failed.execution.status, "partial_failure");
+    assert.equal(failed.result.changes[0].status, "fail");
+    assert.equal(failed.result.changes[0].new_item_ref, "item:guid:{NEW-01}");
+    assert.equal(failed.result.changes[1].status, "skip");
+    assert.equal(failed.result.changes[2].status, "skip");
+    assert.equal(failingExecutor.calls.filter((child) => child.id === "template.items.copy_item_to_track").length, 1);
+  });
+
+  it("accepts 1, 8, and 64 batch rows without truncation and rejects 65 before dispatch", async () => {
+    for (const count of [1, 8, 64]) {
+      const rows = batchRows(count);
+      const executor = makeExecutor({ rows });
+      const response = await executeAlpha3_3B1cItemsApplyMacro({
+        request: request({ mode: "set_item_take_controls", dry_run: false, changes: rows }, { max_response_bytes: 65_536, max_items: 128, max_inline_value_bytes: 24_576 }),
+        executeAtomic: executor.executeAtomic,
+        projectIndexRuntime: fakeIndex(),
+      });
+      assert.equal(response.ok, true, `${count}:${JSON.stringify(response)}`);
+      assert.equal(response.result.changes.length, count);
+      assert.equal(response.result.data.calls.readback, count);
+    }
+    const calls = [];
+    const blocked = await executeAlpha3_3B1cItemsApplyMacro({
+      request: request({ mode: "set_item_take_controls", dry_run: false, changes: batchRows(65) }),
+      executeAtomic: async (child) => { calls.push(child); return execution(child.id, {}); },
+      projectIndexRuntime: fakeIndex(),
+    });
+    assert.equal(blocked.ok, false);
+    assert.equal(blocked.error.code, "ITEM_APPLY_BATCH_CHANGES_INVALID");
+    assert.equal(calls.length, 0);
+  });
   it("keeps mode list and exact public counts 6/15/235/91", () => {
     assert.equal(ALPHA3_3_B1C_ITEMS_APPLY_MODES.includes("set_item_take_controls"), true);
     assert.equal(OPENREAPER_PUBLIC_TOOL_IDS.length, 6);

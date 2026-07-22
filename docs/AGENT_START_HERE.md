@@ -16,12 +16,19 @@ Product: OpenReaper MCP. Server name: `openreaper`. Exactly six tools:
 ## First-round flow
 
 Flow: `ping -> list_templates with the user's original words as query -> exact-id expansion -> call_template -> live readback`.
+For reusable or multi-stage intent, search `list_recipes` in the same first round
+and execute the selected saved revision with one `call_recipe` call.
 
 1. `ping` — confirm the server is loaded and read readiness/startup guidance.
-2. `list_templates` with the user's original words as `query` (and a small `limit`, e.g. 25). Do not guess casing, field names, refs, or enums first.
+2. Search `list_templates` and, for reusable/multi-stage intent, `list_recipes`
+   with the user's original words as `query` (small `limit`, e.g. 25). Do not
+   guess casing, field names, refs, enums, or Recipe identities first.
 3. Exact-id expansion: `list_templates` with `ids:[...]` and needed `fields` (for example `id`, `inputSchema`) to open the full Macro manual.
 4. `call_template` with the exact Macro id and schema-valid `input`.
 5. Live REAPER readback is truth. SQLite / Project Index is navigation only.
+
+Answer with user-facing REAPER facts first. Hide MCP contract, SQLite, session,
+and evidence internals unless they are needed to explain a blocker or recovery.
 
 Saved executable Recipes use `call_recipe` with exactly seven operations:
 `validate`, `save`, `list`, `get`, `delete`, `run`, `resume`. Discover a saved
@@ -31,11 +38,37 @@ revision through `list_recipes`, expand its exact id, and reuse the complete
 and never send runtime trust facts. Page retained evidence with operation `get`
 plus `evidence_ref`.
 
+Recipe authoring/reuse route: discover dependencies by exact Macro/Template
+manuals, build a declarative Macro-first draft, then `validate -> save`. A
+temporary one-off continues `run -> delete` after terminal evidence is retained;
+a reusable Recipe stays saved and is rediscovered after reconnect with
+`list_recipes` or `call_recipe` operation `list/get`, then runs through one public `call_recipe` call.
+Use the returned exact `next_call` for a safe resume;
+never replay Recipe stages or targets yourself.
+
+Search Recipes with the user's original words, then exact-expand the selected
+id using `list_recipes` fields `steps`, `assertions`, and `recovery`. The four
+official product Recipes are:
+
+- `recipe.mix.create_bus_processing`
+- `recipe.midi.create_instrument_part`
+- `recipe.media.create_layered_sound_effect_variants`
+- `recipe.items.create_sound_variations`
+
+Exact Recipe manuals carry required inputs, deterministic defaults, safety,
+whole-Recipe Undo/recovery posture, fork guidance, and the complete one-call run
+shape. Do not expose hash/checkpoint/Bridge/evidence plumbing to the user unless
+it explains a blocker or recovery.
+
 Macro-first: prefer one of the 15 Macros. Use a direct Template only after
 recording one typed fallback reason
 (`macro_missing_for_task`, `macro_task_out_of_scope`,
 `macro_target_ambiguous_or_unavailable`, `macro_domain_not_accepted`,
 `macro_budget_prefers_atomic_template`).
+For that atomic fallback, search `list_templates`, exact-expand `inputSchema`,
+`examples`, and `expectedDelta`, then call only the exact Template with
+schema-valid input and live-resolved refs. Do not compose a hidden workflow from
+Template calls when a Macro or saved Recipe covers the task.
 
 On `list_templates` with a non-empty `query`, read
 `product_surface.agent_context_macro_guide.macro_recommendations` (1-3 rows).
@@ -45,15 +78,18 @@ the full user text. Search phrases are metadata only, never executable aliases.
 
 On exact-id expansion, read each item's `first_try_execution_guide` for accepted
 modes, public fields, units/bounds, selector/ref requirements, paging/budget
-recovery, and deterministic `next_calls`. If live identity is unresolved, the
-guide marks the mutation non-executable and pairs an immediately executable
-`macro.project.query` prerequisite. Never treat placeholder refs as executable.
+recovery, and deterministic `next_calls`. It is not a `fields` value: request
+supported fields such as `id` and `inputSchema`, then read the guide from
+`product_surface.agent_context_macro_guide.requested_expansions.items`. If live
+identity is unresolved, the guide marks the mutation non-executable and pairs
+an immediately executable `macro.project.query` prerequisite. Never treat
+placeholder refs as executable.
 
 On covered validation/replacement/budget/readiness errors, follow machine-readable
 `error.next_call` or `error.request_patch` when present; keep existing failure codes.
 
 FX parameters: prefer `macro.fx.set_controls`. Use `mode=exact_parameters` for
-1-8 parameters on one FX, or `mode=exact_assignments` for 1-8 parameters across
+1-8 parameters on one FX, or `mode=exact_assignments` for 1-64 assignments across
 one or more exact `fx_ref` targets. Obtain exact refs first, page parameters to
 completion, then supply `param_index` or one unique returned name/ident (not
 fuzzy guesses). `mode=semantic` is compatibility-only and fails closed with

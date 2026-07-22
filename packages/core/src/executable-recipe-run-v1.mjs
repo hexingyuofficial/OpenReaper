@@ -355,6 +355,7 @@ export function pageExecutableRecipeEvidence(evidenceStore, request = {}) {
     version: record.version,
     revision: record.revision,
     content_hash: record.content_hash,
+    run_summary: compactRunSummary(record.run_summary),
     items: pageItems,
     page: {
       limit,
@@ -578,13 +579,46 @@ function normalizeDispatchers(dispatchers = {}) {
 
 function compactEvidenceItem(item) {
   if (!isPlainObject(item)) return { summary: boundedString(String(item), 80) };
-  return {
+  const compact = {
     stage_id: item.stage_id ?? null,
     kind: item.kind ?? null,
     status: item.status ?? null,
     verified: item.verified === true,
     summary: boundedString(item.summary ?? "", EXECUTABLE_RECIPE_RUN_BUDGETS.evidence_stage_summary_max_chars),
     checkpoint_id: item.checkpoint_id ?? null,
+  };
+  if (isPlainObject(item.timing)) {
+    compact.timing = { duration_ms: Math.max(0, Number.isSafeInteger(item.timing.duration_ms) ? item.timing.duration_ms : 0) };
+  }
+  if (isPlainObject(item.counters)) {
+    compact.counters = {
+      transport_call_count: Math.max(0, Number.isSafeInteger(item.counters.transport_call_count) ? item.counters.transport_call_count : 0),
+      native_mutation_count: Math.max(0, Number.isSafeInteger(item.counters.native_mutation_count) ? item.counters.native_mutation_count : 0),
+      readback_count: Math.max(0, Number.isSafeInteger(item.counters.readback_count) ? item.counters.readback_count : 0),
+    };
+  }
+  return compact;
+}
+
+function compactRunSummary(summary) {
+  if (!isPlainObject(summary)) return null;
+  const counters = isPlainObject(summary.counters) ? summary.counters : {};
+  const stages = Array.isArray(summary.timing?.stages) ? summary.timing.stages : [];
+  return {
+    contract: summary.contract ?? "call_recipe.run_summary.v1",
+    timing: {
+      duration_ms: Math.max(0, Number.isSafeInteger(summary.timing?.duration_ms) ? summary.timing.duration_ms : 0),
+      stage_timing_count: stages.length,
+    },
+    counters: {
+      counter_scope: counters.counter_scope ?? null,
+      counter_source: counters.counter_source ?? null,
+      transport_call_count: Math.max(0, Number.isSafeInteger(counters.transport_call_count) ? counters.transport_call_count : 0),
+      native_mutation_count: Math.max(0, Number.isSafeInteger(counters.native_mutation_count) ? counters.native_mutation_count : 0),
+      readback_count: Math.max(0, Number.isSafeInteger(counters.readback_count) ? counters.readback_count : 0),
+    },
+    mutation_truth: summary.mutation_truth ?? "unknown",
+    undo: isPlainObject(summary.undo) ? cloneJson(summary.undo) : null,
   };
 }
 

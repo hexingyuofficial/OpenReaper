@@ -905,6 +905,7 @@ export const CALL_TEMPLATE_RUNTIME_ALLOWED_REQUEST_FIELDS = Object.freeze([
   "budget",
   "idempotency_key",
 ]);
+export const CALL_TEMPLATE_INTERNAL_RECIPE_UNDO = Symbol.for("openreaper.call_template.recipe_undo");
 
 export const CALL_TEMPLATE_RUNTIME_FAILURE_LAYERS = Object.freeze([
   "server_validation",
@@ -1152,6 +1153,7 @@ export function createCallTemplateRuntime(options = {}) {
     idempotency_key,
     observeProjectIndex = true,
     projectIndexObservationContext = null,
+    recipe_undo = null,
   }) {
     assertLiveRuntimeDispatchAllowed(live, id);
     const descriptor = resolveAcceptedCatalogDescriptor(catalog, id);
@@ -1163,6 +1165,7 @@ export function createCallTemplateRuntime(options = {}) {
       context,
       budget,
       idempotency_key,
+      recipeUndo: recipe_undo,
       executor: live.enabled ? live.executor : options.executor,
     });
     if (!observeProjectIndex) return execution;
@@ -1183,7 +1186,7 @@ export function createCallTemplateRuntime(options = {}) {
       const normalized = normalizeCallTemplateRequest(request);
       id = normalized.id;
       const macroAtomic = live.enabled || options.executor
-        ? createMacroAtomicExecutor(executeAcceptedAtomic, normalized.context)
+        ? createMacroAtomicExecutor(executeAcceptedAtomic, normalized.context, normalized.recipe_undo)
         : null;
       if (isAlpha3_3B1DeprecatedAlias(id)) {
         const alias = alpha3_3B1DeprecatedAlias(id, normalized.input);
@@ -1510,6 +1513,7 @@ export function createCallTemplateRuntime(options = {}) {
         context: normalized.context,
         budget: normalized.budget,
         idempotency_key: normalized.idempotency_key,
+        recipe_undo: normalized.recipe_undo,
       });
       retainEvidence(retainedEvidence, evidenceFromExecution(observedExecution, live.evidence), evidenceLimit);
       return observedExecution;
@@ -1785,7 +1789,18 @@ function normalizeCallTemplateRequest(request) {
     context: request.context,
     budget: request.budget,
     idempotency_key: request.idempotency_key,
+    recipe_undo: normalizeInternalRecipeUndo(request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO]),
   };
+}
+
+function normalizeInternalRecipeUndo(value) {
+  if (!isPlainObject(value) || value.suppress_child_undo !== true) return null;
+  if (typeof value.handle !== "string" || value.handle.length < 1 || value.handle.length > 160) return null;
+  return Object.freeze({
+    suppress_child_undo: true,
+    handle: value.handle,
+    project_ref: typeof value.project_ref === "string" ? value.project_ref : null,
+  });
 }
 
 const PROJECT_SAVE_CURRENT_TEMPLATE_ID = "template.project.save_current_project";
@@ -2399,7 +2414,7 @@ function acceptedCatalogSummary(catalog) {
   });
 }
 
-function createMacroAtomicExecutor(executeAtomic, parentContext) {
+function createMacroAtomicExecutor(executeAtomic, parentContext, recipeUndo = null) {
   let childIndex = 0;
   return (childRequest = {}) => {
     childIndex += 1;
@@ -2414,6 +2429,7 @@ function createMacroAtomicExecutor(executeAtomic, parentContext) {
     ).toISOString();
     return executeAtomic({
       ...childRequest,
+      recipe_undo: recipeUndo,
       context: {
         ...sourceContext,
         created_at: childCreatedAt,

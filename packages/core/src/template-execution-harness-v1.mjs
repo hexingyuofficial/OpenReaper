@@ -145,7 +145,7 @@ function prepareTemplateExecution(options) {
     },
     params: input,
     refs,
-    undo: undoPolicyForDescriptor(descriptor),
+    undo: undoPolicyForDescriptor(descriptor, options.recipeUndo),
     verification: cloneJson(descriptor.verification),
     artifacts: {
       allow: descriptor.artifacts.mode !== "none",
@@ -523,7 +523,7 @@ function assertIdempotencyKey(key) {
   }
 }
 
-function undoPolicyForDescriptor(descriptor) {
+function undoPolicyForDescriptor(descriptor, recipeUndo = null) {
   const family = descriptor.bridge.operation_family;
   if (descriptor.risk === "read" || READ_OPERATION_FAMILIES.has(family)) {
     return { mode: "none" };
@@ -533,10 +533,18 @@ function undoPolicyForDescriptor(descriptor) {
     return { mode: "none" };
   }
 
+  const flags = undoFlagsForDescriptor(descriptor);
+  if (
+    recipeUndo?.suppress_child_undo === true
+    && typeof recipeUndo.handle === "string"
+    && recipeUndo.handle.length > 0
+  ) {
+    flags.push(`recipe_transaction:${recipeUndo.handle}`);
+  }
   return {
     mode: "required",
     label: `OpenReaper: ${descriptor.bridge.capability}`,
-    flags: undoFlagsForDescriptor(descriptor),
+    flags,
   };
 }
 

@@ -44,6 +44,8 @@ const INTENT_ROUTES = deepFreeze([
     term("inspect project", 8), term("project overview", 8), term("project map", 7), term("what is in this project", 9),
     term("project status", 7), term("show project", 7), term("current project", 6), term("project summary", 8),
     term("检查项目", 8), term("项目概览", 8), term("项目地图", 7), term("项目里有什么", 9), term("项目状态", 7), term("查看项目", 7),
+    term("检查工程", 8), term("工程概览", 8), term("工程里有什么", 9), term("工程里都有什么", 9), term("查看工程", 7),
+    term("轨道多不多", 8),
   ]),
   intent("macro.project.query", [
     term("find track", 8), term("find item", 8), term("find fx", 8), term("search project", 7), term("locate", 5), term("query", 5),
@@ -65,7 +67,7 @@ const INTENT_ROUTES = deepFreeze([
     term("open project", 10), term("switch project", 10), term("activate tab", 10), term("create a new project", 9),
     term("list open projects", 9), term("project tab", 8),
     term("另存为", 10), term("保存项目", 9), term("保存", 6), term("存盘", 7),
-    term("打开工程", 10), term("切换工程", 10), term("激活工程页签", 10), term("新建工程", 9), term("打开项目", 9), term("创建项目", 8),
+    term("打开工程", 10), term("切换工程", 10), term("切换当前工程", 10), term("激活工程页签", 10), term("新建工程", 9), term("打开项目", 9), term("创建项目", 8),
   ]),
   intent("macro.routing.apply", [
     term("routing", 8), term("route track", 8), term("create send", 9), term("remove send", 10), term("delete send", 10), term("send to", 7), term("sidechain", 8), term("bus", 5),
@@ -77,7 +79,7 @@ const INTENT_ROUTES = deepFreeze([
     term("import audio", 10), term("import media", 10), term("import sample", 9), term("place assets", 9), term("place media", 9),
     term("drop sample", 8), term("insert audio file", 9), term("bring in media", 8),
     term("搜索音效库", 10), term("找音效", 9), term("找素材", 10), term("媒体浏览器", 10), term("找kick", 10),
-    term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入采样", 9), term("放置素材", 9), term("放音频", 8),
+    term("导入音频", 10), term("导入媒体", 10), term("导入素材", 10), term("导入工程素材", 10), term("导入采样", 9), term("放置素材", 9), term("放音频", 8),
   ]),
   intent("macro.items.analyze", [
     term("analyze item", 9), term("analyze audio", 9), term("loudness", 8), term("transient", 8), term("silence", 7), term("peak analysis", 8),
@@ -283,6 +285,20 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     const expansion = createAlpha3_3B1dAutomationApplyExactManual();
     return deepFreeze({
       ...expansion,
+      action_manual: {
+        ...expansion.action_manual,
+        examples: [
+          {
+            name: "preview one exact Envelope point insert",
+            input: {
+              mode: "insert_points",
+              envelope_refs: ["envelope:guid:{ENVELOPE-GUID}"],
+              points: [{ time_seconds: 1, value: 0.75, shape: 0, tension: 0 }],
+              dry_run: true,
+            },
+          },
+        ],
+      },
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
       guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
       guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,
@@ -294,6 +310,26 @@ export function createAlpha3_3B1ExactMacroExpansion(id) {
     const expansion = createAlpha3_3MediaPlaceAssetsExactManual();
     return deepFreeze({
       ...expansion,
+      action_manual: {
+        ...expansion.action_manual,
+        examples: [
+          {
+            name: "search the approved Media Explorer library",
+            input: { mode: "search_library", query: "metal impact", page_size: 10 },
+          },
+          {
+            name: "preview one explicit asset placement",
+            input: {
+              mode: "place_assets",
+              assets: [{ id: "impact", path: "/absolute/path/from-search.wav" }],
+              placement: { mode: "sequence_on_one_track", start_seconds: 0, align_basis: "item_start" },
+              track_policy: "one_shared_new_track",
+              new_track: { name: "SFX" },
+              dry_run: true,
+            },
+          },
+        ],
+      },
       contract: ALPHA3_3_B1_REQUESTED_EXPANSIONS_CONTRACT,
       guide_contract: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_CONTRACT,
       guide_version: ALPHA3_3_B1_AGENT_CONTEXT_MACRO_GUIDE_VERSION,

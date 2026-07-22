@@ -9,6 +9,7 @@ import {
   createExecutableDependencyCatalog,
   sealExecutableRecipeRevision,
 } from "../../packages/core/src/executable-recipe-contract-v1.mjs";
+import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   createExecutableRecipeRevisionStore,
 } from "../../packages/core/src/executable-recipe-revision-store-v1.mjs";
@@ -27,13 +28,17 @@ import {
 import {
   CALL_RECIPE_STAGE_BUDGET,
   createStdioCallRecipeRuntime,
+  createStdioOfficialRecipeRunHydrator,
+  createStdioRecipeUndoController,
   readFreshOpenProjectInventory,
 } from "../../packages/mcp-server/src/openreaper-mcp-stdio.mjs";
 import { TOOL_ABI_V1_TOOL_NAMES } from "../../packages/mcp-server/src/tool-abi-v1.mjs";
 import { OPENREAPER_PUBLIC_TOOL_IDS } from "../../packages/mcp-server/src/openreaper-agent-start-here-v1.mjs";
 import { ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
 import { CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
+import { CALL_TEMPLATE_INTERNAL_RECIPE_UNDO } from "../../packages/mcp-server/src/call-template-runtime-v1.mjs";
 import { createExecutableRecipeProductCatalog } from "../../packages/mcp-server/src/executable-recipe-product-catalog-v1.mjs";
+import { createAlpha345OfficialExecutableRecipeRevisions } from "../../packages/mcp-server/src/alpha3-45-official-executable-recipes-v1.mjs";
 
 const STDIO_SERVER = path.resolve("packages/mcp-server/src/openreaper-mcp-stdio.mjs");
 
@@ -120,6 +125,8 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
     assert.equal(got.ok, true);
     assert.equal(got.content_hash, saved.content_hash);
+    assert.equal(got.source, "user");
+    assert.equal(got.draft.id, saved.recipe_id);
 
     const deleted = await runtime.call_recipe({
       operation: "delete",
@@ -279,8 +286,142 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(page.items.length, 1);
     assert.equal(page.page.has_more, true);
     assert.equal(typeof page.page.next_cursor, "string");
+    assert.equal(page.run_summary.contract, "call_recipe.run_summary.v1");
+    assert.equal(page.run_summary.timing.stage_timing_count, 2);
+    assert.deepEqual(page.run_summary.counters, {
+      counter_scope: "recipe_stage_dispatch_and_accepted_native_proof",
+      counter_source: "call_recipe_runtime",
+      transport_call_count: 2,
+      native_mutation_count: 1,
+      readback_count: 2,
+    });
     assert.doesNotMatch(JSON.stringify(page), /child_envelope|raw_request|full_schema/);
     assert.equal(sealed, undefined);
+  });
+
+  it("opens one Whole-Recipe Undo scope, binds child stages, and closes once", async () => {
+    const undoCalls = [];
+    const childUndo = [];
+    const undoController = {
+      async begin(request) {
+        undoCalls.push(request);
+        return {
+          ok: true,
+          opened: true,
+          handle: "recipe-undo-fixture",
+          project_ref: request.project_ref,
+          evidence_refs: ["bridge:undo-begin"],
+        };
+      },
+      async end(request) {
+        undoCalls.push(request);
+        return {
+          ok: true,
+          closed: true,
+          verified: true,
+          handle: request.handle,
+          project_ref: request.project_ref,
+          evidence_refs: ["bridge:undo-end"],
+        };
+      },
+    };
+    const { runtime } = makeRuntime({
+      undoController,
+      dispatchers: {
+        macro: async ({ recipe_undo }) => {
+          childUndo.push(recipe_undo);
+          return macroEnvelope({ project_summary: { name: "Dialog" } });
+        },
+        template: async ({ recipe_undo }) => {
+          childUndo.push(recipe_undo);
+          return templateEnvelope({ track_ref: "track:index:0" });
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const ran = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(ran.ok, true, JSON.stringify(ran));
+    assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
+    assert.deepEqual(undoCalls[0].stage_ids, ["run_macro", "readback"]);
+    assert.equal(undoCalls[1].handle, "recipe-undo-fixture");
+    assert.equal(undoCalls[1].mutation_truth, "applied");
+    assert.equal(childUndo.length, 2);
+    assert.equal(childUndo.every((truth) => truth.suppress_child_undo === true), true);
+    assert.equal(childUndo.every((truth) => truth.handle === "recipe-undo-fixture"), true);
+    assert.deepEqual(ran.undo, {
+      scope: "whole_recipe",
+      binding: "bound",
+      status: "closed",
+      claimed: true,
+      proven: true,
+      opened: true,
+      closed: true,
+      project_ref: "project:tab:fixture-a",
+      rollback_attempted: false,
+      rollback_proven: false,
+    });
+  });
+
+  it("fails before stage dispatch when Whole-Recipe Undo cannot open", async () => {
+    let stageCalls = 0;
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin() { throw new Error("begin unavailable"); },
+        async end() { throw new Error("must not close"); },
+      },
+      dispatchers: {
+        macro: async () => { stageCalls += 1; return macroEnvelope({ project_summary: {} }); },
+        template: async () => { stageCalls += 1; return templateEnvelope({ track_ref: "track:index:0" }); },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.status, "blocked");
+    assert.equal(failed.error.details.zero_write, true);
+    assert.equal(failed.execution_truth.mutation, "not_run");
+    assert.equal(failed.undo.status, "open_failed");
+    assert.equal(stageCalls, 0);
+  });
+
+  it("reports unknown mutation truth when Whole-Recipe Undo close proof fails", async () => {
+    let endCalls = 0;
+    const { runtime } = makeRuntime({
+      undoController: {
+        async begin(request) {
+          return { ok: true, opened: true, handle: "recipe-undo-close-fail", project_ref: request.project_ref };
+        },
+        async end() {
+          endCalls += 1;
+          throw new Error("active project changed before close proof");
+        },
+      },
+    });
+    const saved = await saveFixture(runtime);
+    const failed = await runtime.call_recipe({
+      operation: "run",
+      ...exactIdentity(saved),
+      inputs: { track_name: "Dialog" },
+    });
+
+    assert.equal(failed.ok, false);
+    assert.equal(failed.status, "partial");
+    assert.equal(failed.error.details.undo_close_unknown, true);
+    assert.equal(failed.execution_truth.mutation, "unknown");
+    assert.equal(failed.undo.status, "close_unknown");
+    assert.equal(failed.recovery.strategy, "inspect_and_repair");
+    assert.equal(failed.resume_safe, false);
+    assert.equal(endCalls, 1);
   });
 
   it("fails the declaring stage when verified readback omits a declared output", async () => {
@@ -1280,6 +1421,75 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     }
   });
 
+  it("hydrates Recipe 04 from exact selected Item summaries before any write", async () => {
+    const revision = createAlpha345OfficialExecutableRecipeRevisions().find((entry) => (
+      entry.recipe_id === "recipe.items.create_sound_variations"
+    ));
+    const calls = [];
+    let sequence = 0;
+    const sourceRows = [
+      {
+        item_ref: "item:guid:{SELECTED-1}",
+        track_ref: "track:guid:{TRACK-1}",
+        active_take_ref: "take:guid:{TAKE-1}",
+        position_seconds: 1.25,
+        length_seconds: 0.75,
+      },
+      {
+        item_ref: "item:guid:{SELECTED-2}",
+        track_ref: "track:guid:{TRACK-2}",
+        active_take_ref: "take:guid:{TAKE-2}",
+        position_seconds: 1.5,
+        length_seconds: 1,
+      },
+    ];
+    const hydrator = createStdioOfficialRecipeRunHydrator({
+      callContext: { allocate: () => ({ request_sequence: ++sequence }) },
+      callTemplateRuntime: {
+        async call_template(request) {
+          calls.push(request);
+          if (request.id === "template.items.list_selected_items") {
+            return {
+              ok: true,
+              result: {
+                summary: {
+                  selected_count: sourceRows.length,
+                  truncated: false,
+                  items: sourceRows.map(({ item_ref, track_ref, position_seconds, length_seconds }) => ({
+                    item_ref, track_ref, position_seconds, length_seconds,
+                  })),
+                },
+              },
+            };
+          }
+          const itemRef = request.refs.item_ref;
+          return { ok: true, result: { summary: sourceRows.find((row) => row.item_ref === itemRef) } };
+        },
+      },
+    });
+    const hydrated = await hydrator({
+      revision,
+      source: "official",
+      inputs: { source_items: "current_selection", variation_count: 2 },
+      runtime_facts: { project_identity: "project:tab:fixture", bridge_owner: "owner:fixture", bridge_generation: "1" },
+    });
+    assert.equal(hydrated.ok, true, JSON.stringify(hydrated));
+    assert.deepEqual(hydrated.inputs.source_items, sourceRows.map((row) => ({
+      item_ref: row.item_ref,
+      take_ref: row.active_take_ref,
+      track_ref: row.track_ref,
+      position_seconds: row.position_seconds,
+      length_seconds: row.length_seconds,
+    })));
+    assert.deepEqual(calls.map((call) => call.id), [
+      "template.items.list_selected_items",
+      "template.items.read_item_summary",
+      "template.items.read_item_summary",
+    ]);
+    assert.equal(calls.every((call) => call.budget === CALL_RECIPE_STAGE_BUDGET), true);
+    assert.equal(new Set(calls.map((call) => call.context.request_sequence)).size, calls.length);
+  });
+
   it("uses fresh server-owned context and a fixed budget for every stdio Recipe stage", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-e2-stdio-stage-"));
     const allocationHints = [];
@@ -1316,6 +1526,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         throw new Error(`Unexpected stage ${request.id}`);
       },
     };
+    const undoBridge = makeRecipeUndoBridge();
     const binding = createStdioCallRecipeRuntime({
       env: {
         OPENREAPER_EXECUTABLE_RECIPE_ROOT: root,
@@ -1327,12 +1538,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       artifactRuntime: null,
       callContext,
       liveBridge: {
-        executor: {
-          probeLiveness: async () => ({
-            ready: true,
-            heartbeat: { observed: { active_owner: "owner:fixture", active_generation: 1 } },
-          }),
-        },
+        executor: undoBridge,
       },
     });
     assert.ok(binding);
@@ -1346,6 +1552,9 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     });
     assert.equal(run.ok, true, JSON.stringify(run));
     assert.equal(stageCalls.length, 2);
+    assert.deepEqual(undoBridge.seen.map((request) => request.params.action), ["begin", "end"]);
+    assert.equal(stageCalls.every((call) => call[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO]?.suppress_child_undo === true), true);
+    assert.equal(stageCalls.every((call) => typeof call[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO]?.handle === "string"), true);
     assert.equal(new Set(stageCalls.map((call) => call.context.request_sequence)).size, 2);
     assert.equal(stageCalls.every((call) => call.context.client_id === "openreaper-mcp"), true);
     assert.deepEqual(stageCalls.map((call) => call.budget), [
@@ -1353,6 +1562,56 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       CALL_RECIPE_STAGE_BUDGET,
     ]);
     assert.equal(allocationHints.every((hint) => hint === undefined), true);
+  });
+
+  it("builds fixed internal Bridge begin/end requests with matching identity", async () => {
+    const bridge = makeRecipeUndoBridge();
+    let sequence = 0;
+    const controller = createStdioRecipeUndoController({
+      liveBridge: { executor: bridge },
+      callContext: {
+        allocate() {
+          sequence += 1;
+          return {
+            client_id: "openreaper-mcp",
+            session_id: "server-session",
+            expected_owner: "owner:fixture",
+            expected_generation: 1,
+            created_at: `2026-07-21T00:00:0${sequence}.000Z`,
+            request_sequence: sequence,
+          };
+        },
+      },
+    });
+    const opened = await controller.begin({
+      run_id: "run-fixture",
+      attempt: 1,
+      project_ref: "project:tab:fixture-a",
+      label: "OpenReaper Recipe: recipe.fixture",
+    });
+    const closed = await controller.end({
+      handle: opened.handle,
+      project_ref: "project:tab:fixture-a",
+      label: "OpenReaper Recipe: recipe.fixture",
+      mutation_truth: "applied",
+    });
+
+    assert.equal(opened.ok, true);
+    assert.equal(closed.ok, true);
+    assert.equal(opened.handle, "run-fixture:attempt:1");
+    assert.deepEqual(bridge.seen.map((request) => request.operation), [
+      { family: "run_command", name: "recipe.undo.transaction" },
+      { family: "run_command", name: "recipe.undo.transaction" },
+    ]);
+    assert.deepEqual(bridge.seen.map((request) => request.pack), [
+      { id: "core", capability: "recipe.undo.transaction", risk: "write" },
+      { id: "core", capability: "recipe.undo.transaction", risk: "write" },
+    ]);
+    assert.deepEqual(bridge.seen.map((request) => request.params.transaction_id), [opened.handle, opened.handle]);
+    assert.deepEqual(bridge.seen.map((request) => request.undo.flags), [
+      ["recipe_transaction_control"],
+      ["recipe_transaction_control"],
+    ]);
   });
 
   it("exposes saved exact revisions through the actual six-tool stdio MCP surface", async () => {
@@ -1400,7 +1659,20 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
         arguments: { operation: "list", limit: 1 },
       }));
       assert.equal(listed.count, 1);
-      assert.equal(listed.items[0].revision, 1);
+      assert.equal(listed.total, 5);
+      assert.equal(listed.items[0].source, "official");
+
+      const userListed = parseToolJson(await client.callTool({
+        name: "call_recipe",
+        arguments: {
+          operation: "list",
+          filter: { recipe_id: saved.recipe_id },
+          limit: 1,
+        },
+      }));
+      assert.equal(userListed.count, 1);
+      assert.equal(userListed.items[0].revision, 1);
+      assert.equal(userListed.items[0].source, "user");
 
       const loaded = parseToolJson(await client.callTool({
         name: "call_recipe",
@@ -1414,6 +1686,8 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
       }));
       assert.equal(loaded.ok, true);
       assert.equal(loaded.revision, 1);
+      assert.equal(loaded.source, "user");
+      assert.equal(loaded.draft.id, saved.recipe_id);
 
       const discovery = parseToolJson(await client.callTool({
         name: "list_recipes",
@@ -1513,11 +1787,44 @@ function makeRuntime(overrides = {}) {
       macro: async ({ inputs }) => macroEnvelope({ project_summary: { name: inputs.track_name } }),
       template: async () => templateEnvelope({ track_ref: "track:index:0" }),
     },
+    undoController: overrides.undoController,
     runtimeFactsProvider: async ({ revision }) => overrides.facts
       ? overrides.facts(revision)
       : completeFacts(revision),
   });
   return { runtime, root, catalog, store };
+}
+
+function makeRecipeUndoBridge() {
+  const bridge = new FakeFoundationBridge({
+    owner: "owner:fixture",
+    generation: 1,
+    now: () => new Date("2026-07-21T00:00:10.000Z"),
+  });
+  bridge.probeLiveness = async () => ({
+    ready: true,
+    heartbeat: { observed: { active_owner: "owner:fixture", active_generation: 1 } },
+  });
+  bridge.execute = function executeRecipeUndo(request, startedAt) {
+    const begin = request.params.action === "begin";
+    return this.okEnvelope(request, startedAt, {
+      summary: {
+        contract: "openreaper.recipe_undo_transaction.v1",
+        action: request.params.action,
+        transaction_id: request.params.transaction_id,
+        project_ref: request.params.project_ref,
+        opened: true,
+        closed: !begin,
+        verified: true,
+        readback_status: "passed",
+      },
+      refs: [],
+      artifacts: [],
+      jobs: [],
+      readback: null,
+    });
+  };
+  return bridge;
 }
 
 function makeCatalog() {

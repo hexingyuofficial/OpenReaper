@@ -25,6 +25,7 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_MODES = deepFreeze([
   "remove_silence",
   "align_onsets",
   "set_item_take_controls",
+  "create_variations",
 ]);
 export const ALPHA3_3_B1C_ITEMS_BATCH_ITEM_FIELDS = deepFreeze([
   "volume_db",
@@ -41,6 +42,7 @@ export const ALPHA3_3_B1C_ITEMS_BATCH_TAKE_FIELDS = deepFreeze([
   "preserve_pitch",
 ]);
 export const ALPHA3_3_B1C_ITEMS_BATCH_ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,12}$/u;
+export const ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS = 64;
 export const ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES = deepFreeze([
   "set_snap_offset_to_onset",
   "normalize_peak",
@@ -92,6 +94,8 @@ export const ALPHA3_3_B1C_ITEMS_APPLY_TEMPLATE_IDS = deepFreeze([
   "template.analysis.detect_item_transients",
   "template.items.split_item_by_silence",
   "template.items.list_items_on_track",
+  "template.items.copy_item_to_track",
+  "template.items.set_take_start_in_source",
 ]);
 
 const RESOLVE_ITEM_ID = "template.items.resolve_item_ref";
@@ -113,6 +117,8 @@ const DETECT_SILENCE_ID = "template.analysis.detect_item_silence";
 const DETECT_TRANSIENTS_ID = "template.analysis.detect_item_transients";
 const SPLIT_BY_SILENCE_ID = "template.items.split_item_by_silence";
 const LIST_TRACK_ITEMS_ID = "template.items.list_items_on_track";
+const COPY_ITEM_TO_TRACK_ID = "template.items.copy_item_to_track";
+const SET_TAKE_START_IN_SOURCE_ID = "template.items.set_take_start_in_source";
 const MAX_TARGETS = 8;
 const DEFAULT_TARGET_LIMIT = 4;
 const POSITION_TOLERANCE = 0.000001;
@@ -155,7 +161,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
   program_id: "openreaper.macro.items.apply",
-  program_version: "1.4.0",
+  program_version: "1.5.0",
   implementation_status: "executable",
   risk: "destructive",
   input_schema: {
@@ -168,7 +174,7 @@ const REGISTRY_ENTRY = deepFreeze({
       changes: {
         type: "array",
         minItems: 1,
-        maxItems: MAX_TARGETS,
+        maxItems: ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS,
         items: {
           type: "object",
           additionalProperties: false,
@@ -200,6 +206,23 @@ const REGISTRY_ENTRY = deepFreeze({
             },
           },
           required: ["id", "item_ref"],
+        },
+      },
+      variations: {
+        type: "array",
+        minItems: 1,
+        maxItems: ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            id: { type: "string", minLength: 1, maxLength: 12 },
+            source_item_ref: { type: "string" },
+            target_track_ref: { type: "string" },
+            position_seconds: { type: "number", minimum: 0 },
+            source_offset_seconds: { type: "number", minimum: 0 },
+          },
+          required: ["id", "source_item_ref", "target_track_ref", "position_seconds"],
         },
       },
       limit: { type: "integer", minimum: 1, maximum: MAX_TARGETS },
@@ -321,7 +344,7 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
     support_state: "supported_with_live_readback",
     live_runnable_now: liveRunnableNow,
     known_blocker: liveRunnableNow ? null : "macro_fixed_dependencies_not_available",
-    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, set accepted properties, choose exact Active Takes, apply bounded fades/trims/Take playback/snap offsets, or batch Item and Active-Take controls.",
+    summary: "Arrange selected or exact Items, remove silence, align audio onsets, move exact Items onto existing Tracks, create bounded Item variations, set accepted properties, choose exact Active Takes, apply bounded fades/trims/Take playback/snap offsets, or batch Item and Active-Take controls.",
     inputSchema: clone(REGISTRY_ENTRY.input_schema),
     supported_modes: ALPHA3_3_B1C_ITEMS_APPLY_MODES,
     held_modes: ALPHA3_3_B1C_ITEMS_APPLY_HELD_MODES,
@@ -350,6 +373,14 @@ export function createAlpha3_3B1cItemsApplyDiscoveryItems({ liveRunnableNow = fa
           }],
         },
       },
+      {
+        name: "create_item_variations",
+        input: {
+          mode: "create_variations",
+          dry_run: false,
+          variations: [{ id: "var1", source_item_ref: "item:guid:{SOURCE-GUID}", target_track_ref: "track:guid:{TARGET-GUID}", position_seconds: 8, source_offset_seconds: 0.1 }],
+        },
+      },
     ],
   }]);
 }
@@ -366,6 +397,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "Use stack_on_existing_tracks with one to eight explicit item_ref/target_track_ref rows; every destination must already exist.",
         "Use apply_fades, trim_exact, set_take_playback, set_snap_offset, remove_silence, or align_onsets for bounded common edits backed by accepted native Item/Take atoms.",
         "Use set_item_take_controls for one-call multi-Item multi-field Item/Active-Take control rows with exact item_ref and take_ref when Take fields are present; Item pan remains unsupported.",
+        "Use create_variations to copy 1-64 exact source Items onto existing exact Tracks at explicit positions, with an optional active-Take source offset per new variation.",
       ],
       when_not_to_use: [
         "Do not reinterpret trim_exact as silence analysis, or apply_fades as crossfade construction; normalization, arbitrary transient splitting, and crossfades remain held.",
@@ -379,9 +411,10 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
       ],
       input_shape: {
         mode: ALPHA3_3_B1C_ITEMS_APPLY_MODES.join(" | "),
-        target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take and set_item_take_controls.",
-        target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take and set_item_take_controls.",
-        changes: "For set_item_take_controls only: 1-8 rows of {id,item_ref,take_ref?,item?,take?}. id is 1-12 ASCII [A-Za-z0-9_-]. take_ref is required exactly when take fields are present. Item fields: volume_db,length_seconds,fade_in_seconds,fade_out_seconds,snap_offset_seconds. Take fields: volume_db,pan,pitch_semitones,playrate,preserve_pitch. Item pan remains unsupported.",
+        target: "selected; used by arrangement/property modes when target_refs or exact request refs are absent. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
+        target_refs: "Optional array of at most eight exact canonical item:guid refs for arrangement/property modes. Forbidden for set_active_take, set_item_take_controls, and create_variations.",
+        changes: "For set_item_take_controls only: 1-64 rows of {id,item_ref,take_ref?,item?,take?}. id is 1-12 ASCII [A-Za-z0-9_-]. take_ref is required exactly when take fields are present. Item fields: volume_db,length_seconds,fade_in_seconds,fade_out_seconds,snap_offset_seconds. Take fields: volume_db,pan,pitch_semitones,playrate,preserve_pitch. Item pan remains unsupported.",
+        variations: "For create_variations only: 1-64 rows of {id,source_item_ref,target_track_ref,position_seconds,source_offset_seconds?}. Every ref must be an exact canonical GUID ref. All source Items and destination Tracks resolve before the first copy; each result returns the new exact Item/Take refs after final Item-summary readback.",
         dry_run: "Defaults to true. false is required to mutate REAPER.",
         anchor_seconds: "Non-negative project time; required by move_to_anchor and optional for other arrangement modes.",
         gap_seconds: "Non-negative gap for sequence_with_gap; defaults to 0.",
@@ -410,6 +443,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
         "stack_on_existing_tracks marks a row applied only when the atom returns the exact Item and target Track plus passed identity/take/Track-count readback.",
         "remove_silence marks a row applied only after the destructive atom proves kept GUIDs present, deleted GUIDs absent, duration conservation, and Track Item count; the Macro then reads every kept Item and independently checks the live Track Item count.",
         "align_onsets re-runs native transient detection after every move and marks a row applied only when position + first_transient_time matches the requested project-time anchor.",
+        "create_variations verifies each copy result, optional source-offset atom readback, then the new Item's exact Item summary for Item, Track, Take, and position identity.",
         "Index invalidation is reported separately and never changes an already verified mutation into an unverified applied claim.",
       ],
       success_criteria: [
@@ -470,6 +504,7 @@ export function createAlpha3_3B1cItemsApplyExactManual() {
             }],
           },
         },
+        { name: "create exact variations", input: { mode: "create_variations", dry_run: false, variations: [{ id: "varA", source_item_ref: "item:guid:{SOURCE-A}", target_track_ref: "track:guid:{TARGET-A}", position_seconds: 12, source_offset_seconds: 0.15 }] } },
       ],
     },
   });
@@ -489,6 +524,20 @@ export async function executeAlpha3_3B1cItemsApplyMacro({
   const activeBudget = responseBudget(request);
   if (isPlainObject(request.input) && request.input.mode === "set_item_take_controls") {
     return executeSetItemTakeControlsBatch({
+      entry,
+      request,
+      executeAtomic,
+      projectIndexRuntime,
+      now,
+      monoNow,
+      startedAt,
+      stages,
+      state,
+      activeBudget,
+    });
+  }
+  if (isPlainObject(request.input) && request.input.mode === "create_variations") {
+    return executeCreateVariationsBatch({
       entry,
       request,
       executeAtomic,
@@ -1258,6 +1307,293 @@ async function executeArrangementPlan({ plan, request, executeAtomic, state }) {
   return firstFailure;
 }
 
+async function executeCreateVariationsBatch({
+  entry,
+  request,
+  executeAtomic,
+  projectIndexRuntime,
+  now,
+  monoNow = () => performance.now(),
+  startedAt,
+  stages,
+  state,
+  activeBudget,
+}) {
+  const t0 = monoTick(monoNow);
+  state.batchMode = true;
+  state.calls = emptyCalls();
+  state.timings = emptyTimings();
+  const normalized = normalizeCreateVariationsInput(request.input);
+  const dryRun = normalized.input?.dry_run ?? request.input?.dry_run !== false;
+  const data = () => variationBatchData(state, { dry_run: dryRun });
+  if (!normalized.ok) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: normalized.code, message: normalized.message, blockers: normalized.blockers, data: data() });
+  }
+  const programRequest = {
+    macro_id: ALPHA3_3_B1C_ITEMS_APPLY_MACRO_ID,
+    input: normalized.input,
+    refs: request.refs ?? {},
+    dry_run: normalized.input.dry_run,
+  };
+  const validation = validateMacroProgramRequest(programRequest, { registry: ALPHA3_3_B1C_ITEMS_APPLY_REGISTRY });
+  if (!validation.valid) {
+    const message = validation.errors.join("; ");
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "ITEM_APPLY_REQUEST_INVALID", message, blockers: validation.errors.map((error) => blocker("ITEM_APPLY_REQUEST_INVALID", error)), data: data() });
+  }
+  if (typeof executeAtomic !== "function") {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code: "ITEM_APPLY_LIVE_EXECUTOR_REQUIRED", message: "macro.items.apply requires the managed OpenReaper live executor.", data: data() });
+  }
+
+  const resolveStarted = monoTick(monoNow);
+  const resolvedRows = [];
+  for (const row of normalized.input.variations) {
+    let sourceExecution;
+    let trackExecution;
+    try {
+      sourceExecution = await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_ITEM_ID, input: { ref: row.source_item_ref }, refs: {} });
+      trackExecution = sourceExecution?.ok === true
+        ? await runAtomicCounted(executeAtomic, request, state, "resolve", { id: RESOLVE_TRACK_ID, input: { track_ref: row.target_track_ref }, refs: {} })
+        : null;
+    } catch (error) {
+      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), code: "ITEM_APPLY_ATOMIC_FAILED", message: error?.message ?? "Variation target resolution failed." });
+    }
+    collectExecutionEvidence(state, sourceExecution);
+    collectExecutionEvidence(state, trackExecution);
+    if (sourceExecution?.ok !== true) {
+      const failure = atomicFailure(sourceExecution, RESOLVE_ITEM_ID);
+      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), ...failure });
+    }
+    if (trackExecution?.ok !== true) {
+      const failure = atomicFailure(trackExecution, RESOLVE_TRACK_ID);
+      return variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data: data(), ...failure });
+    }
+    const sourceObject = executionObjectRefs(sourceExecution).find((ref) => ref.kind === "item");
+    const targetTrackObject = executionObjectRefs(trackExecution).find((ref) => ref.kind === "track");
+    if (!isAuthoritativeItemObjectRef(sourceObject) || sourceObject.ref !== row.source_item_ref
+      || !isAuthoritativeTrackObjectRef(targetTrackObject) || targetTrackObject.ref !== row.target_track_ref) {
+      return variationFailure({
+        entry, request, startedAt, now, stages, state, activeBudget, data: data(),
+        code: "ITEM_APPLY_TARGET_IDENTITY_MISMATCH",
+        message: `Variation ${row.id} source Item or target Track did not round-trip its exact canonical ref.`,
+      });
+    }
+    resolvedRows.push({ ...row, source_item: sourceObject, target_track: targetTrackObject });
+    state.canonicalRefs.push(sourceObject.ref, targetTrackObject.ref);
+  }
+  state.timings.target_resolution_ms = monoElapsed(resolveStarted, monoNow);
+  pushStage(stages, "items-apply-targets", "live_ref_resolve", "completed", `Resolved ${resolvedRows.length} exact variation source/target pair(s).`, state.evidenceRefs);
+  state.changes = resolvedRows.map((row) => variationChange(row, { status: normalized.input.dry_run ? "planned" : "pending", mutation: normalized.input.dry_run ? "not_run" : "pending", readback: normalized.input.dry_run ? "not_run" : "pending", index: normalized.input.dry_run ? "skipped" : "pending" }));
+  pushStage(stages, "items-apply-preflight", "template_execute", "completed", "Every copy atom will independently verify its full source footprint before mutation.", state.evidenceRefs);
+
+  if (normalized.input.dry_run) {
+    state.timings.total_ms = monoElapsed(t0, monoNow);
+    pushStage(stages, "items-apply-mutate", "template_execute", "skipped", "dry_run=true; no Item variation was dispatched.", []);
+    pushStage(stages, "items-apply-verify", "verify", "completed", "Validated exact source/target identity for the complete variation preview.", state.evidenceRefs);
+    pushStage(stages, "items-apply-index", "index_update", "skipped", "Dry run did not stale the Project Index.", []);
+    pushStage(stages, "items-apply-result", "result_project", "completed", "Projected compact Item variation truth.", state.evidenceRefs);
+    return successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: "dry_run_completed", summary: `Previewed ${resolvedRows.length} Item variation row(s) with no mutation.`, data: data(), compact: true });
+  }
+
+  let executionFailure = null;
+  let failedIndex = -1;
+  const mutationStarted = monoTick(monoNow);
+  const readbackStarted = monoTick(monoNow);
+  for (const [index, row] of resolvedRows.entries()) {
+    const change = state.changes[index];
+    let copyExecution;
+    try {
+      copyExecution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+        id: COPY_ITEM_TO_TRACK_ID,
+        input: { position_seconds: row.position_seconds },
+        refs: { source_item_ref: row.source_item, target_track_ref: row.target_track },
+      });
+    } catch (error) {
+      change.mutation = { status: "unknown_or_partial" };
+      change.status = "unknown_or_partial";
+      executionFailure = executionError(error, COPY_ITEM_TO_TRACK_ID, "mutation");
+      failedIndex = index;
+      break;
+    }
+    collectExecutionEvidence(state, copyExecution);
+    if (copyExecution?.ok !== true) {
+      change.mutation = { status: "failed" };
+      change.status = "failed";
+      executionFailure = { ...atomicFailure(copyExecution, COPY_ITEM_TO_TRACK_ID), phase: "mutation" };
+      failedIndex = index;
+      break;
+    }
+    const copySummary = executionSummary(copyExecution);
+    const newItemRef = copySummary.new_item_ref;
+    const newTakeRef = copySummary.active_take_ref;
+    const copiedItem = executionObjectRefs(copyExecution).find((ref) => ref.kind === "item" && ref.ref === newItemRef);
+    if (!isExactGuidRef(newItemRef, "item") || !isExactGuidRef(newTakeRef, "take") || !isAuthoritativeItemObjectRef(copiedItem)
+      || copiedItem.ref !== newItemRef || newItemRef === row.source_item_ref || copySummary.source_item_ref !== row.source_item_ref
+      || copySummary.target_track_ref !== row.target_track_ref || !valuesMatch(copySummary.position_seconds, row.position_seconds)) {
+      change.mutation = { status: "completed" };
+      change.status = "readback_failed";
+      executionFailure = { ...failed("ITEM_APPLY_VARIATION_COPY_IDENTITY_INVALID", `Copy result for ${row.id} omitted an exact new Item/Take identity or mismatched the requested source, Track, or position.`), phase: "readback" };
+      failedIndex = index;
+      break;
+    }
+    change.new_item_ref = newItemRef;
+    change.new_take_ref = newTakeRef;
+    state.canonicalRefs.push(newItemRef, newTakeRef);
+    if (row.source_offset_seconds !== undefined) {
+      let offsetExecution;
+      try {
+        offsetExecution = await runAtomicCounted(executeAtomic, request, state, "mutation", {
+          id: SET_TAKE_START_IN_SOURCE_ID,
+          input: { start_offset_seconds: row.source_offset_seconds },
+          refs: { item_ref: copiedItem },
+        });
+      } catch (error) {
+        change.mutation = { status: "unknown_or_partial" };
+        change.status = "unknown_or_partial";
+        executionFailure = executionError(error, SET_TAKE_START_IN_SOURCE_ID, "mutation");
+        failedIndex = index;
+        break;
+      }
+      collectExecutionEvidence(state, offsetExecution);
+      if (offsetExecution?.ok !== true) {
+        change.mutation = { status: "failed" };
+        change.status = "failed";
+        executionFailure = { ...atomicFailure(offsetExecution, SET_TAKE_START_IN_SOURCE_ID), phase: "mutation" };
+        failedIndex = index;
+        break;
+      }
+      const offsetSummary = executionSummary(offsetExecution);
+      if (offsetSummary.item_ref !== newItemRef || !valuesMatch(offsetSummary.start_offset_seconds, row.source_offset_seconds)) {
+        change.mutation = { status: "completed" };
+        change.status = "readback_failed";
+        executionFailure = { ...failed("ITEM_APPLY_VARIATION_OFFSET_READBACK_MISMATCH", `Source-offset readback for ${row.id} did not match the new Item or requested offset.`), phase: "readback" };
+        failedIndex = index;
+        break;
+      }
+    }
+    change.mutation = { status: "completed" };
+    let readExecution;
+    try {
+      readExecution = await runAtomicCounted(executeAtomic, request, state, "readback", {
+        id: READ_ITEM_ID,
+        input: { include_take_summary: true },
+        refs: { item_ref: copiedItem },
+      });
+    } catch (error) {
+      change.live_readback = { status: "failed" };
+      change.status = "readback_failed";
+      executionFailure = executionError(error, READ_ITEM_ID, "readback");
+      failedIndex = index;
+      break;
+    }
+    collectExecutionEvidence(state, readExecution);
+    const summary = executionSummary(readExecution);
+    if (readExecution?.ok !== true || summary.item_ref !== newItemRef || summary.track_ref !== row.target_track_ref
+      || summary.active_take_ref !== newTakeRef || !valuesMatch(summary.position_seconds, row.position_seconds)) {
+      change.live_readback = { status: "failed", source: "final_read_item_summary" };
+      change.status = "readback_failed";
+      executionFailure = { ...failed("ITEM_APPLY_VARIATION_READBACK_MISMATCH", `Final Item summary for ${row.id} did not prove the new Item, Take, Track, and position.`), phase: "readback" };
+      failedIndex = index;
+      break;
+    }
+    change.live_readback = { status: "passed", source: "final_read_item_summary" };
+    change.status = "applied";
+  }
+  state.timings.mutation_ms = monoElapsed(mutationStarted, monoNow);
+  state.timings.final_readback_ms = monoElapsed(readbackStarted, monoNow);
+  if (failedIndex >= 0) {
+    for (let later = failedIndex + 1; later < state.changes.length; later += 1) {
+      state.changes[later] = variationChange(resolvedRows[later], { status: "not_run", mutation: "not_run", readback: "not_run", index: "not_run" });
+    }
+  }
+  const indexStarted = monoTick(monoNow);
+  const indexResult = maintainBatchProjectIndex(projectIndexRuntime, state, now);
+  state.timings.index_maintenance_ms = monoElapsed(indexStarted, monoNow);
+  state.timings.total_ms = monoElapsed(t0, monoNow);
+  applyBatchIndexMaintenance(state.changes, indexResult);
+  pushStage(stages, "items-apply-mutate", "template_execute", executionFailure?.phase === "mutation" ? "failed" : "completed", `${state.changes.filter((change) => change.mutation?.status === "completed").length} variation row(s) completed mutation.`, state.evidenceRefs);
+  pushStage(stages, "items-apply-verify", "verify", executionFailure?.phase === "readback" ? "failed" : "completed", `${state.changes.filter((change) => change.live_readback?.status === "passed").length} variation row(s) passed final Item-summary readback.`, state.evidenceRefs);
+  pushStage(stages, "items-apply-index", "index_update", indexResult.ok === false ? "failed" : indexResult.status === "skipped" ? "skipped" : "completed", indexResult.message, []);
+  if (executionFailure) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: state.changes.some((change) => change.mutation?.status === "completed" || change.status === "applied" || change.status === "unknown_or_partial" || typeof change.new_item_ref === "string") ? "partial_failure" : "failed", code: executionFailure.code, message: executionFailure.message, blockers: executionFailure.blockers, data: data(), compact: true });
+  }
+  if (indexResult.ok === false) {
+    return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: "partial_failure", code: indexResult.code, message: indexResult.message, blockers: indexResult.blockers, data: data(), compact: true });
+  }
+  pushStage(stages, "items-apply-result", "result_project", "completed", "Projected compact Item variation truth.", state.evidenceRefs);
+  return successEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status: "completed", summary: `Created and verified ${state.changes.filter((change) => change.status === "applied").length} Item variation(s).`, data: data(), compact: true });
+}
+
+function variationFailure({ entry, request, startedAt, now, stages, state, activeBudget, data, code, message, blockers }) {
+  pushStage(stages, "items-apply-targets", "live_ref_resolve", "blocked", message, state.evidenceRefs);
+  return failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, code, message, blockers, data });
+}
+
+function normalizeCreateVariationsInput(input) {
+  if (!isPlainObject(input)) return failed("ITEM_APPLY_REQUEST_INVALID", "macro.items.apply input must be an object.");
+  const allowed = new Set(["mode", "variations", "dry_run"]);
+  const unknown = Object.keys(input).filter((field) => !allowed.has(field));
+  if (unknown.length > 0) return failed("ITEM_APPLY_VARIATIONS_FIELDS_INVALID", `create_variations accepts only mode, variations, and dry_run; unsupported field(s): ${unknown.join(", ")}.`);
+  if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
+  if (!Array.isArray(input.variations) || input.variations.length < 1 || input.variations.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS) {
+    return failed("ITEM_APPLY_VARIATIONS_INVALID", `variations must contain 1-${ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS} rows.`);
+  }
+  const ids = new Set();
+  const variations = [];
+  for (const [index, raw] of input.variations.entries()) {
+    if (!isPlainObject(raw)) return failed("ITEM_APPLY_VARIATIONS_INVALID", `variations[${index}] must be an object.`);
+    const rowUnknown = Object.keys(raw).filter((field) => !["id", "source_item_ref", "target_track_ref", "position_seconds", "source_offset_seconds"].includes(field));
+    if (rowUnknown.length > 0) return failed("ITEM_APPLY_VARIATIONS_INVALID", `variations[${index}] has unsupported field(s): ${rowUnknown.join(", ")}.`);
+    if (typeof raw.id !== "string" || !ALPHA3_3_B1C_ITEMS_BATCH_ROW_ID_PATTERN.test(raw.id)) return failed("ITEM_APPLY_BATCH_ROW_ID_INVALID", `variations[${index}].id must match ^[A-Za-z0-9_-]{1,12}$.`);
+    if (ids.has(raw.id)) return failed("ITEM_APPLY_BATCH_ROW_ID_DUPLICATE", `variations repeats id ${raw.id}.`);
+    ids.add(raw.id);
+    if (!isExactGuidRef(raw.source_item_ref, "item") || !isExactGuidRef(raw.target_track_ref, "track")) return failed("ITEM_APPLY_EXACT_TARGET_REQUIRED", `variations[${index}] requires exact source_item_ref and target_track_ref GUID refs.`);
+    if (!Number.isFinite(raw.position_seconds) || raw.position_seconds < 0) return failed("ITEM_APPLY_POSITION_INVALID", `variations[${index}].position_seconds must be a finite non-negative number.`);
+    if (raw.source_offset_seconds !== undefined && (!Number.isFinite(raw.source_offset_seconds) || raw.source_offset_seconds < 0)) return failed("ITEM_APPLY_VARIATION_OFFSET_INVALID", `variations[${index}].source_offset_seconds must be a finite non-negative number when present.`);
+    variations.push({ id: raw.id, source_item_ref: raw.source_item_ref, target_track_ref: raw.target_track_ref, position_seconds: raw.position_seconds, source_offset_seconds: raw.source_offset_seconds });
+  }
+  return { ok: true, input: { mode: "create_variations", dry_run: input.dry_run !== false, variations } };
+}
+
+function isAuthoritativeTrackObjectRef(value) {
+  return isPlainObject(value)
+    && value.kind === "track"
+    && typeof value.ref === "string"
+    && isExactGuidRef(value.ref, "track")
+    && isPlainObject(value.identity)
+    && value.identity.scheme === "guid"
+    && value.identity.value === value.ref.slice("track:guid:".length);
+}
+
+function variationChange(row, { status, mutation, readback, index } = {}) {
+  return compactObject({
+    id: row.id,
+    status,
+    mutation: { status: mutation },
+    live_readback: { status: readback },
+    index_maintenance: { status: index, scopes: [] },
+    source_item_ref: row.source_item_ref,
+    target_track_ref: row.target_track_ref,
+    position_seconds: row.position_seconds,
+    source_offset_seconds: row.source_offset_seconds,
+  });
+}
+
+function variationBatchData(state, { dry_run }) {
+  return {
+    mode: "create_variations",
+    timings: {
+      target_resolution_ms: state.timings?.target_resolution_ms ?? 0,
+      preflight_ms: state.timings?.preflight_ms ?? 0,
+      mutation_ms: state.timings?.mutation_ms ?? 0,
+      final_readback_ms: state.timings?.final_readback_ms ?? 0,
+      index_maintenance_ms: state.timings?.index_maintenance_ms ?? 0,
+      total_ms: state.timings?.total_ms ?? 0,
+    },
+    calls: finalizeCalls(state.calls),
+    dry_run: dry_run === true,
+  };
+}
+
 async function executeSetItemTakeControlsBatch({
   entry,
   request,
@@ -1669,8 +2005,8 @@ function normalizeSetItemTakeControlsInput(input) {
   if (typeof input.dry_run !== "undefined" && typeof input.dry_run !== "boolean") {
     return failed("ITEM_APPLY_REQUEST_INVALID", "dry_run must be boolean.");
   }
-  if (!Array.isArray(input.changes) || input.changes.length < 1 || input.changes.length > MAX_TARGETS) {
-    return failed("ITEM_APPLY_BATCH_CHANGES_INVALID", `changes must contain 1-${MAX_TARGETS} rows.`);
+  if (!Array.isArray(input.changes) || input.changes.length < 1 || input.changes.length > ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS) {
+    return failed("ITEM_APPLY_BATCH_CHANGES_INVALID", `changes must contain 1-${ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS} rows.`);
   }
   const rows = [];
   const seenIds = new Set();
@@ -2423,7 +2759,7 @@ function failureEnvelope({ entry, request, startedAt, now, stages, state, active
 }
 
 function projectCompactBatchChanges(changes) {
-  return (Array.isArray(changes) ? changes : []).slice(0, MAX_TARGETS).map((change) => {
+  return (Array.isArray(changes) ? changes : []).slice(0, ALPHA3_3_B1C_ITEMS_BATCH_MAX_ROWS).map((change) => {
     const mutation = typeof change.mutation === "string" ? change.mutation : (change.mutation?.status ?? "not_run");
     const readback = typeof change.live_readback === "string"
       ? change.live_readback
@@ -2439,6 +2775,9 @@ function projectCompactBatchChanges(changes) {
       index: compactStatusToken(index),
       code: change.code ? String(change.code).replace(/^ITEM_APPLY_/u, "").slice(0, 24) : undefined,
       fields: Array.isArray(change.fields) ? change.fields.slice(0, 3) : undefined,
+      new_item_ref: typeof change.new_item_ref === "string" ? change.new_item_ref : undefined,
+      new_take_ref: typeof change.new_take_ref === "string" ? change.new_take_ref : undefined,
+      source_offset_seconds: Number.isFinite(change.source_offset_seconds) ? change.source_offset_seconds : undefined,
     });
   });
 }
@@ -2463,7 +2802,7 @@ function compactStatusToken(value) {
 function projectCompactBatchData(data) {
   const value = isPlainObject(data) ? data : {};
   return {
-    mode: "set_item_take_controls",
+    mode: typeof value.mode === "string" ? value.mode : "set_item_take_controls",
     timings: {
       target_resolution_ms: Math.round(Number(value.timings?.target_resolution_ms) || 0),
       preflight_ms: Math.round(Number(value.timings?.preflight_ms) || 0),
@@ -2520,7 +2859,7 @@ function finalizeEnvelope(envelope) {
   const result = structuredClone(envelope);
   const isCompactBatch = Array.isArray(result.execution?.stages)
     && result.execution.stages.length === 0
-    && result.result?.data?.mode === "set_item_take_controls"
+    && ["set_item_take_controls", "create_variations"].includes(result.result?.data?.mode)
     && Number.isInteger(result.budget?.max_bytes)
     && result.budget.max_bytes <= MIN_RESPONSE_BUDGET;
   if (isCompactBatch) {

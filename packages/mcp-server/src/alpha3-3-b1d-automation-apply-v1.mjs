@@ -58,8 +58,8 @@ const SET_AUTOMATION_ITEM_BOUNDS_ID = "template.automation.set_automation_item_b
 const DELETE_AUTOMATION_ITEM_ID = "template.automation.delete_automation_item";
 const MAP_FX_PARAMETER_ENVELOPE_ID = "template.fx.parameter_to_envelope_mapping";
 const ENSURE_FX_PARAMETER_ENVELOPE_ID = "template.automation.ensure_fx_parameter_envelope";
-const MAX_TARGETS = 8;
-const MAX_NEW_POINTS = 64;
+const MAX_TARGETS = 64;
+const MAX_NEW_POINTS = 512;
 const MAX_COMPLETE_READ_POINTS = 64;
 const MAX_AUTOMATION_ITEMS = 64;
 const EPSILON = 0.000001;
@@ -75,6 +75,7 @@ const INPUT_FIELDS = new Set([
   "envelope_refs",
   "track_refs",
   "fx_refs",
+  "fx_targets",
   "points",
   "point_update",
   "point_delete",
@@ -97,7 +98,7 @@ const REGISTRY_ENTRY = deepFreeze({
   contract: MACRO_PROGRAM_REGISTRY_CONTRACT,
   macro_id: ALPHA3_3_B1D_AUTOMATION_APPLY_MACRO_ID,
   program_id: "openreaper.macro.automation.apply",
-  program_version: "1.2.0",
+  program_version: "1.3.0",
   implementation_status: "executable",
   risk: "write",
   input_schema: {
@@ -108,6 +109,7 @@ const REGISTRY_ENTRY = deepFreeze({
       envelope_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
       track_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
       fx_refs: { type: "array", maxItems: MAX_TARGETS, items: { type: "string" } },
+      fx_targets: { type: "array", maxItems: MAX_TARGETS, items: { type: "object" } },
       points: { type: "array", maxItems: MAX_NEW_POINTS },
       point_update: { type: "object" },
       point_delete: { type: "object" },
@@ -214,7 +216,7 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
       ],
       required_readiness: [
         "Prefer canonical envelope:guid:{GUID} refs from live inventory. Older exact track/send or fingerprint refs are hidden compatibility inputs only and are never taught as the default.",
-        "Provide at most eight exact Envelope, Track GUID, or Track/Take-FX refs; ambiguous discovery is not accepted here.",
+        "Provide at most 64 exact Envelope, Track GUID, or Track/Take-FX refs; ambiguous discovery is not accepted here.",
         "The Macro resolves and reads every exact target from REAPER live. SQLite may be absent or stale and is never write authority.",
       ],
       input_shape: {
@@ -222,7 +224,7 @@ export function createAlpha3_3B1dAutomationApplyExactManual() {
         envelope_refs: "Existing exact Envelope refs; canonical envelope:guid:{GUID} is preferred.",
         track_refs: "Exact track:guid refs for set_track_mode.",
         fx_refs: "Exact fx:track:guid:{TRACK}:slot or fx:take:guid:{TAKE}:slot refs for insert_fx_parameter_points.",
-        points: "For insert_points: 1-64 raw points; total points across all target Envelopes must be <=64.",
+        points: "For insert_points: 1-512 raw points; total point-work across all target Envelopes must be <=512; each complete lane remains within 64 points.",
         point_update: "For update_point: autoitem_index (default -1), exact point_index, and at least one updated point field.",
         point_delete: "For delete_point: autoitem_index (default -1) and exact point_index.",
         point_range: "For delete_point_range: autoitem_index (default -1), start_seconds, end_seconds; deletion is half-open [start,end).",
@@ -485,14 +487,21 @@ async function prepareTrackOperations({ request, input, executeAtomic, state }) 
 
 async function prepareFxOperations({ request, input, executeAtomic, state }) {
   const direct = collectObjectRefs(request.refs, "fx");
-  const candidates = [...direct.map((ref) => ref.ref), ...input.fx_refs];
-  if (candidates.length < 1) return failed("AUTOMATION_EXACT_FX_REQUIRED", "insert_fx_parameter_points requires at least one exact Track-FX or Take-FX ref.");
-  if (candidates.length > MAX_TARGETS) return failed("AUTOMATION_TARGET_LIMIT_EXCEEDED", `FX targets exceed ${MAX_TARGETS}.`);
-  if (new Set(candidates).size !== candidates.length) return failed("AUTOMATION_TARGETS_DUPLICATED", "FX targets must resolve once each.");
-  if (candidates.length * input.points.length > MAX_NEW_POINTS) return failed("AUTOMATION_POINT_LIMIT_EXCEEDED", `Total inserted point work exceeds ${MAX_NEW_POINTS} across all target FX.`);
-  if (input.points.some((point) => point.value < 0 || point.value > 1)) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", "FX parameter Envelope values must be normalized within 0..1.");
+  if (input.fx_targets.length > 0 && (direct.length > 0 || input.fx_refs.length > 0)) {
+    return failed("AUTOMATION_FX_TARGET_CONFLICT", "Use either fx_targets rows or shared points with request refs/fx_refs, not both.");
+  }
+  const targets = input.fx_targets.length > 0
+    ? input.fx_targets
+    : [...direct.map((ref) => ref.ref), ...input.fx_refs].map((fxRef) => ({ fx_ref: fxRef, points: input.points }));
+  if (targets.length < 1) return failed("AUTOMATION_EXACT_FX_REQUIRED", "insert_fx_parameter_points requires at least one exact Track-FX or Take-FX ref.");
+  if (targets.length > MAX_TARGETS) return failed("AUTOMATION_TARGET_LIMIT_EXCEEDED", `FX targets exceed ${MAX_TARGETS}.`);
+  if (new Set(targets.map((target) => target.fx_ref)).size !== targets.length) return failed("AUTOMATION_TARGETS_DUPLICATED", "FX targets must resolve once each.");
+  if (targets.reduce((total, target) => total + target.points.length, 0) > MAX_NEW_POINTS) return failed("AUTOMATION_POINT_LIMIT_EXCEEDED", `Total inserted point work exceeds ${MAX_NEW_POINTS} across all target FX.`);
+  if (targets.some((target) => target.points.some((point) => point.value < 0 || point.value > 1))) return failed("AUTOMATION_POINT_VALUE_OUT_OF_RANGE", "FX parameter Envelope values must be normalized within 0..1.");
   const operations = [];
-  for (const [index, token] of candidates.entries()) {
+  for (const [index, target] of targets.entries()) {
+    const token = target.fx_ref;
+    const points = target.points;
     if (!isExactFxRef(token)) return failed("AUTOMATION_EXACT_FX_REQUIRED", `FX target ${token} must be an exact fx:track:guid or fx:take:guid ref.`);
     const fxRef = fxObjectRef(token);
     const mapping = await readFxParameterMapping({ request, executeAtomic, state, fxRef, fxParameter: input.fx_parameter });
@@ -503,7 +512,7 @@ async function prepareFxOperations({ request, input, executeAtomic, state }) {
       envelopeRef = mapping.envelopeRef;
       const before = await readCompletePoints({ request, executeAtomic, state, envelopeRef, autoitemIndex: -1 });
       if (!before.ok) return before;
-      const overlay = buildPointOverlay(before.points, input.points);
+      const overlay = buildPointOverlay(before.points, points);
       if (!overlay.ok) return overlay;
       if (overlay.expected.length > MAX_COMPLETE_READ_POINTS) return failed("AUTOMATION_COMPLETE_READBACK_REQUIRED", `FX parameter Envelope ${envelopeRef.ref} overlay would exceed the complete ${MAX_COMPLETE_READ_POINTS}-point readback boundary.`);
       beforePoints = before.points;
@@ -524,7 +533,7 @@ async function prepareFxOperations({ request, input, executeAtomic, state }) {
         owner_kind: mapping.ownerKind,
         create_if_missing: input.fx_parameter.create_if_missing,
         envelope_existed_before: mapping.exists,
-        point_count: input.points.length,
+        point_count: points.length,
         time_basis: "project",
         value_range: { min: 0, max: 1 },
       },
@@ -532,7 +541,7 @@ async function prepareFxOperations({ request, input, executeAtomic, state }) {
       envelope_ref: envelopeRef,
       mapping_before: mapping,
       before_points: beforePoints,
-      points: input.points,
+      points,
       autoitem_index: -1,
     });
     state.canonicalRefs.push(fxRef.ref);
@@ -836,7 +845,8 @@ function normalizeInput(input) {
   if (!trackRefs.ok) return trackRefs;
   const fxRefs = normalizeStringArray(input.fx_refs, "fx_refs", MAX_TARGETS);
   if (!fxRefs.ok) return fxRefs;
-  const normalized = { mode, envelope_refs: envelopeRefs.value, track_refs: trackRefs.value, fx_refs: fxRefs.value, points: null, point_update: null, point_delete: null, point_range: null, track_mode: null, automation_item: null, automation_item_bounds: null, automation_item_delete: null, fx_parameter: null, dry_run: input.dry_run !== false, confirmation_token: input.confirmation_token ?? null };
+  if (mode !== "insert_fx_parameter_points" && input.fx_targets !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "fx_targets is valid only for insert_fx_parameter_points.");
+  const normalized = { mode, envelope_refs: envelopeRefs.value, track_refs: trackRefs.value, fx_refs: fxRefs.value, fx_targets: [], points: null, point_update: null, point_delete: null, point_range: null, track_mode: null, automation_item: null, automation_item_bounds: null, automation_item_delete: null, fx_parameter: null, dry_run: input.dry_run !== false, confirmation_token: input.confirmation_token ?? null };
   if (mode === "insert_points") {
     const points = normalizePoints(input.points);
     if (!points.ok) return points;
@@ -877,12 +887,16 @@ function normalizeInput(input) {
     normalized.automation_item_delete = deletion.value;
     if (hasAny(input, ["points", "point_update", "point_delete", "point_range", "track_mode", "automation_item", "automation_item_bounds", "fx_parameter"]) || trackRefs.value.length > 0 || fxRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "delete_automation_item accepts only Envelope targets, automation_item_delete, and confirmation_token.");
   } else {
-    const points = normalizePoints(input.points);
+    const fxTargets = input.fx_targets === undefined ? { ok: true, value: [] } : normalizeFxTargets(input.fx_targets);
+    if (!fxTargets.ok) return fxTargets;
+    const points = fxTargets.value.length > 0 ? { ok: true, value: null } : normalizePoints(input.points);
     if (!points.ok) return points;
     const fxParameter = normalizeFxParameter(input.fx_parameter);
     if (!fxParameter.ok) return fxParameter;
     normalized.points = points.value;
+    normalized.fx_targets = fxTargets.value;
     normalized.fx_parameter = fxParameter.value;
+    if (fxTargets.value.length > 0 && (input.points !== undefined || fxRefs.value.length > 0)) return failed("AUTOMATION_FX_TARGET_CONFLICT", "fx_targets supplies per-target points and cannot be combined with fx_refs or top-level points.");
     if (hasAny(input, ["point_update", "point_delete", "point_range", "track_mode", "automation_item", "automation_item_bounds", "automation_item_delete"]) || envelopeRefs.value.length > 0 || trackRefs.value.length > 0) return failed("AUTOMATION_REQUEST_INVALID", "insert_fx_parameter_points accepts only FX targets, fx_parameter, and points.");
   }
   if (!DESTRUCTIVE_MODES.has(mode) && input.confirmation_token !== undefined) return failed("AUTOMATION_REQUEST_INVALID", "confirmation_token is valid only for destructive point or Automation Item deletion modes.");
@@ -909,6 +923,25 @@ function normalizePoints(value) {
     if (firstIndex >= 0) return failed("AUTOMATION_DUPLICATE_POINT_TIME", `points[${index}] collides with points[${firstIndex}] at the same project time; no points were inserted.`);
   }
   return { ok: true, value: points };
+}
+
+function normalizeFxTargets(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_TARGETS) return failed("AUTOMATION_FX_TARGETS_INVALID", `fx_targets must contain 1-${MAX_TARGETS} rows.`);
+  const targets = [];
+  const refs = new Set();
+  let pointWork = 0;
+  for (const [index, row] of value.entries()) {
+    if (!isPlainObject(row) || Object.keys(row).some((field) => !["fx_ref", "points"].includes(field))) return failed("AUTOMATION_FX_TARGETS_INVALID", `fx_targets[${index}] accepts only fx_ref and points.`);
+    if (!isExactFxRef(row.fx_ref)) return failed("AUTOMATION_EXACT_FX_REQUIRED", `fx_targets[${index}].fx_ref must be an exact Track-FX or Take-FX ref.`);
+    if (refs.has(row.fx_ref)) return failed("AUTOMATION_TARGETS_DUPLICATED", `fx_targets repeats ${row.fx_ref}.`);
+    const points = normalizePoints(row.points);
+    if (!points.ok) return points;
+    refs.add(row.fx_ref);
+    pointWork += points.value.length;
+    if (pointWork > MAX_NEW_POINTS) return failed("AUTOMATION_POINT_LIMIT_EXCEEDED", `Total inserted point work exceeds ${MAX_NEW_POINTS} across all target FX.`);
+    targets.push({ fx_ref: row.fx_ref, points: points.value });
+  }
+  return { ok: true, value: targets };
 }
 
 function normalizePointUpdate(value) {
@@ -1056,13 +1089,27 @@ function successEnvelope({ entry, request, startedAt, now, stages, state, active
 }
 
 function buildSuccessEnvelope({ entry, request, startedAt, completedAt, stages, state, activeBudget, status, summary, data }) {
-  return { contract: MACRO_EXECUTION_CONTRACT, ok: true, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite ?? sqliteEvidence(), result: { summary, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs).slice(0, 8) }, data }, blockers: [], error: null, recovery: null, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } };
+  const compactChanges = state.changes.length > 8;
+  return { contract: MACRO_EXECUTION_CONTRACT, ok: true, macro: macroIdentity(entry), request: requestSummary(request), execution: { status, started_at: startedAt, completed_at: completedAt, stage_count: stages.length, stages }, sqlite: state.sqlite ?? sqliteEvidence(), result: { summary, canonical_refs: uniqueStrings(state.canonicalRefs), changes: compactChanges ? projectCompactAutomationChanges(state.changes) : clone(state.changes), verification: { status: "passed", evidence_refs: uniqueStrings(state.evidenceRefs).slice(0, 8) }, data }, blockers: [], error: null, recovery: null, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } };
 }
 
 function failureEnvelope({ entry, request, startedAt, now, stages, state, activeBudget, status = "blocked", code, message, blockers = [], data = {} }) {
   const completed = state.changes.filter((change) => ["completed", "unknown_or_partial"].includes(change.mutation.status));
   const verified = completed.length > 0 && completed.every((change) => change.live_readback.status === "passed");
-  return finalizeEnvelope({ contract: MACRO_EXECUTION_CONTRACT, ok: false, macro: macroIdentity(entry), request: requestSummary(request, { forceNonDry: true }), execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages }, sqlite: state.sqlite ?? sqliteEvidence(), result: { summary: message, canonical_refs: uniqueStrings(state.canonicalRefs), changes: clone(state.changes), verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs).slice(0, 8) : [] }, data }, blockers: (blockers.length ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count), error: { code, message, recoverable: true }, recovery: { undo_policy: REGISTRY_ENTRY.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep verified live rows, inspect per-stage undo, refresh stale index scopes, then retry only unverified work." : "Fix the typed preflight blocker and retry the bounded exact-live request." }, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } });
+  const compactChanges = state.changes.length > 8;
+  return finalizeEnvelope({ contract: MACRO_EXECUTION_CONTRACT, ok: false, macro: macroIdentity(entry), request: requestSummary(request, { forceNonDry: true }), execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: stages.length, stages }, sqlite: state.sqlite ?? sqliteEvidence(), result: { summary: message, canonical_refs: uniqueStrings(state.canonicalRefs), changes: compactChanges ? projectCompactAutomationChanges(state.changes) : clone(state.changes), verification: { status: verified ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: status === "partial_failure" ? uniqueStrings(state.evidenceRefs).slice(0, 8) : [] }, data }, blockers: (blockers.length ? blockers : [blocker(code, message)]).slice(0, MACRO_CONTRACT_CEILINGS.blocker_max_count), error: { code, message, recoverable: true }, recovery: { undo_policy: REGISTRY_ENTRY.undo_policy, partial_changes_possible: status === "partial_failure", source_media_deleted: false, action: status === "partial_failure" ? "Keep verified live rows, inspect per-stage undo, refresh stale index scopes, then retry only unverified work." : "Fix the typed preflight blocker and retry the bounded exact-live request." }, budget: { max_bytes: activeBudget, actual_bytes: 0, truncated: false, artifact_fallback: false } });
+}
+
+function projectCompactAutomationChanges(changes) {
+  return changes.map((change) => ({
+    operation_id: change.operation_id,
+    target_ref: change.target_ref,
+    mode: change.mode,
+    status: change.status,
+    mutation: { status: change.mutation?.status ?? "not_run" },
+    live_readback: { status: change.live_readback?.status ?? "not_run" },
+    index_maintenance: { status: change.index_maintenance?.status ?? "not_run" },
+  }));
 }
 
 function finalizeEnvelope(envelope) {

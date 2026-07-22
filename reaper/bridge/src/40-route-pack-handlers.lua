@@ -1054,6 +1054,112 @@ local function dispatch_template_execute(request, resume_continuation)
     })
 end
 
+local function dispatch_recipe_undo_transaction(request)
+  local params = is_object(request.params) and request.params or {}
+  local action = params.action
+  local transaction_id = params.transaction_id
+  local project_ref = params.project_ref
+  local label = params.label
+  if (action ~= "begin" and action ~= "end") or not is_string(transaction_id)
+      or not is_string(project_ref) or not is_string(label) then
+    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires action, transaction_id, project_ref, and label.", {
+      zero_write = true,
+    })
+  end
+
+  if action == "begin" then
+    if ACTIVE_RECIPE_UNDO_TRANSACTION then
+      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", {
+        active_transaction_id = bounded_string(ACTIVE_RECIPE_UNDO_TRANSACTION.id, 160),
+        zero_write = true,
+      })
+    end
+    local ok_project, project, project_path = call_reaper("EnumProjects", -1, "")
+    if not ok_project or project == nil then
+      return handler_error("PROJECT_NOT_FOUND", "The active project is unavailable for Recipe Undo begin.", {
+        zero_write = true,
+      })
+    end
+    local expected_path = project_ref:match("^project:path:(.+)$")
+    if expected_path and project_path ~= expected_path then
+      return handler_error("PROJECT_NOT_FOUND", "Recipe Undo begin project identity does not match the active project.", {
+        expected_project_ref = bounded_string(project_ref, 240),
+        active_project_path = bounded_string(project_path or "", 240),
+        zero_write = true,
+      })
+    end
+    local ok_begin = call_reaper("Undo_BeginBlock2", project)
+    if ok_begin ~= true then
+      return handler_error("COMMAND_FAILED", "Recipe Undo block could not be opened before mutation.", {
+        blocker = "recipe_undo_begin_failed",
+        zero_write = true,
+      })
+    end
+    ACTIVE_RECIPE_UNDO_TRANSACTION = {
+      id = transaction_id,
+      label = label,
+      project = project,
+      project_ref = project_ref,
+      session_id = request.client.session_id,
+    }
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = false
+    request.__openreaper_undo_required_any = true
+    return {
+      contract = "openreaper.recipe_undo_transaction.v1",
+      action = "begin",
+      transaction_id = transaction_id,
+      project_ref = project_ref,
+      opened = true,
+      closed = false,
+      verified = true,
+      readback_status = "passed",
+    }
+  end
+
+  local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+  if not active or active.id ~= transaction_id or active.project_ref ~= project_ref
+      or active.session_id ~= request.client.session_id then
+    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", {
+      zero_write = true,
+    })
+  end
+  local active_project_matches = active_recipe_undo_project_matches()
+  local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
+  local closed = results[1] == true and (results[2] == nil or results[2] == true)
+  request.__openreaper_undo_opened = true
+  request.__openreaper_undo_closed = closed
+  request.__openreaper_undo_required_any = true
+  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+  if not closed then
+    return handler_error("INTERNAL_ERROR", "Recipe Undo close outcome is unknown.", {
+      blocker = "recipe_undo_close_failed",
+      outcome = "unknown",
+      mutations_may_have_happened = params.mutation_truth ~= "not_run",
+    }, false)
+  end
+  if not active_project_matches then
+    return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo close verification.", {
+      blocker = "recipe_active_project_changed",
+      outcome = "unknown",
+      mutations_may_have_happened = params.mutation_truth ~= "not_run",
+    }, false)
+  end
+  return {
+    contract = "openreaper.recipe_undo_transaction.v1",
+    action = "end",
+    transaction_id = transaction_id,
+    project_ref = project_ref,
+    mutation_truth = params.mutation_truth,
+    opened = true,
+    closed = true,
+    verified = true,
+    readback_status = "passed",
+  }
+end
+
+local RECIPE_UNDO_OPERATION_KEY = "run_command:" .. "recipe.undo.transaction"
+
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
     handler = dispatch_template_execute,
@@ -1465,6 +1571,11 @@ local ALLOWED_OPERATIONS = {
     pack = "items",
     handler = create_layer_report,
   },
+}
+
+ALLOWED_OPERATIONS[RECIPE_UNDO_OPERATION_KEY] = {
+  pack = "core",
+  handler = dispatch_recipe_undo_transaction,
 }
 
 local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"

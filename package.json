@@ -80,7 +80,7 @@
     "check:alpha3-4-d3-bridge-continuation": "node --test tests/layer4d2/openreaper-live-bridge.test.mjs tests/layer4dx/alpha3-4-d3-project-switching-native-atoms.test.mjs tests/layer4dx/alpha3-3-subproject-sysex-truth.test.mjs",
     "check:alpha3-4-d3-project-file-highway": "node --test tests/alpha3/alpha3-4-d3-project-switching-macro.test.mjs tests/alpha3/alpha3-4-d3-project-switching-live-harness.test.mjs tests/alpha3/alpha3-2c3d-project-file-macro.test.mjs",
     "check:alpha3-4-f": "node --test tests/alpha3/alpha3-4-f-learned-operation.test.mjs",
-    "check:alpha3-4-g": "node --test tests/alpha3/alpha3-4-g-installed-low-context.test.mjs"
+    "check:alpha3-4-g": "node --test tests/alpha3/alpha3-4-g-installed-low-context.test.mjs tests/alpha3/alpha3-45-installed-novice-trial.test.mjs"
   },
   "devDependencies": {
     "fengari": "^0.1.5"

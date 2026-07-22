@@ -12,6 +12,14 @@ export const ALPHA3_4_B_RECOMMENDATION_CONTRACT = "openreaper.alpha3.4.macro_rec
 export const ALPHA3_4_B_FIRST_TRY_GUIDE_CONTRACT = "openreaper.alpha3.4.first_try_execution_guide.v1";
 export const ALPHA3_4_B_MANUAL_AUDIT_CONTRACT = "openreaper.alpha3.4.manual_schema_audit.v1";
 export const ALPHA3_4_B_DISCOVERY_MANUAL_VERSION = "1.0.0";
+export const ALPHA3_45_RECIPE_MANUAL_CONTRACT = "openreaper.alpha3.45.recipe_productization_manual.v1";
+
+export const ALPHA3_45_OFFICIAL_RECIPE_IDS = deepFreeze([
+  "recipe.mix.create_bus_processing",
+  "recipe.midi.create_instrument_part",
+  "recipe.media.create_layered_sound_effect_variants",
+  "recipe.items.create_sound_variations",
+]);
 
 const PLACEHOLDER_REF_RE = /\{[A-Z][A-Z0-9_-]*\}/u;
 const GUID_PLACEHOLDER_RE = /guid:\{[^}]+\}/iu;
@@ -109,6 +117,45 @@ const MACRO_TARGET_FACTS = deepFreeze({
   },
 });
 
+const OFFICIAL_RECIPE_MANUALS = deepFreeze({
+  "recipe.mix.create_bus_processing": officialRecipeManual({
+    intent: "Create or reuse one named processing bus for exact source Tracks, route without duplicate sends, and apply a verified stock or accepted FX chain.",
+    required_inputs: ["source_tracks"],
+    defaults: { bus_name: "BUS", processing_profile: "stock_eq_compression", reuse_named_bus: true },
+    inputs: ["source_tracks", "bus_name", "processing_profile", "fx_chain", "controls"],
+    safety: "Preserves source Tracks; resolves every source before the first write and verifies the bus, sends, FX, and controls.",
+    undo: "One Recipe run must report whole-Recipe Undo truth; do not claim recovery unless the complete Recipe undo/rollback is natively verified.",
+    example_inputs: { source_tracks: ["selected"], bus_name: "DRUM BUS" },
+  }),
+  "recipe.midi.create_instrument_part": officialRecipeManual({
+    intent: "Create or reuse an instrument Track, prove the requested/default instrument is installed, and create a deterministic playable MIDI part.",
+    required_inputs: [],
+    defaults: { track_name: "Instrument", bars: 4, key: "C", scale: "major", density: "medium", register: "middle", pattern: "pulse", seed: 1, humanize: false },
+    inputs: ["target_track", "track_name", "instrument", "bars", "meter", "tempo", "key", "scale", "density", "register", "pattern", "seed", "humanize"],
+    safety: "Fails before writes when the instrument cannot be proven installed; verifies Track, FX, MIDI Take, note count/range, and audibility prerequisites.",
+    undo: "One Recipe run owns the Track/FX/MIDI mutation Undo truth and reports any partial or unknown recovery explicitly.",
+    example_inputs: { track_name: "Pulse Lead", bars: 4, key: "D", scale: "minor", seed: 42 },
+  }),
+  "recipe.media.create_layered_sound_effect_variants": officialRecipeManual({
+    intent: "Search approved indexed media sources, place separate layers on separate Tracks, align and balance them, then create deterministic bounded variants.",
+    required_inputs: ["search_terms"],
+    defaults: { variant_count: 4, seed: 1, preserve_separate_tracks: true, align_basis: "audible_head" },
+    inputs: ["search_terms", "variant_count", "seed", "style", "track_prefix", "trim", "fades", "balance"],
+    safety: "Uses only approved indexed media, resolves exact canonical files before mutation, and never deletes or mutates source media files.",
+    undo: "One Recipe run owns all project-local placement and variation changes; source media files are outside Undo and remain untouched.",
+    example_inputs: { search_terms: ["impact", "metal"], variant_count: 4, seed: 7301 },
+  }),
+  "recipe.items.create_sound_variations": officialRecipeManual({
+    intent: "Create seeded controlled variation groups from existing selected Items while preserving layer-to-Track structure by default.",
+    required_inputs: [],
+    defaults: { source_items: "current_selection", variation_count: 4, seed: "generate_once_before_write", take_mode: "active", track_shuffle: false, mute_probability: 0, automation: true, tone: true, crossfade: false },
+    inputs: ["source_items", "variation_count", "seed", "take_mode", "source_offset", "pitch", "volume", "pan", "position", "track_shuffle", "mute_probability", "automation", "tone", "crossfade", "item_overrides"],
+    safety: "Requires source_item_count * variation_count <= 64; freezes the seed before writes and fails unsupported requested crossfades before mutation.",
+    undo: "The complete seeded Item/Take, position, volume, pan, Tone/FX, and Automation/Envelope variation is one Recipe Undo unit; unknown Undo closure must be reported as outcome=unknown.",
+    example_inputs: { source_items: "current_selection", variation_count: 4, seed: 7301, automation: true, tone: true },
+  }),
+});
+
 export function createAlpha34BMacroRecommendations(query, { limit = 3 } = {}) {
   if (typeof query !== "string" || query.trim() === "") {
     return deepFreeze({
@@ -177,6 +224,7 @@ export function createAlpha34BFirstTryExecutionGuide(id, discoveryItem = null) {
     id,
     accepted_modes: modes,
     public_fields: schemaFields,
+    inputs: manual.input_shape ?? {},
     units_bounds_limits: collectUnitsBoundsLimits(manual, inputSchema),
     selector_or_ref_requirements: {
       required_targets: targetFacts.required_targets,
@@ -190,6 +238,13 @@ export function createAlpha34BFirstTryExecutionGuide(id, discoveryItem = null) {
       recovery: "On budget/truncation: reduce limit/fields, continue with cursor, or get_state(scope=artifact).",
     },
     preview_or_dry_run_mandatory: targetFacts.preview_or_dry_run_mandatory === true,
+    dry_run: manual.dry_run_shape ?? { supported: false, behavior: "No separate dry-run mode is declared; follow the exact manual risk and readback posture." },
+    recovery: {
+      common_blockers: Array.isArray(manual.common_blockers) ? manual.common_blockers : [],
+      steps: Array.isArray(manual.recovery_steps) ? manual.recovery_steps : [],
+      resume_or_retry_policy: manual.resume_or_retry_policy ?? null,
+    },
+    examples: publicExamples,
     executable_now: Boolean(executableMacroCall),
     non_executable_reason: executableMacroCall
       ? null
@@ -213,6 +268,7 @@ export function attachAlpha34BFirstTryGuideToExpansion(expansion, discoveryItem 
 export function createAlpha34BDiscoveryManualProjection({
   query = null,
   requested_ids = [],
+  requested_recipe_ids = [],
   discovery_items_by_id = null,
 } = {}) {
   const recommendations = createAlpha34BMacroRecommendations(query);
@@ -228,10 +284,105 @@ export function createAlpha34BDiscoveryManualProjection({
     version: ALPHA3_4_B_DISCOVERY_MANUAL_VERSION,
     recommendations,
     first_try_guides: firstTryGuides,
+    recipe_productization: createAlpha345RecipeProductizationManual({ requested_ids: requested_recipe_ids }),
+    direct_template_fallback: createAlpha345DirectTemplateFallbackManual(),
     task_text_persisted: false,
     search_phrases_are_metadata_only: true,
     hidden_ids_executable: false,
     call_recipe_exposed: true,
+  });
+}
+
+export function createAlpha345RecipeProductizationManual({ requested_ids = [] } = {}) {
+  const requestedIds = Array.isArray(requested_ids)
+    ? requested_ids.filter((id) => ALPHA3_45_OFFICIAL_RECIPE_IDS.includes(id))
+    : [];
+  return deepFreeze({
+    contract: ALPHA3_45_RECIPE_MANUAL_CONTRACT,
+    version: "1.0.0",
+    discovery: {
+      compact: { tool: "list_recipes", arguments: { limit: 25 } },
+      search: { tool: "list_recipes", arguments: { query: "use the user's original words", limit: 25 } },
+      exact: { tool: "list_recipes", arguments: { ids: ["recipe.id.from.discovery"], fields: ["steps", "assertions", "recovery"] } },
+      rule: "Run only a saved validated revision and reuse its complete exact identity; do not run a fuzzy recipe id or inline draft.",
+    },
+    lifecycle: createAlpha345RecipeLifecycleManual(),
+    temporary_one_off: ["validate", "save exact temporary immutable revision", "run once", "delete exact revision after terminal evidence is retained"],
+    persistent_reuse: ["validate", "save immutable revision", "reconnect", "list_recipes or call_recipe list", "get exact identity", "run with one public call"],
+    official_recipe_ids: ALPHA3_45_OFFICIAL_RECIPE_IDS,
+    official_menu: ALPHA3_45_OFFICIAL_RECIPE_IDS.map((id) => ({
+      id,
+      expand: { tool: "list_recipes", arguments: { ids: [id], fields: ["steps", "assertions", "recovery"] } },
+    })),
+    requested_manuals: requestedIds.map((id) => createAlpha345OfficialRecipeManual(id)),
+  });
+}
+
+export function createAlpha345RecipeLifecycleManual() {
+  const identity = {
+    recipe_id: "recipe.user.example",
+    version: "1.0.0",
+    revision: 1,
+    content_hash: "COPY_FROM_SAVE_OR_EXACT_EXPANSION",
+    validation_result_id: "COPY_FROM_SAVE_OR_EXACT_EXPANSION",
+  };
+  return deepFreeze({
+    operations: ["validate", "save", "list", "get", "delete", "run", "resume"],
+    authoring_rule: "Build a declarative macro-first recipe.executable.draft.v1 from exact dependency manuals. Template stages require one accepted typed fallback reason. Never include raw Lua, Action, shell, SQL, UI, hardware, or a model-supplied execution graph.",
+    request_examples: {
+      validate: { tool: "call_recipe", arguments: { operation: "validate", draft: { contract: "recipe.executable.draft.v1", id: "recipe.user.example" } }, executable_now: false, complete_from: "exact Macro/Template dependency manuals" },
+      save: { tool: "call_recipe", arguments: { operation: "save", draft: { contract: "recipe.executable.draft.v1", id: "recipe.user.example" }, version: "1.0.0", revision_number: 1 }, executable_now: false, complete_from: "the validated draft" },
+      list: { tool: "call_recipe", arguments: { operation: "list", limit: 25, cursor: null }, executable_now: true },
+      get: { tool: "call_recipe", arguments: { operation: "get", ...identity }, executable_now: false, complete_from: "saved/listed exact identity" },
+      run: { tool: "call_recipe", arguments: { operation: "run", ...identity, inputs: {} }, executable_now: false, complete_from: "saved/listed exact identity and documented recipe inputs" },
+      resume: { tool: "call_recipe", arguments: { operation: "resume", ...identity, run_id: "COPY_FROM_FAILED_RUN", checkpoint_id: "COPY_FROM_LATEST_VERIFIED_CHECKPOINT" }, executable_now: false, complete_from: "the failure next_call; do not override inputs" },
+      get_evidence: { tool: "call_recipe", arguments: { operation: "get", evidence_ref: "COPY_FROM_RUN_RESULT", limit: 25, cursor: null }, executable_now: false, complete_from: "the retained evidence_ref" },
+      delete: { tool: "call_recipe", arguments: { operation: "delete", ...identity, confirm: true }, executable_now: false, complete_from: "saved/listed exact identity" },
+    },
+    run_rule: "A saved Recipe executes through one public call_recipe run. The Agent never replays stages or targets and never supplies runtime_facts or a caller-selected run_id.",
+    failure_rule: "Follow the returned exact next_call. Resume only when resume_safe is true and the latest verified checkpoint identity is present; otherwise inspect evidence and report applied/not-run/unknown truth.",
+  });
+}
+
+export function createAlpha345OfficialRecipeManual(id) {
+  const manual = OFFICIAL_RECIPE_MANUALS[id];
+  if (!manual) return null;
+  return deepFreeze({
+    id,
+    ...manual,
+    discovery: { tool: "list_recipes", arguments: { ids: [id], fields: ["steps", "assertions", "recovery"] } },
+    run_example: {
+      tool: "call_recipe",
+      executable_now: false,
+      complete_from: "the saved official revision exact expansion",
+      arguments: {
+        operation: "run",
+        recipe_id: id,
+        version: "COPY_FROM_EXACT_EXPANSION",
+        revision: 1,
+        content_hash: "COPY_FROM_EXACT_EXPANSION",
+        validation_result_id: "COPY_FROM_EXACT_EXPANSION",
+        inputs: manual.example_inputs,
+      },
+    },
+    fork: "Get the saved official revision, create a new user-owned recipe id, validate the edited draft, and save a new immutable revision; never shadow or mutate the official id.",
+  });
+}
+
+export function createAlpha345DirectTemplateFallbackManual() {
+  return deepFreeze({
+    allowed_only_after_typed_reason: true,
+    reasons: [
+      "macro_missing_for_task",
+      "macro_task_out_of_scope",
+      "macro_target_ambiguous_or_unavailable",
+      "macro_domain_not_accepted",
+      "macro_budget_prefers_atomic_template",
+    ],
+    discover: { tool: "list_templates", arguments: { surface: "catalog", query: "one bounded capability phrase", limit: 25 } },
+    expand: { tool: "list_templates", arguments: { ids: ["template.project.read_summary"], fields: ["id", "inputSchema", "examples", "expectedDelta"] } },
+    example: { tool: "call_template", arguments: { id: "template.project.read_summary", input: {} } },
+    rules: ["Use the exact descriptor schema and refs from expansion.", "Resolve live refs first for mutations; placeholders are never executable.", "Direct Templates are atomic fallback, not an Agent-built workflow loop."],
   });
 }
 
@@ -723,6 +874,19 @@ function mergeRequestPatch(request, patch) {
 
 function finding(id, code, message, details = null) {
   return { id, code, message, ...(details ? { details } : {}) };
+}
+
+function officialRecipeManual({ intent, required_inputs, defaults, inputs, safety, undo, example_inputs }) {
+  return {
+    intent,
+    required_inputs,
+    defaults,
+    inputs,
+    safety,
+    undo,
+    recovery: "Whole-graph preflight fails before the first write on missing/ambiguous identity or capability. After a partial run, follow exact evidence and next_call; never replay completed stages or claim rollback/Undo without native proof.",
+    example_inputs,
+  };
 }
 
 function isPlainObject(value) {

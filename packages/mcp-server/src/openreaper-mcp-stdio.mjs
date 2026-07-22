@@ -16,6 +16,7 @@ import {
   openAlpha3_2DProjectIndexRuntime,
 } from "./alpha3-2d-project-index-runtime-v1.mjs";
 import {
+  CALL_TEMPLATE_INTERNAL_RECIPE_UNDO,
   CALL_TEMPLATE_RUNTIME_CURRENT_PRODUCT_LIVE_TEMPLATE_IDS,
   createCallTemplateRuntime,
 } from "./call-template-runtime-v1.mjs";
@@ -29,6 +30,10 @@ import {
   attachAlpha3_3B1AgentContextProductMetadata,
   createAlpha3_3B1AgentContextMacroGuide,
 } from "./alpha3-3-b1-agent-context-macro-guide-v1.mjs";
+import {
+  createAlpha34BDiscoveryManualProjection,
+  createAlpha345OfficialRecipeManual,
+} from "./alpha3-4-b-discovery-manual-v1.mjs";
 import {
   createOpenReaperMcpInitializationInstructions,
   OPENREAPER_AGENT_FIRST_ROUND_FLOW,
@@ -46,8 +51,22 @@ import {
   createCallRecipeRuntime,
 } from "./call-recipe-runtime-v1.mjs";
 import {
+  FOUNDATION_BRIDGE_CONTRACT,
+  normalizeFoundationBridgeRequest,
+  validateFoundationBridgeResult,
+} from "../../core/src/foundation-bridge-v1.mjs";
+import {
   createExecutableRecipeRevisionStore,
 } from "../../core/src/executable-recipe-revision-store-v1.mjs";
+import {
+  ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS,
+  createAlpha345CombinedExecutableRecipeStore,
+  seedAlpha345OfficialExecutableRecipeRevisions,
+} from "./alpha3-45-official-executable-recipes-v1.mjs";
+import {
+  hydrateAlpha345OfficialRecipeStageInputs,
+  prepareAlpha345OfficialRecipeRun,
+} from "./alpha3-45-official-recipe-runtime-v1.mjs";
 
 const KERNEL = "openreaper-mcp alpha kernel";
 const VERSION = "0.3.0-alpha";
@@ -173,7 +192,11 @@ async function main() {
       limit: z.number().int().positive().optional(),
       cursor: z.string().optional().nullable(),
     },
-    async (request) => jsonToolResult(runtime.list_templates(request ?? {})),
+    async (request) => jsonToolResult(attachExecutableRecipeDependencyFacts(
+      runtime.list_templates(request ?? {}),
+      callRecipeBinding?.catalog,
+      request?.ids,
+    )),
   );
 
   server.tool(
@@ -194,9 +217,21 @@ async function main() {
       try {
         const recipes = loadStdioExecutableRecipeDiscovery(callRecipeBinding);
         const recipeDiscovery = createDiscoveryCatalog({ recipes });
-        return jsonToolResult(attachAlpha3_3B1AgentContextProductMetadata(
+        const response = attachAlpha3_3B1AgentContextProductMetadata(
           recipeDiscovery.list_recipes(request ?? {}),
-        ));
+        );
+        const manual = createAlpha34BDiscoveryManualProjection({
+          query: request?.query ?? null,
+          requested_recipe_ids: request?.ids ?? [],
+        });
+        return jsonToolResult({
+          ...response,
+          product_surface: {
+            ...(response.product_surface ?? {}),
+            recipe_productization: manual.recipe_productization,
+            direct_template_fallback: manual.direct_template_fallback,
+          },
+        });
       } catch (error) {
         return jsonToolResult({
           ok: false,
@@ -342,6 +377,39 @@ async function main() {
   process.stderr.write("[openreaper-mcp] stdio server ready\n");
 }
 
+export function attachExecutableRecipeDependencyFacts(response, catalog, requestedIds = []) {
+  if (!response || !catalog || !Array.isArray(requestedIds) || requestedIds.length === 0) return response;
+  const guide = response.product_surface?.agent_context_macro_guide;
+  const expansions = guide?.requested_expansions?.items;
+  if (!Array.isArray(expansions)) return response;
+  return {
+    ...response,
+    product_surface: {
+      ...response.product_surface,
+      agent_context_macro_guide: {
+        ...guide,
+        requested_expansions: {
+          ...guide.requested_expansions,
+          items: expansions.map((entry) => {
+            const dependency = catalog.getMacro?.(entry.id);
+            return dependency ? {
+              ...entry,
+              executable_recipe_dependency: {
+                kind: "macro",
+                id: dependency.id,
+                version: dependency.version,
+                risk: dependency.risk,
+                descriptor_hash: dependency.descriptor_hash,
+                capabilities: [...dependency.capabilities],
+              },
+            } : entry;
+          }),
+        },
+      },
+    },
+  };
+}
+
 
 async function observeProjectIndexArtifactPayload({ execution, artifactRuntime, projectIndexRuntime }) {
   const initial = execution?.result?.project_index_observation;
@@ -479,20 +547,40 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
   }
   try {
     const source = env.OPENREAPER_EXECUTABLE_RECIPE_SOURCE || "user";
-    const store = createExecutableRecipeRevisionStore({
+    const userStore = createExecutableRecipeRevisionStore({
       root,
       source,
       catalog,
+      officialRecipeIds: ALPHA3_45_OFFICIAL_EXECUTABLE_RECIPE_IDS,
     });
+    const officialRoot = typeof env.OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT === "string"
+      && env.OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT.trim() !== ""
+      ? env.OPENREAPER_OFFICIAL_EXECUTABLE_RECIPE_ROOT.trim()
+      : `${root}.official`;
+    const officialStore = createExecutableRecipeRevisionStore({
+      root: officialRoot,
+      source: "official",
+      catalog,
+    });
+    seedAlpha345OfficialExecutableRecipeRevisions(officialStore, { catalog });
+    const store = createAlpha345CombinedExecutableRecipeStore({ userStore, officialStore, catalog });
     const dispatchers = createStdioRecipeDispatchers({
       callTemplateRuntime,
       artifactRuntime,
+      callContext,
+    });
+    const undoController = createStdioRecipeUndoController({ liveBridge, callContext });
+    const runHydrator = createStdioOfficialRecipeRunHydrator({
+      callTemplateRuntime,
       callContext,
     });
     const runtime = createCallRecipeRuntime({
       store,
       catalog,
       dispatchers,
+      undoController,
+      runHydrator,
+      stageInputHydrator: hydrateAlpha345OfficialRecipeStageInputs,
       runtimeFactsProvider: createAuthoritativeRuntimeFactsProvider({
         catalog,
         projectInventoryProvider: () => readFreshOpenProjectInventory({
@@ -515,17 +603,101 @@ export function createStdioCallRecipeRuntime({ env, callTemplateRuntime, artifac
   }
 }
 
-function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {
-  const callTemplateStage = async ({ stage, inputs }) => {
-    if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
-      throw new Error("Recipe Macro/Template stage runtime is not configured.");
+export function createStdioOfficialRecipeRunHydrator({ callTemplateRuntime, callContext }) {
+  return async (context = {}) => {
+    let inputs = context.inputs ?? {};
+    if (context.revision?.recipe_id === "recipe.items.create_sound_variations"
+      && (inputs.source_items === "current_selection"
+        || !Array.isArray(inputs.source_items)
+        || inputs.source_items.length === 0)) {
+      const selected = await readSelectedRecipeSourceItems({ callTemplateRuntime, callContext });
+      if (!selected.ok) return selected;
+      inputs = { ...inputs, source_items: selected.items };
     }
-    return callTemplateRuntime.call_template({
-      id: stage.dependency?.id,
-      input: inputs,
+    return prepareAlpha345OfficialRecipeRun({ ...context, inputs });
+  };
+}
+
+async function readSelectedRecipeSourceItems({ callTemplateRuntime, callContext }) {
+  if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
+    return recipeHydrationFailure("OFFICIAL_SELECTION_READER_UNAVAILABLE", "Selected Item hydration is not configured.");
+  }
+  const listed = await callTemplateRuntime.call_template({
+    id: "template.items.list_selected_items",
+    input: { limit: 64, include_track_refs: true },
+    refs: {},
+    context: callContext.allocate(),
+    budget: CALL_RECIPE_STAGE_BUDGET,
+  });
+  const listSummary = listed?.result?.summary;
+  const items = Array.isArray(listSummary?.items) ? listSummary.items : [];
+  if (listed?.ok !== true || listSummary?.truncated === true) {
+    return recipeHydrationFailure("OFFICIAL_SELECTION_READ_FAILED", "Selected Items could not be read completely before the Recipe run.");
+  }
+  if (!Number.isInteger(listSummary?.selected_count) || listSummary.selected_count < 1 || listSummary.selected_count !== items.length) {
+    return recipeHydrationFailure("OFFICIAL_SOURCE_ITEMS_REQUIRED", "Select at least one Item before running the sound-variations Recipe.");
+  }
+
+  const sourceItems = [];
+  for (const selected of items) {
+    const itemRef = selected?.item_ref;
+    if (typeof itemRef !== "string" || !itemRef.startsWith("item:guid:")) {
+      return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_IDENTITY_INVALID", "Selected Item discovery returned a non-canonical Item ref.");
+    }
+    const execution = await callTemplateRuntime.call_template({
+      id: "template.items.read_item_summary",
+      input: { include_take_summary: true },
+      refs: { item_ref: itemRef },
       context: callContext.allocate(),
       budget: CALL_RECIPE_STAGE_BUDGET,
     });
+    const summary = execution?.result?.summary;
+    if (execution?.ok !== true
+      || summary?.item_ref !== itemRef
+      || typeof summary?.track_ref !== "string"
+      || !summary.track_ref.startsWith("track:guid:")
+      || typeof summary?.active_take_ref !== "string"
+      || !summary.active_take_ref.startsWith("take:guid:")
+      || !Number.isFinite(summary?.position_seconds)
+      || summary.position_seconds < 0
+      || !Number.isFinite(summary?.length_seconds)
+      || summary.length_seconds <= 0) {
+      return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_SUMMARY_INVALID", `Selected Item ${itemRef} has no exact Item/Track/Take/timeline summary.`);
+    }
+    sourceItems.push({
+      item_ref: itemRef,
+      take_ref: summary.active_take_ref,
+      track_ref: summary.track_ref,
+      position_seconds: summary.position_seconds,
+      length_seconds: summary.length_seconds,
+    });
+  }
+  if (new Set(sourceItems.map((row) => row.item_ref)).size !== sourceItems.length) {
+    return recipeHydrationFailure("OFFICIAL_SELECTED_ITEM_DUPLICATE", "Selected Item hydration returned duplicate Item refs.");
+  }
+  return { ok: true, items: sourceItems };
+}
+
+function recipeHydrationFailure(code, message) {
+  return { ok: false, message, details: { code, zero_write: true } };
+}
+
+function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, callContext }) {
+  const callTemplateStage = async ({ stage, inputs, refs, recipe_undo }) => {
+    if (typeof callTemplateRuntime?.call_template !== "function" || typeof callContext?.allocate !== "function") {
+      throw new Error("Recipe Macro/Template stage runtime is not configured.");
+    }
+    const request = {
+      id: stage.dependency?.id,
+      input: inputs,
+      ...(refs == null ? {} : { refs }),
+      context: callContext.allocate(),
+      budget: CALL_RECIPE_STAGE_BUDGET,
+    };
+    if (recipe_undo?.suppress_child_undo === true) {
+      request[CALL_TEMPLATE_INTERNAL_RECIPE_UNDO] = recipe_undo;
+    }
+    return callTemplateRuntime.call_template(request);
   };
   return {
     macro: callTemplateStage,
@@ -558,6 +730,86 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
       };
     },
   };
+}
+
+export function createStdioRecipeUndoController({ liveBridge, callContext }) {
+  const dispatch = liveBridge?.executor?.dispatch;
+  const allocate = callContext?.allocate;
+
+  async function send(operation, request) {
+    if (typeof dispatch !== "function" || typeof allocate !== "function") {
+      throw new Error("Live Bridge Recipe Undo transaction is not configured.");
+    }
+    const context = allocate.call(callContext);
+    const handle = operation === "begin"
+      ? `${request.run_id}:attempt:${request.attempt}`
+      : request.handle;
+    const bridgeRequest = normalizeFoundationBridgeRequest({
+      contract: FOUNDATION_BRIDGE_CONTRACT,
+      id: recipeUndoBridgeRequestId(context, operation),
+      created_at: context.created_at,
+      client: { id: context.client_id, session_id: context.session_id },
+      bridge: {
+        expected_owner: context.expected_owner,
+        expected_generation: context.expected_generation,
+      },
+      operation: { family: "run_command", name: "recipe.undo.transaction" },
+      pack: { id: "core", capability: "recipe.undo.transaction", risk: "write" },
+      params: {
+        action: operation,
+        transaction_id: handle,
+        project_ref: request.project_ref,
+        label: request.label,
+        ...(operation === "end" ? { mutation_truth: request.mutation_truth } : {}),
+      },
+      refs: [],
+      undo: { mode: "required", label: request.label, flags: ["recipe_transaction_control"] },
+      verification: {
+        mode: "required",
+        checks: ["recipe_transaction_state", "active_project_identity"],
+      },
+      artifacts: { allow: false },
+      budget: { max_response_bytes: 16_384, max_items: 8, max_inline_value_bytes: 2_048 },
+      idempotency_key: `recipe-undo:${operation}:${handle}`,
+      timeout_ms: 5_000,
+    });
+    const result = await dispatch.call(liveBridge.executor, bridgeRequest);
+    validateFoundationBridgeResult(result);
+    const summary = result?.result?.summary;
+    if (result.ok !== true || summary?.transaction_id !== handle || summary?.project_ref !== request.project_ref) {
+      throw new Error(result?.error?.message ?? `Recipe Undo ${operation} returned no exact transaction proof.`);
+    }
+    return { result, summary, handle };
+  }
+
+  return Object.freeze({
+    async begin(request) {
+      const { result, summary, handle } = await send("begin", request);
+      return {
+        ok: summary.opened === true && summary.verified === true,
+        opened: summary.opened === true,
+        handle,
+        project_ref: request.project_ref,
+        evidence_refs: [`bridge:${result.id}`],
+      };
+    },
+    async end(request) {
+      const { result, summary, handle } = await send("end", request);
+      return {
+        ok: summary.closed === true && summary.verified === true,
+        closed: summary.closed === true,
+        verified: summary.verified === true,
+        handle,
+        project_ref: request.project_ref,
+        evidence_refs: [`bridge:${result.id}`],
+      };
+    },
+  });
+}
+
+function recipeUndoBridgeRequestId(context, operation) {
+  const session = String(context.session_id).replace(/[^A-Za-z0-9_]/gu, "_").slice(-48);
+  return `cmd_recipe_undo_${operation}_${context.request_sequence}_${session}`;
 }
 
 function createConfiguredRiskGrantProvider(env) {
@@ -720,14 +972,43 @@ function loadStdioExecutableRecipeDiscovery(binding) {
       previous
       && compareExecutableRecipeDiscoveryIdentity(previous.executable_identity, executableIdentity) >= 0
     ) continue;
+    const manual = item.source === "official"
+      ? createAlpha345OfficialRecipeManual(revision.recipe_id)
+      : null;
     latestByRecipeId.set(revision.recipe_id, {
       ...executableRevisionDiscoveryProjection(revision, { catalog: binding.catalog }),
+      ...createExecutableRecipeDiscoveryDetails(revision, manual),
       kind: "recipe",
       executable: true,
+      source: item.source ?? "user",
       executable_identity: executableIdentity,
     });
   }
   return [...latestByRecipeId.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function createExecutableRecipeDiscoveryDetails(revision, manual = null) {
+  return {
+    steps: revision.draft.stages.map((stage) => ({
+      id: stage.id,
+      kind: stage.kind,
+      dependency: stage.dependency,
+      inputs: stage.inputs,
+      outputs: stage.outputs,
+      risk: stage.risk,
+      checkpoint: stage.checkpoint,
+    })),
+    assertions: {
+      required_inputs: manual?.required_inputs
+        ?? revision.draft.inputs.filter((input) => input.required === true).map((input) => input.id),
+      required_outputs: revision.draft.outputs.filter((output) => output.required === true).map((output) => output.id),
+      preflight: revision.draft.preflight,
+      safety: manual?.safety ?? "Run only the exact saved immutable revision after fresh trust and whole-graph preflight pass.",
+      undo: manual?.undo ?? "Use the returned whole-Recipe Undo and recovery truth; never infer rollback from stage success.",
+    },
+    recovery: manual?.recovery
+      ?? "Follow the returned evidence and exact next_call. Resume only when resume_safe is true; never replay completed or unverified stages.",
+  };
 }
 
 function compareExecutableRecipeDiscoveryIdentity(left, right) {

@@ -12,7 +12,7 @@ import {
 export const ALPHA3_4_D2_FX_BATCH_CONTRACT = "openreaper.alpha3.4.d2_fx_batch.v1";
 export const ALPHA3_4_D2_FX_BATCH_MODE = "exact_assignments";
 export const ALPHA3_4_D2_FX_BATCH_ROW_ID_PATTERN = /^[A-Za-z0-9_-]{1,12}$/u;
-export const ALPHA3_4_D2_FX_BATCH_MAX_ROWS = 8;
+export const ALPHA3_4_D2_FX_BATCH_MAX_ROWS = 64;
 export const ALPHA3_4_D2_MIN_RESPONSE_BUDGET = 2_048;
 
 const SET_FX_PARAMETER_ID = "template.fx.set_fx_parameter_normalized";

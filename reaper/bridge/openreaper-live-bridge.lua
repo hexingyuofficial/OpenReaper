@@ -1927,6 +1927,37 @@ local function required_undo_capability(request, operation_key)
   return operation_key == "run_job:render.targets" or template_execute_write_capability(request, operation_key)
 end
 
+local ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+
+local function is_recipe_undo_transaction_operation(operation_key)
+  return operation_key == "run_command:recipe.undo.transaction"
+end
+
+local function recipe_undo_transaction_flag(request)
+  local flags = is_object(request) and is_object(request.undo) and request.undo.flags or nil
+  if not is_json_array(flags) then
+    return nil
+  end
+  for index = 1, #flags do
+    local flag = flags[index]
+    if is_string(flag) then
+      local transaction_id = flag:match("^recipe_transaction:(.+)$")
+      if is_string(transaction_id) then
+        return transaction_id
+      end
+    end
+  end
+  return nil
+end
+
+local function active_recipe_undo_project_matches()
+  if not ACTIVE_RECIPE_UNDO_TRANSACTION then
+    return true
+  end
+  local ok, project = call_reaper("EnumProjects", -1, "")
+  return ok == true and project ~= nil and project == ACTIVE_RECIPE_UNDO_TRANSACTION.project
+end
+
 local function clear_required_undo_project_handle(request)
   if not is_object(request) then
     return
@@ -1934,6 +1965,7 @@ local function clear_required_undo_project_handle(request)
   request.__openreaper_undo_project = nil
   request.__openreaper_undo_used_project_api = nil
   request.__openreaper_undo_block_open = nil
+  request.__openreaper_undo_borrowed = nil
 end
 
 -- Phase-local required Undo. Begin/End must use the same exact project handle.
@@ -1946,6 +1978,19 @@ local function open_required_undo_block(request, operation_key)
   local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
   clear_required_undo_project_handle(request)
   if options.skip_undo == true then
+    return true
+  end
+  if not is_recipe_undo_transaction_operation(operation_key) and ACTIVE_RECIPE_UNDO_TRANSACTION then
+    local transaction_id = recipe_undo_transaction_flag(request)
+    if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id or not active_recipe_undo_project_matches() then
+      request.__openreaper_undo_block_open = false
+      return false
+    end
+    request.__openreaper_undo_block_open = true
+    request.__openreaper_undo_borrowed = true
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = true
+    request.__openreaper_undo_required_any = true
     return true
   end
   if not required_undo_capability(request, operation_key) then
@@ -1994,6 +2039,13 @@ end
 
 local function close_required_undo_block(request, operation_key)
   local options = is_object(request) and is_object(request.__openreaper_undo_phase) and request.__openreaper_undo_phase or {}
+  if is_object(request) and request.__openreaper_undo_borrowed == true then
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = true
+    clear_required_undo_project_handle(request)
+    request.__openreaper_undo_phase = nil
+    return true
+  end
   if options.skip_undo == true then
     clear_required_undo_project_handle(request)
     if is_object(request) then
@@ -2076,6 +2128,7 @@ local function validate_request(request)
     return false, "operation.family is outside foundation.bridge.v1."
   end
   local operation_key = request.operation.family .. ":" .. request.operation.name
+  local recipe_undo_transaction_operation = is_recipe_undo_transaction_operation(operation_key)
   local artifacts_allowed_for_operation = ARTIFACT_PRODUCING_OPERATIONS[operation_key] == true
   local a2_render_operation = operation_key == "run_job:render.region_wav"
   local safe_write_a_operation = safe_write_a_capability(request, operation_key)
@@ -2103,7 +2156,22 @@ local function validate_request(request)
   if not is_object(request.pack) or not FIXED_PACKS[request.pack.id] or not is_string(request.pack.capability) or not is_string(request.pack.risk) then
     return false, "pack.id, pack.capability, and pack.risk are required."
   end
-  if a2_render_operation then
+  if ACTIVE_RECIPE_UNDO_TRANSACTION and not recipe_undo_transaction_operation
+      and request.operation.family ~= "query_state" and request.operation.family ~= "artifact_metadata"
+      and request.pack.risk ~= "read" then
+    local transaction_id = recipe_undo_transaction_flag(request)
+    if transaction_id ~= ACTIVE_RECIPE_UNDO_TRANSACTION.id then
+      return false, "An active Recipe Undo transaction rejects unrelated or mismatched project writes."
+    end
+    if not active_recipe_undo_project_matches() then
+      return false, "The active project changed during the Recipe Undo transaction."
+    end
+  end
+  if recipe_undo_transaction_operation then
+    if request.pack.id ~= "core" or request.pack.capability ~= "recipe.undo.transaction" or request.pack.risk ~= "write" then
+      return false, "Recipe Undo transaction must use the fixed core write route."
+    end
+  elseif a2_render_operation then
     if request.pack.id ~= "render" or request.pack.risk ~= "write" then
       return false, "A2 render_region_wav must be the render-owned write-risk route."
     end
@@ -2207,7 +2275,11 @@ local function validate_request(request)
   if not is_object(request.undo) then
     return false, "undo policy is required."
   end
-  if a2_render_operation then
+  if recipe_undo_transaction_operation then
+    if request.undo.mode ~= "required" then
+      return false, "Recipe Undo transaction must use undo.mode required."
+    end
+  elseif a2_render_operation then
     if request.undo.mode ~= "required" then
       return false, "A2 render_region_wav must use undo.mode required."
     end
@@ -2307,7 +2379,11 @@ local function validate_request(request)
   if not is_object(request.artifacts) or type(request.artifacts.allow) ~= "boolean" then
     return false, "artifacts.allow must be a boolean."
   end
-  if artifacts_allowed_for_operation then
+  if recipe_undo_transaction_operation then
+    if request.artifacts.allow ~= false then
+      return false, "Recipe Undo transaction must not write artifacts."
+    end
+  elseif artifacts_allowed_for_operation then
     if request.artifacts.allow ~= true then
       return false, "Scoped First-Real-Fixture-A artifact handlers require artifacts.allow true."
     end
@@ -2408,7 +2484,11 @@ local function validate_request(request)
   if not (is_non_negative_integer(request.timeout_ms) and request.timeout_ms > 0) then
     return false, "timeout_ms must be a positive integer."
   end
-  if a2_render_operation then
+  if recipe_undo_transaction_operation then
+    if not is_string(request.idempotency_key) then
+      return false, "Recipe Undo transaction requires an idempotency_key."
+    end
+  elseif a2_render_operation then
     if not is_string(request.idempotency_key) then
       return false, "A2 render_region_wav requires an idempotency_key."
     end
@@ -34145,6 +34225,112 @@ local function dispatch_template_execute(request, resume_continuation)
     })
 end
 
+local function dispatch_recipe_undo_transaction(request)
+  local params = is_object(request.params) and request.params or {}
+  local action = params.action
+  local transaction_id = params.transaction_id
+  local project_ref = params.project_ref
+  local label = params.label
+  if (action ~= "begin" and action ~= "end") or not is_string(transaction_id)
+      or not is_string(project_ref) or not is_string(label) then
+    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires action, transaction_id, project_ref, and label.", {
+      zero_write = true,
+    })
+  end
+
+  if action == "begin" then
+    if ACTIVE_RECIPE_UNDO_TRANSACTION then
+      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", {
+        active_transaction_id = bounded_string(ACTIVE_RECIPE_UNDO_TRANSACTION.id, 160),
+        zero_write = true,
+      })
+    end
+    local ok_project, project, project_path = call_reaper("EnumProjects", -1, "")
+    if not ok_project or project == nil then
+      return handler_error("PROJECT_NOT_FOUND", "The active project is unavailable for Recipe Undo begin.", {
+        zero_write = true,
+      })
+    end
+    local expected_path = project_ref:match("^project:path:(.+)$")
+    if expected_path and project_path ~= expected_path then
+      return handler_error("PROJECT_NOT_FOUND", "Recipe Undo begin project identity does not match the active project.", {
+        expected_project_ref = bounded_string(project_ref, 240),
+        active_project_path = bounded_string(project_path or "", 240),
+        zero_write = true,
+      })
+    end
+    local ok_begin = call_reaper("Undo_BeginBlock2", project)
+    if ok_begin ~= true then
+      return handler_error("COMMAND_FAILED", "Recipe Undo block could not be opened before mutation.", {
+        blocker = "recipe_undo_begin_failed",
+        zero_write = true,
+      })
+    end
+    ACTIVE_RECIPE_UNDO_TRANSACTION = {
+      id = transaction_id,
+      label = label,
+      project = project,
+      project_ref = project_ref,
+      session_id = request.client.session_id,
+    }
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = false
+    request.__openreaper_undo_required_any = true
+    return {
+      contract = "openreaper.recipe_undo_transaction.v1",
+      action = "begin",
+      transaction_id = transaction_id,
+      project_ref = project_ref,
+      opened = true,
+      closed = false,
+      verified = true,
+      readback_status = "passed",
+    }
+  end
+
+  local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+  if not active or active.id ~= transaction_id or active.project_ref ~= project_ref
+      or active.session_id ~= request.client.session_id then
+    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", {
+      zero_write = true,
+    })
+  end
+  local active_project_matches = active_recipe_undo_project_matches()
+  local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
+  local closed = results[1] == true and (results[2] == nil or results[2] == true)
+  request.__openreaper_undo_opened = true
+  request.__openreaper_undo_closed = closed
+  request.__openreaper_undo_required_any = true
+  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+  if not closed then
+    return handler_error("INTERNAL_ERROR", "Recipe Undo close outcome is unknown.", {
+      blocker = "recipe_undo_close_failed",
+      outcome = "unknown",
+      mutations_may_have_happened = params.mutation_truth ~= "not_run",
+    }, false)
+  end
+  if not active_project_matches then
+    return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo close verification.", {
+      blocker = "recipe_active_project_changed",
+      outcome = "unknown",
+      mutations_may_have_happened = params.mutation_truth ~= "not_run",
+    }, false)
+  end
+  return {
+    contract = "openreaper.recipe_undo_transaction.v1",
+    action = "end",
+    transaction_id = transaction_id,
+    project_ref = project_ref,
+    mutation_truth = params.mutation_truth,
+    opened = true,
+    closed = true,
+    verified = true,
+    readback_status = "passed",
+  }
+end
+
+local RECIPE_UNDO_OPERATION_KEY = "run_command:" .. "recipe.undo.transaction"
+
 local ALLOWED_OPERATIONS = {
   ["run_command:template.execute"] = {
     handler = dispatch_template_execute,
@@ -34556,6 +34742,11 @@ local ALLOWED_OPERATIONS = {
     pack = "items",
     handler = OPENREAPER_HANDLER_EXPORTS.create_layer_report,
   },
+}
+
+ALLOWED_OPERATIONS[RECIPE_UNDO_OPERATION_KEY] = {
+  pack = "core",
+  handler = dispatch_recipe_undo_transaction,
 }
 
 local BRIDGE_INTERNAL_CONTINUATION_CONTRACT = "openreaper.bridge.internal_continuation.v1"

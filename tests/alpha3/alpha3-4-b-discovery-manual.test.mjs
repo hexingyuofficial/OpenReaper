@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { FakeFoundationBridge } from "../../packages/core/src/foundation-bridge-v1.mjs";
 import {
   ALPHA3_3_B1_VISIBLE_EXECUTABLE_IDS,
 } from "../../packages/mcp-server/src/alpha3-3-b1-macro-portfolio-v1.mjs";
@@ -9,11 +10,16 @@ import {
   rankAlpha3_3B1MacroIntents,
 } from "../../packages/mcp-server/src/alpha3-3-b1-agent-context-macro-guide-v1.mjs";
 import {
+  ALPHA3_45_OFFICIAL_RECIPE_IDS,
   assertAlpha34BRecommendationShape,
   auditAlpha34BVisibleManuals,
   createAlpha34BDiscoveryManualProjection,
   createAlpha34BFirstTryExecutionGuide,
   createAlpha34BMacroRecommendations,
+  createAlpha345DirectTemplateFallbackManual,
+  createAlpha345OfficialRecipeManual,
+  createAlpha345RecipeLifecycleManual,
+  createAlpha345RecipeProductizationManual,
   enrichAlpha34BRuntimeError,
 } from "../../packages/mcp-server/src/alpha3-4-b-discovery-manual-v1.mjs";
 import {
@@ -51,6 +57,17 @@ test("Chinese/English broad wording routes fades to items.apply and expands lexi
   assert.deepEqual(rankAlpha3_3B1MacroIntents("写音量自动化"), ["macro.automation.apply"]);
   assert.equal(rankAlpha3_3B1MacroIntents("把轨道发送到 reverb")[0], "macro.routing.apply");
   assert.ok(rankAlpha3_3B1MacroIntents("检查项目里有什么").includes("macro.project.inspect"));
+  for (const query of [
+    "帮我看看现在这个 REAPER 工程里都有什么，简单告诉我。",
+    "我这个工程素材和轨道多不多？有没有明显需要整理的？",
+    "检查工程 只读",
+  ]) {
+    assert.equal(rankAlpha3_3B1MacroIntents(query)[0], "macro.project.inspect", query);
+  }
+  assert.equal(rankAlpha3_3B1MacroIntents("保存当前工程")[0], "macro.project.file");
+  assert.equal(rankAlpha3_3B1MacroIntents("切换当前工程")[0], "macro.project.file");
+  assert.equal(rankAlpha3_3B1MacroIntents("导入工程素材")[0], "macro.media.place_assets");
+  assert.ok(!rankAlpha3_3B1MacroIntents("删除工程素材").includes("macro.project.inspect"));
   const runtime = createCallTemplateRuntime();
   const fades = runtime.list_templates({ query: "fade in", limit: 10 });
   assert.equal(fades.product_surface.macro_first_routing.route, "macro_first");
@@ -103,6 +120,14 @@ test("all 15 manuals audit and every executable first-try call passes the curren
     assert.equal(guide.id, id);
     assert.ok(Array.isArray(guide.next_calls));
     assert.ok(guide.next_calls.length >= 1);
+    assert.equal(typeof guide.inputs, "object");
+    assert.equal(typeof guide.units_bounds_limits, "object");
+    assert.equal(typeof guide.selector_or_ref_requirements, "object");
+    assert.equal(typeof guide.dry_run?.supported, "boolean");
+    assert.ok(Array.isArray(guide.recovery?.common_blockers));
+    assert.ok(Array.isArray(guide.recovery?.steps));
+    assert.ok(Array.isArray(guide.examples));
+    assert.ok(guide.examples.length >= 1, `${id} requires at least one exact-manual example`);
     assert.equal(guide.next_calls[0].tool === "list_templates" || guide.next_calls[0].tool === "call_template", true);
     const exactCall = guide.next_calls.find((entry) => entry.tool === "list_templates");
     assert.equal(exactCall.executable_now, true);
@@ -116,6 +141,57 @@ test("all 15 manuals audit and every executable first-try call passes the curren
     assert.equal(skeleton.executable_now, false);
     assert.ok(skeleton.missing_fields.length > 0 || skeleton.missing_target_facts.length > 0);
   }
+});
+
+test("Alpha3.45 Recipe manual covers seven operations, temporary/persistent reuse, four official Recipes, and direct Template fallback", async () => {
+  const lifecycle = createAlpha345RecipeLifecycleManual();
+  assert.deepEqual(lifecycle.operations, ["validate", "save", "list", "get", "delete", "run", "resume"]);
+  assert.match(lifecycle.run_rule, /one public call_recipe run/u);
+  assert.match(lifecycle.authoring_rule, /macro-first/u);
+  assert.match(lifecycle.failure_rule, /resume_safe/u);
+  for (const operation of lifecycle.operations) {
+    assert.equal(lifecycle.request_examples[operation].arguments.operation, operation);
+  }
+  assert.equal(lifecycle.request_examples.get_evidence.arguments.operation, "get");
+  assert.equal(lifecycle.request_examples.resume.arguments.inputs, undefined);
+
+  const product = createAlpha345RecipeProductizationManual({ requested_ids: ALPHA3_45_OFFICIAL_RECIPE_IDS });
+  assert.deepEqual(product.official_recipe_ids, ALPHA3_45_OFFICIAL_RECIPE_IDS);
+  assert.deepEqual(product.temporary_one_off.map((step) => step.split(" ")[0]), ["validate", "save", "run", "delete"]);
+  assert.match(product.persistent_reuse.join(" "), /reconnect/u);
+  assert.equal(product.requested_manuals.length, 4);
+  for (const id of ALPHA3_45_OFFICIAL_RECIPE_IDS) {
+    const manual = createAlpha345OfficialRecipeManual(id);
+    assert.equal(manual.id, id);
+    assert.ok(Array.isArray(manual.inputs) && manual.inputs.length > 0);
+    assert.ok(Array.isArray(manual.required_inputs));
+    assert.equal(typeof manual.defaults, "object");
+    assert.match(manual.undo, /Recipe|Undo/u);
+    assert.match(manual.recovery, /preflight/u);
+    assert.equal(manual.discovery.tool, "list_recipes");
+    assert.equal(manual.run_example.tool, "call_recipe");
+    assert.equal(manual.run_example.arguments.recipe_id, id);
+    assert.equal(manual.run_example.arguments.operation, "run");
+  }
+
+  const fallback = createAlpha345DirectTemplateFallbackManual();
+  assert.equal(fallback.discover.tool, "list_templates");
+  assert.equal(fallback.expand.arguments.ids[0], "template.project.read_summary");
+  const runtime = createCallTemplateRuntime({ executor: new FakeFoundationBridge() });
+  const expanded = runtime.list_templates(fallback.expand.arguments);
+  assert.equal(expanded.items[0].id, "template.project.read_summary");
+  assertPublicSchemaShape(fallback.example.arguments.input, expanded.items[0].inputSchema, fallback.example.arguments.id);
+  const result = await runtime.call_template({
+    ...fallback.example.arguments,
+    context: {
+      session_id: "alpha345-manual-test",
+      expected_owner: "owner-test",
+      expected_generation: 1,
+      created_at: "2026-07-22T00:00:00.000Z",
+      request_sequence: 1,
+    },
+  });
+  assert.notEqual(result.error?.failure_layer, "server_validation", JSON.stringify(result));
 });
 
 test("placeholder-ref examples are explicitly non-executable in exact B projections", () => {

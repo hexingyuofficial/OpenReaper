@@ -1394,7 +1394,7 @@ function stockPluginControlInputSchema() {
       assignments: {
         type: "array",
         minItems: 1,
-        maxItems: 8,
+        maxItems: 64,
         items: {
           type: "object",
           required: ["id", "fx_ref", "normalized_value"],
