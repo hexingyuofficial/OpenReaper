@@ -356,16 +356,25 @@ local function e4_item_read_source_footprint(source_item)
   local ok_pitch, pitch = call_reaper("GetMediaItemTakeInfo_Value", source_take, "D_PITCH")
   local ok_preserve, preserve = call_reaper("GetMediaItemTakeInfo_Value", source_take, "B_PPITCH")
   local canonical_path = ok_identity and READ_B_MEDIA.canonical_path(first_string(source_identity)) or nil
-  if not ok_identity or not is_string(first_string(source_identity)) or not ok_type or not is_string(first_string(source_type))
-      or not canonical_path or first_string(source_type) == "SECTION"
-      or not ok_source_length or not e4_item_finite_native_number(first_number(source_length)) or first_number(source_length) <= 0
-      or length_is_quarter_notes == true or not ok_item_length or not e4_item_finite_native_number(first_number(item_length)) or first_number(item_length) < 0
-      or not ok_start or not e4_item_finite_native_number(first_number(start_offset))
-      or not ok_playrate or not e4_item_finite_native_number(first_number(playrate)) or first_number(playrate) <= 0
-      or not ok_pitch or not e4_item_finite_native_number(first_number(pitch))
-      or not ok_preserve or (first_number(preserve) ~= 0 and first_number(preserve) ~= 1) then
+  local unreadable_fields = json_array({})
+  local function mark_unreadable(condition, field)
+    if condition then unreadable_fields[#unreadable_fields + 1] = field end
+  end
+  mark_unreadable(not ok_identity or not is_string(first_string(source_identity)), "source_identity")
+  mark_unreadable(ok_identity and is_string(first_string(source_identity)) and not canonical_path, "source_path")
+  mark_unreadable(not ok_type or not is_string(first_string(source_type)), "source_type")
+  mark_unreadable(ok_type and first_string(source_type) == "SECTION", "source_type_section")
+  mark_unreadable(not ok_source_length or not e4_item_finite_native_number(first_number(source_length)) or (first_number(source_length) or 0) <= 0, "source_length")
+  mark_unreadable(length_is_quarter_notes == true, "source_length_quarter_notes")
+  mark_unreadable(not ok_item_length or not e4_item_finite_native_number(first_number(item_length)) or (first_number(item_length) or -1) < 0, "item_length")
+  mark_unreadable(not ok_start or not e4_item_finite_native_number(first_number(start_offset)), "start_offset")
+  mark_unreadable(not ok_playrate or not e4_item_finite_native_number(first_number(playrate)) or (first_number(playrate) or 0) <= 0, "playrate")
+  mark_unreadable(not ok_pitch or not e4_item_finite_native_number(first_number(pitch)), "pitch")
+  mark_unreadable(not ok_preserve or (first_number(preserve) ~= 0 and first_number(preserve) ~= 1), "preserve_pitch")
+  if #unreadable_fields > 0 then
     return e4_item_handler_error("VERIFY_FAILED", "E4 copy_item_to_track could not prove the complete source footprint before mutation.", {
       blocker = "source_footprint_unreadable",
+      unreadable_fields = unreadable_fields,
     }, false)
   end
   if type(file_exists) ~= "function" or file_exists(canonical_path) ~= true then

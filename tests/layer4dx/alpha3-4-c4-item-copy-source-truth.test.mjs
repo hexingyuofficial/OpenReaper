@@ -36,21 +36,28 @@ function runLua(body) {
 describe("Alpha3.4-C4 item copy source footprint truth", () => {
   it("preflights every supported source fact before target creation and performs zero writes on an unreadable getter", () => {
     runLua(`
-local source_item, target_track = {}, {}
+local source, source_take = {}, {}
+local source_track, source_item, target_track = {}, {}, {}
 local writes = 0
 call_reaper = function(name, ...)
   local args = { ... }
   if name == "CountMediaItems" then return true, 1 end
   if name == "GetMediaItem" then return true, source_item end
   if name == "GetSetMediaItemInfo_String" then return true, true, "{SOURCE}" end
+  if name == "GetSetMediaItemTakeInfo_String" then return true, true, "{SOURCE-TAKE}" end
   if name == "CountTracks" then return true, 1 end
   if name == "GetTrack" then return true, target_track end
-  if name == "GetTrackGUID" then return true, "{TARGET}" end
-  if name == "GetActiveTake" then return true, {} end
-  if name == "GetMediaItemTake_Source" then return true, {} end
+  if name == "GetTrackGUID" then return true, args[1] == source_track and "{SOURCE-TRACK}" or "{TARGET}" end
+  if name == "GetMediaItemTrack" then return true, source_track end
+  if name == "GetActiveTake" then return true, source_take end
+  if name == "GetMediaItemTake_Source" then return true, source end
   if name == "GetMediaSourceFileName" then return true, "/tmp/source.wav" end
   if name == "GetMediaSourceType" then return true, "WAVE" end
   if name == "GetMediaSourceLength" then return false end
+  if name == "GetMediaItemInfo_Value" then return true, args[2] == "D_POSITION" and 0 or 2 end
+  if name == "GetMediaItemTakeInfo_Value" then
+    return true, args[2] == "D_PLAYRATE" and 1 or args[2] == "B_PPITCH" and 1 or 0
+  end
   if name == "AddMediaItemToTrack" or name == "AddTakeToMediaItem" or name:match("^Set") then writes = writes + 1 end
   return false
 end
@@ -59,6 +66,7 @@ local summary, failure = copy_item_to_track({
   refs = json_array({ { kind = "item", ref = "item:guid:{SOURCE}", identity = { scheme = "guid", value = "{SOURCE}" } }, { kind = "track", ref = "track:guid:{TARGET}", identity = { scheme = "guid", value = "{TARGET}" } } }),
 })
 assert(summary == nil and failure ~= nil, failure and failure.code or "missing_failure")
+assert(#failure.details.unreadable_fields == 1 and failure.details.unreadable_fields[1] == "source_length")
 assert(writes == 0, "writes=" .. tostring(writes))
 `);
   });
@@ -279,6 +287,7 @@ assert(#refs == 4)
 
   it("keeps the generated bridge sourced from the same source-first fail-closed route", () => {
     assert.match(SOURCE, /source_footprint_unreadable/);
+    assert.match(SOURCE, /unreadable_fields = unreadable_fields/);
     assert.match(SOURCE, /PCM_Source_CreateFromFile/);
     assert.match(SOURCE, /created_source_footprint_mismatch/);
     assert.match(SOURCE, /SetMediaItemTake_Source[\s\S]*source_attached = ok_assigned_source and assigned_source == created_source/);
