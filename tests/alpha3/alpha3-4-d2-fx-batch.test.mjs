@@ -117,6 +117,7 @@ function makeExecutor({
         const owner = child.refs?.track_ref?.ref ?? child.refs?.track_ref ?? child.refs?.take_ref?.ref;
         const slot = child.input.slot_index;
         const ref = `fx:${owner}:${slot}`;
+        const ownerKind = owner.startsWith("track:") ? "track" : "take";
         return {
           ok: true,
           request: { id: child.id },
@@ -124,7 +125,7 @@ function makeExecutor({
           result: {
             readback: { fx_ref: ref },
             summary: { fx_ref: ref },
-            refs: [{ kind: "fx", ref, identity: { scheme: "owner_slot", value: ref } }],
+            refs: [{ kind: "fx", ref, identity: { scheme: `${ownerKind}_fx`, value: `${owner}:${slot}` } }],
           },
         };
       }
@@ -261,6 +262,15 @@ describe("Alpha3.4-D2 exact_assignments multi-target FX batch", () => {
       ref: takeRef,
       identity: { scheme: "guid", value: "{AUDIO-TAKE-01}" },
     });
+    const downstream = executor.calls.filter((child) => [
+      "template.fx.list_fx_parameters",
+      "template.fx.read_fx_parameter",
+      "template.fx.set_fx_parameter_normalized",
+    ].includes(child.id));
+    assert.equal(downstream.length > 0, true);
+    assert.equal(downstream.every((child) => child.refs?.fx_ref?.ref === fx), true);
+    assert.equal(downstream.every((child) => child.refs.fx_ref.identity.scheme === "take_fx"), true);
+    assert.equal(downstream.every((child) => child.refs.fx_ref.identity.value === `${takeRef}:0`), true);
   });
   it("keeps public counts 6/15/235/91 and mode token", () => {
     assert.equal(ALPHA3_4_D2_FX_BATCH_MODE, "exact_assignments");

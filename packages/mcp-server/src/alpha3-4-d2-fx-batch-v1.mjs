@@ -1027,6 +1027,7 @@ function finalizeEnvelope(envelope) {
 async function runAtomic(executeAtomic, request, state, child) {
   const execution = await executeAtomic({
     ...child,
+    refs: materializeRefs(child.refs ?? {}, state),
     context: request.context,
     budget: child.budget ?? request.budget,
     observeProjectIndex: false,
@@ -1036,11 +1037,33 @@ async function runAtomic(executeAtomic, request, state, child) {
 }
 
 function collectExecution(state, execution) {
+  for (const objectRef of executionObjectRefs(execution)) {
+    state.objectRefs.set(objectRef.ref, clone(objectRef));
+  }
   state.evidenceRefs.push(...uniqueStrings([
     execution?.request?.id,
     execution?.template?.id,
     ...(Array.isArray(execution?.result?.artifacts) ? execution.result.artifacts.map((entry) => entry?.ref) : []),
   ]));
+}
+
+function materializeRefs(refs, state) {
+  const materialize = (value) => {
+    if (typeof value === "string") {
+      const objectRef = state.objectRefs.get(value);
+      if (!objectRef) {
+        const error = new Error(`No live-resolved object ref is available for ${value}.`);
+        error.code = "MACRO_OBJECT_REF_REQUIRED";
+        throw error;
+      }
+      return clone(objectRef);
+    }
+    if (Array.isArray(value)) return value.map(materialize);
+    if (isPlainObject(value) && typeof value.kind === "string" && typeof value.ref === "string") return clone(value);
+    if (isPlainObject(value)) return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, materialize(child)]));
+    return value;
+  };
+  return materialize(refs);
 }
 
 function executionObjectRefs(execution) {
