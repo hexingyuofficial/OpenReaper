@@ -691,12 +691,10 @@ If bridge connection fails, check for a REAPER window waiting for action,
 resolve it, run the bridge action, reconnect, and run the live read probe:
   call_template(template.transport.read_state)
 
-After openreaper-start opens REAPER, run the REAPER action:
-  ${BRIDGE_ACTION_TITLE}
-
-The agent should try to run that REAPER action for you. If it cannot operate
-the REAPER UI, open REAPER's Actions list, search the exact action name above,
-click Run, and then ask the agent to reconnect to MCP server openreaper.
+The conditional startup hook starts and verifies the Bridge automatically.
+Only if openreaper-start reports the manual recovery fallback, open REAPER's
+Actions list, run "${BRIDGE_ACTION_TITLE}", then rerun Doctor and reconnect the
+MCP client.
 `);
 }
 
