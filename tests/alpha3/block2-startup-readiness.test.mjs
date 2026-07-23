@@ -116,6 +116,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /every process whose unix id is launchedPid/u);
     assert.match(source, /if \(count of matchingProcesses\) is not 1 then return "blocked_reaper_identity:pid="/u);
     assert.doesNotMatch(source, /tell process "REAPER"/u);
+    assert.match(source, /set isProjectNotesWindow to my uiElementNamed\(reaperWindow, "Notes"\) and my uiElementNamed\(reaperWindow, "Show notes on project load"\) and my directButtonCount\(reaperWindow, "OK"\) is 1/u);
+    assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Notes"\) then set isProjectNotesWindow to true/u);
+    assert.doesNotMatch(source, /if my uiElementNamed\(reaperWindow, "Show notes on project load"\) then set isProjectNotesWindow to true/u);
     assert.match(source, /if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"/u);
     assert.match(source, /blocked_dialog_classification:title=/u);
     assert.doesNotMatch(source, /echo "disabled"/u);

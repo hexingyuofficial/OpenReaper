@@ -72,7 +72,7 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal((await lstat(defaultRoot)).isSymbolicLink(), false);
     assert.equal(await readFile(recordPath, "utf8"), `${defaultRoot}\n`);
     assert.doesNotMatch(result.stdout, /ready_for_render/i);
-    assert.match(result.stdout, /conditional startup hook starts and verifies the Bridge automatically/u);
+    assert.match(result.stdout, /reports ready only after the matching heartbeat and public read probe both pass/u);
     assert.doesNotMatch(result.stdout, /After openreaper-start opens REAPER, run the REAPER action/u);
   });
 

@@ -1414,9 +1414,7 @@ tell application "System Events"
         set windowTitle to name of reaperWindow as text
       end try
       if windowTitle is "Project Settings" then
-        set isProjectNotesWindow to false
-        if my uiElementNamed(reaperWindow, "Notes") then set isProjectNotesWindow to true
-        if my uiElementNamed(reaperWindow, "Show notes on project load") then set isProjectNotesWindow to true
+        set isProjectNotesWindow to my uiElementNamed(reaperWindow, "Notes") and my uiElementNamed(reaperWindow, "Show notes on project load") and my directButtonCount(reaperWindow, "OK") is 1
         if isProjectNotesWindow then
           if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"
           try
