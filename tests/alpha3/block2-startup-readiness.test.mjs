@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
@@ -43,6 +44,51 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.doesNotMatch(source, /uiElementNamed\(reaperWindow, "Ignore all missing files"\)/u);
     assert.match(source, /if subrole of reaperWindow is "AXDialog" then set isDialog to true/u);
     assert.match(source, /if isDialog then\s+if windowTitle contains "Evaluation"/u);
+    assert.match(source, /osascript - "\$\{IGNORE_MISSING_MEDIA\}" "\$\{reaper_pid\}"/u);
+    assert.match(source, /set launchedPid to item 2 of argv as integer/u);
+    assert.match(source, /every process whose unix id is launchedPid/u);
+    assert.match(source, /if \(count of matchingProcesses\) is not 1 then return "blocked_reaper_identity:pid="/u);
+    assert.doesNotMatch(source, /tell process "REAPER"/u);
+  });
+
+  it("fails closed for every dialog-assist result outside the exact safe allowlist", () => {
+    const source = readFileSync(START_HELPER, "utf8");
+    const functionStart = source.indexOf("startup_dialog_result_is_safe() {");
+    const functionEnd = source.indexOf("\n}\n\nrecord_dialog_result()", functionStart);
+    assert.notEqual(functionStart, -1);
+    assert.notEqual(functionEnd, -1);
+    const classifier = source.slice(functionStart, functionEnd + 2);
+
+    for (const result of [
+      "disabled",
+      "no_safe_dialog",
+      "dismissed_project_notes",
+      "dismissed_missing_media:choice=Ignore all missing files",
+      "dismissed_missing_media_offline_warning:choice=OK",
+    ]) {
+      assert.equal(runDialogClassifier(classifier, result), 0, result);
+    }
+
+    for (const result of [
+      "unavailable",
+      "failed",
+      "no_reaper_process",
+      "blocked_reaper_identity:pid=123",
+      "project_notes_seen_not_dismissed:permission denied",
+      "project_settings_seen_but_not_notes",
+      "blocked_missing_media:choice=Ignore all missing files:error=permission denied",
+      "blocked_missing_media_offline_warning:choice=OK:error=permission denied",
+      "blocked_user_decision:title=Project Load Warning",
+      "blocked_unknown_dialog:title=Unexpected",
+    ]) {
+      assert.equal(runDialogClassifier(classifier, result), 1, result);
+    }
+
+    const decisionIndex = source.indexOf("if ! startup_dialog_result_is_safe \"${dialog_result}\"; then");
+    const heartbeatIndex = source.indexOf("if bridge_heartbeat_ready; then", decisionIndex);
+    const probeIndex = source.indexOf("verify_public_bridge_read || return 1", heartbeatIndex);
+    assert.notEqual(decisionIndex, -1);
+    assert.equal(decisionIndex < heartbeatIndex && heartbeatIndex < probeIndex, true);
   });
 
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
@@ -235,3 +281,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.safety.raw_lua_action_shell_or_ui_bypass, false);
   });
 });
+
+function runDialogClassifier(classifier, result) {
+  return spawnSync("zsh", ["-c", `${classifier}\nstartup_dialog_result_is_safe "$1"`, "dialog-classifier", result], {
+    encoding: "utf8",
+  }).status;
+}

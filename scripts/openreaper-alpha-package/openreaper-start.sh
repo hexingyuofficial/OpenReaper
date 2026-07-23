@@ -1161,7 +1161,9 @@ run_startup_dialog_assist() {
     echo "unavailable"
     return 0
   fi
-  /usr/bin/osascript - "${IGNORE_MISSING_MEDIA}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
+  local reaper_pid
+  reaper_pid="$(cat "${PID_FILE}")"
+  /usr/bin/osascript - "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
 on uiElementNamed(theWindow, targetName)
   tell application "System Events"
     try
@@ -1188,9 +1190,13 @@ end directButtonCount
 
 on run argv
 set allowMissingMedia to (item 1 of argv is "true")
+set launchedPid to item 2 of argv as integer
 tell application "System Events"
-  if not (exists process "REAPER") then return "no_reaper_process"
-  tell process "REAPER"
+  set matchingProcesses to every process whose unix id is launchedPid
+  if (count of matchingProcesses) is not 1 then return "blocked_reaper_identity:pid=" & launchedPid
+  set launchedProcess to item 1 of matchingProcesses
+  if name of launchedProcess is not "REAPER" then return "blocked_reaper_identity:pid=" & launchedPid
+  tell launchedProcess
     repeat with reaperWindow in windows
       set windowTitle to ""
       try
@@ -1262,6 +1268,15 @@ APPLESCRIPT
   }
 }
 
+startup_dialog_result_is_safe() {
+  case "$1" in
+    disabled|no_safe_dialog|dismissed_project_notes|dismissed_missing_media:choice=Ignore\ all\ missing\ files|dismissed_missing_media_offline_warning:choice=OK)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
 record_dialog_result() {
   local result="$1"
   echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
@@ -1278,12 +1293,10 @@ wait_for_startup_readiness() {
     assert_reaper_process_alive || return 1
     dialog_result="$(run_startup_dialog_assist)"
     record_dialog_result "${dialog_result}"
-    case "${dialog_result}" in
-      blocked_missing_media:*|blocked_user_decision:*|blocked_unknown_dialog:*|project_settings_seen_but_not_notes)
-        echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
-        return 2
-        ;;
-    esac
+    if ! startup_dialog_result_is_safe "${dialog_result}"; then
+      echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+      return 2
+    fi
     if bridge_heartbeat_ready; then
       verify_public_bridge_read || return 1
       echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
