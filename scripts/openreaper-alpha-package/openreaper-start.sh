@@ -1210,7 +1210,11 @@ tell application "System Events"
         end if
         return "project_settings_seen_but_not_notes"
       end if
-      if my uiElementNamed(reaperWindow, "Ignore all missing files") then
+      set hasIgnoreMissingFiles to false
+      try
+        if exists button "Ignore all missing files" of reaperWindow then set hasIgnoreMissingFiles to true
+      end try
+      if hasIgnoreMissingFiles then
         if allowMissingMedia then
           try
             click button "Ignore all missing files" of reaperWindow
@@ -1238,12 +1242,16 @@ tell application "System Events"
         end if
         return "blocked_user_decision:title=Project Load Warning"
       end if
-      if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
-        return "blocked_user_decision:title=" & windowTitle
-      end if
+      set isDialog to false
       try
-        if subrole of reaperWindow is "AXDialog" then return "blocked_unknown_dialog:title=" & windowTitle
+        if subrole of reaperWindow is "AXDialog" then set isDialog to true
       end try
+      if isDialog then
+        if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
+          return "blocked_user_decision:title=" & windowTitle
+        end if
+        return "blocked_unknown_dialog:title=" & windowTitle
+      end if
     end repeat
   end tell
 end tell

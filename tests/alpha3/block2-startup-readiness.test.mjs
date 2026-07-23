@@ -39,6 +39,10 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.match(source, /allowMissingMedia and isOfflineMediaWarning and my directButtonCount\(reaperWindow, "OK"\) is 1/u);
     assert.match(source, /dismissed_missing_media_offline_warning:choice=OK/u);
     assert.match(source, /return "blocked_user_decision:title=Project Load Warning"/u);
+    assert.match(source, /exists button "Ignore all missing files" of reaperWindow/u);
+    assert.doesNotMatch(source, /uiElementNamed\(reaperWindow, "Ignore all missing files"\)/u);
+    assert.match(source, /if subrole of reaperWindow is "AXDialog" then set isDialog to true/u);
+    assert.match(source, /if isDialog then\s+if windowTitle contains "Evaluation"/u);
   });
 
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
