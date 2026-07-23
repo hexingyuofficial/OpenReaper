@@ -1246,7 +1246,7 @@ tell application "System Events"
       end if
       if windowTitle is "Project Load Warning" then
         set isOfflineMediaWarning to false
-        if my uiElementTextContains(reaperWindow, "media item") and my uiElementTextContains(reaperWindow, "offline") then set isOfflineMediaWarning to true
+        if my uiElementTextContains(reaperWindow, "in an off-line state") and my uiElementTextContains(reaperWindow, "filenames should be preserved") then set isOfflineMediaWarning to true
         if allowMissingMedia and isOfflineMediaWarning and my directButtonCount(reaperWindow, "OK") is 1 then
           try
             click button "OK" of reaperWindow

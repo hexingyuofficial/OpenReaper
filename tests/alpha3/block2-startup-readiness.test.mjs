@@ -34,7 +34,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
   it("keeps missing-media dialog automation consent-bound and exact", () => {
     const source = readFileSync(START_HELPER, "utf8");
     assert.match(source, /if windowTitle is "Project Load Warning" then/u);
-    assert.match(source, /uiElementTextContains\(reaperWindow, "media item"\).*uiElementTextContains\(reaperWindow, "offline"\)/u);
+    assert.match(source, /uiElementTextContains\(reaperWindow, "in an off-line state"\).*uiElementTextContains\(reaperWindow, "filenames should be preserved"\)/u);
     assert.match(source, /allowMissingMedia and isOfflineMediaWarning and my directButtonCount\(reaperWindow, "OK"\) is 1/u);
     assert.match(source, /dismissed_missing_media_offline_warning:choice=OK/u);
     assert.match(source, /return "blocked_user_decision:title=Project Load Warning"/u);
