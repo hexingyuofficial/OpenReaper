@@ -307,7 +307,7 @@ console.log(`project_index_next_action=${report.project_index_readiness.next_act
 console.log(`provenance_package_version=${report.provenance?.package_version ?? "unavailable"}`);
 console.log(`provenance_commit=${report.provenance?.openreaper_git_commit ?? "unavailable"}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
-console.log("startup_lifetime=openreaper-start launches REAPER detached and returns only after matching heartbeat plus a bounded public read probe.");
+console.log("startup_lifetime=openreaper-start launches REAPER detached, records pid/log paths, and returns only after matching heartbeat plus a bounded public read probe.");
 console.log("startup_dialog_assist=Project Settings / Notes is safe; missing media needs --ignore-missing-media consent; license/evaluation, recovery, plugin/FX, version, and unknown windows fail closed.");
 console.log("connection_probe=after bridge_ready, doctor uses MCP call_template(template.transport.read_state) before claiming request/response readiness.");
 if (report.smoke?.ok) {
