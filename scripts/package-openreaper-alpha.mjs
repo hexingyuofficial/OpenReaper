@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { constants as fsConstants } from "node:fs";
 import { access, chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
@@ -2351,8 +2352,15 @@ async function writePackageHeartbeat(transportDir, options = {}) {
     interval_ms: 500,
   };
   const heartbeatPath = path.join(transportDir, LIVE_BRIDGE_HEARTBEAT_FILENAME);
-  await writeFile(heartbeatPath, `${JSON.stringify(heartbeat)}\n`, "utf8");
-  await utimes(heartbeatPath, mtime, mtime);
+  const tempPath = `${heartbeatPath}.tmp.${randomUUID()}`;
+  try {
+    await writeFile(tempPath, `${JSON.stringify(heartbeat)}\n`, "utf8");
+    await utimes(tempPath, mtime, mtime);
+    await rename(tempPath, heartbeatPath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
   return heartbeatPath;
 }
 
