@@ -505,7 +505,7 @@ Startup dialogs: before the first assisted launch, openreaper-start asks the
 agent to obtain one explicit user choice: safe assistance once, always, or
 manual handling. Use --startup-dialog-consent once|always|manual. The always
 and manual choices persist outside the replaceable install tree. Consent covers
-only exact Project Notes, missing-media Ignore, and media-offline warning rules;
+only exact Project Settings / Notes, missing-media Ignore, and media-offline warning rules;
 license/evaluation, recovery, plugin, version, ambiguous, and unknown windows
 always fail closed.
 
