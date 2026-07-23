@@ -665,6 +665,11 @@ async function smokePackagedOpenReaperMcp() {
       owner: "openreaper-alpha-package-smoke",
       generation: 1,
     });
+    const refreshPackageBridgeHeartbeat = () => writePackageHeartbeat(transportDir, {
+      owner: "openreaper-alpha-package-smoke",
+      generation: 1,
+    });
+    await refreshPackageBridgeHeartbeat();
     const omittedContextResponse = client.callTool({
       name: "call_template",
       arguments: {
@@ -698,6 +703,7 @@ async function smokePackagedOpenReaperMcp() {
       ["template.project.read_current_project_path", "project.read_current_project_path"],
       ["template.project.read_dirty_state", "project.read_dirty_state"],
     ]) {
+      await refreshPackageBridgeHeartbeat();
       const responsePromise = client.callTool({
         name: "call_template",
         arguments: { id: templateId, input: {} },
@@ -756,6 +762,7 @@ async function smokePackagedOpenReaperMcp() {
       ["template.project.save_current_project", "project.save_current_project", {}],
       ["template.project.save_project_as", "project.save_project_as", { target_path: packageSaveAsTarget, overwrite: true }],
     ]) {
+      await refreshPackageBridgeHeartbeat();
       const responsePromise = client.callTool({
         name: "call_template",
         arguments: { id: templateId, input },
@@ -821,6 +828,7 @@ async function smokePackagedOpenReaperMcp() {
       await clearDirectoryEntries(path.join(transportDir, "requests"));
       await clearDirectoryEntries(path.join(transportDir, "results"));
     }
+    await refreshPackageBridgeHeartbeat();
     const keyedRefResponse = client.callTool({
       name: "call_template",
       arguments: {
@@ -1013,6 +1021,7 @@ async function smokePackagedProjectIndexLifecycle({
   };
   await clearDirectoryEntries(path.join(transportDir, "requests"));
   await clearDirectoryEntries(path.join(transportDir, "results"));
+  await writePackageHeartbeat(transportDir, { owner, generation });
   const coldResponse = client.callTool({
     name: "call_template",
     arguments: { id: "macro.project.query", input: queryInput },
@@ -1047,6 +1056,7 @@ async function smokePackagedProjectIndexLifecycle({
 
   await clearDirectoryEntries(path.join(transportDir, "requests"));
   await clearDirectoryEntries(path.join(transportDir, "results"));
+  await writePackageHeartbeat(transportDir, { owner, generation });
   const warmResponse = client.callTool({
     name: "call_template",
     arguments: { id: "macro.project.query", input: queryInput },
@@ -1119,6 +1129,7 @@ async function smokePackagedProjectIndexLifecycle({
   });
   await clearDirectoryEntries(path.join(transportDir, "requests"));
   await clearDirectoryEntries(path.join(transportDir, "results"));
+  await writePackageHeartbeat(transportDir, { owner, generation });
   const changedResponse = client.callTool({
     name: "call_template",
     arguments: { id: "macro.project.query", input: queryInput },
