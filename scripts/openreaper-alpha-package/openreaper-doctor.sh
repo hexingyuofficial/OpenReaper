@@ -175,15 +175,17 @@ const report = {
   bridge_action: {
     name: bridgeActionName,
     script: bridgeActionScript,
-    agent_should_try_to_run_action: true,
-    user_fallback: `In REAPER, open Actions, search "${bridgeActionName}", click Run, then ask the agent to reconnect.`,
+    agent_should_try_to_run_action: false,
+    role: "manual_recovery_fallback",
+    user_fallback: `Only after autonomous startup reports a Bridge blocker: in REAPER, open Actions, search "${bridgeActionName}", click Run, then rerun Doctor.`,
     verification_probe: "call_template(template.transport.read_state)",
     sws_required: false,
   },
   startup_dialog_assist: {
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
-    does_not_dismiss: ["license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
-    if_not_connected: "Check whether REAPER has a window waiting for agent/user action; resolve it, run the bridge action, reconnect, then run the live read probe.",
+    explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
+    does_not_dismiss: ["missing media without consent", "license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
+    if_not_connected: "Resolve the typed dialog blocker and rerun openreaper-start. Use the Bridge Action only as the reported manual recovery fallback.",
   },
   checks: {},
   client_configs: [],
@@ -305,8 +307,8 @@ console.log(`project_index_next_action=${report.project_index_readiness.next_act
 console.log(`provenance_package_version=${report.provenance?.package_version ?? "unavailable"}`);
 console.log(`provenance_commit=${report.provenance?.openreaper_git_commit ?? "unavailable"}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
-console.log("startup_lifetime=openreaper-start launches REAPER detached from the agent shell and returns a pid/log path.");
-console.log("startup_dialog_assist=only Project Settings / Notes show-notes-on-load is auto-dismissed; license/evaluation, recovery, plugin/FX, version, and unknown windows require agent/user action.");
+console.log("startup_lifetime=openreaper-start launches REAPER detached and returns only after matching heartbeat plus a bounded public read probe.");
+console.log("startup_dialog_assist=Project Settings / Notes is safe; missing media needs --ignore-missing-media consent; license/evaluation, recovery, plugin/FX, version, and unknown windows fail closed.");
 console.log("connection_probe=after bridge_ready, doctor uses MCP call_template(template.transport.read_state) before claiming request/response readiness.");
 if (report.smoke?.ok) {
   console.log(`kernel=${report.smoke.openreaper.kernel}`);
@@ -328,7 +330,7 @@ if (report.migration_actions.length > 0) {
 } else {
   console.log("migration_needed=no");
 }
-console.log(`next_agent_step=If live REAPER work is requested, run ${startCommand}. After REAPER opens, run the REAPER action "${bridgeActionName}". Then use openreaper-doctor --wait-bridge --for live-edit or the requested exact task mode. Doctor never runs the REAPER Action itself.`);
+console.log(`next_agent_step=If live REAPER work is requested, run ${startCommand}; it automatically starts and verifies the Bridge. Use the REAPER action "${bridgeActionName}" only if startup reports that manual recovery fallback, then rerun Doctor.`);
 
 if (cli.mode !== null && report.task?.status !== "ready") {
   process.exitCode = 1;
@@ -419,9 +421,9 @@ function compactDoctorRecoveryCard(diagnosis, bridge) {
   const expected = bridge?.expected ?? {};
   const observed = bridge?.observed ?? {};
   const action = diagnosis === "reaper_not_running"
-    ? `Run ${startCommand}, then run the REAPER Action "${bridgeActionName}" and rerun doctor.`
+    ? `Run ${startCommand}; it starts and verifies the Bridge automatically.`
     : diagnosis === "bridge_action_not_running"
-      ? `In REAPER, run the Action "${bridgeActionName}" and rerun doctor.`
+      ? `Rerun ${startCommand}. If autonomous startup still reports this blocker, run the fallback Action "${bridgeActionName}" and rerun doctor.`
       : diagnosis === "bridge_loop_unresponsive"
         ? `In REAPER, rerun the Action "${bridgeActionName}" and rerun doctor; restart the session only if the heartbeat remains stale.`
         : diagnosis === "owner_generation_mismatch"
@@ -432,7 +434,7 @@ function compactDoctorRecoveryCard(diagnosis, bridge) {
     likely_cause: diagnosis === "bridge_loop_unresponsive"
       ? "The heartbeat is stale; it cannot distinguish a stopped Action from an unresponsive loop."
       : diagnosis === "bridge_action_not_running"
-        ? "REAPER is present but the installed bridge Action has not produced a heartbeat."
+        ? "REAPER is present but the conditional startup hook has not produced a heartbeat."
         : diagnosis === "owner_generation_mismatch"
           ? "The heartbeat belongs to a different OpenReaper session identity."
           : diagnosis === "reaper_not_running"

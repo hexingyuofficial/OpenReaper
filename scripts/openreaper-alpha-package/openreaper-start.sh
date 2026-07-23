@@ -16,8 +16,9 @@ ARTIFACT_ROOT=""
 PROJECT_INDEX_STATE_ROOT=""
 BRIDGE_OWNER=""
 BRIDGE_GENERATION=""
-START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-8}"
+START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
 STARTUP_DIALOG_ASSIST=true
+IGNORE_MISSING_MEDIA=false
 LAUNCHCTL_BIN="/bin/launchctl"
 OPEN_BIN="/usr/bin/open"
 LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
@@ -150,6 +151,10 @@ while [[ $# -gt 0 ]]; do
       STARTUP_DIALOG_ASSIST=false
       shift
       ;;
+    --ignore-missing-media)
+      IGNORE_MISSING_MEDIA=true
+      shift
+      ;;
     --help|-h)
       cat <<'HELP'
 OpenReaper start helper
@@ -162,8 +167,8 @@ Usage:
   openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
 
 REAPER must be started through this helper for OpenReaper MCP to connect.
-The helper starts REAPER with the OpenReaper bridge environment, waits briefly
-for the process to remain alive, and then returns with the REAPER pid/log path.
+The helper starts REAPER with the OpenReaper bridge environment and returns only
+after a matching Bridge heartbeat and real bounded public read probe succeed.
 On macOS it uses LaunchServices so REAPER is not a child of the agent command
 session.
 The helper defaults to its installed session directory and ignores stale
@@ -179,15 +184,15 @@ If REAPER is installed somewhere other than /Applications, the agent can pass
 --reaper-app or --reaper-binary. On macOS the helper also tries Spotlight app
 discovery before asking for a path.
 
-After REAPER opens, the bridge still needs to be started inside REAPER. The
-agent should try to run the REAPER action named "OpenReaper: Start MCP bridge".
-If the agent cannot operate the REAPER UI, ask the user to open the Actions
-list, search that exact action name, and click Run.
+The installed conditional startup hook starts the Bridge automatically. The
+REAPER action named "OpenReaper: Start MCP bridge" remains a manual recovery
+fallback if autonomous startup is blocked.
 
 Startup dialog assist is enabled by default. It only dismisses the known
 Project Settings / Notes "show notes on project load" window by clicking OK.
-It does not close license/evaluation, recovery, plugin, or other user-choice
-dialogs. Pass --no-startup-dialog-assist to disable it for debugging.
+Missing media, license/evaluation, recovery, plugin, and unknown dialogs fail
+closed. Pass --ignore-missing-media to give one-launch consent for the exact
+"Ignore all missing files" choice, or --no-startup-dialog-assist for debugging.
 HELP
       exit 0
       ;;
@@ -632,15 +637,13 @@ if [[ "${USE_LAUNCHSERVICES}" == "true" ]]; then
 else
   echo "[OpenReaper] launch-method=direct_binary_fallback"
 fi
-echo "[OpenReaper] bridge-action=OpenReaper: Start MCP bridge"
-echo "[OpenReaper] bridge-status=needs_reaper_action"
-echo "[OpenReaper] startup-dialog-assist=project_notes_only"
-echo "[OpenReaper] agent-next-step=Try to run REAPER action 'OpenReaper: Start MCP bridge'. If the agent cannot operate the UI, ask the user to open Actions, search that exact name, and click Run."
-echo "[OpenReaper] user-fallback=In REAPER: Actions > Show action list > search 'OpenReaper: Start MCP bridge' > Run."
+echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
+echo "[OpenReaper] bridge-status=starting_automatically"
+echo "[OpenReaper] startup-dialog-assist=project_notes_safe;missing_media_consent=${IGNORE_MISSING_MEDIA}"
 
 launch_reaper() {
   local -a reaper_args
-  reaper_args=("-newinst")
+  reaper_args=("-newinst" "-nosplash")
   if [[ -n "${PROJECT_PATH}" ]]; then
     reaper_args+=("${PROJECT_PATH}")
   fi
@@ -1091,24 +1094,61 @@ wait_for_new_reaper_pid() {
   return 1
 }
 
-wait_for_reaper_process() {
+assert_reaper_process_alive() {
   local reaper_pid
   reaper_pid="$(cat "${PID_FILE}")"
-  local max_ticks=$(( START_WAIT_SECONDS * 2 ))
-  local tick
-  for (( tick = 1; tick <= max_ticks; tick++ )); do
-    if ! kill -0 "${reaper_pid}" 2>/dev/null; then
-      echo "[OpenReaper] REAPER exited before startup stabilized. pid=${reaper_pid}" >&2
-      echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
-      tail -80 "${START_LOG}" >&2 || true
-      exit 1
-    fi
-    sleep 0.5
-  done
-  echo "[OpenReaper] REAPER process stayed alive for ${START_WAIT_SECONDS}s. pid=${reaper_pid}"
-  if [[ -s "${START_LOG}" ]]; then
-    grep -E "\\[OpenReaper\\]" "${START_LOG}" | tail -20 || true
+  if ! kill -0 "${reaper_pid}" 2>/dev/null; then
+    echo "[OpenReaper] REAPER exited before Bridge readiness. pid=${reaper_pid}" >&2
+    echo "[OpenReaper] REAPER log: ${START_LOG}" >&2
+    tail -80 "${START_LOG}" >&2 || true
+    return 1
   fi
+  return 0
+}
+
+bridge_heartbeat_ready() {
+  node --input-type=module - "${TRANSPORT_DIR}/openreaper-bridge-liveness-v1.json" "${BRIDGE_OWNER}" "${BRIDGE_GENERATION}" <<'NODE'
+import { readFile, stat } from "node:fs/promises";
+const [heartbeatPath, owner, generationText] = process.argv.slice(2);
+try {
+  const [raw, metadata] = await Promise.all([readFile(heartbeatPath, "utf8"), stat(heartbeatPath)]);
+  const heartbeat = JSON.parse(raw);
+  const now = Date.now();
+  const generation = Number(generationText);
+  const ready = heartbeat?.contract === "openreaper.bridge_liveness.v1"
+    && heartbeat.active_owner === owner
+    && Number.isSafeInteger(generation)
+    && heartbeat.active_generation === generation
+    && Number.isSafeInteger(heartbeat.sequence)
+    && heartbeat.sequence >= 1
+    && Number.isSafeInteger(heartbeat.refreshed_at_unix_s)
+    && now - metadata.mtimeMs >= -1_000
+    && now - metadata.mtimeMs <= 3_000
+    && now - heartbeat.refreshed_at_unix_s * 1_000 >= -1_000
+    && now - heartbeat.refreshed_at_unix_s * 1_000 <= 3_000;
+  process.exit(ready ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+NODE
+}
+
+verify_public_bridge_read() {
+  local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"
+  local doctor_log="${START_LOG%.log}-doctor.log"
+  if [[ ! -x "${doctor}" ]]; then
+    echo "[OpenReaper] installed Doctor is missing or not executable: ${doctor}" >&2
+    return 1
+  fi
+  if OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
+      OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
+      "${doctor}" --wait-bridge=2 > "${doctor_log}" 2>&1; then
+    echo "[OpenReaper] bridge-read-probe=passed"
+    echo "[OpenReaper] doctor-log=${doctor_log}"
+    return 0
+  fi
+  echo "[OpenReaper] bridge heartbeat was ready but the public read probe failed. doctor-log=${doctor_log}" >&2
+  return 1
 }
 
 run_startup_dialog_assist() {
@@ -1120,7 +1160,7 @@ run_startup_dialog_assist() {
     echo "unavailable"
     return 0
   fi
-  /usr/bin/osascript <<'APPLESCRIPT' 2>> "${START_LOG}" || {
+  /usr/bin/osascript - "${IGNORE_MISSING_MEDIA}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
 on uiElementNamed(theWindow, targetName)
   tell application "System Events"
     try
@@ -1136,6 +1176,8 @@ on uiElementNamed(theWindow, targetName)
   return false
 end uiElementNamed
 
+on run argv
+set allowMissingMedia to (item 1 of argv is "true")
 tell application "System Events"
   if not (exists process "REAPER") then return "no_reaper_process"
   tell process "REAPER"
@@ -1158,13 +1200,65 @@ tell application "System Events"
         end if
         return "project_settings_seen_but_not_notes"
       end if
+      if my uiElementNamed(reaperWindow, "Ignore all missing files") then
+        if allowMissingMedia then
+          try
+            click button "Ignore all missing files" of reaperWindow
+            return "dismissed_missing_media:choice=Ignore all missing files"
+          on error errorMessage
+            return "blocked_missing_media:choice=Ignore all missing files:error=" & errorMessage
+          end try
+        end if
+        return "blocked_missing_media:choice=Ignore all missing files"
+      end if
+      if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "Project Load Warning" or windowTitle contains "New version" then
+        return "blocked_user_decision:title=" & windowTitle
+      end if
+      try
+        if subrole of reaperWindow is "AXDialog" then return "blocked_unknown_dialog:title=" & windowTitle
+      end try
     end repeat
   end tell
 end tell
 return "no_safe_dialog"
+end run
 APPLESCRIPT
     echo "failed"
   }
+}
+
+record_dialog_result() {
+  local result="$1"
+  echo "[OpenReaper] dialog-event timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ") project=${PROJECT_PATH:-none} result=${result}" >> "${START_LOG}"
+}
+
+wait_for_startup_readiness() {
+  local max_ticks=$(( START_WAIT_SECONDS * 4 ))
+  local tick dialog_result
+  if (( max_ticks < 1 )); then
+    echo "[OpenReaper] OPENREAPER_START_WAIT_SECONDS must be at least 1 for verified startup." >&2
+    return 1
+  fi
+  for (( tick = 1; tick <= max_ticks; tick++ )); do
+    assert_reaper_process_alive || return 1
+    dialog_result="$(run_startup_dialog_assist)"
+    record_dialog_result "${dialog_result}"
+    case "${dialog_result}" in
+      blocked_missing_media:*|blocked_user_decision:*|blocked_unknown_dialog:*|project_settings_seen_but_not_notes)
+        echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
+        return 2
+        ;;
+    esac
+    if bridge_heartbeat_ready; then
+      verify_public_bridge_read || return 1
+      echo "[OpenReaper] bridge-heartbeat=ready owner=${BRIDGE_OWNER} generation=${BRIDGE_GENERATION}"
+      return 0
+    fi
+    sleep 0.25
+  done
+  echo "[OpenReaper] Bridge did not become ready within ${START_WAIT_SECONDS}s." >&2
+  echo "[OpenReaper] recovery=Resolve the reported REAPER dialog, or run fallback Action 'OpenReaper: Start MCP bridge'; then rerun openreaper-doctor --wait-bridge." >&2
+  return 1
 }
 
 trap 'launchservices_cleanup_on_exit' EXIT
@@ -1173,8 +1267,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 launch_reaper
-wait_for_reaper_process
-echo "[OpenReaper] startup-dialog-assist-result=$(run_startup_dialog_assist)"
+wait_for_startup_readiness
 
 echo "[OpenReaper] startup-status=ready"
-echo "[OpenReaper] bridge-status=waiting_for_reaper_action"
+echo "[OpenReaper] bridge-status=ready"

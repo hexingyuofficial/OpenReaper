@@ -154,9 +154,12 @@ Forbidden:
 
 Allowed small assists (not product bypass):
 
-- Official `openreaper-start` for REAPER sessions that MCP can connect to
-- REAPER action `OpenReaper: Start MCP bridge` after start
-- Agent may try that bridge action; if UI is unavailable, ask the user for that one assist
+- Official `openreaper-start`; success means matching Bridge heartbeat plus a real
+  `call_template(template.transport.read_state)` probe already passed.
+- Project Notes may be closed automatically. Missing media requires explicit one-launch
+  consent through `--ignore-missing-media`; decision-bearing and unknown dialogs fail closed.
+- REAPER action `OpenReaper: Start MCP bridge` is only a manual recovery fallback when
+  autonomous startup reports that blocker, not a normal startup step.
 
 Live refs for Automation and similar write flows: first call
 `macro.project.query` (or inspect), then reuse returned canonical refs exactly.

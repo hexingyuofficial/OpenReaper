@@ -137,13 +137,13 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     );
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.normal_reaper_launch_supported, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.only_openreaper_startup_supported, true);
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.bridge_action_required_after_start, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.bridge_action_required_after_start, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.requirements.live_probe_required_before_success_claim, true);
     assert.equal(
       expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.installed_action_name,
       "OpenReaper: Start MCP bridge",
     );
-    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.agent_should_try_to_run_action, true);
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.agent_should_try_to_run_action, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.sws_required, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.command_line_reascript_bridge, false);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.bridge_action.verification_probe, "call_template(template.transport.read_state)");
@@ -153,7 +153,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     );
     assert.deepEqual(
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.does_not_dismiss,
-      ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
+      ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
     );
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.starts_reaper_with_openreaper_env, true);
     assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_lifetime.waits_for_reaper_process, true);
@@ -186,10 +186,10 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.requirements.mcp_client_server_name, "openreaper");
     assert.equal(guidance.requirements.normal_reaper_launch_supported, false);
     assert.equal(guidance.requirements.reconnect_after_startup, true);
-    assert.equal(guidance.requirements.bridge_action_required_after_start, true);
+    assert.equal(guidance.requirements.bridge_action_required_after_start, false);
     assert.equal(guidance.requirements.live_probe_required_before_success_claim, true);
     assert.equal(guidance.bridge_action.installed_action_name, "OpenReaper: Start MCP bridge");
-    assert.equal(guidance.bridge_action.agent_should_try_to_run_action, true);
+    assert.equal(guidance.bridge_action.agent_should_try_to_run_action, false);
     assert.equal(guidance.bridge_action.sws_required, false);
     assert.equal(guidance.bridge_action.command_line_reascript_bridge, false);
     assert.equal(guidance.bridge_action.reconnect_after_action, true);
@@ -197,7 +197,7 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, ["project_settings_notes_show_notes_on_project_load"]);
     assert.deepEqual(
       guidance.startup_dialog_assist.does_not_dismiss,
-      ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
+      ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
     );
     assert.equal(guidance.startup_lifetime.starts_reaper_with_openreaper_env, true);
     assert.equal(guidance.startup_lifetime.waits_for_reaper_process, true);
@@ -205,8 +205,8 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.startup_lifetime.log_dir, "/tmp/OpenReaper-alpha/session/logs");
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /OpenReaper bridge environment/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /OpenReaper: Start MCP bridge/);
-    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /If you cannot operate REAPER UI/);
-    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /live read probe/);
+    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /manual recovery fallback/);
+    assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /public read probe/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /Do not auto-dismiss/);
     assert.match(guidance.agent_flow.map((step) => step.agent_action).join("\n"), /reconnect/);
     assert.equal(guidance.safety.added_tools, 0);

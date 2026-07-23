@@ -168,6 +168,21 @@ export function createLiveBridgeExecutor(options = {}) {
       expectedOwner: request?.bridge?.expected_owner,
       expectedGeneration: request?.bridge?.expected_generation,
     });
+    if (liveness.status !== LIVE_BRIDGE_LIVENESS_STATUS.READY) {
+      return bridgeBlockerEnvelope(request, {
+        blocker: liveness.status,
+        message: "Live bridge is not ready for request dispatch.",
+        details: {
+          liveness_status: liveness.status,
+          liveness_details: liveness.details,
+          expected_identity: liveness.expected,
+          observed_heartbeat: liveness.heartbeat?.observed ?? null,
+          zero_write: true,
+        },
+        startedAt,
+        now,
+      });
+    }
     const dispatchTimeoutMs = resolveDispatchTimeoutMs({
       requestTimeoutMs: request?.timeout_ms,
       executorTimeoutMs: timeoutMs,

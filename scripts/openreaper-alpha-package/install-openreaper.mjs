@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants, existsSync } from "node:fs";
-import { chmod, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -99,9 +99,16 @@ const report = {
     command_id: bridgeActionCommand,
     script: bridgeActionScript,
   },
+  startup_hook: {
+    path: path.join(REAPER_RESOURCE_ROOT, "Scripts", "__startup.lua"),
+    mode: "conditional_openreaper_environment",
+    installed: false,
+    backup_path: null,
+  },
   startup_dialog_assist: {
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
-    does_not_dismiss: ["license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
+    explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
+    does_not_dismiss: ["missing media without consent", "license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
   },
   transport_dir: transportDir,
   artifact_root: artifactRoot,
@@ -212,7 +219,7 @@ async function runInstall() {
 
     if (!skipStartupHook) {
       await installBridgeAction();
-      await removeOptionalStartupHook();
+      await installConditionalStartupHook();
       await inspectOptionalStartupCompatibility();
     } else {
       report.skipped.push("REAPER bridge action installation skipped because --skip-startup-hook was set");
@@ -401,25 +408,56 @@ async function upsertBridgeActionInReaperKb() {
   }
 }
 
-async function removeOptionalStartupHook() {
+async function installConditionalStartupHook() {
   const hookPath = path.join(REAPER_RESOURCE_ROOT, "Scripts", "__startup.lua");
-  const existing = await readTextIfExists(hookPath);
-  if (existing === "") {
-    report.skipped.push("no REAPER __startup.lua hook found; no OpenReaper startup hook cleanup needed");
+  const hookStatus = await safeLstat(hookPath);
+  if (hookStatus && !hookStatus.isFile()) {
+    throw new Error(`REAPER startup hook must be a regular file, not ${describeFileType(hookStatus)}: ${hookPath}`);
+  }
+  const existing = hookStatus ? await readFile(hookPath, "utf8") : "";
+  let withoutLegacy = existing;
+  for (const block of LEGACY_STARTUP_BLOCKS) {
+    withoutLegacy = removeMarkedBlock(withoutLegacy, block.begin, block.end);
+  }
+  const next = upsertMarkedBlock(withoutLegacy, STARTUP_BEGIN, STARTUP_END, conditionalStartupHookSource()).trimEnd();
+  const nextText = `${next}\n`;
+  report.startup_hook.installed = true;
+  if (nextText === existing) {
+    report.skipped.push(`conditional OpenReaper startup hook already current at ${hookPath}`);
     return;
   }
-  const next = removeMarkedBlocks(existing, LEGACY_STARTUP_BLOCKS).trimEnd();
-  if (!dryRun && next !== existing.trimEnd()) {
-    await writeFile(hookPath, next === "" ? "" : `${next}\n`, "utf8");
-    report.changed.push(`removed prior OpenReaper/Streetlight startup hook from ${hookPath}`);
-  } else if (next === existing.trimEnd()) {
-    report.skipped.push(`no prior OpenReaper/Streetlight startup hook found in ${hookPath}`);
+  if (dryRun) {
+    report.skipped.push(`dry run: would install conditional OpenReaper startup hook at ${hookPath}`);
+    return;
   }
+  await mkdir(path.dirname(hookPath), { recursive: true });
+  if (hookStatus) {
+    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+    const backupPath = `${hookPath}.openreaper-backup-${stamp}-${randomBytes(4).toString("hex")}`;
+    await copyFile(hookPath, backupPath, fsConstants.COPYFILE_EXCL);
+    report.startup_hook.backup_path = backupPath;
+    report.changed.push(`backed up existing REAPER startup hook at ${backupPath}`);
+  }
+  await writeFile(hookPath, nextText, { encoding: "utf8", mode: 0o644 });
+  report.changed.push(`installed conditional OpenReaper startup hook at ${hookPath}`);
+}
+
+function conditionalStartupHookSource() {
+  return `${STARTUP_BEGIN}
+-- Inert for ordinary REAPER launches; active only for an OpenReaper-managed session.
+do
+  local bridge_script = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
+  local transport_dir = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
+  if bridge_script and bridge_script ~= "" and transport_dir and transport_dir ~= "" then
+    pcall(dofile, bridge_script)
+  end
+end
+${STARTUP_END}`;
 }
 
 function bridgeActionScriptSource() {
   return `-- OpenReaper: Start MCP bridge
--- Installed by OpenReaper alpha. Run this action after openreaper-start opens REAPER.
+-- Installed by OpenReaper alpha as a manual recovery fallback.
 local bridge = os.getenv("OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH")
 local transport = os.getenv("OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR")
 

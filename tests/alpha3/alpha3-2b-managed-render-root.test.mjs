@@ -80,6 +80,57 @@ describe("Alpha3.2-B2 managed render root", () => {
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
   });
 
+  it("installs an idempotent environment-gated startup hook while preserving and backing up user content", async () => {
+    const fixture = await makeInstallerFixture();
+    const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
+    const hookPath = path.join(scriptsRoot, "__startup.lua");
+    const original = [
+      "-- user startup content",
+      "reaper.ShowConsoleMsg('keep user startup')",
+      "",
+      "-- >>> OpenReaper Alpha3 MCP startup hook >>>",
+      "print('legacy openreaper hook')",
+      "-- <<< OpenReaper Alpha3 MCP startup hook <<<",
+      "",
+    ].join("\n");
+    await mkdir(scriptsRoot, { recursive: true });
+    await writeFile(hookPath, original, "utf8");
+
+    const first = await runInstallerWithStartupHook(fixture);
+    assert.equal(first.code, 0, first.stderr || first.stdout);
+    const firstReport = parseInstallerReport(first.stdout);
+    const installed = await readFile(hookPath, "utf8");
+    assert.match(installed, /keep user startup/);
+    assert.doesNotMatch(installed, /legacy openreaper hook/);
+    assert.equal((installed.match(/-- >>> OpenReaper alpha MCP startup hook >>>/g) ?? []).length, 1);
+    assert.match(installed, /OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH/);
+    assert.match(installed, /OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/);
+    assert.match(installed, /pcall\(dofile, bridge_script\)/);
+    assert.equal(await readFile(firstReport.startup_hook.backup_path, "utf8"), original);
+
+    const second = await runInstallerWithStartupHook(fixture);
+    assert.equal(second.code, 0, second.stderr || second.stdout);
+    const secondReport = parseInstallerReport(second.stdout);
+    assert.equal(secondReport.startup_hook.backup_path, null);
+    assert.equal(await readFile(hookPath, "utf8"), installed);
+  });
+
+  it("rejects a symlinked startup hook without modifying its target", async () => {
+    const fixture = await makeInstallerFixture();
+    const scriptsRoot = path.join(fixture.home, "Library", "Application Support", "REAPER", "Scripts");
+    const hookPath = path.join(scriptsRoot, "__startup.lua");
+    const targetPath = path.join(fixture.root, "external-startup.lua");
+    await mkdir(scriptsRoot, { recursive: true });
+    await writeFile(targetPath, "external startup\n", "utf8");
+    await symlink(targetPath, hookPath);
+
+    const result = await runInstallerWithStartupHook(fixture);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /startup hook must be a regular file/);
+    assert.equal(await readFile(targetPath, "utf8"), "external startup\n");
+    assert.equal((await lstat(hookPath)).isSymbolicLink(), true);
+  });
+
   it("rejects an executable recipe root symlink before replacing an existing install", async () => {
     const fixture = await makeInstallerFixture();
     await mkdir(fixture.installRoot, { recursive: true });
@@ -882,13 +933,13 @@ describe("Alpha3.2-B2 managed render root", () => {
     await harness.assertLockRemoved();
   });
 
-  it("waits for a delayed LaunchServices fake PID and drains the active cleanup registry", async () => {
+  it("waits for delayed LaunchServices heartbeat readiness and drains the active cleanup registry", async () => {
     const harness = await makeLaunchServicesHarness("delayed-pid", { fakePidDelayMs: 2500 });
     const selectedRoot = path.join(harness.root, "delayed-pid-selected");
-    const result = await harness.launchForSuiteDrain(["--render-root", selectedRoot], { waitSeconds: 1 });
+    const result = await harness.launchForSuiteDrain(["--render-root", selectedRoot], { waitSeconds: 4 });
 
     assert.equal(result.code, 0, result.stderr || result.stdout);
-    assert.equal(result.cleanupState.pidPresentWhenWrapperSettled, false, "fake PID was not delayed past wrapper completion");
+    assert.equal(result.cleanupState.pidPresentWhenWrapperSettled, true, "startup returned before the fake heartbeat became ready");
     assert.equal(harness.activeCleanupCount(), 1);
     await drainActiveFixtureCleanups();
     assert.equal(result.cleanupState.launchRequested, true);
@@ -1304,7 +1355,9 @@ async function makeStartFixture(label, { source = null } = {}) {
   await mkdir(path.dirname(recordPath), { recursive: true });
   if (source === null) await cp(START_SOURCE, startPath);
   else await writeFile(startPath, source, "utf8");
-  await chmod(startPath, 0o755);
+  const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
+  await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
+  await Promise.all([startPath, doctorPath].map((file) => chmod(file, 0o755)));
   return { root, home, installRoot, startPath, recordPath };
 }
 
@@ -1332,6 +1385,16 @@ function runInstaller(fixture, extraArgs = []) {
   ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
 }
 
+function runInstallerWithStartupHook(fixture, extraArgs = []) {
+  return runCaptured(process.execPath, [
+    fixture.installerPath,
+    "--install-root",
+    fixture.installRoot,
+    "--skip-client-config",
+    ...extraArgs,
+  ], { cwd: fixture.packageRoot, env: { ...process.env, HOME: fixture.home } });
+}
+
 function runUninstaller(fixture) {
   return runCaptured(process.execPath, [
     fixture.uninstallerPath,
@@ -1347,25 +1410,41 @@ async function runFakeStartResult({ fixture, label, extraArgs, staleRoot = null 
   const projectIndexCapturePath = path.join(fixture.root, `${label}.project-index.capture`);
   const fakeBinary = path.join(fixture.root, `${label}-fake-reaper`);
   const fakePidPath = path.join(fixture.root, `${label}-fake-reaper.pid`);
+  const fakeReleasePath = path.join(fixture.root, `${label}-release-fake-reaper`);
   const fakeExitedPath = path.join(fixture.root, `${label}-fake-reaper.exited`);
-  await writeFile(fakeBinary, `#!/bin/zsh\nprint -rn -- "$$" > ${shellQuote(fakePidPath)}\nprint -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}\nprint -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}\nprint -rn -- "exited" > ${shellQuote(fakeExitedPath)}\n`, "utf8");
+  await writeFile(fakeBinary, `#!/bin/zsh
+print -rn -- "$$" > ${shellQuote(fakePidPath)}
+print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
+print -r -- "$OPENREAPER_PROJECT_INDEX_STATE_ROOT" > ${shellQuote(projectIndexCapturePath)}
+mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+heartbeat_now="$(date +%s)"
+printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+fixture_wait_attempt=0
+while [[ ! -f ${shellQuote(fakeReleasePath)} && \${fixture_wait_attempt} -lt 200 ]]; do
+  sleep 0.05
+  fixture_wait_attempt=$(( fixture_wait_attempt + 1 ))
+done
+print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
+`, "utf8");
   await chmod(fakeBinary, 0o755);
-  const env = { ...process.env, HOME: fixture.home, OPENREAPER_START_WAIT_SECONDS: "0" };
+  const env = { ...process.env, HOME: fixture.home, OPENREAPER_START_WAIT_SECONDS: "1" };
   if (staleRoot !== null) env[RENDER_ENV] = staleRoot;
   const result = await runCaptured(fixture.startPath, ["--reaper-binary", fakeBinary, "--no-startup-dialog-assist", ...extraArgs], {
     cwd: fixture.root,
     env,
   });
   let fixturePid = null;
-  if (result.code === 0) {
-    await waitForFile(capturePath);
-    await waitForFile(fakeExitedPath);
-  }
   if (await pathExists(fakePidPath)) {
     fixturePid = await readFixturePid(fakePidPath);
+    await writeFile(fakeReleasePath, "release\n", "utf8");
+    await waitForFile(fakeExitedPath);
     await waitForProcessExit(fixturePid, `${label} direct fake REAPER`);
   }
+  if (result.code === 0) await waitForFile(capturePath);
   await rm(fakePidPath, { force: true });
+  await rm(fakeReleasePath, { force: true });
   await rm(fakeExitedPath, { force: true });
   return { result, capturePath, projectIndexCapturePath, fixturePid };
 }
@@ -1453,6 +1532,8 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
     .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
     .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`);
   await writeFile(startPath, startSource, "utf8");
+  const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
+  await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
   await writeFile(unamePath, "#!/bin/zsh\necho Darwin\n", "utf8");
   await writeFile(fakeBinary, `#!/bin/zsh
 set -u
@@ -1464,6 +1545,11 @@ if [[ -n "\${OPENREAPER_B2_FAKE_PID_DELAY_SECONDS:-}" ]]; then
 fi
 print -rn -- "$$" > "$pid_path"
 print -r -- "$${RENDER_ENV}" > ${shellQuote(capturePath)}
+mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+heartbeat_now="$(date +%s)"
+printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
 fixture_wait_attempt=0
 while [[ ! -f "$release_path" && \${fixture_wait_attempt} -lt 200 ]]; do
   sleep 0.05
@@ -1473,7 +1559,7 @@ print -rn -- "exited" > "$exited_path"
 `, "utf8");
   await writeFile(launchctlPath, launchctlFixtureSource({ stateRoot, controlRoot, logPath }), "utf8");
   await writeFile(openPath, openFixtureSource({ stateRoot, controlRoot, keys }), "utf8");
-  await Promise.all([startPath, unamePath, fakeBinary, launchctlPath, openPath].map((file) => chmod(file, 0o755)));
+  await Promise.all([startPath, doctorPath, unamePath, fakeBinary, launchctlPath, openPath].map((file) => chmod(file, 0o755)));
 
   let fakeRunSequence = 0;
   const commandArgs = (extraArgs) => ["--reaper-app", fakeApp, "--no-startup-dialog-assist", ...extraArgs];

@@ -480,34 +480,25 @@ For a bounded new session, --session-root /absolute/path/to/session derives
 that session's own renders child unless --render-root is also supplied. New
 session and render roots must be absolute writable directories.
 
-After REAPER opens:
-Run the REAPER action:
-  OpenReaper: Start MCP bridge
-
-The agent should try to run that action for you. If the agent cannot operate
-the REAPER UI on your machine, it should ask you for one small assist:
-Actions > Show action list, search "OpenReaper: Start MCP bridge", click Run,
-then ask the agent to reconnect.
-
-After reconnect:
-The agent should run a bounded live probe before saying the bridge is connected:
+Autonomous Bridge startup:
+The installed conditional startup hook starts the Bridge. openreaper-start
+returns ready only after a matching heartbeat and this bounded public probe pass:
   call_template(template.transport.read_state)
+The REAPER action "OpenReaper: Start MCP bridge" remains a manual recovery
+fallback only when autonomous startup reports that blocker.
 
 After install:
 Restart Codex, Cursor, Claude, or your MCP client so it reloads MCP config. Then ask:
   Open REAPER with OpenReaper and inspect the current project.
 
 Startup lifetime: openreaper-start launches REAPER detached from the agent
-shell, with the OpenReaper bridge environment prepared, waits for the REAPER
-process to stay alive, and then returns with a pid/log path. This keeps REAPER
+shell, with the OpenReaper bridge environment prepared, and returns with a
+pid/log path only after verified Bridge readiness. This keeps REAPER
 open if a terminal, MCP client, or agent command session ends.
 
-Startup dialogs: openreaper-start only tries to clear the known Project Settings / Notes
-"show notes on project load" window. license/evaluation, recovery, plugin,
-version, and other windows are user-choice dialogs. If MCP does not connect
-after REAPER opens, check whether a REAPER window is waiting for agent or user
-action, resolve it, run the bridge action, reconnect, and run the live probe
-again.
+Startup dialogs: openreaper-start clears only the known Project Settings / Notes
+window. Missing media requires explicit per-launch --ignore-missing-media consent.
+license/evaluation, recovery, plugin, version, and unknown windows fail closed.
 
 Uninstall:
   ./uninstall.command
@@ -2439,7 +2430,7 @@ async function smokePackagedOpenReaperStartHelper() {
   }
   for (const required of [
     "launch_reaper()",
-    'reaper_args=("-newinst")',
+    'reaper_args=("-newinst" "-nosplash")',
     'reaper_args+=("${PROJECT_PATH}")',
     'USE_LAUNCHSERVICES=true',
     "REAPER_APP",
@@ -2467,16 +2458,15 @@ async function smokePackagedOpenReaperStartHelper() {
     "reaper-pid=",
     "reaper-pid-file=",
     "reaper-log=",
-    "bridge-action=OpenReaper: Start MCP bridge",
-    "bridge-status=needs_reaper_action",
-    "startup-dialog-assist=project_notes_only",
+    "bridge-action-fallback=OpenReaper: Start MCP bridge",
+    "bridge-status=starting_automatically",
+    "startup-dialog-assist=project_notes_safe",
     "Project Settings / Notes",
     "Show notes on project load",
-    "license/evaluation, recovery, plugin, or other user-choice",
-    "agent-next-step=Try to run REAPER action",
-    "user-fallback=In REAPER: Actions",
-    "wait_for_reaper_process()",
-    "REAPER process stayed alive",
+    "--ignore-missing-media",
+    "blocked_unknown_dialog",
+    "wait_for_startup_readiness()",
+    "bridge-read-probe=passed",
     "OPENREAPER_START_WAIT_SECONDS",
   ]) {
     if (!source.includes(required)) {
@@ -2536,8 +2526,8 @@ async function smokePackagedOpenReaperStartHelper() {
     if (!text.includes("Project Settings") || !text.includes("Notes") || !text.includes("license/evaluation")) {
       throw new Error(`${label} must explain the narrow Project Notes assist and user-choice blocker windows.`);
     }
-    if (!text.includes("agent") || !text.includes("Actions")) {
-      throw new Error(`${label} must explain agent-first action launch and user fallback through REAPER Actions.`);
+    if (!text.includes("manual recovery fallback") && !text.includes("manual_recovery_fallback")) {
+      throw new Error(`${label} must keep the REAPER Action as a manual recovery fallback.`);
     }
     if (!text.includes("detached") || !text.includes("pid/log")) {
       throw new Error(`${label} must explain detached startup lifetime and pid/log recovery.`);
@@ -2579,10 +2569,10 @@ async function smokePackagedOpenReaperStartHelper() {
     macos_launchservices: true,
     launchservices_global_lock: "package_root/session/.openreaper-launchservices-env.lock",
     launchservices_lock_source_guard: true,
-    bridge_action_required: true,
+    bridge_action_required: false,
     bridge_action_name: "OpenReaper: Start MCP bridge",
-    agent_should_try_to_run_action: true,
-    startup_dialog_assist: "project_notes_only",
+    agent_should_try_to_run_action: false,
+    startup_dialog_assist: "project_notes_safe_missing_media_consent",
     connection_probe: "call_template(template.transport.read_state)",
     user_fallback: "Actions search Run",
     command_line_reascript_bridge: false,
@@ -2747,12 +2737,39 @@ async function smokePackagedStartRenderPropagation(startHelperPath) {
 async function runFakeStart({ startPath, fixtureRoot, capturePath, args, env }) {
   const fakeBinary = path.join(fixtureRoot, `fake-reaper-${path.basename(capturePath)}`);
   const fakePidPath = `${fakeBinary}.pid`;
+  const fakeReleasePath = `${fakeBinary}.release`;
   const fakeExitedPath = `${fakeBinary}.exited`;
-  await writeFile(fakeBinary, `#!/bin/zsh\nprint -rn -- "$$" > ${shellQuote(fakePidPath)}\nprint -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}\nprint -rn -- "exited" > ${shellQuote(fakeExitedPath)}\n`, "utf8");
-  await chmod(fakeBinary, 0o755);
+  const fakeDoctor = `${fakeBinary}.doctor`;
+  const fixtureStart = `${fakeBinary}.start`;
+  const installRoot = path.dirname(path.dirname(startPath));
+  const startSource = await readFile(startPath, "utf8");
+  const fixtureStartSource = startSource
+    .replace('INSTALL_ROOT="${SCRIPT_DIR:h}"', `INSTALL_ROOT=${shellQuote(installRoot)}`)
+    .replace('local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"', `local doctor=${shellQuote(fakeDoctor)}`);
+  if (fixtureStartSource === startSource || !fixtureStartSource.includes(`local doctor=${shellQuote(fakeDoctor)}`)) {
+    throw new Error("packaged start readiness fixture could not bind its fake Doctor");
+  }
+  await writeFile(fakeDoctor, "#!/bin/zsh\nexit 0\n", "utf8");
+  await writeFile(fixtureStart, fixtureStartSource, "utf8");
+  await writeFile(fakeBinary, `#!/bin/zsh
+print -rn -- "$$" > ${shellQuote(fakePidPath)}
+print -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}
+mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+heartbeat_now="$(date +%s)"
+printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+fixture_wait_attempt=0
+while [[ ! -f ${shellQuote(fakeReleasePath)} && \${fixture_wait_attempt} -lt 400 ]]; do
+  sleep 0.025
+  fixture_wait_attempt=$(( fixture_wait_attempt + 1 ))
+done
+print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
+`, "utf8");
+  await Promise.all([fakeBinary, fakeDoctor, fixtureStart].map((file) => chmod(file, 0o755)));
   let result;
   try {
-    result = await runCaptured(startPath, [
+    result = await runCaptured(fixtureStart, [
       "--reaper-binary",
       fakeBinary,
       "--no-startup-dialog-assist",
@@ -2762,7 +2779,7 @@ async function runFakeStart({ startPath, fixtureRoot, capturePath, args, env }) 
       env: {
         ...process.env,
         ...env,
-        OPENREAPER_START_WAIT_SECONDS: "0",
+        OPENREAPER_START_WAIT_SECONDS: "1",
       },
     });
     if (result.code !== 0) {
@@ -2777,10 +2794,13 @@ async function runFakeStart({ startPath, fixtureRoot, capturePath, args, env }) 
   } finally {
     await reapFixtureProcess({
       pidPath: fakePidPath,
+      releasePath: fakeReleasePath,
       exitedPath: fakeExitedPath,
       expectedStart: result?.code === 0,
       label: `direct fake REAPER ${path.basename(capturePath)}`,
     });
+    await rm(fakeDoctor, { force: true });
+    await rm(fixtureStart, { force: true });
   }
 }
 
@@ -2799,7 +2819,7 @@ async function runFakeStartExpectFailure({ startPath, fixtureRoot, capturePath, 
       ...args,
     ], {
       cwd: fixtureRoot,
-      env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "0" },
+      env: { ...process.env, OPENREAPER_START_WAIT_SECONDS: "1" },
     });
     if (result.code !== 2 || !result.stderr.includes("render-root validation failed")) {
       throw new Error(`invalid packaged start record did not fail closed: ${result.stderr || result.stdout}`);
@@ -2830,6 +2850,7 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
   const openPath = path.join(binRoot, "open");
   const unamePath = path.join(binRoot, "uname");
   const transformedStart = path.join(installRoot, "bin", "openreaper-start");
+  const fakeDoctor = path.join(installRoot, "bin", "openreaper-doctor");
   const fakeApp = path.join(lsRoot, "FakeREAPER.app");
   const fakeBinary = path.join(fakeApp, "Contents", "MacOS", "REAPER");
   const capturePath = path.join(lsRoot, "launchservices.capture");
@@ -2874,6 +2895,7 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
       .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`),
     "utf8",
   );
+  await writeFile(fakeDoctor, "#!/bin/zsh\nexit 0\n", "utf8");
   await writeFile(unamePath, "#!/bin/zsh\necho Darwin\n", "utf8");
   await writeFile(launchctlPath, `#!/bin/zsh
 set -eu
@@ -2905,6 +2927,11 @@ nohup "$app/Contents/MacOS/REAPER" "$@" >/dev/null 2>&1 &
   await writeFile(fakeBinary, `#!/bin/zsh
 print -rn -- "$$" > ${shellQuote(fakePidPath)}
 print -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" > ${shellQuote(capturePath)}
+mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+heartbeat_now="$(date +%s)"
+printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \
+  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
 for key in ${scrubKeys.map(shellQuote).join(" ")}; do
   if (( \${+parameters[\$key]} )); then
     print -r -- "\$key=\${(P)key}"
@@ -2919,7 +2946,7 @@ while [[ ! -f ${shellQuote(fakeReleasePath)} && \${fixture_wait_attempt} -lt 200
 done
 print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
 `, "utf8");
-  await Promise.all([transformedStart, unamePath, launchctlPath, openPath, fakeBinary].map((file) => chmod(file, 0o755)));
+  await Promise.all([transformedStart, fakeDoctor, unamePath, launchctlPath, openPath, fakeBinary].map((file) => chmod(file, 0o755)));
 
   const previousTransport = "previous transport with spaces";
   await writeFile(path.join(stateRoot, "OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR.presence"), "set", "utf8");
@@ -3107,8 +3134,9 @@ async function smokePackagedInstallerUpgradeMigration() {
     "prior OpenReaper alpha startup hook",
     "legacy OpenReaper Alpha3 startup hook",
     "legacy Streetlight startup hook",
-    "removeMarkedBlocks",
-    "removeOptionalStartupHook",
+    "removeMarkedBlock",
+    "installConditionalStartupHook",
+    "conditionalStartupHookSource",
     "inspectOptionalStartupCompatibility",
     "readIniValue",
     "OpenReaper does not require or take over SWS startup actions",
@@ -3251,9 +3279,10 @@ args = ["/tmp/other.js"]
     removes_legacy_mcp_config: true,
     removes_legacy_openreaper_alias_to_streetlight_kernel: true,
     removes_legacy_startup_hooks: true,
+    installs_conditional_startup_hook: true,
     installs_reaper_bridge_action: true,
     bridge_action_name: "OpenReaper: Start MCP bridge",
-    agent_or_user_runs_bridge_action: true,
+    bridge_action_manual_recovery_only: true,
     sws_startup_optional: true,
     sws_required: false,
   };
@@ -3773,8 +3802,8 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (guidance.requirements?.only_openreaper_startup_supported !== true) {
     throw new Error(`${label} must require OpenReaper startup helper`);
   }
-  if (guidance.requirements?.bridge_action_required_after_start !== true) {
-    throw new Error(`${label} must require the bridge action after openreaper-start`);
+  if (guidance.requirements?.bridge_action_required_after_start !== false) {
+    throw new Error(`${label} must not require the fallback bridge action after openreaper-start`);
   }
   if (guidance.requirements?.live_probe_required_before_success_claim !== true) {
     throw new Error(`${label} must require a live read probe before claiming the bridge is connected`);
@@ -3782,8 +3811,8 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (guidance.bridge_action?.installed_action_name !== "OpenReaper: Start MCP bridge") {
     throw new Error(`${label} must name the installed bridge action`);
   }
-  if (guidance.bridge_action?.agent_should_try_to_run_action !== true) {
-    throw new Error(`${label} must tell the agent to try running the bridge action first`);
+  if (guidance.bridge_action?.agent_should_try_to_run_action !== false || guidance.bridge_action?.role !== "manual_recovery_fallback") {
+    throw new Error(`${label} must keep the bridge action as manual recovery only`);
   }
   if (guidance.bridge_action?.sws_required !== false) {
     throw new Error(`${label} must not require SWS for bridge startup`);
@@ -3797,7 +3826,7 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   if (!guidance.startup_dialog_assist?.auto_dismisses?.includes("project_settings_notes_show_notes_on_project_load")) {
     throw new Error(`${label} must limit automatic startup dialog assist to Project Settings / Notes`);
   }
-  for (const blocker of ["license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"]) {
+  for (const blocker of ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"]) {
     if (!guidance.startup_dialog_assist?.does_not_dismiss?.includes(blocker)) {
       throw new Error(`${label} must not auto-dismiss ${blocker}`);
     }

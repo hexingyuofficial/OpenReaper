@@ -120,7 +120,7 @@ describe("Layer 4D.1 live bridge executor binding", () => {
     assert.equal(response.request.id.startsWith("cmd_"), true);
   });
 
-  it("reports bridge script absence and handshake failure without raw execution paths", async () => {
+  it("reports bridge script absence and missing heartbeat without writing a request", async () => {
     const transport = await makeTransport();
     const scriptMissingExecutor = createLiveBridgeExecutor({
       transportDir: transport.root,
@@ -140,21 +140,77 @@ describe("Layer 4D.1 live bridge executor binding", () => {
       timeoutMs: 20,
       pollIntervalMs: 1,
     });
-    const timeoutStartedAt = Date.now();
-    const timeout = await timeoutExecutor.dispatch(idempotentProjectRequest({
+    const blockedStartedAt = Date.now();
+    const blocked = await timeoutExecutor.dispatch(idempotentProjectRequest({
       id: "cmd_handshake_timeout",
       idempotencyKey: "handshake-timeout",
       name: "Handshake Timeout",
       timeoutMs: 300_000,
     }));
-    assert.equal(timeout.error.code, "BRIDGE_TIMEOUT");
-    assert.equal(timeout.error.details.blocker, "live_bridge_handshake_failed");
-    assert.equal(timeout.error.details.timeout_ms, 20);
-    assert.equal(Date.now() - timeoutStartedAt < 500, true);
-    assert.equal((await readdir(join(transport.root, "requests"))).length, 1);
-    const [writtenRequestPath] = await readdir(join(transport.root, "requests"));
-    const writtenRequest = JSON.parse(await readFile(join(transport.root, "requests", writtenRequestPath), "utf8"));
-    assert.equal(writtenRequest.timeout_ms, 300_000);
+    assert.equal(blocked.error.code, "BRIDGE_NOT_RUNNING");
+    assert.equal(blocked.error.details.blocker, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+    assert.equal(blocked.error.details.liveness_status, LIVE_BRIDGE_LIVENESS_STATUS.ACTION_NOT_RUNNING);
+    assert.equal(blocked.error.details.zero_write, true);
+    assert.equal(Date.now() - blockedStartedAt < 500, true);
+    assert.deepEqual(await readdir(join(transport.root, "requests")), []);
+  });
+
+  it("fails closed with zero request writes for stale, mismatched, and invalid heartbeats", async () => {
+    const now = new Date("2026-07-10T12:00:10.000Z");
+    const cases = [
+      {
+        status: LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE,
+        heartbeat: { active_owner: "owner-test", active_generation: 1, mtime: new Date(now.getTime() - 5_000) },
+      },
+      {
+        status: LIVE_BRIDGE_LIVENESS_STATUS.OWNER_MISMATCH,
+        heartbeat: { active_owner: "other-owner", active_generation: 1, mtime: new Date(now.getTime() - 100) },
+      },
+      {
+        status: LIVE_BRIDGE_LIVENESS_STATUS.GENERATION_MISMATCH,
+        heartbeat: { active_owner: "owner-test", active_generation: 2, mtime: new Date(now.getTime() - 100) },
+      },
+    ];
+
+    for (const fixture of cases) {
+      const transport = await makeTransport();
+      const bridgeScriptPath = join(transport.root, "openreaper-live-bridge.lua");
+      await writeFile(bridgeScriptPath, "-- minimal test fixture; not a runtime\n");
+      await writeHeartbeat(transport.root, fixture.heartbeat);
+      const executor = createLiveBridgeExecutor({
+        transportDir: transport.root,
+        bridgeScriptPath,
+        heartbeatMaxAgeMs: 2_000,
+        now: () => now,
+      });
+      const result = await executor.dispatch(idempotentProjectRequest({
+        id: `cmd_zero_write_${fixture.status}`,
+        idempotencyKey: `zero-write-${fixture.status}`,
+        name: fixture.status,
+      }));
+      assert.equal(result.ok, false, fixture.status);
+      assert.equal(result.error.details.blocker, fixture.status);
+      assert.equal(result.error.details.zero_write, true);
+      assert.deepEqual(await readdir(join(transport.root, "requests")), [], fixture.status);
+    }
+
+    const invalidTransport = await makeTransport();
+    const invalidScript = join(invalidTransport.root, "openreaper-live-bridge.lua");
+    await writeFile(invalidScript, "-- minimal test fixture; not a runtime\n");
+    await writeFile(join(invalidTransport.root, LIVE_BRIDGE_HEARTBEAT_FILENAME), "not-json\n");
+    const invalid = await createLiveBridgeExecutor({
+      transportDir: invalidTransport.root,
+      bridgeScriptPath: invalidScript,
+      heartbeatMaxAgeMs: 2_000,
+      now: () => now,
+    }).dispatch(idempotentProjectRequest({
+      id: "cmd_zero_write_invalid",
+      idempotencyKey: "zero-write-invalid",
+      name: "invalid heartbeat",
+    }));
+    assert.equal(invalid.error.details.blocker, LIVE_BRIDGE_LIVENESS_STATUS.HEARTBEAT_INVALID);
+    assert.equal(invalid.error.details.zero_write, true);
+    assert.deepEqual(await readdir(join(invalidTransport.root, "requests")), []);
   });
 
   it("uses the descriptor timeout as the live transport wait budget", async () => {
