@@ -484,8 +484,8 @@ Autonomous Bridge startup:
 The installed conditional startup hook starts the Bridge. openreaper-start
 returns ready only after a matching heartbeat and this bounded public probe pass:
   call_template(template.transport.read_state)
-The REAPER action "OpenReaper: Start MCP bridge" remains a manual recovery
-fallback only when autonomous startup reports that blocker.
+The REAPER action "OpenReaper: Start MCP bridge" remains a manual recovery fallback
+only when autonomous startup reports that blocker.
 
 After install:
 Restart Codex, Cursor, Claude, or your MCP client so it reloads MCP config. Then ask:
