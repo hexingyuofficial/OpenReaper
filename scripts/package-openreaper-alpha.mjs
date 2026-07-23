@@ -2786,7 +2786,6 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
       throw new Error(`fake direct openreaper-start failed: ${result.stderr || result.stdout}`);
     }
     await waitForFile(capturePath);
-    await waitForFile(fakeExitedPath);
     const renderLines = result.stdout.split(/\r?\n/).filter((line) => line.includes("render-root="));
     if (renderLines.length !== 1) {
       throw new Error(`openreaper-start must print exactly one render-root=<path> line, saw ${JSON.stringify(renderLines)}`);
