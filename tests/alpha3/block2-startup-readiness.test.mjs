@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   ALPHA3_BLOCK2_STARTUP_READINESS_CONTRACT,
   ALPHA3_BLOCK2_STARTUP_READINESS_DISCOVERY_SUMMARY,
@@ -24,7 +27,19 @@ import {
   createOpenReaperAgentStartupGuidance,
 } from "../../packages/mcp-server/src/openreaper-agent-startup-guidance-v1.mjs";
 
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const START_HELPER = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
+
 describe("Alpha3 Block2 startup and connection readiness", () => {
+  it("keeps missing-media dialog automation consent-bound and exact", () => {
+    const source = readFileSync(START_HELPER, "utf8");
+    assert.match(source, /if windowTitle is "Project Load Warning" then/u);
+    assert.match(source, /uiElementTextContains\(reaperWindow, "media item"\).*uiElementTextContains\(reaperWindow, "offline"\)/u);
+    assert.match(source, /allowMissingMedia and isOfflineMediaWarning and my directButtonCount\(reaperWindow, "OK"\) is 1/u);
+    assert.match(source, /dismissed_missing_media_offline_warning:choice=OK/u);
+    assert.match(source, /return "blocked_user_decision:title=Project Load Warning"/u);
+  });
+
   it("summarizes startup readiness without opening REAPER or spawning processes", () => {
     const summary = summarizeAlpha3Block2StartupReadiness();
 

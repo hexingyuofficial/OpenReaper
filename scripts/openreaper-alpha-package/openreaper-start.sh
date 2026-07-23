@@ -192,7 +192,8 @@ Startup dialog assist is enabled by default. It only dismisses the known
 Project Settings / Notes "show notes on project load" window by clicking OK.
 Missing media, license/evaluation, recovery, plugin, and unknown dialogs fail
 closed. Pass --ignore-missing-media to give one-launch consent for the exact
-"Ignore all missing files" choice, or --no-startup-dialog-assist for debugging.
+"Ignore all missing files" choice and its exact media-items-offline warning,
+or --no-startup-dialog-assist for debugging.
 HELP
       exit 0
       ;;
@@ -1176,6 +1177,38 @@ on uiElementNamed(theWindow, targetName)
   return false
 end uiElementNamed
 
+on uiElementTextContains(theWindow, targetText)
+  tell application "System Events"
+    try
+      set uiElements to entire contents of theWindow
+      repeat with uiElement in uiElements
+        repeat with attributeName in {"name", "value", "description"}
+          try
+            if attributeName is "name" then
+              set attributeValue to name of uiElement
+            else if attributeName is "value" then
+              set attributeValue to value of uiElement
+            else
+              set attributeValue to description of uiElement
+            end if
+            if attributeValue is not missing value and (attributeValue as text) contains targetText then return true
+          end try
+        end repeat
+      end repeat
+    end try
+  end tell
+  return false
+end uiElementTextContains
+
+on directButtonCount(theWindow, targetName)
+  tell application "System Events"
+    try
+      return count of (buttons of theWindow whose name is targetName)
+    end try
+  end tell
+  return 0
+end directButtonCount
+
 on run argv
 set allowMissingMedia to (item 1 of argv is "true")
 tell application "System Events"
@@ -1211,7 +1244,20 @@ tell application "System Events"
         end if
         return "blocked_missing_media:choice=Ignore all missing files"
       end if
-      if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "Project Load Warning" or windowTitle contains "New version" then
+      if windowTitle is "Project Load Warning" then
+        set isOfflineMediaWarning to false
+        if my uiElementTextContains(reaperWindow, "media item") and my uiElementTextContains(reaperWindow, "offline") then set isOfflineMediaWarning to true
+        if allowMissingMedia and isOfflineMediaWarning and my directButtonCount(reaperWindow, "OK") is 1 then
+          try
+            click button "OK" of reaperWindow
+            return "dismissed_missing_media_offline_warning:choice=OK"
+          on error errorMessage
+            return "blocked_missing_media_offline_warning:choice=OK:error=" & errorMessage
+          end try
+        end if
+        return "blocked_user_decision:title=Project Load Warning"
+      end if
+      if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
         return "blocked_user_decision:title=" & windowTitle
       end if
       try

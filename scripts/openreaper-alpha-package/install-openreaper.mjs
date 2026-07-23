@@ -49,6 +49,10 @@ try {
   process.stderr.write(`[OpenReaper] ${String(error?.message ?? "invalid option").replace(/[\u0000-\u001f\u007f]/gu, " ").slice(0, 320)}\n`);
   process.exit(2);
 }
+if (options.help === true) {
+  printInstallHelp();
+  process.exit(0);
+}
 const home = os.homedir();
 const installRoot = path.resolve(options.install_root ?? path.join(home, ".openreaper", "current"));
 const dryRun = options.dry_run === true;
@@ -1180,4 +1184,21 @@ function parseArgValue(value) {
   if (value === "true") return true;
   if (value === "false") return false;
   return value;
+}
+
+function printInstallHelp() {
+  process.stdout.write(`OpenReaper alpha installer
+
+Usage:
+  ./install.command [options]
+  node ./installer/install-openreaper.mjs [options]
+
+Options:
+  --install-root <path>       Install destination (default: ~/.openreaper/current)
+  --render-root <path>        Managed render output destination
+  --dry-run                   Validate without installing
+  --skip-client-config        Do not update supported MCP client configs
+  --skip-startup-hook         Do not install the conditional REAPER startup hook
+  --help                      Show this help without installing
+`);
 }

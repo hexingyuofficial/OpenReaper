@@ -43,6 +43,18 @@ after(async () => {
 });
 
 describe("Alpha3.2-B2 managed render root", () => {
+  it("prints installer help without creating or replacing an install", async () => {
+    const fixture = await makeInstallerFixture();
+    const result = await runCaptured(process.execPath, [fixture.installerPath, "--help"], {
+      cwd: fixture.packageRoot,
+      env: { ...process.env, HOME: fixture.home },
+    });
+    assert.equal(result.code, 0, result.stderr || result.stdout);
+    assert.match(result.stdout, /OpenReaper alpha installer/u);
+    assert.match(result.stdout, /Show this help without installing/u);
+    await assert.rejects(lstat(fixture.installRoot), (error) => error?.code === "ENOENT");
+  });
+
   it("creates and persists the fresh default root with a bounded writable report", async () => {
     const fixture = await makeInstallerFixture();
     const result = await runInstaller(fixture);

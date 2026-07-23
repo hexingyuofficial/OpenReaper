@@ -33,6 +33,19 @@ test("creates a fresh absolute evidence root with the fixed journal layout", asy
   }
 });
 
+test("creates missing evidence parent directories without weakening fresh-root exclusion", async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-evidence-parent-"));
+  const root = path.join(parent, "missing", "parents", "fresh");
+  try {
+    const journal = await createEvidenceJournal({ evidenceRoot: root });
+    assert.equal(journal.root, root);
+    assert.equal((await stat(path.dirname(root))).isDirectory(), true);
+    await assert.rejects(createEvidenceJournal({ evidenceRoot: root }), (error) => error.code === "EVIDENCE_ROOT_NOT_FRESH");
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 test("appends successful, expected-failure, and thrown calls in stable order with atomic request/response artifacts", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-journal-"));
   const root = path.join(parent, "root");

@@ -44,6 +44,7 @@ export async function createFreshEvidenceRoot(evidenceRoot) {
     if (error?.code !== "ENOENT") throw evidenceError("EVIDENCE_ROOT_UNAVAILABLE", "Evidence root could not be inspected.", { evidence_root: root, cause: boundedError(error) });
   }
   try {
+    await mkdir(path.dirname(root), { recursive: true });
     await mkdir(root, { recursive: false });
     await mkdir(path.join(root, "reports"), { recursive: false });
     await mkdir(path.join(root, "events"), { recursive: false });
