@@ -19,6 +19,9 @@ BRIDGE_GENERATION=""
 START_WAIT_SECONDS="${OPENREAPER_START_WAIT_SECONDS:-20}"
 STARTUP_DIALOG_ASSIST=true
 IGNORE_MISSING_MEDIA=false
+STARTUP_DIALOG_CONSENT=""
+STARTUP_DIALOG_CONSENT_EXPLICIT=false
+STARTUP_DIALOG_POLICY_FILE="${INSTALL_ROOT:h}/data/startup-dialog-consent"
 LAUNCHCTL_BIN="/bin/launchctl"
 OPEN_BIN="/usr/bin/open"
 LAUNCHSERVICES_LOCK_PATH="${INSTALL_ROOT}/session/.openreaper-launchservices-env.lock"
@@ -77,6 +80,28 @@ require_option_value() {
     echo "[OpenReaper] ${option_name} requires a non-empty value" >&2
     exit 2
   fi
+}
+
+set_startup_dialog_consent_internal() {
+  local value="$1"
+  if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" && "${STARTUP_DIALOG_CONSENT}" != "${value}" ]]; then
+    echo "[OpenReaper] conflicting startup dialog consent options" >&2
+    exit 2
+  fi
+  STARTUP_DIALOG_CONSENT="${value}"
+  STARTUP_DIALOG_CONSENT_EXPLICIT=true
+}
+
+set_startup_dialog_consent() {
+  local value="$1"
+  case "${value}" in
+    once|always|manual) ;;
+    *)
+      echo "[OpenReaper] --startup-dialog-consent must be once, always, or manual" >&2
+      exit 2
+      ;;
+  esac
+  set_startup_dialog_consent_internal "${value}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -147,12 +172,21 @@ while [[ $# -gt 0 ]]; do
       BRIDGE_GENERATION="$2"
       shift 2
       ;;
+    --startup-dialog-consent=*)
+      set_startup_dialog_consent "${1#*=}"
+      shift
+      ;;
+    --startup-dialog-consent)
+      require_option_value "$1" "$#" "${2-}"
+      set_startup_dialog_consent "$2"
+      shift 2
+      ;;
     --no-startup-dialog-assist|--no-dialog-assist)
-      STARTUP_DIALOG_ASSIST=false
+      set_startup_dialog_consent_internal manual_once
       shift
       ;;
     --ignore-missing-media)
-      IGNORE_MISSING_MEDIA=true
+      set_startup_dialog_consent once
       shift
       ;;
     --help|-h)
@@ -188,12 +222,19 @@ The installed conditional startup hook starts the Bridge automatically. The
 REAPER action named "OpenReaper: Start MCP bridge" remains a manual recovery
 fallback if autonomous startup is blocked.
 
-Startup dialog assist is enabled by default. It only dismisses the known
-Project Settings / Notes "show notes on project load" window by clicking OK.
-Missing media, license/evaluation, recovery, plugin, and unknown dialogs fail
-closed. Pass --ignore-missing-media to give one-launch consent for the exact
-"Ignore all missing files" choice and its exact media-items-offline warning,
-or --no-startup-dialog-assist for debugging.
+Before the first assisted launch, choose one startup-dialog policy:
+  --startup-dialog-consent once    Assist this launch only; do not save consent.
+  --startup-dialog-consent always  Assist now and save consent for later launches.
+  --startup-dialog-consent manual  Save that the user will handle startup windows.
+With no saved policy or explicit choice, the helper asks the agent to obtain the
+user's choice and exits before starting REAPER. Saved choices live outside the
+replaceable install tree and survive upgrades.
+
+Consent applies only to the exact Project Settings / Notes, missing-media Ignore,
+and exact media-items-offline warning rules. License/evaluation, recovery,
+plugin, version, decision-bearing, ambiguous, and unknown dialogs always fail
+closed. --ignore-missing-media remains a one-launch compatibility alias for
+"once"; --no-startup-dialog-assist remains a one-launch manual/debug override.
 HELP
       exit 0
       ;;
@@ -203,6 +244,96 @@ HELP
       ;;
   esac
 done
+
+persist_startup_dialog_consent() {
+  local value="$1"
+  local policy_dir="${STARTUP_DIALOG_POLICY_FILE:h}"
+  local temp_file="${STARTUP_DIALOG_POLICY_FILE}.tmp.$$"
+  if [[ -L "${policy_dir}" || -L "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
+    echo "[OpenReaper] startup dialog consent path must not be a symlink: ${STARTUP_DIALOG_POLICY_FILE}" >&2
+    return 1
+  fi
+  mkdir -p "${policy_dir}"
+  if [[ ! -d "${policy_dir}" ]]; then
+    echo "[OpenReaper] startup dialog consent directory is unavailable: ${policy_dir}" >&2
+    return 1
+  fi
+  umask 077
+  print -r -- "${value}" > "${temp_file}"
+  chmod 600 "${temp_file}"
+  mv -f "${temp_file}" "${STARTUP_DIALOG_POLICY_FILE}"
+}
+
+resolve_startup_dialog_consent() {
+  local stored=""
+  if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" != "true" ]]; then
+    if [[ -L "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
+      echo "[OpenReaper] startup dialog consent file must not be a symlink: ${STARTUP_DIALOG_POLICY_FILE}" >&2
+      return 1
+    fi
+    if [[ -e "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
+      if [[ ! -f "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
+        echo "[OpenReaper] startup dialog consent path is not a regular file: ${STARTUP_DIALOG_POLICY_FILE}" >&2
+        return 1
+      fi
+      stored="$(<"${STARTUP_DIALOG_POLICY_FILE}")"
+      case "${stored}" in
+        always|manual) STARTUP_DIALOG_CONSENT="${stored}" ;;
+        *)
+          echo "[OpenReaper] invalid saved startup dialog consent; choose once, always, or manual again" >&2
+          return 1
+          ;;
+      esac
+    else
+      echo "[OpenReaper] startup-status=needs_user_consent" >&2
+      echo "[OpenReaper] startup-dialog-consent=required" >&2
+      echo "[OpenReaper] Ask the user: allow safe startup-window assistance once, always, or handle windows themselves?" >&2
+      echo "[OpenReaper] once: openreaper-start --startup-dialog-consent once" >&2
+      echo "[OpenReaper] always: openreaper-start --startup-dialog-consent always" >&2
+      echo "[OpenReaper] manual: openreaper-start --startup-dialog-consent manual" >&2
+      return 3
+    fi
+  fi
+
+  case "${STARTUP_DIALOG_CONSENT}" in
+    once)
+      STARTUP_DIALOG_ASSIST=true
+      IGNORE_MISSING_MEDIA=true
+      ;;
+    always)
+      STARTUP_DIALOG_ASSIST=true
+      IGNORE_MISSING_MEDIA=true
+      if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" ]]; then
+        persist_startup_dialog_consent always || return 1
+      fi
+      ;;
+    manual)
+      STARTUP_DIALOG_ASSIST=false
+      IGNORE_MISSING_MEDIA=false
+      if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" == "true" ]]; then
+        persist_startup_dialog_consent manual || return 1
+      fi
+      ;;
+    manual_once)
+      STARTUP_DIALOG_ASSIST=false
+      IGNORE_MISSING_MEDIA=false
+      ;;
+    *)
+      echo "[OpenReaper] unresolved startup dialog consent" >&2
+      return 1
+      ;;
+  esac
+}
+
+if resolve_startup_dialog_consent; then
+  :
+else
+  consent_status=$?
+  if (( consent_status == 3 )); then
+    exit 3
+  fi
+  exit 1
+fi
 
 if [[ -z "${TRANSPORT_DIR}" ]]; then
   TRANSPORT_DIR="${SESSION_ROOT}/transport"
@@ -640,7 +771,8 @@ else
 fi
 echo "[OpenReaper] bridge-action-fallback=OpenReaper: Start MCP bridge"
 echo "[OpenReaper] bridge-status=starting_automatically"
-echo "[OpenReaper] startup-dialog-assist=project_notes_safe;missing_media_consent=${IGNORE_MISSING_MEDIA}"
+echo "[OpenReaper] startup-dialog-consent=${STARTUP_DIALOG_CONSENT};policy=${STARTUP_DIALOG_POLICY_FILE}"
+echo "[OpenReaper] startup-dialog-assist=exact_safe_allowlist;missing_media_consent=${IGNORE_MISSING_MEDIA}"
 
 launch_reaper() {
   local -a reaper_args

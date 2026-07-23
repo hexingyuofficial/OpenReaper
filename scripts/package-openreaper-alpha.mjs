@@ -350,6 +350,8 @@ async function copyOpenReaperKernel() {
       path.join(packageRoot, "docs", "AGENT_START_HERE.md"),
     ],
   });
+  await mkdir(path.join(packageRoot, "docs"), { recursive: true });
+  await cp(path.join(repoRoot, "docs", "USER_GUIDE.md"), path.join(packageRoot, "docs", "USER_GUIDE.md"));
 }
 
 async function copyAgentStartHereDocument({ sourcePath, destinations }) {
@@ -451,6 +453,9 @@ Also shipped byte-identical at:
   vendor/openreaper-kernel/docs/AGENT_START_HERE.md
 MCP initialization instructions are projected from that document's compact marked section. Read it first: ping -> list_templates with the user's original query -> exact-id expansion -> call_template -> live readback. Macro-first; no product bypass.
 
+User guide:
+  docs/USER_GUIDE.md
+
 Important:
 REAPER must be started through OpenReaper for MCP to connect. Normal double-click REAPER launches are not OpenReaper MCP sessions.
 
@@ -496,9 +501,13 @@ shell, with the OpenReaper bridge environment prepared, and returns with a
 pid/log path only after verified Bridge readiness. This keeps REAPER
 open if a terminal, MCP client, or agent command session ends.
 
-Startup dialogs: openreaper-start clears only the known Project Settings / Notes
-window. Missing media requires explicit per-launch --ignore-missing-media consent.
-license/evaluation, recovery, plugin, version, and unknown windows fail closed.
+Startup dialogs: before the first assisted launch, openreaper-start asks the
+agent to obtain one explicit user choice: safe assistance once, always, or
+manual handling. Use --startup-dialog-consent once|always|manual. The always
+and manual choices persist outside the replaceable install tree. Consent covers
+only exact Project Notes, missing-media Ignore, and media-offline warning rules;
+license/evaluation, recovery, plugin, version, ambiguous, and unknown windows
+always fail closed.
 
 Uninstall:
   ./uninstall.command
@@ -945,7 +954,10 @@ async function smokePackagedOpenReaperMcp() {
           verification_probe: ping.agent_startup_guidance.bridge_action.verification_probe,
         },
         startup_dialog_assist: {
+          requires_first_use_consent: ping.agent_startup_guidance.startup_dialog_assist.requires_first_use_consent,
+          consent_choices: ping.agent_startup_guidance.startup_dialog_assist.consent_choices,
           auto_dismisses: ping.agent_startup_guidance.startup_dialog_assist.auto_dismisses,
+          auto_dismisses_with_consent: ping.agent_startup_guidance.startup_dialog_assist.auto_dismisses_with_consent,
           does_not_dismiss: ping.agent_startup_guidance.startup_dialog_assist.does_not_dismiss,
         },
       },
@@ -2471,10 +2483,14 @@ async function smokePackagedOpenReaperStartHelper() {
     "reaper-log=",
     "bridge-action-fallback=OpenReaper: Start MCP bridge",
     "bridge-status=starting_automatically",
-    "startup-dialog-assist=project_notes_safe",
+    "startup-dialog-assist=exact_safe_allowlist",
     "Project Settings / Notes",
     "Show notes on project load",
     "--ignore-missing-media",
+    "--startup-dialog-consent",
+    "startup-status=needs_user_consent",
+    "startup-dialog-consent=required",
+    "startup-dialog-consent must be once, always, or manual",
     "blocked_unknown_dialog",
     "wait_for_startup_readiness()",
     "bridge-read-probe=passed",
@@ -2523,6 +2539,7 @@ async function smokePackagedOpenReaperStartHelper() {
   const installerSource = await readFile(path.join(packageRoot, "installer", "install-openreaper.mjs"), "utf8");
   const doctorSource = await readFile(path.join(packageRoot, "bin", "openreaper-doctor"), "utf8");
   const readmeSource = await readFile(path.join(packageRoot, "README.txt"), "utf8");
+  const userGuideSource = await readFile(path.join(packageRoot, "docs", "USER_GUIDE.md"), "utf8");
   for (const [label, text] of [
     ["installer", installerSource],
     ["doctor", doctorSource],
@@ -2556,6 +2573,11 @@ async function smokePackagedOpenReaperStartHelper() {
       throw new Error(`${label} must not promise automatic version-notification dismissal.`);
     }
   }
+  for (const required of ["--startup-dialog-consent once", "--startup-dialog-consent always", "--startup-dialog-consent manual", "always fail closed"]) {
+    if (!userGuideSource.includes(required)) {
+      throw new Error(`packaged user guide missing startup consent truth: ${required}`);
+    }
+  }
   for (const required of [
     "needsClientConfigRefresh",
     "report.migration_actions.length > 0",
@@ -2583,7 +2605,7 @@ async function smokePackagedOpenReaperStartHelper() {
     bridge_action_required: false,
     bridge_action_name: "OpenReaper: Start MCP bridge",
     agent_should_try_to_run_action: false,
-    startup_dialog_assist: "project_notes_safe_missing_media_consent",
+    startup_dialog_assist: "first_use_once_always_manual_exact_safe_allowlist",
     connection_probe: "call_template(template.transport.read_state)",
     user_fallback: "Actions search Run",
     command_line_reascript_bridge: false,
@@ -3835,6 +3857,14 @@ function assertAgentStartupGuidance(guidance, { label, expectedPackageRoot }) {
   }
   if (!guidance.startup_dialog_assist?.auto_dismisses?.includes("project_settings_notes_show_notes_on_project_load")) {
     throw new Error(`${label} must limit automatic startup dialog assist to Project Settings / Notes`);
+  }
+  if (guidance.startup_dialog_assist?.requires_first_use_consent !== true) {
+    throw new Error(`${label} must require the user's first-use startup dialog consent`);
+  }
+  for (const [choice, flag] of Object.entries({ once: "--startup-dialog-consent once", always: "--startup-dialog-consent always", manual: "--startup-dialog-consent manual" })) {
+    if (guidance.startup_dialog_assist?.consent_choices?.[choice] !== flag) {
+      throw new Error(`${label} missing exact startup dialog consent choice ${choice}`);
+    }
   }
   for (const blocker of ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"]) {
     if (!guidance.startup_dialog_assist?.does_not_dismiss?.includes(blocker)) {

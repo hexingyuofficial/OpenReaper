@@ -182,7 +182,15 @@ const report = {
     sws_required: false,
   },
   startup_dialog_assist: {
+    requires_first_use_consent: true,
+    consent_choices: {
+      once: "--startup-dialog-consent once",
+      always: "--startup-dialog-consent always",
+      manual: "--startup-dialog-consent manual",
+    },
+    persistent_policy_file: path.join(path.dirname(installRoot), "data", "startup-dialog-consent"),
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
+    auto_dismisses_with_consent: ["Project Settings / Notes show notes on project load", "Ignore all missing files", "exact media-items-offline warning"],
     explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
     does_not_dismiss: ["missing media without consent", "license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
     if_not_connected: "Resolve the typed dialog blocker and rerun openreaper-start. Use the Bridge Action only as the reported manual recovery fallback.",
@@ -308,7 +316,7 @@ console.log(`provenance_package_version=${report.provenance?.package_version ?? 
 console.log(`provenance_commit=${report.provenance?.openreaper_git_commit ?? "unavailable"}`);
 console.log("important=REAPER must be started through OpenReaper for MCP live calls; a normal REAPER launch is not an OpenReaper MCP session.");
 console.log("startup_lifetime=openreaper-start launches REAPER detached, records pid/log paths, and returns only after matching heartbeat plus a bounded public read probe.");
-console.log("startup_dialog_assist=Project Settings / Notes is safe; missing media needs --ignore-missing-media consent; license/evaluation, recovery, plugin/FX, version, and unknown windows fail closed.");
+console.log("startup_dialog_assist=first use asks once|always|manual; consent covers only the exact safe allowlist; license/evaluation, recovery, plugin/FX, version, ambiguous, and unknown windows always fail closed.");
 console.log("connection_probe=after bridge_ready, doctor uses MCP call_template(template.transport.read_state) before claiming request/response readiness.");
 if (report.smoke?.ok) {
   console.log(`kernel=${report.smoke.openreaper.kernel}`);

@@ -31,7 +31,7 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     normal_reaper_launch_supported: false,
     only_openreaper_startup_supported: true,
     startup_lifetime_action: "openreaper-start launches REAPER with the OpenReaper bridge environment and returns only after a matching heartbeat and bounded public read probe pass.",
-    startup_dialog_assist: "openreaper-start safely dismisses Project Settings / Notes. Missing media requires explicit per-launch consent; other decision-bearing or unknown dialogs fail closed.",
+    startup_dialog_assist: "On first use, ask the user whether exact safe startup-window assistance is allowed once, always, or should remain manual. Unknown and decision-bearing dialogs always fail closed.",
     bridge_start_action: `The conditional startup hook starts the Bridge automatically. The REAPER action "${OPENREAPER_BRIDGE_ACTION_NAME}" is a manual recovery fallback.`,
     connection_verification: "openreaper-start performs call_template(template.transport.read_state) before reporting startup-status=ready.",
   },
@@ -54,7 +54,15 @@ export const OPENREAPER_AGENT_STARTUP_GUIDANCE_SUMMARY = deepFreeze({
     command_line_reascript_bridge: false,
   },
   startup_dialog_assist: {
+    requires_first_use_consent: true,
+    consent_choices: {
+      once: "--startup-dialog-consent once",
+      always: "--startup-dialog-consent always",
+      manual: "--startup-dialog-consent manual",
+    },
+    persistent_choices: ["always", "manual"],
     auto_dismisses: ["project_settings_notes_show_notes_on_project_load"],
+    auto_dismisses_with_consent: ["project_settings_notes_show_notes_on_project_load", "missing_media_ignore_all", "missing_media_offline_warning_ok"],
     explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
     does_not_dismiss: ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
     agent_recovery: "Resolve the typed dialog blocker. Use the installed Bridge Action only when autonomous startup reports that recovery fallback.",
@@ -84,6 +92,12 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
     },
     agent_flow: [
       {
+        id: "choose_startup_dialog_consent",
+        when: "openreaper-start reports startup-status=needs_user_consent.",
+        agent_action: "Ask the user to choose safe startup-window assistance once, always, or manual handling. Rerun with the exact returned command; never infer consent.",
+        command: null,
+      },
+      {
         id: "start_reaper_for_live_mcp",
         when: "The user asks for live REAPER work and no current OpenReaper session is connected.",
         agent_action: "Run the OpenReaper startup helper. It opens REAPER, starts the Bridge through the conditional hook, and returns only after a matching heartbeat and public read probe pass.",
@@ -112,7 +126,7 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       {
         id: "recover_startup_dialog",
         when: "REAPER shows a license/evaluation, recovery, plugin, version, project warning, or other user-choice dialog.",
-        agent_action: "Do not auto-dismiss it. Missing media may use --ignore-missing-media only with explicit one-launch consent; all other decision-bearing or unknown dialogs remain blockers.",
+        agent_action: "Do not auto-dismiss it unless it is in the exact consent-bound safe allowlist. License, recovery, plugin, version, ambiguous, and unknown dialogs remain blockers even under always consent.",
         command: null,
       },
     ],
@@ -127,7 +141,16 @@ export function createOpenReaperAgentStartupGuidance(input = {}) {
       verification_probe: "call_template(template.transport.read_state)",
     },
     startup_dialog_assist: {
+      requires_first_use_consent: true,
+      consent_choices: {
+        once: "--startup-dialog-consent once",
+        always: "--startup-dialog-consent always",
+        manual: "--startup-dialog-consent manual",
+      },
+      persistent_choices: ["always", "manual"],
+      policy_file: packageRoot ? `${packageRoot}/../data/startup-dialog-consent` : "~/.openreaper/data/startup-dialog-consent",
       auto_dismisses: ["project_settings_notes_show_notes_on_project_load"],
+      auto_dismisses_with_consent: ["project_settings_notes_show_notes_on_project_load", "missing_media_ignore_all", "missing_media_offline_warning_ok"],
       explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
       does_not_dismiss: ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
       disable_flag: "--no-startup-dialog-assist",

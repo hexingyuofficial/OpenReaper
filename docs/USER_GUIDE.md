@@ -96,16 +96,26 @@ Check whether OpenReaper is healthy.
 For the installable macOS alpha package, the agent should:
 
 1. Run `~/.openreaper/current/bin/openreaper-start`.
-2. Wait for REAPER to remain alive and read the printed guidance.
-3. Run the REAPER Action `OpenReaper: Start MCP bridge` when possible.
-4. Ask for one small UI assist only if it cannot run that Action itself.
-5. Reconnect the MCP server named `openreaper`.
-6. Run a bounded live probe before claiming that the bridge is connected.
+2. On first use, choose whether OpenReaper may handle its exact safe startup
+   windows once, always, or not at all. The agent must ask; it cannot infer this.
+3. Rerun the exact command printed by the helper. `always` and `manual` persist
+   across upgrades, while `once` applies only to that launch.
+4. Wait for the autonomous Bridge heartbeat and public read probe to pass.
+5. Reconnect the MCP server named `openreaper` if its prior session was stale.
 
-OpenReaper may automatically close only the known Project Settings / Notes
-"show notes on project load" window. License, recovery, plugin, version, and
-unknown windows remain user-choice blockers. SWS is not required for this
-startup route.
+The three exact choices are:
+
+```text
+openreaper-start --startup-dialog-consent once
+openreaper-start --startup-dialog-consent always
+openreaper-start --startup-dialog-consent manual
+```
+
+Consent covers only Project Settings / Notes, `Ignore all missing files`, and
+the exact media-items-offline warning. License, recovery, plugin, version,
+ambiguous, decision-bearing, and unknown windows remain blockers even after an
+`always` choice. The installed startup hook starts the Bridge automatically;
+the `OpenReaper: Start MCP bridge` Action is recovery-only. SWS is not required.
 
 ## Project Index And Live Truth
 

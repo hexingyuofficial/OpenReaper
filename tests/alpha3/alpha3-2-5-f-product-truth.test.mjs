@@ -136,6 +136,7 @@ describe("Alpha3.2.5-F product truth", () => {
     try {
       const packageRoot = path.join(fixture, "OpenReaper-alpha");
       const startPath = path.join(packageRoot, "bin", "openreaper-start");
+      const doctorPath = path.join(packageRoot, "bin", "openreaper-doctor");
       const bridgePath = path.join(packageRoot, "vendor", "openreaper-kernel", "reaper", "bridge", "openreaper-live-bridge.lua");
       const fakeReaper = path.join(fixture, "fake-reaper");
       const capturePath = path.join(fixture, "captured.env");
@@ -145,12 +146,19 @@ describe("Alpha3.2.5-F product truth", () => {
       await mkdir(path.dirname(bridgePath), { recursive: true });
       await copyFile(path.join(root, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), startPath);
       await chmod(startPath, 0o755);
+      await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
+      await chmod(doctorPath, 0o755);
       await writeFile(bridgePath, "-- fixture\n", "utf8");
       await writeFile(fakeReaper, `#!/bin/zsh
 for key in OPENREAPER_SESSION_ROOT OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR OPENREAPER_LIVE_BRIDGE_SCRIPT_PATH OPENREAPER_ARTIFACT_ROOT OPENREAPER_LIVE_SMOKE_RENDER_ROOT OPENREAPER_LIVE_BRIDGE_OWNER OPENREAPER_LIVE_BRIDGE_GENERATION OPENREAPER_LIVE_BRIDGE_SESSION_ID OPENREAPER_PROJECT_INDEX_STATE_ROOT OPENREAPER_PROJECT_INDEX_LOGICAL_SESSION_KEY OPENREAPER_CURRENT_PROJECT_PATH; do
   if (( \${+parameters[\$key]} )); then print -r -- "\$key=\${(P)key}"; else print -r -- "\$key=<unset>"; fi
 done > ${shellQuote(capturePath)}
-sleep 0.1
+mkdir -p "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR"
+heartbeat_now="$(date +%s)"
+printf '{"contract":"openreaper.bridge_liveness.v1","active_owner":"%s","active_generation":%s,"sequence":1,"refreshed_at_unix_s":%s}\n' \\
+  "$OPENREAPER_LIVE_BRIDGE_OWNER" "$OPENREAPER_LIVE_BRIDGE_GENERATION" "$heartbeat_now" \\
+  > "$OPENREAPER_LIVE_BRIDGE_TRANSPORT_DIR/openreaper-bridge-liveness-v1.json"
+sleep 0.5
 `, "utf8");
       await chmod(fakeReaper, 0o755);
       const pollutedKeys = [
@@ -176,7 +184,7 @@ sleep 0.1
         "--no-startup-dialog-assist",
       ], {
         cwd: fixture,
-        env: { ...process.env, ...polluted, OPENREAPER_START_WAIT_SECONDS: "0" },
+        env: { ...process.env, ...polluted, OPENREAPER_START_WAIT_SECONDS: "1" },
         timeout: 20_000,
         maxBuffer: 1_048_576,
       });

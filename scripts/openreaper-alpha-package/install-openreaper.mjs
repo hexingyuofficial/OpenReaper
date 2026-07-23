@@ -110,7 +110,11 @@ const report = {
     backup_path: null,
   },
   startup_dialog_assist: {
+    requires_first_use_consent: true,
+    consent_choices: ["once", "always", "manual"],
+    persistent_policy_file: path.join(path.dirname(installRoot), "data", "startup-dialog-consent"),
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
+    auto_dismisses_with_consent: ["Project Settings / Notes show notes on project load", "Ignore all missing files", "exact media-items-offline warning"],
     explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
     does_not_dismiss: ["missing media without consent", "license/evaluation", "recovery", "plugin/FX", "version", "unknown REAPER windows"],
   },

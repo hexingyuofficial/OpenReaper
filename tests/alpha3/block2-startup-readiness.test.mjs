@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -32,6 +33,45 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 const START_HELPER = path.join(REPO_ROOT, "scripts/openreaper-alpha-package/openreaper-start.sh");
 
 describe("Alpha3 Block2 startup and connection readiness", () => {
+  it("requires an explicit first-use choice and persists only always or manual", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openreaper-start-consent-"));
+    const startPath = path.join(root, "current", "bin", "openreaper-start");
+    const policyPath = path.join(root, "data", "startup-dialog-consent");
+    const missingReaperApp = path.join(root, "MissingREAPER.app");
+    mkdirSync(path.dirname(startPath), { recursive: true });
+    copyFileSync(START_HELPER, startPath);
+    chmodSync(startPath, 0o755);
+    try {
+      const first = spawnSync(startPath, [], { encoding: "utf8" });
+      assert.equal(first.status, 3);
+      assert.match(first.stderr, /startup-status=needs_user_consent/u);
+      assert.match(first.stderr, /once, always, or handle windows themselves/u);
+
+      const internalOnly = spawnSync(startPath, ["--startup-dialog-consent", "manual_once"], { encoding: "utf8" });
+      assert.equal(internalOnly.status, 2);
+      assert.match(internalOnly.stderr, /must be once, always, or manual/u);
+
+      const always = spawnSync(startPath, ["--startup-dialog-consent", "always", "--reaper-app", missingReaperApp], { encoding: "utf8" });
+      assert.equal(always.status, 2);
+      assert.equal(readFileSync(policyPath, "utf8"), "always\n");
+      assert.equal(statSync(policyPath).mode & 0o777, 0o600);
+
+      const reused = spawnSync(startPath, ["--reaper-app", missingReaperApp], { encoding: "utf8" });
+      assert.equal(reused.status, 2);
+      assert.doesNotMatch(reused.stderr, /startup-dialog-consent=required/u);
+
+      const manual = spawnSync(startPath, ["--startup-dialog-consent=manual", "--reaper-app", missingReaperApp], { encoding: "utf8" });
+      assert.equal(manual.status, 2);
+      assert.equal(readFileSync(policyPath, "utf8"), "manual\n");
+
+      const once = spawnSync(startPath, ["--startup-dialog-consent", "once", "--reaper-app", missingReaperApp], { encoding: "utf8" });
+      assert.equal(once.status, 2);
+      assert.equal(readFileSync(policyPath, "utf8"), "manual\n");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps missing-media dialog automation consent-bound and exact", () => {
     const source = readFileSync(START_HELPER, "utf8");
     assert.match(source, /if windowTitle is "Project Load Warning" then/u);
@@ -217,6 +257,12 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.auto_dismisses,
       ["project_settings_notes_show_notes_on_project_load"],
     );
+    assert.equal(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.requires_first_use_consent, true);
+    assert.deepEqual(expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.consent_choices, {
+      once: "--startup-dialog-consent once",
+      always: "--startup-dialog-consent always",
+      manual: "--startup-dialog-consent manual",
+    });
     assert.deepEqual(
       expandedProductSurface.agent_startup_guidance_snapshot.startup_dialog_assist.does_not_dismiss,
       ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],
@@ -261,6 +307,9 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
     assert.equal(guidance.bridge_action.reconnect_after_action, true);
     assert.equal(guidance.bridge_action.verification_probe, "call_template(template.transport.read_state)");
     assert.deepEqual(guidance.startup_dialog_assist.auto_dismisses, ["project_settings_notes_show_notes_on_project_load"]);
+    assert.equal(guidance.startup_dialog_assist.requires_first_use_consent, true);
+    assert.deepEqual(guidance.startup_dialog_assist.persistent_choices, ["always", "manual"]);
+    assert.equal(guidance.startup_dialog_assist.policy_file, "/tmp/OpenReaper-alpha/../data/startup-dialog-consent");
     assert.deepEqual(
       guidance.startup_dialog_assist.does_not_dismiss,
       ["missing_media_without_consent", "license_or_evaluation", "recovery", "plugin_or_fx", "version_notice", "unknown_reaper_window"],

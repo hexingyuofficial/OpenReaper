@@ -331,13 +331,15 @@ test("stdio wires exactly six tools and SDK instructions from the unique documen
   await server.close();
 });
 
-test("package builder copies AGENT_START_HERE and README points to the unique entry", async () => {
+test("package builder copies the unique Agent entry and the user guide", async () => {
   const builder = await readFile(PACKAGE_BUILDER, "utf8");
   assert.match(builder, /copyAgentStartHereDocument/u);
   assert.match(builder, /vendor\/openreaper-kernel\/docs\/AGENT_START_HERE\.md/u);
   assert.match(builder, /docs\/AGENT_START_HERE\.md/u);
   assert.match(builder, /Agent entry \(unique\):/u);
   assert.match(builder, /MCP initialization instructions are projected from that document/u);
+  assert.match(builder, /docs\/USER_GUIDE\.md/u);
+  assert.match(builder, /User guide:/u);
 
   const root = await mkdtemp(path.join(os.tmpdir(), "openreaper-alpha34-start-here-pkg-"));
   try {

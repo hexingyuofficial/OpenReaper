@@ -156,8 +156,14 @@ Allowed small assists (not product bypass):
 
 - Official `openreaper-start`; success means matching Bridge heartbeat plus a real
   `call_template(template.transport.read_state)` probe already passed.
-- Project Notes may be closed automatically. Missing media requires explicit one-launch
-  consent through `--ignore-missing-media`; decision-bearing and unknown dialogs fail closed.
+- On first use, `openreaper-start` returns `startup-status=needs_user_consent`
+  before opening REAPER. Ask the user to choose safe startup-window assistance
+  `once`, `always`, or `manual`; rerun with the exact returned
+  `--startup-dialog-consent` command and never infer consent. `always` and
+  `manual` persist across upgrades; `once` does not.
+- Consent covers only the exact Project Notes, `Ignore all missing files`, and
+  exact media-items-offline warning rules. License, recovery, plugin, version,
+  ambiguous, decision-bearing, and unknown dialogs always fail closed.
 - REAPER action `OpenReaper: Start MCP bridge` is only a manual recovery fallback when
   autonomous startup reports that blocker, not a normal startup step.
 
