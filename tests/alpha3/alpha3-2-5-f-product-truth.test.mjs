@@ -144,7 +144,13 @@ describe("Alpha3.2.5-F product truth", () => {
       const freshRender = path.join(fixture, "fresh-renders");
       await mkdir(path.dirname(startPath), { recursive: true });
       await mkdir(path.dirname(bridgePath), { recursive: true });
-      await copyFile(path.join(root, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), startPath);
+      const productStartSource = await readFile(path.join(root, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), "utf8");
+      const fixtureStartSource = productStartSource.replace(
+        /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+        'run_startup_dialog_assist() {\n  echo "no_safe_dialog"\n}\n\nstartup_dialog_result_is_safe() {',
+      );
+      assert.notEqual(fixtureStartSource, productStartSource);
+      await writeFile(startPath, fixtureStartSource, "utf8");
       await chmod(startPath, 0o755);
       await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
       await chmod(doctorPath, 0o755);

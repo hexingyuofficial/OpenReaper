@@ -111,6 +111,10 @@ openreaper-start --startup-dialog-consent always
 openreaper-start --startup-dialog-consent manual
 ```
 
+`manual` means OpenReaper will not click any startup window. It still checks
+the window state read-only and waits for you to clear every blocker before it
+can report the Bridge ready.
+
 Consent covers only Project Settings / Notes, `Ignore all missing files`, and
 the exact media-items-offline warning. License, recovery, plugin, version,
 ambiguous, decision-bearing, and unknown windows always fail closed, including

@@ -113,6 +113,7 @@ const report = {
     requires_first_use_consent: true,
     consent_choices: ["once", "always", "manual"],
     persistent_policy_file: path.join(path.dirname(installRoot), "data", "startup-dialog-consent"),
+    manual_behavior: "no_clicks_read_only_classification_wait_for_user_to_clear_blockers",
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
     auto_dismisses_with_consent: ["Project Settings / Notes show notes on project load", "Ignore all missing files", "exact media-items-offline warning"],
     explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },
@@ -688,12 +689,12 @@ Startup lifetime: openreaper-start launches REAPER detached from the agent
 shell, waits for the REAPER process to stay alive, and returns the pid/log
 path for recovery.
 
-Startup window assist: openreaper-start only tries to close the known Project
-Settings / Notes "show notes on project load" window. It does not close
-license/evaluation, recovery, plugin/FX, version, or unknown REAPER windows.
-If bridge connection fails, check for a REAPER window waiting for action,
-resolve it, run the bridge action, reconnect, and run the live read probe:
-  call_template(template.transport.read_state)
+Startup window assist: on first use, the Agent must ask for once, always, or
+manual. Once/always may handle only exact Project Settings / Notes,
+Ignore all missing files, and the exact media-offline warning. Manual never
+clicks; it only checks read-only and waits for the user to clear blockers.
+License/evaluation, recovery, plugin/FX, version, ambiguous, decision-bearing,
+and unknown windows always fail closed.
 
 The conditional startup hook starts and verifies the Bridge automatically.
 Only if openreaper-start reports the manual recovery fallback, open REAPER's

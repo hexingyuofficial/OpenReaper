@@ -22,6 +22,7 @@ const installRoot = path.resolve(options.install_root ?? path.join(home, ".openr
 const defaultRenderRoot = path.join(installRoot, "session", "renders");
 const managedRenderRootRecord = path.join(installRoot, "session", "managed-render-root.path");
 const executableRecipeRoot = path.join(path.dirname(installRoot), "data", "executable-recipes");
+const startupDialogConsentPath = path.join(path.dirname(installRoot), "data", "startup-dialog-consent");
 const skipClientConfig = options.skip_client_config === true;
 const skipStartupHook = options.skip_startup_hook === true;
 const managedRenderRootRecordResult = await readManagedRenderRootRecord();
@@ -44,6 +45,11 @@ const report = {
     status: executableRecipeRootResult.status,
     preserved: executableRecipeRootResult.status === "ready",
   },
+  startup_dialog_consent: {
+    path: startupDialogConsentPath,
+    removed: false,
+    status: "missing",
+  },
   changed: [],
   skipped: [],
   warnings: [],
@@ -62,9 +68,24 @@ if (!skipClientConfig) {
   report.skipped.push("client config cleanup skipped because --skip-client-config was set");
 }
 await preserveDefaultRenderOutputs();
+await removeStartupDialogConsent();
 await rm(installRoot, { recursive: true, force: true });
 report.changed.push(`removed ${installRoot}`);
 console.log(JSON.stringify(report, null, 2));
+
+async function removeStartupDialogConsent() {
+  const status = await safeLstat(startupDialogConsentPath);
+  if (!status) return;
+  if (status.isDirectory()) {
+    report.startup_dialog_consent.status = "unsafe_directory_preserved";
+    report.warnings.push(`startup dialog consent path is a directory and was not recursively removed: ${startupDialogConsentPath}`);
+    return;
+  }
+  await rm(startupDialogConsentPath, { force: true });
+  report.startup_dialog_consent.removed = true;
+  report.startup_dialog_consent.status = status.isSymbolicLink() ? "symlink_removed_without_following" : "removed";
+  report.changed.push(`removed startup dialog consent so reinstall asks again: ${startupDialogConsentPath}`);
+}
 
 async function preserveDefaultRenderOutputs() {
   const selected = report.render_root.persisted_selection;

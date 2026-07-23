@@ -189,6 +189,7 @@ const report = {
       manual: "--startup-dialog-consent manual",
     },
     persistent_policy_file: path.join(path.dirname(installRoot), "data", "startup-dialog-consent"),
+    manual_behavior: "no_clicks_read_only_classification_wait_for_user_to_clear_blockers",
     auto_dismisses: ["Project Settings / Notes show notes on project load"],
     auto_dismisses_with_consent: ["Project Settings / Notes show notes on project load", "Ignore all missing files", "exact media-items-offline warning"],
     explicit_per_launch_consent: { missing_media: "--ignore-missing-media" },

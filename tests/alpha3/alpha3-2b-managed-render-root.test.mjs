@@ -79,6 +79,7 @@ describe("Alpha3.2-B2 managed render root", () => {
   it("keeps executable recipe revisions in sibling data across upgrade and uninstall", async () => {
     const fixture = await makeInstallerFixture();
     const recipeRoot = path.join(fixture.home, ".openreaper", "data", "executable-recipes");
+    const consentPath = path.join(fixture.home, ".openreaper", "data", "startup-dialog-consent");
     const fresh = await runInstaller(fixture);
     assert.equal(fresh.code, 0, fresh.stderr || fresh.stdout);
     assert.equal(parseInstallerReport(fresh.stdout).executable_recipe_root.path, recipeRoot);
@@ -87,10 +88,14 @@ describe("Alpha3.2-B2 managed render root", () => {
     const upgrade = await runInstaller(fixture);
     assert.equal(upgrade.code, 0, upgrade.stderr || upgrade.stdout);
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
+    await writeFile(consentPath, "always\n", "utf8");
 
     const uninstall = await runUninstaller(fixture);
     assert.equal(uninstall.code, 0, uninstall.stderr || uninstall.stdout);
-    assert.equal(JSON.parse(uninstall.stdout).executable_recipe_root.preserved, true);
+    const uninstallReport = JSON.parse(uninstall.stdout);
+    assert.equal(uninstallReport.executable_recipe_root.preserved, true);
+    assert.equal(uninstallReport.startup_dialog_consent.removed, true);
+    assert.equal(await pathExists(consentPath), false);
     assert.equal(await readFile(path.join(recipeRoot, "revision.json"), "utf8"), "immutable-revision\n");
   });
 
@@ -1367,8 +1372,8 @@ async function makeStartFixture(label, { source = null } = {}) {
   const recordPath = path.join(installRoot, "session", RECORD_NAME);
   await mkdir(path.dirname(startPath), { recursive: true });
   await mkdir(path.dirname(recordPath), { recursive: true });
-  if (source === null) await cp(START_SOURCE, startPath);
-  else await writeFile(startPath, source, "utf8");
+  const startSource = withFixtureCleanDialogInspection(source ?? await readFile(START_SOURCE, "utf8"));
+  await writeFile(startPath, startSource, "utf8");
   const doctorPath = path.join(installRoot, "bin", "openreaper-doctor");
   await writeFile(doctorPath, "#!/bin/zsh\nexit 0\n", "utf8");
   await Promise.all([startPath, doctorPath].map((file) => chmod(file, 0o755)));
@@ -1542,7 +1547,7 @@ async function makeLaunchServicesHarness(label, { source = null, fakePidDelayMs 
     mkdir(stateRoot, { recursive: true }),
     mkdir(controlRoot, { recursive: true }),
   ]);
-  const startSource = (source ?? await readFile(START_SOURCE, "utf8"))
+  const startSource = withFixtureCleanDialogInspection(source ?? await readFile(START_SOURCE, "utf8"))
     .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
     .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`);
   await writeFile(startPath, startSource, "utf8");
@@ -1797,6 +1802,17 @@ print -rn -- "exited" > "$exited_path"
     },
   };
   return api;
+}
+
+function withFixtureCleanDialogInspection(source) {
+  const replacement = `run_startup_dialog_assist() {
+  echo "no_safe_dialog"
+}
+
+startup_dialog_result_is_safe() {`;
+  const patched = source.replace(/run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u, replacement);
+  assert.notEqual(patched, source, "fixture must replace only its copied dialog inspector");
+  return patched;
 }
 function launchctlFixtureSource({ stateRoot, controlRoot, logPath }) {
   return `#!/bin/zsh

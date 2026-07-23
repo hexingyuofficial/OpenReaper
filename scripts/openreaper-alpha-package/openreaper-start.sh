@@ -229,6 +229,8 @@ Before the first assisted launch, choose one startup-dialog policy:
 With no saved policy or explicit choice, the helper asks the agent to obtain the
 user's choice and exits before starting REAPER. Saved choices live outside the
 replaceable install tree and survive upgrades.
+Manual means OpenReaper never clicks startup windows. It still inspects them
+read-only and cannot report ready until the user clears every blocking window.
 
 Consent applies only to the exact Project Settings / Notes, missing-media Ignore,
 and exact media-items-offline warning rules. License/evaluation, recovery,
@@ -247,36 +249,112 @@ done
 
 persist_startup_dialog_consent() {
   local value="$1"
-  local policy_dir="${STARTUP_DIALOG_POLICY_FILE:h}"
-  local temp_file="${STARTUP_DIALOG_POLICY_FILE}.tmp.$$"
-  if [[ -L "${policy_dir}" || -L "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
-    echo "[OpenReaper] startup dialog consent path must not be a symlink: ${STARTUP_DIALOG_POLICY_FILE}" >&2
-    return 1
-  fi
-  mkdir -p "${policy_dir}"
-  if [[ ! -d "${policy_dir}" ]]; then
-    echo "[OpenReaper] startup dialog consent directory is unavailable: ${policy_dir}" >&2
-    return 1
-  fi
-  umask 077
-  print -r -- "${value}" > "${temp_file}"
-  chmod 600 "${temp_file}"
-  mv -f "${temp_file}" "${STARTUP_DIALOG_POLICY_FILE}"
+  node --input-type=module - "${STARTUP_DIALOG_POLICY_FILE}" "${value}" <<'NODE'
+import { constants } from "node:fs";
+import { lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import path from "node:path";
+
+const [policyPathInput, value] = process.argv.slice(2);
+const policyPath = path.resolve(policyPathInput);
+const policyDir = path.dirname(policyPath);
+const policyRoot = path.dirname(policyDir);
+
+function fail(message) {
+  process.stderr.write(`[OpenReaper] ${message}\n`);
+  process.exitCode = 1;
+}
+
+async function assertPlainDirectory(candidate, label) {
+  const entry = await lstat(candidate);
+  if (entry.isSymbolicLink() || !entry.isDirectory()) throw new Error(`${label} must be a real directory: ${candidate}`);
+  return entry;
+}
+
+let tempPath = "";
+try {
+  await assertPlainDirectory(policyRoot, "startup dialog consent root");
+  await mkdir(policyDir, { mode: 0o700 }).catch((error) => {
+    if (error?.code !== "EEXIST") throw error;
+  });
+  const beforeDir = await assertPlainDirectory(policyDir, "startup dialog consent directory");
+  const [canonicalRoot, canonicalDir] = await Promise.all([realpath(policyRoot), realpath(policyDir)]);
+  if (canonicalDir !== path.join(canonicalRoot, path.basename(policyDir))) {
+    throw new Error(`startup dialog consent directory must not traverse a symlink: ${policyDir}`);
+  }
+  const existing = await lstat(policyPath).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
+  if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
+    throw new Error(`startup dialog consent path must be a regular non-symlink file: ${policyPath}`);
+  }
+
+  tempPath = `${policyPath}.tmp.${randomBytes(16).toString("hex")}`;
+  const handle = await open(
+    tempPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    await handle.writeFile(`${value}\n`, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+
+  const afterDir = await assertPlainDirectory(policyDir, "startup dialog consent directory");
+  if (beforeDir.dev !== afterDir.dev || beforeDir.ino !== afterDir.ino || await realpath(policyDir) !== canonicalDir) {
+    throw new Error(`startup dialog consent directory changed during write: ${policyDir}`);
+  }
+  const destination = await lstat(policyPath).catch((error) => error?.code === "ENOENT" ? null : Promise.reject(error));
+  if (destination && (destination.isSymbolicLink() || !destination.isFile())) {
+    throw new Error(`startup dialog consent destination changed to an unsafe path: ${policyPath}`);
+  }
+  await rename(tempPath, policyPath);
+  tempPath = "";
+} catch (error) {
+  if (tempPath) await unlink(tempPath).catch(() => {});
+  fail(error?.message ?? String(error));
+}
+NODE
+}
+
+read_startup_dialog_consent() {
+  node --input-type=module - "${STARTUP_DIALOG_POLICY_FILE}" <<'NODE'
+import { constants } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import path from "node:path";
+
+const policyPath = path.resolve(process.argv[2]);
+const policyDir = path.dirname(policyPath);
+const policyRoot = path.dirname(policyDir);
+try {
+  const rootEntry = await lstat(policyRoot);
+  if (rootEntry.isSymbolicLink() || !rootEntry.isDirectory()) throw new Error(`startup dialog consent root must be a real directory: ${policyRoot}`);
+  const dirEntry = await lstat(policyDir);
+  if (dirEntry.isSymbolicLink() || !dirEntry.isDirectory()) throw new Error(`startup dialog consent directory must be a real directory: ${policyDir}`);
+  const [canonicalRoot, canonicalDir] = await Promise.all([realpath(policyRoot), realpath(policyDir)]);
+  if (canonicalDir !== path.join(canonicalRoot, path.basename(policyDir))) throw new Error(`startup dialog consent directory must not traverse a symlink: ${policyDir}`);
+  const pathEntry = await lstat(policyPath);
+  if (pathEntry.isSymbolicLink() || !pathEntry.isFile()) throw new Error(`startup dialog consent path must be a regular non-symlink file: ${policyPath}`);
+  const handle = await open(policyPath, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const handleEntry = await handle.stat();
+    if (!handleEntry.isFile() || handleEntry.dev !== pathEntry.dev || handleEntry.ino !== pathEntry.ino) throw new Error(`startup dialog consent file changed during read: ${policyPath}`);
+    process.stdout.write(await handle.readFile("utf8"));
+  } finally {
+    await handle.close();
+  }
+} catch (error) {
+  if (error?.code === "ENOENT") process.exit(3);
+  process.stderr.write(`[OpenReaper] ${error?.message ?? String(error)}\n`);
+  process.exit(1);
+}
+NODE
 }
 
 resolve_startup_dialog_consent() {
   local stored=""
   if [[ "${STARTUP_DIALOG_CONSENT_EXPLICIT}" != "true" ]]; then
-    if [[ -L "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
-      echo "[OpenReaper] startup dialog consent file must not be a symlink: ${STARTUP_DIALOG_POLICY_FILE}" >&2
-      return 1
-    fi
-    if [[ -e "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
-      if [[ ! -f "${STARTUP_DIALOG_POLICY_FILE}" ]]; then
-        echo "[OpenReaper] startup dialog consent path is not a regular file: ${STARTUP_DIALOG_POLICY_FILE}" >&2
-        return 1
-      fi
-      stored="$(<"${STARTUP_DIALOG_POLICY_FILE}")"
+    if stored="$(read_startup_dialog_consent)"; then
       case "${stored}" in
         always|manual) STARTUP_DIALOG_CONSENT="${stored}" ;;
         *)
@@ -285,6 +363,10 @@ resolve_startup_dialog_consent() {
           ;;
       esac
     else
+      local read_status=$?
+      if (( read_status != 3 )); then
+        return 1
+      fi
       echo "[OpenReaper] startup-status=needs_user_consent" >&2
       echo "[OpenReaper] startup-dialog-consent=required" >&2
       echo "[OpenReaper] Ask the user: allow safe startup-window assistance once, always, or handle windows themselves?" >&2
@@ -1285,17 +1367,13 @@ verify_public_bridge_read() {
 }
 
 run_startup_dialog_assist() {
-  if [[ "${STARTUP_DIALOG_ASSIST}" != "true" ]]; then
-    echo "disabled"
-    return 0
-  fi
   if [[ "$(uname -s)" != "Darwin" || ! -x "/usr/bin/osascript" ]]; then
     echo "unavailable"
     return 0
   fi
   local reaper_pid
   reaper_pid="$(cat "${PID_FILE}")"
-  /usr/bin/osascript - "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
+  /usr/bin/osascript - "${STARTUP_DIALOG_ASSIST}" "${IGNORE_MISSING_MEDIA}" "${reaper_pid}" <<'APPLESCRIPT' 2>> "${START_LOG}" || {
 on uiElementNamed(theWindow, targetName)
   tell application "System Events"
     try
@@ -1321,8 +1399,9 @@ on directButtonCount(theWindow, targetName)
 end directButtonCount
 
 on run argv
-set allowMissingMedia to (item 1 of argv is "true")
-set launchedPid to item 2 of argv as integer
+set allowSafeActions to (item 1 of argv is "true")
+set allowMissingMedia to (item 2 of argv is "true")
+set launchedPid to item 3 of argv as integer
 tell application "System Events"
   set matchingProcesses to every process whose unix id is launchedPid
   if (count of matchingProcesses) is not 1 then return "blocked_reaper_identity:pid=" & launchedPid
@@ -1339,6 +1418,7 @@ tell application "System Events"
         if my uiElementNamed(reaperWindow, "Notes") then set isProjectNotesWindow to true
         if my uiElementNamed(reaperWindow, "Show notes on project load") then set isProjectNotesWindow to true
         if isProjectNotesWindow then
+          if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"
           try
             click button "OK" of reaperWindow
             return "dismissed_project_notes"
@@ -1380,11 +1460,13 @@ tell application "System Events"
         end if
         return "blocked_user_decision:title=Project Load Warning"
       end if
-      set isDialog to false
+      set windowSubrole to ""
       try
-        if subrole of reaperWindow is "AXDialog" then set isDialog to true
+        set windowSubrole to subrole of reaperWindow as text
+      on error errorMessage
+        return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
       end try
-      if isDialog then
+      if windowSubrole is "AXDialog" then
         if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
           return "blocked_user_decision:title=" & windowTitle
         end if
@@ -1402,7 +1484,7 @@ APPLESCRIPT
 
 startup_dialog_result_is_safe() {
   case "$1" in
-    disabled|no_safe_dialog|dismissed_project_notes|dismissed_missing_media:choice=Ignore\ all\ missing\ files|dismissed_missing_media_offline_warning:choice=OK)
+    no_safe_dialog|dismissed_project_notes|dismissed_missing_media:choice=Ignore\ all\ missing\ files|dismissed_missing_media_offline_warning:choice=OK)
       return 0
       ;;
   esac
@@ -1428,6 +1510,10 @@ wait_for_startup_readiness() {
     if ! startup_dialog_result_is_safe "${dialog_result}"; then
       echo "[OpenReaper] startup-dialog-blocker=${dialog_result}" >&2
       return 2
+    fi
+    if [[ "${dialog_result}" != "no_safe_dialog" ]]; then
+      sleep 0.25
+      continue
     fi
     if bridge_heartbeat_ready; then
       verify_public_bridge_read || return 1

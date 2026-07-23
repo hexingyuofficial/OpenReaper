@@ -161,6 +161,8 @@ Allowed small assists (not product bypass):
   `once`, `always`, or `manual`; rerun with the exact returned
   `--startup-dialog-consent` command and never infer consent. `always` and
   `manual` persist across upgrades; `once` does not.
+- `manual` disables all OpenReaper dialog clicks but keeps read-only window
+  classification; wait for the user to clear blockers before readiness can pass.
 - Consent covers only the exact Project Notes, `Ignore all missing files`, and
   exact media-items-offline warning rules. License, recovery, plugin, version,
   ambiguous, decision-bearing, and unknown dialogs always fail closed.

@@ -508,6 +508,8 @@ and manual choices persist outside the replaceable install tree. Consent covers
 only exact Project Settings / Notes, missing-media Ignore, and media-offline warning rules;
 license/evaluation, recovery, plugin, version, ambiguous, and unknown windows
 always fail closed.
+Manual mode never clicks startup windows; it inspects read-only and waits for
+the user to clear every blocker before readiness can pass.
 
 Uninstall:
   ./uninstall.command
