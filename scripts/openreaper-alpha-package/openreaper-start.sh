@@ -1177,29 +1177,6 @@ on uiElementNamed(theWindow, targetName)
   return false
 end uiElementNamed
 
-on uiElementTextContains(theWindow, targetText)
-  tell application "System Events"
-    try
-      set uiElements to entire contents of theWindow
-      repeat with uiElement in uiElements
-        repeat with attributeName in {"name", "value", "description"}
-          try
-            if attributeName is "name" then
-              set attributeValue to name of uiElement
-            else if attributeName is "value" then
-              set attributeValue to value of uiElement
-            else
-              set attributeValue to description of uiElement
-            end if
-            if attributeValue is not missing value and (attributeValue as text) contains targetText then return true
-          end try
-        end repeat
-      end repeat
-    end try
-  end tell
-  return false
-end uiElementTextContains
-
 on directButtonCount(theWindow, targetName)
   tell application "System Events"
     try
@@ -1245,8 +1222,12 @@ tell application "System Events"
         return "blocked_missing_media:choice=Ignore all missing files"
       end if
       if windowTitle is "Project Load Warning" then
+        set warningText to ""
+        try
+          set warningText to value of text area 1 of scroll area 1 of reaperWindow as text
+        end try
         set isOfflineMediaWarning to false
-        if my uiElementTextContains(reaperWindow, "in an off-line state") and my uiElementTextContains(reaperWindow, "filenames should be preserved") then set isOfflineMediaWarning to true
+        if warningText contains "in an off-line state" and warningText contains "filenames should be preserved" then set isOfflineMediaWarning to true
         if allowMissingMedia and isOfflineMediaWarning and my directButtonCount(reaperWindow, "OK") is 1 then
           try
             click button "OK" of reaperWindow
