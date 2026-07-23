@@ -3367,15 +3367,21 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     const home = path.join(fixtureRoot, "home");
     const installRoot = path.join(home, ".openreaper", "current");
     const capturePath = path.join(fixtureRoot, "mcp-render-root.capture");
+    const fixtureUninstaller = path.join(fixturePackage, "installer", "uninstall-openreaper.mjs");
+    const fakeReaper = path.join(fixtureRoot, "fake-reaper");
+    const fakeReaperStarted = path.join(fixtureRoot, "fake-reaper.started");
     await mkdir(path.dirname(fixtureInstaller), { recursive: true });
     await mkdir(path.join(fixturePackage, "bin"), { recursive: true });
     await mkdir(path.join(fixturePackage, "vendor", "openreaper-kernel", "reaper", "bridge"), { recursive: true });
     await cp(installerPath, fixtureInstaller);
+    await cp(path.join(repoRoot, "scripts", "openreaper-alpha-package", "uninstall-openreaper.mjs"), fixtureUninstaller);
+    await cp(path.join(repoRoot, "scripts", "openreaper-alpha-package", "openreaper-start.sh"), path.join(fixturePackage, "bin", "openreaper-start"));
     const mcpStub = `#!/bin/zsh\nprint -r -- "$OPENREAPER_LIVE_SMOKE_RENDER_ROOT" >> ${shellQuote(capturePath)}\necho "stdio server ready" >&2\n`;
     await writeFile(path.join(fixturePackage, "bin", "openreaper-mcp"), mcpStub, "utf8");
-    for (const name of ["vital-agent-mcp", "openreaper-start", "openreaper-doctor"]) {
+    for (const name of ["vital-agent-mcp", "openreaper-doctor"]) {
       await writeFile(path.join(fixturePackage, "bin", name), "#!/bin/zsh\nexit 0\n", "utf8");
     }
+    await writeFile(fakeReaper, `#!/bin/zsh\nprint -r -- started > ${shellQuote(fakeReaperStarted)}\n`, "utf8");
     await writeFile(path.join(fixturePackage, "install.command"), "#!/bin/zsh\n", "utf8");
     await writeFile(path.join(fixturePackage, "uninstall.command"), "#!/bin/zsh\n", "utf8");
     const fixtureProvenance = path.join(fixturePackage, "provenance.json");
@@ -3387,6 +3393,7 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       "utf8",
     );
     await Promise.all((await readdir(path.join(fixturePackage, "bin"))).map((name) => chmod(path.join(fixturePackage, "bin", name), 0o755)));
+    await chmod(fakeReaper, 0o755);
 
     const installerArgs = [
       fixtureInstaller,
@@ -3442,6 +3449,51 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
     }
     assertEqualText(await readFile(markerPath, "utf8"), "keep-installed", "installer invalid-record replacement guard");
     assertEqualText(await readFile(outputPath, "utf8"), "preserve-me", "installer invalid-record output guard");
+
+    await writeFile(path.join(installRoot, "session", "managed-render-root.path"), `${defaultRoot}\n`, "utf8");
+    const consentPath = path.join(home, ".openreaper", "data", "startup-dialog-consent");
+    const userRecipePath = path.join(home, ".openreaper", "data", "executable-recipes", "revision.json");
+    const userRecipe = '{"contract":"openreaper.executable_recipe_revision.v1","fixture":"preserve-me"}\n';
+    await writeFile(consentPath, "always\n", { encoding: "utf8", mode: 0o600 });
+    await writeFile(userRecipePath, userRecipe, "utf8");
+
+    const uninstall = await runCaptured(process.execPath, [
+      path.join(installRoot, "installer", "uninstall-openreaper.mjs"),
+      "--install-root",
+      installRoot,
+      "--skip-client-config",
+      "--skip-startup-hook",
+    ], {
+      cwd: installRoot,
+      env: { ...process.env, HOME: home },
+    });
+    if (uninstall.code !== 0) throw new Error(`packaged uninstaller consent fixture failed: ${uninstall.stderr || uninstall.stdout}`);
+    const uninstallReport = JSON.parse(uninstall.stdout);
+    if (await fileExists(consentPath) || uninstallReport.startup_dialog_consent?.removed !== true) {
+      throw new Error(`packaged uninstaller did not remove startup consent: ${uninstall.stdout}`);
+    }
+    assertEqualText(await readFile(userRecipePath, "utf8"), userRecipe.trim(), "packaged uninstaller user Recipe preservation");
+
+    const reinstall = await runCaptured(process.execPath, installerArgs, {
+      cwd: fixturePackage,
+      env: { ...process.env, HOME: home },
+    });
+    if (reinstall.code !== 0) throw new Error(`packaged installer reinstall fixture failed: ${reinstall.stderr || reinstall.stdout}`);
+    assertEqualText(await readFile(userRecipePath, "utf8"), userRecipe.trim(), "packaged reinstall user Recipe preservation");
+    const startAfterReinstall = await runCaptured(path.join(installRoot, "bin", "openreaper-start"), [
+      "--reaper-binary",
+      fakeReaper,
+    ], {
+      cwd: installRoot,
+      env: { ...process.env, HOME: home },
+      timeoutMs: 5_000,
+    });
+    if (startAfterReinstall.code !== 3 || !startAfterReinstall.stderr.includes("startup-status=needs_user_consent")) {
+      throw new Error(`packaged reinstall did not require fresh startup consent: ${startAfterReinstall.stderr || startAfterReinstall.stdout}`);
+    }
+    if (await fileExists(fakeReaperStarted)) {
+      throw new Error("packaged reinstall started REAPER before obtaining fresh startup consent.");
+    }
     return {
       ok: true,
       default_root: defaultRoot,
@@ -3450,6 +3502,12 @@ async function smokePackagedInstallerManagedRenderRoot(installerPath) {
       installer_mcp_smoke_env: true,
       installed_provenance_read_only: true,
       invalid_record_rejected_before_replacement: true,
+      consent_lifecycle: {
+        uninstall_removed_consent: true,
+        user_recipe_preserved: true,
+        reinstall_requires_fresh_consent: true,
+        reaper_not_started: true,
+      },
       atomic_backup_container: /\.openreaper-install-backup-/.test(upgradeReport.recovery?.previous_install_backup ?? ""),
       safety_flags: ["--skip-client-config", "--skip-startup-hook"],
     };
