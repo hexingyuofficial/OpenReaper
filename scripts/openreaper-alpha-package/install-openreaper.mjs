@@ -696,7 +696,8 @@ clicks; it only checks read-only and waits for the user to clear blockers.
 License/evaluation, recovery, plugin/FX, version, ambiguous, decision-bearing,
 and unknown windows always fail closed.
 
-The conditional startup hook starts and verifies the Bridge automatically.
+The conditional startup hook starts the Bridge automatically. openreaper-start
+reports ready only after the matching heartbeat and public read probe both pass.
 Only if openreaper-start reports the manual recovery fallback, open REAPER's
 Actions list, run "${BRIDGE_ACTION_TITLE}", then rerun Doctor and reconnect the
 MCP client.

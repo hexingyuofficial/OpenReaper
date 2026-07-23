@@ -2280,6 +2280,17 @@ async function runPackagedDoctorFixture({
     ...extraEnv,
   };
   const abortController = new AbortController();
+  let heartbeatRefreshError = null;
+  let heartbeatRefreshTimer = null;
+  if (provideReadResult) {
+    await writePackageHeartbeat(transportDir, { owner, generation });
+    heartbeatRefreshTimer = setInterval(() => {
+      writePackageHeartbeat(transportDir, { owner, generation }).catch((error) => {
+        heartbeatRefreshError ??= error;
+      });
+    }, 200);
+    heartbeatRefreshTimer.unref?.();
+  }
   const runPromise = runCaptured(doctorPath, args, {
     cwd: path.dirname(doctorPath),
     env,
@@ -2303,6 +2314,7 @@ async function runPackagedDoctorFixture({
         const early = await runPromise;
         throw new Error(`Packaged doctor exited before read request: ${early.stderr || early.stdout || error.message}`);
       }
+      if (heartbeatRefreshError) throw heartbeatRefreshError;
       const bridge = new FakeFoundationBridge({ owner, generation });
       const result = bridge.dispatch(request);
       await writeFile(path.join(resultsDir, path.basename(requestPath)), `${JSON.stringify(result)}\n`, "utf8");
@@ -2318,6 +2330,7 @@ async function runPackagedDoctorFixture({
     }
     return { ...outcome, report };
   } finally {
+    if (heartbeatRefreshTimer) clearInterval(heartbeatRefreshTimer);
     abortController.abort(new Error("packaged doctor fixture cleanup"));
     await runPromise.catch(() => {});
     await clearDirectoryEntries(requestsDir);
@@ -2550,8 +2563,8 @@ async function smokePackagedOpenReaperStartHelper() {
     if (!text.includes("OpenReaper: Start MCP bridge")) {
       throw new Error(`${label} must name the installed OpenReaper bridge action.`);
     }
-    if (!text.includes("call_template(template.transport.read_state)")) {
-      throw new Error(`${label} must tell the agent to run the live read probe after reconnect.`);
+    if (!text.includes("call_template(template.transport.read_state)") && !text.includes("public read probe")) {
+      throw new Error(`${label} must explain the public read probe used to verify startup readiness.`);
     }
     if (!text.includes("Project Settings") || !text.includes("Notes") || !text.includes("license/evaluation")) {
       throw new Error(`${label} must explain the narrow Project Notes assist and user-choice blocker windows.`);
@@ -2778,7 +2791,7 @@ async function runFakeStart({ startPath, fixtureRoot, capturePath, args, env }) 
   const fixtureStart = `${fakeBinary}.start`;
   const installRoot = path.dirname(path.dirname(startPath));
   const startSource = await readFile(startPath, "utf8");
-  const fixtureStartSource = startSource
+  const fixtureStartSource = withPackageFixtureCleanDialogInspection(startSource)
     .replace('INSTALL_ROOT="${SCRIPT_DIR:h}"', `INSTALL_ROOT=${shellQuote(installRoot)}`)
     .replace('local doctor="${INSTALL_ROOT}/bin/openreaper-doctor"', `local doctor=${shellQuote(fakeDoctor)}`);
   if (fixtureStartSource === startSource || !fixtureStartSource.includes(`local doctor=${shellQuote(fakeDoctor)}`)) {
@@ -2836,6 +2849,22 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
     await rm(fakeDoctor, { force: true });
     await rm(fixtureStart, { force: true });
   }
+}
+
+function withPackageFixtureCleanDialogInspection(source) {
+  const replacement = `run_startup_dialog_assist() {
+  echo "no_safe_dialog"
+}
+
+startup_dialog_result_is_safe() {`;
+  const patched = source.replace(
+    /run_startup_dialog_assist\(\) \{[\s\S]*?\n\}\n\nstartup_dialog_result_is_safe\(\) \{/u,
+    replacement,
+  );
+  if (patched === source) {
+    throw new Error("package fixture could not replace its copied startup dialog inspector");
+  }
+  return patched;
 }
 
 async function runFakeStartExpectFailure({ startPath, fixtureRoot, capturePath, args = [] }) {
@@ -2924,7 +2953,7 @@ async function smokeFakeLaunchServicesRenderPropagation({ source, fixtureRoot, s
   await mkdir(stateRoot, { recursive: true });
   await writeFile(
     transformedStart,
-    source
+    withPackageFixtureCleanDialogInspection(source)
       .replace('LAUNCHCTL_BIN="/bin/launchctl"', `LAUNCHCTL_BIN=${shellQuote(launchctlPath)}`)
       .replace('OPEN_BIN="/usr/bin/open"', `OPEN_BIN=${shellQuote(openPath)}`),
     "utf8",
