@@ -1,0 +1,14 @@
+{
+  "contract": "alpha4.shard-c.batch.capacity-fixtures.v1",
+  "chunk_size": 128,
+  "candidate_ceiling": 512,
+  "accepted_counts": [1, 8, 64, 128, 300, 400, 512],
+  "typed_blocker": {
+    "target_count": 513,
+    "code": "BATCH_CANDIDATE_CEILING_EXCEEDED",
+    "failure_stage": "preflight",
+    "writes": 0,
+    "undo_scopes": 0,
+    "recovery_posture": "zero_write"
+  }
+}

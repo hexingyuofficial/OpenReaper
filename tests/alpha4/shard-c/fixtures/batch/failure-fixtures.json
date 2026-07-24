@@ -1,0 +1,60 @@
+{
+  "contract": "alpha4.shard-c.batch.failure-fixtures.v1",
+  "scenarios": [
+    {
+      "id": "schema-invalid",
+      "request": {"request_id": "failure-schema", "target_refs": "not-an-array"},
+      "expected": {"status": "blocked", "code": "BATCH_SCHEMA_INVALID", "stage": "validation", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "node-graph-invalid",
+      "request": {"request_id": "failure-node-graph", "target_refs": ["item:guid:{A}"], "node_graph": {"valid": false, "nodes": [{"id": "model-node", "kind": "unregistered"}]}},
+      "expected": {"status": "blocked", "code": "BATCH_NODE_GRAPH_INVALID", "stage": "validation", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "expression-invalid",
+      "request": {"request_id": "failure-expression", "target_refs": ["item:guid:{A}"], "expression": "row.value + ???"},
+      "expected": {"status": "blocked", "code": "BATCH_EXPRESSION_INVALID", "stage": "validation", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "preflight-blocker",
+      "request": {"request_id": "failure-preflight", "target_refs": ["item:guid:{A}"]},
+      "executor": {"preflight_blocker": {"code": "BATCH_PROTECTED_TARGET", "message": "protected target"}},
+      "expected": {"status": "blocked", "code": "BATCH_PROTECTED_TARGET", "stage": "preflight", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "stale-selection-before-first-write",
+      "request": {"request_id": "failure-stale-selection", "target_refs": ["item:guid:{A}"], "selection_snapshot": "selection:captured-1"},
+      "executor": {"current_selection_snapshot": "selection:live-2"},
+      "expected": {"status": "blocked", "code": "BATCH_STALE_SELECTION", "stage": "preflight", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "ref-drift-before-first-write",
+      "request": {"request_id": "failure-ref-drift", "target_refs": ["item:guid:{A}"]},
+      "executor": {"ref_drift_before_write": true},
+      "expected": {"status": "blocked", "code": "BATCH_REF_DRIFT", "stage": "preflight", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "mid-batch-native-failure",
+      "request": {"request_id": "failure-native", "target_refs": ["item:guid:{A}", "item:guid:{B}", "item:guid:{C}", "item:guid:{D}"]},
+      "executor": {"native_failure_at": 3},
+      "expected": {"status": "partial_failure", "code": "BATCH_NATIVE_EXECUTION_FAILED", "stage": "mutation", "writes": 2, "undo_scopes": 1, "recovery_posture": "partial_writes_recoverable_with_single_undo"}
+    },
+    {
+      "id": "verification-readback-failure",
+      "request": {"request_id": "failure-readback", "target_refs": ["item:guid:{A}", "item:guid:{B}"]},
+      "executor": {"readback_failure": true},
+      "expected": {"status": "failed", "code": "BATCH_VERIFICATION_READBACK_FAILED", "stage": "readback", "writes": 2, "undo_scopes": 1, "recovery_posture": "writes_require_single_undo_recovery"}
+    },
+    {
+      "id": "response-budget-oversize",
+      "request": {"request_id": "failure-budget", "target_refs": ["item:guid:{A}"], "response_budget": 64},
+      "expected": {"status": "blocked", "code": "BATCH_RESPONSE_BUDGET_EXCEEDED", "stage": "preflight", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    },
+    {
+      "id": "recipe-fixed-template-dependency-injection",
+      "request": {"request_id": "failure-recipe-dependency", "target_refs": ["item:guid:{A}"], "recipe": {"fixed_template_id": "template.items.set_item_volume"}, "template_id": "template.items.set_item_fades"},
+      "expected": {"status": "blocked", "code": "RECIPE_FIXED_TEMPLATE_DEPENDENCY_INJECTION_REJECTED", "stage": "validation", "writes": 0, "undo_scopes": 0, "recovery_posture": "zero_write"}
+    }
+  ]
+}

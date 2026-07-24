@@ -1,0 +1,450 @@
+{
+  "contract": "openreaper.alpha4.shard_c.selector_support_matrix.v1",
+  "version": "1.0.0",
+  "status": "current_a_baseline_evidence_only",
+  "baseline": {
+    "product_commit": "1ab1a46",
+    "control_commit": "7926e22",
+    "captured_at": "2026-07-24"
+  },
+  "legend": {
+    "selected_supported": "The current public Macro surface explicitly exposes a current-selection target shape.",
+    "exact_only": "The current public Macro surface requires exact refs or an explicit bounded selector object; no dedicated current-selection shortcut is frozen.",
+    "not_applicable": "Current selection is not a first-class target shape for this Macro at the public boundary.",
+    "held": "A direct selected/predicate surface is explicitly held or blocked and must not be promoted."
+  },
+  "summary": {
+    "macro_count": 15,
+    "status_counts": {
+      "selected_supported": 4,
+      "exact_only": 7,
+      "not_applicable": 4,
+      "held": 0
+    }
+  },
+  "rows": [
+    {
+      "macro_id": "macro.project.inspect",
+      "status": "not_applicable",
+      "selector_shape": "Selection is output-only via include=selected_context; the Macro does not accept a selection target input.",
+      "empty_behavior": {
+        "kind": "not_applicable",
+        "code": null
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "General include/limit response bounds only."
+      },
+      "reason": "Current selection is observed, not targeted.",
+      "owner": "shard_c",
+      "dependency": "none",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selected_context"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "Inspect current project identity, selection"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.project.query",
+      "status": "selected_supported",
+      "selector_shape": "Use entity=selected_context for direct selection reads, or entity-scoped selectors such as selected/name/track_ref.",
+      "empty_behavior": {
+        "kind": "returns_zero_rows",
+        "code": null
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Caller-bounded query limit; exact selector hydration stays bounded separately."
+      },
+      "reason": "Current A baseline already exposes selected_context plus selected-aware selectors.",
+      "owner": "shard_c",
+      "dependency": "none",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selected_context"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "selectors"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "selected, name, track_ref"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.project.delete_targets",
+      "status": "exact_only",
+      "selector_shape": "Explicit canonical refs first; query-derived selectors are previewed and confirmed before destructive execution.",
+      "empty_behavior": {
+        "kind": "preview_or_target_blocker",
+        "code": "DELETE_TARGETS_PREVIEW_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "No direct selected/predicate delete surface is frozen in the current baseline."
+      },
+      "reason": "The accepted delete path remains exact/confirmed rather than direct selected or predicate entry.",
+      "owner": "shard_c",
+      "dependency": "accepted_shard_b_mutation_truth",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "Explicit canonical project-object refs"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "query-derived selectors"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "DELETE_TARGETS_PREVIEW_REQUIRED"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.project.apply_layout",
+      "status": "not_applicable",
+      "selector_shape": "Consumes explicit layout rows and annotation rows, not current selection.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "LAYOUT_INVALID"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Layout rows define the target set."
+      },
+      "reason": "Current public input is declarative layout data, not a selector surface.",
+      "owner": "shard_c",
+      "dependency": "none",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "Apply an explicit JSON layout"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "Recursive children are flattened deterministically"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.project.file",
+      "status": "not_applicable",
+      "selector_shape": "Operation-oriented project save/switch surface; no selection target input exists.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "PROJECT_FILE_OPERATION_HELD"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Selector widening is unrelated to this Macro."
+      },
+      "reason": "Project-file operations are not selection-driven; held operations stay held.",
+      "owner": "shard_c",
+      "dependency": "none",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "operation"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "new/create/open remain held"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.routing.apply",
+      "status": "exact_only",
+      "selector_shape": "Requires exact track/send refs for routes, master_parent, and channel_counts rows.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "ROUTING_GRAPH_COVERAGE_INCOMPLETE"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Route rows are bounded, but no direct current-selection target is frozen."
+      },
+      "reason": "Routing work is currently expressed as exact canonical topology rows.",
+      "owner": "shard_c",
+      "dependency": "accepted_shard_b_selection_identity",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "exact canonical Track or Send ref"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "source_track_ref"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.media.place_assets",
+      "status": "not_applicable",
+      "selector_shape": "Consumes explicit asset rows, search_library queries, and relink take refs; no current project selection target is frozen.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "MEDIA_COMPLETE_PREFLIGHT_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Assets are bounded to 1-8 explicit rows; folder_ref selection remains held."
+      },
+      "reason": "Current public targeting is asset-driven, not selected/predicate-driven.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "search_library"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "assets"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "folder_ref selection remains held"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.items.analyze",
+      "status": "selected_supported",
+      "selector_shape": "target=selected by default, with optional exact item refs and bounded limit.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "ITEM_ANALYSIS_TARGETS_EMPTY"
+      },
+      "capacity": {
+        "selected_target_limit": 8,
+        "notes": "Manual freezes limit 1-8, default 4 for selected Items."
+      },
+      "reason": "Current public manual explicitly treats selected Items as a first-class target.",
+      "owner": "shard_c",
+      "dependency": "accepted_shard_b_selection_identity",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selected; used when no exact refs or target_refs are supplied"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "limit"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "ITEM_ANALYSIS_TARGETS_EMPTY"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.items.apply",
+      "status": "selected_supported",
+      "selector_shape": "target=selected for arrangement/property modes; exact-only rows remain required for set_active_take, set_item_take_controls, and create_variations.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "ITEM_APPLY_TARGETS_EMPTY"
+      },
+      "capacity": {
+        "selected_target_limit": 8,
+        "notes": "Selected/exact arrangement/property target_refs stay at 1-8; exact control/variation rows go higher only through separate exact-row modes."
+      },
+      "reason": "Current public manual already exposes a selected target while keeping several modes exact-only.",
+      "owner": "shard_c",
+      "dependency": "accepted_shard_b_selection_identity",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selected; used by arrangement/property modes"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "Forbidden for set_active_take, set_item_take_controls, and create_variations"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "ITEM_APPLY_TARGET_COVERAGE_INCOMPLETE"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.midi.apply",
+      "status": "exact_only",
+      "selector_shape": "create_clips may use one track selector or exact track_ref; edit modes require exact take_ref rows.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "MIDI_EXACT_TAKE_REF_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "No current public selected-track or selected-take shortcut is frozen."
+      },
+      "reason": "Current selection is not a dedicated public target; current support is selector/ref based.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selector"
+        },
+        {
+          "kind": "manual_substring",
+        "needle": "Each operation requires a unique exact take_ref in take:guid:{GUID} form."
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.fx.apply_chain",
+      "status": "exact_only",
+      "selector_shape": "Track owner may use one selector or exact track_ref; Take owner requires exact take_ref.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "FX_CHAIN_TAKE_REF_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "One owner target per call; chain[] remains bounded to 1-8 nodes."
+      },
+      "reason": "Current public FX owner targeting is selector/ref based rather than direct current selection.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selector"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "track_ref or take_ref"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.fx.set_controls",
+      "status": "exact_only",
+      "selector_shape": "Requires exact fx_ref or one unambiguous selector; exact_assignments stays exact-row only.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "STOCK_PLUGIN_FX_REF_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "exact_parameters is 1-8 rows on one FX; exact_assignments is 1-64 rows across exact fx_ref targets."
+      },
+      "reason": "Current public support is explicit FX identity or bounded selector, not direct current selection.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selector or exact fx_ref required"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "exact_assignments"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.controls.set",
+      "status": "exact_only",
+      "selector_shape": "Object targets may use one explicit selector or exact refs; project/transport do not use current selection.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "CONTROL_TARGET_REF_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Single-target shape or 1-8 changes[] rows; no dedicated current-selection shortcut is frozen."
+      },
+      "reason": "The current public shape is explicit selector/ref based rather than selected-context based.",
+      "owner": "shard_c",
+      "dependency": "accepted_shard_b_selection_identity",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "Optional singular bounded Project Index selector"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "changes[]"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "CONTROL_TARGET_REF_REQUIRED"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.automation.apply",
+      "status": "exact_only",
+      "selector_shape": "Uses exact envelope_refs, track_refs, and fx_refs; no public selected/predicate target exists.",
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "AUTOMATION_COMPLETE_READBACK_REQUIRED"
+      },
+      "capacity": {
+        "selected_target_limit": null,
+        "notes": "Point-work stays bounded, but targeting is exact-identity only."
+      },
+      "reason": "Current public automation entry requires exact live refs throughout.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "envelope_refs"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "Exact track:guid refs"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "fx:track:guid"
+        }
+      ]
+    },
+    {
+      "macro_id": "macro.render.targets",
+      "status": "selected_supported",
+      "selector_shape": "target_kind supports selected_items and selected_tracks; explicit refs are rejected for selected target kinds.",
+      "empty_behavior": {
+        "kind": "live_selection_runtime_specific",
+        "code": null
+      },
+      "capacity": {
+        "selected_target_limit": 16,
+        "notes": "Current public max_targets is 16."
+      },
+      "reason": "The current public render target shape already exposes selected_items and selected_tracks.",
+      "owner": "shard_d_after_shard_c",
+      "dependency": "stable_shard_c_selector_contract",
+      "evidence": [
+        {
+          "kind": "manual_substring",
+          "needle": "selected_items"
+        },
+        {
+          "kind": "manual_substring",
+          "needle": "selected_tracks"
+        },
+        {
+          "kind": "source_substring",
+          "file": "packages/mcp-server/src/alpha3-2e-render-targets-v1.mjs",
+          "needle": "selected targets are resolved from live selection"
+        }
+      ]
+    }
+  ]
+}

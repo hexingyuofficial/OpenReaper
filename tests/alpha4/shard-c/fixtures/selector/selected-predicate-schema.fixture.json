@@ -1,0 +1,221 @@
+{
+  "contract": "openreaper.alpha4.shard_c.selector_schema_fixture.v1",
+  "version": "1.0.0",
+  "status": "fixture_only_not_runtime_bound",
+  "baseline": {
+    "product_commit": "1ab1a46",
+    "control_commit": "7926e22",
+    "captured_at": "2026-07-24"
+  },
+  "legend": {
+    "fixture_only_not_runtime_bound": "This fixture freezes the intended selected/predicate parse and preflight contract for Shard C only. It is not a runtime support claim.",
+    "candidate_packet_target_unproven": "Numeric ceilings come from the accepted Shard C packet target and remain unproven until later runtime/batch evidence exists."
+  },
+  "target_scope": {
+    "entity_kinds": [
+      "track",
+      "item"
+    ],
+    "selection_snapshot_identity": {
+      "freeze_kind": "guid_snapshot",
+      "project_identity_required": true,
+      "bridge_owner_required": true,
+      "bridge_generation_required": true,
+      "live_reresolve_before_write": true,
+      "zero_write_on_identity_drift": true
+    },
+    "candidate_ceiling": {
+      "status": "candidate_packet_target_unproven",
+      "max_targets": 512,
+      "first_blocked_target_count": 513,
+      "zero_write_required": true
+    }
+  },
+  "selector_request_schemas": [
+    {
+      "kind": "current_selection",
+      "description": "Resolve the current live selection once, freeze GUIDs, then carry only the frozen snapshot into mutation preflight.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "entity_kind"
+        ],
+        "properties": {
+          "kind": {
+            "const": "current_selection"
+          },
+          "entity_kind": {
+            "enum": [
+              "track",
+              "item"
+            ]
+          },
+          "selection_scope": {
+            "enum": [
+              "current"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512
+          }
+        }
+      },
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "SELECTOR_TARGETS_EMPTY"
+      }
+    },
+    {
+      "kind": "explicit_refs",
+      "description": "Accept exact canonical GUID refs only; no positional refs, names, or implicit widening.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "entity_kind",
+          "refs"
+        ],
+        "properties": {
+          "kind": {
+            "const": "explicit_refs"
+          },
+          "entity_kind": {
+            "enum": [
+              "track",
+              "item"
+            ]
+          },
+          "refs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 512,
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "ref_patterns": {
+        "track": "^track:guid:\\{[A-Z0-9_-]+\\}$",
+        "item": "^item:guid:\\{[A-Z0-9_-]+\\}$"
+      },
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "SELECTOR_TARGETS_EMPTY"
+      }
+    },
+    {
+      "kind": "predicate",
+      "description": "Resolve bounded live Track or Item candidates from one approved typed predicate without a GUID inventory round trip.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "entity_kind",
+          "field",
+          "operator",
+          "value"
+        ],
+        "properties": {
+          "kind": {
+            "const": "predicate"
+          },
+          "entity_kind": {
+            "enum": [
+              "track",
+              "item"
+            ]
+          },
+          "field": {
+            "enum": [
+              "muted",
+              "soloed",
+              "record_armed",
+              "name",
+              "locked",
+              "active_take_name"
+            ]
+          },
+          "operator": {
+            "enum": [
+              "equals",
+              "contains",
+              "starts_with"
+            ]
+          },
+          "value": {},
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 512
+          }
+        }
+      },
+      "empty_behavior": {
+        "kind": "typed_blocker",
+        "code": "SELECTOR_TARGETS_EMPTY"
+      }
+    }
+  ],
+  "approved_predicates": {
+    "track": [
+      "muted",
+      "soloed",
+      "record_armed",
+      "name"
+    ],
+    "item": [
+      "muted",
+      "locked",
+      "active_take_name"
+    ]
+  },
+  "preflight_blockers": [
+    {
+      "code": "SELECTOR_TARGETS_EMPTY",
+      "family": "empty",
+      "zero_write_required": true
+    },
+    {
+      "code": "SELECTOR_TYPE_MISMATCH",
+      "family": "type",
+      "zero_write_required": true
+    },
+    {
+      "code": "SELECTOR_TARGET_AMBIGUOUS",
+      "family": "ambiguity",
+      "zero_write_required": true
+    },
+    {
+      "code": "SELECTOR_LIMIT_EXCEEDED",
+      "family": "limit",
+      "zero_write_required": true
+    },
+    {
+      "code": "SELECTOR_PREWRITE_DRIFT",
+      "family": "pre_write_drift",
+      "zero_write_required": true
+    },
+    {
+      "code": "MASTER_TRACK_PROTECTED",
+      "family": "protection",
+      "zero_write_required": true
+    },
+    {
+      "code": "FOLDER_CASCADE_SCOPE_REQUIRED",
+      "family": "cascade",
+      "zero_write_required": true
+    }
+  ],
+  "evidence_policy": {
+    "machine_verifiable_only": true,
+    "shared_runtime_called": false,
+    "live_reaper_called": false
+  }
+}

@@ -1,0 +1,244 @@
+{
+  "contract": "openreaper.alpha4.shard_c.selector_failure_fixture.v1",
+  "version": "1.0.0",
+  "status": "fixture_only_not_runtime_bound",
+  "baseline": {
+    "product_commit": "1ab1a46",
+    "control_commit": "7926e22",
+    "captured_at": "2026-07-24"
+  },
+  "scenarios": [
+    {
+      "id": "empty-current-track-selection",
+      "selector_request": {
+        "kind": "current_selection",
+        "entity_kind": "track"
+      },
+      "frozen_guid_snapshot": {
+        "snapshot_id": "selection-snapshot:tracks-empty",
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "track",
+        "rows": []
+      },
+      "expected": {
+        "phase": "preflight",
+        "code": "SELECTOR_TARGETS_EMPTY",
+        "zero_write": true
+      }
+    },
+    {
+      "id": "type-mismatch-item-selection-used-for-track-target",
+      "selector_request": {
+        "kind": "current_selection",
+        "entity_kind": "track"
+      },
+      "frozen_guid_snapshot": {
+        "snapshot_id": "selection-snapshot:item-wrong-type",
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "item",
+        "rows": [
+          {
+            "ordinal": 0,
+            "item_ref": "item:guid:{ITEM-A}"
+          }
+        ]
+      },
+      "expected": {
+        "phase": "parse",
+        "code": "SELECTOR_TYPE_MISMATCH",
+        "zero_write": true
+      }
+    },
+    {
+      "id": "track-name-predicate-duplicate-name-ambiguity",
+      "selector_request": {
+        "kind": "predicate",
+        "entity_kind": "track",
+        "field": "name",
+        "operator": "equals",
+        "value": "Lead Vox"
+      },
+      "candidate_rows": [
+        {
+          "track_ref": "track:guid:{TRACK-LEAD-A}",
+          "name": "Lead Vox",
+          "muted": false,
+          "soloed": false,
+          "record_armed": false
+        },
+        {
+          "track_ref": "track:guid:{TRACK-LEAD-B}",
+          "name": "Lead Vox",
+          "muted": false,
+          "soloed": false,
+          "record_armed": true
+        }
+      ],
+      "expected": {
+        "phase": "preflight",
+        "code": "SELECTOR_TARGET_AMBIGUOUS",
+        "zero_write": true
+      }
+    },
+    {
+      "id": "item-active-take-name-predicate-limit-513",
+      "selector_request": {
+        "kind": "predicate",
+        "entity_kind": "item",
+        "field": "active_take_name",
+        "operator": "equals",
+        "value": "Snare Top",
+        "limit": 512
+      },
+      "synthetic_snapshot": {
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "item",
+        "row_count": 513,
+        "guid_prefix": "ITEM-SNARE-"
+      },
+      "expected": {
+        "phase": "preflight",
+        "code": "SELECTOR_LIMIT_EXCEEDED",
+        "blocked_target_count": 513,
+        "zero_write": true
+      }
+    },
+    {
+      "id": "pre-write-drift-frozen-guid-missing-live",
+      "selector_request": {
+        "kind": "explicit_refs",
+        "entity_kind": "item",
+        "refs": [
+          "item:guid:{ITEM-KEEP}",
+          "item:guid:{ITEM-DRIFTED}"
+        ]
+      },
+      "frozen_guid_snapshot": {
+        "snapshot_id": "selection-snapshot:items-drift",
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "item",
+        "rows": [
+          {
+            "ordinal": 0,
+            "item_ref": "item:guid:{ITEM-KEEP}",
+            "active_take_name": "Kick In"
+          },
+          {
+            "ordinal": 1,
+            "item_ref": "item:guid:{ITEM-DRIFTED}",
+            "active_take_name": "Kick Out"
+          }
+        ]
+      },
+      "live_reresolve_result": {
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 8,
+        "resolved_refs": [
+          "item:guid:{ITEM-KEEP}"
+        ],
+        "missing_refs": [
+          "item:guid:{ITEM-DRIFTED}"
+        ]
+      },
+      "expected": {
+        "phase": "pre_write_live_reresolve",
+        "code": "SELECTOR_PREWRITE_DRIFT",
+        "zero_write": true
+      }
+    },
+    {
+      "id": "master-track-protection",
+      "selector_request": {
+        "kind": "explicit_refs",
+        "entity_kind": "track",
+        "refs": [
+          "track:guid:{MASTER-TRACK}"
+        ]
+      },
+      "frozen_guid_snapshot": {
+        "snapshot_id": "selection-snapshot:master-track",
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "track",
+        "rows": [
+          {
+            "ordinal": 0,
+            "track_ref": "track:guid:{MASTER-TRACK}",
+            "name": "MASTER",
+            "is_master": true,
+            "folder_depth": 0
+          }
+        ]
+      },
+      "expected": {
+        "phase": "preflight",
+        "code": "MASTER_TRACK_PROTECTED",
+        "zero_write": true
+      }
+    },
+    {
+      "id": "folder-cascade-scope-required",
+      "selector_request": {
+        "kind": "predicate",
+        "entity_kind": "track",
+        "field": "name",
+        "operator": "equals",
+        "value": "Drum Bus"
+      },
+      "frozen_guid_snapshot": {
+        "snapshot_id": "selection-snapshot:folder-cascade",
+        "project_identity": "project:guid:{PROJECT-A}",
+        "bridge_owner": "bridge-owner-A",
+        "bridge_generation": 7,
+        "selection_entity_kind": "track",
+        "rows": [
+          {
+            "ordinal": 0,
+            "track_ref": "track:guid:{TRACK-FOLDER}",
+            "name": "Drum Bus",
+            "is_master": false,
+            "folder_depth": 1,
+            "descendant_track_refs": [
+              "track:guid:{TRACK-KICK}",
+              "track:guid:{TRACK-SNARE}"
+            ]
+          },
+          {
+            "ordinal": 1,
+            "track_ref": "track:guid:{TRACK-KICK}",
+            "name": "Kick",
+            "is_master": false,
+            "folder_depth": 0
+          },
+          {
+            "ordinal": 2,
+            "track_ref": "track:guid:{TRACK-SNARE}",
+            "name": "Snare",
+            "is_master": false,
+            "folder_depth": -1
+          }
+        ]
+      },
+      "expected": {
+        "phase": "preflight",
+        "code": "FOLDER_CASCADE_SCOPE_REQUIRED",
+        "zero_write": true
+      }
+    }
+  ],
+  "evidence_policy": {
+    "machine_verifiable_only": true,
+    "shared_runtime_called": false,
+    "live_reaper_called": false
+  }
+}
