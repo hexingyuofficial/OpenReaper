@@ -232,9 +232,36 @@ local function d9_tracks_selected(limit)
   return tracks, total, total > limit
 end
 
+local function d9_tracks_selector_matches(summary, filter)
+  if not is_object(filter) then return false end
+  local value = summary[filter.field]
+  if filter.field == "soloed" then value = summary.solo_mode ~= "off" end
+  if filter.operator == "equals" then return value == filter.value end
+  return type(value) == "string" and (
+    filter.operator == "contains" and value:find(filter.value, 1, true) ~= nil
+    or filter.operator == "starts_with" and value:sub(1, #filter.value) == filter.value
+  )
+end
+
+local function d9_tracks_filtered(limit, filter)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local tracks, matches = {}, 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and d9_tracks_selector_matches(d9_tracks_mixer_summary(track), filter) then
+      matches = matches + 1
+      if #tracks < limit then tracks[#tracks + 1] = track end
+      if matches > limit then break end
+    end
+  end
+  return tracks, matches, matches > limit
+end
+
 local function list_tracks(request)
-  local limit = d9_tracks_limit(request, 64, 256)
-  local tracks, total, truncated = d9_tracks_all(limit)
+  local limit = d9_tracks_limit(request, 64, 513)
+  local filter = request.params and request.params.selector_filter
+  local tracks, total, truncated = filter and d9_tracks_filtered(limit, filter) or d9_tracks_all(limit)
   local rows = json_array({})
   local refs = json_array({})
   local selected_count = 0
@@ -248,6 +275,7 @@ local function list_tracks(request)
       record_armed = summary.record_armed,
       muted = summary.muted,
       solo_mode = summary.solo_mode,
+      folder_depth = summary.folder_depth,
     }
     if summary.selected then
       selected_count = selected_count + 1
@@ -259,11 +287,13 @@ local function list_tracks(request)
     track_count = total,
     selected_count = selected_count,
     truncated = truncated,
+    selector_match_count = filter and total or JSON_NULL,
+    selector_matches_complete = filter and not truncated or JSON_NULL,
   }), nil, json_array({}), json_array({}), refs
 end
 
 local function read_mixer_controls(request)
-  local limit = d9_tracks_limit(request, 32, 128)
+  local limit = d9_tracks_limit(request, 32, 513)
   local tracks = d9_tracks_from_request_refs(request)
   local total = #tracks
   local truncated = false

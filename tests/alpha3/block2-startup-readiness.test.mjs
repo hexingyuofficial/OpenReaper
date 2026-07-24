@@ -100,6 +100,13 @@ describe("Alpha3 Block2 startup and connection readiness", () => {
 
   it("keeps missing-media dialog automation consent-bound and exact", () => {
     const source = readFileSync(START_HELPER, "utf8");
+    assert.match(source, /--recover-existing/u);
+    assert.match(source, /verified_existing_reaper_pid\(\)/u);
+    assert.match(source, /startup-mode=recover_existing/u);
+    assert.match(source, /SAME_INSTANCE_BRIDGE_ACTION_REQUIRED/u);
+    assert.match(source, /cannot restart (?:its|a) stopped Bridge/u);
+    assert.match(source, /existing session could not be safely verified; refusing to launch another REAPER/u);
+    assert.match(source, /OPENREAPER_SESSION_ROOT="\$\{SESSION_ROOT\}"/u);
     assert.match(source, /if windowTitle is "Project Load Warning" then/u);
     assert.match(source, /value of text area 1 of scroll area 1 of reaperWindow as text/u);
     assert.match(source, /warningText contains "in an off-line state" and warningText contains "filenames should be preserved"/u);

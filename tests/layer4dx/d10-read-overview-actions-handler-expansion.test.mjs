@@ -176,7 +176,7 @@ describe("D10 read overview/actions live handler expansion", () => {
     assert.match(PROJECT_HANDLER_SOURCE, /max_items_per_track_effective/);
     assert.match(PROJECT_HANDLER_SOURCE, /summary\.next_track_cursor = tostring\(end_track\)/);
     assert.match(PROJECT_HANDLER_SOURCE, /summary\.next_item_cursor = tostring\(end_item\)/);
-    assert.match(PROJECT_HANDLER_SOURCE, /item_coverage_status = not items_internally_complete and "incomplete" or \(end_item < total_items and "paged" or "complete"\)/);
+    assert.match(PROJECT_HANDLER_SOURCE, /selector_matches_complete/);
     assert.doesNotMatch(PROJECT_HANDLER_SOURCE, /next_track_cursor = .*JSON_NULL/);
     assert.match(BRIDGE_SOURCE, /kbd_getTextFromCmd/);
     assert.match(BRIDGE_SOURCE, /NamedCommandLookup/);

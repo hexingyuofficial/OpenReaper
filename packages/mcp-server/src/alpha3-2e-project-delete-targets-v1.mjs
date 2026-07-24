@@ -44,13 +44,17 @@ export function isAlpha3_2EProjectDeleteTargetsMacroId(id) {
   return id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID;
 }
 
+export function hasAlpha3_2EProjectDeleteTargetSelectors(input) {
+  return Array.isArray(input?.selectors) && input.selectors.length > 0;
+}
+
 export function planAlpha3_2EProjectDeleteTargetsMacro(input = {}, requestPosture = {}) {
   const normalized = isPlainObject(input) ? input : {};
   const blockers = [
     ...validateUnusedRequestPosture(requestPosture),
     ...validateInput(input, normalized),
   ];
-  const targetSet = normalizeTargetSet(normalized.refs);
+  const targetSet = normalizeTargetSet(normalized.refs, { selectorInternal: requestPosture.selector_internal_batch === true });
   blockers.push(...targetSet.blockers);
   const dryRun = normalized.dry_run !== false;
   const collapsed = collapseOverlappingTargets(targetSet.targets);
@@ -63,7 +67,9 @@ export function planAlpha3_2EProjectDeleteTargetsMacro(input = {}, requestPostur
   }
   if (dryRun) return previewPlan(preview, confirmation);
 
-  const confirmBlockers = validateConfirmation(normalized.confirm_scope, confirmation, preview);
+  const confirmBlockers = requestPosture.selector_internal_confirmation === true
+    ? []
+    : validateConfirmation(normalized.confirm_scope, confirmation, preview);
   if (confirmBlockers.length > 0) return blockedPlan(confirmBlockers, preview, confirmation);
 
   const mutationRequests = buildMutationRequests(collapsed.targets);
@@ -273,12 +279,25 @@ function validateInput(original, normalized) {
 function validateSelectors(value) {
   if (!Array.isArray(value)) return [blocker("DELETE_SELECTORS_INVALID", "selectors must be an array when supplied.")];
   if (value.length > MAX_SELECTOR_COUNT) return [blocker("DELETE_SELECTORS_TOO_LARGE", `selectors accepts at most ${MAX_SELECTOR_COUNT} entries.`)];
-  return value.length > 0
-    ? [blocker("DELETE_SELECTORS_REQUIRE_RESOLUTION", "Selectors must be resolved to exact canonical refs before macro.project.delete_targets emits deletion child requests.")]
-    : [];
+  return value.flatMap((selector) => validateSelector(selector));
 }
 
-function normalizeTargetSet(refs) {
+function validateSelector(selector) {
+  if (!isPlainObject(selector)) return [blocker("DELETE_SELECTOR_INVALID", "Each selector must be an object.")];
+  if (selector.kind === "current_selection" && ["track", "item"].includes(selector.entity_kind)) return [];
+  if (selector.kind !== "predicate" || !["track", "item"].includes(selector.entity_kind)) return [blocker("DELETE_SELECTOR_INVALID", "Selector must be an approved current_selection or typed Track/Item predicate.")];
+  const stringField = (selector.entity_kind === "track" && selector.field === "name")
+    || (selector.entity_kind === "item" && selector.field === "active_take_name");
+  const booleanField = (selector.entity_kind === "track" && ["muted", "soloed", "record_armed"].includes(selector.field))
+    || (selector.entity_kind === "item" && ["muted", "locked"].includes(selector.field));
+  if (stringField && typeof selector.value === "string" && ["equals", "contains", "starts_with"].includes(selector.operator)) return [];
+  if (booleanField && typeof selector.value === "boolean" && selector.operator === "equals") return [];
+  return [blocker("DELETE_SELECTOR_INVALID", "Selector must be an approved current_selection or typed Track/Item predicate.")];
+}
+
+function normalizeTargetSet(refs, { selectorInternal = false } = {}) {
+  const maxRefsPerKind = selectorInternal ? 512 : MAX_REFS_PER_KIND;
+  const maxTotalRefs = selectorInternal ? 512 : MAX_TOTAL_REFS;
   const targets = { tracks: [], items: [], markers: [], regions: [], fx: [] };
   const blockers = [];
   if (refs === undefined) return { targets, blockers };
@@ -296,7 +315,7 @@ function normalizeTargetSet(refs) {
       blockers.push(blocker("DELETE_TARGET_REFS_INVALID", `refs.${kind} must be an array of canonical refs.`, { kind }));
       continue;
     }
-    if (value.length > MAX_REFS_PER_KIND) blockers.push(blocker("DELETE_TARGET_REFS_TOO_LARGE", `refs.${kind} accepts at most ${MAX_REFS_PER_KIND} refs.`, { kind }));
+    if (value.length > maxRefsPerKind) blockers.push(blocker("DELETE_TARGET_REFS_TOO_LARGE", `refs.${kind} accepts at most ${maxRefsPerKind} refs.`, { kind }));
     const seen = new Set();
     for (const ref of value) {
       if (typeof ref !== "string" || ref.length === 0 || /[\u0000-\u001f\u007f]/u.test(ref) || !ref.startsWith(REF_PREFIX_BY_KIND[kind]) || (kind === "fx" && !parseExactFxRef(ref))) {
@@ -312,7 +331,7 @@ function normalizeTargetSet(refs) {
     }
   }
   const total = Object.values(targets).reduce((sum, rows) => sum + rows.length, 0);
-  if (total > MAX_TOTAL_REFS) blockers.push(blocker("DELETE_TARGET_REFS_TOO_LARGE", `macro.project.delete_targets accepts at most ${MAX_TOTAL_REFS} total refs.`));
+  if (total > maxTotalRefs) blockers.push(blocker("DELETE_TARGET_REFS_TOO_LARGE", `macro.project.delete_targets accepts at most ${maxTotalRefs} total refs.`));
   return { targets: deepFreeze(targets), blockers };
 }
 

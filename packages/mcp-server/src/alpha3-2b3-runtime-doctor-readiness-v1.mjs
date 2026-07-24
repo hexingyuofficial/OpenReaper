@@ -760,6 +760,7 @@ export function createAlpha3_2B3DoctorTaskResult(options = {}) {
       bridgeActionName: options.bridgeActionName,
       renderInspection,
       transportDir: options.transportDir,
+      reaperProcess,
     });
     return deepFreeze({
       contract: ALPHA3_2B3_RUNTIME_DOCTOR_READINESS_CONTRACT,
@@ -777,7 +778,8 @@ export function createAlpha3_2B3DoctorTaskResult(options = {}) {
         ? { restart_escalation: recovery.restart_escalation }
         : {}),
       safe_copy_paste_fix: recovery.safe_copy_paste_fix,
-      recovery_card: beginnerRecoveryCard(first, runtime?.bridge, recovery),
+      recovery_card: beginnerRecoveryCard(first, runtime?.bridge, recovery, reaperProcess),
+      same_instance_recovery: recovery.same_instance_recovery ?? null,
       evidence: taskEvidence(runtime, requestResponse, reaperProcess, renderInspection),
       ...(mode === "render" ? renderPreflight(false) : {}),
     });
@@ -833,7 +835,7 @@ export function createAlpha3_2B3DoctorTaskResult(options = {}) {
   });
 }
 
-function beginnerRecoveryCard(diagnosis, bridge, recovery) {
+function beginnerRecoveryCard(diagnosis, bridge, recovery, reaperProcess) {
   const observed = bridge?.observed ?? {};
   const expected = bridge?.expected ?? {};
   return {
@@ -853,6 +855,12 @@ function beginnerRecoveryCard(diagnosis, bridge, recovery) {
     } : {}),
     recovery: recovery.next_action.instruction,
     action_auto_run: false,
+    ...(recovery.same_instance_recovery
+      ? { same_instance_recovery: recovery.same_instance_recovery }
+      : {}),
+    ...(reaperProcess?.running === true && Number.isSafeInteger(reaperProcess.pid)
+      ? { reaper_pid: reaperProcess.pid, reaper_identity_verified: reaperProcess.identity_verified === true }
+      : {}),
   };
 }
 
@@ -1052,6 +1060,7 @@ function taskEvidence(runtime, requestResponse, reaperProcess, renderInspection)
 function recoveryForFailure(code, options) {
   const startCommand = normalizeSafeCommand(options.startCommand) ?? "~/.openreaper/current/bin/openreaper-start";
   const bridgeAction = boundedText(options.bridgeActionName, 160) ?? "OpenReaper: Start MCP bridge";
+  const sameInstance = sameInstanceRecovery(options.reaperProcess);
   if (code === "reaper_not_running") {
     return recovery({
       instruction: "Start REAPER through OpenReaper, run the installed bridge Action, then reconnect and rerun doctor.",
@@ -1064,28 +1073,36 @@ function recoveryForFailure(code, options) {
   }
   if (code === "bridge_action_not_running") {
     return recovery({
-      instruction: `In REAPER, run the Action \"${bridgeAction}\", then rerun doctor or reconnect the MCP client.`,
-      code: "run_bridge_action",
+      instruction: sameInstance
+        ? `The verified REAPER PID ${sameInstance.reaper_pid} is alive, but OpenReaper cannot restart its stopped Bridge externally. In that same REAPER, run the Action \"${bridgeAction}\", then rerun doctor; do not start another REAPER.`
+        : `In REAPER, run the Action \"${bridgeAction}\", then rerun doctor or reconnect the MCP client.`,
+      code: sameInstance ? "same_instance_bridge_action_required" : "run_bridge_action",
       userAction: true,
       mcpRestart: true,
       reaperRestart: false,
       fix: null,
+      sameInstanceRecovery: sameInstance,
     });
   }
   if (code === "bridge_loop_unresponsive") {
     return recovery({
-      instruction: `The heartbeat is stale. In REAPER, rerun the Action "${bridgeAction}", then rerun doctor. Restart the OpenReaper session only if the heartbeat remains stale.`,
-      code: "rerun_bridge_action_then_escalate_session_restart",
+      instruction: sameInstance
+        ? `The heartbeat is stale but verified REAPER PID ${sameInstance.reaper_pid} is alive. OpenReaper cannot restart its stopped Bridge externally; in that same REAPER, run the Action "${bridgeAction}", then rerun doctor; do not start another REAPER.`
+        : `The heartbeat is stale. In REAPER, rerun the Action "${bridgeAction}", then rerun doctor. Restart the OpenReaper session only if the heartbeat remains stale.`,
+      code: sameInstance ? "same_instance_bridge_action_required" : "rerun_bridge_action_then_escalate_session_restart",
       userAction: true,
       mcpRestart: false,
       reaperRestart: false,
-      restartEscalation: {
-        reaper: {
-          conditional: true,
-          condition: "heartbeat_remains_stale_after_rerunning_bridge_action",
+      ...(sameInstance ? {} : {
+        restartEscalation: {
+          reaper: {
+            conditional: true,
+            condition: "heartbeat_remains_stale_after_rerunning_bridge_action",
+          },
         },
-      },
+      }),
       fix: null,
+      sameInstanceRecovery: sameInstance,
     });
   }
   if (code === "owner_generation_mismatch") {
@@ -1167,7 +1184,7 @@ function renderRootRecovery(inspection, startCommand) {
   };
 }
 
-function recovery({ instruction, code, userAction, mcpRestart, reaperRestart, restartEscalation, fix }) {
+function recovery({ instruction, code, userAction, mcpRestart, reaperRestart, restartEscalation, fix, sameInstanceRecovery }) {
   return {
     recoverable: true,
     next_action: { code, instruction: boundedText(instruction, 640) },
@@ -1178,6 +1195,22 @@ function recovery({ instruction, code, userAction, mcpRestart, reaperRestart, re
     },
     ...(restartEscalation ? { restart_escalation: restartEscalation } : {}),
     safe_copy_paste_fix: boundedCopyPasteFix(fix),
+    ...(sameInstanceRecovery ? { same_instance_recovery: sameInstanceRecovery } : {}),
+  };
+}
+
+function sameInstanceRecovery(reaperProcess) {
+  if (reaperProcess?.running !== true || reaperProcess?.identity_verified !== true || !Number.isSafeInteger(reaperProcess.pid)) {
+    return null;
+  }
+  return {
+    scope: "same_reaper_instance",
+    reaper_pid: reaperProcess.pid,
+    identity_verified: true,
+    duplicate_launch_forbidden: true,
+    reaper_restart_allowed: false,
+    automatic_bridge_restart_available: false,
+    required_action: "run_registered_bridge_action",
   };
 }
 

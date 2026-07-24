@@ -152,6 +152,41 @@ describe("Alpha4 Shard B Recipe truth", () => {
     }
   });
 
+  it("reports delayed begin timeout as open_unknown without zero-write or no-recovery claims", async () => {
+    const timeout = new Error("Timed out waiting for delayed Recipe Undo begin proof.");
+    timeout.code = "BRIDGE_TIMEOUT";
+    timeout.outcome = "unknown";
+    timeout.reconciliation_required = true;
+    timeout.handle = "run-delayed:attempt:1";
+    const fixture = makeRuntime({
+      undoController: {
+        async begin() { throw timeout; },
+        async end() { throw new Error("end must not be called"); },
+      },
+    });
+    const dispatches = [];
+    try {
+      const draft = makeDraft();
+      const saved = await saveDraft(fixture.runtime, draft);
+      const blocked = await runFixture(fixture, saved, draft, {
+        dispatches,
+        template: () => templateSuccess(),
+      });
+      assert.equal(blocked.ok, false, JSON.stringify(blocked));
+      assert.equal(blocked.undo.status, "open_unknown");
+      assert.equal(blocked.execution_truth.mutation, "unknown");
+      assert.equal(blocked.execution_truth.transport_call_count, 0);
+      assert.equal(blocked.error.details.stage_dispatch_count, 0);
+      assert.equal(blocked.error.details.transaction_reconciliation_required, true);
+      assert.equal(Object.hasOwn(blocked.error.details, "zero_write"), false);
+      assert.equal(blocked.recovery.strategy, "reconcile_recipe_undo");
+      assert.equal(blocked.recovery.required_action, "reconcile_exact_not_run_transaction_before_retry");
+      assert.deepEqual(dispatches, []);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("retains output, mutation, run, Undo, recovery, and evidence identity when response projection overflows", async () => {
     const fixture = makeRuntime({
       undoController: {

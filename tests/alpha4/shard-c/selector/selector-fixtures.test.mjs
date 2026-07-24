@@ -45,13 +45,13 @@ test("selected/predicate schema fixture freezes the approved union and blocker f
   assert.equal(schemaFixture.evidence_policy.live_reaper_called, false);
 });
 
-test("failure fixtures cover empty/type/ambiguity/limit/pre-write-drift plus frozen GUID, duplicate-name, master, and folder-cascade blockers", () => {
+test("selector fixtures cover empty/type/limit/pre-write-drift plus duplicate-name batching, master, and folder-cascade blockers", () => {
   assert.equal(failureFixture.contract, "openreaper.alpha4.shard_c.selector_failure_fixture.v1");
   const scenarioIds = failureFixture.scenarios.map((entry) => entry.id);
   assert.deepEqual(scenarioIds, [
     "empty-current-track-selection",
     "type-mismatch-item-selection-used-for-track-target",
-    "track-name-predicate-duplicate-name-ambiguity",
+    "track-name-predicate-duplicate-name-batch",
     "item-active-take-name-predicate-limit-513",
     "pre-write-drift-frozen-guid-missing-live",
     "master-track-protection",
@@ -59,14 +59,14 @@ test("failure fixtures cover empty/type/ambiguity/limit/pre-write-drift plus fro
   ]);
   const knownBlockers = new Set(schemaFixture.preflight_blockers.map((entry) => entry.code));
   for (const scenario of failureFixture.scenarios) {
-    assert.equal(scenario.expected.zero_write, true, scenario.id);
-    assert.equal(knownBlockers.has(scenario.expected.code), true, scenario.id);
+    if (scenario.expected.zero_write) assert.equal(knownBlockers.has(scenario.expected.code), true, scenario.id);
     assert.deepEqual(validateSelector(scenario.selector_request), { valid: true, errors: [] }, scenario.id);
   }
 
-  const duplicateNames = byId("track-name-predicate-duplicate-name-ambiguity").candidate_rows.map((row) => row.name);
+  const duplicateNames = byId("track-name-predicate-duplicate-name-batch").candidate_rows.map((row) => row.name);
   assert.equal(new Set(duplicateNames).size, 1);
   assert.equal(duplicateNames[0], "Lead Vox");
+  assert.equal(byId("track-name-predicate-duplicate-name-batch").expected.target_count, 2);
 
   const limitScenario = byId("item-active-take-name-predicate-limit-513");
   assert.equal(limitScenario.synthetic_snapshot.row_count, 513);

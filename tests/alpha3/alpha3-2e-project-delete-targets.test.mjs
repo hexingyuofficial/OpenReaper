@@ -146,7 +146,7 @@ describe("Alpha3.2-E project delete_targets planner", () => {
     assert.equal(plan.ok, false);
     assert.equal(codes.includes("TARGET_KIND_UNSUPPORTED"), true);
     assert.equal(codes.includes("FILESYSTEM_DELETE_FORBIDDEN"), true);
-    assert.equal(codes.includes("DELETE_SELECTORS_REQUIRE_RESOLUTION"), true);
+    assert.equal(codes.includes("DELETE_SELECTOR_INVALID"), true);
     assert.equal(codes.includes("DELETE_POLICY_UNSUPPORTED"), true);
     assert.equal(codes.includes("DELETE_TARGET_REF_DUPLICATE"), true);
     assert.equal(codes.includes("DELETE_TARGET_REF_INVALID"), true);

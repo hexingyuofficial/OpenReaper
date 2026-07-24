@@ -730,26 +730,37 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     stages: stages.filter((stage) => !completed.has(stage.id)),
     projectRef: runtimeFacts.project_identity,
   });
-  if (undo.status === "open_failed") {
+  if (undo.status === "open_failed" || undo.status === "open_unknown") {
+    const openUnknown = undo.status === "open_unknown";
+    const mutationTruth = openUnknown ? "unknown" : "not_applied";
     return withRunExecutionTruth(projectRunFailureEnvelope({
       operation: resume ? "resume" : "run",
       revision,
       runId,
       status: "blocked",
       code: "STAGE_FAILED",
-      message: "Whole-Recipe Undo scope could not open before dispatch.",
+      message: openUnknown
+        ? "Whole-Recipe Undo open outcome is unknown; exact transaction reconciliation is required before dispatch."
+        : "Whole-Recipe Undo scope could not open before dispatch.",
       failedStageIds: [],
       completedStageIds: [...completed],
       notStartedStageIds: stages.filter((stage) => !completed.has(stage.id)).map((stage) => stage.id),
       provenPartialChanges,
       counts: { processed, applied, skipped },
       latestCheckpoint,
-      recovery: recipeRecoveryTruth(false, "not_applied", undo),
+      recovery: recipeRecoveryTruth(false, mutationTruth, undo),
       undo,
       resumeSafe: false,
       nextCall: buildExactNextCall("get", exactRevisionIdentity(revision)),
-      details: { zero_write: true, undo_status: undo.status },
-    }), { startedAt, telemetry, undo, mutationTruth: "not_applied" });
+      details: openUnknown
+        ? {
+            undo_status: undo.status,
+            stage_dispatch_count: 0,
+            transaction_reconciliation_required: true,
+            undo_error: undo.error,
+          }
+        : { zero_write: true, undo_status: undo.status },
+    }), { startedAt, telemetry, undo, mutationTruth });
   }
 
   for (const stage of stages) {
@@ -1755,8 +1766,10 @@ async function beginRecipeUndo(controller, {
       || result.handle === ""
       || result.project_ref !== projectRef
     ) {
-      return recipeUndoFailure("open_failed", label, projectRef, {
+      return recipeUndoFailure(result?.outcome === "unknown" ? "open_unknown" : "open_failed", label, projectRef, {
         message: "Recipe Undo begin returned no exact open proof.",
+        outcome: result?.outcome ?? null,
+        reconciliation_required: result?.reconciliation_required === true,
       });
     }
     return freeze({
@@ -1775,8 +1788,15 @@ async function beginRecipeUndo(controller, {
       rollback_proven: false,
     });
   } catch (error) {
-    return recipeUndoFailure("open_failed", label, projectRef, {
+    const openUnknown = error?.outcome === "unknown"
+      || error?.code === "BRIDGE_TIMEOUT"
+      || error?.reconciliation_required === true;
+    return recipeUndoFailure(openUnknown ? "open_unknown" : "open_failed", label, projectRef, {
+      code: boundedText(error?.code, 80),
       message: boundedText(error?.message, 160),
+      outcome: openUnknown ? "unknown" : null,
+      reconciliation_required: error?.reconciliation_required === true,
+      transaction_id: boundedText(error?.handle, 160),
     });
   }
 }
@@ -2051,6 +2071,14 @@ function compactRecipeCheckpoint(checkpoint) {
 }
 
 function recipeRecoveryTruth(resumeSafe, mutationTruth, undo) {
+  if (undo?.status === "open_unknown") {
+    return freeze({
+      strategy: "reconcile_recipe_undo",
+      rollback_claimed: false,
+      outcome: "unknown",
+      required_action: "reconcile_exact_not_run_transaction_before_retry",
+    });
+  }
   if (mutationTruth === "not_applied") {
     return freeze({ strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_applied" });
   }

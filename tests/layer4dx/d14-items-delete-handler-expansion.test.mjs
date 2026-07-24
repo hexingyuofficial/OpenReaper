@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   FakeFoundationBridge,
   createObjectRef,
@@ -117,7 +118,59 @@ describe("D14 items delete live handler expansion", () => {
     assert.doesNotMatch(BRIDGE_SOURCE, /\["run_action:/);
     assert.doesNotMatch(BRIDGE_SOURCE, /LIVE_SMOKE_MATRIX|list_recipes|recipes\/|call_recipe/);
   });
+
+  it("runs the native selector guard before deletion and keeps GUID scans linear at 512", () => {
+    const assertions = String.raw`
+local items, deletes, get_calls = {}, 0, 0
+for i = 1, 513 do items[i] = { guid = "{ITEM-" .. i .. "}", track = {} } end
+reaper = {}
+reaper.CountMediaItems = function() return #items end
+reaper.GetMediaItem = function(_, index) get_calls = get_calls + 1; return items[index + 1] end
+reaper.BR_GetMediaItemGUID = function(item) return item.guid end
+reaper.GetMediaItemTrack = function(item) return item.track end
+reaper.GetMediaItemInfo_Value = function(_, key) return (key == "B_UISEL" or key == "B_MUTE") and 1 or 0 end
+reaper.CountSelectedMediaItems = function() return 0 end
+reaper.GetSelectedMediaItem = function() return nil end
+reaper.DeleteTrackMediaItem = function() deletes = deletes + 1; return true end
+reaper.UpdateArrange = function() end
+local refs = {}
+for i = 1, 512 do refs[i] = { kind = "item", ref = "item:guid:{ITEM-" .. i .. "}", identity = { scheme = "guid", value = "{ITEM-" .. i .. "}" } } end
+local request = { refs = refs, params = { selector_guard = { kind = "current_selection", entity_kind = "item", refs = (function() local out = {}; for i = 1, 512 do out[i] = "item:guid:{ITEM-" .. i .. "}" end; return out end)() } }, pack = { capability = "items.delete", id = "items", risk = "destructive" }, budget = { max_items = 1024 } }
+local _, failure = d14_items_delete_items(request)
+assert(failure.code == "PREWRITE_SELECTION_DRIFT")
+assert(deletes == 0)
+assert(get_calls == 513)
+local predicate_request = { refs = { refs[1] }, params = { selector_guard = { kind = "predicate", entity_kind = "item", selector = { field = "muted", operator = "equals", value = true }, refs = { "item:guid:{ITEM-1}" } } }, pack = request.pack, budget = request.budget }
+local _, predicate_failure = d14_items_delete_items(predicate_request)
+assert(predicate_failure.code == "SELECTOR_TRUNCATED")
+assert(deletes == 0)
+assert(get_calls == 1539)
+`;
+    runLua(`${D14_LUA_PRELUDE}\n${HANDLER_SOURCE}\n${assertions}`);
+  });
 });
+
+const D14_LUA_PRELUDE = String.raw`
+JSON_NULL = {}
+function is_string(value) return type(value) == "string" end
+function is_object(value) return type(value) == "table" end
+function is_json_array(value) return type(value) == "table" end
+function json_array(value) return value or {} end
+function first_number(...) for i = 1, select("#", ...) do local v = select(i, ...); if type(v) == "number" then return v end end end
+function first_string(...) for i = 1, select("#", ...) do local v = select(i, ...); if type(v) == "string" then return v end end end
+function bounded_string(value) return tostring(value or "") end
+function safe_budget(request) return request.budget or { max_items = 512 } end
+function call_reaper(name, ...) if not reaper[name] then return false end return pcall(reaper[name], ...) end
+`;
+
+function runLua(source) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const status = lauxlib.luaL_loadstring(state, to_luastring(source));
+  assert.equal(status, lua.LUA_OK, status === lua.LUA_OK ? "D14 Lua loaded" : to_jsstring(lua.lua_tostring(state, -1)));
+  const callStatus = lua.lua_pcall(state, 0, 0, 0);
+  assert.equal(callStatus, lua.LUA_OK, callStatus === lua.LUA_OK ? "D14 Lua executed" : to_jsstring(lua.lua_tostring(state, -1)));
+}
 
 const ITEM_REF_A = createObjectRef("item", { scheme: "guid", value: "{D14-ITEM-A}" }, {
   ref: "item:guid:{D14-ITEM-A}",

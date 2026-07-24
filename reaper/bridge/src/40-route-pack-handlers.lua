@@ -1055,24 +1055,52 @@ local function dispatch_template_execute(request, resume_continuation)
 end
 
 local function dispatch_recipe_undo_transaction(request)
+  local function active_recipe_undo_conflict_details()
+    local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+    if not active then
+      return {
+        blocker = "recipe_undo_transaction_not_active",
+        outcome = "not_run",
+        zero_write = true,
+      }
+    end
+    local active_project_matches = active_recipe_undo_project_matches()
+    local proven_not_run = active.mutation_may_have_happened == false
+      and active.close_outcome_unknown ~= true
+      and active_project_matches == true
+    return {
+      blocker = proven_not_run and "recipe_undo_orphan_not_run" or "recipe_undo_transaction_state_uncertain",
+      outcome = proven_not_run and "not_run" or "unknown",
+      zero_write = proven_not_run,
+      active_transaction_id = bounded_string(active.id, 160),
+      active_transaction = {
+        transaction_id = bounded_string(active.id, 160),
+        project_ref = bounded_string(active.project_ref, 240),
+        label = bounded_string(active.label, 240),
+        owner = bounded_string(active.owner, 160),
+        generation = active.generation,
+        mutation_may_have_happened = active.mutation_may_have_happened == true,
+        close_outcome_unknown = active.close_outcome_unknown == true,
+        active_project_matches = active_project_matches == true,
+      },
+    }
+  end
+
   local params = is_object(request.params) and request.params or {}
   local action = params.action
   local transaction_id = params.transaction_id
   local project_ref = params.project_ref
   local label = params.label
-  if (action ~= "begin" and action ~= "end") or not is_string(transaction_id)
+  if (action ~= "begin" and action ~= "end" and action ~= "reconcile_not_run") or not is_string(transaction_id)
       or not is_string(project_ref) or not is_string(label) then
-    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires action, transaction_id, project_ref, and label.", {
+    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires begin, end, or reconcile_not_run with transaction_id, project_ref, and label.", {
       zero_write = true,
     })
   end
 
   if action == "begin" then
     if ACTIVE_RECIPE_UNDO_TRANSACTION then
-      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", {
-        active_transaction_id = bounded_string(ACTIVE_RECIPE_UNDO_TRANSACTION.id, 160),
-        zero_write = true,
-      })
+      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", active_recipe_undo_conflict_details())
     end
     local ok_project, project, project_path = call_reaper("EnumProjects", -1, "")
     if not ok_project or project == nil then
@@ -1101,6 +1129,10 @@ local function dispatch_recipe_undo_transaction(request)
       project = project,
       project_ref = project_ref,
       session_id = request.client.session_id,
+      owner = request.bridge.expected_owner,
+      generation = request.bridge.expected_generation,
+      mutation_may_have_happened = false,
+      close_outcome_unknown = false,
     }
     request.__openreaper_undo_opened = true
     request.__openreaper_undo_closed = false
@@ -1118,11 +1150,49 @@ local function dispatch_recipe_undo_transaction(request)
   end
 
   local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+  if action == "reconcile_not_run" then
+    if not active
+        or active.id ~= transaction_id
+        or active.project_ref ~= project_ref
+        or active.label ~= label
+        or active.owner ~= request.bridge.expected_owner
+        or active.generation ~= request.bridge.expected_generation then
+      return handler_error("QUEUE_CONFLICT", "Recipe Undo reconcile_not_run does not match the exact active transaction.", active_recipe_undo_conflict_details())
+    end
+    if active.mutation_may_have_happened == true or active.close_outcome_unknown == true then
+      return handler_error("QUEUE_CONFLICT", "Recipe Undo transaction is not proven not_run and cannot be reconciled automatically.", active_recipe_undo_conflict_details(), false)
+    end
+    if not active_recipe_undo_project_matches() then
+      return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo reconcile_not_run.", active_recipe_undo_conflict_details(), false)
+    end
+    local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
+    local closed = results[1] == true and (results[2] == nil or results[2] == true)
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = closed
+    request.__openreaper_undo_required_any = true
+    if not closed then
+      active.close_outcome_unknown = true
+      return handler_error("INTERNAL_ERROR", "Recipe Undo reconcile_not_run close outcome is unknown.", active_recipe_undo_conflict_details(), false)
+    end
+    ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+    return {
+      contract = "openreaper.recipe_undo_transaction.v1",
+      action = "reconcile_not_run",
+      transaction_id = transaction_id,
+      project_ref = project_ref,
+      mutation_truth = "not_run",
+      opened = true,
+      closed = true,
+      verified = true,
+      readback_status = "passed",
+    }
+  end
+
   if not active or active.id ~= transaction_id or active.project_ref ~= project_ref
-      or active.session_id ~= request.client.session_id then
-    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", {
-      zero_write = true,
-    })
+      or active.label ~= label or active.session_id ~= request.client.session_id
+      or active.owner ~= request.bridge.expected_owner
+      or active.generation ~= request.bridge.expected_generation then
+    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", active_recipe_undo_conflict_details())
   end
   local active_project_matches = active_recipe_undo_project_matches()
   local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
@@ -1130,14 +1200,16 @@ local function dispatch_recipe_undo_transaction(request)
   request.__openreaper_undo_opened = true
   request.__openreaper_undo_closed = closed
   request.__openreaper_undo_required_any = true
-  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
   if not closed then
+    active.close_outcome_unknown = true
     return handler_error("INTERNAL_ERROR", "Recipe Undo close outcome is unknown.", {
       blocker = "recipe_undo_close_failed",
       outcome = "unknown",
+      zero_write = false,
       mutations_may_have_happened = params.mutation_truth ~= "not_run",
     }, false)
   end
+  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
   if not active_project_matches then
     return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo close verification.", {
       blocker = "recipe_active_project_changed",
@@ -1954,6 +2026,11 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
         zero_write = true,
       },
     })
+  end
+  if phase_may_mutate == true and ACTIVE_RECIPE_UNDO_TRANSACTION
+      and is_object(request.pack) and request.pack.risk ~= "read"
+      and recipe_undo_transaction_flag(request) == ACTIVE_RECIPE_UNDO_TRANSACTION.id then
+    ACTIVE_RECIPE_UNDO_TRANSACTION.mutation_may_have_happened = true
   end
   local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request, resume_continuation)
   close_required_undo_block(request, key)

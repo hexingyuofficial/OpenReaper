@@ -383,6 +383,7 @@ export const WAVE1A_ITEMS_TEMPLATES = deepFreeze([
     }),
     inputSchema: objectSchema({
       require_selected: { type: "boolean" },
+      selector_guard: { type: "object" },
     }, []),
     outputSchema: objectSchema({
       deleted_count: { type: "integer" },

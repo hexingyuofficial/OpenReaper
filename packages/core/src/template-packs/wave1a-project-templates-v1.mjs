@@ -1013,6 +1013,7 @@ export const WAVE1A_PROJECT_TEMPLATES = deepFreeze([
       item_cursor: { type: "integer" },
       include_selected_items: { type: "boolean" },
       include_track_items: { type: "boolean" },
+      selector_filter: { type: "object" },
     }, []),
     outputSchema: objectSchema({
       project_ref: { type: "string" },

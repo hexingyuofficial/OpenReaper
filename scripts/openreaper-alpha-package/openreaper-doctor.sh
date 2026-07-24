@@ -288,7 +288,7 @@ if (cli.mode !== null) {
 report.recovery_card = report.task?.recovery_card ?? (
   report.runtime_diagnosis === "bridge_ready" || report.runtime_diagnosis === "not_observed"
     ? null
-    : compactDoctorRecoveryCard(report.runtime_diagnosis, report.runtime_readiness?.bridge)
+    : compactDoctorRecoveryCard(report.runtime_diagnosis, report.runtime_readiness?.bridge, reaperProcess)
 );
 
 console.log(JSON.stringify(report, null, 2));
@@ -426,10 +426,14 @@ function sameFileSnapshot(left, right) {
   );
 }
 
-function compactDoctorRecoveryCard(diagnosis, bridge) {
+function compactDoctorRecoveryCard(diagnosis, bridge, processEvidence) {
   const expected = bridge?.expected ?? {};
   const observed = bridge?.observed ?? {};
-  const action = diagnosis === "reaper_not_running"
+  const sameInstance = processEvidence?.running === true && processEvidence?.identity_verified === true && Number.isSafeInteger(processEvidence.pid) &&
+    (diagnosis === "bridge_action_not_running" || diagnosis === "bridge_loop_unresponsive");
+  const action = sameInstance
+    ? `Verified REAPER PID ${processEvidence.pid} is alive, but OpenReaper cannot restart its stopped Bridge externally. In that same REAPER, run the Action "${bridgeActionName}", then rerun doctor; do not start another REAPER.`
+    : diagnosis === "reaper_not_running"
     ? `Run ${startCommand}; it starts and verifies the Bridge automatically.`
     : diagnosis === "bridge_action_not_running"
       ? `Rerun ${startCommand}. If autonomous startup still reports this blocker, run the fallback Action "${bridgeActionName}" and rerun doctor.`
@@ -455,6 +459,19 @@ function compactDoctorRecoveryCard(diagnosis, bridge) {
     } : {}),
     recovery: action,
     action_auto_run: false,
+    ...(sameInstance ? {
+      same_instance_recovery: {
+        scope: "same_reaper_instance",
+        reaper_pid: processEvidence.pid,
+        identity_verified: true,
+        duplicate_launch_forbidden: true,
+        reaper_restart_allowed: false,
+        automatic_bridge_restart_available: false,
+        required_action: "run_registered_bridge_action",
+      },
+      reaper_pid: processEvidence.pid,
+      reaper_identity_verified: true,
+    } : {}),
   };
 }
 

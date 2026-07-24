@@ -12,8 +12,10 @@ import {
 } from "./alpha3-2e-project-layout-v1.mjs";
 import {
   ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID,
+  hasAlpha3_2EProjectDeleteTargetSelectors,
   planAlpha3_2EProjectDeleteTargetsMacro,
 } from "./alpha3-2e-project-delete-targets-v1.mjs";
+import { resolveAlpha4ShardCSelection } from "./alpha4-shard-c-selection-batch-runtime-v1.mjs";
 import {
   ALPHA3_2E_MEDIA_PLACE_ASSETS_MACRO_ID,
 } from "./alpha3-2e-media-place-assets-v1.mjs";
@@ -68,7 +70,7 @@ const PROGRAMS = Object.freeze({
     undoPolicy: "per_stage_undo",
     planner: planAlpha3_2EProjectDeleteTargetsMacro,
     templateIds: [
-      "template.tracks.list_tracks", TRACK_RESOLVER_ID, ITEM_RESOLVER_ID, ITEM_ID_RESOLVER_ID, MARKER_REGION_RESOLVER_ID, FX_RESOLVER_ID,
+      "template.tracks.list_tracks", "template.tracks.read_mixer_controls", "template.project.read_track_item_overview", TRACK_RESOLVER_ID, ITEM_RESOLVER_ID, ITEM_ID_RESOLVER_ID, MARKER_REGION_RESOLVER_ID, FX_RESOLVER_ID,
       "template.tracks.delete_tracks", "template.items.delete_items", "template.project.delete_marker", "template.project.delete_region", "template.fx.delete_fx",
     ],
     dryReads: [read("template.tracks.list_tracks", { limit: 100 }), read(MARKER_REGION_RESOLVER_ID, { limit: 250 })],
@@ -122,7 +124,29 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
   if (!validation.valid) return failure(program, request, startedAt, now, stages, "blocked", "MACRO_REQUEST_INVALID", validation.errors.join("; "));
   if (typeof executeAtomic !== "function") return failure(program, request, startedAt, now, stages, "blocked", "PROJECT_WRITE_EXECUTOR_UNAVAILABLE", "The managed OpenReaper atomic executor is unavailable.");
 
-  const plan = program.planner(request.input ?? {}, { idempotency_key_present: request.idempotency_key !== undefined });
+  const state = createProjectWriteState(request);
+
+  let effectiveRequest = request;
+  if (program.entry.macro_id === ALPHA3_2E_PROJECT_DELETE_TARGETS_MACRO_ID && hasAlpha3_2EProjectDeleteTargetSelectors(request.input)) {
+    const selectorResolution = await resolveDeleteSelectors({ program, request, executeAtomic, stages, state, now });
+    if (!selectorResolution.ok) return failure(program, request, startedAt, now, stages, "blocked", selectorResolution.error.code, "The requested live selector is blocked before mutation.", [selectorResolution.error], { preview: {} }, state);
+    effectiveRequest = {
+      ...request,
+      input: {
+        ...request.input,
+        refs: mergeDeleteSelectorRefs(request.input.refs, selectorResolution.refs),
+        selectors: [],
+      },
+    };
+    state.trustedSelectorRefs = new Set(Object.values(selectorResolution.refs).flat());
+    const selector = request.input.selectors[0];
+    state.selectorDelete = { kind: selector.kind, entity_kind: selector.entity_kind, selector: structuredClone(selector), refs: [...state.trustedSelectorRefs], snapshot: selectorResolution.snapshot, guard: selectorResolution.guard };
+  }
+  const plan = program.planner(effectiveRequest.input ?? {}, {
+    idempotency_key_present: effectiveRequest.idempotency_key !== undefined,
+    selector_internal_confirmation: effectiveRequest !== request,
+    selector_internal_batch: effectiveRequest !== request,
+  });
   if (plan.ok !== true) {
     const message = program.entry.macro_id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID
       ? "The registered Routing Macro input is blocked."
@@ -130,29 +154,8 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     return failure(program, request, startedAt, now, stages, "blocked", firstCode(plan, "PROJECT_WRITE_INPUT_BLOCKED"), message, plan.blockers, { preview: plan.preview ?? {} });
   }
 
+  request = effectiveRequest;
   const dryRun = request.input?.dry_run !== false;
-  const state = {
-    objectRefs: new Map(),
-    localRefs: new Map(),
-    evidenceRefs: [],
-    changes: [],
-    canonicalRefs: [],
-    readbackRefs: new Set(),
-    layoutTrackReadbackRows: new Map(),
-    markerRegionReadbackRows: new Map(),
-    routingReadbackRows: new Map(),
-    routingResolvedSends: new Map(),
-    routingReusedRows: new Set(),
-    routingResolverCache: request?.id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID ? new Set() : null,
-    readbackEvidenceRefs: [],
-    layoutPreflightTracks: null,
-    layoutPreflightFolders: null,
-    layoutMatchedRows: new Map(),
-    writeAttempted: false,
-    writeExecuted: false,
-    sqlite: sqliteEvidence(),
-    indexUpdate: null,
-  };
   rememberInputObjectRefs(state, request.refs);
   if (!dryRun && program.entry.macro_id === ALPHA3_2E_PROJECT_LAYOUT_MACRO_ID) {
     const budgetPosture = layoutResponseBudgetPosture(program, request, plan);
@@ -234,8 +237,11 @@ export async function executeAlpha3_2_5CProjectWriteMacro({
     if ((plan.mutation_requests ?? []).length > MAX_MUTATIONS) throw coded("PROJECT_WRITE_MUTATION_LIMIT", "The registered Macro exceeded its bounded mutation ceiling.");
     prepareLayoutMutationExecution(program, plan, state);
     for (const mutation of plan.mutation_requests ?? []) {
-      const effectiveMutation = effectiveRoutingMutation(program, effectiveLayoutMutation(program, mutation, state), state);
+      let effectiveMutation = effectiveRoutingMutation(program, effectiveLayoutMutation(program, mutation, state), state);
       if (!effectiveMutation) continue;
+      if (state.selectorDelete && ((state.selectorDelete.entity_kind === "item" && effectiveMutation.id === "template.items.delete_items") || (state.selectorDelete.entity_kind === "track" && effectiveMutation.id === "template.tracks.delete_tracks"))) {
+        effectiveMutation = { ...effectiveMutation, input: { ...effectiveMutation.input, selector_guard: state.selectorDelete.guard } };
+      }
       if (!program.templateIds.includes(effectiveMutation.id) || effectiveMutation.id.startsWith("macro.")) throw coded("PROJECT_WRITE_DEPENDENCY_REJECTED", `Rejected non-atomic dependency ${String(effectiveMutation.id)}.`);
       const resolvedRefs = await liveResolveRefs({ program, request, executeAtomic, stages, state, refs: effectiveMutation.refs ?? {}, now });
       const execution = await atomicStage({ program, request, executeAtomic, stages, state, id: effectiveMutation.id, input: effectiveMutation.input ?? {}, refs: resolvedRefs, stageId: `write-${stageToken(effectiveMutation.id)}`, kind: "template_execute", mutation: effectiveMutation, plan, now });
@@ -355,6 +361,98 @@ function program({ macroId, programId, risk, undoPolicy, planner, templateIds, d
   };
 }
 
+function createProjectWriteState(request) {
+  return {
+    objectRefs: new Map(), localRefs: new Map(), evidenceRefs: [], changes: [], canonicalRefs: [], readbackRefs: new Set(),
+    layoutTrackReadbackRows: new Map(), markerRegionReadbackRows: new Map(), routingReadbackRows: new Map(), routingResolvedSends: new Map(), routingReusedRows: new Set(),
+    routingResolverCache: request?.id === ALPHA3_2E_ROUTING_APPLY_MACRO_ID ? new Set() : null, readbackEvidenceRefs: [], layoutPreflightTracks: null,
+    layoutPreflightFolders: null, layoutMatchedRows: new Map(), writeAttempted: false, writeExecuted: false, sqlite: sqliteEvidence(), indexUpdate: null, selectorDelete: null,
+  };
+}
+
+async function resolveDeleteSelectors({ program, request, executeAtomic, stages, state, now }) {
+  const selectors = request.input.selectors;
+  if (selectors.length !== 1) return { ok: false, error: { code: "SELECTOR_AMBIGUOUS", message: "Delete accepts one current-selection or predicate selector per call." } };
+  if (object(request.input.refs) && Object.values(request.input.refs).some((refs) => Array.isArray(refs) && refs.length > 0)) {
+    return { ok: false, error: { code: "SELECTOR_AMBIGUOUS", message: "Selector and exact-ref deletion targets cannot be mixed in one call." } };
+  }
+  const selector = selectors[0];
+  const selectorValidation = validateDeleteSelectorPrewrite(selector);
+  if (selectorValidation) return { ok: false, error: selectorValidation };
+  const reader = selector.entity_kind === "item"
+    ? { id: "template.project.read_track_item_overview", input: { max_items: 513, max_selected_items: 513, include_track_items: false, ...(selector.kind === "predicate" ? { selector_filter: selector } : {}) } }
+    : selector.kind === "current_selection"
+      ? { id: "template.tracks.read_mixer_controls", input: { limit: 513, include_selected: true } }
+      : { id: "template.tracks.list_tracks", input: { limit: 513, include_selection: true, selector_filter: selector } };
+  const capture = async () => selectorRows(await atomicStage({ program, request, executeAtomic, stages, state, id: reader.id, input: reader.input, refs: {}, stageId: "select-capture", kind: "selector_resolve", now }), selector, reader.id);
+  const captured = await capture();
+  if (captured.blocked) return { ok: false, error: captured.blocked };
+  const result = await resolveAlpha4ShardCSelection({
+    selector,
+    candidateRows: captured.rows,
+    captureSelection: async () => captured,
+    // The fixed native delete handler rechecks this frozen packet before any Delete call.
+    liveResolve: async ({ refs, snapshot }) => ({ ok: true, refs, snapshot }),
+  });
+  if (!result.ok) return { ok: false, error: result.error };
+  const kind = selector.entity_kind === "track" ? "tracks" : "items";
+  return { ok: true, refs: { [kind]: result.refs }, snapshot: result.snapshot, guard: { kind: selector.kind, entity_kind: selector.entity_kind, selector: structuredClone(selector), refs: result.refs, rows: captured.rows.filter((row) => result.refs.includes(row.ref)) } };
+}
+
+function selectorRows(execution, selector, readerId) {
+  const summary = executionSummary(execution);
+  const source = selector.entity_kind === "track"
+    ? summary.tracks
+    : selector.kind === "current_selection" ? summary.selected_items : summary.items;
+  const rows = Array.isArray(source) ? source.map((row) => ({
+    ref: row.track_ref ?? row.item_ref,
+    entity_kind: selector.entity_kind,
+    muted: row.muted === true,
+    soloed: row.soloed === true || row.solo_mode === "solo" || (Number.isInteger(row.solo_mode) && row.solo_mode !== 0),
+    record_armed: row.record_armed === true,
+    name: row.name,
+    locked: row.locked === true,
+    active_take_name: row.active_take_name,
+    is_master: row.is_master === true,
+    selected: row.selected === true,
+    folder_depth: Number.isInteger(row.folder_depth) ? row.folder_depth : 0,
+  })) : [];
+  const candidates = selector.kind === "current_selection" && selector.entity_kind === "track"
+    ? rows.filter((row) => row.selected === true)
+    : rows;
+  const matched = selector.kind === "predicate" ? candidates.filter((row) => predicateMatchesDeleteSelector(row, selector)) : candidates;
+  if (selector.entity_kind === "track" && matched.some((row) => row.folder_depth !== 0)) {
+    return { rows: [], complete: false, blocked: { code: "FOLDER_CASCADE_CONFIRMATION_REQUIRED", message: "A selected Track opens a folder; selector deletion requires explicit scoped folder evidence." } };
+  }
+  const predicateFiltered = selector.kind === "predicate" && summary.selector_matches_complete !== undefined && summary.selector_matches_complete !== null;
+  const truncated = predicateFiltered
+    ? summary.selector_matches_complete !== true
+    : selector.entity_kind === "track" ? summary.truncated : (selector.kind === "current_selection" ? summary.selected_items_truncated : summary.items_truncated);
+  const itemCoverageComplete = readerId !== "template.project.read_track_item_overview" || selector.kind === "current_selection" || predicateFiltered || summary.item_coverage_status === "complete";
+  return { rows: candidates, complete: truncated === false && itemCoverageComplete, snapshot: { selection_token: `${readerId}:${JSON.stringify(candidates.map((row) => row.ref))}` } };
+}
+
+function predicateMatchesDeleteSelector(row, selector) {
+  const value = row?.[selector.field];
+  if (selector.operator === "equals") return value === selector.value;
+  return typeof value === "string" && (selector.operator === "starts_with" ? value.startsWith(selector.value) : value.includes(selector.value));
+}
+
+function validateDeleteSelectorPrewrite(selector) {
+  if (selector?.kind !== "predicate") return null;
+  const stringField = (selector.entity_kind === "track" && selector.field === "name") || (selector.entity_kind === "item" && selector.field === "active_take_name");
+  const booleanField = (selector.entity_kind === "track" && ["muted", "soloed", "record_armed"].includes(selector.field)) || (selector.entity_kind === "item" && ["muted", "locked"].includes(selector.field));
+  if (stringField && typeof selector.value === "string" && ["equals", "contains", "starts_with"].includes(selector.operator)) return null;
+  if (booleanField && typeof selector.value === "boolean" && selector.operator === "equals") return null;
+  return { code: "DELETE_SELECTOR_INVALID", message: "Selector predicate field, value type, or operator is not approved." };
+}
+
+function mergeDeleteSelectorRefs(refs, resolved) {
+  const output = object(refs) ? structuredClone(refs) : {};
+  for (const [kind, values] of Object.entries(resolved)) output[kind] = [...new Set([...(output[kind] ?? []), ...values])];
+  return output;
+}
+
 function registryStage(id, kind, risk, dependencyRef = undefined) {
   return { id, kind, risk, stop_on_error: true, ...(kind === "template_execute" ? { dependency_ref: dependencyRef } : {}) };
 }
@@ -397,6 +495,7 @@ async function resolveValue({ program, request, executeAtomic, stages, state, ke
   const candidate = local ?? value;
   if (allowProducedObjectRefs && local && state.objectRefs.has(candidate)) return candidate;
   if (state.routingResolverCache?.has(candidate) && state.objectRefs.has(candidate)) return candidate;
+  if (state.trustedSelectorRefs?.has(candidate) && state.objectRefs.has(candidate)) return candidate;
   if (candidate.startsWith("track:planned:") || candidate.startsWith("send:planned:") || candidate.startsWith("file:planned:")) throw coded("LIVE_REF_UNRESOLVED", `A planned ref was not produced by the registered program: ${candidate}.`);
   const resolver = resolverFor(key, candidate);
   if (!resolver) return candidate;
@@ -433,7 +532,13 @@ function exactGuidObjectRef(kind, ref) {
 async function atomicStage({ program, request, executeAtomic, stages, state, id, input, refs, stageId, kind, mutation = null, plan = null, now }) {
   const materializedRefs = materializeRefs(refs, state);
   if (kind === "template_execute") state.writeAttempted = true;
-  const execution = await executeAtomic({ id, input, refs: materializedRefs, context: request.context, budget: PROJECT_WRITE_INTERNAL_BUDGET, observeProjectIndex: false });
+  const selectorRead = request?.input?.selectors?.length > 0 && ["template.tracks.list_tracks", "template.tracks.read_mixer_controls", "template.project.read_track_item_overview"].includes(id);
+  const selectorMutation = kind === "template_execute" && state.trustedSelectorRefs?.size > 0;
+  const selectorReadback = state.selectorDelete !== null && ((state.selectorDelete.entity_kind === "item" && id === "template.project.read_track_item_overview") || (state.selectorDelete.entity_kind === "track" && ["template.tracks.list_tracks", "template.tracks.read_mixer_controls"].includes(id)));
+  const budget = selectorRead || selectorMutation || selectorReadback
+    ? { ...PROJECT_WRITE_INTERNAL_BUDGET, max_items: 513 }
+    : PROJECT_WRITE_INTERNAL_BUDGET;
+  const execution = await executeAtomic({ id, input, refs: materializedRefs, context: request.context, budget, observeProjectIndex: false });
   const evidence = boundedProgramEvidenceRefs(program, evidenceRefs(execution));
   state.evidenceRefs.push(...evidence);
   const childVerification = execution?.verification ?? execution?.result?.verification;
@@ -805,21 +910,54 @@ async function verifyDeletedTargets({ program, plan, request, executeAtomic, sta
   const targets = deleteTargetsFromPlan(plan);
   const evidence = [];
   if (targets.tracks.length > 0) {
-    const execution = await executeAtomic({
-      id: "template.tracks.list_tracks",
-      input: { limit: 250, include_selection: true },
-      refs: {},
-      context: request.context,
-      budget: PROJECT_WRITE_INTERNAL_BUDGET,
-      observeProjectIndex: false,
-    });
+    const selectedTrackReadback = state.selectorDelete?.entity_kind === "track" && state.selectorDelete.kind === "current_selection";
+    const execution = state.selectorDelete?.entity_kind === "track"
+      ? await atomicStage({ program, request, executeAtomic, stages, state, id: selectedTrackReadback ? "template.tracks.read_mixer_controls" : "template.tracks.list_tracks", input: selectedTrackReadback ? { limit: 513, include_selected: true } : { limit: 513, include_selection: true }, refs: {}, stageId: "verify-selector-tracks", kind: "verify", now })
+      : await executeAtomic({
+        id: "template.tracks.list_tracks",
+        input: { limit: 250, include_selection: true },
+        refs: {},
+        context: request.context,
+        budget: PROJECT_WRITE_INTERNAL_BUDGET,
+        observeProjectIndex: false,
+      });
     evidence.push(...evidenceRefs(execution));
     if (execution?.ok !== true) throw childExecutionError("template.tracks.list_tracks", execution);
+    if (state.selectorDelete?.entity_kind === "track" && executionSummary(execution).truncated !== false) {
+      throw coded("DELETE_TRACK_READBACK_INCOMPLETE", "Selector Track deletion requires a complete bounded Track absence readback.");
+    }
     recordProjectWriteReadback(state, execution);
     const survivors = targets.tracks.filter((ref) => collectedRefs(execution).includes(ref));
     if (survivors.length > 0) throw coded("DELETE_TRACK_READBACK_SURVIVOR", "One or more confirmed track refs still exist after deletion.", survivors.map((ref) => ({ code: "DELETE_TRACK_READBACK_SURVIVOR", message: `Track survived deletion: ${ref}`, recoverable: true })));
   }
-  for (const itemRef of targets.items) {
+  if (state.selectorDelete?.entity_kind === "item" && targets.items.length > 0) {
+    const selectedItemReadback = state.selectorDelete.kind === "current_selection";
+    const execution = await atomicStage({
+      program,
+      request,
+      executeAtomic,
+      stages,
+      state,
+      id: "template.project.read_track_item_overview",
+      input: selectedItemReadback
+        ? { max_selected_items: 513, include_track_items: false, include_selected_items: true }
+        : { max_items: 513, max_selected_items: 513, include_track_items: false, include_selected_items: false },
+      refs: {},
+      stageId: "verify-selector-items",
+      kind: "verify",
+      now,
+    });
+    const summary = executionSummary(execution);
+    if ((!selectedItemReadback && (summary.item_coverage_status !== "complete" || summary.items_truncated !== false))
+      || (selectedItemReadback && summary.selected_items_truncated !== false)) {
+      throw coded("DELETE_ITEM_READBACK_INCOMPLETE", "Selector item deletion requires a complete bounded item absence readback.");
+    }
+    const returned = new Set((selectedItemReadback ? summary.selected_items : summary.items).map((row) => row?.item_ref).filter((ref) => typeof ref === "string"));
+    const survivors = targets.items.filter((ref) => returned.has(ref));
+    if (survivors.length > 0) throw coded("DELETE_ITEM_READBACK_SURVIVOR", "One or more selected items still exist after deletion.", survivors.map((ref) => ({ code: "DELETE_ITEM_READBACK_SURVIVOR", message: `Item survived deletion: ${ref}`, recoverable: true })));
+    for (const itemRef of targets.items) state.readbackRefs.add(itemRef);
+    evidence.push(...evidenceRefs(execution));
+  } else for (const itemRef of targets.items) {
     const execution = await executeAtomic({
       id: ITEM_ID_RESOLVER_ID,
       input: { ref: itemRef },
@@ -1560,7 +1698,7 @@ function success(program, request, startedAt, now, stages, state, status, summar
     macro: identity(program), request: requestSummary(request),
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: publicStages.length, stages: publicStages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: "passed", evidence_refs: projectedEvidenceRefs(program, state.evidenceRefs) }, data: projectResultData(program, request, data) },
+    result: { summary, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: "passed", evidence_refs: projectedEvidenceRefs(program, state.evidenceRefs) }, data: projectResultData(program, request, selectorResultData(data, state)) },
     blockers: [], error: null, recovery: null,
     budget: { max_bytes: program.entry.result_budget.max_bytes, actual_bytes: 0, truncated: false, artifact_fallback: false },
   });
@@ -1576,7 +1714,7 @@ function failure(program, request, startedAt, now, stages, status, code, message
     macro: identity(program), request: requestSummary(request, { forceNonDry: true }),
     execution: { status, started_at: startedAt, completed_at: safeNowIso(now), stage_count: publicStages.length, stages: publicStages },
     sqlite: state.sqlite ?? sqliteEvidence(),
-    result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, data) },
+    result: { summary: message, canonical_refs: projectedCanonicalRefs(program, state), changes: projectedChanges(program, state), verification: { status: verifiedByLiveReadback ? "passed" : status === "partial_failure" ? "failed" : "not_required", evidence_refs: verifiedByLiveReadback || status === "partial_failure" ? projectedEvidenceRefs(program, state.evidenceRefs) : [] }, data: projectResultData(program, request, selectorResultData(data, state)) },
     blockers: boundedBlockers(blockers.length ? blockers : [{ code, message, recoverable: true }]),
     error: { code, message, recoverable: true },
     recovery: recoveryForFailure(program, status, code),
@@ -1598,6 +1736,27 @@ function recoveryForFailure(program, status, code) {
     };
   }
   return { undo_policy: program.entry.undo_policy, partial_changes_possible: partialChangesPossible, source_media_deleted: false, action: "Inspect reported stage evidence, use the project undo scope where available, then retry only after live refs are current." };
+}
+
+function selectorResultData(data, state) {
+  const output = object(data) ? structuredClone(data) : {};
+  const selector = state.selectorDelete;
+  if (!selector) return output;
+  const snapshot = selector.snapshot ?? {};
+  output.selector_snapshot = {
+    kind: selector.kind,
+    entity_kind: selector.entity_kind,
+    target_count: selector.refs.length,
+    identity_location: "result.canonical_refs",
+    ...(typeof snapshot.selection_token === "string" ? { selection_token: snapshot.selection_token } : { target_hash: selectorSnapshotHash(selector.refs) }),
+  };
+  return output;
+}
+
+function selectorSnapshotHash(refs) {
+  let value = 2166136261;
+  for (const character of refs.join("\n")) value = Math.imul(value ^ character.charCodeAt(0), 16777619);
+  return `selector:${(value >>> 0).toString(16)}`;
 }
 
 function finalize(envelope) {

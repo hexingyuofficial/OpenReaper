@@ -98,37 +98,33 @@ local function d16_tracks_track_summary(track)
   }
 end
 
-local function d16_tracks_find_by_guid(guid)
+local function d16_tracks_build_ref_map()
   local ok_count, count = call_reaper("CountTracks", 0)
   local total = ok_count and first_number(count) or 0
+  local refs = { guid = {}, index = {}, name = {} }
   for index = 0, total - 1 do
     local ok_track, track = call_reaper("GetTrack", 0, index)
-    if ok_track and track and d16_tracks_guid(track) == guid then
-      return track
+    if ok_track and track then
+      refs.index[tostring(index)] = track
+      local guid = d16_tracks_guid(track)
+      if guid then refs.guid[guid] = track end
+      local name = d16_tracks_name(track)
+      refs.name[name] = refs.name[name] or {}
+      refs.name[name][#refs.name[name] + 1] = track
     end
   end
-  return nil
+  return refs
 end
 
-local function d16_tracks_find_by_name(name)
-  local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and first_number(count) or 0
-  local found = nil
-  local matches = 0
-  for index = 0, total - 1 do
-    local ok_track, track = call_reaper("GetTrack", 0, index)
-    if ok_track and track and d16_tracks_name(track) == name then
-      found = track
-      matches = matches + 1
-    end
-  end
-  if matches > 1 then
+local function d16_tracks_find_by_name(name, ref_map)
+  local matches = ref_map and ref_map.name[name] or nil
+  if matches and #matches > 1 then
     return nil, "ambiguous"
   end
-  return found
+  return matches and matches[1] or nil
 end
 
-local function d16_tracks_resolve_token(token)
+local function d16_tracks_resolve_token(token, ref_map)
   if not is_string(token) then
     return nil
   end
@@ -139,42 +135,42 @@ local function d16_tracks_resolve_token(token)
   end
   local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
   if index then
-    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
-    return ok and track or nil
+    return ref_map and ref_map.index[index] or nil
   end
   local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
   if guid then
-    return d16_tracks_find_by_guid(guid)
+    return ref_map and ref_map.guid[guid] or nil
   end
   local name = token:match("^track:(.+)$")
   if name then
-    return d16_tracks_find_by_name(name)
+    return d16_tracks_find_by_name(name, ref_map)
   end
   return nil
 end
 
-local function d16_tracks_from_ref_object(ref)
+local function d16_tracks_from_ref_object(ref, ref_map)
   if not is_object(ref) or ref.kind ~= "track" then
     return nil
   end
   local identity = is_object(ref.identity) and ref.identity or {}
   if identity.scheme == "selected" then
-    return d16_tracks_resolve_token("selected:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("selected:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "index" then
-    return d16_tracks_resolve_token("index:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("index:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "guid" then
-    return d16_tracks_resolve_token("guid:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("guid:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "name" then
-    return d16_tracks_find_by_name(tostring(identity.value))
+    return d16_tracks_find_by_name(tostring(identity.value), ref_map)
   end
-  return d16_tracks_resolve_token(ref.ref)
+  return d16_tracks_resolve_token(ref.ref, ref_map)
 end
 
 local function d16_tracks_from_request_refs(request)
   local tracks = {}
+  local ref_map = d16_tracks_build_ref_map()
   if is_json_array(request.refs) then
     for index = 1, #request.refs do
-      local track = d16_tracks_from_ref_object(request.refs[index])
+      local track = d16_tracks_from_ref_object(request.refs[index], ref_map)
       if track then
         tracks[#tracks + 1] = track
       end
@@ -215,8 +211,9 @@ local function d16_tracks_select_only(tracks)
 end
 
 local function d16_tracks_verify_absent(refs)
+  local ref_map = d16_tracks_build_ref_map()
   for index = 1, #refs do
-    local track = d16_tracks_resolve_token(refs[index])
+    local track = d16_tracks_resolve_token(refs[index], ref_map)
     if track then
       return false, refs[index]
     end
@@ -234,6 +231,58 @@ local function d16_tracks_deleted_refs(tracks)
   return refs, tokens
 end
 
+local function d16_tracks_guard_matches(request, tracks)
+  local guard = request.params and request.params.selector_guard
+  if not is_object(guard) then return true end
+  if guard.entity_kind ~= "track" or not is_json_array(guard.refs) or #guard.refs ~= #tracks or #tracks > 512 then return false, "SELECTOR_GUARD_INVALID" end
+  local expected, actual = {}, {}
+  for index = 1, #guard.refs do expected[guard.refs[index]] = true end
+  for index = 1, #tracks do actual[d16_tracks_ref_string(tracks[index])] = true end
+  for ref, _ in pairs(expected) do if not actual[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  for index = 1, #tracks do
+    if d16_tracks_numeric(tracks[index], "I_FOLDERDEPTH", 0) ~= 0 then
+      return false, "FOLDER_CASCADE_CONFIRMATION_REQUIRED"
+    end
+  end
+  if guard.kind == "current_selection" then
+    local ok_count, count = call_reaper("CountSelectedTracks", 0)
+    if not ok_count or first_number(count) ~= #tracks then return false, "PREWRITE_SELECTION_DRIFT" end
+    for index = 0, #tracks - 1 do
+      local ok_track, track = call_reaper("GetSelectedTrack", 0, index)
+      if not ok_track or not actual[d16_tracks_ref_string(track)] then return false, "PREWRITE_SELECTION_DRIFT" end
+    end
+    return true
+  end
+  if guard.kind ~= "predicate" or not is_object(guard.selector) then return false, "SELECTOR_GUARD_INVALID" end
+  local selector, matched = guard.selector, {}
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false, "SELECTOR_TRUNCATED" end
+  local matched_count = 0
+  for index = 0, first_number(count) - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track then
+      local value = selector.field == "muted" and d16_tracks_numeric(track, "B_MUTE", 0) == 1
+        or selector.field == "soloed" and d16_tracks_numeric(track, "I_SOLO", 0) ~= 0
+        or selector.field == "record_armed" and d16_tracks_numeric(track, "I_RECARM", 0) == 1
+        or selector.field == "name" and d16_tracks_name(track)
+      local hit = selector.operator == "equals" and value == selector.value
+        or selector.operator == "contains" and type(value) == "string" and value:find(selector.value, 1, true) ~= nil
+        or selector.operator == "starts_with" and type(value) == "string" and value:sub(1, #selector.value) == selector.value
+      if hit then
+        if d16_tracks_numeric(track, "I_FOLDERDEPTH", 0) ~= 0 then return false, "FOLDER_CASCADE_CONFIRMATION_REQUIRED" end
+        local ref = d16_tracks_ref_string(track)
+        if not matched[ref] then
+          matched[ref] = true
+          matched_count = matched_count + 1
+          if matched_count > 512 then return false, "SELECTOR_TRUNCATED" end
+        end
+      end
+    end
+  end
+  for ref, _ in pairs(matched) do if not expected[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  return matched_count == #tracks, "PREWRITE_REF_DRIFT"
+end
+
 local function d16_tracks_delete_tracks_impl(request, require_single)
   local tracks = d16_tracks_unique_tracks(d16_tracks_from_request_refs(request))
   if require_single and #tracks ~= 1 then
@@ -244,6 +293,8 @@ local function d16_tracks_delete_tracks_impl(request, require_single)
   if #tracks == 0 then
     return d16_tracks_error("TRACK_NOT_FOUND", "D16 delete tracks requires one or more resolvable track refs.", {})
   end
+  local guard_ok, guard_code = d16_tracks_guard_matches(request, tracks)
+  if not guard_ok then return d16_tracks_error(guard_code, "Selector guard changed before native Track deletion; no Track was deleted.", {}, true) end
   local refs, tokens = d16_tracks_deleted_refs(tracks)
   table.sort(tracks, function(left, right)
     return d16_tracks_index(left) > d16_tracks_index(right)

@@ -54,7 +54,7 @@
       }
     },
     {
-      "id": "track-name-predicate-duplicate-name-ambiguity",
+      "id": "track-name-predicate-duplicate-name-batch",
       "selector_request": {
         "kind": "predicate",
         "entity_kind": "track",
@@ -80,8 +80,9 @@
       ],
       "expected": {
         "phase": "preflight",
-        "code": "SELECTOR_TARGET_AMBIGUOUS",
-        "zero_write": true
+        "code": "SELECTOR_TARGETS_BATCHED",
+        "target_count": 2,
+        "zero_write": false
       }
     },
     {

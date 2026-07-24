@@ -76,13 +76,19 @@ describe("Alpha4 Shard C selector and predicate contract", () => {
     assert.equal(validateSnapshot({ ...valid, frozen_refs: ["item:guid:{A}", "item:guid:{A}"] }).errors[0].code, "SNAPSHOT_REFS_INVALID");
   });
 
-  it("keeps every failure fixture typed and zero-write by contract", () => {
+  it("keeps every blocker fixture typed and zero-write while allowing explicit predicate batches", () => {
     assert.equal(ALPHA4_SHARD_C_SELECTOR_FAILURE_FIXTURES.length, 9);
     for (const fixture of ALPHA4_SHARD_C_SELECTOR_FAILURE_FIXTURES) {
       assert.equal(typeof fixture.id, "string");
       assert.equal(typeof fixture.expected.code, "string", fixture.id);
-      assert.equal(fixture.expected.writes, 0, fixture.id);
-      assert.equal(fixture.expected.undo_opened, false, fixture.id);
+      if (fixture.id === "predicate-name-batch") {
+        assert.equal(fixture.expected.code, "SELECTOR_TARGETS_BATCHED");
+        assert.equal(fixture.expected.writes, 2);
+        assert.equal(fixture.expected.undo_opened, true);
+      } else {
+        assert.equal(fixture.expected.writes, 0, fixture.id);
+        assert.equal(fixture.expected.undo_opened, false, fixture.id);
+      }
     }
     const limit = ALPHA4_SHARD_C_SELECTOR_FAILURE_FIXTURES.find((fixture) => fixture.id === "candidate-limit-513");
     assert.equal(limit.input.refs.length, 513);

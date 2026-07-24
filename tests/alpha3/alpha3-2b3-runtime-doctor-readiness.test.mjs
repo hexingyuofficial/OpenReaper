@@ -524,6 +524,32 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     assert.equal(actionMissing.failure_layer, "bridge_heartbeat");
     assert.equal(actionMissing.safe_copy_paste_fix, null);
 
+    const sameInstanceAction = createAlpha3_2B3DoctorTaskResult({
+      ...common,
+      mode: "live-edit",
+      runtimeReadiness: {
+        ...runtime,
+        bridge: { status: "bridge_action_not_running", diagnosis: "bridge_action_not_running" },
+      },
+      requestResponse: { status: "not_run", ready: false },
+      reaperProcess: { status: "running", running: true, pid: 4242, identity_verified: true },
+    });
+    assert.equal(sameInstanceAction.missing_precondition, "bridge_action_not_running");
+    assert.equal(sameInstanceAction.next_action.code, "same_instance_bridge_action_required");
+    assert.deepEqual(sameInstanceAction.same_instance_recovery, {
+      scope: "same_reaper_instance",
+      reaper_pid: 4242,
+      identity_verified: true,
+      duplicate_launch_forbidden: true,
+      reaper_restart_allowed: false,
+      automatic_bridge_restart_available: false,
+      required_action: "run_registered_bridge_action",
+    });
+    assert.match(sameInstanceAction.next_action.instruction, /do not start another REAPER/);
+    assert.match(sameInstanceAction.next_action.instruction, /cannot restart its stopped Bridge externally/);
+    assert.equal(sameInstanceAction.safe_copy_paste_fix, null);
+    assert.deepEqual(sameInstanceAction.restart_required, { mcp_client: true, reaper: false });
+
     const staleHeartbeat = createAlpha3_2B3DoctorTaskResult({
       ...common,
       mode: "live-edit",
@@ -545,6 +571,27 @@ describe("Alpha3.2-B3 runtime / doctor live readiness", () => {
     );
     assert.match(staleHeartbeat.next_action.instruction, /rerun the Action/);
     assert.match(staleHeartbeat.next_action.instruction, /only if the heartbeat remains stale/);
+
+    const sameInstanceStale = createAlpha3_2B3DoctorTaskResult({
+      ...common,
+      mode: "live-edit",
+      runtimeReadiness: {
+        ...runtime,
+        bridge: {
+          status: LIVE_BRIDGE_LIVENESS_STATUS.LOOP_UNRESPONSIVE,
+          diagnosis: "bridge_loop_unresponsive",
+          ready: false,
+        },
+      },
+      requestResponse: { status: "not_run", ready: false },
+      reaperProcess: { status: "running", running: true, pid: 4242, identity_verified: true },
+    });
+    assert.equal(sameInstanceStale.next_action.code, "same_instance_bridge_action_required");
+    assert.equal(sameInstanceStale.restart_escalation, undefined);
+    assert.equal(sameInstanceStale.same_instance_recovery.reaper_pid, 4242);
+    assert.match(sameInstanceStale.next_action.instruction, /heartbeat is stale/);
+    assert.match(sameInstanceStale.next_action.instruction, /do not start another REAPER/);
+    assert.equal(sameInstanceStale.safe_copy_paste_fix, null);
 
     const maliciousTransport = "/tmp/openreaper transport'; printf unsafe";
     const permissionRepair = createAlpha3_2B3DoctorTaskResult({

@@ -37,19 +37,22 @@ local function d14_items_item_ref_string(item)
   return "item:unknown"
 end
 
-local function d14_items_find_item_by_guid(guid)
+local function d14_items_build_ref_map()
   local ok_count, count = call_reaper("CountMediaItems", 0)
   local total = ok_count and first_number(count) or 0
+  local refs = {}
   for index = 0, total - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, index)
-    if ok_item and item and d14_items_item_guid(item) == guid then
-      return item
+    if ok_item and item then
+      refs["item:index:" .. tostring(index)] = item
+      local guid = d14_items_item_guid(item)
+      if guid then refs["item:guid:" .. guid] = item end
     end
   end
-  return nil
+  return refs
 end
 
-local function d14_items_resolve_item_token(token)
+local function d14_items_resolve_item_token(token, ref_map)
   if not is_string(token) then
     return nil
   end
@@ -60,17 +63,16 @@ local function d14_items_resolve_item_token(token)
   end
   local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
   if index then
-    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
-    return ok and item or nil
+    return ref_map and ref_map["item:index:" .. index] or nil
   end
   local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
   if guid then
-    return d14_items_find_item_by_guid(guid)
+    return ref_map and ref_map["item:guid:" .. guid] or nil
   end
   return nil
 end
 
-local function d14_items_resolve_item_from_ref_object(ref)
+local function d14_items_resolve_item_from_ref_object(ref, ref_map)
   if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
@@ -81,7 +83,7 @@ local function d14_items_resolve_item_from_ref_object(ref)
   if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
     return nil
   end
-  return d14_items_resolve_item_token(ref.ref)
+  return d14_items_resolve_item_token(ref.ref, ref_map)
 end
 
 local function d14_items_item_object_ref_from_string(ref)
@@ -120,10 +122,11 @@ local function d14_items_collect_entries(request)
   end
   local entries = {}
   local seen = {}
+  local ref_map = d14_items_build_ref_map()
   for index = 1, #request.refs do
     local ref = request.refs[index]
     if is_object(ref) and ref.kind == "item" then
-      local item = d14_items_resolve_item_from_ref_object(ref)
+      local item = d14_items_resolve_item_from_ref_object(ref, ref_map)
       if not item then
         return nil, {
           code = "ITEM_NOT_FOUND",
@@ -206,8 +209,9 @@ local function d14_items_delete_entries(request, entries)
     end
   end
   call_reaper("UpdateArrange")
+  local ref_map = d14_items_build_ref_map()
   for index = 1, #entries do
-    if d14_items_resolve_item_token(entries[index].item_ref) then
+    if ref_map[entries[index].item_ref] then
       return nil, {
         code = "VERIFICATION_FAILED",
         message = "Deleted item still resolved after deletion.",
@@ -263,11 +267,74 @@ local function d14_items_delete_item(request)
   return d14_items_delete_summary(request, entries, true)
 end
 
+local function d14_items_guard_ref_set(entries)
+  local values = {}
+  for index = 1, #entries do values[d14_items_item_ref_string(entries[index].item)] = true end
+  return values
+end
+
+local function d14_items_guard_matches(request, entries)
+  local guard = request.params and request.params.selector_guard
+  if not is_object(guard) then return true end
+  if guard.entity_kind ~= "item" or not is_json_array(guard.refs) or #guard.refs ~= #entries or #entries > 512 then
+    return false, "SELECTOR_GUARD_INVALID"
+  end
+  local expected = {}
+  for index = 1, #guard.refs do expected[guard.refs[index]] = true end
+  local actual = d14_items_guard_ref_set(entries)
+  for ref, _ in pairs(expected) do if not actual[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  if guard.kind == "current_selection" then
+    local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+    if not ok_count or first_number(count) ~= #entries then return false, "PREWRITE_SELECTION_DRIFT" end
+    for index = 0, #entries - 1 do
+      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+      if not ok_item or not actual[d14_items_item_ref_string(item)] then return false, "PREWRITE_SELECTION_DRIFT" end
+    end
+    return true
+  end
+  if guard.kind ~= "predicate" or not is_object(guard.selector) then return false, "SELECTOR_GUARD_INVALID" end
+  local selector = guard.selector
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return false, "SELECTOR_TRUNCATED" end
+  local matched = {}
+  local matched_count = 0
+  for index = 0, first_number(count) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item then
+      local value = nil
+      if selector.field == "muted" then value = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) == 1
+      elseif selector.field == "locked" then value = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) ~= 0
+      elseif selector.field == "active_take_name" then
+        local ok_take, take = call_reaper("GetActiveTake", item)
+        if ok_take and take then
+          local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+          value = ok_name and first_string(name) or ""
+        else value = "" end
+      end
+      local hit = selector.operator == "equals" and value == selector.value
+        or selector.operator == "contains" and type(value) == "string" and value:find(selector.value, 1, true) ~= nil
+        or selector.operator == "starts_with" and type(value) == "string" and value:sub(1, #selector.value) == selector.value
+      if hit then
+        local ref = d14_items_item_ref_string(item)
+        if not matched[ref] then
+          matched[ref] = true
+          matched_count = matched_count + 1
+          if matched_count > 512 then return false, "SELECTOR_TRUNCATED" end
+        end
+      end
+    end
+  end
+  for ref, _ in pairs(matched) do if not expected[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  return matched_count == #entries, "PREWRITE_REF_DRIFT"
+end
+
 local function d14_items_delete_items(request)
   local entries, failure = d14_items_collect_entries(request)
   if not entries then
     return d14_items_error(failure.code, failure.message, failure.details, failure.recoverable)
   end
+  local guard_ok, guard_code = d14_items_guard_matches(request, entries)
+  if not guard_ok then return d14_items_error(guard_code, "Selector guard changed before native item deletion; no Item was deleted.", {}, true) end
   local ok, delete_failure = d14_items_delete_entries(request, entries)
   if not ok then
     return d14_items_error(delete_failure.code, delete_failure.message, delete_failure.details, delete_failure.recoverable)

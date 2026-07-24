@@ -21,6 +21,7 @@ STARTUP_DIALOG_ASSIST=true
 IGNORE_MISSING_MEDIA=false
 STARTUP_DIALOG_CONSENT=""
 STARTUP_DIALOG_CONSENT_EXPLICIT=false
+RECOVER_EXISTING=false
 STARTUP_DIALOG_POLICY_FILE="${INSTALL_ROOT:h}/data/startup-dialog-consent"
 LAUNCHCTL_BIN="/bin/launchctl"
 OPEN_BIN="/usr/bin/open"
@@ -189,6 +190,10 @@ while [[ $# -gt 0 ]]; do
       set_startup_dialog_consent once
       shift
       ;;
+    --recover-existing|--reuse-existing-session)
+      RECOVER_EXISTING=true
+      shift
+      ;;
     --help|-h)
       cat <<'HELP'
 OpenReaper start helper
@@ -199,6 +204,7 @@ Usage:
   openreaper-start --reaper-app /path/to/REAPER.app [--project-path /path/to/project.RPP]
   openreaper-start --session-root /path/to/session [--project-path /path/to/project.RPP]
   openreaper-start --render-root /absolute/path/to/renders [--project-path /path/to/project.RPP]
+  openreaper-start --recover-existing [--session-root /path/to/session]
 
 REAPER must be started through this helper for OpenReaper MCP to connect.
 The helper starts REAPER with the OpenReaper bridge environment and returns only
@@ -221,6 +227,12 @@ discovery before asking for a path.
 The installed conditional startup hook starts the Bridge automatically. The
 REAPER action named "OpenReaper: Start MCP bridge" remains a manual recovery
 fallback if autonomous startup is blocked.
+
+If the selected session already has a verified live REAPER, a normal start
+refuses to launch a duplicate instance. Use --recover-existing to reuse that
+same REAPER PID and verify an already-running Bridge; it cannot restart a
+stopped Bridge. This mode cannot select a new project or pass arbitrary REAPER
+arguments.
 
 Before the first assisted launch, choose one startup-dialog policy:
   --startup-dialog-consent once    Assist this launch only; do not save consent.
@@ -246,6 +258,11 @@ HELP
       ;;
   esac
 done
+
+if [[ "${RECOVER_EXISTING}" == "true" && ( -n "${PROJECT_PATH}" || ${#ARGS[@]} -gt 0 ) ]]; then
+  echo "[OpenReaper] --recover-existing cannot be combined with a project path or REAPER arguments." >&2
+  exit 2
+fi
 
 persist_startup_dialog_consent() {
   local value="$1"
@@ -1355,7 +1372,8 @@ verify_public_bridge_read() {
     echo "[OpenReaper] installed Doctor is missing or not executable: ${doctor}" >&2
     return 1
   fi
-  if OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
+  if OPENREAPER_SESSION_ROOT="${SESSION_ROOT}" \
+      OPENREAPER_DOCTOR_SMOKE_TIMEOUT_MS=10000 \
       OPENREAPER_DOCTOR_READ_PROBE_TIMEOUT_MS=3000 \
       "${doctor}" --wait-bridge=2 > "${doctor_log}" 2>&1; then
     echo "[OpenReaper] bridge-read-probe=passed"
@@ -1364,6 +1382,34 @@ verify_public_bridge_read() {
   fi
   echo "[OpenReaper] bridge heartbeat was ready but the public read probe failed. doctor-log=${doctor_log}" >&2
   return 1
+}
+
+verified_existing_reaper_pid() {
+  local readiness_module="${INSTALL_ROOT}/vendor/openreaper-kernel/packages/mcp-server/src/alpha3-2b3-runtime-doctor-readiness-v1.mjs"
+  if [[ ! -f "${PID_FILE}" && ! -L "${PID_FILE}" ]]; then
+    return 1
+  fi
+  if [[ ! -f "${readiness_module}" || -L "${readiness_module}" ]]; then
+    echo "[OpenReaper] cannot verify the existing session PID because the readiness module is unavailable." >&2
+    return 2
+  fi
+  node --input-type=module - "${readiness_module}" "${SESSION_ROOT}" <<'NODE'
+import { pathToFileURL } from "node:url";
+
+const [readinessModulePath, sessionRoot] = process.argv.slice(2);
+try {
+  const readiness = await import(pathToFileURL(readinessModulePath));
+  const inspected = await readiness.inspectAlpha3_2B3ReaperProcess({ sessionRoot });
+  if (inspected?.running === true && inspected?.identity_verified === true && Number.isSafeInteger(inspected.pid)) {
+    process.stdout.write(String(inspected.pid));
+    process.exit(0);
+  }
+  if (inspected?.status === "pid_missing" || inspected?.status === "pid_dead") process.exit(1);
+  process.exit(2);
+} catch {
+  process.exit(2);
+}
+NODE
 }
 
 run_startup_dialog_assist() {
@@ -1520,6 +1566,12 @@ wait_for_startup_readiness() {
     fi
     sleep 0.25
   done
+  if [[ "${RECOVER_EXISTING}" == "true" ]]; then
+    echo "[OpenReaper] startup-status=blocked_same_instance_bridge_not_ready" >&2
+    echo "[OpenReaper] blocker-code=SAME_INSTANCE_BRIDGE_ACTION_REQUIRED" >&2
+    echo "[OpenReaper] recovery=The verified REAPER PID is alive, but this command cannot restart its stopped Bridge externally. In that same REAPER, run fallback Action 'OpenReaper: Start MCP bridge', then rerun openreaper-doctor --wait-bridge. Do not start another REAPER." >&2
+    return 4
+  fi
   echo "[OpenReaper] Bridge did not become ready within ${START_WAIT_SECONDS}s." >&2
   echo "[OpenReaper] recovery=Resolve the reported REAPER dialog, or run fallback Action 'OpenReaper: Start MCP bridge'; then rerun openreaper-doctor --wait-bridge." >&2
   return 1
@@ -1530,7 +1582,23 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-launch_reaper
+if existing_reaper_pid="$(verified_existing_reaper_pid)"; then
+  echo "[OpenReaper] existing-session=reaper_pid=${existing_reaper_pid};identity=verified"
+  if [[ "${RECOVER_EXISTING}" != "true" ]]; then
+    echo "[OpenReaper] startup-status=existing_session"
+    echo "[OpenReaper] recovery=If its Bridge is already running, use ${0} --recover-existing with the same session root to verify it. If the Bridge stopped, run the registered Bridge Action in that REAPER; no duplicate REAPER will be started." >&2
+    exit 3
+  fi
+  echo "[OpenReaper] startup-mode=recover_existing"
+  echo "${existing_reaper_pid}" > "${PID_FILE}"
+else
+  existing_reaper_status=$?
+  if (( existing_reaper_status == 2 )); then
+    echo "[OpenReaper] existing session could not be safely verified; refusing to launch another REAPER." >&2
+    exit 1
+  fi
+  launch_reaper
+fi
 wait_for_startup_readiness
 
 echo "[OpenReaper] startup-status=ready"

@@ -711,8 +711,9 @@ function createStdioRecipeDispatchers({ callTemplateRuntime, artifactRuntime, ca
 export function createStdioRecipeUndoController({ liveBridge, callContext }) {
   const dispatch = liveBridge?.executor?.dispatch;
   const allocate = callContext?.allocate;
+  const transactionTimeoutMs = 60_000;
 
-  async function send(operation, request) {
+  async function send(operation, request, { retry = 0 } = {}) {
     if (typeof dispatch !== "function" || typeof allocate !== "function") {
       throw new Error("Live Bridge Recipe Undo transaction is not configured.");
     }
@@ -746,27 +747,76 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
       },
       artifacts: { allow: false },
       budget: { max_response_bytes: 16_384, max_items: 8, max_inline_value_bytes: 2_048 },
-      idempotency_key: `recipe-undo:${operation}:${handle}`,
-      timeout_ms: 5_000,
+      idempotency_key: `recipe-undo:${operation}:${handle}${retry > 0 ? `:retry:${retry}` : ""}`,
+      timeout_ms: transactionTimeoutMs,
     });
     const result = await dispatch.call(liveBridge.executor, bridgeRequest);
     validateFoundationBridgeResult(result);
     const summary = result?.result?.summary;
-    if (result.ok !== true || summary?.transaction_id !== handle || summary?.project_ref !== request.project_ref) {
-      throw new Error(result?.error?.message ?? `Recipe Undo ${operation} returned no exact transaction proof.`);
+    if (result.ok !== true) {
+      throw recipeUndoControllerError(result, {
+        operation,
+        handle,
+        projectRef: request.project_ref,
+        expectedOwner: context.expected_owner,
+        expectedGeneration: context.expected_generation,
+      });
+    }
+    if (summary?.transaction_id !== handle || summary?.project_ref !== request.project_ref) {
+      const error = new Error(`Recipe Undo ${operation} returned no exact transaction proof.`);
+      error.code = "VERIFY_FAILED";
+      error.outcome = "unknown";
+      error.reconciliation_required = operation !== "end";
+      error.handle = handle;
+      throw error;
     }
     return { result, summary, handle };
   }
 
+  async function reconcileNotRun(error, request) {
+    const active = error?.details?.active_transaction;
+    if (!provenNotRunRecipeUndoConflict(error, request)) throw error;
+    try {
+      const reconciled = await send("reconcile_not_run", {
+        handle: active.transaction_id,
+        project_ref: active.project_ref,
+        label: active.label,
+      });
+      if (reconciled.summary.closed !== true || reconciled.summary.verified !== true) {
+        const reconcileError = new Error("Recipe Undo reconcile_not_run returned no exact close proof.");
+        reconcileError.code = "VERIFY_FAILED";
+        reconcileError.outcome = "unknown";
+        reconcileError.reconciliation_required = true;
+        reconcileError.handle = active.transaction_id;
+        throw reconcileError;
+      }
+      return reconciled;
+    } catch (reconcileError) {
+      reconcileError.reconciliation_required = true;
+      reconcileError.outcome = "unknown";
+      reconcileError.handle ??= active.transaction_id;
+      throw reconcileError;
+    }
+  }
+
   return Object.freeze({
     async begin(request) {
-      const { result, summary, handle } = await send("begin", request);
+      let opened;
+      const evidenceRefs = [];
+      try {
+        opened = await send("begin", request);
+      } catch (error) {
+        const reconciled = await reconcileNotRun(error, request);
+        evidenceRefs.push(`bridge:${reconciled.result.id}`);
+        opened = await send("begin", request, { retry: 1 });
+      }
+      const { result, summary, handle } = opened;
       return {
         ok: summary.opened === true && summary.verified === true,
         opened: summary.opened === true,
         handle,
         project_ref: request.project_ref,
-        evidence_refs: [`bridge:${result.id}`],
+        evidence_refs: [...evidenceRefs, `bridge:${result.id}`],
       };
     },
     async end(request) {
@@ -781,6 +831,49 @@ export function createStdioRecipeUndoController({ liveBridge, callContext }) {
       };
     },
   });
+}
+
+function recipeUndoControllerError(result, {
+  operation,
+  handle,
+  projectRef,
+  expectedOwner,
+  expectedGeneration,
+}) {
+  const error = new Error(result?.error?.message ?? `Recipe Undo ${operation} failed.`);
+  error.code = result?.error?.code ?? "INTERNAL_ERROR";
+  error.details = result?.error?.details ?? {};
+  error.outcome = result?.error?.details?.outcome
+    ?? (error.code === "BRIDGE_TIMEOUT" ? "unknown" : null);
+  error.reconciliation_required = error.outcome === "unknown"
+    || error.code === "QUEUE_CONFLICT"
+    || operation === "reconcile_not_run";
+  error.handle = handle;
+  error.project_ref = projectRef;
+  error.bridge = result?.bridge ?? null;
+  error.expected_owner = expectedOwner;
+  error.expected_generation = expectedGeneration;
+  return error;
+}
+
+function provenNotRunRecipeUndoConflict(error, request) {
+  const active = error?.details?.active_transaction;
+  return error?.code === "QUEUE_CONFLICT"
+    && error?.details?.outcome === "not_run"
+    && active != null
+    && typeof active === "object"
+    && typeof active.transaction_id === "string"
+    && active.transaction_id !== ""
+    && active.project_ref === request.project_ref
+    && typeof active.label === "string"
+    && active.label !== ""
+    && active.owner === error?.bridge?.owner
+    && active.generation === error?.bridge?.generation
+    && active.owner === error?.expected_owner
+    && active.generation === error?.expected_generation
+    && active.active_project_matches === true
+    && active.mutation_may_have_happened === false
+    && active.close_outcome_unknown !== true;
 }
 
 function recipeUndoBridgeRequestId(context, operation) {

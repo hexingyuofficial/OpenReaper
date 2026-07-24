@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
+import { lauxlib, lua, lualib, to_jsstring, to_luastring } from "fengari";
 import {
   FakeFoundationBridge,
   createObjectRef,
@@ -157,7 +158,68 @@ describe("D16 tracks organization live handler expansion", () => {
     assert.match(HANDLER_SOURCE, /D16 nested child subtrees did not leave a balanced folder span/);
     assert.doesNotMatch(HANDLER_SOURCE, /local depth = index == #children and -1 or 0/);
   });
+
+  it("runs the native selector guard before deletion and resolves 512 GUID refs with one scan", () => {
+    const assertions = String.raw`
+local tracks, deletes, get_calls = {}, 0, 0
+for i = 1, 512 do tracks[i] = { guid = "{TRACK-" .. i .. "}", index = i - 1, name = "Track " .. i } end
+reaper = {}
+reaper.CountTracks = function() return #tracks end
+reaper.GetTrack = function(_, index) get_calls = get_calls + 1; return tracks[index + 1] end
+reaper.GetTrackGUID = function(track) return track.guid end
+reaper.GetTrackName = function(track) return true, track.name end
+reaper.GetMediaTrackInfo_Value = function(track, key)
+  if key == "IP_TRACKNUMBER" then return track.index + 1 end
+  if key == "I_FOLDERDEPTH" then return 0 end
+  if key == "B_MUTE" then return 1 end
+  return 0
+end
+reaper.CountSelectedTracks = function() return 0 end
+reaper.GetSelectedTrack = function() return nil end
+reaper.DeleteTrack = function() deletes = deletes + 1; return true end
+reaper.TrackList_AdjustWindows = function() end
+local refs, guard_refs = {}, {}
+for i = 1, 512 do
+  local ref = "track:guid:{TRACK-" .. i .. "}"
+  refs[i] = { kind = "track", ref = ref, identity = { scheme = "guid", value = "{TRACK-" .. i .. "}" } }
+  guard_refs[i] = ref
+end
+local request = { refs = refs, params = { selector_guard = { kind = "current_selection", entity_kind = "track", refs = guard_refs } }, pack = { capability = "tracks.delete", id = "tracks", risk = "destructive" } }
+local _, failure = d16_tracks_delete_tracks(request)
+assert(failure.code == "PREWRITE_SELECTION_DRIFT")
+assert(deletes == 0)
+assert(get_calls == 512)
+tracks[513] = { guid = "{TRACK-513}", index = 512, name = "Track 513" }
+local predicate_request = { refs = { refs[1] }, params = { selector_guard = { kind = "predicate", entity_kind = "track", selector = { field = "muted", operator = "equals", value = true }, refs = { "track:guid:{TRACK-1}" } } }, pack = request.pack }
+local _, predicate_failure = d16_tracks_delete_tracks(predicate_request)
+assert(predicate_failure.code == "SELECTOR_TRUNCATED")
+assert(deletes == 0)
+assert(get_calls == 1538)
+`;
+    runLua(`${D16_LUA_PRELUDE}\n${HANDLER_SOURCE}\n${assertions}`);
+  });
 });
+
+const D16_LUA_PRELUDE = String.raw`
+JSON_NULL = {}
+function is_string(value) return type(value) == "string" end
+function is_object(value) return type(value) == "table" end
+function is_json_array(value) return type(value) == "table" end
+function json_array(value) return value or {} end
+function first_number(...) for i = 1, select("#", ...) do local v = select(i, ...); if type(v) == "number" then return v end end end
+function first_string(...) for i = 1, select("#", ...) do local v = select(i, ...); if type(v) == "string" then return v end end end
+function bounded_string(value) return tostring(value or "") end
+function call_reaper(name, ...) if not reaper[name] then return false end return pcall(reaper[name], ...) end
+`;
+
+function runLua(source) {
+  const state = lauxlib.luaL_newstate();
+  lualib.luaL_openlibs(state);
+  const status = lauxlib.luaL_loadstring(state, to_luastring(source));
+  assert.equal(status, lua.LUA_OK, status === lua.LUA_OK ? "D16 Lua loaded" : to_jsstring(lua.lua_tostring(state, -1)));
+  const callStatus = lua.lua_pcall(state, 0, 0, 0);
+  assert.equal(callStatus, lua.LUA_OK, callStatus === lua.LUA_OK ? "D16 Lua executed" : to_jsstring(lua.lua_tostring(state, -1)));
+}
 
 const FOLDER_REF = createObjectRef("track", { scheme: "guid", value: "{D16-FOLDER}" }, {
   ref: "track:guid:{D16-FOLDER}",

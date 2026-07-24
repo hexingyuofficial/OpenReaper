@@ -489,7 +489,7 @@ end
 local function d13_items_list_selected_items(request)
   local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
   local selected_count = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
-  local limit = d13_items_bounded_limit(request, request.params.limit, 32, 128)
+  local limit = d13_items_bounded_limit(request, request.params.limit, 32, 513)
   local include_track_refs = request.params.include_track_refs == true
   local items = json_array({})
   local refs = json_array({})

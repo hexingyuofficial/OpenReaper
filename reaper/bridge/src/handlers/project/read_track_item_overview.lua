@@ -52,7 +52,7 @@ local function d10_overview_budget_item_limit(request, requested, track_limit)
 end
 
 local function d10_overview_project_item_limit(request, requested)
-  return d10_overview_bounded_limit(request, requested, 32, 64)
+  return d10_overview_bounded_limit(request, requested, 32, 513)
 end
 
 local function d10_overview_track_guid(track)
@@ -168,6 +168,12 @@ local function d10_overview_item_ref(item)
 end
 
 local function d10_overview_item_summary(item, track, item_index)
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  local active_take_name = ""
+  if ok_take and take then
+    local ok_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+    if ok_name then active_take_name = bounded_string(first_string(take_name) or "", 80) end
+  end
   return {
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
@@ -175,7 +181,20 @@ local function d10_overview_item_summary(item, track, item_index)
     position_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_POSITION"))) or 0,
     length_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH"))) or 0,
     selected = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_UISEL"))) or 0) == 1,
+    muted = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) or 0) == 1,
+    locked = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) or 0) ~= 0,
+    active_take_name = active_take_name,
   }
+end
+
+local function d10_overview_selector_matches(summary, filter)
+  if not is_object(filter) then return false end
+  local value = summary[filter.field]
+  if filter.operator == "equals" then return value == filter.value end
+  return type(value) == "string" and (
+    filter.operator == "contains" and value:find(filter.value, 1, true) ~= nil
+    or filter.operator == "starts_with" and value:sub(1, #filter.value) == filter.value
+  )
 end
 
 local function d10_overview_native_count(api_name, ...)
@@ -221,7 +240,8 @@ local function read_track_item_overview(request)
   local include_track_items = request.params and request.params.include_track_items ~= false
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
-  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 16)
+  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
+  local selector_filter = request.params and request.params.selector_filter
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
   local ok_items, item_count = call_reaper("CountMediaItems", 0)
   local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
@@ -242,18 +262,33 @@ local function read_track_item_overview(request)
 
   local items_internally_complete = ok_items == true
   local end_item = math.min(total_items, item_cursor + max_items)
-  for index = item_cursor, end_item - 1 do
+  local selector_match_count = 0
+  local selector_matches_complete = JSON_NULL
+  local item_start = selector_filter and 0 or item_cursor
+  local item_end = selector_filter and total_items or end_item
+  for index = item_start, item_end - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, index)
     if ok_item and item then
       local ok_track, track = call_reaper("GetMediaItemTrack", item)
       if not ok_track or not track then
         items_internally_complete = false
       end
-      items[#items + 1] = d10_overview_item_summary(item, ok_track and track or nil, index)
-      refs[#refs + 1] = d10_overview_item_ref(item)
+      local summary = d10_overview_item_summary(item, ok_track and track or nil, index)
+      if not selector_filter or d10_overview_selector_matches(summary, selector_filter) then
+        selector_match_count = selector_match_count + 1
+        if #items < max_items then
+          items[#items + 1] = summary
+          refs[#refs + 1] = d10_overview_item_ref(item)
+        end
+        if selector_match_count > max_items then break end
+      end
     else
       items_internally_complete = false
     end
+  end
+  if selector_filter then
+    selector_matches_complete = selector_match_count <= max_items
+    end_item = selector_matches_complete and total_items or item_end
   end
 
   local total_selected = 0
@@ -285,12 +320,14 @@ local function read_track_item_overview(request)
     max_tracks_effective = max_tracks,
     max_items_per_track_effective = max_items_per_track,
     selected_items_truncated = include_selected_items and total_selected ~= nil and total_selected > #selected_items or false,
-    items_truncated = end_item < total_items,
-    item_coverage_status = not items_internally_complete and "incomplete" or (end_item < total_items and "paged" or "complete"),
+    items_truncated = selector_filter and not selector_matches_complete or end_item < total_items,
+    item_coverage_status = not items_internally_complete and "incomplete" or (selector_filter and (selector_matches_complete and "complete" or "paged") or (end_item < total_items and "paged" or "complete")),
     item_coverage = {
       internally_complete = items_internally_complete,
     },
     truncated = end_track < total_tracks,
+    selector_match_count = selector_filter and selector_match_count or JSON_NULL,
+    selector_matches_complete = selector_matches_complete,
   }
   if end_track < total_tracks then
     summary.next_track_cursor = tostring(end_track)

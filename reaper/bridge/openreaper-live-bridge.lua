@@ -5619,9 +5619,36 @@ local function d9_tracks_selected(limit)
   return tracks, total, total > limit
 end
 
+local function d9_tracks_selector_matches(summary, filter)
+  if not is_object(filter) then return false end
+  local value = summary[filter.field]
+  if filter.field == "soloed" then value = summary.solo_mode ~= "off" end
+  if filter.operator == "equals" then return value == filter.value end
+  return type(value) == "string" and (
+    filter.operator == "contains" and value:find(filter.value, 1, true) ~= nil
+    or filter.operator == "starts_with" and value:sub(1, #filter.value) == filter.value
+  )
+end
+
+local function d9_tracks_filtered(limit, filter)
+  local ok_count, count = call_reaper("CountTracks", 0)
+  local total = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
+  local tracks, matches = {}, 0
+  for index = 0, total - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track and d9_tracks_selector_matches(d9_tracks_mixer_summary(track), filter) then
+      matches = matches + 1
+      if #tracks < limit then tracks[#tracks + 1] = track end
+      if matches > limit then break end
+    end
+  end
+  return tracks, matches, matches > limit
+end
+
 local function list_tracks(request)
-  local limit = d9_tracks_limit(request, 64, 256)
-  local tracks, total, truncated = d9_tracks_all(limit)
+  local limit = d9_tracks_limit(request, 64, 513)
+  local filter = request.params and request.params.selector_filter
+  local tracks, total, truncated = filter and d9_tracks_filtered(limit, filter) or d9_tracks_all(limit)
   local rows = json_array({})
   local refs = json_array({})
   local selected_count = 0
@@ -5635,6 +5662,7 @@ local function list_tracks(request)
       record_armed = summary.record_armed,
       muted = summary.muted,
       solo_mode = summary.solo_mode,
+      folder_depth = summary.folder_depth,
     }
     if summary.selected then
       selected_count = selected_count + 1
@@ -5646,11 +5674,13 @@ local function list_tracks(request)
     track_count = total,
     selected_count = selected_count,
     truncated = truncated,
+    selector_match_count = filter and total or JSON_NULL,
+    selector_matches_complete = filter and not truncated or JSON_NULL,
   }), nil, json_array({}), json_array({}), refs
 end
 
 local function read_mixer_controls(request)
-  local limit = d9_tracks_limit(request, 32, 128)
+  local limit = d9_tracks_limit(request, 32, 513)
   local tracks = d9_tracks_from_request_refs(request)
   local total = #tracks
   local truncated = false
@@ -5863,7 +5893,7 @@ local function d10_overview_budget_item_limit(request, requested, track_limit)
 end
 
 local function d10_overview_project_item_limit(request, requested)
-  return d10_overview_bounded_limit(request, requested, 32, 64)
+  return d10_overview_bounded_limit(request, requested, 32, 513)
 end
 
 local function d10_overview_track_guid(track)
@@ -5979,6 +6009,12 @@ local function d10_overview_item_ref(item)
 end
 
 local function d10_overview_item_summary(item, track, item_index)
+  local ok_take, take = call_reaper("GetActiveTake", item)
+  local active_take_name = ""
+  if ok_take and take then
+    local ok_name, _, take_name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+    if ok_name then active_take_name = bounded_string(first_string(take_name) or "", 80) end
+  end
   return {
     item_ref = d10_overview_item_ref_string(item),
     track_ref = track and d10_overview_track_ref_string(track) or JSON_NULL,
@@ -5986,7 +6022,20 @@ local function d10_overview_item_summary(item, track, item_index)
     position_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_POSITION"))) or 0,
     length_seconds = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "D_LENGTH"))) or 0,
     selected = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_UISEL"))) or 0) == 1,
+    muted = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) or 0) == 1,
+    locked = (first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) or 0) ~= 0,
+    active_take_name = active_take_name,
   }
+end
+
+local function d10_overview_selector_matches(summary, filter)
+  if not is_object(filter) then return false end
+  local value = summary[filter.field]
+  if filter.operator == "equals" then return value == filter.value end
+  return type(value) == "string" and (
+    filter.operator == "contains" and value:find(filter.value, 1, true) ~= nil
+    or filter.operator == "starts_with" and value:sub(1, #filter.value) == filter.value
+  )
 end
 
 local function d10_overview_native_count(api_name, ...)
@@ -6032,7 +6081,8 @@ local function read_track_item_overview(request)
   local include_track_items = request.params and request.params.include_track_items ~= false
   local max_items_per_track = include_track_items and d10_overview_budget_item_limit(request, request.params and request.params.max_items_per_track, max_tracks) or 0
   local include_selected_items = request.params == nil or request.params.include_selected_items ~= false
-  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 16)
+  local max_selected_items = d10_overview_bounded_limit(request, request.params and request.params.max_selected_items, 4, 513)
+  local selector_filter = request.params and request.params.selector_filter
   local ok_tracks, track_count = call_reaper("CountTracks", 0)
   local ok_items, item_count = call_reaper("CountMediaItems", 0)
   local total_tracks = ok_tracks and math.max(0, math.floor(first_number(track_count) or 0)) or 0
@@ -6053,18 +6103,33 @@ local function read_track_item_overview(request)
 
   local items_internally_complete = ok_items == true
   local end_item = math.min(total_items, item_cursor + max_items)
-  for index = item_cursor, end_item - 1 do
+  local selector_match_count = 0
+  local selector_matches_complete = JSON_NULL
+  local item_start = selector_filter and 0 or item_cursor
+  local item_end = selector_filter and total_items or end_item
+  for index = item_start, item_end - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, index)
     if ok_item and item then
       local ok_track, track = call_reaper("GetMediaItemTrack", item)
       if not ok_track or not track then
         items_internally_complete = false
       end
-      items[#items + 1] = d10_overview_item_summary(item, ok_track and track or nil, index)
-      refs[#refs + 1] = d10_overview_item_ref(item)
+      local summary = d10_overview_item_summary(item, ok_track and track or nil, index)
+      if not selector_filter or d10_overview_selector_matches(summary, selector_filter) then
+        selector_match_count = selector_match_count + 1
+        if #items < max_items then
+          items[#items + 1] = summary
+          refs[#refs + 1] = d10_overview_item_ref(item)
+        end
+        if selector_match_count > max_items then break end
+      end
     else
       items_internally_complete = false
     end
+  end
+  if selector_filter then
+    selector_matches_complete = selector_match_count <= max_items
+    end_item = selector_matches_complete and total_items or item_end
   end
 
   local total_selected = 0
@@ -6096,12 +6161,14 @@ local function read_track_item_overview(request)
     max_tracks_effective = max_tracks,
     max_items_per_track_effective = max_items_per_track,
     selected_items_truncated = include_selected_items and total_selected ~= nil and total_selected > #selected_items or false,
-    items_truncated = end_item < total_items,
-    item_coverage_status = not items_internally_complete and "incomplete" or (end_item < total_items and "paged" or "complete"),
+    items_truncated = selector_filter and not selector_matches_complete or end_item < total_items,
+    item_coverage_status = not items_internally_complete and "incomplete" or (selector_filter and (selector_matches_complete and "complete" or "paged") or (end_item < total_items and "paged" or "complete")),
     item_coverage = {
       internally_complete = items_internally_complete,
     },
     truncated = end_track < total_tracks,
+    selector_match_count = selector_filter and selector_match_count or JSON_NULL,
+    selector_matches_complete = selector_matches_complete,
   }
   if end_track < total_tracks then
     summary.next_track_cursor = tostring(end_track)
@@ -7321,7 +7388,7 @@ end
 local function d13_items_list_selected_items(request)
   local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
   local selected_count = ok_count and math.max(0, math.floor(first_number(count) or 0)) or 0
-  local limit = d13_items_bounded_limit(request, request.params.limit, 32, 128)
+  local limit = d13_items_bounded_limit(request, request.params.limit, 32, 513)
   local include_track_refs = request.params.include_track_refs == true
   local items = json_array({})
   local refs = json_array({})
@@ -8125,19 +8192,22 @@ local function d14_items_item_ref_string(item)
   return "item:unknown"
 end
 
-local function d14_items_find_item_by_guid(guid)
+local function d14_items_build_ref_map()
   local ok_count, count = call_reaper("CountMediaItems", 0)
   local total = ok_count and first_number(count) or 0
+  local refs = {}
   for index = 0, total - 1 do
     local ok_item, item = call_reaper("GetMediaItem", 0, index)
-    if ok_item and item and d14_items_item_guid(item) == guid then
-      return item
+    if ok_item and item then
+      refs["item:index:" .. tostring(index)] = item
+      local guid = d14_items_item_guid(item)
+      if guid then refs["item:guid:" .. guid] = item end
     end
   end
-  return nil
+  return refs
 end
 
-local function d14_items_resolve_item_token(token)
+local function d14_items_resolve_item_token(token, ref_map)
   if not is_string(token) then
     return nil
   end
@@ -8148,17 +8218,16 @@ local function d14_items_resolve_item_token(token)
   end
   local index = token:match("^index:(%d+)$") or token:match("^item:index:(%d+)$")
   if index then
-    local ok, item = call_reaper("GetMediaItem", 0, tonumber(index))
-    return ok and item or nil
+    return ref_map and ref_map["item:index:" .. index] or nil
   end
   local guid = token:match("^guid:(.+)$") or token:match("^item:guid:(.+)$")
   if guid then
-    return d14_items_find_item_by_guid(guid)
+    return ref_map and ref_map["item:guid:" .. guid] or nil
   end
   return nil
 end
 
-local function d14_items_resolve_item_from_ref_object(ref)
+local function d14_items_resolve_item_from_ref_object(ref, ref_map)
   if not is_object(ref) or ref.kind ~= "item" or not is_string(ref.ref) or not is_object(ref.identity) then
     return nil
   end
@@ -8169,7 +8238,7 @@ local function d14_items_resolve_item_from_ref_object(ref)
   if ref.identity.scheme ~= scheme or tostring(ref.identity.value) ~= value then
     return nil
   end
-  return d14_items_resolve_item_token(ref.ref)
+  return d14_items_resolve_item_token(ref.ref, ref_map)
 end
 
 local function d14_items_item_object_ref_from_string(ref)
@@ -8208,10 +8277,11 @@ local function d14_items_collect_entries(request)
   end
   local entries = {}
   local seen = {}
+  local ref_map = d14_items_build_ref_map()
   for index = 1, #request.refs do
     local ref = request.refs[index]
     if is_object(ref) and ref.kind == "item" then
-      local item = d14_items_resolve_item_from_ref_object(ref)
+      local item = d14_items_resolve_item_from_ref_object(ref, ref_map)
       if not item then
         return nil, {
           code = "ITEM_NOT_FOUND",
@@ -8294,8 +8364,9 @@ local function d14_items_delete_entries(request, entries)
     end
   end
   call_reaper("UpdateArrange")
+  local ref_map = d14_items_build_ref_map()
   for index = 1, #entries do
-    if d14_items_resolve_item_token(entries[index].item_ref) then
+    if ref_map[entries[index].item_ref] then
       return nil, {
         code = "VERIFICATION_FAILED",
         message = "Deleted item still resolved after deletion.",
@@ -8351,11 +8422,74 @@ local function d14_items_delete_item(request)
   return d14_items_delete_summary(request, entries, true)
 end
 
+local function d14_items_guard_ref_set(entries)
+  local values = {}
+  for index = 1, #entries do values[d14_items_item_ref_string(entries[index].item)] = true end
+  return values
+end
+
+local function d14_items_guard_matches(request, entries)
+  local guard = request.params and request.params.selector_guard
+  if not is_object(guard) then return true end
+  if guard.entity_kind ~= "item" or not is_json_array(guard.refs) or #guard.refs ~= #entries or #entries > 512 then
+    return false, "SELECTOR_GUARD_INVALID"
+  end
+  local expected = {}
+  for index = 1, #guard.refs do expected[guard.refs[index]] = true end
+  local actual = d14_items_guard_ref_set(entries)
+  for ref, _ in pairs(expected) do if not actual[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  if guard.kind == "current_selection" then
+    local ok_count, count = call_reaper("CountSelectedMediaItems", 0)
+    if not ok_count or first_number(count) ~= #entries then return false, "PREWRITE_SELECTION_DRIFT" end
+    for index = 0, #entries - 1 do
+      local ok_item, item = call_reaper("GetSelectedMediaItem", 0, index)
+      if not ok_item or not actual[d14_items_item_ref_string(item)] then return false, "PREWRITE_SELECTION_DRIFT" end
+    end
+    return true
+  end
+  if guard.kind ~= "predicate" or not is_object(guard.selector) then return false, "SELECTOR_GUARD_INVALID" end
+  local selector = guard.selector
+  local ok_count, count = call_reaper("CountMediaItems", 0)
+  if not ok_count then return false, "SELECTOR_TRUNCATED" end
+  local matched = {}
+  local matched_count = 0
+  for index = 0, first_number(count) - 1 do
+    local ok_item, item = call_reaper("GetMediaItem", 0, index)
+    if ok_item and item then
+      local value = nil
+      if selector.field == "muted" then value = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "B_MUTE"))) == 1
+      elseif selector.field == "locked" then value = first_number(select(2, call_reaper("GetMediaItemInfo_Value", item, "C_LOCK"))) ~= 0
+      elseif selector.field == "active_take_name" then
+        local ok_take, take = call_reaper("GetActiveTake", item)
+        if ok_take and take then
+          local ok_name, _, name = call_reaper("GetSetMediaItemTakeInfo_String", take, "P_NAME", "", false)
+          value = ok_name and first_string(name) or ""
+        else value = "" end
+      end
+      local hit = selector.operator == "equals" and value == selector.value
+        or selector.operator == "contains" and type(value) == "string" and value:find(selector.value, 1, true) ~= nil
+        or selector.operator == "starts_with" and type(value) == "string" and value:sub(1, #selector.value) == selector.value
+      if hit then
+        local ref = d14_items_item_ref_string(item)
+        if not matched[ref] then
+          matched[ref] = true
+          matched_count = matched_count + 1
+          if matched_count > 512 then return false, "SELECTOR_TRUNCATED" end
+        end
+      end
+    end
+  end
+  for ref, _ in pairs(matched) do if not expected[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  return matched_count == #entries, "PREWRITE_REF_DRIFT"
+end
+
 local function d14_items_delete_items(request)
   local entries, failure = d14_items_collect_entries(request)
   if not entries then
     return d14_items_error(failure.code, failure.message, failure.details, failure.recoverable)
   end
+  local guard_ok, guard_code = d14_items_guard_matches(request, entries)
+  if not guard_ok then return d14_items_error(guard_code, "Selector guard changed before native item deletion; no Item was deleted.", {}, true) end
   local ok, delete_failure = d14_items_delete_entries(request, entries)
   if not ok then
     return d14_items_error(delete_failure.code, delete_failure.message, delete_failure.details, delete_failure.recoverable)
@@ -8875,37 +9009,33 @@ local function d16_tracks_track_summary(track)
   }
 end
 
-local function d16_tracks_find_by_guid(guid)
+local function d16_tracks_build_ref_map()
   local ok_count, count = call_reaper("CountTracks", 0)
   local total = ok_count and first_number(count) or 0
+  local refs = { guid = {}, index = {}, name = {} }
   for index = 0, total - 1 do
     local ok_track, track = call_reaper("GetTrack", 0, index)
-    if ok_track and track and d16_tracks_guid(track) == guid then
-      return track
+    if ok_track and track then
+      refs.index[tostring(index)] = track
+      local guid = d16_tracks_guid(track)
+      if guid then refs.guid[guid] = track end
+      local name = d16_tracks_name(track)
+      refs.name[name] = refs.name[name] or {}
+      refs.name[name][#refs.name[name] + 1] = track
     end
   end
-  return nil
+  return refs
 end
 
-local function d16_tracks_find_by_name(name)
-  local ok_count, count = call_reaper("CountTracks", 0)
-  local total = ok_count and first_number(count) or 0
-  local found = nil
-  local matches = 0
-  for index = 0, total - 1 do
-    local ok_track, track = call_reaper("GetTrack", 0, index)
-    if ok_track and track and d16_tracks_name(track) == name then
-      found = track
-      matches = matches + 1
-    end
-  end
-  if matches > 1 then
+local function d16_tracks_find_by_name(name, ref_map)
+  local matches = ref_map and ref_map.name[name] or nil
+  if matches and #matches > 1 then
     return nil, "ambiguous"
   end
-  return found
+  return matches and matches[1] or nil
 end
 
-local function d16_tracks_resolve_token(token)
+local function d16_tracks_resolve_token(token, ref_map)
   if not is_string(token) then
     return nil
   end
@@ -8916,42 +9046,42 @@ local function d16_tracks_resolve_token(token)
   end
   local index = token:match("^index:(%d+)$") or token:match("^track:index:(%d+)$")
   if index then
-    local ok, track = call_reaper("GetTrack", 0, tonumber(index))
-    return ok and track or nil
+    return ref_map and ref_map.index[index] or nil
   end
   local guid = token:match("^guid:(.+)$") or token:match("^track:guid:(.+)$")
   if guid then
-    return d16_tracks_find_by_guid(guid)
+    return ref_map and ref_map.guid[guid] or nil
   end
   local name = token:match("^track:(.+)$")
   if name then
-    return d16_tracks_find_by_name(name)
+    return d16_tracks_find_by_name(name, ref_map)
   end
   return nil
 end
 
-local function d16_tracks_from_ref_object(ref)
+local function d16_tracks_from_ref_object(ref, ref_map)
   if not is_object(ref) or ref.kind ~= "track" then
     return nil
   end
   local identity = is_object(ref.identity) and ref.identity or {}
   if identity.scheme == "selected" then
-    return d16_tracks_resolve_token("selected:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("selected:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "index" then
-    return d16_tracks_resolve_token("index:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("index:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "guid" then
-    return d16_tracks_resolve_token("guid:" .. tostring(identity.value))
+    return d16_tracks_resolve_token("guid:" .. tostring(identity.value), ref_map)
   elseif identity.scheme == "name" then
-    return d16_tracks_find_by_name(tostring(identity.value))
+    return d16_tracks_find_by_name(tostring(identity.value), ref_map)
   end
-  return d16_tracks_resolve_token(ref.ref)
+  return d16_tracks_resolve_token(ref.ref, ref_map)
 end
 
 local function d16_tracks_from_request_refs(request)
   local tracks = {}
+  local ref_map = d16_tracks_build_ref_map()
   if is_json_array(request.refs) then
     for index = 1, #request.refs do
-      local track = d16_tracks_from_ref_object(request.refs[index])
+      local track = d16_tracks_from_ref_object(request.refs[index], ref_map)
       if track then
         tracks[#tracks + 1] = track
       end
@@ -8992,8 +9122,9 @@ local function d16_tracks_select_only(tracks)
 end
 
 local function d16_tracks_verify_absent(refs)
+  local ref_map = d16_tracks_build_ref_map()
   for index = 1, #refs do
-    local track = d16_tracks_resolve_token(refs[index])
+    local track = d16_tracks_resolve_token(refs[index], ref_map)
     if track then
       return false, refs[index]
     end
@@ -9011,6 +9142,58 @@ local function d16_tracks_deleted_refs(tracks)
   return refs, tokens
 end
 
+local function d16_tracks_guard_matches(request, tracks)
+  local guard = request.params and request.params.selector_guard
+  if not is_object(guard) then return true end
+  if guard.entity_kind ~= "track" or not is_json_array(guard.refs) or #guard.refs ~= #tracks or #tracks > 512 then return false, "SELECTOR_GUARD_INVALID" end
+  local expected, actual = {}, {}
+  for index = 1, #guard.refs do expected[guard.refs[index]] = true end
+  for index = 1, #tracks do actual[d16_tracks_ref_string(tracks[index])] = true end
+  for ref, _ in pairs(expected) do if not actual[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  for index = 1, #tracks do
+    if d16_tracks_numeric(tracks[index], "I_FOLDERDEPTH", 0) ~= 0 then
+      return false, "FOLDER_CASCADE_CONFIRMATION_REQUIRED"
+    end
+  end
+  if guard.kind == "current_selection" then
+    local ok_count, count = call_reaper("CountSelectedTracks", 0)
+    if not ok_count or first_number(count) ~= #tracks then return false, "PREWRITE_SELECTION_DRIFT" end
+    for index = 0, #tracks - 1 do
+      local ok_track, track = call_reaper("GetSelectedTrack", 0, index)
+      if not ok_track or not actual[d16_tracks_ref_string(track)] then return false, "PREWRITE_SELECTION_DRIFT" end
+    end
+    return true
+  end
+  if guard.kind ~= "predicate" or not is_object(guard.selector) then return false, "SELECTOR_GUARD_INVALID" end
+  local selector, matched = guard.selector, {}
+  local ok_count, count = call_reaper("CountTracks", 0)
+  if not ok_count then return false, "SELECTOR_TRUNCATED" end
+  local matched_count = 0
+  for index = 0, first_number(count) - 1 do
+    local ok_track, track = call_reaper("GetTrack", 0, index)
+    if ok_track and track then
+      local value = selector.field == "muted" and d16_tracks_numeric(track, "B_MUTE", 0) == 1
+        or selector.field == "soloed" and d16_tracks_numeric(track, "I_SOLO", 0) ~= 0
+        or selector.field == "record_armed" and d16_tracks_numeric(track, "I_RECARM", 0) == 1
+        or selector.field == "name" and d16_tracks_name(track)
+      local hit = selector.operator == "equals" and value == selector.value
+        or selector.operator == "contains" and type(value) == "string" and value:find(selector.value, 1, true) ~= nil
+        or selector.operator == "starts_with" and type(value) == "string" and value:sub(1, #selector.value) == selector.value
+      if hit then
+        if d16_tracks_numeric(track, "I_FOLDERDEPTH", 0) ~= 0 then return false, "FOLDER_CASCADE_CONFIRMATION_REQUIRED" end
+        local ref = d16_tracks_ref_string(track)
+        if not matched[ref] then
+          matched[ref] = true
+          matched_count = matched_count + 1
+          if matched_count > 512 then return false, "SELECTOR_TRUNCATED" end
+        end
+      end
+    end
+  end
+  for ref, _ in pairs(matched) do if not expected[ref] then return false, "PREWRITE_REF_DRIFT" end end
+  return matched_count == #tracks, "PREWRITE_REF_DRIFT"
+end
+
 local function d16_tracks_delete_tracks_impl(request, require_single)
   local tracks = d16_tracks_unique_tracks(d16_tracks_from_request_refs(request))
   if require_single and #tracks ~= 1 then
@@ -9021,6 +9204,8 @@ local function d16_tracks_delete_tracks_impl(request, require_single)
   if #tracks == 0 then
     return d16_tracks_error("TRACK_NOT_FOUND", "D16 delete tracks requires one or more resolvable track refs.", {})
   end
+  local guard_ok, guard_code = d16_tracks_guard_matches(request, tracks)
+  if not guard_ok then return d16_tracks_error(guard_code, "Selector guard changed before native Track deletion; no Track was deleted.", {}, true) end
   local refs, tokens = d16_tracks_deleted_refs(tracks)
   table.sort(tracks, function(left, right)
     return d16_tracks_index(left) > d16_tracks_index(right)
@@ -34498,24 +34683,52 @@ local function dispatch_template_execute(request, resume_continuation)
 end
 
 local function dispatch_recipe_undo_transaction(request)
+  local function active_recipe_undo_conflict_details()
+    local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+    if not active then
+      return {
+        blocker = "recipe_undo_transaction_not_active",
+        outcome = "not_run",
+        zero_write = true,
+      }
+    end
+    local active_project_matches = active_recipe_undo_project_matches()
+    local proven_not_run = active.mutation_may_have_happened == false
+      and active.close_outcome_unknown ~= true
+      and active_project_matches == true
+    return {
+      blocker = proven_not_run and "recipe_undo_orphan_not_run" or "recipe_undo_transaction_state_uncertain",
+      outcome = proven_not_run and "not_run" or "unknown",
+      zero_write = proven_not_run,
+      active_transaction_id = bounded_string(active.id, 160),
+      active_transaction = {
+        transaction_id = bounded_string(active.id, 160),
+        project_ref = bounded_string(active.project_ref, 240),
+        label = bounded_string(active.label, 240),
+        owner = bounded_string(active.owner, 160),
+        generation = active.generation,
+        mutation_may_have_happened = active.mutation_may_have_happened == true,
+        close_outcome_unknown = active.close_outcome_unknown == true,
+        active_project_matches = active_project_matches == true,
+      },
+    }
+  end
+
   local params = is_object(request.params) and request.params or {}
   local action = params.action
   local transaction_id = params.transaction_id
   local project_ref = params.project_ref
   local label = params.label
-  if (action ~= "begin" and action ~= "end") or not is_string(transaction_id)
+  if (action ~= "begin" and action ~= "end" and action ~= "reconcile_not_run") or not is_string(transaction_id)
       or not is_string(project_ref) or not is_string(label) then
-    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires action, transaction_id, project_ref, and label.", {
+    return handler_error("PARAMS_INVALID", "Recipe Undo transaction requires begin, end, or reconcile_not_run with transaction_id, project_ref, and label.", {
       zero_write = true,
     })
   end
 
   if action == "begin" then
     if ACTIVE_RECIPE_UNDO_TRANSACTION then
-      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", {
-        active_transaction_id = bounded_string(ACTIVE_RECIPE_UNDO_TRANSACTION.id, 160),
-        zero_write = true,
-      })
+      return handler_error("QUEUE_CONFLICT", "A Recipe Undo transaction is already active.", active_recipe_undo_conflict_details())
     end
     local ok_project, project, project_path = call_reaper("EnumProjects", -1, "")
     if not ok_project or project == nil then
@@ -34544,6 +34757,10 @@ local function dispatch_recipe_undo_transaction(request)
       project = project,
       project_ref = project_ref,
       session_id = request.client.session_id,
+      owner = request.bridge.expected_owner,
+      generation = request.bridge.expected_generation,
+      mutation_may_have_happened = false,
+      close_outcome_unknown = false,
     }
     request.__openreaper_undo_opened = true
     request.__openreaper_undo_closed = false
@@ -34561,11 +34778,49 @@ local function dispatch_recipe_undo_transaction(request)
   end
 
   local active = ACTIVE_RECIPE_UNDO_TRANSACTION
+  if action == "reconcile_not_run" then
+    if not active
+        or active.id ~= transaction_id
+        or active.project_ref ~= project_ref
+        or active.label ~= label
+        or active.owner ~= request.bridge.expected_owner
+        or active.generation ~= request.bridge.expected_generation then
+      return handler_error("QUEUE_CONFLICT", "Recipe Undo reconcile_not_run does not match the exact active transaction.", active_recipe_undo_conflict_details())
+    end
+    if active.mutation_may_have_happened == true or active.close_outcome_unknown == true then
+      return handler_error("QUEUE_CONFLICT", "Recipe Undo transaction is not proven not_run and cannot be reconciled automatically.", active_recipe_undo_conflict_details(), false)
+    end
+    if not active_recipe_undo_project_matches() then
+      return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo reconcile_not_run.", active_recipe_undo_conflict_details(), false)
+    end
+    local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
+    local closed = results[1] == true and (results[2] == nil or results[2] == true)
+    request.__openreaper_undo_opened = true
+    request.__openreaper_undo_closed = closed
+    request.__openreaper_undo_required_any = true
+    if not closed then
+      active.close_outcome_unknown = true
+      return handler_error("INTERNAL_ERROR", "Recipe Undo reconcile_not_run close outcome is unknown.", active_recipe_undo_conflict_details(), false)
+    end
+    ACTIVE_RECIPE_UNDO_TRANSACTION = nil
+    return {
+      contract = "openreaper.recipe_undo_transaction.v1",
+      action = "reconcile_not_run",
+      transaction_id = transaction_id,
+      project_ref = project_ref,
+      mutation_truth = "not_run",
+      opened = true,
+      closed = true,
+      verified = true,
+      readback_status = "passed",
+    }
+  end
+
   if not active or active.id ~= transaction_id or active.project_ref ~= project_ref
-      or active.session_id ~= request.client.session_id then
-    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", {
-      zero_write = true,
-    })
+      or active.label ~= label or active.session_id ~= request.client.session_id
+      or active.owner ~= request.bridge.expected_owner
+      or active.generation ~= request.bridge.expected_generation then
+    return handler_error("QUEUE_CONFLICT", "Recipe Undo end does not match the active transaction.", active_recipe_undo_conflict_details())
   end
   local active_project_matches = active_recipe_undo_project_matches()
   local results = { call_reaper("Undo_EndBlock2", active.project, active.label, -1) }
@@ -34573,14 +34828,16 @@ local function dispatch_recipe_undo_transaction(request)
   request.__openreaper_undo_opened = true
   request.__openreaper_undo_closed = closed
   request.__openreaper_undo_required_any = true
-  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
   if not closed then
+    active.close_outcome_unknown = true
     return handler_error("INTERNAL_ERROR", "Recipe Undo close outcome is unknown.", {
       blocker = "recipe_undo_close_failed",
       outcome = "unknown",
+      zero_write = false,
       mutations_may_have_happened = params.mutation_truth ~= "not_run",
     }, false)
   end
+  ACTIVE_RECIPE_UNDO_TRANSACTION = nil
   if not active_project_matches then
     return handler_error("VERIFY_FAILED", "The active project changed before Recipe Undo close verification.", {
       blocker = "recipe_active_project_changed",
@@ -35397,6 +35654,11 @@ local function dispatch_request(request, fallback_id, resume_continuation, runti
         zero_write = true,
       },
     })
+  end
+  if phase_may_mutate == true and ACTIVE_RECIPE_UNDO_TRANSACTION
+      and is_object(request.pack) and request.pack.risk ~= "read"
+      and recipe_undo_transaction_flag(request) == ACTIVE_RECIPE_UNDO_TRANSACTION.id then
+    ACTIVE_RECIPE_UNDO_TRANSACTION.mutation_may_have_happened = true
   end
   local ok, summary, handler_failure, artifacts, jobs, refs = pcall(operation.handler, request, resume_continuation)
   close_required_undo_block(request, key)

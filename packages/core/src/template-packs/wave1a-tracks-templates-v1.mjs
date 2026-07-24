@@ -103,6 +103,7 @@ export const WAVE1A_TRACKS_TEMPLATES = deepFreeze([
     inputSchema: objectSchema({
       limit: { type: "integer" },
       include_selection: { type: "boolean" },
+      selector_filter: { type: "object" },
     }, []),
     outputSchema: objectSchema({
       tracks: { type: "array" },
@@ -612,7 +613,8 @@ export const WAVE1A_TRACKS_TEMPLATES = deepFreeze([
     title: "Delete tracks",
     summary: "Delete multiple resolved tracks in one cleanup operation and report deleted refs.",
     capability: "tracks.delete",
-    inputProperties: {},
+    inputProperties: { selector_guard: { type: "object" } },
+    inputRequired: [],
     outputProperties: {
       deleted_count: { type: "integer" },
       deleted_refs: { type: "array" },
