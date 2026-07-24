@@ -630,7 +630,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       startedAt,
       telemetry: retained.telemetry,
       undo: retained.undo,
-      mutationTruth: retained.provenPartialChanges.length > 0 ? "applied" : "not_run",
+      mutationTruth: retained.mutationTruth,
     });
   }
   const inputs = hydration.inputs;
@@ -673,7 +673,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       startedAt,
       telemetry: retained.telemetry,
       undo: retained.undo,
-      mutationTruth: retained.provenPartialChanges.length > 0 ? "applied" : "not_run",
+      mutationTruth: retained.mutationTruth,
     });
   }
 
@@ -705,7 +705,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       startedAt,
       telemetry: retained.telemetry,
       undo: retained.undo,
-      mutationTruth: retained.provenPartialChanges.length > 0 ? "applied" : "not_run",
+      mutationTruth: retained.mutationTruth,
     });
   }
 
@@ -744,12 +744,12 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       provenPartialChanges,
       counts: { processed, applied, skipped },
       latestCheckpoint,
-      recovery: recipeRecoveryTruth(false, "not_run", undo),
+      recovery: recipeRecoveryTruth(false, "not_applied", undo),
       undo,
       resumeSafe: false,
       nextCall: buildExactNextCall("get", exactRevisionIdentity(revision)),
       details: { zero_write: true, undo_status: undo.status },
-    }), { startedAt, telemetry, undo, mutationTruth: "not_run" });
+    }), { startedAt, telemetry, undo, mutationTruth: "not_applied" });
   }
 
   for (const stage of stages) {
@@ -760,7 +760,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     }
 
     if (options.signal?.aborted === true) {
-      const mutationTruth = telemetry.native_mutation_count > 0 ? "applied" : "not_run";
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
       undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
@@ -779,18 +779,18 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: false,
-        details: { request_cancelled: true, zero_write: mutationTruth === "not_run" },
+        details: { request_cancelled: true, zero_write: mutationTruth === "not_applied" },
         startedAt,
         telemetry,
         undo,
-        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        mutationTruth,
         failedStageAlreadyCompleted: true,
       });
     }
 
     const dispatcher = selectDispatcher(dispatchers, stage.kind);
     if (typeof dispatcher !== "function") {
-      const mutationTruth = telemetry.native_mutation_count > 0 ? "applied" : "not_run";
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
       undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
@@ -812,7 +812,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         startedAt,
         telemetry,
         undo,
-        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        mutationTruth,
       });
     }
 
@@ -850,7 +850,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       };
     }
     if (hydratedStage.ok !== true) {
-      const mutationTruth = telemetry.native_mutation_count > 0 ? "applied" : "not_run";
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
       undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
@@ -869,11 +869,11 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: false,
-        details: { ...(isPlainObject(hydratedStage.details) ? hydratedStage.details : {}), zero_write: mutationTruth === "not_run" },
+        details: { ...(isPlainObject(hydratedStage.details) ? hydratedStage.details : {}), zero_write: mutationTruth === "not_applied" },
         startedAt,
         telemetry,
         undo,
-        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        mutationTruth,
       });
     }
     const stageInputs = hydratedStage.inputs;
@@ -904,9 +904,11 @@ async function opRun(request, options, { startedAt, resume, budget }) {
 
     const normalized = normalizeStageOutcome(stage, outcome, revision);
     const stageTelemetry = recordStageTelemetry(telemetry, stage, outcome, normalized, Date.now() - stageStartedAt);
+    const stageTruth = stageMutationTruth(stage, normalized, stageTelemetry);
     processed += 1;
     evidenceItems.push(freeze({
       ...compactStageEvidence(stage, normalized),
+      mutation_truth: stageTruth,
       timing: { duration_ms: stageTelemetry.duration_ms },
       counters: {
         transport_call_count: stageTelemetry.transport_call_count,
@@ -919,7 +921,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       provenPartialChanges.push(...normalized.proven_changes);
     }
     if (options.signal?.aborted === true) {
-      const mutationTruth = stageMutationTruth(stage, normalized, stageTelemetry, telemetry);
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
       undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
@@ -938,15 +940,15 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         counts: { processed, applied, skipped },
         options,
         resumeSafe: false,
-        details: { request_cancelled: true, zero_write: mutationTruth === "not_run" },
+        details: { request_cancelled: true, zero_write: mutationTruth === "not_applied" },
         startedAt,
         telemetry,
         undo,
-        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        mutationTruth,
       });
     }
     if (!normalized.ok || normalized.verified !== true) {
-      const mutationTruth = stageMutationTruth(stage, normalized, stageTelemetry, telemetry);
+      const mutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
       undo = await closeRecipeUndo(options.undoController, undo, mutationTruth);
       return failPartial({
         operation: resume ? "resume" : "run",
@@ -974,7 +976,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
         startedAt,
         telemetry,
         undo,
-        mutationTruth: undo.status === "close_unknown" ? "unknown" : mutationTruth,
+        mutationTruth,
       });
     }
 
@@ -1013,7 +1015,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
     });
   }
 
-  const successMutationTruth = telemetry.native_mutation_count > 0 ? "applied" : "not_run";
+  const successMutationTruth = summarizeMutationTruth(telemetry, evidenceItems);
   undo = await closeRecipeUndo(options.undoController, undo, successMutationTruth);
   if (undo.status === "close_unknown") {
     return failPartial({
@@ -1037,7 +1039,7 @@ async function opRun(request, options, { startedAt, resume, budget }) {
       startedAt,
       telemetry,
       undo,
-      mutationTruth: "unknown",
+      mutationTruth: successMutationTruth,
       failedStageAlreadyCompleted: true,
     });
   }
@@ -1119,7 +1121,7 @@ function failPartial({
   startedAt,
   telemetry = createRunTelemetry(),
   undo = defaultRecipeUndoTruth(),
-  mutationTruth = "unknown",
+  mutationTruth = "not_applied",
   failedStageAlreadyCompleted = false,
 }) {
   const failed = failedStageAlreadyCompleted ? [] : [stage.id];
@@ -1789,7 +1791,10 @@ async function closeRecipeUndo(controller, undo, mutationTruth) {
     handle: undo.handle,
     label: undo.label,
     project_ref: undo.project_ref,
-    mutation_truth: mutationTruth,
+    // The frozen Bridge transaction handler still consumes the original
+    // not_run/applied/unknown wire vocabulary. Keep that internal ABI stable
+    // while the public Recipe result reports the more precise Alpha4 truth.
+    mutation_truth: recipeUndoWireMutationTruth(mutationTruth),
   });
   try {
     const result = await controller.end(request);
@@ -1816,6 +1821,12 @@ async function closeRecipeUndo(controller, undo, mutationTruth) {
   } catch (error) {
     return recipeUndoCloseUnknown(undo, boundedText(error?.message, 160));
   }
+}
+
+function recipeUndoWireMutationTruth(mutationTruth) {
+  if (mutationTruth === "not_applied") return "not_run";
+  if (mutationTruth === "applied_verified") return "applied";
+  return "unknown";
 }
 
 function recipeUndoFailure(status, label, projectRef, error) {
@@ -1911,7 +1922,11 @@ function recordStageTelemetry(telemetry, stage, outcome, normalized, durationMs)
 function provenNativeMutationCount(stage, outcome, normalized) {
   if (stage.risk === "read") return 0;
   const explicit = outcome?.result?.data?.outcome?.mutation?.completed_count;
-  if (Number.isSafeInteger(explicit) && explicit >= 0 && normalized.verified === true) return explicit;
+  const direct = outcome?.result?.mutation?.completed_count;
+  const errorDetail = outcome?.error?.details?.mutation?.completed_count;
+  for (const count of [explicit, direct, errorDetail]) {
+    if (Number.isSafeInteger(count) && count >= 0) return count;
+  }
   if (stage.kind === "macro") return Array.isArray(outcome?.result?.changes)
     ? outcome.result.changes.filter(isProvenMacroChange).length
     : normalized.proven_changes.length;
@@ -1929,15 +1944,20 @@ function acceptedReadbackCount(stage, outcome, normalized) {
   return 1;
 }
 
-function stageMutationTruth(stage, normalized, stageTelemetry, telemetry) {
-  if (normalized.zero_write === true) {
-    return telemetry.native_mutation_count > 0 ? "applied" : "not_run";
-  }
-  if (stage.risk === "read") {
-    return telemetry.native_mutation_count > 0 ? "applied" : "not_run";
-  }
-  if (normalized.verified === true || stageTelemetry.native_mutation_count > 0) return "applied";
-  return "unknown";
+function stageMutationTruth(stage, normalized, stageTelemetry) {
+  if (stage.risk === "read" || normalized.zero_write === true) return "not_applied";
+  if (stageTelemetry.native_mutation_count > 0 && normalized.verified === true) return "applied_verified";
+  if (normalized.ok === true && normalized.verified === true) return "not_applied";
+  return "applied_unverified";
+}
+
+function summarizeMutationTruth(telemetry, evidenceItems = []) {
+  const truths = Array.isArray(evidenceItems)
+    ? evidenceItems.map((item) => item?.mutation_truth)
+    : [];
+  if (truths.includes("applied_unverified") || truths.includes("unknown")) return "applied_unverified";
+  if (telemetry?.native_mutation_count > 0 || truths.includes("applied_verified")) return "applied_verified";
+  return "not_applied";
 }
 
 function buildRunSummaryEvidence({ startedAt, telemetry, undo, mutationTruth }) {
@@ -1966,7 +1986,7 @@ function withRunExecutionTruth(response, {
   startedAt,
   telemetry = createRunTelemetry(),
   undo = defaultRecipeUndoTruth(),
-  mutationTruth = "not_run",
+  mutationTruth = "not_applied",
 }) {
   const snapshot = snapshotRunTelemetry(telemetry);
   return freeze({
@@ -1984,6 +2004,9 @@ function withRunExecutionTruth(response, {
       native_mutation_count: snapshot.native_mutation_count,
       readback_count: snapshot.readback_count,
     },
+    recovery: response.recovery ?? (response.ok === true
+      ? { strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_needed" }
+      : recipeRecoveryTruth(false, mutationTruth, undo)),
     undo: compactRecipeUndoTruth(undo),
   });
 }
@@ -2003,20 +2026,44 @@ function compactRecipeUndoTruth(undo) {
   });
 }
 
+function compactRecipeCheckpoint(checkpoint) {
+  if (!isPlainObject(checkpoint)) return null;
+  const proof = isPlainObject(checkpoint.proof) ? checkpoint.proof : null;
+  return {
+    checkpoint_id: checkpoint.checkpoint_id ?? null,
+    stage_id: checkpoint.stage_id ?? null,
+    evidence_id: checkpoint.evidence_id ?? null,
+    resume_identity: checkpoint.resume_identity ?? null,
+    recipe_id: checkpoint.recipe_id ?? null,
+    version: checkpoint.version ?? null,
+    revision: checkpoint.revision ?? null,
+    content_hash: checkpoint.content_hash ?? null,
+    validation_result_id: checkpoint.validation_result_id ?? null,
+    verified: checkpoint.verified === true,
+    ...(proof ? {
+      proof: {
+        source_contract: proof.source_contract ?? null,
+        evidence_refs: uniqueStrings(proof.evidence_refs).slice(0, 8).map((ref) => boundedText(ref, 96)),
+        explicit_checkpoint_proof: proof.explicit_checkpoint_proof === true,
+      },
+    } : {}),
+  };
+}
+
 function recipeRecoveryTruth(resumeSafe, mutationTruth, undo) {
-  if (mutationTruth === "not_run") {
-    return freeze({ strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_run" });
+  if (mutationTruth === "not_applied") {
+    return freeze({ strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_applied" });
   }
-  if (mutationTruth === "unknown" || undo?.status === "close_unknown") {
-    return freeze({ strategy: "inspect_and_repair", rollback_claimed: false, outcome: "unknown" });
+  if (mutationTruth === "applied_unverified" || mutationTruth === "unknown" || undo?.status === "close_unknown") {
+    return freeze({ strategy: "inspect_and_repair", rollback_claimed: false, outcome: mutationTruth });
   }
   if (resumeSafe) {
-    return freeze({ strategy: "resume_from_checkpoint", rollback_claimed: false, outcome: "applied" });
+    return freeze({ strategy: "resume_from_checkpoint", rollback_claimed: false, outcome: "applied_verified" });
   }
   if (undo?.status === "closed" && undo.proven === true) {
-    return freeze({ strategy: "use_whole_recipe_undo", rollback_claimed: false, outcome: "applied" });
+    return freeze({ strategy: "use_whole_recipe_undo", rollback_claimed: false, outcome: "applied_verified" });
   }
-  return freeze({ strategy: "inspect_and_repair", rollback_claimed: false, outcome: "applied" });
+  return freeze({ strategy: "inspect_and_repair", rollback_claimed: false, outcome: "applied_verified" });
 }
 
 function exactRevisionIdentity(revision) {
@@ -2057,6 +2104,7 @@ function retainedFailureTruth(revision, resumeState, runId) {
       ? createExecutableRecipeEvidenceRef(runId, 0)
       : null,
     telemetry: createRunTelemetry(resumeState?.telemetry),
+    mutationTruth: summarizeMutationTruth(resumeState?.telemetry, resumeState?.evidence_items),
     undo: resumeState?.undo ?? defaultRecipeUndoTruth(),
   };
 }
@@ -2110,7 +2158,7 @@ function finalizeError(error, request, options, startedAt) {
         startedAt,
         telemetry: createRunTelemetry(),
         undo: defaultRecipeUndoTruth(),
-        mutationTruth: "not_run",
+        mutationTruth: "not_applied",
       })
     : response;
 }
@@ -2450,6 +2498,7 @@ function requiredRunMutationResponseBytes(revision, operation) {
       stage_timing_count: stageIds.length,
     },
     execution_truth: projectedExecutionTruth,
+    recovery: { strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_needed" },
     undo: projectedUndo,
     evidence_ref: `evidence:recipe-run:${"f".repeat(EXECUTABLE_RECIPE_RUN_BUDGETS.run_id_hex_chars)}:0`,
     latest_checkpoint: checkpoint
@@ -2462,6 +2511,8 @@ function requiredRunMutationResponseBytes(revision, operation) {
           ...identity,
         }
       : null,
+    next_call: null,
+    response_compacted: true,
   };
   return Math.max(
     EXECUTABLE_RECIPE_RUN_BUDGETS.mutation_response_min_bytes,
@@ -2529,8 +2580,11 @@ function compactCallRecipeResponse(response, operation) {
       validation_result_id: response.validation_result_id ?? response.identity?.validation_result_id ?? null,
       run_id: response.run_id ?? null,
       counts: response.counts,
+      verified_outputs: response.verified_outputs ?? [],
+      latest_checkpoint: compactRecipeCheckpoint(response.latest_checkpoint),
       timing: response.timing,
       execution_truth: response.execution_truth,
+      recovery: response.recovery ?? { strategy: "no_recovery_needed", rollback_claimed: false, outcome: "not_needed" },
       undo: response.undo,
       evidence_ref: response.evidence_ref ?? null,
       next_call: response.next_call ?? null,
@@ -2557,7 +2611,7 @@ function compactCallRecipeResponse(response, operation) {
     proven_partial_changes: Array.isArray(response.proven_partial_changes)
       ? response.proven_partial_changes.slice(0, COMPACT_FAILURE_PARTIAL_CHANGE_MAX_COUNT)
       : undefined,
-    latest_checkpoint: response.latest_checkpoint ?? null,
+    latest_checkpoint: compactRecipeCheckpoint(response.latest_checkpoint),
     recovery: response.recovery ?? {
       strategy: response.resume_safe === true ? "resume_from_checkpoint" : "inspect_and_repair",
       rollback_claimed: false,

@@ -587,13 +587,40 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
   let managerLifecycle = lifecycle;
   let managerDegradedReason = degradedReason;
   let managerBlockers = [...blockers];
+  const selectionState = {
+    lifecycle: "stale_until_live_readback",
+    epoch: 0,
+    fingerprint: null,
+    revision: null,
+    object_kinds: [],
+    row_count: 0,
+  };
   const pendingArtifacts = new Map();
   const logicalRefreshes = new Map();
+
+  const clearSelectionIdentity = () => {
+    selectionState.lifecycle = "stale_until_live_readback";
+    selectionState.fingerprint = null;
+    selectionState.revision = null;
+    selectionState.object_kinds = [];
+    selectionState.row_count = 0;
+  };
+
+  const promoteSelectionIdentity = (rows) => {
+    const next = liveSelectionFingerprint(rows);
+    if (selectionState.fingerprint !== next.fingerprint) selectionState.epoch += 1;
+    selectionState.lifecycle = "live";
+    selectionState.fingerprint = next.fingerprint;
+    selectionState.revision = `selection:alpha4:${selectionState.epoch}:${next.fingerprint}`;
+    selectionState.object_kinds = next.object_kinds;
+    selectionState.row_count = next.row_count;
+  };
 
   const status = () => {
     const snapshot = guardedSnapshot(adapter.snapshot());
     const stale = snapshot.lifecycle === "stale_session";
     const snapshotEvidence = compactSnapshotEvidence(snapshot, identity.project_ref);
+    const selectionIdentity = selectionIdentityEvidence(selectionState, identity.project_ref);
     return Object.freeze({
       contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
       ok: !closed && !stale,
@@ -615,10 +642,13 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
       freshness_token: snapshotEvidence.freshness_token,
       revision_source: snapshotEvidence.revision_source,
       project_change_count: snapshotEvidence.project_change_count,
+      selection_identity: selectionIdentity,
+      selection_revision: selectionIdentity.revision,
       recovery,
       rows_available: !closed && !stale,
       sqlite_rows_are_candidates_only: true,
       sqlite_is_truth: false,
+      sqlite_may_authorize_write: false,
       child_calls_executed: 0,
       logical_refreshes_staged: logicalRefreshes.size,
       row_counts: countSnapshotRows(snapshot),
@@ -712,6 +742,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     if (scopes.length === 0 || scopes.some((scope) => typeof scope !== "string" || !PROJECT_INDEX_SCOPE_NAMES.has(scope))) {
       return invalidationFailure("invalid_scopes", "INDEX_SCOPE_UNKNOWN", "Scope invalidation accepts only known Project Index scope names.", { scopes: input.scopes });
     }
+    if (scopes.includes("selection")) clearSelectionIdentity();
     const observedAt = safeIso(input.observed_at, now);
     const before = adapter.snapshot();
     for (const scope of scopes) {
@@ -1002,6 +1033,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     }
     if (projection.blocker) return observationFailure("invalid_readback", projection.blocker.code, projection.blocker.message, projection.blocker.details);
     const scopeEntries = Object.entries(projection.scopes);
+    const selectionProjected = scopeEntries.some(([scope]) => scope === "selected_context");
     const totalRows = scopeEntries.reduce((sum, [, rows]) => sum + rows.length, 0);
     if (totalRows > maxRows) return observationFailure("pressure_rejected", "READBACK_ROWS_EXCEEDED", "Readback exceeds the Project Index row bound; no rows were stored.", { row_count: totalRows, max_rows: maxRows });
     if (scopeEntries.length === 0) return observationFailure("invalid_readback", "NO_PROJECTABLE_SCOPES", "Readback did not identify any accepted Project Index scope.");
@@ -1047,7 +1079,7 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
           if (!method) continue;
           let coverage = projection.coverage[scope] ?? "complete";
           let projectedRows = method === "replaceSelection"
-            ? mergeProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, rows)
+            ? replaceProjectHeadSelectionRows(adapter.snapshot().rows?.selection_state, rows)
             : rows;
           if (method === "replaceTracks") {
             const snapshot = adapter.snapshot();
@@ -1066,7 +1098,9 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
           applied.push(scope);
         }
       }
+      if (selectionProjected) promoteSelectionIdentity(adapter.snapshot().rows?.selection_state);
     } catch (error) {
+      if (selectionProjected) clearSelectionIdentity();
       managerLifecycle = "degraded";
       managerDegradedReason = "STORE_WRITE_FAILED";
       managerBlockers = [blocker("STORE_WRITE_FAILED", "Project Index store rejected projected readback rows.", error)];
@@ -1090,7 +1124,15 @@ function createRuntime({ adapter, backend, blockers, dbPath, degradedReason, ide
     });
   };
 
-  const guardedAdapter = createGuardedAdapter(adapter);
+  const guardedAdapter = createGuardedAdapter(adapter, {
+    onSelectionResult(result) {
+      if (result?.ok === true) promoteSelectionIdentity(adapter.snapshot().rows?.selection_state);
+      else clearSelectionIdentity();
+    },
+    onSelectionError() {
+      clearSelectionIdentity();
+    },
+  });
   return Object.freeze({
     contract: ALPHA3_2D_PROJECT_INDEX_RUNTIME_CONTRACT,
     ok: true,
@@ -1762,7 +1804,14 @@ function projectReadback(templateId, readback, projectRef) {
         map.scopes.markers_regions = markerRows;
         map.coverage.markers_regions = coverageOf(readback.markers_regions ?? {}, "complete");
       }
-      const head = projectHeadRows(readback, projectRef, map.scopes.selected_context ?? []);
+      const artifactHead = arrayOf(map.scopes.selected_context).find((row) => row?.scope_kind === "project_head");
+      const head = projectHeadRows(
+        readback,
+        projectRef,
+        arrayOf(map.scopes.selected_context).filter((row) => row?.scope_kind !== "project_head"),
+      ).map((row) => row?.scope_kind === "project_head" && artifactHead
+        ? { ...row, summary: { ...compactObject(artifactHead.summary), ...compactObject(row.summary) } }
+        : row);
       map.scopes.selected_context = head;
       map.coverage.selected_context = "complete";
       return map;
@@ -1811,9 +1860,18 @@ function projectMapPayload(overview, projectRef, coverage = {}) {
   const itemSource = [...arrayOf(overview.items), ...nestedItems, ...arrayOf(overview.selected_items)];
   const items = dedupeRows([...projectItems, ...mapItems(nestedItems), ...selectedItems]);
   const takes = mapTakesFromItems(itemSource);
-  const selectedContext = projectHeadRows(overview, projectRef, selectedItems.map((row) => ({
-    ref: row.ref, owner_ref: row.track_ref, scope_kind: "item", summary: { selected: true },
-  })));
+  const selectedItemRefs = new Set(selectedItems.map((row) => row.ref));
+  const selectedContext = projectHeadRows(overview, projectRef, [
+    ...tracks.filter((row) => row.selected === true).map((row) => ({
+      ref: row.ref, owner_ref: row.owner_ref, scope_kind: "track", summary: { selected: true },
+    })),
+    ...selectedItems.map((row) => ({
+      ref: row.ref, owner_ref: row.track_ref, scope_kind: "item", summary: { selected: true },
+    })),
+    ...takes.filter((row) => selectedItemRefs.has(row.item_ref) || row.selected === true).map((row) => ({
+      ref: row.ref, owner_ref: row.item_ref, scope_kind: "take", summary: { selected: true },
+    })),
+  ]);
   const scopes = { tracks, items, selected_context: selectedContext };
   const projectedCoverage = {
     tracks: trackCoverage,
@@ -1977,14 +2035,23 @@ function simpleProjection(scope, rows, coverage, sourceCount = 0) {
   return { scopes: { [scope]: dedupeRows(rows) }, coverage: { [scope]: normalizeCoverage(coverage, "complete") } };
 }
 
-function createGuardedAdapter(adapter) {
+function createGuardedAdapter(adapter, hooks = {}) {
   const wrapped = {};
   for (const key of Object.keys(adapter)) {
     const value = adapter[key];
     if (typeof value !== "function") wrapped[key] = value;
     else if (key === "snapshot") wrapped[key] = () => guardedSnapshot(adapter.snapshot());
     else if (key === "changedSince") wrapped[key] = (...args) => adapter.changedSince(...args);
-    else wrapped[key] = (...args) => adapter[key](...args);
+    else wrapped[key] = (...args) => {
+      try {
+        const result = adapter[key](...args);
+        if (key === "replaceSelection") hooks.onSelectionResult?.(result);
+        return result;
+      } catch (error) {
+        if (key === "replaceSelection") hooks.onSelectionError?.(error);
+        throw error;
+      }
+    };
   }
   return Object.freeze(wrapped);
 }
@@ -2013,6 +2080,63 @@ function compactSnapshotEvidence(snapshot, projectRef) {
     revision_source: projectChangeCount === null ? "project_index_snapshot" : "reaper_project_state_change_count",
     project_change_count: projectChangeCount,
   };
+}
+
+function selectionIdentityEvidence(state, projectRef) {
+  return Object.freeze({
+    lifecycle: state.lifecycle,
+    project_ref: projectRef,
+    fingerprint: state.fingerprint,
+    epoch: state.epoch,
+    revision: state.revision,
+    object_kinds: [...state.object_kinds],
+    row_count: state.row_count,
+    source: state.lifecycle === "live" ? "live_readback" : "none",
+  });
+}
+
+function liveSelectionFingerprint(rows) {
+  const entries = arrayOf(rows)
+    .filter((row) => row?.scope_kind !== "project_head")
+    .filter((row) => row?.summary?.selected !== false && row?.selected !== false)
+    .map((row) => ({
+      scope_kind: normalizeSelectionKind(row?.scope_kind),
+      ref: typeof row?.ref === "string" ? row.ref : null,
+      owner_ref: typeof row?.owner_ref === "string" ? row.owner_ref : null,
+    }))
+    .filter((row) => row.scope_kind && row.ref)
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  const unique = [...new Map(entries.map((row) => [`${row.scope_kind}\0${row.ref}\0${row.owner_ref ?? ""}`, row])).values()];
+  return {
+    fingerprint: `selection-fingerprint:sha256:${createHash("sha256").update(JSON.stringify(unique)).digest("hex")}`,
+    object_kinds: [...new Set(unique.map((row) => row.scope_kind))].sort(),
+    row_count: unique.length,
+  };
+}
+
+function replaceProjectHeadSelectionRows(currentRows, nextRows) {
+  const existingProjectHead = arrayOf(currentRows).find((row) => row?.scope_kind === "project_head");
+  const projectedProjectHead = arrayOf(nextRows).find((row) => row?.scope_kind === "project_head");
+  const projectHead = projectedProjectHead
+    ? {
+        ...existingProjectHead,
+        ...projectedProjectHead,
+        summary: { ...compactObject(existingProjectHead?.summary), ...compactObject(projectedProjectHead.summary) },
+      }
+    : existingProjectHead;
+  const rows = arrayOf(nextRows).filter((row) => row?.scope_kind !== "project_head");
+  if (projectHead) rows.unshift(projectHead);
+  return dedupeRows(rows);
+}
+
+function normalizeSelectionKind(value) {
+  const aliases = {
+    envelope: "automation",
+    envelope_point: "automation",
+    selected_context: "selection",
+  };
+  const kind = typeof value === "string" ? value.toLowerCase() : "";
+  return aliases[kind] ?? kind;
 }
 
 function projectChangeCountFromSnapshot(snapshot, projectRef) {

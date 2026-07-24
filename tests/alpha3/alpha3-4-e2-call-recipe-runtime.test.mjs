@@ -365,6 +365,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
     assert.deepEqual(undoCalls[0].stage_ids, ["run_macro", "readback"]);
     assert.equal(undoCalls[1].handle, "recipe-undo-fixture");
+    assert.equal(ran.execution_truth.mutation, "applied_verified");
     assert.equal(undoCalls[1].mutation_truth, "applied");
     assert.equal(childUndo.length, 2);
     assert.equal(childUndo.every((truth) => truth.suppress_child_undo === true), true);
@@ -431,7 +432,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.deepEqual(cancelled.stages.failed, ["run_macro"]);
     assert.deepEqual(cancelled.stages.completed, []);
     assert.deepEqual(cancelled.stages.not_started, ["readback"]);
-    assert.equal(cancelled.execution_truth.mutation, "not_run");
+    assert.equal(cancelled.execution_truth.mutation, "not_applied");
     assert.equal(cancelled.undo.status, "closed");
     assert.deepEqual(undoCalls.map((call) => call.operation), ["begin", "end"]);
     assert.equal(undoCalls[1].mutation_truth, "not_run");
@@ -503,13 +504,13 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
 
     assert.equal(cancelled.ok, false);
     assert.equal(cancelled.error.details.request_cancelled, true);
-    assert.equal(cancelled.execution_truth.mutation, "applied");
+    assert.equal(cancelled.execution_truth.mutation, "applied_verified");
     assert.equal(cancelled.undo.status, "closed");
     assert.equal(cancelled.proven_partial_changes.length, 1);
     assert.equal(undoCalls[1].mutation_truth, "applied");
   });
 
-  it("reports unknown mutation truth when cancellation cannot prove Whole-Recipe Undo close", async () => {
+  it("keeps verified mutation truth separate when cancellation cannot prove Whole-Recipe Undo close", async () => {
     const controller = new AbortController();
     const { runtime } = makeRuntime({
       undoController: {
@@ -537,7 +538,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
 
     assert.equal(cancelled.ok, false);
     assert.equal(cancelled.error.details.request_cancelled, true);
-    assert.equal(cancelled.execution_truth.mutation, "unknown");
+    assert.equal(cancelled.execution_truth.mutation, "applied_verified");
     assert.equal(cancelled.undo.status, "close_unknown");
     assert.equal(cancelled.resume_safe, false);
   });
@@ -564,12 +565,12 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(failed.ok, false);
     assert.equal(failed.status, "blocked");
     assert.equal(failed.error.details.zero_write, true);
-    assert.equal(failed.execution_truth.mutation, "not_run");
+    assert.equal(failed.execution_truth.mutation, "not_applied");
     assert.equal(failed.undo.status, "open_failed");
     assert.equal(stageCalls, 0);
   });
 
-  it("reports unknown mutation truth when Whole-Recipe Undo close proof fails", async () => {
+  it("keeps verified mutation truth separate when Whole-Recipe Undo close proof fails", async () => {
     let endCalls = 0;
     const { runtime } = makeRuntime({
       undoController: {
@@ -592,7 +593,7 @@ describe("Alpha3.4-E2 call_recipe runtime", () => {
     assert.equal(failed.ok, false);
     assert.equal(failed.status, "partial");
     assert.equal(failed.error.details.undo_close_unknown, true);
-    assert.equal(failed.execution_truth.mutation, "unknown");
+    assert.equal(failed.execution_truth.mutation, "applied_verified");
     assert.equal(failed.undo.status, "close_unknown");
     assert.equal(failed.recovery.strategy, "inspect_and_repair");
     assert.equal(failed.resume_safe, false);

@@ -120,7 +120,7 @@ test("official required inputs fail generic preflight before Undo or dispatch", 
       const result = await runtime.call_recipe({ operation: "run", ...saved, inputs });
       assert.equal(result.ok, false, recipeId);
       assert.equal(result.error.code, "PREFLIGHT_FAILED", recipeId);
-      assert.equal(result.execution_truth.mutation, "not_run", recipeId);
+      assert.equal(result.execution_truth.mutation, "not_applied", recipeId);
     }
     assert.equal(calls.length, 0);
     assert.equal(undoBegins, 0);
@@ -309,7 +309,7 @@ test("generic official expressions produce the full 64-row Recipe 03 and 04 batc
     });
     assert.equal(overLimit.ok, false);
     assert.equal(overLimit.error.details.zero_write, true, JSON.stringify(overLimit));
-    assert.equal(overLimit.execution_truth.mutation, "not_run");
+    assert.equal(overLimit.execution_truth.mutation, "not_applied");
     assert.equal(overLimit.undo.claimed, true);
     assert.equal(overLimit.undo.status, "closed");
     assert.equal(overLimit.undo.proven, true);
@@ -335,7 +335,7 @@ test("Recipe 04 filters compact skip rows and fails closed before later write st
       inputs: { source_items: sourceItems(1), variation_count: 1, seed: 345 },
     });
     assert.equal(result.ok, false);
-    assert.equal(result.execution_truth.mutation, "not_run");
+    assert.equal(result.execution_truth.mutation, "not_applied");
     assert.deepEqual(calls.find((call) => call.stage === "controls").inputs.changes, []);
     assert.equal(calls.some((call) => call.stage === "tone" || call.stage === "automation"), false);
   } finally {
