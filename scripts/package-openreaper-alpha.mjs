@@ -2854,6 +2854,10 @@ print -rn -- "exited" > ${shellQuote(fakeExitedPath)}
       expectedStart: result?.code === 0,
       label: `direct fake REAPER ${path.basename(capturePath)}`,
     });
+    // The fixture REAPER exits between independent launches. Remove only the
+    // pid marker created by this temporary install so the next case exercises
+    // a fresh launch instead of the real duplicate-session recovery path.
+    await rm(path.join(installRoot, "session", "reaper.pid"), { force: true });
     await rm(fakeDoctor, { force: true });
     await rm(fixtureStart, { force: true });
   }
