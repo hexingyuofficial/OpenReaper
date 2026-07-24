@@ -129,6 +129,28 @@ All Macros are peers. Expand manuals only by exact id.
 - `macro.automation.apply` — automation points/curves on exact live refs
 - `macro.render.targets` — bounded render/export targets
 
+## 15 Macro minimum examples
+
+Use the user's words, expand the exact Macro, and then make one public call.
+These are the shortest safe intents; the expanded manual supplies the exact
+schema, selected/exact target rule, live readback, and recovery:
+
+- `macro.project.inspect`: "检查工程是否就绪并告诉我当前工程路径。"
+- `macro.project.query`: "找出当前选中的 Item 和它们的精确引用。"
+- `macro.project.delete_targets`: "删除所有静音轨道；运行前冻结 predicate 选择。"
+- `macro.project.apply_layout`: "创建一个名为 Music 的文件夹轨道和两个子轨道。"
+- `macro.project.file`: "保存当前工程。"
+- `macro.routing.apply`: "把当前选中的 Track 路由到名为 Bus 的 Track。"
+- `macro.media.place_assets`: "把这批音频一次放到当前选中的 Track。"
+- `macro.items.analyze`: "分析当前选中的 Item 的响度、瞬态和静音。"
+- `macro.items.apply`: "把当前选中的 Item 音量降低 3 dB。"
+- `macro.midi.apply`: "把当前选中的 MIDI 音符按网格量化。"
+- `macro.fx.apply_chain`: "给当前选中的 Track 加 ReaEQ；Audio Take FX 要明确 take。"
+- `macro.fx.set_controls`: "把当前选中的 Track FX 的精确参数设为请求值。"
+- `macro.controls.set`: "把当前选中的 Track 静音并读回结果。"
+- `macro.automation.apply`: "对当前选中的 Track 写入一段 Automation。"
+- `macro.render.targets`: "渲染当前选中的 Item 和 Track，并返回输出文件。"
+
 ## Paging, budget, and recovery
 
 Public responses may truncate. Truncation is not internal knowledge loss.
@@ -180,7 +202,7 @@ list_templates {"query":"create a MIDI clip and add a compressor","limit":25}
 list_templates {"ids":["macro.midi.apply"],"fields":["id","inputSchema"]}
 call_template {"id":"macro.project.inspect","input":{"include":["project_path","dirty_state","markers_regions"],"fields_by_scope":{"markers_regions":["ref","name","position_seconds"]},"limit":25,"compact_response":true,"ref_policy":"canonical_only"}}
 call_template {"id":"macro.midi.apply","input":{"mode":"create_clips","start_seconds":0,"duration_quarter_notes":4,"notes":[{"start_offset_quarter_notes":0,"end_offset_quarter_notes":1,"pitch":60,"velocity":96,"channel":0},{"start_offset_quarter_notes":1,"end_offset_quarter_notes":2,"pitch":62,"velocity":96,"channel":0},{"start_offset_quarter_notes":2,"end_offset_quarter_notes":3,"pitch":64,"velocity":96,"channel":0},{"start_offset_quarter_notes":3,"end_offset_quarter_notes":4,"pitch":65,"velocity":96,"channel":0}],"selector":{"name":"Instrument"},"dry_run":false}}
-call_template {"id":"macro.items.apply","input":{"mode":"set_item_take_controls","dry_run":false,"changes":[{"id":"clipA","item_ref":"item:guid:{ITEM-GUID}","take_ref":"take:guid:{TAKE-GUID}","item":{"volume_db":-3,"fade_in_seconds":0.01,"fade_out_seconds":0.05},"take":{"pan":-0.2,"playrate":1,"preserve_pitch":true}}]}}
+call_template {"id":"macro.items.apply","input":{"mode":"set_properties","target":"selected","properties":{"volume_db":-3},"dry_run":false}}
 call_template {"id":"macro.fx.apply_chain","input":{"plugin":"reacomp","controls":{"threshold_db":-18,"ratio":3},"selector":{"name":"Lead Vocal"},"dry_run":false}}
 call_template {"id":"macro.project.file","input":{"operation":"save_current"}}
 call_template {"id":"macro.project.file","input":{"operation":"list_open_projects","cursor":"0","limit":25}}

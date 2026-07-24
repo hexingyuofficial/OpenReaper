@@ -1,0 +1,126 @@
+{
+  "contract": "alpha4.control-tower.agent-routing.v1",
+  "date": "2026-07-24",
+  "policy": {
+    "gpt_max_concurrent": 2,
+    "grok_max_concurrent": 2,
+    "final_source_blind_reviewer": "gpt-5.6-sol only after B/C/D/E/F are green",
+    "workers_may_modify_product": false,
+    "workers_may_commit": false
+  },
+  "gpt_subagents": [
+    {
+      "agent_id": "019f94a7-e124-74d1-b594-d881dfa7608c",
+      "model": "gpt-5.6-luna",
+      "role": "read-only live Bridge diagnosis",
+      "result": "completed_and_closed",
+      "writes": []
+    },
+    {
+      "agent_id": "019f94be-d5d8-71e2-891d-0f6c8105bd0b",
+      "model": "gpt-5.6-luna",
+      "role": "read-only Alpha4-D experiment-entry audit",
+      "result": "completed_and_closed",
+      "writes": []
+    },
+    {
+      "agent_id": "019f94be-d683-7b53-b400-ddf6b7185406",
+      "model": "gpt-5.6-luna",
+      "role": "read-only exact-HEAD core-only package audit",
+      "result": "completed_and_closed",
+      "writes": []
+    },
+    {
+      "agent_id": "019f94d1-0c5f-7891-b317-7ffa67156073",
+      "nickname": "Bacon",
+      "model": "gpt-5.6-luna",
+      "role": "read-only Alpha4-D experiment-entry audit",
+      "result": "errored_upstream_403",
+      "error": "sui-xiang.com returned 403 permission_error: Fast临时关闭",
+      "writes": [],
+      "concurrency_slot": 1
+    },
+    {
+      "agent_id": "019f94d1-0b1d-7082-b6cf-f2768a460941",
+      "nickname": "Ptolemy",
+      "model": "gpt-5.6-luna",
+      "role": "read-only Alpha4-F exact-HEAD package/install audit",
+      "result": "errored_upstream_403",
+      "error": "sui-xiang.com returned 403 permission_error: Fast临时关闭",
+      "writes": [],
+      "concurrency_slot": 2
+    }
+  ],
+  "opencode_grok_probe": {
+    "cli": "/Users/Zhuanz/.npm-global/bin/opencode",
+    "version": "1.18.4",
+    "model": "suixiang/grok-4.5",
+    "command": "opencode run --pure --model suixiang/grok-4.5 --format json 'Reply with exactly OK and no other text.'",
+    "attempts": [
+      {
+        "environment": "default",
+        "result": "blocked",
+        "reason": "OpenCode log path was not writable"
+      },
+      {
+        "environment": "XDG_DATA_HOME/XDG_STATE_HOME/XDG_CONFIG_HOME under /private/tmp",
+        "result": "blocked",
+        "reason": "API/network connection failed before a model response"
+      },
+      {
+        "environment": "XDG_STATE_HOME/XDG_CACHE_HOME/XDG_CONFIG_HOME under distinct /private/tmp roots",
+        "concurrency": 2,
+        "result": "blocked",
+        "reason": "Both requests returned OpenCode UnknownError/Unexpected server error before a model response",
+        "session_ids": [
+          "ses_06b2ee99affedw0lV6M6E4ds2C",
+          "ses_06b2ee99fffeYUKBLafLl9xkaV"
+        ]
+      }
+    ],
+    "full_report": "tests/alpha4/evidence/opencode-cli-probe-20260724/report.json"
+  },
+  "verification": {
+    "b_startup_and_recipe_gate": {
+      "command": "node --test tests/alpha4/shard-b/*.test.mjs tests/alpha3/block2-startup-readiness.test.mjs",
+      "passed": 19,
+      "failed": 0
+    },
+    "e_static_gate": {
+      "command": "node --test tests/alpha4/shard-e/compiler/*.test.mjs tests/alpha4/shard-e/corpus/*.test.mjs tests/alpha4/shard-e/experiment/*.test.mjs",
+      "passed": 20,
+      "failed": 0
+    },
+    "f_static_gate": {
+      "command": "node --test tests/alpha4/shard-f/*.test.mjs",
+      "passed": 2,
+      "failed": 0
+    },
+    "tower_commit_attempt": {
+      "command": "git add scripts/openreaper-alpha-package/openreaper-start.sh tests/alpha3/block2-startup-readiness.test.mjs && git commit -m 'fix: harden startup dialog safety'",
+      "result": "blocked_by_host_permission",
+      "failure": "fatal: Unable to create /Users/Zhuanz/Documents/openreaper/.git/index.lock: Operation not permitted",
+      "staged_paths": [],
+      "commit_created": false
+    },
+    "full_product_gate": {
+      "command": "npm test",
+      "result": "blocked_by_host_permission",
+      "failure": "Layer 4D.1 test attempted UNIX socket listen and received EPERM; no product source mutation was made"
+    },
+    "d_and_e_status": "blocked_by_LIVE_BRIDGE_NOT_READY",
+    "latest_b_gate": {
+      "command": "node --test tests/alpha4/shard-b/*.test.mjs tests/alpha3/block2-startup-readiness.test.mjs",
+      "passed": 19,
+      "failed": 0
+    },
+    "f_status": "not_started_as_final_acceptance",
+    "gpt_5_6_sol_invoked": false
+  },
+  "live_startup_evidence": "tests/alpha4/evidence/live-startup-attempts-20260724/report.json",
+  "known_blockers": [
+    "No matching live Bridge heartbeat and public read probe",
+    "Current installed provenance points to 29ac3a3, not product HEAD e112483",
+    "Product worktree is intentionally dirty, so the official package builder rejects provenance until the accepted tower commit"
+  ]
+}

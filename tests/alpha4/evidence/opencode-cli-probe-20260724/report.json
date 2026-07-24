@@ -1,0 +1,28 @@
+{
+  "contract": "alpha4.opencode.cli.probe.v1",
+  "timestamp_utc": "2026-07-24T15:02:56Z",
+  "tool": {
+    "path": "/Users/Zhuanz/.npm-global/bin/opencode",
+    "version": "1.18.4",
+    "command": "opencode run --pure --model suixiang/grok-4.5 --format json 'Reply with exactly OK and no other text.'"
+  },
+  "attempts": [
+    {
+      "environment": "default",
+      "result": "blocked",
+      "error": "OpenCode could not open /Users/Zhuanz/.local/share/opencode/log/opencode.log"
+    },
+    {
+      "environment": "XDG_DATA_HOME=/private/tmp/openreaper-opencode-data XDG_STATE_HOME=/private/tmp/openreaper-opencode-state XDG_CONFIG_HOME=/private/tmp/openreaper-opencode-config",
+      "result": "blocked",
+      "model_selection": {
+        "provider_id": "suixiang",
+        "model_id": "grok-4.5"
+      },
+      "session_id": "ses_06b6d96adffe1XURd1Ij5JEUuR",
+      "error": "AI_APICallError: Cannot connect to API; retries ended without a model response"
+    }
+  ],
+  "conclusion": "The CLI is installed and selects suixiang/grok-4.5, but this environment did not produce a usable response. Use the XDG override when retrying so OpenCode can write its log, and keep Grok/OpenCode concurrency at no more than two workers.",
+  "related_log": "/private/tmp/openreaper-opencode-data/opencode/log/opencode.log"
+}

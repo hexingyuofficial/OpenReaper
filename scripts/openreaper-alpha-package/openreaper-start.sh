@@ -1435,14 +1435,58 @@ on uiElementNamed(theWindow, targetName)
   return false
 end uiElementNamed
 
-on directButtonCount(theWindow, targetName)
+on exactUiElementCount(theWindow, targetName, targetRole)
   tell application "System Events"
+    set matchCount to 0
     try
-      return count of (buttons of theWindow whose name is targetName)
+      set uiElements to entire contents of theWindow
+      repeat with uiElement in uiElements
+        try
+          set uiName to name of uiElement
+          set uiRole to role of uiElement
+          if uiName is not missing value and uiRole is not missing value and (uiName as text) is targetName and (uiRole as text) is targetRole then set matchCount to matchCount + 1
+        end try
+      end repeat
     end try
   end tell
-  return 0
-end directButtonCount
+  return matchCount
+end exactUiElementCount
+
+on clickUniqueExactButton(theWindow, targetName)
+  tell application "System Events"
+    try
+      set uiElements to entire contents of theWindow
+      set matchingElement to missing value
+      set matchCount to 0
+      repeat with uiElement in uiElements
+        try
+          set uiName to name of uiElement
+          set uiRole to role of uiElement
+          if uiName is not missing value and uiRole is not missing value and (uiName as text) is targetName and (uiRole as text) is "AXButton" then
+            set matchCount to matchCount + 1
+            set matchingElement to uiElement
+          end if
+        end try
+      end repeat
+      if matchCount is not 1 then error "exact button is not unique"
+      click matchingElement
+      return true
+    on error errorMessage
+      error errorMessage
+    end try
+  end tell
+  error "exact button disappeared before click"
+end clickUniqueExactButton
+
+on uiTextAreaContains(theWindow, firstNeedle, secondNeedle)
+  tell application "System Events"
+    try
+      set warningText to value of text area 1 of scroll area 1 of theWindow as text
+      return warningText contains firstNeedle and warningText contains secondNeedle
+    end try
+  end tell
+  return false
+end uiTextAreaContains
 
 on run argv
 set allowSafeActions to (item 1 of argv is "true")
@@ -1459,12 +1503,12 @@ tell application "System Events"
       try
         set windowTitle to name of reaperWindow as text
       end try
-      if windowTitle is "Project Settings" then
-        set isProjectNotesWindow to my uiElementNamed(reaperWindow, "Notes") and my uiElementNamed(reaperWindow, "Show notes on project load") and my directButtonCount(reaperWindow, "OK") is 1
+      if windowTitle is "Project Settings" or windowTitle is "Project Settings / Notes" then
+        set isProjectNotesWindow to my uiElementNamed(reaperWindow, "Notes") and my uiElementNamed(reaperWindow, "Show notes on project load") and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1
         if isProjectNotesWindow then
           if not allowSafeActions then return "blocked_manual_dialog:title=Project Settings"
           try
-            click button "OK" of reaperWindow
+            my clickUniqueExactButton(reaperWindow, "OK")
             return "dismissed_project_notes"
           on error errorMessage
             return "project_notes_seen_not_dismissed:" & errorMessage
@@ -1474,12 +1518,12 @@ tell application "System Events"
       end if
       set hasIgnoreMissingFiles to false
       try
-        if exists button "Ignore all missing files" of reaperWindow then set hasIgnoreMissingFiles to true
+        if my exactUiElementCount(reaperWindow, "Ignore all missing files", "AXButton") is 1 then set hasIgnoreMissingFiles to true
       end try
       if hasIgnoreMissingFiles then
         if allowMissingMedia then
           try
-            click button "Ignore all missing files" of reaperWindow
+            my clickUniqueExactButton(reaperWindow, "Ignore all missing files")
             return "dismissed_missing_media:choice=Ignore all missing files"
           on error errorMessage
             return "blocked_missing_media:choice=Ignore all missing files:error=" & errorMessage
@@ -1488,15 +1532,10 @@ tell application "System Events"
         return "blocked_missing_media:choice=Ignore all missing files"
       end if
       if windowTitle is "Project Load Warning" then
-        set warningText to ""
-        try
-          set warningText to value of text area 1 of scroll area 1 of reaperWindow as text
-        end try
-        set isOfflineMediaWarning to false
-        if warningText contains "in an off-line state" and warningText contains "filenames should be preserved" then set isOfflineMediaWarning to true
-        if allowMissingMedia and isOfflineMediaWarning and my directButtonCount(reaperWindow, "OK") is 1 then
+        set isOfflineMediaWarning to my uiTextAreaContains(reaperWindow, "in an off-line state", "filenames should be preserved")
+        if allowMissingMedia and isOfflineMediaWarning and my exactUiElementCount(reaperWindow, "OK", "AXButton") is 1 then
           try
-            click button "OK" of reaperWindow
+            my clickUniqueExactButton(reaperWindow, "OK")
             return "dismissed_missing_media_offline_warning:choice=OK"
           on error errorMessage
             return "blocked_missing_media_offline_warning:choice=OK:error=" & errorMessage
@@ -1510,10 +1549,13 @@ tell application "System Events"
       on error errorMessage
         return "blocked_dialog_classification:title=" & windowTitle & ":error=" & errorMessage
       end try
-      if windowSubrole is "AXDialog" then
+      if windowSubrole is "AXDialog" or windowSubrole is "AXSheet" then
         if windowTitle contains "Evaluation" or windowTitle contains "License" or windowTitle contains "Recovery" or windowTitle contains "missing effect" or windowTitle contains "New version" then
           return "blocked_user_decision:title=" & windowTitle
         end if
+        return "blocked_unknown_dialog:title=" & windowTitle
+      end if
+      if windowSubrole is not "AXWindow" and windowSubrole is not "AXStandardWindow" and windowSubrole is not "" then
         return "blocked_unknown_dialog:title=" & windowTitle
       end if
     end repeat

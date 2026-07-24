@@ -1,0 +1,90 @@
+{
+  "contract": "alpha4.live-startup-attempts.v1",
+  "date": "2026-07-24",
+  "fixture": "/Users/Zhuanz/Untitled/Untitled.RPP",
+  "safety": {
+    "fresh_evidence_required": true,
+    "ignore_missing_media": "used only on these bounded attempts",
+    "unknown_or_decision_dialogs": "fail_closed",
+    "product_boundary": "official OpenReaper start helper only"
+  },
+  "attempts": [
+    {
+      "id": "direct2",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct2-20260724T150019Z",
+      "result": "blocked",
+      "details": "REAPER reached startup but AppleScript/System Events returned -10827; dialog event result=failed; no verified Bridge heartbeat.",
+      "log": "logs/openreaper-start-20260724T150019Z.log"
+    },
+    {
+      "id": "direct3",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct3-20260724T1505Z",
+      "result": "blocked",
+      "details": "Official helper selected macos_launchservices and launchctl setenv returned Not privileged to set domain environment; no REAPER launch was accepted.",
+      "log": "session/logs/openreaper-start-20260724T150623Z.log"
+    },
+    {
+      "id": "direct4",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct4-20260724T1507Z",
+      "result": "blocked",
+      "details": "Official helper selected direct_binary_fallback; REAPER pid 69745 exited before readiness and System Events returned -10827.",
+      "log": "session/logs/openreaper-start-20260724T150659Z.log"
+    },
+    {
+      "id": "direct5",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct5-20260724T1510Z",
+      "result": "blocked",
+      "details": "Official helper selected direct_binary_fallback through an evidence-local exec wrapper; REAPER pid 72596 exited before readiness and System Events returned -10827.",
+      "log": "session/logs/openreaper-start-20260724T150917Z.log"
+    },
+    {
+      "id": "direct6",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct6-20260724T1535Z",
+      "result": "blocked",
+      "details": "The helper rejected conflicting --ignore-missing-media and --no-startup-dialog-assist consent options before launch.",
+      "log": null
+    },
+    {
+      "id": "direct7",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct7-20260724T1536Z",
+      "result": "blocked",
+      "details": "The helper rejected conflicting --ignore-missing-media and --no-startup-dialog-assist consent options before launch.",
+      "log": null
+    },
+    {
+      "id": "direct8",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct8-20260724T1537Z",
+      "result": "blocked",
+      "details": "Forced binary mode still inferred /Applications/REAPER.app and selected LaunchServices; launchctl returned Not privileged and retained its bounded cleanup snapshot.",
+      "log": "session/logs/openreaper-start-20260724T153548Z.log"
+    },
+    {
+      "id": "direct9",
+      "evidence_root": "/Users/Zhuanz/Documents/openreaper/tests/alpha4/evidence/live-d-source-direct9-20260724T1538Z",
+      "result": "blocked",
+      "details": "A temporary binary symlink forced direct_binary_fallback and spawned pid 24640, but dialog classification still called System Events, returned -10827, and the PID exited before any matching heartbeat.",
+      "log": "session/logs/openreaper-start-20260724T153606Z.log"
+    }
+  ],
+  "subagents": [
+    {
+      "id": "019f94a7-e124-74d1-b594-d881dfa7608c",
+      "model": "gpt-5.6-luna",
+      "role": "read-only live bridge diagnosis",
+      "result": "completed_and_closed",
+      "writes": [],
+      "conclusion": "E is blocked at matching live Bridge readiness; stale heartbeat and old Doctor evidence cannot be reused."
+    }
+  ],
+  "d_e_gate": {
+    "status": "blocked",
+    "blocker": "LIVE_BRIDGE_NOT_READY",
+    "required_before_d": [
+      "fresh heartbeat with owner and generation match",
+      "verified REAPER PID identity",
+      "template.transport.read_state public probe",
+      "Doctor package/bridge/render/request/project-index readiness"
+    ],
+    "e_must_not_run": true
+  }
+}
